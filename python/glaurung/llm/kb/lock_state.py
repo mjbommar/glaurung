@@ -22,6 +22,7 @@ through the wrapper. The lessons, baked in here:
      not classified (modeling gap), plus the INTRAPROCEDURAL caveat (a lock
      held by a caller is not seen here). Partial coverage must read as partial.
 """
+
 from __future__ import annotations
 
 import re
@@ -38,8 +39,8 @@ _ABS = re.compile(r"0x[0-9a-fA-F]+")
 # names or function_names canonical, including mangled wrapper methods).
 _ACQUIRE = re.compile(
     r"(?:^|[A-Za-z])(?:Ke|Ex)?Acquire\w*?(?:SpinLock|Lock|Resource|Mutex|"
-    r"PushLock|Rundown|FastMutex)"           # raw kernel APIs
-    r"|^\?Acquire(?:Shared|Exclusive)?@"     # ?Acquire@AcquireSpinLock@@...
+    r"PushLock|Rundown|FastMutex)"  # raw kernel APIs
+    r"|^\?Acquire(?:Shared|Exclusive)?@"  # ?Acquire@AcquireSpinLock@@...
 )
 _RELEASE = re.compile(
     r"(?:^|[A-Za-z])(?:Ke|Ex)?Release\w*?(?:SpinLock|Lock|Resource|Mutex|"
@@ -57,8 +58,8 @@ _LOCKISH = re.compile(
 @dataclass
 class LockOp:
     va: int
-    kind: str          # "acquire" | "release"
-    primitive: str     # resolved callee name
+    kind: str  # "acquire" | "release"
+    primitive: str  # resolved callee name
     lock_id: Optional[str]  # symbolic lock object, e.g. "r14+0x7c0", or None
 
 
@@ -66,8 +67,8 @@ class LockOp:
 class HeldAtCall:
     va: int
     callee: str
-    must: Set[str]     # locks held on ALL paths reaching this call
-    may: Set[str]      # locks held on SOME path reaching this call
+    must: Set[str]  # locks held on ALL paths reaching this call
+    may: Set[str]  # locks held on SOME path reaching this call
 
 
 @dataclass
@@ -88,15 +89,24 @@ class LockReport:
             "start_va": self.start_va,
             "end_va": self.end_va,
             "ops": [
-                {"va": o.va, "kind": o.kind, "primitive": o.primitive,
-                 "lock_id": o.lock_id}
+                {
+                    "va": o.va,
+                    "kind": o.kind,
+                    "primitive": o.primitive,
+                    "lock_id": o.lock_id,
+                }
                 for o in self.ops
             ],
-            "balance": {k: {"acquire": a, "release": r}
-                        for k, (a, r) in self.balance.items()},
+            "balance": {
+                k: {"acquire": a, "release": r} for k, (a, r) in self.balance.items()
+            },
             "held_at_calls": [
-                {"va": h.va, "callee": h.callee,
-                 "must_held": sorted(h.must), "may_held": sorted(h.may)}
+                {
+                    "va": h.va,
+                    "callee": h.callee,
+                    "must_held": sorted(h.must),
+                    "may_held": sorted(h.may),
+                }
                 for h in self.held_at_calls
             ],
             "cfg": {"blocks": self.cfg_blocks, "edges": self.cfg_edges},
@@ -110,8 +120,10 @@ class LockReport:
         return None
 
     def render(self) -> str:
-        out = [f"; lock-state: {self.function}  0x{self.start_va:x}-0x{self.end_va:x}"
-               f"  (CFG: {self.cfg_blocks} blocks, {self.cfg_edges} edges)"]
+        out = [
+            f"; lock-state: {self.function}  0x{self.start_va:x}-0x{self.end_va:x}"
+            f"  (CFG: {self.cfg_blocks} blocks, {self.cfg_edges} edges)"
+        ]
         out.append(f"; acquire/release sites: {len(self.ops)}")
         for op in self.ops:
             out.append(
@@ -125,7 +137,9 @@ class LockReport:
                 flag = "" if a == r else "  (unbalanced -- see caveats)"
                 out.append(f"  {k}: acquire={a} release={r}{flag}")
         if self.held_at_calls:
-            out.append("; locks held at call sites (must = all paths, may = some path):")
+            out.append(
+                "; locks held at call sites (must = all paths, may = some path):"
+            )
             for h in self.held_at_calls:
                 disc = "" if h.must == h.may else "  [PATH-DISCREPANCY: may>must]"
                 out.append(
@@ -141,8 +155,10 @@ class LockReport:
 
 def _load(db_path: str) -> Tuple[Dict[int, str], Optional[str]]:
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    va_name = {int(va): canon for va, canon in
-               con.execute("SELECT entry_va, canonical FROM function_names")}
+    va_name = {
+        int(va): canon
+        for va, canon in con.execute("SELECT entry_va, canonical FROM function_names")
+    }
     row = con.execute(
         "SELECT first_path FROM binaries ORDER BY binary_id LIMIT 1"
     ).fetchone()
@@ -158,7 +174,7 @@ def _bytes_of(dis: str) -> bytes:
     i = 0
     s = body.strip()
     while i + 1 < len(s):
-        pair = s[i:i + 2]
+        pair = s[i : i + 2]
         if len(pair) == 2 and all(c in "0123456789abcdefABCDEF" for c in pair):
             out.append(int(pair, 16))
             i += 2
@@ -182,7 +198,7 @@ def _add_imm_to_rcx(dis: str) -> Optional[int]:
     if modrm != 0xC1:  # mod=11, reg=/0 (add), rm=001 (rcx)
         return None
     if op == 0x81 and j + 6 <= len(b):
-        return int.from_bytes(b[j + 2:j + 6], "little")
+        return int.from_bytes(b[j + 2 : j + 6], "little")
     if op == 0x83 and j + 3 <= len(b):
         v = b[j + 2]
         return v - 0x100 if v >= 0x80 else v
@@ -253,6 +269,7 @@ def analyze_locks(
 
     # ---- glaurung CFG for this function (authoritative edges) ----
     import glaurung as g
+
     funcs, _cg = g.analysis.analyze_functions_path(binary_path)
     fobj = None
     for f in funcs:
@@ -263,7 +280,7 @@ def analyze_locks(
         raise KeyError(f"no CFG for function at 0x{start:x} ({fname})")
 
     blocks = fobj.basic_blocks
-    blk_start = {}      # block-start-va -> (start, end)
+    blk_start = {}  # block-start-va -> (start, end)
     succ: Dict[int, Set[int]] = {}
     for b in blocks:
         s = _addr(b.start_address)
@@ -288,18 +305,28 @@ def analyze_locks(
     iat: Dict[int, str] = {}
     try:
         from glaurung.llm.kb.structural_fingerprint import resolve_iat_map
+
         iat = resolve_iat_map(binary_path)
     except Exception:
         pass
 
     from glaurung.disasm import disassemble_window_at
+
     insns = disassemble_window_at(
-        binary_path, int(start), window_bytes=int(func_end - start),
-        max_instructions=16384, max_time_ms=10000,
+        binary_path,
+        int(start),
+        window_bytes=int(func_end - start),
+        max_instructions=16384,
+        max_time_ms=10000,
     )
 
-    rep = LockReport(function=fname, start_va=int(start), end_va=int(func_end),
-                     cfg_blocks=len(blocks), cfg_edges=edges)
+    rep = LockReport(
+        function=fname,
+        start_va=int(start),
+        end_va=int(func_end),
+        cfg_blocks=len(blocks),
+        cfg_edges=edges,
+    )
     cov = CoverageFooter("lock-state")
 
     # ---- linear pass: classify ops + resolve lock objects ----
@@ -355,8 +382,11 @@ def analyze_locks(
                 indirect_calls += 1
             continue
         call_by_va[v] = callee
-        kind = "acquire" if _ACQUIRE.search(callee) else (
-            "release" if _RELEASE.search(callee) else None)
+        kind = (
+            "acquire"
+            if _ACQUIRE.search(callee)
+            else ("release" if _RELEASE.search(callee) else None)
+        )
         if kind is None:
             if _LOCKISH.search(callee):
                 unmodeled_lockish.add(callee)
@@ -418,7 +448,9 @@ def analyze_locks(
     must_in: Dict[int, Set[str]] = {s: set() for s in blk_start}
     may_in: Dict[int, Set[str]] = {s: set() for s in blk_start}
     order = sorted(blk_start)
-    for _pass in range(len(order) + 2):  # bounded fixpoint (acyclic-ish; cycles converge)
+    for _pass in range(
+        len(order) + 2
+    ):  # bounded fixpoint (acyclic-ish; cycles converge)
         changed = False
         for s in order:
             ps = preds[s]

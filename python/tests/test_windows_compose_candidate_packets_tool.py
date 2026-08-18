@@ -191,7 +191,9 @@ NTSTATUS Helper(void *out, ULONG len) {
     assert composition.packet.gate_status == "gate_before_sink"
     assert composition.packet.path[0].symbol == "Helper"
     assert composition.packet.path[1].symbol == "RtlCopyMemory"
-    assert any(e.source == "windows_trace_onehop_flow" for e in composition.packet.evidence)
+    assert any(
+        e.source == "windows_trace_onehop_flow" for e in composition.packet.evidence
+    )
 
 
 def test_memory_agent_registers_windows_compose_candidate_packets() -> None:

@@ -92,24 +92,24 @@ class NameFuncCommand(BaseCommand):
             type=parse_func_arg,
             default=None,
             help="Function selector: hex VA (0x140001480), decimal, or a "
-                 "function name like 'main' resolved against analysis. "
-                 "Defaults to the binary's detected entry point.",
+            "function name like 'main' resolved against analysis. "
+            "Defaults to the binary's detected entry point.",
         )
         parser.add_argument(
             "--original",
             dest="original_name",
             default=None,
             help="Original / mangled name if known (given to the model as "
-                 "soft context).",
+            "soft context).",
         )
         parser.add_argument(
             "--cache-dir",
             default=None,
             help="Optional persistent cache directory for name-func output. "
-                 "Entries are keyed by (glaurung version, sha256(binary), VA, "
-                 "model, original-name hint). Falls back to $GLAURUNG_CACHE_DIR "
-                 "when unset. Append-only — clear the directory manually if "
-                 "disk fills up.",
+            "Entries are keyed by (glaurung version, sha256(binary), VA, "
+            "model, original-name hint). Falls back to $GLAURUNG_CACHE_DIR "
+            "when unset. Append-only — clear the directory manually if "
+            "disk fills up.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -138,7 +138,8 @@ class NameFuncCommand(BaseCommand):
         elif isinstance(args.func, str):
             try:
                 discovered = g.analysis.analyze_functions_path(
-                    str(path), max_functions=2000,
+                    str(path),
+                    max_functions=2000,
                 )[0]
             except Exception as e:
                 formatter.output_plain(
@@ -242,5 +243,7 @@ class NameFuncCommand(BaseCommand):
                 formatter.output_plain(f"summary:        {payload['summary']}")
             if payload.get("rationale"):
                 formatter.output_plain(f"rationale:      {payload['rationale']}")
-            formatter.output_plain(f"model:          {payload.get('model', model_name)}")
+            formatter.output_plain(
+                f"model:          {payload.get('model', model_name)}"
+            )
         return 0

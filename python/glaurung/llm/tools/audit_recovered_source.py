@@ -78,9 +78,7 @@ class AuditFinding(BaseModel):
 
 class AuditReport(BaseModel):
     findings: List[AuditFinding] = Field(default_factory=list)
-    summary: str = Field(
-        "", description="One-paragraph headline summary of audit"
-    )
+    summary: str = Field("", description="One-paragraph headline summary of audit")
     blocker_count: int = 0
     passed: bool = Field(
         False,
@@ -109,7 +107,7 @@ def _heuristic(args: AuditRecoveredSourceArgs) -> AuditReport:
                     "confidence — manual review recommended."
                 ),
                 recommended_action="re-run rewrite with richer caller context "
-                                   "or review by hand",
+                "or review by hand",
             )
         )
     # Functions with many assumptions — inherent risk.
@@ -121,7 +119,7 @@ def _heuristic(args: AuditRecoveredSourceArgs) -> AuditReport:
                 severity="medium",
                 location=f"{len(noisy)} function(s)",
                 description=f"{len(noisy)} functions carry ≥5 rewrite "
-                            "assumptions; each is a potential divergence.",
+                "assumptions; each is a potential divergence.",
                 recommended_action="audit assumption lists; run #17 on each",
             )
         )
@@ -200,8 +198,8 @@ class AuditRecoveredSourceTool(
             ToolMeta(
                 name="audit_recovered_source",
                 description="Tree-scale adversarial audit of a recovered "
-                            "source project — flags dead code, missing "
-                            "error paths, invented functions, coherence gaps.",
+                "source project — flags dead code, missing "
+                "error paths, invented functions, coherence gaps.",
                 tags=("llm", "audit", "layer4"),
             ),
             AuditRecoveredSourceArgs,
@@ -242,7 +240,5 @@ class AuditRecoveredSourceTool(
         return AuditRecoveredSourceResult(report=report, source=source)
 
 
-def build_tool() -> MemoryTool[
-    AuditRecoveredSourceArgs, AuditRecoveredSourceResult
-]:
+def build_tool() -> MemoryTool[AuditRecoveredSourceArgs, AuditRecoveredSourceResult]:
     return AuditRecoveredSourceTool()

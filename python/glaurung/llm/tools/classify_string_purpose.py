@@ -52,12 +52,10 @@ class ClassifyStringPurposeArgs(BaseModel):
     use_sites: List[str] = Field(
         default_factory=list,
         description="Optional — short pseudocode snippets where the string is "
-                    "used. Improves disambiguation between formats and "
-                    "plain messages.",
+        "used. Improves disambiguation between formats and "
+        "plain messages.",
     )
-    use_llm: bool = Field(
-        True, description="Fall back to heuristics only if False"
-    )
+    use_llm: bool = Field(True, description="Fall back to heuristics only if False")
 
 
 class StringPurpose(BaseModel):
@@ -66,8 +64,8 @@ class StringPurpose(BaseModel):
     rationale: str = Field(
         "",
         description="One-sentence justification citing the specific feature "
-                    "that drove the classification (a %s format token, a "
-                    "'http://' prefix, an ERR_ word, etc.).",
+        "that drove the classification (a %s format token, a "
+        "'http://' prefix, an ERR_ word, etc.).",
     )
 
 
@@ -91,9 +89,7 @@ _SQL_RE = re.compile(
     r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE\s+TABLE|DROP|ALTER)\b",
     re.IGNORECASE,
 )
-_FORMAT_RE = re.compile(
-    r"%[-+#0 ]*\d*(?:\.\d+)?[hljztL]*[diouxXeEfgGaAcspn]"
-)
+_FORMAT_RE = re.compile(r"%[-+#0 ]*\d*(?:\.\d+)?[hljztL]*[diouxXeEfgGaAcspn]")
 _CRYPTO_RE = re.compile(
     r"^(-----BEGIN |ssh-rsa |ssh-ed25519 |\$2[aby]\$|"
     r"MII[A-Za-z0-9+/]{16,})"
@@ -111,9 +107,7 @@ def _heuristic(text: str) -> StringPurpose:
         return StringPurpose(kind="benign", confidence=0.3, rationale="empty string")
 
     if _URL_RE.match(s):
-        return StringPurpose(
-            kind="url", confidence=0.95, rationale="scheme:// prefix"
-        )
+        return StringPurpose(kind="url", confidence=0.95, rationale="scheme:// prefix")
     if _USER_AGENT_RE.search(s):
         return StringPurpose(
             kind="user_agent",
@@ -175,9 +169,7 @@ def _build_prompt(text: str, use_sites: List[str]) -> str:
     if use_sites:
         # Cap to keep prompt small — 5 sites is usually sufficient.
         sites = use_sites[:5]
-        parts.append(
-            "Call sites:\n" + "\n".join(f"  - {s}" for s in sites)
-        )
+        parts.append("Call sites:\n" + "\n".join(f"  - {s}" for s in sites))
     parts.append(
         "Pick the best label, a confidence in [0, 1], and a short "
         "rationale citing the feature that decided it."
@@ -193,9 +185,9 @@ class ClassifyStringPurposeTool(
             ToolMeta(
                 name="classify_string_purpose",
                 description="Classify a single string literal into one of a "
-                            "fixed label set (url, path, format, sql, "
-                            "error_message, …). Heuristic pre-filter; LLM "
-                            "fallback for ambiguous cases.",
+                "fixed label set (url, path, format, sql, "
+                "error_message, …). Heuristic pre-filter; LLM "
+                "fallback for ambiguous cases.",
                 tags=("llm", "strings", "layer0"),
             ),
             ClassifyStringPurposeArgs,
@@ -235,7 +227,5 @@ class ClassifyStringPurposeTool(
         )
 
 
-def build_tool() -> MemoryTool[
-    ClassifyStringPurposeArgs, ClassifyStringPurposeResult
-]:
+def build_tool() -> MemoryTool[ClassifyStringPurposeArgs, ClassifyStringPurposeResult]:
     return ClassifyStringPurposeTool()

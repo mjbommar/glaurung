@@ -43,7 +43,9 @@ class WindowsProjectOperationRiskSummaryArgs(BaseModel):
         None,
         description="Path to ASB data/kg/pe-sources.yaml. Defaults to ASB_REPO or sibling repo.",
     )
-    binary_id: int | None = Field(None, description="Optional project binary_id filter.")
+    binary_id: int | None = Field(
+        None, description="Optional project binary_id filter."
+    )
     function_va: int | None = Field(
         None,
         description="Optional caller function VA used to filter sink callsites.",
@@ -222,9 +224,9 @@ def _ranked_groups(
     source_by_key = {
         (group.sink_kind, group.sink_symbol): group for group in source_groups
     }
-    keys = {
-        (group.sink_kind, group.sink_symbol) for group in gate_groups
-    } | set(source_by_key)
+    keys = {(group.sink_kind, group.sink_symbol) for group in gate_groups} | set(
+        source_by_key
+    )
     gate_by_key = {(group.sink_kind, group.sink_symbol): group for group in gate_groups}
 
     ranked = [
@@ -241,7 +243,9 @@ def _risk_group(
     source: WindowsProjectOperationSourceGroup | None,
 ) -> WindowsProjectOperationRiskGroup:
     sink_kind, sink_symbol = key
-    packet_count = max(gate.packet_count if gate else 0, source.packet_count if source else 0)
+    packet_count = max(
+        gate.packet_count if gate else 0, source.packet_count if source else 0
+    )
     score = 0.0
     reasons: list[str] = []
     blockers: list[str] = []

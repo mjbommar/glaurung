@@ -39,7 +39,9 @@ class WindowsSeedBinaryDiffTriageArgs(BaseModel):
     seed_id: str | None = Field(None, description="Optional seed id filter.")
     public_id: str | None = Field(None, description="Optional CVE/advisory id filter.")
     target_id: str | None = Field(None, description="Optional seed target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
     skip_anonymous: bool = Field(
         True,
         description="Drop sub_<hex> placeholder names that often shift between builds.",
@@ -196,7 +198,9 @@ def _triage_seed(seed, rows_by_name: dict[str, object]) -> SeedBinaryDiffTriageR
     for function in seed.functions:
         row = rows_by_name.get(function)
         if row is None:
-            functions.append(SeedFunctionDiffStatus(function=function, status="not_in_diff"))
+            functions.append(
+                SeedFunctionDiffStatus(function=function, status="not_in_diff")
+            )
             missing.append(function)
             continue
         status = str(row.status)

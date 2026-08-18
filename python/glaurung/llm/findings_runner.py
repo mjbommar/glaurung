@@ -101,6 +101,7 @@ async def run_findings_pass(
         tool_filter = None
     elif getattr(args, "route", False):
         from .tool_routing import select_tools_for_question
+
         routing_prompt = getattr(args, "cwe_class_prompt", None) or _FINDINGS_QUESTION
         tool_filter = set(select_tools_for_question(routing_prompt))
     # Always route the findings pass under the default OpenAI model:
@@ -108,9 +109,12 @@ async def run_findings_pass(
     # subset (~17 tools) is enough for vuln hunting.
     if tool_filter is None and model_name.startswith(("openai:", "openai-responses:")):
         from .tool_routing import select_tools_for_question
-        tool_filter = set(select_tools_for_question(
-            getattr(args, "cwe_class_prompt", None) or _FINDINGS_QUESTION
-        ))
+
+        tool_filter = set(
+            select_tools_for_question(
+                getattr(args, "cwe_class_prompt", None) or _FINDINGS_QUESTION
+            )
+        )
 
     # Build a structured-output agent: same tool surface as create_memory_agent
     # but with output_type=FindingsReport so the validation happens server-side.
@@ -120,7 +124,9 @@ async def run_findings_pass(
         system_prompt=_FINDINGS_SYSTEM_PROMPT,
     )
     agent = register_analysis_tools(
-        foundation, model_name=model_name, tool_filter=tool_filter,
+        foundation,
+        model_name=model_name,
+        tool_filter=tool_filter,
     )
 
     # Triage + minimal MemoryContext so the agent has KB content to chew on.
@@ -158,6 +164,7 @@ async def run_findings_pass(
     # full conversation). Use the LLMConfig default (32_768) so the cap
     # is generous AND tracked centrally.
     from .usage_limits import default_max_output_tokens
+
     params = ModelHyperparameters(
         temperature=0.2,
         max_tokens=default_max_output_tokens(),
@@ -166,6 +173,7 @@ async def run_findings_pass(
     # pydantic-ai >=1.x: sampling params via ModelSettings. The
     # model_name arg drives OpenAI service_tier=flex handoff.
     from pydantic_ai.settings import ModelSettings
+
     settings = ModelSettings(**params.to_model_kwargs(model_name=model_name))
 
     # L3 hook: the CWE sweep passes a class-scoped prompt via
@@ -178,6 +186,7 @@ async def run_findings_pass(
     # decompile one or two, then emit final_result). 8 leaves a small
     # buffer; ~5x cheaper than pydantic-ai's 50 default.
     from .usage_limits import build_usage_limits
+
     usage_limits = build_usage_limits(model_name=model_name, request_limit=8)
 
     result = await agent.run(
@@ -191,8 +200,11 @@ async def run_findings_pass(
     # masks a real LLM error.
     try:
         from .usage_tracker import get_tracker
+
         get_tracker().record(
-            result, model=model_name, source="findings_runner",
+            result,
+            model=model_name,
+            source="findings_runner",
         )
     except Exception:  # pragma: no cover
         pass
@@ -213,13 +225,15 @@ async def run_findings_pass(
     binary_ctx = None
     try:
         from .finding_verifier import _BinaryContext, verify_report
+
         binary_ctx = _BinaryContext.build(binary_path)
         verify_report(report, binary_ctx=binary_ctx)
     except Exception as e:
         existing = report.notes or ""
         sep = "\n" if existing else ""
         object.__setattr__(
-            report, "notes",
+            report,
+            "notes",
             f"{existing}{sep}[verifier-error] {type(e).__name__}: {e}",
         )
 
@@ -231,6 +245,7 @@ async def run_findings_pass(
         if not getattr(args, "skip_critique", False):
             try:
                 from .finding_critic import critique_report
+
                 await critique_report(
                     report,
                     model_name=model_name,
@@ -240,7 +255,8 @@ async def run_findings_pass(
                 existing = report.notes or ""
                 sep = "\n" if existing else ""
                 object.__setattr__(
-                    report, "notes",
+                    report,
+                    "notes",
                     f"{existing}{sep}[critic-error] {type(e).__name__}: {e}",
                 )
 

@@ -67,7 +67,9 @@ class WindowsSummarizeHelperSideEffectsArgs(BaseModel):
     sink_kind: str | None = Field(None, description="Optional operation kind filter.")
     max_effects: int = Field(64, description="Maximum side-effect calls to return.")
     max_depth: int = Field(2, description="Maximum simple alias depth from parameters.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
@@ -120,7 +122,9 @@ class WindowsSummarizeHelperSideEffectsTool(
         parameters = _parameters(text)
         operations = _load_operations(args.sinks_path)
         operations_by_symbol = _operations_by_symbol(operations)
-        tracked_by_param = _tracked_names_by_param(text, parameters, max_depth=args.max_depth)
+        tracked_by_param = _tracked_names_by_param(
+            text, parameters, max_depth=args.max_depth
+        )
         calls = _extract_calls(text)
         side_effects: list[HelperSideEffect] = []
 
@@ -130,7 +134,9 @@ class WindowsSummarizeHelperSideEffectsTool(
                 continue
             if args.sink_kind and operation.sink_kind != args.sink_kind:
                 continue
-            impacts = _parameter_impacts(call.args, operation, parameters, tracked_by_param)
+            impacts = _parameter_impacts(
+                call.args, operation, parameters, tracked_by_param
+            )
             if not impacts:
                 continue
             side_effects.append(
@@ -142,7 +148,11 @@ class WindowsSummarizeHelperSideEffectsTool(
                     parameter_impacts=impacts,
                     summary=_summary(call.name, operation, impacts),
                     confidence=0.65,
-                    provenance=["asb_pe_sink_metadata", source, "simple_parameter_alias_trace"],
+                    provenance=[
+                        "asb_pe_sink_metadata",
+                        source,
+                        "simple_parameter_alias_trace",
+                    ],
                 )
             )
             if len(side_effects) >= args.max_effects:
@@ -229,7 +239,9 @@ def _parameters(text: str) -> list[HelperParameter]:
         name = name_match.group("name")
         if name.lower() == "void":
             continue
-        out.append(HelperParameter(index=index, name=name, declaration=declaration.strip()))
+        out.append(
+            HelperParameter(index=index, name=name, declaration=declaration.strip())
+        )
     return out
 
 
@@ -295,7 +307,9 @@ def _summary(
     pieces = []
     for impact in impacts:
         role = impact.call_arg_role or f"arg{impact.call_arg_index}"
-        pieces.append(f"{role}=helper_arg{impact.parameter.index}:{impact.parameter.name}")
+        pieces.append(
+            f"{role}=helper_arg{impact.parameter.index}:{impact.parameter.name}"
+        )
     return f"{operation.sink_kind} via {call_symbol} ({', '.join(pieces)})"
 
 

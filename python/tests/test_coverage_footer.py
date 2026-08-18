@@ -1,4 +1,5 @@
 """Unit tests for the coverage/assumptions footer."""
+
 from __future__ import annotations
 
 from glaurung.llm.coverage import CoverageFooter
@@ -6,7 +7,9 @@ from glaurung.llm.coverage import CoverageFooter
 
 def test_complete_footer_has_no_caveats() -> None:
     cov = CoverageFooter("lock-state")
-    cov.fact("instructions", 412).fact("lock primitives modeled", ["KeAcquire", "AcquireSpinLock::Acquire"])
+    cov.fact("instructions", 412).fact(
+        "lock primitives modeled", ["KeAcquire", "AcquireSpinLock::Acquire"]
+    )
     assert cov.is_complete() is True
     text = cov.render()
     assert "coverage (lock-state)" in text

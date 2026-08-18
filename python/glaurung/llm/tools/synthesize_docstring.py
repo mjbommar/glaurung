@@ -36,12 +36,12 @@ class SynthesizeDocstringArgs(BaseModel):
     printed_strings: List[str] = Field(
         default_factory=list,
         description="String literals the function prints or logs — often the "
-                    "single best signal for what the function does.",
+        "single best signal for what the function does.",
     )
     caller_snippet: Optional[str] = Field(
         None,
         description="One real caller snippet showing a typical invocation. "
-                    "Feeds the @example block.",
+        "Feeds the @example block.",
     )
     use_llm: bool = True
 
@@ -50,7 +50,7 @@ class FunctionDocstring(BaseModel):
     docblock: str = Field(
         ...,
         description="The complete doc-comment block, ready to paste above the "
-                    "function definition.",
+        "function definition.",
     )
     style: DocStyle
     example: Optional[str] = Field(
@@ -150,8 +150,8 @@ class SynthesizeDocstringTool(
             ToolMeta(
                 name="synthesize_docstring",
                 description="Write a Doxygen/rustdoc/godoc/Python docstring "
-                            "for a rewritten function from its source plus "
-                            "string and caller evidence.",
+                "for a rewritten function from its source plus "
+                "string and caller evidence.",
                 tags=("llm", "docs", "layer2"),
             ),
             SynthesizeDocstringArgs,
@@ -179,7 +179,5 @@ class SynthesizeDocstringTool(
         return SynthesizeDocstringResult(doc=doc, source=source)
 
 
-def build_tool() -> MemoryTool[
-    SynthesizeDocstringArgs, SynthesizeDocstringResult
-]:
+def build_tool() -> MemoryTool[SynthesizeDocstringArgs, SynthesizeDocstringResult]:
     return SynthesizeDocstringTool()

@@ -142,7 +142,7 @@ def _write_project(tmp_path: Path) -> Path:
                 0x1080,
                 "jne",
                 '["0x1100"]',
-                0x107c,
+                0x107C,
                 "test",
                 '["rdi", "rdi"]',
                 "not_equal",
@@ -160,7 +160,7 @@ def _write_project(tmp_path: Path) -> Path:
                 0x1400,
                 "je",
                 '["0x1410"]',
-                0x13fc,
+                0x13FC,
                 "cmp",
                 '["eax", "0"]',
                 "equal",
@@ -373,7 +373,9 @@ def test_windows_project_sink_call_packets_emits_manifest_backed_seed(
         evidence.source == "windows_project_callsite_facts"
         for evidence in packet.evidence
     )
-    assert any(evidence.source == "windows_cfg_dominance" for evidence in packet.evidence)
+    assert any(
+        evidence.source == "windows_cfg_dominance" for evidence in packet.evidence
+    )
     cfg_path_evidence = [
         evidence
         for evidence in packet.evidence
@@ -530,8 +532,7 @@ def test_windows_project_sink_call_packets_marks_missing_source_refinement(
         packet.source_refinement_blockers
     )
     assert any(
-        "source refinement missing" in blocker
-        for blocker in packet.promotion_blockers
+        "source refinement missing" in blocker for blocker in packet.promotion_blockers
     )
 
 

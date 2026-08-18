@@ -12,9 +12,7 @@ from glaurung.llm.kb.packer_detect import detect_packer
 _HELLO = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
 )
-_SWITCHY = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 
 
 def _need(p: Path) -> Path:
@@ -41,9 +39,11 @@ def test_synthetic_packed_binary_detects_upx(tmp_path: Path) -> None:
     fake = tmp_path / "fake-upx.bin"
     # Just enough of a binary to look "real" — followed by UPX magic.
     fake.write_bytes(
-        b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 100
+        b"\x7fELF\x02\x01\x01\x00"
+        + b"\x00" * 100
         + b"$Info: This file is packed with the UPX executable packer "
-        + b"http://upx.sf.net" + b"\x00" * 100
+        + b"http://upx.sf.net"
+        + b"\x00" * 100
     )
     verdict = detect_packer(str(fake))
     assert verdict.is_packed is True
@@ -56,7 +56,8 @@ def test_synthetic_packed_binary_detects_upx(tmp_path: Path) -> None:
 def test_themida_section_marker(tmp_path: Path) -> None:
     fake = tmp_path / "fake-themida.bin"
     fake.write_bytes(
-        b"\x4d\x5a" + b"\x00" * 200    # MZ header
+        b"\x4d\x5a"
+        + b"\x00" * 200  # MZ header
         + b".themida\x00\x00\x00\x00"  # section name
         + b"\x00" * 200
     )
@@ -68,8 +69,9 @@ def test_themida_section_marker(tmp_path: Path) -> None:
 def test_vmprotect_section_marker(tmp_path: Path) -> None:
     fake = tmp_path / "fake-vmp.bin"
     fake.write_bytes(
-        b"\x4d\x5a" + b"\x00" * 200
-        + b".vmp0\x00\x00\x00"         # section name
+        b"\x4d\x5a"
+        + b"\x00" * 200
+        + b".vmp0\x00\x00\x00"  # section name
         + b"\x00" * 200
     )
     verdict = detect_packer(str(fake))
@@ -82,8 +84,9 @@ def test_high_entropy_no_signature_flags_generic(tmp_path: Path) -> None:
     should be flagged as packed (family='generic'). Use random-ish
     bytes to hit the entropy gate."""
     import os
+
     fake = tmp_path / "noisy.bin"
-    fake.write_bytes(os.urandom(8192))   # entropy ~7.99
+    fake.write_bytes(os.urandom(8192))  # entropy ~7.99
     verdict = detect_packer(str(fake))
     assert verdict.is_packed is True
     assert verdict.packer_name is None

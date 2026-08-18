@@ -80,7 +80,10 @@ class WindowsOperationMetadataTool(
         args: WindowsOperationMetadataArgs,
     ) -> WindowsOperationMetadataResult:
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        operations = [_operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)]
+        operations = [
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
+        ]
         operation_count_total = len(operations)
 
         if args.symbol:

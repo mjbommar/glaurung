@@ -40,6 +40,7 @@ def test_rename_substitutes_in_caller_body(tmp_path: Path) -> None:
 
     import glaurung as g
     import re
+
     funcs, _cg = g.analysis.analyze_functions_path(str(binary))
     if not funcs:
         pytest.skip("no functions discovered")
@@ -51,8 +52,11 @@ def test_rename_substitutes_in_caller_body(tmp_path: Path) -> None:
     for f in funcs:
         try:
             text = xref_db.render_decompile_with_names(
-                kb, str(binary), int(f.entry_point.value),
-                timeout_ms=500, style="c",
+                kb,
+                str(binary),
+                int(f.entry_point.value),
+                timeout_ms=500,
+                style="c",
             )
         except Exception:
             continue
@@ -66,24 +70,33 @@ def test_rename_substitutes_in_caller_body(tmp_path: Path) -> None:
 
     # Pre-rename: text contains `0x<callee>(`.
     pre = xref_db.render_decompile_with_names(
-        kb, str(binary), target_caller, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        target_caller,
+        timeout_ms=500,
+        style="c",
     )
     assert re.search(rf"\b0x{callee_va:x}\s*\(", pre, re.IGNORECASE), pre[:400]
 
     # Rename the callee.
     xref_db.set_function_name(
-        kb, callee_va, "my_renamed_callee", set_by="manual",
+        kb,
+        callee_va,
+        "my_renamed_callee",
+        set_by="manual",
     )
 
     # Re-render the caller; the new name must appear, the old call
     # token must NOT (we don't want analyst-renamed entries to drift).
     post = xref_db.render_decompile_with_names(
-        kb, str(binary), target_caller, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        target_caller,
+        timeout_ms=500,
+        style="c",
     )
     assert "my_renamed_callee" in post
-    assert not re.search(
-        rf"\b0x{callee_va:x}\s*\(", post, re.IGNORECASE
-    ), post[:400]
+    assert not re.search(rf"\b0x{callee_va:x}\s*\(", post, re.IGNORECASE), post[:400]
 
     kb.close()
 
@@ -95,6 +108,7 @@ def test_rename_does_not_clobber_unrelated_subs(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     import glaurung as g
+
     funcs, _cg = g.analysis.analyze_functions_path(str(binary))
     if len(funcs) < 2:
         pytest.skip("need at least 2 functions for this test")
@@ -106,7 +120,11 @@ def test_rename_does_not_clobber_unrelated_subs(tmp_path: Path) -> None:
     # Render fn_b; it shouldn't contain `renamed_a` UNLESS fn_b actually
     # calls fn_a — in which case the substitution is correct.
     text = xref_db.render_decompile_with_names(
-        kb, str(binary), fn_b, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        fn_b,
+        timeout_ms=500,
+        style="c",
     )
     # The unrelated sub_<fn_b_hex> must still appear unchanged in its
     # own header (decompiler emits the function's own declaration).

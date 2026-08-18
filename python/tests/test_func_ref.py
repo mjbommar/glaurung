@@ -16,6 +16,7 @@ from glaurung.cli.func_ref import (
 
 # ---- parse_func_arg ----
 
+
 def test_parse_func_arg_hex():
     assert parse_func_arg("0x140001480") == 0x140001480
 
@@ -52,20 +53,24 @@ def test_parse_func_arg_strips_whitespace():
 
 # ---- resolve_func_to_va ----
 
+
 class _FnStub:
     """Mimics glaurung.analysis.Function for resolver tests."""
+
     def __init__(self, name: str, va: int):
         self.name = name
+
         class _Addr:
             def __init__(self, v):
                 self.value = v
+
         self.entry_point = _Addr(va)
 
 
 def test_resolve_exact_match():
     fns = [
         _FnStub("vuln", 0x140001480),
-        _FnStub("main", 0x1400014ed),
+        _FnStub("main", 0x1400014ED),
         _FnStub("sub_140001000", 0x140001000),
     ]
     assert resolve_func_to_va("vuln", fns) == 0x140001480
@@ -135,16 +140,36 @@ def test_cli_decompile_by_name_matches_decompile_by_va():
         pytest.skip("venv glaurung CLI not built")
 
     by_name = subprocess.run(
-        [str(glaurung_bin), "decompile", str(V1_CORPUS),
-         "--func", "vuln", "--style", "c"],
-        capture_output=True, text=True, timeout=60,
+        [
+            str(glaurung_bin),
+            "decompile",
+            str(V1_CORPUS),
+            "--func",
+            "vuln",
+            "--style",
+            "c",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     by_va = subprocess.run(
-        [str(glaurung_bin), "decompile", str(V1_CORPUS),
-         "--func", "0x1400014b4", "--style", "c"],
-        capture_output=True, text=True, timeout=60,
+        [
+            str(glaurung_bin),
+            "decompile",
+            str(V1_CORPUS),
+            "--func",
+            "0x1400014b4",
+            "--style",
+            "c",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
-    assert by_name.returncode == 0, f"name path failed: {by_name.stderr}\n{by_name.stdout}"
+    assert by_name.returncode == 0, (
+        f"name path failed: {by_name.stderr}\n{by_name.stdout}"
+    )
     assert by_va.returncode == 0, f"VA path failed: {by_va.stderr}\n{by_va.stdout}"
     # Output should be identical (same VA resolved both ways).
     assert by_name.stdout == by_va.stdout

@@ -35,9 +35,7 @@ class CliFlagDoc(BaseModel):
 
 class WriteReadmeAndManpageArgs(BaseModel):
     project_name: str
-    synopsis: str = Field(
-        ..., description="One-line SYNOPSIS from #12"
-    )
+    synopsis: str = Field(..., description="One-line SYNOPSIS from #12")
     description: str = Field(
         "", description="Short paragraph describing what the project does"
     )
@@ -148,8 +146,7 @@ def _build_prompt(args: WriteReadmeAndManpageArgs) -> str:
     ]
     if args.modules:
         parts.append(
-            "Modules:\n"
-            + "\n".join(f"  - {m.path}: {m.purpose}" for m in args.modules)
+            "Modules:\n" + "\n".join(f"  - {m.path}: {m.purpose}" for m in args.modules)
         )
     if args.flags:
         parts.append(
@@ -173,8 +170,8 @@ class WriteReadmeAndManpageTool(
             ToolMeta(
                 name="write_readme_and_manpage",
                 description="Produce README.md + troff manpage for a "
-                            "recovered project given its module tree, CLI "
-                            "grammar, and build instructions.",
+                "recovered project given its module tree, CLI "
+                "grammar, and build instructions.",
                 tags=("llm", "docs", "layer3"),
             ),
             WriteReadmeAndManpageArgs,
@@ -202,7 +199,5 @@ class WriteReadmeAndManpageTool(
         return WriteReadmeAndManpageResult(docs=docs, source=source)
 
 
-def build_tool() -> MemoryTool[
-    WriteReadmeAndManpageArgs, WriteReadmeAndManpageResult
-]:
+def build_tool() -> MemoryTool[WriteReadmeAndManpageArgs, WriteReadmeAndManpageResult]:
     return WriteReadmeAndManpageTool()

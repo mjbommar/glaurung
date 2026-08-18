@@ -35,7 +35,9 @@ class WindowsProjectOperationSourceSummaryArgs(BaseModel):
         None,
         description="Path to ASB data/kg/pe-sources.yaml. Defaults to ASB_REPO or sibling repo.",
     )
-    binary_id: int | None = Field(None, description="Optional project binary_id filter.")
+    binary_id: int | None = Field(
+        None, description="Optional project binary_id filter."
+    )
     function_va: int | None = Field(
         None,
         description="Optional caller function VA used to filter sink callsites.",

@@ -9,7 +9,9 @@ from glaurung.llm.agents.memory_agent import create_memory_agent
 
 def test_memory_agent_tools_smoke():
     # Pick a small sample binary
-    sample = Path("samples/binaries/platforms/linux/amd64/native/clang/O0/hello-clang-O0")
+    sample = Path(
+        "samples/binaries/platforms/linux/amd64/native/clang/O0/hello-clang-O0"
+    )
     assert sample.exists(), "sample binary missing"
 
     art = g.triage.analyze_path(str(sample), 10_000_000, 100_000_000, 1)
@@ -29,4 +31,3 @@ def test_memory_agent_tools_smoke():
     # Search for hello-related strings in KB
     r3 = agent.run_sync("search KB for hello", deps=ctx)
     assert isinstance(r3.output, str)
-

@@ -364,7 +364,9 @@ def _pipeline_blockers(
         )
         for item in items
     ]
-    next_tools = _dedupe([tool for item in items for tool in _blocker_next_tools(item.kind)])
+    next_tools = _dedupe(
+        [tool for item in items for tool in _blocker_next_tools(item.kind)]
+    )
     return _result(
         config=config,
         answer=answer,
@@ -411,9 +413,7 @@ def _pipeline_blocker_task_plan(
         )
         for task in tasks
     ]
-    next_tools = _dedupe(
-        [task.next_tool_name for task in tasks if task.next_tool_name]
-    )
+    next_tools = _dedupe([task.next_tool_name for task in tasks if task.next_tool_name])
     return _result(
         config=config,
         answer=answer,

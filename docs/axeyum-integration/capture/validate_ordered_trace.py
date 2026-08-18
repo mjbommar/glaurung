@@ -461,7 +461,10 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                     fail(f"Axeyum timing/outcome presence mismatch for {check_id}")
                 if z3_outcome is not None and z3_outcome not in backend_outcomes:
                     fail(f"invalid Z3 outcome for {check_id}")
-                if axeyum_outcome is not None and axeyum_outcome not in backend_outcomes:
+                if (
+                    axeyum_outcome is not None
+                    and axeyum_outcome not in backend_outcomes
+                ):
                     fail(f"invalid Axeyum outcome for {check_id}")
                 if (axeyum_nanos is None) != (axeyum_execution is None):
                     fail(f"Axeyum timing/execution presence mismatch for {check_id}")
@@ -533,7 +536,9 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                                 or entry.get("unit") != unit
                                 or entry.get("limit") != expected_limit
                             ):
-                                fail(f"invalid v4 {cell} resource identity for {check_id}")
+                                fail(
+                                    f"invalid v4 {cell} resource identity for {check_id}"
+                                )
                             reason = entry.get("stop_reason")
                             if reason not in {
                                 None,
@@ -551,7 +556,11 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                         (z3_nanos, event["z3_cold_nanos"], "Z3 timing"),
                         (axeyum_nanos, event["axeyum_warm_nanos"], "Axeyum timing"),
                         (z3_outcome, event["z3_cold_outcome"], "Z3 outcome"),
-                        (axeyum_outcome, event["axeyum_warm_outcome"], "Axeyum outcome"),
+                        (
+                            axeyum_outcome,
+                            event["axeyum_warm_outcome"],
+                            "Axeyum outcome",
+                        ),
                         (
                             axeyum_execution,
                             event["axeyum_warm_execution"],
@@ -610,7 +619,9 @@ def validate(root: pathlib.Path) -> dict[str, int]:
                 or children <= 0
             ):
                 fail(f"invalid warm owner share on line {line_number}")
-            warm_owner_references[owner] = warm_owner_references.get(owner, 1) + children
+            warm_owner_references[owner] = (
+                warm_owner_references.get(owner, 1) + children
+            )
             warm_owner_share_count += 1
         elif kind == "warm_owner_release":
             owner = event.get("owner_id")
@@ -756,7 +767,9 @@ def validate(root: pathlib.Path) -> dict[str, int]:
         if native_replay.get("warm_owner_release_count") != warm_owner_release_count:
             fail("warm owner release manifest count mismatch")
         if warm_owner_references:
-            fail(f"unterminated warm owner leases: {sorted(warm_owner_references.items())[:5]}")
+            fail(
+                f"unterminated warm owner leases: {sorted(warm_owner_references.items())[:5]}"
+            )
     for query_hash, row in indexed.items():
         expected = [
             (entry.get("check_id"), entry.get("path_id"), entry.get("event_seq"))

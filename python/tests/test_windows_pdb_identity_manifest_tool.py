@@ -101,8 +101,7 @@ def test_windows_pdb_identity_manifest_filters_missing_pdb_and_adds_evidence(
     assert result.records[0].expected_pdb_name == "cldflt.pdb"
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_pdb_identity_manifest"
+        node.kind == NodeKind.evidence and node.label == "windows_pdb_identity_manifest"
         for node in ctx.kb.nodes()
     )
 

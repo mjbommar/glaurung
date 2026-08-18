@@ -10,9 +10,7 @@ import glaurung as g
 
 
 def _hello_path() -> Path:
-    p = Path(
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
-    )
+    p = Path("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2")
     if not p.exists():
         pytest.skip(f"missing sample binary {p}")
     return p
@@ -67,7 +65,8 @@ def test_finds_null_terminator_starting_at_offset(tmp_path: Path) -> None:
 
     # include_sentinel: bytes_consumed includes the terminator byte.
     r3 = tool.run(
-        ctx, ctx.kb,
+        ctx,
+        ctx.kb,
         tool.input_model(file_offset=0, include_sentinel=True),
     )
     assert r3.found
@@ -114,7 +113,8 @@ def test_multiple_sentinels(tmp_path: Path) -> None:
 
     tool = build_tool()
     r = tool.run(
-        ctx, ctx.kb,
+        ctx,
+        ctx.kb,
         tool.input_model(file_offset=0, sentinels=[0x0A, 0x0D]),
     )
     assert r.found
@@ -124,7 +124,8 @@ def test_multiple_sentinels(tmp_path: Path) -> None:
 
     # Skip past the \n; next stop should be the \r at offset 8.
     r2 = tool.run(
-        ctx, ctx.kb,
+        ctx,
+        ctx.kb,
         tool.input_model(file_offset=5, sentinels=[0x0A, 0x0D]),
     )
     assert r2.found
@@ -134,6 +135,7 @@ def test_multiple_sentinels(tmp_path: Path) -> None:
 
 def test_rejects_empty_sentinel_set() -> None:
     from glaurung.llm.tools.scan_until_byte import ScanUntilByteArgs
+
     with pytest.raises(ValueError):
         ScanUntilByteArgs(file_offset=0, sentinels=[])
 
@@ -190,7 +192,8 @@ def test_works_against_real_binary_offset() -> None:
 
     tool = build_tool()
     r = tool.run(
-        ctx, ctx.kb,
+        ctx,
+        ctx.kb,
         tool.input_model(file_offset=start_off, max_scan_bytes=128),
     )
     assert r.found

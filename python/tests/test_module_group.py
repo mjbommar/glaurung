@@ -3,6 +3,7 @@ driver family (the cross-module corruption surface). Regression for the
 "dxgmms1 overflows into dxgmms2's shared pool" hypothesis that crossed the
 per-.glaurung boundary and had no expression before.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

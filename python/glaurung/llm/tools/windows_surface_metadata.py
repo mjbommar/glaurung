@@ -93,9 +93,13 @@ class WindowsSurfaceMetadataTool(
         kb: KnowledgeBase,
         args: WindowsSurfaceMetadataArgs,
     ) -> WindowsSurfaceMetadataResult:
-        sources_path = _resolve_metadata_path(args.sources_path, "data/kg/pe-sources.yaml")
+        sources_path = _resolve_metadata_path(
+            args.sources_path, "data/kg/pe-sources.yaml"
+        )
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
-        sources = [_source_record(e, sources_path) for e in _load_yaml_list(sources_path)]
+        sources = [
+            _source_record(e, sources_path) for e in _load_yaml_list(sources_path)
+        ]
         gates = [_gate_record(e, gates_path) for e in _load_yaml_list(gates_path)]
         source_count_total = len(sources)
         gate_count_total = len(gates)
@@ -207,7 +211,9 @@ def _source_role(raw: Any, path: Path, owner: Any) -> SourceRole:
         raise ValueError(f"{path}: role for {owner!r} missing role")
     return SourceRole(
         index=int(raw["index"]) if raw.get("index") is not None else None,
-        expression=str(raw["expression"]) if raw.get("expression") is not None else None,
+        expression=str(raw["expression"])
+        if raw.get("expression") is not None
+        else None,
         role=role,
         paired_length=raw.get("paired_length"),
         selector=raw.get("selector"),
@@ -228,5 +234,7 @@ def _required_str_list(entry: dict[str, Any], key: str, path: Path) -> list[str]
     return [str(v) for v in values if str(v)]
 
 
-def build_tool() -> MemoryTool[WindowsSurfaceMetadataArgs, WindowsSurfaceMetadataResult]:
+def build_tool() -> MemoryTool[
+    WindowsSurfaceMetadataArgs, WindowsSurfaceMetadataResult
+]:
     return WindowsSurfaceMetadataTool()

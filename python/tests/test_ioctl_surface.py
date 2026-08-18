@@ -52,4 +52,6 @@ def test_bytes_and_path_agree():
     from_path = analysis.ioctl_surface_map_path(path)
     from_bytes = analysis.ioctl_surface_map_bytes(open(path, "rb").read())
     assert len(from_path) == len(from_bytes)
-    assert {d["dispatcher_va"] for d in from_path} == {d["dispatcher_va"] for d in from_bytes}
+    assert {d["dispatcher_va"] for d in from_path} == {
+        d["dispatcher_va"] for d in from_bytes
+    }

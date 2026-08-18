@@ -74,7 +74,10 @@ def test_family_mismatch_flag(tmp_path: Path) -> None:
     ]:
         xref_db.set_function_name(kb, va, callee, set_by="analyzer")
         xref_db.add_xref(
-            kb, src_va=0x2000 + 0x10, dst_va=va, kind="call",
+            kb,
+            src_va=0x2000 + 0x10,
+            dst_va=va,
+            kind="call",
             src_function_va=0x2000,
         )
     res = xref_db.verify_function_name(kb, 0x2000)
@@ -100,7 +103,10 @@ def test_consistent_rename_scores_high(tmp_path: Path) -> None:
     ]:
         xref_db.set_function_name(kb, va, callee, set_by="analyzer")
         xref_db.add_xref(
-            kb, src_va=0x3000 + 0x10, dst_va=va, kind="call",
+            kb,
+            src_va=0x3000 + 0x10,
+            dst_va=va,
+            kind="call",
             src_function_va=0x3000,
         )
     res = xref_db.verify_function_name(kb, 0x3000)
@@ -129,12 +135,18 @@ def test_audited_rename_inlines_warning_in_summary(tmp_path: Path) -> None:
     ]:
         xref_db.set_function_name(kb, va, callee, set_by="analyzer")
         xref_db.add_xref(
-            kb, src_va=0x4000 + 0x10, dst_va=va, kind="call",
+            kb,
+            src_va=0x4000 + 0x10,
+            dst_va=va,
+            kind="call",
             src_function_va=0x4000,
         )
     # Now rename to something memory-shaped (mismatch).
     cite_id, _new = xref_db.set_function_name_audited(
-        kb, 0x4000, "free_resources", set_by="manual",
+        kb,
+        0x4000,
+        "free_resources",
+        set_by="manual",
         rationale="suspected cleanup function",
     )
     rec = xref_db.get_evidence(kb, cite_id)

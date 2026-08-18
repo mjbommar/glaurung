@@ -94,7 +94,9 @@ class WindowsProjectOperationCoverageSummaryResult(BaseModel):
     resolution_kind_counts: dict[str, int] = Field(default_factory=dict)
     operation_kind_counts: dict[str, int] = Field(default_factory=dict)
     non_sink_category_counts: dict[str, int] = Field(default_factory=dict)
-    unmatched_groups: list[WindowsProjectUnmatchedCallGroup] = Field(default_factory=list)
+    unmatched_groups: list[WindowsProjectUnmatchedCallGroup] = Field(
+        default_factory=list
+    )
     known_non_sink_groups: list[WindowsProjectUnmatchedCallGroup] = Field(
         default_factory=list
     )
@@ -152,7 +154,9 @@ class WindowsProjectOperationCoverageSummaryTool(
             site for site in facts if site.operation is None and _display_symbol(site)
         ]
         unmatched_unnamed = [
-            site for site in facts if site.operation is None and not _display_symbol(site)
+            site
+            for site in facts
+            if site.operation is None and not _display_symbol(site)
         ]
         non_sink_by_site = {
             site.callsite_va: record
@@ -286,7 +290,9 @@ def _unmatched_groups(
                 sample_callsites=[site.callsite_va for site in sites[:5]],
                 sample_callers=callers,
                 resolution_kind_counts=dict(
-                    sorted(Counter(site.callee_resolution_kind for site in sites).items())
+                    sorted(
+                        Counter(site.callee_resolution_kind for site in sites).items()
+                    )
                 ),
                 non_sink_category=non_sink.category if non_sink else None,
                 non_sink_disposition=non_sink.disposition if non_sink else None,
@@ -352,7 +358,10 @@ def _recommended_next_action(
             f"treat as {non_sink.category} non-sink unless local context shows "
             "security-relevant side effects"
         )
-    if any(site.callee_aliases or site.callee_resolution_kind != "direct_name" for site in sites):
+    if any(
+        site.callee_aliases or site.callee_resolution_kind != "direct_name"
+        for site in sites
+    ):
         return "review alias/import-thunk spelling and add ASB sink metadata if security-relevant"
     return "classify callee semantics and add ASB sink metadata if security-relevant"
 

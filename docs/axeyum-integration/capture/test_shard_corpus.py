@@ -49,7 +49,9 @@ class ShardCorpusTests(unittest.TestCase):
             for shard in shard_set["shards"]:
                 directory = root / "shards" / shard["directory"]
                 capture = json.loads((directory / "capture-index-v1.json").read_text())
-                self.assertEqual({row["tiers"][0] for row in capture["files"]}, {shard["tier"]})
+                self.assertEqual(
+                    {row["tiers"][0] for row in capture["files"]}, {shard["tier"]}
+                )
                 paths.extend(row["path"] for row in capture["files"])
             self.assertEqual(len(paths), len(set(paths)))
             self.assertEqual(len(paths), shard_set["files"])

@@ -217,9 +217,7 @@ class WindowsComposeSourceGateSinkPacketTool(
 
 def _emit_packet(ctx, kb, args, operand, gate) -> WindowsReviewPacket:
     sink_kind = (
-        gate.sink.operation.sink_kind
-        if gate.sink.operation is not None
-        else "unknown"
+        gate.sink.operation.sink_kind if gate.sink.operation is not None else "unknown"
     )
     required_gates = (
         list(gate.sink.operation.required_gates)

@@ -29,10 +29,7 @@ LIVE = os.environ.get("GLAURUNG_LIVE_LLM") == "1"
 
 
 def _has_credentials() -> bool:
-    return bool(
-        os.environ.get("ANTHROPIC_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-    )
+    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"))
 
 
 pytestmark = pytest.mark.skipif(
@@ -83,9 +80,9 @@ def test_c2_demo_main_is_named_something_print_or_config_related():
     # dump, display.
     name, conf, summary, rationale = _name_func(C2_SAMPLE, 0x10C0)
     text = " ".join([name, summary, rationale]).lower()
-    assert any(
-        kw in text for kw in ("print", "config", "dump", "display", "log")
-    ), f"unexpected naming output: name={name!r} summary={summary!r}"
+    assert any(kw in text for kw in ("print", "config", "dump", "display", "log")), (
+        f"unexpected naming output: name={name!r} summary={summary!r}"
+    )
     assert conf >= 0.2, "model returned very low confidence"
 
 
@@ -95,6 +92,6 @@ def test_hello_start_is_named_as_entry_point():
     # start, entry, init, libc, main.
     name, conf, summary, rationale = _name_func(HELLO_SAMPLE, 0x1840)
     text = " ".join([name, summary, rationale]).lower()
-    assert any(
-        kw in text for kw in ("start", "entry", "init", "libc", "main")
-    ), f"unexpected naming output: name={name!r} summary={summary!r}"
+    assert any(kw in text for kw in ("start", "entry", "init", "libc", "main")), (
+        f"unexpected naming output: name={name!r} summary={summary!r}"
+    )

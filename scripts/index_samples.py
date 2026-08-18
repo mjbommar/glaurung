@@ -4,6 +4,7 @@ Generate an index manifest for built/collected samples.
 Scans samples/binaries and emits samples/binaries/index.json with per-file
 size, sha256, and `file`-type (when available), plus tool versions snapshot.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -45,7 +46,9 @@ def cmd_version(cmd: str) -> Optional[str]:
     if not exe:
         return None
     try:
-        out = subprocess.check_output([exe, "--version"], text=True, stderr=subprocess.STDOUT)
+        out = subprocess.check_output(
+            [exe, "--version"], text=True, stderr=subprocess.STDOUT
+        )
         return out.splitlines()[0]
     except Exception:
         return None
@@ -93,7 +96,9 @@ def main() -> int:
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {
         "root": str(BIN_DIR),
-        "generated_at": subprocess.check_output(["date", "-Iseconds"], text=True).strip(),
+        "generated_at": subprocess.check_output(
+            ["date", "-Iseconds"], text=True
+        ).strip(),
         "host": subprocess.check_output(["hostname"], text=True).strip(),
         "tools": collect_tool_versions(),
         "files": scan_binaries(BIN_DIR),
@@ -105,4 +110,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

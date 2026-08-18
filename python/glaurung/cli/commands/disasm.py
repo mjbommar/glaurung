@@ -98,15 +98,19 @@ class DisasmCommand(BaseCommand):
             "--comments", action="store_true", help="Add comments for calls and strings"
         )
         parser.add_argument(
-            "--db", type=Path, default=None,
+            "--db",
+            type=Path,
+            default=None,
             help="A .glaurung project. With --function, disassemble one "
-                 "function with symbol-annotated call targets, CFG-derived "
-                 "bounds, and a coverage footer (KB-aware mode).",
+            "function with symbol-annotated call targets, CFG-derived "
+            "bounds, and a coverage footer (KB-aware mode).",
         )
         parser.add_argument(
-            "--function", default=None, metavar="NAME|VA",
+            "--function",
+            default=None,
+            metavar="NAME|VA",
             help="Function to disassemble in KB-aware mode: a canonical/"
-                 "demangled name or a hex/decimal VA. Requires --db.",
+            "demangled name or a hex/decimal VA. Requires --db.",
         )
 
     def _get_architecture(self, path: Path, arch_str: Optional[str]) -> Architecture:
@@ -302,7 +306,9 @@ class DisasmCommand(BaseCommand):
 
         try:
             fd = disasm_function(
-                path, db_path=str(args.db), function=args.function,
+                path,
+                db_path=str(args.db),
+                function=args.function,
                 max_instructions=args.max_instructions,
             )
         except (KeyError, FileNotFoundError, ValueError) as e:

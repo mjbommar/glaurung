@@ -51,20 +51,23 @@ class ReplCommand(BaseCommand):
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
-            "binary", help="Path to the binary (or existing .glaurung file)",
+            "binary",
+            help="Path to the binary (or existing .glaurung file)",
         )
         parser.add_argument(
             "--db",
             help="Path to the .glaurung database file. Defaults to "
-                 "<binary>.glaurung next to the binary.",
+            "<binary>.glaurung next to the binary.",
         )
         parser.add_argument(
-            "--session", default="main",
+            "--session",
+            default="main",
             help="Session name (default: 'main'). Different sessions on "
-                 "the same binary keep their KB nodes separate.",
+            "the same binary keep their KB nodes separate.",
         )
         parser.add_argument(
-            "--no-index", action="store_true",
+            "--no-index",
+            action="store_true",
             help="Skip the one-time callgraph indexing step.",
         )
 
@@ -72,8 +75,10 @@ class ReplCommand(BaseCommand):
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         binary_path = self.validate_file_path(args.binary)
-        db_path = Path(args.db) if args.db else binary_path.with_suffix(
-            binary_path.suffix + ".glaurung"
+        db_path = (
+            Path(args.db)
+            if args.db
+            else binary_path.with_suffix(binary_path.suffix + ".glaurung")
         )
 
         # Lazy import — pulling pydantic-ai for `ask` is expensive and
@@ -86,7 +91,9 @@ class ReplCommand(BaseCommand):
         sys.stdout.write(f"               db={db_path}  session={args.session!r}\n")
 
         kb = PersistentKnowledgeBase.open(
-            db_path, binary_path=binary_path, session=args.session,
+            db_path,
+            binary_path=binary_path,
+            session=args.session,
             auto_load_stdlib=True,
         )
 
@@ -98,7 +105,7 @@ class ReplCommand(BaseCommand):
 
         # Navigation history for `forward` / `back`.
         history: List[int] = []
-        cursor = -1   # index into history; -1 == no current position
+        cursor = -1  # index into history; -1 == no current position
 
         def _push(va: int) -> None:
             nonlocal cursor
@@ -117,6 +124,7 @@ class ReplCommand(BaseCommand):
         def _ensure_funcs() -> dict[int, object]:
             if not _funcs_cache:
                 import glaurung as g
+
                 try:
                     funcs, _cg = g.analysis.analyze_functions_path(str(binary_path))
                 except Exception:
@@ -166,7 +174,9 @@ class ReplCommand(BaseCommand):
             _push(va)
             name = xref_db.get_function_name(kb, va)
             if name:
-                sys.stdout.write(f"  {va:#x}  {name.canonical}  (set_by={name.set_by})\n")
+                sys.stdout.write(
+                    f"  {va:#x}  {name.canonical}  (set_by={name.set_by})\n"
+                )
             else:
                 sys.stdout.write(f"  {va:#x}\n")
 
@@ -193,8 +203,11 @@ class ReplCommand(BaseCommand):
             already persisted; the preview is convenience only."""
             try:
                 text = xref_db.render_decompile_with_names(
-                    kb, str(ctx.file_path), func_va,
-                    timeout_ms=500, style="c",
+                    kb,
+                    str(ctx.file_path),
+                    func_va,
+                    timeout_ms=500,
+                    style="c",
                 )
             except Exception as e:
                 sys.stdout.write(f"  (re-render skipped: {e})\n")
@@ -222,7 +235,7 @@ class ReplCommand(BaseCommand):
                 idx = args_clean.index("--by")
                 if idx + 1 < len(args_clean):
                     set_by = args_clean[idx + 1]
-                    args_clean = args_clean[:idx] + args_clean[idx + 2:]
+                    args_clean = args_clean[:idx] + args_clean[idx + 2 :]
             # Single-arg form: rename the function at the cursor.
             if len(args_clean) == 1:
                 here_va = _here()
@@ -233,7 +246,10 @@ class ReplCommand(BaseCommand):
                     return
                 func_va = _enclosing_function_va(here_va) or here_va
                 xref_db.set_function_name(
-                    kb, func_va, args_clean[0], set_by=set_by,
+                    kb,
+                    func_va,
+                    args_clean[0],
+                    set_by=set_by,
                 )
                 sys.stdout.write(f"  {func_va:#x} → {args_clean[0]}\n")
                 _rerender_preview(func_va, header=f"{args_clean[0]} (post-rename)")
@@ -278,12 +294,14 @@ class ReplCommand(BaseCommand):
                     )
                     return
                 xref_db.set_data_label(
-                    kb, here_va, existing.name, c_type=c_type,
-                    size=existing.size, set_by="manual",
+                    kb,
+                    here_va,
+                    existing.name,
+                    c_type=c_type,
+                    size=existing.size,
+                    set_by="manual",
                 )
-                sys.stdout.write(
-                    f"  {here_va:#x} {existing.name}: {c_type}\n"
-                )
+                sys.stdout.write(f"  {here_va:#x} {existing.name}: {c_type}\n")
                 return
             # `y <addr> <c-type>` — explicit form.
             try:
@@ -300,8 +318,12 @@ class ReplCommand(BaseCommand):
                 )
                 return
             xref_db.set_data_label(
-                kb, va, existing.name, c_type=c_type,
-                size=existing.size, set_by="manual",
+                kb,
+                va,
+                existing.name,
+                c_type=c_type,
+                size=existing.size,
+                set_by="manual",
             )
             sys.stdout.write(f"  {va:#x} {existing.name}: {c_type}\n")
 
@@ -324,6 +346,7 @@ class ReplCommand(BaseCommand):
                 sys.stdout.write("xrefs [<addr>]\n")
                 return
             from glaurung.cli.commands.xrefs import _disasm_one
+
             into = xref_db.list_xrefs_to(kb, target)
             outof = xref_db.list_xrefs_from(kb, target)
             file_path = str(ctx.file_path) if ctx.file_path else ""
@@ -355,7 +378,11 @@ class ReplCommand(BaseCommand):
             func_va = _enclosing_function_va(target) or target
             try:
                 text = xref_db.render_decompile_with_names(
-                    kb, str(ctx.file_path), func_va, timeout_ms=500, style="c",
+                    kb,
+                    str(ctx.file_path),
+                    func_va,
+                    timeout_ms=500,
+                    style="c",
                 )
             except Exception as e:
                 sys.stdout.write(f"decompile failed: {e}\n")
@@ -378,12 +405,9 @@ class ReplCommand(BaseCommand):
                 # Prefer the demangled form when the canonical is mangled.
                 pretty = name.demangled or name.canonical
                 # If we did demangle, also show the raw name parenthesized.
-                aux = (
-                    f"  ({name.canonical})" if name.demangled else ""
-                )
+                aux = f"  ({name.canonical})" if name.demangled else ""
                 sys.stdout.write(
-                    f"    {name.entry_va:#x}  {pretty}{aux}  "
-                    f"(set_by={name.set_by})\n"
+                    f"    {name.entry_va:#x}  {pretty}{aux}  (set_by={name.set_by})\n"
                 )
 
         def cmd_types(argv: List[str]) -> None:
@@ -399,9 +423,7 @@ class ReplCommand(BaseCommand):
         def cmd_struct(argv: List[str]) -> None:
             """struct <name> field=type[@offset] field=type[@offset] ..."""
             if not argv:
-                sys.stdout.write(
-                    "struct <name> <field>:<type>[@<offset>] ...\n"
-                )
+                sys.stdout.write("struct <name> <field>:<type>[@<offset>] ...\n")
                 return
             name = argv[0]
             fields: List[type_db.StructField] = []
@@ -421,7 +443,10 @@ class ReplCommand(BaseCommand):
                 size = _guess_size(ty)
                 fields.append(
                     type_db.StructField(
-                        offset=cursor_off, name=fname, c_type=ty, size=size,
+                        offset=cursor_off,
+                        name=fname,
+                        c_type=ty,
+                        size=size,
                     )
                 )
                 cursor_off += size
@@ -442,11 +467,11 @@ class ReplCommand(BaseCommand):
                 sys.stdout.write(f"no function contains {here_va:#x}\n")
                 return
             n = type_db.discover_struct_candidates(
-                kb, str(ctx.file_path), func_va,
+                kb,
+                str(ctx.file_path),
+                func_va,
             )
-            sys.stdout.write(
-                f"  added {n} struct candidate(s) for fn@{func_va:#x}\n"
-            )
+            sys.stdout.write(f"  added {n} struct candidate(s) for fn@{func_va:#x}\n")
             kb.save()
 
         def cmd_propagate(argv: List[str]) -> None:
@@ -463,7 +488,9 @@ class ReplCommand(BaseCommand):
                 sys.stdout.write(f"no function contains {here_va:#x}\n")
                 return
             n = xref_db.propagate_types_at_callsites(
-                kb, str(ctx.file_path), func_va,
+                kb,
+                str(ctx.file_path),
+                func_va,
             )
             sys.stdout.write(
                 f"  refined types on {n} stack slot(s) in fn@{func_va:#x}\n"
@@ -479,9 +506,7 @@ class ReplCommand(BaseCommand):
                 protos = xref_db.list_function_prototypes(kb)
                 sys.stdout.write(f"  {len(protos)} prototypes loaded:\n")
                 for p in protos[:32]:
-                    sys.stdout.write(
-                        f"    {p.render()}  (set_by={p.set_by})\n"
-                    )
+                    sys.stdout.write(f"    {p.render()}  (set_by={p.set_by})\n")
                 if len(protos) > 32:
                     sys.stdout.write(f"    … {len(protos) - 32} more\n")
                 return
@@ -505,8 +530,11 @@ class ReplCommand(BaseCommand):
                     pn, _, pt = p.partition(":")
                     params.append(xref_db.FunctionParam(name=pn, c_type=pt))
                 xref_db.set_function_prototype(
-                    kb, function_name=name, return_type=ret,
-                    params=params, set_by="manual",
+                    kb,
+                    function_name=name,
+                    return_type=ret,
+                    params=params,
+                    set_by="manual",
                 )
                 sys.stdout.write(f"  set prototype: {name}\n")
                 kb.save()
@@ -528,6 +556,7 @@ class ReplCommand(BaseCommand):
                 return
             donor = argv[0]
             from pathlib import Path as _Path
+
             if not _Path(donor).exists():
                 sys.stdout.write(f"donor not found: {donor}\n")
                 return
@@ -584,7 +613,11 @@ class ReplCommand(BaseCommand):
                 name = argv[2]
                 c_type = " ".join(argv[3:]) if len(argv) > 3 else None
                 xref_db.set_data_label(
-                    kb, va=va, name=name, c_type=c_type, set_by="manual",
+                    kb,
+                    va=va,
+                    name=name,
+                    c_type=c_type,
+                    set_by="manual",
                 )
                 sys.stdout.write(f"  labelled {va:#010x} -> {name}\n")
                 kb.save()
@@ -604,7 +637,8 @@ class ReplCommand(BaseCommand):
                 return
             if sub == "import":
                 n = xref_db.import_data_symbols_from_binary(
-                    kb, str(ctx.file_path),
+                    kb,
+                    str(ctx.file_path),
                 )
                 sys.stdout.write(f"  imported {n} data labels from binary symbols\n")
                 kb.save()
@@ -661,7 +695,10 @@ class ReplCommand(BaseCommand):
                     return
                 name = argv[2]
                 xref_db.set_stack_var(
-                    kb, function_va=func_va, offset=off, name=name,
+                    kb,
+                    function_va=func_va,
+                    offset=off,
+                    name=name,
                     set_by="manual",
                 )
                 sys.stdout.write(f"  renamed {off:+#06x} -> {name}\n")
@@ -690,9 +727,7 @@ class ReplCommand(BaseCommand):
                     pass
             sys.stdout.write(f"  {len(sample)} strings, first {limit}:\n")
             for s in sample[:limit]:
-                sys.stdout.write(
-                    f"    @{s.offset:08x}  {s.text[:80]!r}\n"
-                )
+                sys.stdout.write(f"    @{s.offset:08x}  {s.text[:80]!r}\n")
 
         def cmd_ask(argv: List[str]) -> None:
             nonlocal agent
@@ -701,6 +736,7 @@ class ReplCommand(BaseCommand):
                 return
             if agent is None:
                 from glaurung.llm.agents.memory_agent import create_memory_agent
+
                 agent = create_memory_agent()
                 sys.stdout.write("(loaded memory agent — 51 tools available)\n")
             question = " ".join(argv)
@@ -712,28 +748,42 @@ class ReplCommand(BaseCommand):
             kb.save()  # persist any KB nodes the agent added
 
         commands = {
-            "help": cmd_help, "?": cmd_help, "h": cmd_help,
-            "quit": cmd_quit, "q": cmd_quit, "exit": cmd_quit,
+            "help": cmd_help,
+            "?": cmd_help,
+            "h": cmd_help,
+            "quit": cmd_quit,
+            "q": cmd_quit,
+            "exit": cmd_quit,
             "save": cmd_save,
-            "goto": cmd_goto, "g": cmd_goto,
-            "back": cmd_back, "b": cmd_back,
-            "forward": cmd_forward, "f": cmd_forward,
-            "rename": cmd_rename, "n": cmd_rename,
-            "retype": cmd_retype, "y": cmd_retype,
-            "comment": cmd_comment, "c": cmd_comment,
-            "xrefs": cmd_xrefs, "x": cmd_xrefs,
-            "decomp": cmd_decomp, "d": cmd_decomp,
+            "goto": cmd_goto,
+            "g": cmd_goto,
+            "back": cmd_back,
+            "b": cmd_back,
+            "forward": cmd_forward,
+            "f": cmd_forward,
+            "rename": cmd_rename,
+            "n": cmd_rename,
+            "retype": cmd_retype,
+            "y": cmd_retype,
+            "comment": cmd_comment,
+            "c": cmd_comment,
+            "xrefs": cmd_xrefs,
+            "x": cmd_xrefs,
+            "decomp": cmd_decomp,
+            "d": cmd_decomp,
             "functions": cmd_functions,
             "types": cmd_types,
             "struct": cmd_struct,
             "show": cmd_show,
-            "locals": cmd_locals, "l": cmd_locals,
+            "locals": cmd_locals,
+            "l": cmd_locals,
             "label": cmd_label,
             "borrow": cmd_borrow,
             "proto": cmd_proto,
             "propagate": cmd_propagate,
             "recover-structs": cmd_recover_structs,
-            "strings": cmd_strings, "s": cmd_strings,
+            "strings": cmd_strings,
+            "s": cmd_strings,
             "ask": cmd_ask,
         }
 
@@ -769,10 +819,7 @@ class ReplCommand(BaseCommand):
                 cmd_name = argv[0]
                 handler = commands.get(cmd_name)
                 if handler is None:
-                    sys.stdout.write(
-                        f"unknown command: {cmd_name!r}  "
-                        f"(try 'help')\n"
-                    )
+                    sys.stdout.write(f"unknown command: {cmd_name!r}  (try 'help')\n")
                     continue
                 try:
                     handler(argv[1:])
@@ -783,8 +830,7 @@ class ReplCommand(BaseCommand):
                     continue
                 # Persist after every state-changing command — REPL
                 # crashes shouldn't lose work.
-                if cmd_name in ("rename", "n", "comment", "c",
-                                "struct", "ask"):
+                if cmd_name in ("rename", "n", "comment", "c", "struct", "ask"):
                     kb.save()
         except (EOFError, KeyboardInterrupt):
             pass
@@ -810,7 +856,9 @@ class ReplCommand(BaseCommand):
 
         artifact = g.triage.analyze_path(
             str(binary_path),
-            str_min_len=4, str_max_samples=1000, str_max_classify=1000,
+            str_min_len=4,
+            str_max_samples=1000,
+            str_max_classify=1000,
         )
         ctx = MemoryContext(
             file_path=str(binary_path),
@@ -843,8 +891,7 @@ def _guess_size(c_type: str) -> int:
         return 2
     if t in ("int", "uint32_t", "int32_t", "float"):
         return 4
-    if t in ("long", "uint64_t", "int64_t", "size_t", "ssize_t",
-             "double", "ptrdiff_t"):
+    if t in ("long", "uint64_t", "int64_t", "size_t", "ssize_t", "double", "ptrdiff_t"):
         return 8
     return 8  # default: pointer-sized
 

@@ -368,8 +368,7 @@ def test_windows_risk_json_reports_parser_shape(
         for item in report["risk_items"]
     )
     assert any(
-        item["kind"] == "resource-size-allocation-flow"
-        for item in report["risk_items"]
+        item["kind"] == "resource-size-allocation-flow" for item in report["risk_items"]
     )
     assert any(
         item["kind"] == "resource-size-buffer-flow" for item in report["risk_items"]

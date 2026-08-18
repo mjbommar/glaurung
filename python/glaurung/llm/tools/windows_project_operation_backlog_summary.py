@@ -35,7 +35,9 @@ class WindowsProjectOperationBacklogSummaryArgs(BaseModel):
         description="Path to ASB data/kg/pe-sinks.yaml. Defaults to ASB_REPO or sibling repo.",
     )
     target_id: str | None = Field(None, description="Optional target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
     required_capability: str | None = Field(
         None,
         description="Optional required Glaurung/ASB capability filter.",
@@ -155,13 +157,17 @@ class WindowsProjectOperationBacklogSummaryTool(
             ),
         )
 
-        matched_sites = _match_backlog_entries(backlog_result.entries, callsite_result.callsites)
+        matched_sites = _match_backlog_entries(
+            backlog_result.entries, callsite_result.callsites
+        )
         groups = _groups(
             backlog_result.entries,
             matched_sites,
             include_unmatched=args.include_unmatched_backlog,
         )[: args.max_entries]
-        matched_entry_count = sum(1 for entry in backlog_result.entries if entry.id in matched_sites)
+        matched_entry_count = sum(
+            1 for entry in backlog_result.entries if entry.id in matched_sites
+        )
         matched_callsite_count = sum(len(sites) for sites in matched_sites.values())
         unmatched_entry_count = len(backlog_result.entries) - matched_entry_count
 
@@ -294,7 +300,9 @@ def _callsite_names(site: ProjectCallsiteFact) -> list[str]:
 def _symbol_matches(name: str, symbol: str) -> bool:
     name_suffix = name.rsplit("!", 1)[-1].rsplit("::", 1)[-1]
     symbol_suffix = symbol.rsplit("!", 1)[-1].rsplit("::", 1)[-1]
-    return name.lower() == symbol.lower() or name_suffix.lower() == symbol_suffix.lower()
+    return (
+        name.lower() == symbol.lower() or name_suffix.lower() == symbol_suffix.lower()
+    )
 
 
 def _sample_callers(sites: list[ProjectCallsiteFact]) -> list[str]:
@@ -327,7 +335,9 @@ def _coverage(
     return coverage
 
 
-def _missing_capabilities(groups: list[WindowsProjectOperationBacklogGroup]) -> list[str]:
+def _missing_capabilities(
+    groups: list[WindowsProjectOperationBacklogGroup],
+) -> list[str]:
     missing = [
         "classifier_semantic_confirmation",
         "type_aware_operation_classification",

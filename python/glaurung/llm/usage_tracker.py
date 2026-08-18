@@ -48,20 +48,22 @@ logger = logging.getLogger(__name__)
 # Source: provider pricing pages, May 2026. Conservative when uncertain.
 PRICE_PER_MILLION_USD: dict[str, tuple[float, float]] = {
     # OpenAI
-    "openai:gpt-5.4-mini":         (0.15, 0.60),
-    "openai:gpt-5.5":              (5.00, 15.00),
-    "openai:gpt-5.5-mini":         (0.25, 1.00),
+    "openai:gpt-5.4-mini": (0.15, 0.60),
+    "openai:gpt-5.5": (5.00, 15.00),
+    "openai:gpt-5.5-mini": (0.25, 1.00),
     # Anthropic
-    "anthropic:claude-haiku-4-5":  (1.00, 5.00),
+    "anthropic:claude-haiku-4-5": (1.00, 5.00),
     "anthropic:claude-sonnet-4-6": (3.00, 15.00),
-    "anthropic:claude-opus-4-7":   (15.00, 75.00),
+    "anthropic:claude-opus-4-7": (15.00, 75.00),
     # Test / unknown -- log zero so totals don't lie.
-    "test":                        (0.0, 0.0),
+    "test": (0.0, 0.0),
 }
 
 
 def estimate_cost_usd(
-    model: str, input_tokens: int, output_tokens: int,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
 ) -> Optional[float]:
     """Compute USD for a single call. Returns ``None`` if the model
     isn't in the price table (operator should add it)."""
@@ -81,25 +83,26 @@ def estimate_cost_usd(
 @dataclass
 class UsageRecord:
     """One LLM call's usage."""
+
     call_id: str
-    ts: float            # unix epoch
+    ts: float  # unix epoch
     model: str
     input_tokens: int
     output_tokens: int
-    request_count: int   # how many tool round-trips this run did
+    request_count: int  # how many tool round-trips this run did
     cost_usd: Optional[float]
-    source: str          # 'single_pass' | 'findings_runner' | 'finding_critic' | ...
+    source: str  # 'single_pass' | 'findings_runner' | 'finding_critic' | ...
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "call_id":        self.call_id,
-            "ts":             self.ts,
-            "model":          self.model,
-            "input_tokens":   self.input_tokens,
-            "output_tokens":  self.output_tokens,
-            "request_count":  self.request_count,
-            "cost_usd":       self.cost_usd,
-            "source":         self.source,
+            "call_id": self.call_id,
+            "ts": self.ts,
+            "model": self.model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "request_count": self.request_count,
+            "cost_usd": self.cost_usd,
+            "source": self.source,
         }
 
 
@@ -116,7 +119,9 @@ class UsageTracker:
     """
 
     session_id: str = field(
-        default_factory=lambda: time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
+        default_factory=lambda: (
+            time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        ),
     )
     records: list[UsageRecord] = field(default_factory=list)
     budget_usd: Optional[float] = None
@@ -210,7 +215,9 @@ class UsageTracker:
             ):
                 logger.info(
                     "[usage] session=%s calls=%d running=$%.4f",
-                    self.session_id, len(self.records), running_cost,
+                    self.session_id,
+                    len(self.records),
+                    running_cost,
                 )
             if (
                 self.budget_usd is not None
@@ -256,7 +263,12 @@ class UsageTracker:
             for r in self.records:
                 bucket = out.setdefault(
                     r.model,
-                    {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+                    {
+                        "calls": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cost_usd": 0.0,
+                    },
                 )
                 bucket["calls"] += 1
                 bucket["input_tokens"] += r.input_tokens

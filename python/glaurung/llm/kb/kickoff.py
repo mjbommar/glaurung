@@ -39,6 +39,7 @@ from .persistent import PersistentKnowledgeBase
 @dataclass
 class KickoffSummary:
     """Structured result of a first-touch analysis run."""
+
     binary_path: str
     binary_size: int
 
@@ -179,11 +180,13 @@ def kickoff_analysis(
                 # Each IocSample exposes kind / text / offset; flatten
                 # to plain dict so the JSON serializer doesn't need a
                 # custom adapter.
-                summary.ioc_samples.append({
-                    "kind": str(getattr(sample, "kind", "")),
-                    "text": str(getattr(sample, "text", ""))[:200],
-                    "offset": int(getattr(sample, "offset", 0) or 0),
-                })
+                summary.ioc_samples.append(
+                    {
+                        "kind": str(getattr(sample, "kind", "")),
+                        "text": str(getattr(sample, "text", ""))[:200],
+                        "offset": int(getattr(sample, "offset", 0) or 0),
+                    }
+                )
     except Exception:
         pass
 
@@ -191,10 +194,13 @@ def kickoff_analysis(
     if db_path is None:
         # In-memory-ish: tmp file the caller is expected to discard.
         import tempfile
+
         td = tempfile.mkdtemp(prefix="glaurung-kickoff-")
         db_path = str(Path(td) / "kickoff.glaurung")
     kb = PersistentKnowledgeBase.open(
-        Path(db_path), binary_path=binary, session=session,
+        Path(db_path),
+        binary_path=binary,
+        session=session,
         auto_load_stdlib=True,
     )
     try:
@@ -204,8 +210,10 @@ def kickoff_analysis(
         t0 = time.perf_counter()
         try:
             edges = _xref_db.index_callgraph(
-                kb, str(binary),
-                max_read_bytes=max_read_bytes, max_file_size=max_file_size,
+                kb,
+                str(binary),
+                max_read_bytes=max_read_bytes,
+                max_file_size=max_file_size,
             )
         except Exception as e:
             summary.notes.append(f"index_callgraph failed: {e}")
@@ -250,25 +258,19 @@ def kickoff_analysis(
                             f"unresolved (cache miss"
                             + (", fetch off)" if not fetch_pdb else ", fetch failed)")
                         )
-                    pdb_map = dict(
-                        _g.symbols.pdb_symbol_map(str(binary), pdb_cache)
-                    )
+                    pdb_map = dict(_g.symbols.pdb_symbol_map(str(binary), pdb_cache))
                     applied = 0
                     for va, nm in pdb_map.items():
                         if not nm:
                             continue
-                        _xref_db.set_function_name(
-                            kb, int(va), str(nm), set_by="pdb"
-                        )
+                        _xref_db.set_function_name(kb, int(va), str(nm), set_by="pdb")
                         applied += 1
                     summary.functions_named_pdb = applied
                     if applied:
                         kb._conn.commit()
             except Exception as e:  # noqa: BLE001 - informational pass
                 summary.notes.append(f"pdb naming failed: {e}")
-            timings["pdb_naming_ms"] = round(
-                (time.perf_counter() - t0) * 1000, 1
-            )
+            timings["pdb_naming_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
             # #4: surface PDB struct layouts at analysis time. Bounded to
             # an explicit name list when supplied (Windows PDBs carry
@@ -284,7 +286,11 @@ def kickoff_analysis(
                     # Microsoft PUBLIC PDBs carry function publics but usually
                     # NOT private struct layouts -- so requested structs often
                     # land here. Surface that instead of silently importing 0.
-                    miss = ty.get("missing_layouts") or ty.get("missing_struct_names") or []
+                    miss = (
+                        ty.get("missing_layouts")
+                        or ty.get("missing_struct_names")
+                        or []
+                    )
                     if miss:
                         summary.notes.append(
                             f"pdb types: {len(miss)} requested layout(s) not in "
@@ -292,9 +298,7 @@ def kickoff_analysis(
                         )
                 except Exception as e:  # noqa: BLE001
                     summary.notes.append(f"pdb type import failed: {e}")
-                timings["pdb_types_ms"] = round(
-                    (time.perf_counter() - t0) * 1000, 1
-                )
+                timings["pdb_types_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
         # 5. Optional: import DWARF types into type_db.
         t0 = time.perf_counter()
@@ -317,9 +321,7 @@ def kickoff_analysis(
         )
         summary.functions_total = len(funcs)
         summary.functions_with_blocks = sum(1 for f in funcs if f.basic_blocks)
-        summary.functions_named = sum(
-            1 for f in funcs if not f.name.startswith("sub_")
-        )
+        summary.functions_named = sum(1 for f in funcs if not f.name.startswith("sub_"))
 
         # Count provenance sources from the freshly-populated function_names.
         names = _xref_db.list_function_names(kb)
@@ -331,7 +333,7 @@ def kickoff_analysis(
         timings["analyze_functions_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
         t0 = time.perf_counter()
-        targets = funcs[: max_functions_for_kb_lift]
+        targets = funcs[:max_functions_for_kb_lift]
         slots_total = 0
         propagated_total = 0
         autos_total = 0
@@ -340,29 +342,33 @@ def kickoff_analysis(
                 continue
             try:
                 slots = _xref_db.discover_stack_vars(
-                    kb, str(binary), int(f.entry_point.value),
+                    kb,
+                    str(binary),
+                    int(f.entry_point.value),
                 )
             except Exception:
                 slots = 0
             slots_total += slots
             try:
                 propagated_total += _xref_db.propagate_types_at_callsites(
-                    kb, str(binary), int(f.entry_point.value),
+                    kb,
+                    str(binary),
+                    int(f.entry_point.value),
                 )
             except Exception:
                 pass
             try:
                 autos_total += _type_db.discover_struct_candidates(
-                    kb, str(binary), int(f.entry_point.value),
+                    kb,
+                    str(binary),
+                    int(f.entry_point.value),
                 )
             except Exception:
                 pass
         summary.stack_slots_discovered = slots_total
         summary.types_propagated = propagated_total
         summary.auto_structs_emitted = autos_total
-        timings["per_function_lift_ms"] = round(
-            (time.perf_counter() - t0) * 1000, 1
-        )
+        timings["per_function_lift_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
         # Record this whole invocation as a single evidence row so
         # the chat UI can cite the agent's first-turn summary back
@@ -432,20 +438,26 @@ def render_kickoff_markdown(summary: KickoffSummary) -> str:
                 lines.append(f"_{n}_")
         return "\n".join(lines) + "\n"
 
-    lines.append(f"- format: **{summary.format}**, arch: **{summary.arch}**, "
-                 f"size: **{summary.binary_size}** bytes")
+    lines.append(
+        f"- format: **{summary.format}**, arch: **{summary.arch}**, "
+        f"size: **{summary.binary_size}** bytes"
+    )
     if summary.entry_va is not None:
         lines.append(f"- entry: **{summary.entry_va:#x}**")
     lines.append("")
     lines.append("## Functions")
-    lines.append(f"- discovered: **{summary.functions_total}** "
-                 f"(with blocks: {summary.functions_with_blocks}, "
-                 f"named: {summary.functions_named})")
+    lines.append(
+        f"- discovered: **{summary.functions_total}** "
+        f"(with blocks: {summary.functions_with_blocks}, "
+        f"named: {summary.functions_named})"
+    )
     lines.append(f"- callgraph edges: **{summary.callgraph_edges}**")
     if summary.by_set_by:
         sources = ", ".join(
-            f"{k}={v}" for k, v in sorted(
-                summary.by_set_by.items(), key=lambda kv: -kv[1],
+            f"{k}={v}"
+            for k, v in sorted(
+                summary.by_set_by.items(),
+                key=lambda kv: -kv[1],
             )
         )
         lines.append(f"- name sources: {sources}")
@@ -461,7 +473,8 @@ def render_kickoff_markdown(summary: KickoffSummary) -> str:
         lines.append("## IOCs (from string scan)")
         # Sort buckets descending by count for human readability.
         for kind, count in sorted(
-            summary.iocs.items(), key=lambda kv: -kv[1],
+            summary.iocs.items(),
+            key=lambda kv: -kv[1],
         ):
             lines.append(f"- **{kind}**: {count}")
         # Show up to 6 representative samples — enough to ground the
@@ -470,7 +483,9 @@ def render_kickoff_markdown(summary: KickoffSummary) -> str:
             lines.append("")
             lines.append("Examples:")
             for s in summary.ioc_samples[:6]:
-                lines.append(f"  - `{s['kind']}` `{s['text']}`  (off `{s['offset']:#x}`)")
+                lines.append(
+                    f"  - `{s['kind']}` `{s['text']}`  (off `{s['offset']:#x}`)"
+                )
         lines.append("")
     if summary.elapsed_ms:
         ms_total = sum(v for v in summary.elapsed_ms.values())

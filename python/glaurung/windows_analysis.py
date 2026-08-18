@@ -366,7 +366,9 @@ def import_callers(
         if cache_dir.is_dir():
             symmap = {
                 int(va): str(name)
-                for va, name in symbols.pdb_symbol_map(str(path), str(cache_dir)).items()
+                for va, name in symbols.pdb_symbol_map(
+                    str(path), str(cache_dir)
+                ).items()
             }
     entries = sorted(symmap)
 
@@ -395,7 +397,9 @@ def import_callers(
         }
         for (name, entry_va, func_name), call_sites in groups.items()
     ]
-    out.sort(key=lambda row: (-row["count"], row["import_name"], row["function_va"] or 0))
+    out.sort(
+        key=lambda row: (-row["count"], row["import_name"], row["function_va"] or 0)
+    )
     return out
 
 

@@ -9,7 +9,9 @@ from glaurung.llm.tools.kb_search import build_tool as build_kb_search
 
 
 def test_direct_tools_end_to_end():
-    sample = Path("samples/binaries/platforms/linux/amd64/native/clang/O0/hello-clang-O0")
+    sample = Path(
+        "samples/binaries/platforms/linux/amd64/native/clang/O0/hello-clang-O0"
+    )
     assert sample.exists(), "sample binary missing"
 
     art = g.triage.analyze_path(str(sample), 10_000_000, 100_000_000, 1)
@@ -30,4 +32,3 @@ def test_direct_tools_end_to_end():
     s_tool = build_kb_search()
     sres = s_tool.run(ctx, ctx.kb, s_tool.input_model(query="hello", k=10))
     assert isinstance(sres.hits, list)
-

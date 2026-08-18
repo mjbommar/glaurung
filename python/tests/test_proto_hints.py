@@ -25,7 +25,9 @@ def _seed(tmp_path: Path):
     binary = _need(_C2)
     db = tmp_path / "proto.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
     return kb, binary
 
@@ -34,12 +36,16 @@ def _find_function_with_call(kb, binary, callee_name: str):
     """Return a (caller_va, body) where the rendered body contains a
     call to `callee_name`. Skips when not present."""
     import glaurung as g
+
     funcs, _ = g.analysis.analyze_functions_path(str(binary))
     for f in funcs:
         try:
             text = xref_db.render_decompile_with_names(
-                kb, str(binary), int(f.entry_point.value),
-                timeout_ms=500, style="c",
+                kb,
+                str(binary),
+                int(f.entry_point.value),
+                timeout_ms=500,
+                style="c",
                 include_call_proto_hints=False,
             )
         except Exception:
@@ -56,7 +62,11 @@ def test_proto_hint_appears_for_libc_call(tmp_path: Path) -> None:
     kb, binary = _seed(tmp_path)
     fn_va, _ = _find_function_with_call(kb, binary, "printf")
     text = xref_db.render_decompile_with_names(
-        kb, str(binary), fn_va, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        fn_va,
+        timeout_ms=500,
+        style="c",
         include_call_proto_hints=True,
     )
     # Must contain at least one printf call line with a hint comment.
@@ -71,7 +81,11 @@ def test_proto_hint_can_be_disabled(tmp_path: Path) -> None:
     kb, binary = _seed(tmp_path)
     fn_va, _ = _find_function_with_call(kb, binary, "printf")
     text = xref_db.render_decompile_with_names(
-        kb, str(binary), fn_va, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        fn_va,
+        timeout_ms=500,
+        style="c",
         include_call_proto_hints=False,
     )
     # No proto hints anywhere when the flag is off.
@@ -86,7 +100,11 @@ def test_proto_hint_skips_lines_with_existing_comment(tmp_path: Path) -> None:
     kb, binary = _seed(tmp_path)
     fn_va, _ = _find_function_with_call(kb, binary, "printf")
     text = xref_db.render_decompile_with_names(
-        kb, str(binary), fn_va, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        fn_va,
+        timeout_ms=500,
+        style="c",
         include_call_proto_hints=True,
     )
     # No line should have two `//` comments.
@@ -99,12 +117,16 @@ def test_proto_hint_uses_analyst_set_proto(tmp_path: Path) -> None:
     """Manually set a prototype for a function and confirm the hint
     appears at every call site for that function."""
     from glaurung.llm.kb.xref_db import (
-        FunctionParam, set_function_prototype,
+        FunctionParam,
+        set_function_prototype,
     )
+
     kb, binary = _seed(tmp_path)
     fn_va, _ = _find_function_with_call(kb, binary, "memcpy")
     set_function_prototype(
-        kb, "memcpy", "void *",
+        kb,
+        "memcpy",
+        "void *",
         [
             FunctionParam(name="dst", c_type="void *"),
             FunctionParam(name="src", c_type="const void *"),
@@ -113,7 +135,11 @@ def test_proto_hint_uses_analyst_set_proto(tmp_path: Path) -> None:
         set_by="manual",
     )
     text = xref_db.render_decompile_with_names(
-        kb, str(binary), fn_va, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        fn_va,
+        timeout_ms=500,
+        style="c",
         include_call_proto_hints=True,
     )
     assert any(
@@ -130,11 +156,13 @@ def test_proto_hint_no_proto_no_hint(tmp_path: Path) -> None:
     # Use a function name that's almost certainly NOT in any bundle.
     bogus = "totally_made_up_function"
     text = xref_db.render_decompile_with_names(
-        kb, str(binary), 0x1110, timeout_ms=500, style="c",
+        kb,
+        str(binary),
+        0x1110,
+        timeout_ms=500,
+        style="c",
         include_call_proto_hints=True,
     )
     # No line should mention the bogus name with a hint.
-    assert not any(
-        bogus in line and "// proto:" in line for line in text.splitlines()
-    )
+    assert not any(bogus in line and "// proto:" in line for line in text.splitlines())
     kb.close()

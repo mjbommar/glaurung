@@ -110,11 +110,14 @@ def load_targets(corpus: Path) -> list[dict[str, object]]:
     return manifest["fixtures"]
 
 
-def run_glaurung(path: Path, max_functions: int,
-                 max_blocks: int = 2048,
-                 max_instructions: int = 50_000,
-                 timeout_ms: int = 100,
-                 augment_tailcalls: bool = True) -> dict[str, object]:
+def run_glaurung(
+    path: Path,
+    max_functions: int,
+    max_blocks: int = 2048,
+    max_instructions: int = 50_000,
+    timeout_ms: int = 100,
+    augment_tailcalls: bool = True,
+) -> dict[str, object]:
     start = time.perf_counter()
     funcs, cg, stats = g.analysis.analyze_functions_path_with_stats(
         str(path),
@@ -130,6 +133,7 @@ def run_glaurung(path: Path, max_functions: int,
         # heads that the in-tree tail_call_seeds pass missed.
         try:
             from asb_tailcall_augment import augment_entries  # type: ignore
+
             baseline = {func.entry_point.value for func in funcs}
             augmented = augment_entries(path, baseline)
             new_entries = augmented - baseline
@@ -235,7 +239,9 @@ def address_gap(row: dict[str, object]) -> dict[str, object]:
     gl_entries = {str(entry).lower() for entry in row["glaurung"].get("entry_vas", [])}
     gh_functions = row["ghidra"].get("functions", [])
     gh_entries = {str(func["entry"]).lower() for func in gh_functions}
-    missing = [func for func in gh_functions if str(func["entry"]).lower() not in gl_entries]
+    missing = [
+        func for func in gh_functions if str(func["entry"]).lower() not in gl_entries
+    ]
     extra = sorted(gl_entries - gh_entries)
     return {
         "missing_entries": len(missing),
@@ -296,7 +302,9 @@ def annotate_trends(
             "missing_delta": missing_delta,
             "extra_delta": extra_delta,
             "recall_delta": recall_delta,
-            "new_bad_delta": missing_delta > 0 or extra_delta > 5 or recall_delta < -0.005,
+            "new_bad_delta": missing_delta > 0
+            or extra_delta > 5
+            or recall_delta < -0.005,
         }
 
 
@@ -313,7 +321,9 @@ def suspected_reason(row: dict[str, object]) -> str:
         return "glaurung_budget_truncated"
     if gap <= 0:
         return "parity_or_over"
-    if gh_thunks > gl_thunks and gh_thunks - gl_thunks >= max(1, min(gap, gh_thunks) // 2):
+    if gh_thunks > gl_thunks and gh_thunks - gl_thunks >= max(
+        1, min(gap, gh_thunks) // 2
+    ):
         return "thunk_classification_gap"
     if int(gap_detail.get("missing_le32", 0)) >= max(1, gap // 2):
         return "address_missing_tiny_function_gap"
@@ -445,21 +455,31 @@ def main() -> int:
         help="Glaurung function-count cap; 0 means unlimited.",
     )
     parser.add_argument(
-        "--max-blocks", type=int, default=2048,
+        "--max-blocks",
+        type=int,
+        default=2048,
         help="Per-function CFG block budget; raise for ntoskrnl-class binaries.",
     )
     parser.add_argument(
-        "--max-instructions", type=int, default=50_000,
+        "--max-instructions",
+        type=int,
+        default=50_000,
         help="Per-function instruction budget; raise for ntoskrnl-class binaries.",
     )
     parser.add_argument(
-        "--per-fn-timeout-ms", type=int, default=100,
+        "--per-fn-timeout-ms",
+        type=int,
+        default=100,
         help="Per-function CFG walk timeout (ms); raise for ntoskrnl-class binaries.",
     )
     parser.add_argument("--analysis-timeout-s", type=int, default=75)
     parser.add_argument("--timeout-s", type=int, default=130)
-    parser.add_argument("--output-json", type=Path, default=Path("/tmp/windows-ghidra-parity.json"))
-    parser.add_argument("--output-md", type=Path, default=Path("/tmp/windows-ghidra-parity.md"))
+    parser.add_argument(
+        "--output-json", type=Path, default=Path("/tmp/windows-ghidra-parity.json")
+    )
+    parser.add_argument(
+        "--output-md", type=Path, default=Path("/tmp/windows-ghidra-parity.md")
+    )
     parser.add_argument(
         "--previous-json",
         type=Path,
@@ -491,7 +511,8 @@ def main() -> int:
                 "sha256_16": sha256_16(path),
             }
             row["glaurung"] = run_glaurung(
-                path, args.max_functions,
+                path,
+                args.max_functions,
                 max_blocks=args.max_blocks,
                 max_instructions=args.max_instructions,
                 timeout_ms=args.per_fn_timeout_ms,

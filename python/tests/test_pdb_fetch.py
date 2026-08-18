@@ -4,6 +4,7 @@ Network-dependent tests are skipped when the corpus/cache is absent so
 the suite stays green off-box. The CodeView parser test is deterministic
 and runs whenever a sample PE is present.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

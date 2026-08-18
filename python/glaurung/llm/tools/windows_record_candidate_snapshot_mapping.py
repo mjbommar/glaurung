@@ -183,7 +183,9 @@ def _build_mapping(
         blockers.append(f"binary mismatch: packet={packet.binary} plan={plan.binary}")
 
     if candidate_build_label and candidate_build_label == plan.build_label:
-        evidence.append(f"candidate build label matches snapshot: {candidate_build_label}")
+        evidence.append(
+            f"candidate build label matches snapshot: {candidate_build_label}"
+        )
     elif candidate_build_label:
         blockers.append(
             "candidate build label mismatch: "
@@ -201,8 +203,14 @@ def _build_mapping(
                 "inventory build_label mismatch: "
                 f"inventory={substrate.build_label} plan={plan.build_label}"
             )
-        if packet.build and substrate.build_number and substrate.build_number in packet.build:
-            evidence.append(f"candidate build contains inventory build number {substrate.build_number}")
+        if (
+            packet.build
+            and substrate.build_number
+            and substrate.build_number in packet.build
+        ):
+            evidence.append(
+                f"candidate build contains inventory build number {substrate.build_number}"
+            )
         elif substrate.build_number:
             blockers.append(
                 "candidate build does not contain inventory build number "
@@ -253,7 +261,9 @@ def _build_mapping(
         candidate_build_label=candidate_build_label,
         validation_id=plan.validation_id,
         validation_build_label=plan.build_label,
-        validation_build_number=substrate.build_number if substrate is not None else None,
+        validation_build_number=substrate.build_number
+        if substrate is not None
+        else None,
         snapshot_name=plan.snapshot_name,
         image_path=plan.image_path,
         ovmf_vars_path=plan.ovmf_vars_path,

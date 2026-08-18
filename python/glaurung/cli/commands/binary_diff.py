@@ -17,16 +17,19 @@ class BinaryDiffCommand(BaseCommand):
         return "Diff two binaries function-by-function"
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("binary_a", help="First binary (\"before\")")
-        parser.add_argument("binary_b", help="Second binary (\"after\")")
+        parser.add_argument("binary_a", help='First binary ("before")')
+        parser.add_argument("binary_b", help='Second binary ("after")')
         parser.add_argument(
-            "--include-anonymous", action="store_true",
+            "--include-anonymous",
+            action="store_true",
             help="Include `sub_<hex>` placeholder functions in the diff. "
-                 "Off by default — their VAs shift between builds and "
-                 "the resulting noise dominates real changes.",
+            "Off by default — their VAs shift between builds and "
+            "the resulting noise dominates real changes.",
         )
         parser.add_argument(
-            "--max-rows", type=int, default=0,
+            "--max-rows",
+            type=int,
+            default=0,
             help=(
                 "Cap on changed-function rows shown in Markdown output. "
                 "0 = unlimited. JSON output is never truncated regardless."
@@ -36,9 +39,9 @@ class BinaryDiffCommand(BaseCommand):
             "--pdb-cache",
             default="",
             help="Optional Microsoft-style PDB cache directory. When set, "
-                 "each row's JSON output carries `public_name_pre` / "
-                 "`public_name_post` populated from the PDB at the row's "
-                 "entry VA -- skips LLM-naming for nameable functions.",
+            "each row's JSON output carries `public_name_pre` / "
+            "`public_name_post` populated from the PDB at the row's "
+            "entry VA -- skips LLM-naming for nameable functions.",
         )
         parser.add_argument(
             "--cross-name-threshold",
@@ -75,7 +78,8 @@ class BinaryDiffCommand(BaseCommand):
             else CROSS_NAME_THRESHOLD_DEFAULT
         )
         diff = diff_binaries(
-            str(a), str(b),
+            str(a),
+            str(b),
             skip_anonymous=not args.include_anonymous,
             pdb_cache=(args.pdb_cache or None),
             cross_name_threshold=threshold,

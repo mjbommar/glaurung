@@ -34,6 +34,5 @@ def test_gcc_o2_loop_flags_round_trip() -> None:
 
     lane = observed["14_flag_effects:gcc:O2"]
     assert lane == {name: "pass" for name in functions}, (
-        "optimized flag consumers did not preserve executable behavior: "
-        f"{lane}"
+        f"optimized flag consumers did not preserve executable behavior: {lane}"
     )

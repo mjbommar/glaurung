@@ -100,7 +100,9 @@ class WindowsEnumerateEntrypointsTool(
         kb: KnowledgeBase,
         args: WindowsEnumerateEntrypointsArgs,
     ) -> WindowsEnumerateEntrypointsResult:
-        sources_path = _resolve_metadata_path(args.sources_path, "data/kg/pe-sources.yaml")
+        sources_path = _resolve_metadata_path(
+            args.sources_path, "data/kg/pe-sources.yaml"
+        )
         sources = _load_sources(sources_path)
         symbol_inventory = _collect_binary_symbols(ctx)
         address_map = _collect_symbol_addresses(ctx)
@@ -138,7 +140,10 @@ class WindowsEnumerateEntrypointsTool(
                     and len(entrypoints) >= args.max_entrypoints
                 ):
                     break
-            if args.max_entrypoints is not None and len(entrypoints) >= args.max_entrypoints:
+            if (
+                args.max_entrypoints is not None
+                and len(entrypoints) >= args.max_entrypoints
+            ):
                 break
 
         evidence_node_id = None
@@ -149,7 +154,9 @@ class WindowsEnumerateEntrypointsTool(
                     label="windows_enumerate_entrypoints",
                     props={
                         "entrypoint_count": len(entrypoints),
-                        "present_count": sum(1 for e in entrypoints if e.present_in_binary),
+                        "present_count": sum(
+                            1 for e in entrypoints if e.present_in_binary
+                        ),
                     },
                 )
             )
@@ -234,7 +241,8 @@ def _symbol_evidence(
     for category in ("exports", "imports", "dynamic", "all"):
         matches = _find_matching_symbols(symbol, inventory[category])
         out.extend(
-            BinarySymbolEvidence(name=name, category=category) for name in sorted(matches)
+            BinarySymbolEvidence(name=name, category=category)
+            for name in sorted(matches)
         )
     return out
 

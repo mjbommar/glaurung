@@ -63,7 +63,7 @@ class FunctionExplanation(BaseModel):
     key_operations: List[str] = Field(
         default_factory=list,
         description="Bullet list of the function's observable behaviour — "
-                    "library calls, string uses, I/O, arithmetic invariants.",
+        "library calls, string uses, I/O, arithmetic invariants.",
     )
     calls: List[str] = Field(
         default_factory=list, description="Resolved direct-call targets"
@@ -136,7 +136,7 @@ class PotentialVulnerability(BaseModel):
     kind: str = Field(
         ...,
         description="'buffer-overflow', 'format-string', 'integer-overflow', "
-                    "'use-after-free', 'command-injection', 'toctou', 'other'",
+        "'use-after-free', 'command-injection', 'toctou', 'other'",
     )
     evidence: str = Field(..., description="Pseudocode excerpt and reasoning")
     severity: str = Field(..., description="'low' | 'medium' | 'high'")

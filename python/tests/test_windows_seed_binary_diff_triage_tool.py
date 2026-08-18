@@ -11,9 +11,7 @@ from glaurung.llm.kb.models import NodeKind
 from glaurung.llm.tools.windows_seed_binary_diff_triage import build_tool
 
 
-_SWITCHY_V1 = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 _SWITCHY_V2 = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
 )

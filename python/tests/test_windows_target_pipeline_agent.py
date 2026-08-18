@@ -391,7 +391,10 @@ def test_windows_target_pipeline_runs_target_to_evidence_review(
     blocker_manifest = json.loads(
         (tmp_path / "blocker-worklist.json").read_text(encoding="utf-8")
     )
-    assert blocker_manifest["claim_level"] == "target_pipeline_blocker_worklist_not_finding"
+    assert (
+        blocker_manifest["claim_level"]
+        == "target_pipeline_blocker_worklist_not_finding"
+    )
     assert blocker_manifest["blocker_work_item_count"] == len(result.blocker_worklist)
     assert blocker_manifest["work_items"][0]["candidate_ids"]
     manifest = json.loads(

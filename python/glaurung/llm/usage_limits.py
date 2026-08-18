@@ -80,7 +80,12 @@ def build_usage_limits(
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "build_usage_limits(model=%s, req=%s, in=%s, out=%s, tot=%s, tool=%s)",
-            model_name, req, inp, out, tot, tool_calls_limit,
+            model_name,
+            req,
+            inp,
+            out,
+            tot,
+            tool_calls_limit,
         )
     return UsageLimits(
         request_limit=req,

@@ -18,6 +18,7 @@ A coverage footer reports how many targets resolved and how many indirect
 (register / memory) calls were left unresolved, so the output never reads
 as more complete than it is.
 """
+
 from __future__ import annotations
 
 import re
@@ -155,7 +156,8 @@ def disasm_function(
     from glaurung.disasm import disassemble_window_at
 
     insns = disassemble_window_at(
-        binary_path, int(start),
+        binary_path,
+        int(start),
         window_bytes=int(end - start),
         max_instructions=max_instructions,
         max_time_ms=8000,
@@ -212,8 +214,11 @@ def disasm_function(
         ops = ", ".join(str(o) for o in i.operands)
         text = f"{i.mnemonic} {ops}".rstrip()
         out.insns.append(
-            AnnotatedInsn(va=int(i.address.value), text=text,
-                          comment=annotate(ops, is_cf, is_call))
+            AnnotatedInsn(
+                va=int(i.address.value),
+                text=text,
+                comment=annotate(ops, is_cf, is_call),
+            )
         )
 
     cov.fact("instructions", len(out.insns))

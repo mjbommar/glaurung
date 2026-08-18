@@ -11,9 +11,7 @@ from glaurung.llm.kb.models import NodeKind
 from glaurung.llm.tools.windows_binary_diff_summary import build_tool
 
 
-_SWITCHY_V1 = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 _SWITCHY_V2 = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
 )
@@ -87,8 +85,7 @@ def test_windows_binary_diff_summary_can_omit_rows_and_add_evidence(
     assert result.rows == []
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_binary_diff_summary"
+        node.kind == NodeKind.evidence and node.label == "windows_binary_diff_summary"
         for node in ctx.kb.nodes()
     )
 

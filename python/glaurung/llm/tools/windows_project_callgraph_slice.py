@@ -166,7 +166,9 @@ def _present_tables(conn: sqlite3.Connection) -> set[str]:
 def _first_binary_id(conn: sqlite3.Connection, present: set[str]) -> int | None:
     if "binaries" not in present:
         return None
-    row = conn.execute("SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1").fetchone()
+    row = conn.execute(
+        "SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1"
+    ).fetchone()
     return int(row[0]) if row else None
 
 

@@ -168,9 +168,9 @@ def test_switch_dispatch_vectors_execute_every_arm_with_signed_inputs():
     vectors = M.override("switch_jt", "dispatch").get("extra_vectors", [])
     covered = {int(vector[0]) for vector in vectors if len(vector) == 3}
     assert set(range(8)) <= covered, f"missing switch arms: {set(range(8)) - covered}"
-    assert any(
-        int(vector[0]) == 7 and int(vector[2]) < 0 for vector in vectors
-    ), "case 7 needs a negative signed-shift operand"
+    assert any(int(vector[0]) == 7 and int(vector[2]) < 0 for vector in vectors), (
+        "case 7 needs a negative signed-shift operand"
+    )
     assert any(int(vector[0]) < 0 or int(vector[0]) > 7 for vector in vectors), (
         "the out-of-range default arm needs an explicit vector"
     )

@@ -23,14 +23,16 @@ class ExportCommand(BaseCommand):
             choices=("json", "markdown", "header", "ida", "binja", "ghidra"),
             default="markdown",
             help="Export shape (default: markdown). `json` is "
-                 "round-trippable; `header` emits the type DB as .h; "
-                 "`ida` / `binja` / `ghidra` emit scripts that apply "
-                 "the KB inside the respective tool.",
+            "round-trippable; `header` emits the type DB as .h; "
+            "`ida` / `binja` / `ghidra` emit scripts that apply "
+            "the KB inside the respective tool.",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against. "
-                 "Required when the DB has multiple binaries.",
+            "Required when the DB has multiple binaries.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -40,15 +42,19 @@ class ExportCommand(BaseCommand):
             return 2
 
         from glaurung.llm.kb.export import (
-            export_to_binja_script, export_to_c_header,
-            export_to_ghidra_script, export_to_ida_script,
-            export_to_json, export_to_markdown,
+            export_to_binja_script,
+            export_to_c_header,
+            export_to_ghidra_script,
+            export_to_ida_script,
+            export_to_json,
+            export_to_markdown,
         )
         from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")

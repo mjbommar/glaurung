@@ -26,8 +26,7 @@ def _slot_size(prev_offset: Optional[int], offset: int) -> Optional[int]:
 
 def _format_table(rows) -> str:
     lines = [
-        f"{'offset':>8}  {'name':<24}  {'type':<24}  {'size':>5}  "
-        f"{'uses':>4}  set_by"
+        f"{'offset':>8}  {'name':<24}  {'type':<24}  {'size':>5}  {'uses':>4}  set_by"
     ]
     lines.append("-" * len(lines[0]))
     sorted_rows = sorted(rows, key=lambda r: r.offset)
@@ -57,18 +56,23 @@ class FrameCommand(BaseCommand):
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument("fn_va", help="Function entry VA (hex with 0x or decimal)")
         parser.add_argument(
-            "action", nargs="?", default="list",
+            "action",
+            nargs="?",
+            default="list",
             choices=("list", "rename", "retype", "discover"),
             help="`list` (default), `rename`, `retype`, or `discover`",
         )
         parser.add_argument(
-            "rest", nargs="*",
+            "rest",
+            nargs="*",
             help="For `rename`: <offset> <name>. "
-                 "For `retype`: <offset> <c-type>. "
-                 "Offsets accept hex (0x10) or signed decimal (-16).",
+            "For `retype`: <offset> <c-type>. "
+            "Offsets accept hex (0x10) or signed decimal (-16).",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
 
@@ -88,7 +92,8 @@ class FrameCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -115,7 +120,9 @@ class FrameCommand(BaseCommand):
 
             if args.action == "rename":
                 if len(args.rest) < 2:
-                    formatter.output_plain("Usage: frame <db> <fn_va> rename <offset> <name>")
+                    formatter.output_plain(
+                        "Usage: frame <db> <fn_va> rename <offset> <name>"
+                    )
                     return 2
                 try:
                     off = int(args.rest[0], 0)
@@ -125,19 +132,22 @@ class FrameCommand(BaseCommand):
                 # Preserve existing c_type; only changing the name.
                 existing = xref_db.get_stack_var(kb, fn_va, off)
                 xref_db.set_stack_var(
-                    kb, function_va=fn_va, offset=off, name=args.rest[1],
+                    kb,
+                    function_va=fn_va,
+                    offset=off,
+                    name=args.rest[1],
                     c_type=existing.c_type if existing else None,
                     use_count=existing.use_count if existing else 0,
                     set_by="manual",
                 )
-                formatter.output_plain(
-                    f"  fn@{fn_va:#x} {off:+#06x} -> {args.rest[1]}"
-                )
+                formatter.output_plain(f"  fn@{fn_va:#x} {off:+#06x} -> {args.rest[1]}")
                 return 0
 
             if args.action == "retype":
                 if len(args.rest) < 2:
-                    formatter.output_plain("Usage: frame <db> <fn_va> retype <offset> <c-type>")
+                    formatter.output_plain(
+                        "Usage: frame <db> <fn_va> retype <offset> <c-type>"
+                    )
                     return 2
                 try:
                     off = int(args.rest[0], 0)
@@ -152,9 +162,13 @@ class FrameCommand(BaseCommand):
                     )
                     return 5
                 xref_db.set_stack_var(
-                    kb, function_va=fn_va, offset=off, name=existing.name,
+                    kb,
+                    function_va=fn_va,
+                    offset=off,
+                    name=existing.name,
                     c_type=args.rest[1],
-                    use_count=existing.use_count, set_by="manual",
+                    use_count=existing.use_count,
+                    set_by="manual",
                 )
                 formatter.output_plain(
                     f"  fn@{fn_va:#x} {off:+#06x} {existing.name}: {args.rest[1]}"
@@ -171,14 +185,19 @@ class FrameCommand(BaseCommand):
                 return 0
 
             if formatter.format_type == OutputFormat.JSON:
-                formatter.output_json([
-                    {
-                        "function_va": r.function_va, "offset": r.offset,
-                        "name": r.name, "c_type": r.c_type,
-                        "use_count": r.use_count, "set_by": r.set_by,
-                    }
-                    for r in rows
-                ])
+                formatter.output_json(
+                    [
+                        {
+                            "function_va": r.function_va,
+                            "offset": r.offset,
+                            "name": r.name,
+                            "c_type": r.c_type,
+                            "use_count": r.use_count,
+                            "set_by": r.set_by,
+                        }
+                        for r in rows
+                    ]
+                )
                 return 0
 
             formatter.output_plain(_format_table(rows))

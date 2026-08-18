@@ -22,7 +22,9 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_plan(tmp_path: Path, *, source_body: bytes = b"fresh") -> tuple[Path, Path, Path]:
+def _write_plan(
+    tmp_path: Path, *, source_body: bytes = b"fresh"
+) -> tuple[Path, Path, Path]:
     source = tmp_path / "artifacts" / "refresh.json"
     destination = tmp_path / "docs" / "windows-port" / "baseline.json"
     source.parent.mkdir(parents=True)
@@ -177,13 +179,13 @@ def test_windows_runner_artifact_promotion_apply_cli_json(
         [
             "windows",
             "runner-artifact-promotion-apply",
-                "--plan-path",
-                str(plan),
-                "--review-markdown-path",
-                str(tmp_path / "review.md"),
-                "--format",
-                "json",
-            ]
+            "--plan-path",
+            str(plan),
+            "--review-markdown-path",
+            str(tmp_path / "review.md"),
+            "--format",
+            "json",
+        ]
     )
 
     assert rc == 0

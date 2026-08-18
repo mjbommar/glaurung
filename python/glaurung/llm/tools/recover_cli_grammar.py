@@ -36,7 +36,7 @@ class RecoverCliGrammarArgs(BaseModel):
     help_strings: List[str] = Field(
         default_factory=list,
         description="Raw -h / --help text extracted verbatim from the "
-                    "binary. Best single naming signal if present.",
+        "binary. Best single naming signal if present.",
     )
     program_name_hint: Optional[str] = Field(
         None, description="Short program name hint (basename)"
@@ -66,9 +66,7 @@ class CliSubcommand(BaseModel):
 
 class CliGrammar(BaseModel):
     program_name: str
-    synopsis: str = Field(
-        ..., description="One-line SYNOPSIS suitable for a manpage"
-    )
+    synopsis: str = Field(..., description="One-line SYNOPSIS suitable for a manpage")
     description: str = Field(
         "", description="Short paragraph describing what the program does"
     )
@@ -170,16 +168,14 @@ def _build_prompt(args: RecoverCliGrammarArgs) -> str:
     return "\n\n".join(parts)
 
 
-class RecoverCliGrammarTool(
-    MemoryTool[RecoverCliGrammarArgs, RecoverCliGrammarResult]
-):
+class RecoverCliGrammarTool(MemoryTool[RecoverCliGrammarArgs, RecoverCliGrammarResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="recover_cli_grammar",
                 description="Recover a program's full CLI grammar from "
-                            "argv-handling pseudocode and help text: "
-                            "synopsis, flags, positional args, subcommands.",
+                "argv-handling pseudocode and help text: "
+                "synopsis, flags, positional args, subcommands.",
                 tags=("llm", "cli", "layer1"),
             ),
             RecoverCliGrammarArgs,

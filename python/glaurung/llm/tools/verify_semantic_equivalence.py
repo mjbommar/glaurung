@@ -45,14 +45,12 @@ class VerifySemanticEquivalenceArgs(BaseModel):
     original_pseudocode: str = Field(
         ..., description="Raw decompiler output for the function"
     )
-    rewritten_source: str = Field(
-        ..., description="Layer-2 rewrite from #14"
-    )
+    rewritten_source: str = Field(..., description="Layer-2 rewrite from #14")
     rewrite_assumptions: List[str] = Field(
         default_factory=list,
         description="The `assumptions` list returned by #14 — the LLM sees "
-                    "what the rewriter flagged as non-mechanical and can "
-                    "challenge those directly.",
+        "what the rewriter flagged as non-mechanical and can "
+        "challenge those directly.",
     )
     use_llm: bool = True
 
@@ -62,7 +60,7 @@ class Divergence(BaseModel):
     location: str = Field(
         ...,
         description="Line number or short quote pinpointing where the "
-                    "divergence appears in the rewrite",
+        "divergence appears in the rewrite",
     )
     severity: Severity
     description: str
@@ -74,13 +72,10 @@ class Divergence(BaseModel):
 class EquivalenceVerdict(BaseModel):
     equivalent: bool = Field(
         ...,
-        description="True only when no divergences of severity >= medium "
-                    "were found.",
+        description="True only when no divergences of severity >= medium were found.",
     )
     divergences: List[Divergence] = Field(default_factory=list)
-    summary: str = Field(
-        "", description="One-paragraph summary of findings"
-    )
+    summary: str = Field("", description="One-paragraph summary of findings")
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -145,18 +140,16 @@ def _build_prompt(args: VerifySemanticEquivalenceArgs) -> str:
 
 
 class VerifySemanticEquivalenceTool(
-    MemoryTool[
-        VerifySemanticEquivalenceArgs, VerifySemanticEquivalenceResult
-    ]
+    MemoryTool[VerifySemanticEquivalenceArgs, VerifySemanticEquivalenceResult]
 ):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="verify_semantic_equivalence",
                 description="Adversarial LLM check that a Layer-2 rewrite "
-                            "matches the original pseudocode — flags dropped "
-                            "error checks, changed widths, missing side "
-                            "effects. Blocks publishing when divergent.",
+                "matches the original pseudocode — flags dropped "
+                "error checks, changed widths, missing side "
+                "effects. Blocks publishing when divergent.",
                 tags=("llm", "audit", "layer2"),
             ),
             VerifySemanticEquivalenceArgs,

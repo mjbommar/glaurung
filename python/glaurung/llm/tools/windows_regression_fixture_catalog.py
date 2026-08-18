@@ -96,7 +96,10 @@ class WindowsRegressionFixtureCatalogTool(
             args.fixtures_path,
             "data/kg/pe-regression-fixtures.yaml",
         )
-        fixtures = [_fixture_record(entry, fixtures_path) for entry in _load_yaml_list(fixtures_path)]
+        fixtures = [
+            _fixture_record(entry, fixtures_path)
+            for entry in _load_yaml_list(fixtures_path)
+        ]
         fixture_count_total = len(fixtures)
         case_count_total = sum(len(fixture.cases) for fixture in fixtures)
         fixtures = _filter_fixtures(fixtures, args)
@@ -157,10 +160,7 @@ def _filter_fixtures(
 def _strip_pseudocode(
     fixture: WindowsRegressionFixture,
 ) -> WindowsRegressionFixture:
-    cases = [
-        case.model_copy(update={"pseudocode": ""})
-        for case in fixture.cases
-    ]
+    cases = [case.model_copy(update={"pseudocode": ""}) for case in fixture.cases]
     return fixture.model_copy(update={"cases": cases})
 
 
@@ -177,10 +177,14 @@ def _load_yaml_list(path: Path) -> list[dict[str, Any]]:
 
 
 def _fixture_record(entry: dict[str, Any], path: Path) -> WindowsRegressionFixture:
-    cases = [_case_record(case, path, entry.get("id")) for case in entry.get("cases") or []]
+    cases = [
+        _case_record(case, path, entry.get("id")) for case in entry.get("cases") or []
+    ]
     expected = {case.expected for case in cases}
     if not {"positive", "negative"} <= expected:
-        raise ValueError(f"{path}: fixture {entry.get('id')!r} missing positive/negative cases")
+        raise ValueError(
+            f"{path}: fixture {entry.get('id')!r} missing positive/negative cases"
+        )
     return WindowsRegressionFixture(
         id=_required_str(entry, "id", path),
         bug_class=_required_str(entry, "bug_class", path),

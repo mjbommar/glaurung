@@ -43,7 +43,9 @@ def _find_gcc_with_libgfortran() -> str | None:
         try:
             res = subprocess.run(
                 [cc, "-print-file-name=libgfortran.so"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             continue
@@ -109,7 +111,10 @@ def test_recovered_tree_builds(tree: Path):
 
         configure = subprocess.run(
             ["cmake", str(tree)],
-            cwd=tmp_path, capture_output=True, text=True, env=env,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            env=env,
         )
         assert configure.returncode == 0, (
             f"cmake configure failed for {tree.name}:\n"
@@ -118,7 +123,9 @@ def test_recovered_tree_builds(tree: Path):
 
         build = subprocess.run(
             ["cmake", "--build", "."],
-            cwd=tmp_path, capture_output=True, text=True,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
         )
         assert build.returncode == 0, (
             f"cmake build failed for {tree.name} — recovered-tree "

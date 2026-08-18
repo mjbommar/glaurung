@@ -19,6 +19,7 @@ letting NEW regressions slip through green. It is marked `slow` (compiles +
 executes the whole matrix); run with `-m slow`. The fail-closed *unit* checks in
 test_decompiler_fixture_harness.py run in the normal suite.
 """
+
 from __future__ import annotations
 
 import json
@@ -81,7 +82,9 @@ def test_the_compile_toolchain_matches_the_baseline(baseline):
 def test_baseline_schema_is_valid(baseline):
     """The committed baseline must cover all ten fixtures with valid statuses and
     must never bake in infrastructure failures (lane errors / missing / nocases)."""
-    probs = H.schema_problems(baseline, sorted({tuple(k.split(":")[1:]) for k in H.lanes(baseline)}))
+    probs = H.schema_problems(
+        baseline, sorted({tuple(k.split(":")[1:]) for k in H.lanes(baseline)})
+    )
     probs += H.baseline_problems(baseline)
     assert not probs, "BASELINE SCHEMA INVALID:\n  " + "\n  ".join(probs)
 

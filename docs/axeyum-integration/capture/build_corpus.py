@@ -84,9 +84,13 @@ def load_raw(raw: Path, jobs: int) -> tuple[list[dict[str, object]], dict[str, i
     missing = sorted(set(verdicts) - set(scripts))
     orphaned = sorted(set(scripts) - set(verdicts))
     if missing:
-        raise ValueError(f"index references {len(missing)} missing scripts; first={missing[0]}")
+        raise ValueError(
+            f"index references {len(missing)} missing scripts; first={missing[0]}"
+        )
     if orphaned:
-        raise ValueError(f"raw directory has {len(orphaned)} unindexed scripts; first={orphaned[0]}")
+        raise ValueError(
+            f"raw directory has {len(orphaned)} unindexed scripts; first={orphaned[0]}"
+        )
 
     def load_query(query_hash: str) -> dict[str, object]:
         path = scripts[query_hash]
@@ -194,7 +198,9 @@ def build(args: argparse.Namespace) -> dict[str, int]:
     if args.jobs <= 0:
         raise ValueError("--jobs must be positive")
     if not args.source.strip():
-        raise ValueError("--source must be non-empty and identify revision plus drivers")
+        raise ValueError(
+            "--source must be non-empty and identify revision plus drivers"
+        )
     require_empty_output(args.out, "output directory")
     if args.full_out is not None:
         if args.tier != "representative":
@@ -205,7 +211,11 @@ def build(args: argparse.Namespace) -> dict[str, int]:
 
     rows, stats = load_raw(args.raw, args.jobs)
     representative = representative_hashes(rows, args.rep_per_bucket)
-    selected = rows if args.tier == "full" else [row for row in rows if row["hash"] in representative]
+    selected = (
+        rows
+        if args.tier == "full"
+        else [row for row in rows if row["hash"] in representative]
+    )
     if not selected:
         raise ValueError(f"tier {args.tier!r} selected no queries")
 
@@ -226,18 +236,28 @@ def build(args: argparse.Namespace) -> dict[str, int]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("raw", type=Path, help="raw directory containing index.tsv and HASH.smt2")
-    parser.add_argument("out", type=Path, help="new or empty capture-index pack directory")
+    parser.add_argument(
+        "raw", type=Path, help="raw directory containing index.tsv and HASH.smt2"
+    )
+    parser.add_argument(
+        "out", type=Path, help="new or empty capture-index pack directory"
+    )
     parser.add_argument("rep_per_bucket", type=int, nargs="?", default=6)
-    parser.add_argument("--jobs", type=int, default=8, help="bounded parallel raw-file validators")
-    parser.add_argument("--tier", choices=("representative", "full"), default="representative")
+    parser.add_argument(
+        "--jobs", type=int, default=8, help="bounded parallel raw-file validators"
+    )
+    parser.add_argument(
+        "--tier", choices=("representative", "full"), default="representative"
+    )
     parser.add_argument(
         "--full-out",
         type=Path,
         help="also emit a separate full pack after the same strict validation pass",
     )
     parser.add_argument("--name", default="glaurung-qfbv-corrected-v2")
-    parser.add_argument("--source", required=True, help="producer revision and exact driver set")
+    parser.add_argument(
+        "--source", required=True, help="producer revision and exact driver set"
+    )
     return parser.parse_args()
 
 

@@ -18,6 +18,7 @@ the allocator call (this immediate IS rendered by the disassembler, unlike
 add/and immediates -- see the analyst-ergonomics DIFF, Finding A). Calls
 whose tag we cannot resolve are counted so coverage stays honest.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,9 +30,14 @@ from typing import Dict, List, Optional, Set, Tuple
 from glaurung.llm.coverage import CoverageFooter
 
 _ABS = re.compile(r"0x[0-9a-fA-F]+")
-_ALLOC_NAMES = ("ExAllocatePoolWithTag", "ExAllocatePool2", "ExAllocatePool3",
-                "ExAllocatePoolZero", "ExAllocatePoolPriorityZero",
-                "ExAllocatePoolQuotaZero")
+_ALLOC_NAMES = (
+    "ExAllocatePoolWithTag",
+    "ExAllocatePool2",
+    "ExAllocatePool3",
+    "ExAllocatePoolZero",
+    "ExAllocatePoolPriorityZero",
+    "ExAllocatePoolQuotaZero",
+)
 
 
 def _tag_str(imm: int) -> Optional[str]:
@@ -53,14 +59,15 @@ def _text_range(binary_path: str) -> Tuple[int, int, int]:
     opt = coff + 20
     magic = struct.unpack_from("<H", data, opt)[0]
     is_pe32_plus = magic == 0x20B
-    image_base = struct.unpack_from("<Q" if is_pe32_plus else "<I", data,
-                                    opt + (24 if is_pe32_plus else 28))[0]
+    image_base = struct.unpack_from(
+        "<Q" if is_pe32_plus else "<I", data, opt + (24 if is_pe32_plus else 28)
+    )[0]
     opt_size = struct.unpack_from("<H", data, coff + 16)[0]
     sec_off = opt + opt_size
     best = None
     for i in range(num_sections):
         s = sec_off + i * 40
-        name = data[s:s + 8].rstrip(b"\0")
+        name = data[s : s + 8].rstrip(b"\0")
         vsz, va = struct.unpack_from("<II", data, s + 8)
         if name == b".text":
             return image_base, image_base + va, vsz
@@ -90,8 +97,13 @@ def pool_tags(binary_path: str, name: Optional[str] = None) -> ModulePoolFacts:
         return facts
 
     _base, tva, tsz = _text_range(binary_path)
-    insns = disassemble_window_at(binary_path, int(tva), window_bytes=int(tsz),
-                                  max_instructions=5_000_000, max_time_ms=120_000)
+    insns = disassemble_window_at(
+        binary_path,
+        int(tva),
+        window_bytes=int(tsz),
+        max_instructions=5_000_000,
+        max_time_ms=120_000,
+    )
     last_tag: Optional[str] = None
     for i in insns:
         ops = ", ".join(str(o) for o in i.operands)
@@ -162,7 +174,9 @@ class ModuleGroup:
         for m in self.members:
             out.append(f";   {m.name}: {len(m.tags)} tags, {m.alloc_calls} alloc sites")
         shared = self.shared_tags()
-        out.append(f"; SHARED pool tags ({len(shared)}) -- cross-module corruption surface:")
+        out.append(
+            f"; SHARED pool tags ({len(shared)}) -- cross-module corruption surface:"
+        )
         for tag in sorted(shared):
             members = ", ".join(f"{k}({v})" for k, v in sorted(shared[tag].items()))
             out.append(f"  '{tag}': {members}")
@@ -176,9 +190,13 @@ class ModuleGroup:
     def to_dict(self) -> dict:
         return {
             "members": [
-                {"name": m.name, "binary": m.binary, "alloc_calls": m.alloc_calls,
-                 "tag_unresolved": m.tag_unresolved,
-                 "tags": {t: vs for t, vs in m.tags.items()}}
+                {
+                    "name": m.name,
+                    "binary": m.binary,
+                    "alloc_calls": m.alloc_calls,
+                    "tag_unresolved": m.tag_unresolved,
+                    "tags": {t: vs for t, vs in m.tags.items()},
+                }
                 for m in self.members
             ],
             "shared_tags": self.shared_tags(),

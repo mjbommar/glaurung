@@ -38,7 +38,9 @@ def _find_gcc_with_libgfortran() -> str | None:
         try:
             result = subprocess.run(
                 [cc, "-print-file-name=libgfortran.so"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             continue
@@ -64,7 +66,8 @@ def test_recovered_fortran_tree_builds_and_links():
         configure = subprocess.run(
             ["cmake", str(_RECOVERED)],
             cwd=tmp_path,
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             env={**__import__("os").environ, "CC": cc},
         )
         assert configure.returncode == 0, (
@@ -76,7 +79,8 @@ def test_recovered_fortran_tree_builds_and_links():
         build = subprocess.run(
             ["cmake", "--build", "."],
             cwd=tmp_path,
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert build.returncode == 0, (
             f"cmake build failed — Bug L regression. The "
@@ -88,8 +92,7 @@ def test_recovered_fortran_tree_builds_and_links():
         # Sanity: the executable exists and is non-empty.
         exe = tmp_path / "hello_gfortran_O2"
         assert exe.exists() and exe.stat().st_size > 0, (
-            f"build claimed success but produced no executable at "
-            f"{exe}"
+            f"build claimed success but produced no executable at {exe}"
         )
 
 
@@ -102,11 +105,19 @@ def test_recovered_fortran_tree_makefile_compiles_main():
         pytest.skip("gcc not available")
     with tempfile.TemporaryDirectory(prefix="glaurung-recov-make-") as tmp:
         result = subprocess.run(
-            ["gcc", "-O2", "-Wall", "-Werror", "-c",
-             str(_RECOVERED / "main.c"), "-o", f"{tmp}/main.o"],
-            capture_output=True, text=True,
+            [
+                "gcc",
+                "-O2",
+                "-Wall",
+                "-Werror",
+                "-c",
+                str(_RECOVERED / "main.c"),
+                "-o",
+                f"{tmp}/main.o",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, (
-            f"main.c failed to compile under -Wall -Werror:\n"
-            f"stderr={result.stderr}"
+            f"main.c failed to compile under -Wall -Werror:\nstderr={result.stderr}"
         )

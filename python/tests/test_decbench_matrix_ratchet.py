@@ -215,9 +215,12 @@ def test_structural_verdict_is_accepted_only_for_explicit_skip_exec(dm):
     manifest = _load_manifest()
     structural = {"status": "structural", "detail": "manifest skip_exec"}
 
-    assert dm.behavior_problems(
-        {"apply": structural}, ["apply"], "08_indirect_dispatch", manifest
-    ) == []
+    assert (
+        dm.behavior_problems(
+            {"apply": structural}, ["apply"], "08_indirect_dispatch", manifest
+        )
+        == []
+    )
     assert dm.behavior_problems(
         {"sum_array": structural}, ["sum_array"], "arrays", manifest
     ) == ["sum_array: structural (manifest skip_exec)"]
@@ -413,8 +416,7 @@ long second(long x) { return x - 2; }
 
 def test_behavior_gate_fails_closed_on_any_required_nonpass(dm):
     assert (
-        dm.behavior_problems({"f": {"status": "pass", "detail": "cases"}}, ["f"])
-        == []
+        dm.behavior_problems({"f": {"status": "pass", "detail": "cases"}}, ["f"]) == []
     )
     assert dm.behavior_problems(
         {"f": {"status": "fail", "detail": "return differs"}}, ["f"]

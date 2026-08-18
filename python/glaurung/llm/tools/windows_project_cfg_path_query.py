@@ -134,7 +134,9 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
     try:
         present = {
             str(row[0])
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
         }
         required = {"basic_blocks", "cfg_edges"}
         if not required.issubset(present):
@@ -147,7 +149,9 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
         binary_id, function_va = resolved
         blocks = _blocks(conn, binary_id, function_va)
         if not blocks:
-            return _unknown(args, f"no persisted CFG blocks for function 0x{function_va:x}")
+            return _unknown(
+                args, f"no persisted CFG blocks for function 0x{function_va:x}"
+            )
         successors, predecessors = _edges(conn, binary_id, function_va)
     except sqlite3.Error as exc:
         return _unknown(args, f"failed to read persisted CFG facts: {exc}")
@@ -156,7 +160,9 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
 
     entry_id = _entry_block(blocks)
     sink_id = _containing_block(blocks, args.sink_va)
-    gate_id = _containing_block(blocks, args.gate_va) if args.gate_va is not None else None
+    gate_id = (
+        _containing_block(blocks, args.gate_va) if args.gate_va is not None else None
+    )
     branch_id = (
         _containing_block(blocks, args.branch_va)
         if args.branch_va is not None
@@ -195,7 +201,9 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
     branch_path = (
         _find_path(branch_id, sink_id, successors) if branch_id is not None else None
     )
-    gate_path = _find_path(gate_id, sink_id, successors) if gate_id is not None else None
+    gate_path = (
+        _find_path(gate_id, sink_id, successors) if gate_id is not None else None
+    )
 
     status: PathCoverageStatus
     confidence: float
@@ -219,7 +227,9 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
         status = "same_block"
         confidence = 0.65
         all_paths_pass_gate = True
-        reason = "gate and sink are in the same basic block; instruction order still matters"
+        reason = (
+            "gate and sink are in the same basic block; instruction order still matters"
+        )
     else:
         bypass_path = _find_path(entry_id, sink_id, successors, blocked={gate_id}) or []
         all_paths_pass_gate = not bypass_path
@@ -249,10 +259,14 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
         branch_to_sink_path_block_ids=(
             branch_path[: args.max_path_blocks] if branch_path else []
         ),
-        gate_to_sink_path_block_ids=gate_path[: args.max_path_blocks] if gate_path else [],
+        gate_to_sink_path_block_ids=gate_path[: args.max_path_blocks]
+        if gate_path
+        else [],
     )
     result.entry_reaches_sink = entry_path is not None
-    result.branch_reaches_sink = branch_path is not None if branch_id is not None else None
+    result.branch_reaches_sink = (
+        branch_path is not None if branch_id is not None else None
+    )
     result.gate_reaches_sink = gate_path is not None if gate_id is not None else None
     result.all_paths_to_sink_pass_gate = all_paths_pass_gate
     return result

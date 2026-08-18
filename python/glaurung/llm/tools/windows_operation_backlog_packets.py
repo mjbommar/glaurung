@@ -33,8 +33,12 @@ class WindowsOperationBacklogPacketsArgs(BaseModel):
     )
     target_id: str | None = Field(None, description="Optional target id filter.")
     component: str | None = Field(None, description="Optional component filter.")
-    symbol: str | None = Field(None, description="Optional exact backlog symbol filter.")
-    triage_category: str | None = Field(None, description="Optional triage category filter.")
+    symbol: str | None = Field(
+        None, description="Optional exact backlog symbol filter."
+    )
+    triage_category: str | None = Field(
+        None, description="Optional triage category filter."
+    )
     required_capability: str | None = Field(
         None,
         description="Optional required Glaurung/ASB capability filter.",
@@ -118,9 +122,7 @@ class WindowsOperationBacklogPacketsTool(
         packets: list[WindowsReviewPacket] = []
         emitter = WindowsEmitReviewPacketTool()
         for entry in backlog.entries[: args.max_packets]:
-            packets.append(
-                emitter.run(ctx, kb, _packet_args(entry, args)).packet
-            )
+            packets.append(emitter.run(ctx, kb, _packet_args(entry, args)).packet)
 
         evidence_node_id = None
         if args.add_to_kb:

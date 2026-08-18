@@ -228,7 +228,10 @@ def test_windows_project_callsite_facts_filters_symbol_and_operation(
     )
 
     assert [site.callsite_va for site in result.callsites] == [0x1010, 0x4010]
-    assert all(site.operation and site.operation.id == "rtl_copy_memory" for site in result.callsites)
+    assert all(
+        site.operation and site.operation.id == "rtl_copy_memory"
+        for site in result.callsites
+    )
 
 
 def test_windows_project_callsite_facts_normalizes_import_thunk_aliases(

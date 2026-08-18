@@ -40,6 +40,7 @@ def _matcher(query: str, *, regex: bool, case_sensitive: bool):
 
 def _function_names_hits(kb, match) -> Iterable[SearchHit]:
     from glaurung.llm.kb import xref_db
+
     for fn in xref_db.list_function_names(kb):
         for field in (fn.canonical, fn.demangled or "", " ".join(fn.aliases)):
             if field and match(field):
@@ -54,6 +55,7 @@ def _function_names_hits(kb, match) -> Iterable[SearchHit]:
 
 def _comments_hits(kb, match) -> Iterable[SearchHit]:
     from glaurung.llm.kb import xref_db
+
     for va, body in xref_db.list_comments(kb):
         if match(body):
             yield ("comment", f"0x{va:x}", body[:140])
@@ -61,6 +63,7 @@ def _comments_hits(kb, match) -> Iterable[SearchHit]:
 
 def _data_labels_hits(kb, match) -> Iterable[SearchHit]:
     from glaurung.llm.kb import xref_db
+
     for d in xref_db.list_data_labels(kb):
         if match(d.name) or (d.c_type and match(d.c_type)):
             piece = d.name + (f": {d.c_type}" if d.c_type else "")
@@ -69,6 +72,7 @@ def _data_labels_hits(kb, match) -> Iterable[SearchHit]:
 
 def _types_hits(kb, match) -> Iterable[SearchHit]:
     from glaurung.llm.kb import type_db
+
     for t in type_db.list_types(kb):
         if match(t.name) or match(t.kind):
             yield ("type", t.name, f"{t.kind}  (set_by={t.set_by})")
@@ -76,11 +80,11 @@ def _types_hits(kb, match) -> Iterable[SearchHit]:
 
 def _stack_vars_hits(kb, match) -> Iterable[SearchHit]:
     from glaurung.llm.kb import xref_db
+
     for sv in xref_db.list_stack_vars(kb):
         if match(sv.name) or (sv.c_type and match(sv.c_type)):
-            piece = (
-                f"fn@0x{sv.function_va:x} {sv.offset:+#06x}  "
-                f"{sv.name}" + (f": {sv.c_type}" if sv.c_type else "")
+            piece = f"fn@0x{sv.function_va:x} {sv.offset:+#06x}  {sv.name}" + (
+                f": {sv.c_type}" if sv.c_type else ""
             )
             yield ("stack_var", f"0x{sv.function_va:x}", piece)
 
@@ -90,8 +94,11 @@ def _strings_hits(binary_path: Optional[str], match) -> Iterable[SearchHit]:
         return
     try:
         import glaurung as g
+
         art = g.triage.analyze_path(
-            binary_path, str_min_len=4, str_max_samples=10_000,
+            binary_path,
+            str_min_len=4,
+            str_max_samples=10_000,
         )
     except Exception:
         return
@@ -114,14 +121,17 @@ def _disasm_hits(kb, binary_path: Optional[str], match) -> Iterable[SearchHit]:
         return
     try:
         import glaurung as g
+
         funcs, _cg = g.analysis.analyze_functions_path(binary_path)
     except Exception:
         return
     for f in funcs:
         try:
             instrs = g.disasm.disassemble_window_at(
-                binary_path, int(f.entry_point.value),
-                window_bytes=2048, max_instructions=500,
+                binary_path,
+                int(f.entry_point.value),
+                window_bytes=2048,
+                max_instructions=500,
             )
         except Exception:
             continue
@@ -158,27 +168,42 @@ class FindCommand(BaseCommand):
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument("query", help="Substring or regex to search for")
         parser.add_argument(
-            "--kind", default="all",
-            choices=("function", "comment", "data", "type", "stack_var",
-                     "string", "disasm", "all"),
+            "--kind",
+            default="all",
+            choices=(
+                "function",
+                "comment",
+                "data",
+                "type",
+                "stack_var",
+                "string",
+                "disasm",
+                "all",
+            ),
             help="Filter to one kind (default: all)",
         )
         parser.add_argument(
-            "--regex", action="store_true",
+            "--regex",
+            action="store_true",
             help="Treat query as a Python regex (re.search)",
         )
         parser.add_argument(
-            "--case-sensitive", action="store_true",
+            "--case-sensitive",
+            action="store_true",
             help="Match case-sensitively (default: case-insensitive)",
         )
         parser.add_argument(
-            "--limit", type=int, default=200,
+            "--limit",
+            type=int,
+            default=200,
             help="Max rows (default 200)",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path. Required for string/disasm "
-                 "kinds when not stored in DB.",
+            "kinds when not stored in DB.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -190,7 +215,8 @@ class FindCommand(BaseCommand):
         try:
             match = _matcher(
                 args.query,
-                regex=args.regex, case_sensitive=args.case_sensitive,
+                regex=args.regex,
+                case_sensitive=args.case_sensitive,
             )
         except ValueError as e:
             formatter.output_plain(f"Error: {e}")
@@ -200,7 +226,8 @@ class FindCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -216,9 +243,9 @@ class FindCommand(BaseCommand):
                     bin_path = bins[0][2]
 
             kinds = (
-                ("function", "comment", "data", "type", "stack_var",
-                 "string", "disasm")
-                if args.kind == "all" else (args.kind,)
+                ("function", "comment", "data", "type", "stack_var", "string", "disasm")
+                if args.kind == "all"
+                else (args.kind,)
             )
 
             hits: List[SearchHit] = []
@@ -238,10 +265,12 @@ class FindCommand(BaseCommand):
                 return 0
 
             if formatter.format_type == OutputFormat.JSON:
-                formatter.output_json([
-                    {"kind": k, "location": loc, "snippet": snip}
-                    for k, loc, snip in hits
-                ])
+                formatter.output_json(
+                    [
+                        {"kind": k, "location": loc, "snippet": snip}
+                        for k, loc, snip in hits
+                    ]
+                )
                 return 0
 
             header = f"{'kind':<10}  {'location':<14}  snippet"

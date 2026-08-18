@@ -351,7 +351,9 @@ def index_cfg_dominance(
         ).fetchall()
     ]
     now = int(time.time())
-    rows: list[tuple[int, int, str, str | None, str | None, int, int, int, int, int]] = []
+    rows: list[
+        tuple[int, int, str, str | None, str | None, int, int, int, int, int]
+    ] = []
     covered_functions = 0
     for function_va in functions:
         summaries = _dominance_rows_for_function(kb._conn, kb.binary_id, function_va)
@@ -556,7 +558,10 @@ def _branch_fact_from_instructions(
     instructions: list[object],
     successors: list[str],
     block_ranges: dict[tuple[int, str], tuple[int, int]],
-) -> tuple[int, str, str, int | None, str | None, str, str, str | None, str | None] | None:
+) -> (
+    tuple[int, str, str, int | None, str | None, str, str, str | None, str | None]
+    | None
+):
     branch_index = None
     for index in range(len(instructions) - 1, -1, -1):
         mnemonic = str(getattr(instructions[index], "mnemonic", "")).lower()
@@ -578,7 +583,9 @@ def _branch_fact_from_instructions(
         int(getattr(getattr(branch, "address"), "value")),
         str(getattr(branch, "mnemonic")).lower(),
         json.dumps(_operand_texts(branch)),
-        int(getattr(getattr(compare, "address"), "value")) if compare is not None else None,
+        int(getattr(getattr(compare, "address"), "value"))
+        if compare is not None
+        else None,
         str(getattr(compare, "mnemonic")).lower() if compare is not None else None,
         json.dumps(_operand_texts(compare)) if compare is not None else "[]",
         _condition_kind(str(getattr(branch, "mnemonic")).lower()),
@@ -656,7 +663,11 @@ def _target_successor(
                 return successor
         for successor in successors:
             start_va, end_va = block_ranges.get((function_va, successor), (None, None))
-            if start_va is not None and end_va is not None and start_va <= target_va < end_va:
+            if (
+                start_va is not None
+                and end_va is not None
+                and start_va <= target_va < end_va
+            ):
                 return successor
     return successors[0] if successors else None
 
@@ -910,6 +921,8 @@ def _immediate_parent(
 ) -> str | None:
     strict = parents - {block_id}
     for candidate in sorted(strict):
-        if all(other in parent_sets.get(candidate, set()) for other in strict - {candidate}):
+        if all(
+            other in parent_sets.get(candidate, set()) for other in strict - {candidate}
+        ):
             return candidate
     return None

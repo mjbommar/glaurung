@@ -37,17 +37,15 @@ class ListCallsResult(BaseModel):
     callees: List[Callee]
 
 
-class ListCallsFromFunctionTool(
-    MemoryTool[ListCallsArgs, ListCallsResult]
-):
+class ListCallsFromFunctionTool(MemoryTool[ListCallsArgs, ListCallsResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="list_calls_from_function",
                 description="Return the deduplicated set of direct-call "
-                            "targets reachable from the function whose "
-                            "entry is `func_va`. Cheaper than "
-                            "list_xrefs_from when the caller's VA is known.",
+                "targets reachable from the function whose "
+                "entry is `func_va`. Cheaper than "
+                "list_xrefs_from when the caller's VA is known.",
                 tags=("analysis", "xrefs"),
             ),
             ListCallsArgs,

@@ -43,6 +43,7 @@ def test_set_default_tool_strict_round_trip():
     prev = set_default_tool_strict(False)
     try:
         from glaurung.llm.tools.base import _DEFAULT_TOOL_STRICT as cur
+
         assert cur is False
     finally:
         set_default_tool_strict(prev)
@@ -54,9 +55,11 @@ def test_default_tool_strict_for_context_manager_restores():
     with pytest.raises(RuntimeError):
         with default_tool_strict_for(False):
             from glaurung.llm.tools.base import _DEFAULT_TOOL_STRICT as inside
+
             assert inside is False
             raise RuntimeError("boom")
     from glaurung.llm.tools.base import _DEFAULT_TOOL_STRICT as after
+
     assert after is None
 
 
@@ -64,6 +67,7 @@ def test_java_helper_delegates_to_canonical():
     """The Java agent's legacy _default_tool_strict_for_model must now
     return the same answer as the canonical helper."""
     from glaurung.llm.agents.java import _default_tool_strict_for_model as _java
+
     assert _java("anthropic:claude-haiku-4-5") is False
     assert _java("openai:gpt-5.4-mini") is True
 
@@ -85,12 +89,16 @@ def test_register_analysis_tools_flips_strict_for_anthropic_model():
 
     # 2. Confirm the context manager sets and restores the module-level default.
     set_default_tool_strict(None)  # baseline
-    with default_tool_strict_for(default_tool_strict_for_model("anthropic:claude-haiku-4-5")):
+    with default_tool_strict_for(
+        default_tool_strict_for_model("anthropic:claude-haiku-4-5")
+    ):
         from glaurung.llm.tools.base import _DEFAULT_TOOL_STRICT as inside
+
         assert inside is False, (
             f"Default inside Anthropic context should be False; got {inside}"
         )
     from glaurung.llm.tools.base import _DEFAULT_TOOL_STRICT as after
+
     assert after is None, f"Default not restored after context exit; got {after}"
 
     # 3. Confirm tool_to_pyd_ai inherits the module-level default when

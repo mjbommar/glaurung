@@ -410,7 +410,9 @@ def _notebook_blocks_promotion(decision: WindowsNotebookDecision) -> bool:
 
 
 def _notebook_summary(decision: WindowsNotebookDecision, surface: str) -> str:
-    value = decision.name or decision.state or decision.comment or decision.reason or "-"
+    value = (
+        decision.name or decision.state or decision.comment or decision.reason or "-"
+    )
     return f"{decision.kind}@0x{decision.va:x}:{value} matched {surface}"
 
 

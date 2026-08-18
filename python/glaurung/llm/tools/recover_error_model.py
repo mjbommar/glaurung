@@ -36,7 +36,7 @@ class ErrorSite(BaseModel):
     associated_string: str = Field(
         "",
         description="Error string printed on or near this path — usually "
-                    "the best naming signal.",
+        "the best naming signal.",
     )
     snippet: str = Field("", description="Short pseudocode excerpt")
 
@@ -69,8 +69,8 @@ class ErrorModel(BaseModel):
     site_map: Dict[str, str] = Field(
         default_factory=dict,
         description="Mapping from 'func_va:return_value' → canonical code name. "
-                    "Used by the Layer-2 rewriter to emit a uniform "
-                    "`return CODE;` everywhere.",
+        "Used by the Layer-2 rewriter to emit a uniform "
+        "`return CODE;` everywhere.",
     )
     c_definition: str = Field(
         ..., description="Full C enum + a matching strerror-style table"
@@ -167,16 +167,14 @@ def _build_prompt(args: RecoverErrorModelArgs) -> str:
     return "\n\n".join(parts)
 
 
-class RecoverErrorModelTool(
-    MemoryTool[RecoverErrorModelArgs, RecoverErrorModelResult]
-):
+class RecoverErrorModelTool(MemoryTool[RecoverErrorModelArgs, RecoverErrorModelResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="recover_error_model",
                 description="Unify ad-hoc error returns across a binary into "
-                            "one project-wide error enum with a matching "
-                            "strerror-style lookup.",
+                "one project-wide error enum with a matching "
+                "strerror-style lookup.",
                 tags=("llm", "types", "layer1"),
             ),
             RecoverErrorModelArgs,

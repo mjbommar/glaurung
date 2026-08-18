@@ -185,7 +185,9 @@ class WindowsHighVolumePreflightTool(
                     max_matches=args.max_matches_per_target,
                 ),
             )
-            targets = [_target_status(target) for target in corpus.targets[: args.max_targets]]
+            targets = [
+                _target_status(target) for target in corpus.targets[: args.max_targets]
+            ]
             for target in targets:
                 blockers.extend(target.blockers)
         if not targets:
@@ -204,7 +206,9 @@ class WindowsHighVolumePreflightTool(
             and (ghidra_ready or not args.require_ghidra)
             and (bsim_ready or not args.require_bsim)
         )
-        command = _high_volume_command(args, manifest, corpus_root, project_root, metadata_root)
+        command = _high_volume_command(
+            args, manifest, corpus_root, project_root, metadata_root
+        )
         notes = [
             "High-volume preflight checks runner readiness only; it does not run analysis.",
             "Optional metadata absence is a warning unless the target pipeline explicitly needs it.",

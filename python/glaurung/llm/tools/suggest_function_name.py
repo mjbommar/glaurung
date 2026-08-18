@@ -381,24 +381,26 @@ class SuggestFunctionNameTool(
 # in PE images.
 
 # Exact whole-string matches to reject.
-_PE_BOILERPLATE_EXACT: frozenset[str] = frozenset({
-    # DOS stub, ubiquitous and three common variants.
-    "!This program cannot be run in DOS mode.",
-    "This program cannot be run in DOS mode.",
-    "This program cannot be run in DOS mode.\r\n$",
-    # PE section names appearing in isolation.
-    ".text",
-    ".rdata",
-    ".data",
-    ".rsrc",
-    ".reloc",
-    ".bss",
-    ".pdata",
-    ".xdata",
-    # WPP tracing globals.
-    "Microsoft.Diagnostics.Tracing.WPP",
-    "WPP_GLOBAL_Control",
-})
+_PE_BOILERPLATE_EXACT: frozenset[str] = frozenset(
+    {
+        # DOS stub, ubiquitous and three common variants.
+        "!This program cannot be run in DOS mode.",
+        "This program cannot be run in DOS mode.",
+        "This program cannot be run in DOS mode.\r\n$",
+        # PE section names appearing in isolation.
+        ".text",
+        ".rdata",
+        ".data",
+        ".rsrc",
+        ".reloc",
+        ".bss",
+        ".pdata",
+        ".xdata",
+        # WPP tracing globals.
+        "Microsoft.Diagnostics.Tracing.WPP",
+        "WPP_GLOBAL_Control",
+    }
+)
 
 # Prefix-based rejection for boilerplate that varies by suffix.
 _PE_BOILERPLATE_PREFIXES: tuple[str, ...] = (
@@ -426,11 +428,38 @@ _PE_BOILERPLATE_PREFIXES: tuple[str, ...] = (
 # start with one of these prefixes, we drop the strings list entirely:
 # the call targets are higher-fidelity than the linker-injected strings.
 _KERNEL_CALL_PREFIXES: tuple[str, ...] = (
-    "Ke", "Rtl", "Io", "Iof", "Mm", "Ex", "Exf", "Ps", "Ob", "Cc",
-    "Cm", "Se", "Ki", "Nt", "Zw", "Hal",
-    "Cldi", "Hsm", "Hsmp", "Hsmi",
-    "Flt", "Fsrtl", "Wdf", "Wpp_", "EtwReg",
-    "Bcrypt", "Cng", "Crypt", "Adv", "Dxg", "Vid", "Net",
+    "Ke",
+    "Rtl",
+    "Io",
+    "Iof",
+    "Mm",
+    "Ex",
+    "Exf",
+    "Ps",
+    "Ob",
+    "Cc",
+    "Cm",
+    "Se",
+    "Ki",
+    "Nt",
+    "Zw",
+    "Hal",
+    "Cldi",
+    "Hsm",
+    "Hsmp",
+    "Hsmi",
+    "Flt",
+    "Fsrtl",
+    "Wdf",
+    "Wpp_",
+    "EtwReg",
+    "Bcrypt",
+    "Cng",
+    "Crypt",
+    "Adv",
+    "Dxg",
+    "Vid",
+    "Net",
 )
 
 
@@ -550,7 +579,9 @@ def build_naming_prompt(
             pseudocode = g.ir.decompile_at(
                 str(ctx.file_path),
                 int(va),
-                timeout_ms=max(200, int(getattr(ctx.budgets, "timeout_ms", 500) or 500)),
+                timeout_ms=max(
+                    200, int(getattr(ctx.budgets, "timeout_ms", 500) or 500)
+                ),
                 style="c",
             )
         except Exception:
@@ -577,19 +608,23 @@ def build_naming_prompt(
         # Cap at ~120 lines to stay within a reasonable prompt budget.
         lines = pseudocode.splitlines()
         if len(lines) > 120:
-            lines = lines[:120] + [f"... ({len(pseudocode.splitlines()) - 120} more lines truncated)"]
-        parts.append("Pseudocode (glaurung --style c):\n```\n" + "\n".join(lines) + "\n```")
+            lines = lines[:120] + [
+                f"... ({len(pseudocode.splitlines()) - 120} more lines truncated)"
+            ]
+        parts.append(
+            "Pseudocode (glaurung --style c):\n```\n" + "\n".join(lines) + "\n```"
+        )
     else:
         # Fall back to the old context shape when decompilation is
         # unavailable (e.g. unsupported arch, or timeout).
         if calls:
             parts.append(f"Calls (resolved): {', '.join(calls[:8])}")
         if filtered_strings:
-            parts.append("Strings:\n" + "\n".join(f"  {s!r}" for s in filtered_strings[:5]))
-        if instructions:
             parts.append(
-                "First instructions:\n" + "\n".join(instructions[:16])
+                "Strings:\n" + "\n".join(f"  {s!r}" for s in filtered_strings[:5])
             )
+        if instructions:
+            parts.append("First instructions:\n" + "\n".join(instructions[:16]))
 
     prompt = (
         "Suggest a meaningful snake_case name for the function below.\n\n"

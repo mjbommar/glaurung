@@ -128,7 +128,7 @@ def _index_focused_targets(
     seen: set[tuple[int, int, str]] = set()
     for section in sections:
         end = min(len(data), section.raw_start + section.raw_size)
-        blob = data[section.raw_start:end]
+        blob = data[section.raw_start : end]
         for offset in range(0, max(0, len(blob) - 4)):
             if blob[offset] != 0xE8:
                 continue

@@ -120,8 +120,9 @@ def run_structured_llm(
         )
         if require:
             raise LLMUnavailable(msg)
-        print(f"[glaurung.llm] WARNING: {msg} Falling back to heuristic.",
-              file=sys.stderr)
+        print(
+            f"[glaurung.llm] WARNING: {msg} Falling back to heuristic.", file=sys.stderr
+        )
         return fallback()
 
     if in_running_event_loop():
@@ -133,8 +134,9 @@ def run_structured_llm(
             raise LLMUnavailable(msg)
         # Nested-event-loop fallback is normal in composite agents,
         # so emit at debug level (still stderr but quieter framing).
-        print(f"[glaurung.llm] DEBUG: {msg} Falling back to heuristic.",
-              file=sys.stderr)
+        print(
+            f"[glaurung.llm] DEBUG: {msg} Falling back to heuristic.", file=sys.stderr
+        )
         return fallback()
 
     cfg = get_config()
@@ -166,8 +168,9 @@ def run_structured_llm(
         msg = f"LLM call failed: {type(exc).__name__}: {exc}"
         if require:
             raise LLMUnavailable(msg) from exc
-        print(f"[glaurung.llm] WARNING: {msg} Falling back to heuristic.",
-              file=sys.stderr)
+        print(
+            f"[glaurung.llm] WARNING: {msg} Falling back to heuristic.", file=sys.stderr
+        )
         return fallback()
     # pydantic-ai occasionally returns a raw string instead of the
     # requested structured output (e.g. when the LLM emits unparseable
@@ -181,7 +184,8 @@ def run_structured_llm(
         )
         if require:
             raise LLMUnavailable(msg)
-        print(f"[glaurung.llm] WARNING: {msg} Falling back to heuristic.",
-              file=sys.stderr)
+        print(
+            f"[glaurung.llm] WARNING: {msg} Falling back to heuristic.", file=sys.stderr
+        )
         return fallback()
     return result

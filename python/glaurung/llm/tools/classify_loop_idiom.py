@@ -51,8 +51,8 @@ class ClassifyLoopIdiomArgs(BaseModel):
     loop_body: str = Field(
         ...,
         description="Pseudocode of the loop body (one basic block or tight "
-                    "nested pair). Include the header — the comparison and "
-                    "increment — so the LLM sees the exit condition.",
+        "nested pair). Include the header — the comparison and "
+        "increment — so the LLM sees the exit condition.",
     )
     use_llm: bool = True
 
@@ -62,14 +62,14 @@ class LoopIdiomLabel(BaseModel):
     parameters: Dict[str, str] = Field(
         default_factory=dict,
         description="Parameter map keyed by role — src, dst, len, seed, "
-                    "output, key, polynomial — to variable names as they "
-                    "appear in the loop body.",
+        "output, key, polynomial — to variable names as they "
+        "appear in the loop body.",
     )
     library_call: Optional[str] = Field(
         None,
         description="C library call that should replace the loop in "
-                    "rewritten source, e.g. 'strlen(src)' or "
-                    "'memcpy(dst, src, len)'. None for custom idioms.",
+        "rewritten source, e.g. 'strlen(src)' or "
+        "'memcpy(dst, src, len)'. None for custom idioms.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
@@ -86,9 +86,7 @@ class ClassifyLoopIdiomResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 _STRLEN_HINTS = re.compile(r"\*\s*\w+\s*(?:!=|==)\s*0", re.IGNORECASE)
-_MEMCPY_HINTS = re.compile(
-    r"\*\s*(\w+)\s*=\s*\*\s*(\w+)", re.IGNORECASE
-)
+_MEMCPY_HINTS = re.compile(r"\*\s*(\w+)\s*=\s*\*\s*(\w+)", re.IGNORECASE)
 _MEMSET_HINTS = re.compile(r"\*\s*\w+\s*=\s*(?:0|0x[0-9a-f]+|[0-9]+)\b")
 _CRC_HINT = re.compile(r"(?:0xedb88320|0x04c11db7|0xa001|0x8408)", re.IGNORECASE)
 
@@ -150,17 +148,15 @@ _SYSTEM_PROMPT = (
 )
 
 
-class ClassifyLoopIdiomTool(
-    MemoryTool[ClassifyLoopIdiomArgs, ClassifyLoopIdiomResult]
-):
+class ClassifyLoopIdiomTool(MemoryTool[ClassifyLoopIdiomArgs, ClassifyLoopIdiomResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="classify_loop_idiom",
                 description="Label a loop body as a known idiom (strlen, "
-                            "memcpy, crc32, aes_round, …) and return the "
-                            "parameter map and the C library call that "
-                            "would replace it.",
+                "memcpy, crc32, aes_round, …) and return the "
+                "parameter map and the C library call that "
+                "would replace it.",
                 tags=("llm", "loops", "layer0"),
             ),
             ClassifyLoopIdiomArgs,

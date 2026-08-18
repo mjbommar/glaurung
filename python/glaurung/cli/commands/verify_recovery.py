@@ -19,42 +19,58 @@ class VerifyRecoveryCommand(BaseCommand):
         return "Compile-check rewritten source; optionally diff bytes against a target binary"
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("source_file", help="Recovered C/C++ source file (or - for stdin)")
         parser.add_argument(
-            "--language", default="c", choices=("c", "cpp"),
+            "source_file", help="Recovered C/C++ source file (or - for stdin)"
+        )
+        parser.add_argument(
+            "--language",
+            default="c",
+            choices=("c", "cpp"),
             help="Source language (default: c)",
         )
         parser.add_argument(
-            "--compiler", default=None,
+            "--compiler",
+            default=None,
             help="Compiler to use (default: gcc → clang → cc)",
         )
         parser.add_argument(
-            "--target", type=Path, default=None,
+            "--target",
+            type=Path,
+            default=None,
             help="Optional target binary; when set, also runs byte-similarity",
         )
         parser.add_argument(
-            "--function", default=None,
+            "--function",
+            default=None,
             help="Function name to compare against in the target",
         )
         parser.add_argument(
-            "--run", action="store_true",
+            "--run",
+            action="store_true",
             help="Compile + run the source. Capture stdout/stderr/exit (#171).",
         )
         parser.add_argument(
-            "--compare-runtime", action="store_true",
+            "--compare-runtime",
+            action="store_true",
             help="Run both the recovered source AND the --target binary "
-                 "with the same args/stdin; report whether outputs match.",
+            "with the same args/stdin; report whether outputs match.",
         )
         parser.add_argument(
-            "--arg", dest="run_args", action="append", default=[],
+            "--arg",
+            dest="run_args",
+            action="append",
+            default=[],
             help="argv to pass to the executable (repeatable). e.g. --arg foo --arg bar",
         )
         parser.add_argument(
-            "--stdin", default=None,
+            "--stdin",
+            default=None,
             help="String to feed on stdin to the executable.",
         )
         parser.add_argument(
-            "--timeout", type=float, default=5.0,
+            "--timeout",
+            type=float,
+            default=5.0,
             help="Per-execution timeout in seconds (default: 5.0)",
         )
 
@@ -77,21 +93,29 @@ class VerifyRecoveryCommand(BaseCommand):
         )
 
         result = compile_check(
-            source, compiler=args.compiler, language=args.language,
+            source,
+            compiler=args.compiler,
+            language=args.language,
         )
         payload: dict = {"compile": asdict(result)}
 
         if args.target and args.function:
             sim = byte_similarity_against_target(
-                source, str(args.target), args.function,
-                compiler=args.compiler, language=args.language,
+                source,
+                str(args.target),
+                args.function,
+                compiler=args.compiler,
+                language=args.language,
             )
             payload["similarity"] = asdict(sim)
 
         if args.run:
             run_result = build_and_run(
-                source, args=args.run_args, stdin=args.stdin,
-                compiler=args.compiler, language=args.language,
+                source,
+                args=args.run_args,
+                stdin=args.stdin,
+                compiler=args.compiler,
+                language=args.language,
                 timeout_seconds=args.timeout,
             )
             payload["run"] = asdict(run_result)
@@ -101,9 +125,12 @@ class VerifyRecoveryCommand(BaseCommand):
                 formatter.output_plain("Error: --compare-runtime requires --target")
                 return 2
             cmp_result = compare_runtime_to_target(
-                source, str(args.target),
-                args=args.run_args, stdin=args.stdin,
-                compiler=args.compiler, language=args.language,
+                source,
+                str(args.target),
+                args=args.run_args,
+                stdin=args.stdin,
+                compiler=args.compiler,
+                language=args.language,
                 timeout_seconds=args.timeout,
             )
             payload["compare_runtime"] = asdict(cmp_result)

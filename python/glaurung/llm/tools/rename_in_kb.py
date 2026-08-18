@@ -20,18 +20,20 @@ from .base import MemoryTool, ToolMeta
 
 
 class RenameInKBArgs(BaseModel):
-    entry_va: int = Field(..., description="Entry VA identifying the function to rename")
+    entry_va: int = Field(
+        ..., description="Entry VA identifying the function to rename"
+    )
     new_name: str = Field(..., description="Replacement label (e.g. 'parse_config')")
     rationale: Optional[str] = Field(
         None,
         description="Short note recorded alongside the rename — usually the "
-                    "agent's justification. Stored in props.rename_rationale.",
+        "agent's justification. Stored in props.rename_rationale.",
     )
     create_if_missing: bool = Field(
         True,
         description="If no function node with this entry_va exists yet, create "
-                    "one. Set False to refuse to rename functions that were "
-                    "never enumerated.",
+        "one. Set False to refuse to rename functions that were "
+        "never enumerated.",
     )
 
 
@@ -42,7 +44,7 @@ class RenameInKBResult(BaseModel):
     aliases: List[str] = Field(
         default_factory=list,
         description="All names this function has ever been known by, including "
-                    "the current one.",
+        "the current one.",
     )
     created: bool = Field(False, description="True when a new node had to be created")
 
@@ -53,8 +55,8 @@ class RenameInKBTool(MemoryTool[RenameInKBArgs, RenameInKBResult]):
             ToolMeta(
                 name="rename_in_kb",
                 description="Rename a function in the session KB, preserving "
-                            "the old name as an alias. Use this after "
-                            "suggest_function_name picks a better label.",
+                "the old name as an alias. Use this after "
+                "suggest_function_name picks a better label.",
                 tags=("kb", "naming"),
             ),
             RenameInKBArgs,

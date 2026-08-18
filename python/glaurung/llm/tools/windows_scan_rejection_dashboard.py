@@ -226,7 +226,9 @@ def _load_json_rows(path: Path) -> list[dict[str, Any]]:
     return [row for row in raw if isinstance(row, dict)]
 
 
-def _filter_rows(rows: list[dict[str, Any]], file_filter: str | None) -> list[dict[str, Any]]:
+def _filter_rows(
+    rows: list[dict[str, Any]], file_filter: str | None
+) -> list[dict[str, Any]]:
     if not file_filter:
         return rows
     needle = file_filter.lower()
@@ -585,9 +587,7 @@ def _evidence_bundle(
             "scan_rejection_dashboard_not_finding",
             *[code for row in rows[:8] for code in row.reason_codes],
         ],
-        blockers=[
-            row.reason for row in rows if row.ghidra_missing_address_hits > 0
-        ],
+        blockers=[row.reason for row in rows if row.ghidra_missing_address_hits > 0],
         next_actions=_dedupe([row.next_action for row in rows[:8]]),
         notes=notes,
     )

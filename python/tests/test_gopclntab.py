@@ -11,9 +11,7 @@ from glaurung.llm.kb import xref_db
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
 
-_HELLO_GO = Path(
-    "samples/binaries/platforms/linux/amd64/export/go/hello-go"
-)
+_HELLO_GO = Path("samples/binaries/platforms/linux/amd64/export/go/hello-go")
 _HELLO_GO_STATIC = Path(
     "samples/binaries/platforms/linux/amd64/export/go/hello-go-static"
 )
@@ -29,6 +27,7 @@ def _need(p: Path) -> Path:
 
 
 # --- Direct binding tests ---------------------------------------------------
+
 
 def test_gopclntab_recovers_main_main(tmp_path: Path) -> None:
     binary = _need(_HELLO_GO)
@@ -62,6 +61,7 @@ def test_gopclntab_recovers_static_binary() -> None:
 
 
 # --- KB integration tests --------------------------------------------------
+
 
 def test_index_xrefs_upgrades_go_function_names(tmp_path: Path) -> None:
     """Running the standard xref/name population on a stripped Go
@@ -97,11 +97,15 @@ def test_manual_rename_wins_over_gopclntab(tmp_path: Path) -> None:
     xref_db.index_callgraph(kb, str(binary))
 
     main_va = next(
-        n.entry_va for n in xref_db.list_function_names(kb)
+        n.entry_va
+        for n in xref_db.list_function_names(kb)
         if n.canonical == "main.main"
     )
     xref_db.set_function_name(
-        kb, main_va, "user_renamed_main", set_by="manual",
+        kb,
+        main_va,
+        "user_renamed_main",
+        set_by="manual",
     )
 
     # Re-run index — the gopclntab pass must respect the manual entry.

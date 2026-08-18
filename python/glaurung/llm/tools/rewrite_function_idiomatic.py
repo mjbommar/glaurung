@@ -66,46 +66,42 @@ class RewriteFunctionArgs(BaseModel):
     pseudocode: Optional[str] = Field(
         None,
         description="Function pseudocode. When omitted, the tool calls "
-                    "g.ir.decompile_at itself.",
+        "g.ir.decompile_at itself.",
     )
     fidelity: RewriteFidelity = Field(
         default="tldr",
         description="Rewrite preset. 'tldr' = idiomatic-source recovery "
-                    "(default; existing behavior). 'annotated' = per-block "
-                    "faithful for bug-hunting triage; emits an "
-                    "AnnotatedFunction with one CodeBlock per basic block.",
+        "(default; existing behavior). 'annotated' = per-block "
+        "faithful for bug-hunting triage; emits an "
+        "AnnotatedFunction with one CodeBlock per basic block.",
     )
     suspicious_vas: List[int] = Field(
         default_factory=list,
         description="Optional list of VAs the caller wants extra fidelity "
-                    "around (e.g. a static-rule sink_va). Used by the "
-                    "'annotated' preset to bias prompt attention.",
+        "around (e.g. a static-rule sink_va). Used by the "
+        "'annotated' preset to bias prompt attention.",
     )
-    c_prototype: str = Field(
-        ..., description="Recovered prototype from #10"
-    )
-    role: Optional[str] = Field(
-        None, description="Role label from #13"
-    )
+    c_prototype: str = Field(..., description="Recovered prototype from #10")
+    role: Optional[str] = Field(None, description="Role label from #13")
     variable_names: Dict[str, str] = Field(
         default_factory=dict,
         description="Mapping from raw identifier (var3, arg0, t7) to the "
-                    "name picked by #5. The rewriter substitutes these.",
+        "name picked by #5. The rewriter substitutes these.",
     )
     constant_labels: Dict[str, str] = Field(
         default_factory=dict,
         description="Mapping from string-rendered constant value ('0x4002') "
-                    "to its symbolic form ('O_RDWR | O_DIRECT') from #2.",
+        "to its symbolic form ('O_RDWR | O_DIRECT') from #2.",
     )
     string_names: Dict[str, str] = Field(
         default_factory=dict,
         description="Mapping from raw string literal to SCREAMING_SNAKE_CASE "
-                    "name from #3.",
+        "name from #3.",
     )
     loop_idioms: List[str] = Field(
         default_factory=list,
         description="Human-readable descriptions of loop replacements from "
-                    "#4 — e.g. 'line 12 loop replaced with memcpy(dst, src, len)'.",
+        "#4 — e.g. 'line 12 loop replaced with memcpy(dst, src, len)'.",
     )
     structs: List[StructDef] = Field(default_factory=list)
     enums: List[EnumDef] = Field(default_factory=list)
@@ -120,8 +116,8 @@ class RewrittenFunction(BaseModel):
     assumptions: List[str] = Field(
         default_factory=list,
         description="Every non-mechanical rewrite decision — dropped dead "
-                    "stores, idiom replacements, renamed variables whose "
-                    "intent the LLM inferred. Feeds #17.",
+        "stores, idiom replacements, renamed variables whose "
+        "intent the LLM inferred. Feeds #17.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
@@ -131,6 +127,7 @@ class RewrittenFunction(BaseModel):
 # structure is to make compression impossible: the LLM cannot collapse two
 # basic blocks into one without violating the type contract.
 
+
 class AnnotatedCallSite(BaseModel):
     call_va: str = Field(..., description="VA of the call instruction, hex")
     callee: str = Field(..., description="Callee symbol or expression")
@@ -138,8 +135,8 @@ class AnnotatedCallSite(BaseModel):
     notable: bool = Field(
         False,
         description="True if this call is security-relevant for review "
-                    "(ObReferenceObjectByHandle, ExAllocatePool*, "
-                    "ProbeForRead/Write, IofCompleteRequest, etc).",
+        "(ObReferenceObjectByHandle, ExAllocatePool*, "
+        "ProbeForRead/Write, IofCompleteRequest, etc).",
     )
 
 
@@ -150,9 +147,9 @@ class AnnotatedMemAccess(BaseModel):
     addr_expr: str = Field(
         ...,
         description="Symbolic address expression -- "
-                    "'SystemBuffer + 0x28', 'caller_arg0->Endpoint', "
-                    "'[rsp + 0x40]'. Preserved verbatim from input fact-bundle "
-                    "where present; otherwise reconstructed from disasm.",
+        "'SystemBuffer + 0x28', 'caller_arg0->Endpoint', "
+        "'[rsp + 0x40]'. Preserved verbatim from input fact-bundle "
+        "where present; otherwise reconstructed from disasm.",
     )
 
 
@@ -169,21 +166,22 @@ class CodeBlock(BaseModel):
     lifted_c: str = Field(
         ...,
         description="Faithful C-line equivalent for every instruction in "
-                    "this block. NO dead-store removal. NO branch collapse. "
-                    "NO loop-to-memcpy replacement unless the body is "
-                    "exactly that idiom. Variable renames from Layer-0 ARE "
-                    "applied. Symbolic addr_exprs from the fact-bundle ARE "
-                    "applied. Out-of-block calls show as // call <callee> "
-                    "comments with their VA.",
+        "this block. NO dead-store removal. NO branch collapse. "
+        "NO loop-to-memcpy replacement unless the body is "
+        "exactly that idiom. Variable renames from Layer-0 ARE "
+        "applied. Symbolic addr_exprs from the fact-bundle ARE "
+        "applied. Out-of-block calls show as // call <callee> "
+        "comments with their VA.",
     )
     calls: List[AnnotatedCallSite] = Field(default_factory=list)
     mem_accesses: List[AnnotatedMemAccess] = Field(default_factory=list)
     branches: List[AnnotatedBranch] = Field(default_factory=list)
     block_confidence: float = Field(
-        ge=0.0, le=1.0,
+        ge=0.0,
+        le=1.0,
         description="Per-block self-rated confidence. Use < 0.5 for any "
-                    "block where the LLM had to guess at struct fields, "
-                    "type widths, or branch direction.",
+        "block where the LLM had to guess at struct fields, "
+        "type widths, or branch direction.",
     )
 
 
@@ -192,8 +190,8 @@ class AnnotatedFunction(BaseModel):
     blocks: List[CodeBlock] = Field(
         ...,
         description="ONE entry per basic block in the input. The list MUST "
-                    "cover every block; do not collapse, dedupe, or skip. "
-                    "An empty list is invalid output.",
+        "cover every block; do not collapse, dedupe, or skip. "
+        "An empty list is invalid output.",
     )
     assumptions: List[str] = Field(default_factory=list)
     overall_confidence: float = Field(ge=0.0, le=1.0)
@@ -227,9 +225,7 @@ def _apply_substitutions(text: str, mappings: Dict[str, str]) -> str:
     return out
 
 
-def _heuristic(
-    args: RewriteFunctionArgs, pseudocode: str
-) -> RewrittenFunction:
+def _heuristic(args: RewriteFunctionArgs, pseudocode: str) -> RewrittenFunction:
     text = pseudocode
     text = _apply_substitutions(text, args.variable_names)
     text = _apply_substitutions(text, args.constant_labels)
@@ -287,7 +283,6 @@ _SYSTEM_PROMPT_ANNOTATED = (
     "CWE-416 (UAF), CWE-822 (untrusted pointer deref), CWE-787 (OOB "
     "write), CWE-200 (info disclosure), CWE-269 (priv esc), CWE-362 "
     "(race), and similar shapes. Faithfulness BEATS readability.\n\n"
-
     "For EVERY basic block in the input pseudocode, emit one CodeBlock "
     "entry with:\n"
     "  - start_va / end_va: the VA range this block covers\n"
@@ -297,7 +292,6 @@ _SYSTEM_PROMPT_ANNOTATED = (
     "    side effect in this block, with VAs.\n"
     "  - block_confidence: < 0.5 if you had to guess at types, struct "
     "    layouts, or branch direction.\n\n"
-
     "RENAMING IS MANDATORY. When the user supplies variable_names, "
     "constant_labels, or string_names tables, you MUST substitute "
     "those names into the `lifted_c` body. A `%var0` in the input that "
@@ -308,14 +302,12 @@ _SYSTEM_PROMPT_ANNOTATED = (
     "identifiers happen to share a name, disambiguate with a numeric "
     "suffix; do NOT silently drop the rename. Variables not in the "
     "table keep their raw form (`var3`, `arg2`) -- do not invent names.\n\n"
-
     "STRUCT FIELDS. When you have a struct definition available (Irp, "
     "IO_STACK_LOCATION, AFD_ENDPOINT, IO_STATUS_BLOCK, etc) use field "
     "names: `irp->AssociatedIrp.SystemBuffer` instead of `*(u64 *)&"
     "[irp + 0x18]`. If the struct is NOT in the supplied definitions, "
     "leave the raw offset (`*(unsigned char *)(arg0 + 0x40)`) -- DO "
     "NOT invent a field name.\n\n"
-
     "DO NOT collapse blocks. DO NOT merge two basic blocks into one "
     "CodeBlock even if they look alike. DO NOT remove 'dead stores' -- "
     "they may be security-relevant (e.g. zeroing a buffer before "
@@ -323,14 +315,12 @@ _SYSTEM_PROMPT_ANNOTATED = (
     "library calls unless the body matches memcpy/memset EXACTLY. "
     "DO NOT shorten the function. If you are uncertain about a region, "
     "transcribe it MORE verbosely, not less.\n\n"
-
     "When the caller flags `suspicious_vas`, give those blocks extra "
     "attention -- a static rule fired in that region and the human "
     "reviewer needs to see every load/store/call clearly to decide "
     "TP vs FP. Mark such blocks with `block_confidence` >= 0.5 ONLY "
     "if every instruction is unambiguous -- if you had to guess, "
     "say so.\n\n"
-
     "Output an AnnotatedFunction. The `blocks` list MUST be non-empty "
     "and MUST cover every basic block visible in the input. Empty "
     "output is treated as a refusal and will trigger the fallback."
@@ -359,9 +349,7 @@ def _build_prompt_annotated(args: "RewriteFunctionArgs", pseudocode: str) -> str
     if args.constant_labels:
         parts.append(
             "Constant rewrites (apply these):\n"
-            + "\n".join(
-                f"  {k} -> {v}" for k, v in args.constant_labels.items()
-            )
+            + "\n".join(f"  {k} -> {v}" for k, v in args.constant_labels.items())
         )
     if args.string_names:
         parts.append(
@@ -384,8 +372,7 @@ def _build_prompt_annotated(args: "RewriteFunctionArgs", pseudocode: str) -> str
         parts.append(
             "Error codes available:\n"
             + "\n".join(
-                f"  {e.canonical_name} = {e.numeric_value}"
-                for e in args.error_codes
+                f"  {e.canonical_name} = {e.numeric_value}" for e in args.error_codes
             )
         )
     parts.append(
@@ -476,7 +463,9 @@ def _ground_annotated_lift(annotated: "AnnotatedFunction") -> "AnnotatedFunction
             else:
                 out_lines.append(line)
         if block_flagged:
-            new_blocks.append(block.model_copy(update={"lifted_c": "\n".join(out_lines)}))
+            new_blocks.append(
+                block.model_copy(update={"lifted_c": "\n".join(out_lines)})
+            )
         else:
             new_blocks.append(block)
     if not flagged_any:
@@ -488,10 +477,12 @@ def _ground_annotated_lift(annotated: "AnnotatedFunction") -> "AnnotatedFunction
         "lines are prefixed `// SYNTHESIZED -- unverified store`. Verify "
         "against raw disasm before triaging UAF/race/store-based bugs.",
     ]
-    return annotated.model_copy(update={
-        "blocks": new_blocks,
-        "assumptions": new_assumptions,
-    })
+    return annotated.model_copy(
+        update={
+            "blocks": new_blocks,
+            "assumptions": new_assumptions,
+        }
+    )
 
 
 def _annotated_heuristic_fallback(
@@ -551,23 +542,25 @@ def _build_prompt(args: RewriteFunctionArgs, pseudocode: str) -> str:
             )
         )
     if args.loop_idioms:
-        parts.append("Loop idiom replacements:\n" + "\n".join(
-            f"  - {entry}" for entry in args.loop_idioms
-        ))
+        parts.append(
+            "Loop idiom replacements:\n"
+            + "\n".join(f"  - {entry}" for entry in args.loop_idioms)
+        )
     if args.structs:
-        parts.append("Available struct definitions:\n" + "\n\n".join(
-            s.c_definition for s in args.structs
-        ))
+        parts.append(
+            "Available struct definitions:\n"
+            + "\n\n".join(s.c_definition for s in args.structs)
+        )
     if args.enums:
-        parts.append("Available enum definitions:\n" + "\n\n".join(
-            e.c_definition for e in args.enums
-        ))
+        parts.append(
+            "Available enum definitions:\n"
+            + "\n\n".join(e.c_definition for e in args.enums)
+        )
     if args.error_codes:
         parts.append(
             "Error codes available:\n"
             + "\n".join(
-                f"  {e.canonical_name} = {e.numeric_value}"
-                for e in args.error_codes
+                f"  {e.canonical_name} = {e.numeric_value}" for e in args.error_codes
             )
         )
     parts.append(
@@ -585,9 +578,9 @@ class RewriteFunctionIdiomaticTool(
             ToolMeta(
                 name="rewrite_function_idiomatic",
                 description="Rewrite one function from pseudocode to idiomatic "
-                            "source in C/Rust/Go/Python, consuming all "
-                            "Layer-0/Layer-1 evidence. The central creative "
-                            "step of source recovery.",
+                "source in C/Rust/Go/Python, consuming all "
+                "Layer-0/Layer-1 evidence. The central creative "
+                "step of source recovery.",
                 tags=("llm", "rewrite", "layer2"),
             ),
             RewriteFunctionArgs,

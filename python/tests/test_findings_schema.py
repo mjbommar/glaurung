@@ -20,6 +20,7 @@ from glaurung.llm.findings import (
 
 # ---- normalize_cwe ----
 
+
 def test_normalize_cwe_canonical_unchanged():
     assert normalize_cwe("CWE-121") == "CWE-121"
 
@@ -57,6 +58,7 @@ def test_normalize_cwe_rejects_garbage():
 
 # ---- lookup_cwe_name ----
 
+
 def test_lookup_cwe_name_known():
     assert lookup_cwe_name("CWE-121") == "Stack-based Buffer Overflow"
     assert lookup_cwe_name("CWE-416") == "Use After Free"
@@ -67,6 +69,7 @@ def test_lookup_cwe_name_unknown_returns_none():
 
 
 # ---- FunctionRef ----
+
 
 def test_function_ref_name_only():
     f = FunctionRef(name="vuln")
@@ -94,6 +97,7 @@ def test_function_ref_requires_at_least_one():
 
 # ---- VulnerabilityFinding ----
 
+
 def _good_evidence() -> Evidence:
     return Evidence(
         kind="disasm",
@@ -120,7 +124,9 @@ def test_vulnerability_finding_normalizes_cwe_id():
         cwe="cwe 416",  # lowercase, space
         function=FunctionRef(name="VulnTouch"),
         root_cause="returns a freed heap pointer",
-        evidence=[Evidence(kind="import", location="HeapFree", text="HeapFree imported")],
+        evidence=[
+            Evidence(kind="import", location="HeapFree", text="HeapFree imported")
+        ],
     )
     assert f.cwe == "CWE-416"
     assert f.cwe_name == "Use After Free"
@@ -150,12 +156,15 @@ def test_vulnerability_finding_rejects_short_root_cause():
 def test_vulnerability_finding_roundtrips_json():
     f = VulnerabilityFinding(
         cwe="CWE-190",
-        function=FunctionRef(name="parse_packet_array", va=0x1400018e0),
+        function=FunctionRef(name="parse_packet_array", va=0x1400018E0),
         bug_site=AddressRef(va=0x140001910),
         root_cause="record_count * record_size wraps before malloc allocates",
         evidence=[
-            Evidence(kind="disasm", location="0x140001910",
-                     text="imul edx, ecx ; no overflow check"),
+            Evidence(
+                kind="disasm",
+                location="0x140001910",
+                text="imul edx, ecx ; no overflow check",
+            ),
             Evidence(kind="import", location="malloc", text="malloc imported"),
         ],
         confidence="high",
@@ -170,6 +179,7 @@ def test_vulnerability_finding_roundtrips_json():
 
 # ---- FindingsReport ----
 
+
 def test_findings_report_empty():
     r = FindingsReport(binary_path="/tmp/x.exe", notes="nothing stood out")
     assert r.findings == []
@@ -178,17 +188,20 @@ def test_findings_report_empty():
 
 def test_findings_report_by_cwe():
     f1 = VulnerabilityFinding(
-        cwe="CWE-121", function=FunctionRef(name="a"),
+        cwe="CWE-121",
+        function=FunctionRef(name="a"),
         root_cause="stack overflow via strcpy in helper",
         evidence=[_good_evidence()],
     )
     f2 = VulnerabilityFinding(
-        cwe="CWE-121", function=FunctionRef(name="b"),
+        cwe="CWE-121",
+        function=FunctionRef(name="b"),
         root_cause="another stack overflow site near sprintf",
         evidence=[_good_evidence()],
     )
     f3 = VulnerabilityFinding(
-        cwe="CWE-416", function=FunctionRef(name="c"),
+        cwe="CWE-416",
+        function=FunctionRef(name="c"),
         root_cause="freed buffer returned and dereferenced by caller",
         evidence=[_good_evidence()],
     )
@@ -203,7 +216,8 @@ def test_findings_report_merge_dedups_by_site():
     """Two reports finding the same (cwe, function, bug_site) tuple should
     produce one entry in the merged output (used by the L3 sweep)."""
     f_dup = VulnerabilityFinding(
-        cwe="CWE-121", function=FunctionRef(va=0x140001480),
+        cwe="CWE-121",
+        function=FunctionRef(va=0x140001480),
         bug_site=AddressRef(va=0x140001520),
         root_cause="strcpy of argv[1] into 32-byte stack buffer",
         evidence=[_good_evidence()],
@@ -211,7 +225,8 @@ def test_findings_report_merge_dedups_by_site():
     r1 = FindingsReport(binary_path="/tmp/x", findings=[f_dup])
     r2 = FindingsReport(binary_path="/tmp/x", findings=[f_dup])
     f_other = VulnerabilityFinding(
-        cwe="CWE-134", function=FunctionRef(va=0x140002000),
+        cwe="CWE-134",
+        function=FunctionRef(va=0x140002000),
         root_cause="printf called with caller-controlled first arg",
         evidence=[_good_evidence()],
     )

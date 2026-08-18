@@ -29,7 +29,7 @@ class XrefEntry(BaseModel):
     kind: str = Field(
         "call",
         description="Reference kind: 'call' (direct control-flow) or 'data' "
-                    "(load/store reference).",
+        "(load/store reference).",
     )
 
 
@@ -78,8 +78,8 @@ class ListXrefsToTool(MemoryTool[XrefArgs, XrefResult]):
             ToolMeta(
                 name="list_xrefs_to",
                 description="Return control-flow references that land at or "
-                            "inside the function starting at this VA "
-                            "(IDA's 'X' key, incoming direction).",
+                "inside the function starting at this VA "
+                "(IDA's 'X' key, incoming direction).",
                 tags=("analysis", "xrefs"),
             ),
             XrefArgs,
@@ -97,9 +97,7 @@ class ListXrefsToTool(MemoryTool[XrefArgs, XrefResult]):
         refs: List[XrefEntry] = []
         for caller_va, callee_va, caller_name, _ in edges:
             if callee_va == target:
-                refs.append(
-                    XrefEntry(va=caller_va, name=caller_name, kind="call")
-                )
+                refs.append(XrefEntry(va=caller_va, name=caller_name, kind="call"))
                 if len(refs) >= args.max_results:
                     break
         return XrefResult(target_va=target, refs=refs)
@@ -113,8 +111,8 @@ class ListXrefsFromTool(MemoryTool[XrefArgs, XrefResult]):
             ToolMeta(
                 name="list_xrefs_from",
                 description="Return the direct-call targets reachable from "
-                            "the function containing this VA (outgoing "
-                            "direction).",
+                "the function containing this VA (outgoing "
+                "direction).",
                 tags=("analysis", "xrefs"),
             ),
             XrefArgs,
@@ -139,9 +137,7 @@ class ListXrefsFromTool(MemoryTool[XrefArgs, XrefResult]):
         for caller_va, callee_va, _caller_name, callee_name in edges:
             if caller_va == fn_va and callee_va not in seen:
                 seen.add(callee_va)
-                refs.append(
-                    XrefEntry(va=callee_va, name=callee_name, kind="call")
-                )
+                refs.append(XrefEntry(va=callee_va, name=callee_name, kind="call"))
                 if len(refs) >= args.max_results:
                     break
         return XrefResult(target_va=target, refs=refs)

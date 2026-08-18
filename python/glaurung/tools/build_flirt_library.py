@@ -76,7 +76,10 @@ class Signature:
 def _read_prologue(binary: Path, va: int, raw: bytes) -> Optional[bytes]:
     try:
         off = g.analysis.va_to_file_offset_path(
-            str(binary), int(va), 100_000_000, 100_000_000,
+            str(binary),
+            int(va),
+            100_000_000,
+            100_000_000,
         )
     except Exception:
         return None
@@ -115,9 +118,7 @@ def _harvest_one(binary: Path) -> List[Signature]:
     return out
 
 
-def build_library(
-    binaries: Iterable[Path], arch: str
-) -> dict:
+def build_library(binaries: Iterable[Path], arch: str) -> dict:
     """Collect signatures, deduplicate by prologue, return a JSON-ready dict."""
     by_proto: dict[str, Signature] = {}
     ambiguous_protos: set[str] = set()
@@ -193,10 +194,14 @@ def main(argv: list[str] | None = None) -> int:
         description="Build a FLIRT-style prologue signature library (#158).",
     )
     p.add_argument(
-        "roots", nargs="+", type=Path,
+        "roots",
+        nargs="+",
+        type=Path,
         help="One or more directories or files to harvest signatures from.",
     )
-    p.add_argument("--output", type=Path, required=True, help="JSON library output path.")
+    p.add_argument(
+        "--output", type=Path, required=True, help="JSON library output path."
+    )
     p.add_argument("--arch", default="x86_64", help="Target architecture tag.")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args(argv)

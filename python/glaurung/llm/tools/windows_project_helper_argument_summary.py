@@ -17,7 +17,9 @@ from .windows_project_onehop_argument_flow import (
 
 
 class WindowsProjectHelperArgumentSummaryArgs(BaseModel):
-    binary_path: str = Field(..., description="Path to the PE binary backing the project.")
+    binary_path: str = Field(
+        ..., description="Path to the PE binary backing the project."
+    )
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
     sinks_path: str | None = Field(
         None,
@@ -44,7 +46,9 @@ class WindowsProjectHelperArgumentSummaryArgs(BaseModel):
         None,
         description="Optional caller-to-helper argument index to summarize.",
     )
-    sink_symbol: str | None = Field(None, description="Optional helper-local sink symbol.")
+    sink_symbol: str | None = Field(
+        None, description="Optional helper-local sink symbol."
+    )
     sink_kind: str | None = Field(None, description="Optional ASB sink kind filter.")
     max_flows: int = Field(
         256,

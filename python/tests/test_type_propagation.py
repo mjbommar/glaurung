@@ -36,8 +36,8 @@ def test_operand_destination_register_recognises_sysv_args() -> None:
         ("edi", "rdi"),
         ("rsi:rsi", "rsi"),  # disassembler colon prefix
         ("EDX", "rdx"),
-        ("rax", None),       # not an arg register
-        ("[rdi]", None),     # memory operand
+        ("rax", None),  # not an arg register
+        ("[rdi]", None),  # memory operand
         ("0x10", None),
     ]
     for op, expected in cases:
@@ -83,8 +83,12 @@ def test_propagation_does_not_overwrite_manual_slots(tmp_path: Path) -> None:
 
     # Pre-populate a slot with a manual type.
     xref_db.set_stack_var(
-        kb, function_va=int(main.entry_point.value), offset=-0x10,
-        name="my_argv", c_type="my_custom_type", set_by="manual",
+        kb,
+        function_va=int(main.entry_point.value),
+        offset=-0x10,
+        name="my_argv",
+        c_type="my_custom_type",
+        set_by="manual",
     )
     xref_db.index_callgraph(kb, str(binary))
     xref_db.propagate_types_at_callsites(kb, str(binary), int(main.entry_point.value))
@@ -105,7 +109,9 @@ def test_propagation_returns_zero_without_prototypes(tmp_path: Path) -> None:
     main = next((f for f in funcs if f.name == "main"), None)
     assert main is not None
     n = xref_db.propagate_types_at_callsites(
-        kb, str(binary), int(main.entry_point.value),
+        kb,
+        str(binary),
+        int(main.entry_point.value),
     )
     assert n == 0
     kb.close()
@@ -120,7 +126,9 @@ def test_propagation_lifts_c2_demo_via_libc_calls(tmp_path: Path) -> None:
     binary = _need(_C2_DEMO_O0)
     db = tmp_path / "tp.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
     xref_db.index_callgraph(kb, str(binary))
 
@@ -131,18 +139,23 @@ def test_propagation_lifts_c2_demo_via_libc_calls(tmp_path: Path) -> None:
             continue
         xref_db.discover_stack_vars(kb, str(binary), int(f.entry_point.value))
         total += xref_db.propagate_types_at_callsites(
-            kb, str(binary), int(f.entry_point.value),
+            kb,
+            str(binary),
+            int(f.entry_point.value),
         )
     assert total >= 5, (
         f"expected ≥5 stack-slot type refinements via libc-call propagation; got {total}"
     )
-    typed = [s for s in xref_db.list_stack_vars(kb)
-             if s.c_type and s.set_by == "propagated"]
+    typed = [
+        s for s in xref_db.list_stack_vars(kb) if s.c_type and s.set_by == "propagated"
+    ]
     assert typed
     # Sanity: types come from the libc proto bundle vocabulary.
     seen_types = {s.c_type for s in typed}
-    libc_shaped = {t for t in seen_types if any(
-        kw in t for kw in ("char", "void *", "size_t", "int", "FILE", "*const")
-    )}
+    libc_shaped = {
+        t
+        for t in seen_types
+        if any(kw in t for kw in ("char", "void *", "size_t", "int", "FILE", "*const"))
+    }
     assert libc_shaped, f"propagated types don't look libc-shaped: {seen_types}"
     kb.close()

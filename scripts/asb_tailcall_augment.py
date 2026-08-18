@@ -9,6 +9,7 @@ fallthrough caller).
 Called by scripts/windows_ghidra_parity.py to produce the augmented
 entry_vas list reported in parity-output JSON.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,9 +29,11 @@ def _read_pe_section_map(pe_bytes: bytes):
     opt_hdr_size = _struct.unpack_from("<H", pe_bytes, fh_off + 16)[0]
     opt_off = fh_off + 20
     magic = _struct.unpack_from("<H", pe_bytes, opt_off)[0]
-    image_base = (_struct.unpack_from("<Q", pe_bytes, opt_off + 24)[0]
-                  if magic == 0x20b else
-                  _struct.unpack_from("<I", pe_bytes, opt_off + 28)[0])
+    image_base = (
+        _struct.unpack_from("<Q", pe_bytes, opt_off + 24)[0]
+        if magic == 0x20B
+        else _struct.unpack_from("<I", pe_bytes, opt_off + 28)[0]
+    )
     sect_off = opt_off + opt_hdr_size
     sections = []
     for i in range(num_sections):
@@ -51,15 +54,18 @@ def _va_to_file_offset(image_base, sections, va):
     return None
 
 
-def augment_entries(pe_path: Path, baseline_entries: Iterable[int],
-                    max_fn_bytes: int = 4096) -> set[int]:
+def augment_entries(
+    pe_path: Path, baseline_entries: Iterable[int], max_fn_bytes: int = 4096
+) -> set[int]:
     """Return augmented entry set = baseline ∪ {tail-call targets}."""
     pe_bytes = Path(pe_path).read_bytes()
     image_base, sections = _read_pe_section_map(pe_bytes)
     sorted_entries = sorted(set(baseline_entries))
     fn_ranges: dict[int, tuple[int, int]] = {}
     for i, va in enumerate(sorted_entries):
-        nxt = sorted_entries[i + 1] if i + 1 < len(sorted_entries) else va + max_fn_bytes
+        nxt = (
+            sorted_entries[i + 1] if i + 1 < len(sorted_entries) else va + max_fn_bytes
+        )
         end = min(nxt - 1, va + max_fn_bytes - 1)
         fn_ranges[va] = (va, end)
     known = set(sorted_entries)
@@ -73,7 +79,7 @@ def augment_entries(pe_path: Path, baseline_entries: Iterable[int],
         if off is None:
             continue
         body_size = min(hi - lo + 1, max_fn_bytes)
-        body = pe_bytes[off:off + body_size]
+        body = pe_bytes[off : off + body_size]
         for ins in md.disasm(body, fn_va):
             if ins.mnemonic.lower() != "jmp":
                 continue

@@ -126,7 +126,9 @@ def test_windows_surface_catalog_filters_and_joins_references(tmp_path: Path) ->
         "build_corpus_target",
     }
     assert any(ref.id == "nt_query_system_information" for ref in syscall.references)
-    assert any(ref.symbols_or_filename == ["ntoskrnl.exe"] for ref in syscall.references)
+    assert any(
+        ref.symbols_or_filename == ["ntoskrnl.exe"] for ref in syscall.references
+    )
     assert "not per-function proof" in result.notes[0]
 
 

@@ -100,56 +100,100 @@ _INTENTS: tuple[Intent, ...] = (
         tools=(
             _CORE_TRIAGE_TOOLS
             + _DECOMPILE_TOOLS
-            + ("list_basic_blocks", "list_callers", "list_callees",
-               "map_pe_iat", "map_symbol_addresses")
+            + (
+                "list_basic_blocks",
+                "list_callers",
+                "list_callees",
+                "map_pe_iat",
+                "map_symbol_addresses",
+            )
             # NB: windows_project_* tools are NOT included by default --
             # they require a .glaurung project DB the raw-binary `ask`
             # flow doesn't open. Use `--all-tools` when running against
             # a project DB.
         ),
         keywords=(
-            "vuln", "vulnerab", "bug", "cwe-", "cwe ",
-            "overflow", "use-after-free", "uaf", "double free",
-            "format string", "off by one", "off-by-one",
-            "integer overflow", "null deref", "null pointer",
-            "out of bound", "out-of-bound", "memory corrupt",
-            "race", "toctou", "double-fetch", "double fetch",
-            "find any bug", "find a bug", "audit",
+            "vuln",
+            "vulnerab",
+            "bug",
+            "cwe-",
+            "cwe ",
+            "overflow",
+            "use-after-free",
+            "uaf",
+            "double free",
+            "format string",
+            "off by one",
+            "off-by-one",
+            "integer overflow",
+            "null deref",
+            "null pointer",
+            "out of bound",
+            "out-of-bound",
+            "memory corrupt",
+            "race",
+            "toctou",
+            "double-fetch",
+            "double fetch",
+            "find any bug",
+            "find a bug",
+            "audit",
         ),
     ),
     Intent(
         name="triage_summary",
         tools=_CORE_TRIAGE_TOOLS,
         keywords=(
-            "what is this", "what kind", "summary", "summarise",
-            "summarize", "what format", "format", "platform",
-            "pe or elf", "windows or linux", "is this pe",
-            "is this elf", "metadata",
+            "what is this",
+            "what kind",
+            "summary",
+            "summarise",
+            "summarize",
+            "what format",
+            "format",
+            "platform",
+            "pe or elf",
+            "windows or linux",
+            "is this pe",
+            "is this elf",
+            "metadata",
         ),
     ),
     Intent(
         name="function_walk",
         tools=_CORE_TRIAGE_TOOLS + _DECOMPILE_TOOLS + ("list_callers", "list_callees"),
         keywords=(
-            "explain", "walk through", "what does", "describe function",
-            "decompile", "pseudocode", "show me ",
+            "explain",
+            "walk through",
+            "what does",
+            "describe function",
+            "decompile",
+            "pseudocode",
+            "show me ",
         ),
     ),
     Intent(
         name="import_audit",
-        tools=("list_imports", "list_exports", "annotate_binary",
-               "map_pe_iat"),
+        tools=("list_imports", "list_exports", "annotate_binary", "map_pe_iat"),
         keywords=(
-            "list imports", "what apis", "what api", "import table",
-            "dangerous calls", "imported function",
+            "list imports",
+            "what apis",
+            "what api",
+            "import table",
+            "dangerous calls",
+            "imported function",
         ),
     ),
     Intent(
         name="string_audit",
         tools=("extract_strings", "annotate_binary"),
         keywords=(
-            "find strings", "extract strings", "ioc", "indicators of",
-            "embedded urls", "what strings",
+            "find strings",
+            "extract strings",
+            "ioc",
+            "indicators of",
+            "embedded urls",
+            "what strings",
         ),
     ),
     Intent(
@@ -159,8 +203,13 @@ _INTENTS: tuple[Intent, ...] = (
         tools=(
             _CORE_TRIAGE_TOOLS
             + _DECOMPILE_TOOLS
-            + ("list_basic_blocks", "list_callers", "list_callees",
-               "map_pe_iat", "map_symbol_addresses")
+            + (
+                "list_basic_blocks",
+                "list_callers",
+                "list_callees",
+                "map_pe_iat",
+                "map_symbol_addresses",
+            )
         ),
         keywords=(),
     ),

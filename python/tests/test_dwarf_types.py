@@ -40,9 +40,7 @@ def test_import_dwarf_types_into_type_db(tmp_path: Path) -> None:
     db = tmp_path / "types.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     summary = type_db.import_dwarf_types(kb, str(binary))
-    assert summary["imported_struct"] >= 1, (
-        f"no structs imported; summary={summary}"
-    )
+    assert summary["imported_struct"] >= 1, f"no structs imported; summary={summary}"
     # Round-trip: read one struct back from the DB and verify shape.
     structs = type_db.list_types(kb, kind="struct")
     assert structs, "no structs landed in the persistent type DB"
@@ -63,7 +61,8 @@ def test_import_does_not_overwrite_manual_entries(tmp_path: Path) -> None:
 
     # Hand-author a fake `_Vector_impl_data` with one field.
     type_db.add_struct(
-        kb, "_Vector_impl_data",
+        kb,
+        "_Vector_impl_data",
         [type_db.StructField(0, "manually_named", "void *", 8)],
         set_by="manual",
     )

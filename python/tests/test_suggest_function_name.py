@@ -280,7 +280,9 @@ def test_strip_lines_preserves_first_occurrence_drops_repeats():
     out = _strip_pe_boilerplate_lines(body)
     out_lines = out.splitlines()
     # First occurrence of each boilerplate token kept.
-    assert sum("This program cannot be run in DOS mode" in line for line in out_lines) == 1
+    assert (
+        sum("This program cannot be run in DOS mode" in line for line in out_lines) == 1
+    )
     assert sum('".text"' in line for line in out_lines) == 1
     # Non-boilerplate lines survive.
     assert any("return var0" in line for line in out_lines)

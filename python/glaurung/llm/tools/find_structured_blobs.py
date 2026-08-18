@@ -48,7 +48,13 @@ from .base import MemoryTool, ToolMeta
 
 
 ImageFormat = Literal[
-    "png", "jpeg", "gif", "bmp", "webp", "ico", "tiff",
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+    "ico",
+    "tiff",
 ]
 
 
@@ -58,8 +64,8 @@ def _png_length(data: bytes, off: int) -> Optional[int]:
     end = len(data)
     p = off + 8  # past the 8-byte magic
     while p + 12 <= end:
-        ln = int.from_bytes(data[p: p + 4], "big")
-        ctype = data[p + 4: p + 8]
+        ln = int.from_bytes(data[p : p + 4], "big")
+        ctype = data[p + 4 : p + 8]
         if ln > 100 * 1024 * 1024:
             return None  # absurd chunk length → malformed
         chunk_end = p + 8 + ln + 4  # length + type + data + crc
@@ -77,28 +83,28 @@ def _jpeg_length(data: bytes, off: int) -> Optional[int]:
     end = len(data)
     p = off + 2  # past SOI
     while p + 4 <= end:
-        if data[p] != 0xff:
+        if data[p] != 0xFF:
             return None
         # Skip 0xff padding bytes.
-        while p < end and data[p] == 0xff:
+        while p < end and data[p] == 0xFF:
             p += 1
         if p >= end:
             return None
         marker = data[p]
         p += 1
-        if marker == 0xd9:
+        if marker == 0xD9:
             return p - off  # EOI
-        if 0xd0 <= marker <= 0xd7 or marker == 0x01:
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:
             continue  # standalone marker
         if p + 2 > end:
             return None
-        seg_len = int.from_bytes(data[p: p + 2], "big")
+        seg_len = int.from_bytes(data[p : p + 2], "big")
         p += seg_len
-        if marker == 0xda:
+        if marker == 0xDA:
             # Start of scan — read until next \xff which isn't part of an
             # entropy-coded byte (FF 00 escape).
             while p + 1 < end:
-                if data[p] == 0xff and data[p + 1] != 0x00:
+                if data[p] == 0xFF and data[p + 1] != 0x00:
                     break
                 p += 1
             else:
@@ -119,16 +125,16 @@ def _bmp_length(data: bytes, off: int) -> Optional[int]:
     """
     if off + 26 > len(data):
         return None
-    size = int.from_bytes(data[off + 2: off + 6], "little")
+    size = int.from_bytes(data[off + 2 : off + 6], "little")
     if size < 26 or off + size > len(data):
         return None
-    reserved = int.from_bytes(data[off + 6: off + 10], "little")
+    reserved = int.from_bytes(data[off + 6 : off + 10], "little")
     if reserved != 0:
         return None
-    pixel_data_off = int.from_bytes(data[off + 10: off + 14], "little")
+    pixel_data_off = int.from_bytes(data[off + 10 : off + 14], "little")
     if pixel_data_off < 26 or pixel_data_off >= size:
         return None
-    dib_size = int.from_bytes(data[off + 14: off + 18], "little")
+    dib_size = int.from_bytes(data[off + 14 : off + 18], "little")
     if dib_size not in (12, 40, 52, 56, 64, 108, 124):
         return None
     return size
@@ -139,7 +145,7 @@ def _ico_length(data: bytes, off: int) -> Optional[int]:
     ``\\x00\\x00\\x01\\x00`` matches null-byte runs in any binary."""
     if off + 6 > len(data):
         return None
-    n_images = int.from_bytes(data[off + 4: off + 6], "little")
+    n_images = int.from_bytes(data[off + 4 : off + 6], "little")
     if n_images == 0 or n_images > 256:
         return None
     if off + 6 + n_images * 16 > len(data):
@@ -152,11 +158,11 @@ def _ico_length(data: bytes, off: int) -> Optional[int]:
         width = 256
     if height == 0:
         height = 256
-    bpp = int.from_bytes(data[e + 6: e + 8], "little")
+    bpp = int.from_bytes(data[e + 6 : e + 8], "little")
     if bpp not in (0, 1, 4, 8, 16, 24, 32):
         return None
-    img_size = int.from_bytes(data[e + 8: e + 12], "little")
-    img_off = int.from_bytes(data[e + 12: e + 16], "little")
+    img_size = int.from_bytes(data[e + 8 : e + 12], "little")
+    img_off = int.from_bytes(data[e + 12 : e + 16], "little")
     if img_off < 6 + n_images * 16:
         return None
     if img_off + img_size > len(data) - off:
@@ -186,13 +192,14 @@ class EmbeddedImage(BaseModel):
     format: str
     offset: int
     length: int = Field(
-        ..., description="Total payload length when the parser walked it; "
-                        "0 when length couldn't be determined.",
+        ...,
+        description="Total payload length when the parser walked it; "
+        "0 when length couldn't be determined.",
     )
     confirmed_via_sniff: bool = Field(
         False,
         description="True when the Rust sniff_bytes() also identified the "
-                    "blob — strong corroboration.",
+        "blob — strong corroboration.",
     )
 
 
@@ -209,10 +216,10 @@ class FindEmbeddedImagesTool(
             ToolMeta(
                 name="find_embedded_images",
                 description="Scan a file for PNG / JPEG / GIF / BMP / WEBP / "
-                            "ICO / TIFF magics; for the formats with a "
-                            "length field, walk the structure to report the "
-                            "full payload extent. Cross-checks each match "
-                            "against the Rust content-sniffer.",
+                "ICO / TIFF magics; for the formats with a "
+                "length field, walk the structure to report the "
+                "full payload extent. Cross-checks each match "
+                "against the Rust content-sniffer.",
                 tags=("extract", "embedded", "images", "layer1"),
             ),
             FindEmbeddedImagesArgs,
@@ -233,6 +240,7 @@ class FindEmbeddedImagesTool(
 
         try:
             import glaurung as g
+
             sniff = g.strings.sniff_bytes
         except Exception:
             sniff = None
@@ -246,11 +254,11 @@ class FindEmbeddedImagesTool(
                     break
                 start = pos + 1
                 # WEBP needs the 'WEBP' confirmation at +8.
-                if fmt == "webp" and not data[pos + 8: pos + 12] == b"WEBP":
+                if fmt == "webp" and not data[pos + 8 : pos + 12] == b"WEBP":
                     continue
                 length = length_fn(data, pos) if length_fn else 0
                 # Sniff the candidate blob (up to 4 KB) to corroborate.
-                blob = data[pos: pos + (length or 4096)]
+                blob = data[pos : pos + (length or 4096)]
                 confirmed = False
                 if sniff is not None:
                     s = sniff(blob)
@@ -264,7 +272,9 @@ class FindEmbeddedImagesTool(
                     continue
                 images.append(
                     EmbeddedImage(
-                        format=fmt, offset=pos, length=length or 0,
+                        format=fmt,
+                        offset=pos,
+                        length=length or 0,
                         confirmed_via_sniff=confirmed,
                     )
                 )
@@ -300,7 +310,7 @@ def _xml_extent(data: bytes, off: int) -> Optional[int]:
     """
     end = len(data)
     p = off
-    if data[p:p + 5] == b"<?xml":
+    if data[p : p + 5] == b"<?xml":
         m = _XML_DECL_RE.match(data, p)
         if m:
             p = m.end()
@@ -339,8 +349,8 @@ class FindXmlBlobsTool(MemoryTool[FindXmlBlobsArgs, FindXmlBlobsResult]):
             ToolMeta(
                 name="find_xml_blobs",
                 description="Scan for XML documents — `<?xml ...?>` "
-                            "declarations or balanced root-element pairs. "
-                            "Reports root tag and extent.",
+                "declarations or balanced root-element pairs. "
+                "Reports root tag and extent.",
                 tags=("extract", "structured", "layer1"),
             ),
             FindXmlBlobsArgs,
@@ -368,8 +378,10 @@ class FindXmlBlobsTool(MemoryTool[FindXmlBlobsArgs, FindXmlBlobsResult]):
             root = tag_m.group(1).decode("ascii") if tag_m else "?"
             blobs.append(
                 XmlBlob(
-                    offset=m.start(), length=ext,
-                    root_element=root, starts_with_decl=True,
+                    offset=m.start(),
+                    length=ext,
+                    root_element=root,
+                    starts_with_decl=True,
                 )
             )
             if len(blobs) >= args.max_results:
@@ -383,7 +395,8 @@ class FindXmlBlobsTool(MemoryTool[FindXmlBlobsArgs, FindXmlBlobsResult]):
                     continue
                 blobs.append(
                     XmlBlob(
-                        offset=m.start(), length=ext,
+                        offset=m.start(),
+                        length=ext,
                         root_element=known.decode().strip().lstrip("<"),
                         starts_with_decl=False,
                     )
@@ -446,21 +459,21 @@ def _json_extent(data: bytes, off: int) -> Optional[int]:
         if in_str:
             if escape:
                 escape = False
-            elif b == 0x5c:  # backslash
+            elif b == 0x5C:  # backslash
                 escape = True
             elif b == 0x22:  # close quote
                 in_str = False
         else:
             if b == 0x22:
                 in_str = True
-            elif b in (0x7b, 0x5b):  # { or [
+            elif b in (0x7B, 0x5B):  # { or [
                 depth += 1
-            elif b in (0x7d, 0x5d):  # } or ]
+            elif b in (0x7D, 0x5D):  # } or ]
                 depth -= 1
                 if depth == 0:
                     end_off = p + 1
                     try:
-                        json.loads(data[off: end_off])
+                        json.loads(data[off:end_off])
                     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                         return None
                     return end_off - off
@@ -474,8 +487,8 @@ class FindJsonBlobsTool(MemoryTool[FindJsonBlobsArgs, FindJsonBlobsResult]):
             ToolMeta(
                 name="find_json_blobs",
                 description="Scan for parseable JSON documents (objects / "
-                            "arrays). Reports offset, length, top-level "
-                            "kind, and a preview of the keys.",
+                "arrays). Reports offset, length, top-level "
+                "kind, and a preview of the keys.",
                 tags=("extract", "structured", "layer1"),
             ),
             FindJsonBlobsArgs,
@@ -500,7 +513,7 @@ class FindJsonBlobsTool(MemoryTool[FindJsonBlobsArgs, FindJsonBlobsResult]):
         # mismatched braces) but iterating across megabytes of data is
         # still O(n).
         candidates = []
-        for ch in (0x7b, 0x5b):
+        for ch in (0x7B, 0x5B):
             start = 0
             while True:
                 pos = data.find(bytes([ch]), start)
@@ -517,20 +530,22 @@ class FindJsonBlobsTool(MemoryTool[FindJsonBlobsArgs, FindJsonBlobsResult]):
             if ext is None or ext < args.min_size:
                 continue
             kind: Literal["object", "array"] = (
-                "object" if data[pos] == 0x7b else "array"
+                "object" if data[pos] == 0x7B else "array"
             )
             keys: List[str] = []
             if kind == "object":
                 try:
-                    parsed = json.loads(data[pos: pos + ext])
+                    parsed = json.loads(data[pos : pos + ext])
                     if isinstance(parsed, dict):
                         keys = list(parsed.keys())[:5]
                 except Exception:
                     pass
             blobs.append(
                 JsonBlob(
-                    offset=pos, length=ext,
-                    top_level_kind=kind, keys_preview=keys,
+                    offset=pos,
+                    length=ext,
+                    top_level_kind=kind,
+                    keys_preview=keys,
                 )
             )
             consumed_through = pos + ext - 1
@@ -570,7 +585,7 @@ class FindPlistBlobsTool(MemoryTool[FindPlistBlobsArgs, FindPlistBlobsResult]):
             ToolMeta(
                 name="find_plist_blobs",
                 description="Find Apple property lists in either bplist00 "
-                            "binary form or XML form (DOCTYPE plist).",
+                "binary form or XML form (DOCTYPE plist).",
                 tags=("extract", "structured", "layer1"),
             ),
             FindPlistBlobsArgs,
@@ -600,9 +615,7 @@ class FindPlistBlobsTool(MemoryTool[FindPlistBlobsArgs, FindPlistBlobsResult]):
             # Heuristic length cap: until next bplist or EOF.
             next_pos = data.find(b"bplist00", pos + 8)
             length = (next_pos if next_pos >= 0 else len(data)) - pos
-            blobs.append(
-                PlistBlob(offset=pos, length=length, format="bplist00")
-            )
+            blobs.append(PlistBlob(offset=pos, length=length, format="bplist00"))
             start = pos + 8
             if len(blobs) >= args.max_results:
                 break
@@ -611,18 +624,14 @@ class FindPlistBlobsTool(MemoryTool[FindPlistBlobsArgs, FindPlistBlobsResult]):
             ext = _xml_extent(data, m.start())
             if ext is None:
                 continue
-            blobs.append(
-                PlistBlob(offset=m.start(), length=ext, format="xml")
-            )
+            blobs.append(PlistBlob(offset=m.start(), length=ext, format="xml"))
             if len(blobs) >= args.max_results:
                 break
         blobs.sort(key=lambda b: b.offset)
         return FindPlistBlobsResult(path=str(path), blobs=blobs[: args.max_results])
 
 
-def build_find_plist_blobs() -> MemoryTool[
-    FindPlistBlobsArgs, FindPlistBlobsResult
-]:
+def build_find_plist_blobs() -> MemoryTool[FindPlistBlobsArgs, FindPlistBlobsResult]:
     return FindPlistBlobsTool()
 
 
@@ -662,9 +671,9 @@ class FindIniBlobsTool(MemoryTool[FindIniBlobsArgs, FindIniBlobsResult]):
             ToolMeta(
                 name="find_ini_blobs",
                 description="Find INI-style config blocks: ``[section]`` "
-                            "headers followed by ``key=value`` pairs. "
-                            "Threshold of min_sections distinguishes real "
-                            "config from one-off bracket text.",
+                "headers followed by ``key=value`` pairs. "
+                "Threshold of min_sections distinguishes real "
+                "config from one-off bracket text.",
                 tags=("extract", "structured", "layer1"),
             ),
             FindIniBlobsArgs,
@@ -691,7 +700,9 @@ class FindIniBlobsTool(MemoryTool[FindIniBlobsArgs, FindIniBlobsResult]):
         )
         sections: List[tuple[int, int, str]] = []
         for m in section_re.finditer(data):
-            sections.append((m.start(), m.end(), m.group(1).decode("ascii", errors="ignore")))
+            sections.append(
+                (m.start(), m.end(), m.group(1).decode("ascii", errors="ignore"))
+            )
         # Coalesce adjacent / near-adjacent sections into INI blobs.
         blobs: List[IniBlob] = []
         i = 0
@@ -739,7 +750,7 @@ class ExtractPeOverlayResult(BaseModel):
     overlay_sniff: Optional[str] = Field(
         None,
         description="MIME / format label for the overlay bytes, when "
-                    "the content sniffer could identify them.",
+        "the content sniffer could identify them.",
     )
 
 
@@ -748,38 +759,36 @@ def _pe_section_table_end(data: bytes) -> Optional[int]:
     or None if data isn't a recognisable PE."""
     if len(data) < 0x40 or data[:2] != b"MZ":
         return None
-    e_lfanew = int.from_bytes(data[0x3c: 0x40], "little")
+    e_lfanew = int.from_bytes(data[0x3C:0x40], "little")
     if e_lfanew + 24 > len(data):
         return None
-    if data[e_lfanew: e_lfanew + 4] != b"PE\x00\x00":
+    if data[e_lfanew : e_lfanew + 4] != b"PE\x00\x00":
         return None
     coff = e_lfanew + 4
-    nsec = int.from_bytes(data[coff + 2: coff + 4], "little")
-    opt_size = int.from_bytes(data[coff + 16: coff + 18], "little")
+    nsec = int.from_bytes(data[coff + 2 : coff + 4], "little")
+    opt_size = int.from_bytes(data[coff + 16 : coff + 18], "little")
     sec_table = coff + 20 + opt_size
     end = 0
     for i in range(nsec):
         sh = sec_table + i * 40
         if sh + 40 > len(data):
             return None
-        size = int.from_bytes(data[sh + 16: sh + 20], "little")
-        offset = int.from_bytes(data[sh + 20: sh + 24], "little")
+        size = int.from_bytes(data[sh + 16 : sh + 20], "little")
+        offset = int.from_bytes(data[sh + 20 : sh + 24], "little")
         sec_end = offset + size
         if sec_end > end:
             end = sec_end
     return end
 
 
-class ExtractPeOverlayTool(
-    MemoryTool[ExtractPeOverlayArgs, ExtractPeOverlayResult]
-):
+class ExtractPeOverlayTool(MemoryTool[ExtractPeOverlayArgs, ExtractPeOverlayResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="extract_pe_overlay",
                 description="Compute a PE's formal end (last raw section "
-                            "boundary) and report any bytes appended after "
-                            "it as the overlay, with a content-sniff label.",
+                "boundary) and report any bytes appended after "
+                "it as the overlay, with a content-sniff label.",
                 tags=("extract", "pe", "overlay", "layer1"),
             ),
             ExtractPeOverlayArgs,
@@ -800,10 +809,11 @@ class ExtractPeOverlayTool(
         end = _pe_section_table_end(data)
         if end is None or end >= len(data):
             return ExtractPeOverlayResult(path=str(path), has_overlay=False)
-        overlay = data[end: end + 4096]  # sniff a 4 KB sample
+        overlay = data[end : end + 4096]  # sniff a 4 KB sample
         sniff_label: Optional[str] = None
         try:
             import glaurung as g
+
             s = g.strings.sniff_bytes(overlay)
             if s is not None:
                 mime, _ext, label = s
@@ -811,8 +821,10 @@ class ExtractPeOverlayTool(
         except Exception:
             pass
         return ExtractPeOverlayResult(
-            path=str(path), has_overlay=True,
-            overlay_offset=end, overlay_size=len(data) - end,
+            path=str(path),
+            has_overlay=True,
+            overlay_offset=end,
+            overlay_size=len(data) - end,
             overlay_sniff=sniff_label,
         )
 
@@ -854,48 +866,46 @@ def _read_elf_section(data: bytes, name: str) -> Optional[tuple[int, int]]:
     ei_data = data[5]
     if ei_class != 2 or ei_data != 1:
         return None
-    e_shoff = int.from_bytes(data[0x28: 0x30], "little")
-    e_shentsize = int.from_bytes(data[0x3a: 0x3c], "little")
-    e_shnum = int.from_bytes(data[0x3c: 0x3e], "little")
-    e_shstrndx = int.from_bytes(data[0x3e: 0x40], "little")
+    e_shoff = int.from_bytes(data[0x28:0x30], "little")
+    e_shentsize = int.from_bytes(data[0x3A:0x3C], "little")
+    e_shnum = int.from_bytes(data[0x3C:0x3E], "little")
+    e_shstrndx = int.from_bytes(data[0x3E:0x40], "little")
     if e_shoff == 0 or e_shnum == 0:
         return None
     str_hdr_off = e_shoff + e_shstrndx * e_shentsize
     if str_hdr_off + e_shentsize > len(data):
         return None
-    str_off = int.from_bytes(data[str_hdr_off + 24: str_hdr_off + 32], "little")
-    str_size = int.from_bytes(data[str_hdr_off + 32: str_hdr_off + 40], "little")
+    str_off = int.from_bytes(data[str_hdr_off + 24 : str_hdr_off + 32], "little")
+    str_size = int.from_bytes(data[str_hdr_off + 32 : str_hdr_off + 40], "little")
     if str_off + str_size > len(data):
         return None
-    strings = data[str_off: str_off + str_size]
+    strings = data[str_off : str_off + str_size]
     target = name.encode()
     for i in range(e_shnum):
         sh = e_shoff + i * e_shentsize
         if sh + e_shentsize > len(data):
             break
-        sh_name = int.from_bytes(data[sh: sh + 4], "little")
-        sh_offset = int.from_bytes(data[sh + 24: sh + 32], "little")
-        sh_size = int.from_bytes(data[sh + 32: sh + 40], "little")
+        sh_name = int.from_bytes(data[sh : sh + 4], "little")
+        sh_offset = int.from_bytes(data[sh + 24 : sh + 32], "little")
+        sh_size = int.from_bytes(data[sh + 32 : sh + 40], "little")
         if sh_name >= len(strings):
             continue
         # Section names are nul-terminated within shstrtab.
         nul = strings.find(b"\x00", sh_name)
-        sec_name = strings[sh_name: nul if nul > 0 else None]
+        sec_name = strings[sh_name : nul if nul > 0 else None]
         if sec_name == target:
             return sh_offset, sh_size
     return None
 
 
-class ExtractElfSectionTool(
-    MemoryTool[ExtractElfSectionArgs, ExtractElfSectionResult]
-):
+class ExtractElfSectionTool(MemoryTool[ExtractElfSectionArgs, ExtractElfSectionResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="extract_elf_section",
                 description="Read the raw bytes of a named ELF section "
-                            "(.rodata, .comment, .note.go.buildid, "
-                            ".gopclntab, etc.). 64-bit LE only.",
+                "(.rodata, .comment, .note.go.buildid, "
+                ".gopclntab, etc.). 64-bit LE only.",
                 tags=("extract", "elf", "layer1"),
             ),
             ExtractElfSectionArgs,
@@ -913,20 +923,28 @@ class ExtractElfSectionTool(
             data = path.read_bytes()
         except Exception:
             return ExtractElfSectionResult(
-                path=str(path), section_name=args.section_name, found=False,
+                path=str(path),
+                section_name=args.section_name,
+                found=False,
             )
         result = _read_elf_section(data, args.section_name)
         if result is None:
             return ExtractElfSectionResult(
-                path=str(path), section_name=args.section_name, found=False,
+                path=str(path),
+                section_name=args.section_name,
+                found=False,
             )
         off, size = result
         if off + size > len(data):
             size = max(0, len(data) - off)
-        body = data[off: off + size]
+        body = data[off : off + size]
         return ExtractElfSectionResult(
-            path=str(path), section_name=args.section_name, found=True,
-            offset=off, size=size, bytes_hex_preview=body[:64].hex(),
+            path=str(path),
+            section_name=args.section_name,
+            found=True,
+            offset=off,
+            size=size,
+            bytes_hex_preview=body[:64].hex(),
         )
 
 

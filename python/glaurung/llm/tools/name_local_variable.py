@@ -30,7 +30,8 @@ from ._llm_helpers import run_structured_llm
 
 class NameLocalVariableArgs(BaseModel):
     current_id: str = Field(
-        ..., description="Current identifier as it appears in pseudocode (%var3, arg0, t7)"
+        ...,
+        description="Current identifier as it appears in pseudocode (%var3, arg0, t7)",
     )
     recovered_type: str = Field(
         "int",
@@ -39,11 +40,9 @@ class NameLocalVariableArgs(BaseModel):
     def_use_slice: List[str] = Field(
         default_factory=list,
         description="Pseudocode lines showing how the variable is read and "
-                    "written. Keep compact — 10 lines is plenty.",
+        "written. Keep compact — 10 lines is plenty.",
     )
-    role_hint: Literal[
-        "parameter", "local", "return", "global", "unknown"
-    ] = "unknown"
+    role_hint: Literal["parameter", "local", "return", "global", "unknown"] = "unknown"
     use_llm: bool = True
 
 
@@ -73,9 +72,7 @@ def _slugify(name: str) -> str:
     return n or "var"
 
 
-def _heuristic(
-    current_id: str, ty: str, slice_: List[str], role: str
-) -> VariableName:
+def _heuristic(current_id: str, ty: str, slice_: List[str], role: str) -> VariableName:
     t = ty.strip().lower()
     is_ptr = t.endswith("*")
     base = t.rstrip("*")
@@ -83,34 +80,48 @@ def _heuristic(
 
     # Common-shape guesses.
     if is_ptr and "char" in base:
-        if any("strlen" in line or "strcmp" in line or "strcpy" in line for line in slice_):
+        if any(
+            "strlen" in line or "strcmp" in line or "strcpy" in line for line in slice_
+        ):
             return VariableName(
-                name="str", confidence=0.5,
+                name="str",
+                confidence=0.5,
                 rationale="char* used with string functions",
             )
         return VariableName(
-            name="buf", confidence=0.4,
+            name="buf",
+            confidence=0.4,
             rationale="generic char pointer",
         )
     if is_ptr:
         return VariableName(
-            name="ptr", confidence=0.35, rationale="non-char pointer",
+            name="ptr",
+            confidence=0.35,
+            rationale="non-char pointer",
         )
     if "size" in base or t in ("size_t", "usize"):
         return VariableName(
-            name="len", confidence=0.4, rationale="size/length-sized integer",
+            name="len",
+            confidence=0.4,
+            rationale="size/length-sized integer",
         )
     if base in ("bool", "_bool"):
         return VariableName(
-            name="flag", confidence=0.5, rationale="boolean",
+            name="flag",
+            confidence=0.5,
+            rationale="boolean",
         )
     if re.search(r"\+\s*1\b", body) and re.search(r"<\s*\w+", body):
         return VariableName(
-            name="i", confidence=0.6, rationale="bounded incrementing counter",
+            name="i",
+            confidence=0.6,
+            rationale="bounded incrementing counter",
         )
     if role == "return":
         return VariableName(
-            name="ret", confidence=0.5, rationale="value returned from function",
+            name="ret",
+            confidence=0.5,
+            rationale="value returned from function",
         )
 
     # Give up — sanitise the current id rather than returning gibberish.
@@ -128,7 +139,7 @@ _SYSTEM_PROMPT = (
     "type. Favour short, concrete names: buf, len, offset, path, err, "
     "response, status, ctx, fd. Avoid one-letter names except for "
     "canonical loop counters (i, j, k) and return values (ret). Use "
-    "the def/use slice to decide — a char* compared to \"HTTP/\" is a "
+    'the def/use slice to decide — a char* compared to "HTTP/" is a '
     "`method`, not a `str`. Return a confidence in [0, 1] and one-line "
     "rationale citing the specific use that decided the name."
 )
@@ -150,16 +161,14 @@ def _build_prompt(args: NameLocalVariableArgs) -> str:
     return "\n\n".join(parts)
 
 
-class NameLocalVariableTool(
-    MemoryTool[NameLocalVariableArgs, NameLocalVariableResult]
-):
+class NameLocalVariableTool(MemoryTool[NameLocalVariableArgs, NameLocalVariableResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="name_local_variable",
                 description="Propose a snake_case name for one local variable "
-                            "given its recovered type and a slice of its "
-                            "uses. Highest-volume Layer-0 call.",
+                "given its recovered type and a slice of its "
+                "uses. Highest-volume Layer-0 call.",
                 tags=("llm", "naming", "layer0"),
             ),
             NameLocalVariableArgs,
@@ -194,7 +203,11 @@ class NameLocalVariableTool(
             confidence=named.confidence,
             rationale=named.rationale,
         )
-        source = "heuristic" if named.name == heur.name and named.rationale == heur.rationale else "llm"
+        source = (
+            "heuristic"
+            if named.name == heur.name and named.rationale == heur.rationale
+            else "llm"
+        )
         return NameLocalVariableResult(
             current_id=args.current_id, named=named, source=source
         )

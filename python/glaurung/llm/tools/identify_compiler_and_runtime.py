@@ -60,7 +60,7 @@ class IdentifyCompilerArgs(BaseModel):
     max_scan_bytes: int | None = Field(
         None,
         description="Cap on bytes read from the file. Defaults to "
-                    "ctx.budgets.max_read_bytes.",
+        "ctx.budgets.max_read_bytes.",
     )
 
 
@@ -83,7 +83,7 @@ class IdentifyCompilerResult(BaseModel):
     evidence: List[str] = Field(
         default_factory=list,
         description="Short list of the raw evidence strings or symbol names "
-                    "that drove the classification.",
+        "that drove the classification.",
     )
     confidence: str = Field("LOW", description="HIGH / MEDIUM / LOW")
 
@@ -96,8 +96,8 @@ class IdentifyCompilerAndRuntimeTool(
             ToolMeta(
                 name="identify_compiler_and_runtime",
                 description="Infer the compiler, language, and libc/runtime of "
-                            "the target binary from markers and symbols. "
-                            "Returns a confidence tier and the raw evidence.",
+                "the target binary from markers and symbols. "
+                "Returns a confidence tier and the raw evidence.",
                 tags=("triage", "identification"),
             ),
             IdentifyCompilerArgs,

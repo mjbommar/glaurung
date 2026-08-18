@@ -14,10 +14,17 @@ from glaurung.llm.tool_routing import (
 
 # ---- intent catalog sanity ----
 
+
 def test_at_least_six_intents_in_catalog():
     names = {it.name for it in list_intents()}
-    assert {"vuln_discovery", "triage_summary", "function_walk",
-            "import_audit", "string_audit", "broad_discovery"} <= names
+    assert {
+        "vuln_discovery",
+        "triage_summary",
+        "function_walk",
+        "import_audit",
+        "string_audit",
+        "broad_discovery",
+    } <= names
 
 
 def test_no_intent_exceeds_strict_anthropic_cap_after_filter():
@@ -35,44 +42,59 @@ def test_every_intent_includes_at_least_one_triage_tool():
     """An intent that doesn't let the agent identify the file gracefully
     will fail in practice. Each intent should keep at least one of
     {annotate_binary, hash_file, list_imports, extract_strings}."""
-    light = {"annotate_binary", "hash_file", "list_imports",
-             "extract_strings", "list_exports", "list_functions"}
+    light = {
+        "annotate_binary",
+        "hash_file",
+        "list_imports",
+        "extract_strings",
+        "list_exports",
+        "list_functions",
+    }
     for it in list_intents():
         assert light & set(it.tools), (
-            f"intent {it.name} has none of {light} -- agent can't "
-            "even orient itself."
+            f"intent {it.name} has none of {light} -- agent can't even orient itself."
         )
 
 
 # ---- routing decisions ----
 
-@pytest.mark.parametrize("question,expected_intent", [
-    ("Find any obvious bug in the application's own code.", "vuln_discovery"),
-    ("Is there a CWE-121 stack buffer overflow somewhere?", "vuln_discovery"),
-    ("Look for a use-after-free in the session handler", "vuln_discovery"),
-    ("Could this binary have an integer overflow before alloc?", "vuln_discovery"),
-    ("Find a format string bug", "vuln_discovery"),
-    ("Find a double-fetch race", "vuln_discovery"),
-])
+
+@pytest.mark.parametrize(
+    "question,expected_intent",
+    [
+        ("Find any obvious bug in the application's own code.", "vuln_discovery"),
+        ("Is there a CWE-121 stack buffer overflow somewhere?", "vuln_discovery"),
+        ("Look for a use-after-free in the session handler", "vuln_discovery"),
+        ("Could this binary have an integer overflow before alloc?", "vuln_discovery"),
+        ("Find a format string bug", "vuln_discovery"),
+        ("Find a double-fetch race", "vuln_discovery"),
+    ],
+)
 def test_vuln_questions_route_to_vuln_intent(question, expected_intent):
     assert route_for_question(question).name == expected_intent
 
 
-@pytest.mark.parametrize("question", [
-    "What is this binary?",
-    "What format is this file?",
-    "Give me a summary of the file",
-    "Is this PE or ELF?",
-])
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is this binary?",
+        "What format is this file?",
+        "Give me a summary of the file",
+        "Is this PE or ELF?",
+    ],
+)
 def test_triage_questions_route_to_triage(question):
     assert route_for_question(question).name == "triage_summary"
 
 
-@pytest.mark.parametrize("question", [
-    "Decompile main",
-    "Explain function 0x140001480",
-    "What does sub_140001480 do?",
-])
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Decompile main",
+        "Explain function 0x140001480",
+        "What does sub_140001480 do?",
+    ],
+)
 def test_function_walk_routing(question):
     intent = route_for_question(question)
     assert intent.name in ("function_walk", "vuln_discovery"), (
@@ -102,6 +124,7 @@ def test_select_tools_for_question_returns_tuple_of_names():
 
 # ---- register_analysis_tools filter wiring ----
 
+
 def test_tool_filter_excludes_named_tools_when_applied():
     """``register_analysis_tools(agent, tool_filter={'list_imports'})``
     should leave only that tool in the agent's toolset (or empty if the
@@ -113,8 +136,9 @@ def test_tool_filter_excludes_named_tools_when_applied():
 
     cfg_model = "test"  # avoid hitting any real backend
     agent = create_foundation_agent(model=cfg_model)
-    register_analysis_tools(agent, model_name=cfg_model,
-                            tool_filter={"list_imports", "annotate_binary"})
+    register_analysis_tools(
+        agent, model_name=cfg_model, tool_filter={"list_imports", "annotate_binary"}
+    )
 
     toolset = getattr(agent, "_function_toolset", None)
     assert toolset is not None, "expected pydantic-ai _function_toolset"
@@ -138,8 +162,9 @@ def test_tool_filter_silently_ignores_unknown_names():
     from glaurung.llm.agents.memory_agent import register_analysis_tools
 
     agent = create_foundation_agent(model="test")
-    register_analysis_tools(agent, model_name="test",
-                            tool_filter={"this_tool_does_not_exist_at_all"})
+    register_analysis_tools(
+        agent, model_name="test", tool_filter={"this_tool_does_not_exist_at_all"}
+    )
     toolset = agent._function_toolset
     tools = getattr(toolset, "_tools", None) or getattr(toolset, "tools", {})
     assert tools == {}

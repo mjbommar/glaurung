@@ -132,29 +132,32 @@ def test_realworld_windows_vendor_default_function_discovery_is_not_preview_capp
             stats["pdata_chained_unwind_parsed"]
             + stats["pdata_chained_unwind_parse_failed"]
         ), row["file"]
-        assert stats["prologue_scan_candidates"] >= stats[
-            "prologue_scan_seeds_inserted"
-        ], row["file"]
-        assert stats["thunk_scan_candidates"] >= stats["thunk_scan_seeds_inserted"], row[
-            "file"
-        ]
-        assert stats["tiny_stub_scan_candidates"] >= stats[
-            "tiny_stub_scan_seeds_inserted"
-        ], row["file"]
+        assert (
+            stats["prologue_scan_candidates"] >= stats["prologue_scan_seeds_inserted"]
+        ), row["file"]
+        assert stats["thunk_scan_candidates"] >= stats["thunk_scan_seeds_inserted"], (
+            row["file"]
+        )
+        assert (
+            stats["tiny_stub_scan_candidates"] >= stats["tiny_stub_scan_seeds_inserted"]
+        ), row["file"]
         if row["file"] in TINY_STUB_SEED_CEILINGS:
             assert (
                 stats["tiny_stub_scan_seeds_inserted"]
                 <= TINY_STUB_SEED_CEILINGS[row["file"]]
             ), row["file"]
-        assert stats["raw_call_target_candidates"] >= stats[
-            "raw_call_target_seeds_inserted"
-        ], row["file"]
-        assert stats["raw_call_target_seeds_inserted"] >= stats[
-            "raw_call_target_body_split_seeds_inserted"
-        ], row["file"]
-        assert stats["data_ref_code_pointer_candidates"] >= stats[
-            "data_ref_code_pointer_seeds_inserted"
-        ], row["file"]
+        assert (
+            stats["raw_call_target_candidates"]
+            >= stats["raw_call_target_seeds_inserted"]
+        ), row["file"]
+        assert (
+            stats["raw_call_target_seeds_inserted"]
+            >= stats["raw_call_target_body_split_seeds_inserted"]
+        ), row["file"]
+        assert (
+            stats["data_ref_code_pointer_candidates"]
+            >= stats["data_ref_code_pointer_seeds_inserted"]
+        ), row["file"]
         assert stats["data_ref_code_pointer_table_count"] >= 0, row["file"]
         assert stats["pdata_body_overlap_starts"] >= 0, row["file"]
         assert stats["code_label_count"] == len(stats["code_labels"]), row["file"]
@@ -170,12 +173,10 @@ def test_realworld_windows_vendor_default_function_discovery_is_not_preview_capp
         assert stats["direct_call_targets"] >= stats["direct_call_seeds_added"], row[
             "file"
         ]
-        assert stats["tail_call_targets"] >= stats["tail_call_seeds_added"], row[
-            "file"
-        ]
-        assert stats["indirect_call_targets"] >= stats[
-            "indirect_call_seeds_added"
-        ], row["file"]
+        assert stats["tail_call_targets"] >= stats["tail_call_seeds_added"], row["file"]
+        assert stats["indirect_call_targets"] >= stats["indirect_call_seeds_added"], (
+            row["file"]
+        )
         if row["file"] in THUNK_COUNT_FLOORS:
             assert thunk_count >= THUNK_COUNT_FLOORS[row["file"]], row["file"]
         if row["file"] == "windows-update-SurfacePenBleLcAddrAdaptationDriver.sys":

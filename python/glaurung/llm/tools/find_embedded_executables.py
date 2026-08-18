@@ -28,7 +28,12 @@ from .base import MemoryTool, ToolMeta
 
 
 ExecutableFormat = Literal[
-    "elf32", "elf64", "pe", "macho32", "macho64", "macho_fat",
+    "elf32",
+    "elf64",
+    "pe",
+    "macho32",
+    "macho64",
+    "macho_fat",
 ]
 
 
@@ -62,26 +67,26 @@ def _validate(data: bytes, off: int, fmt: ExecutableFormat) -> bool:
         if data[off + 5] not in (1, 2):
             return False
         # e_type field at offset+16 — accept ET_REL/ET_EXEC/ET_DYN/ET_CORE
-        e_type = int.from_bytes(data[off + 16: off + 18], "little")
-        if e_type > 0xfeff:
+        e_type = int.from_bytes(data[off + 16 : off + 18], "little")
+        if e_type > 0xFEFF:
             return False
         return True
     if fmt == "pe":
         # MZ → e_lfanew @ +0x3c → "PE\0\0" check
         if off + 0x40 > end:
             return False
-        e_lfanew = int.from_bytes(data[off + 0x3c: off + 0x40], "little")
+        e_lfanew = int.from_bytes(data[off + 0x3C : off + 0x40], "little")
         pe_off = off + e_lfanew
         if pe_off + 4 > end:
             return False
-        return data[pe_off: pe_off + 4] == b"PE\x00\x00"
+        return data[pe_off : pe_off + 4] == b"PE\x00\x00"
     if fmt.startswith("macho"):
         if off + 8 > end:
             return False
-        cputype = int.from_bytes(data[off + 4: off + 8], "little")
+        cputype = int.from_bytes(data[off + 4 : off + 8], "little")
         # Known Mach-O cputype values: x86 (7), x86_64 (16777223),
         # arm (12), arm64 (16777228), powerpc (18), powerpc64 (16777234)
-        cputype &= 0xffffff
+        cputype &= 0xFFFFFF
         return cputype in {7, 12, 18}
     return True
 
@@ -91,7 +96,7 @@ class FindEmbeddedExecutablesArgs(BaseModel):
     skip_first_match: bool = Field(
         True,
         description="Skip a magic at offset 0 — that's the file's own header. "
-                    "Set False to also report the outer binary's own magic.",
+        "Set False to also report the outer binary's own magic.",
     )
     max_results: int = 64
 
@@ -118,9 +123,9 @@ class FindEmbeddedExecutablesTool(
             ToolMeta(
                 name="find_embedded_executables",
                 description="Scan a file for ELF / PE / Mach-O magic bytes at "
-                            "any offset (not just 0). Validates each match by "
-                            "header-structure plausibility to suppress false "
-                            "positives from random byte sequences.",
+                "any offset (not just 0). Validates each match by "
+                "header-structure plausibility to suppress false "
+                "positives from random byte sequences.",
                 tags=("extract", "embedded", "layer1"),
             ),
             FindEmbeddedExecutablesArgs,
@@ -138,7 +143,9 @@ class FindEmbeddedExecutablesTool(
             data = path.read_bytes()
         except Exception:
             return FindEmbeddedExecutablesResult(
-                path=str(path), file_size=0, matches=[],
+                path=str(path),
+                file_size=0,
+                matches=[],
             )
         matches: List[EmbeddedExecutable] = []
         for sig, fmt, _need in _SIGNATURES:
@@ -156,7 +163,7 @@ class FindEmbeddedExecutablesTool(
                     EmbeddedExecutable(
                         format=fmt,  # type: ignore[arg-type]
                         offset=pos,
-                        signature_bytes=data[pos: pos + 8].hex(),
+                        signature_bytes=data[pos : pos + 8].hex(),
                     )
                 )
                 if len(matches) >= args.max_results:
@@ -167,7 +174,9 @@ class FindEmbeddedExecutablesTool(
         # Sort by offset so the output is in file order.
         matches.sort(key=lambda m: m.offset)
         return FindEmbeddedExecutablesResult(
-            path=str(path), file_size=len(data), matches=matches,
+            path=str(path),
+            file_size=len(data),
+            matches=matches,
         )
 
 

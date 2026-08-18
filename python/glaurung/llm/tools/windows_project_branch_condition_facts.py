@@ -36,7 +36,9 @@ class WindowsProjectBranchConditionFactsArgs(BaseModel):
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
     function_va: int | None = Field(None, description="Optional function VA filter.")
     block_id: str | None = Field(None, description="Optional CFG block id filter.")
-    branch_va: int | None = Field(None, description="Optional branch instruction VA filter.")
+    branch_va: int | None = Field(
+        None, description="Optional branch instruction VA filter."
+    )
     condition_kind: str | None = Field(
         None,
         description="Optional condition class filter, e.g. equal or unsigned_less.",
@@ -145,7 +147,9 @@ def _query(
     try:
         present = {
             str(row[0])
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
         }
         if "cfg_branch_facts" not in present:
             missing.append("branch_conditions")
@@ -196,7 +200,9 @@ def _facts(
     where, params = _where(args)
     if path_filter:
         placeholders = ",".join("?" for _ in path_filter)
-        where = (where + " AND " if where else " WHERE ") + f"b.block_id IN ({placeholders})"
+        where = (
+            where + " AND " if where else " WHERE "
+        ) + f"b.block_id IN ({placeholders})"
         params.extend(sorted(path_filter))
     join = ""
     select_block = "NULL, NULL"
@@ -217,10 +223,7 @@ def _facts(
         "ORDER BY b.function_va, b.branch_va LIMIT ?",
         params,
     ).fetchall()
-    return [
-        _fact_from_row(row, path_filter)
-        for row in rows
-    ]
+    return [_fact_from_row(row, path_filter) for row in rows]
 
 
 def _fact_from_row(
@@ -324,7 +327,9 @@ def _predicate_text(
         value = lhs if lhs == rhs else f"({lhs} & {rhs})"
         return _predicate_from_operands(value, "0", condition_kind)
     if compare_mnemonic == "cmp" and len(compare_operands) >= 2:
-        return _predicate_from_operands(compare_operands[0], compare_operands[1], condition_kind)
+        return _predicate_from_operands(
+            compare_operands[0], compare_operands[1], condition_kind
+        )
     expression = _flag_result_expression(compare_mnemonic, compare_operands)
     if expression is not None:
         return _predicate_from_operands(expression, "0", condition_kind)
@@ -335,7 +340,10 @@ def _flag_result_expression(
     compare_mnemonic: str,
     compare_operands: list[str],
 ) -> str | None:
-    if compare_mnemonic in {"and", "or", "xor", "sub", "add"} and len(compare_operands) >= 2:
+    if (
+        compare_mnemonic in {"and", "or", "xor", "sub", "add"}
+        and len(compare_operands) >= 2
+    ):
         op = {
             "and": "&",
             "or": "|",

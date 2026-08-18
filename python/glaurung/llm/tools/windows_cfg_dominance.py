@@ -57,7 +57,9 @@ class WindowsCfgDominanceArgs(BaseModel):
     max_functions: int = Field(256, description="Native function discovery cap.")
     max_blocks: int = Field(512, description="Native per-function basic block cap.")
     max_instructions: int = Field(20_000, description="Native instruction cap.")
-    timeout_ms: int = Field(1000, description="Native analysis timeout in milliseconds.")
+    timeout_ms: int = Field(
+        1000, description="Native analysis timeout in milliseconds."
+    )
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact CFG dominance evidence node to the KB.",
@@ -161,7 +163,12 @@ def _blocks(
             timeout_ms=args.timeout_ms,
         )
     except Exception as exc:
-        return [], args.function_va, ["native_cfg_failed"], [f"native CFG analysis failed: {exc}"]
+        return (
+            [],
+            args.function_va,
+            ["native_cfg_failed"],
+            [f"native CFG analysis failed: {exc}"],
+        )
 
     for func in funcs:
         entry = int(getattr(getattr(func, "entry_point", 0), "value", 0) or 0)
@@ -181,7 +188,11 @@ def _blocks_from_project(
 ) -> tuple[list[CfgBlockFact], int | None, list[str]]:
     project_path = Path(args.project_path or "")
     if not project_path.exists():
-        return [], args.function_va, [f"{project_path}: .glaurung project does not exist"]
+        return (
+            [],
+            args.function_va,
+            [f"{project_path}: .glaurung project does not exist"],
+        )
     try:
         conn = sqlite3.connect(f"file:{project_path}?mode=ro", uri=True)
     except sqlite3.Error as exc:
@@ -189,13 +200,19 @@ def _blocks_from_project(
     try:
         present = {
             str(row[0])
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
         }
         if "basic_blocks" not in present or "cfg_edges" not in present:
             return [], args.function_va, ["project lacks persisted CFG tables"]
         resolved = _resolve_project_function(conn, args)
         if resolved is None:
-            return [], args.function_va, ["no persisted CFG function contains gate and sink"]
+            return (
+                [],
+                args.function_va,
+                ["no persisted CFG function contains gate and sink"],
+            )
         binary_id, function_va = resolved
         rows = conn.execute(
             "SELECT block_id, start_va, end_va FROM basic_blocks "
@@ -279,7 +296,20 @@ def _assess(
 ) -> WindowsCfgDominanceResult:
     edge_count = sum(len(block.successor_ids) for block in blocks)
     if not blocks:
-        return _result(args, function_va, None, None, None, 0, 0, "unknown", 0.0, "no CFG blocks available", provenance, notes)
+        return _result(
+            args,
+            function_va,
+            None,
+            None,
+            None,
+            0,
+            0,
+            "unknown",
+            0.0,
+            "no CFG blocks available",
+            provenance,
+            notes,
+        )
 
     by_id = {block.id: block for block in blocks}
     entry = _entry_block(blocks)
@@ -423,7 +453,9 @@ def _entry_block(blocks: list[CfgBlockFact]) -> CfgBlockFact | None:
 
 
 def _containing_block(blocks: list[CfgBlockFact], va: int) -> CfgBlockFact | None:
-    return next((block for block in blocks if block.start_va <= va < block.end_va), None)
+    return next(
+        (block for block in blocks if block.start_va <= va < block.end_va), None
+    )
 
 
 def _reachable(entry_id: str, by_id: dict[str, CfgBlockFact]) -> set[str]:
@@ -440,10 +472,7 @@ def _reachable(entry_id: str, by_id: dict[str, CfgBlockFact]) -> set[str]:
 
 def _dominators(blocks: list[CfgBlockFact], entry_id: str) -> dict[str, set[str]]:
     ids = {block.id for block in blocks}
-    predecessors = {
-        block.id: set(block.predecessor_ids) & ids
-        for block in blocks
-    }
+    predecessors = {block.id: set(block.predecessor_ids) & ids for block in blocks}
     dom = {block_id: set(ids) for block_id in ids}
     dom[entry_id] = {entry_id}
 

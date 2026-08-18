@@ -28,8 +28,18 @@ from ._llm_helpers import run_structured_llm
 
 _SPECIFICITY_WORDS = {
     # low-specificity hedge stems that should lose ties
-    "do", "handle", "process", "data", "work", "thing", "helper", "util",
-    "func", "function", "impl", "internal",
+    "do",
+    "handle",
+    "process",
+    "data",
+    "work",
+    "thing",
+    "helper",
+    "util",
+    "func",
+    "function",
+    "impl",
+    "internal",
 }
 
 
@@ -122,24 +132,21 @@ def _build_prompt(args: ReconcileFunctionIdentityArgs) -> str:
             f"conf={c.confidence:.2f}): {c.justification}"
         )
     parts.append(
-        "Return canonical_name, aliases (all losers), justification, "
-        "confidence."
+        "Return canonical_name, aliases (all losers), justification, confidence."
     )
     return "\n\n".join(parts)
 
 
 class ReconcileFunctionIdentityTool(
-    MemoryTool[
-        ReconcileFunctionIdentityArgs, ReconcileFunctionIdentityResult
-    ]
+    MemoryTool[ReconcileFunctionIdentityArgs, ReconcileFunctionIdentityResult]
 ):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="reconcile_function_identity",
                 description="Choose a canonical name for a function given "
-                            "multiple candidates proposed by different "
-                            "pipeline stages. LLM favours specificity.",
+                "multiple candidates proposed by different "
+                "pipeline stages. LLM favours specificity.",
                 tags=("llm", "naming", "layer3"),
             ),
             ReconcileFunctionIdentityArgs,

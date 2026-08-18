@@ -19,17 +19,16 @@ from ..formatters.base import BaseFormatter, OutputFormat
 
 def _format_entry(e) -> str:
     state = "[undone] " if e.undone else ""
-    key_str = " ".join(f"{k}={v:#x}" if isinstance(v, int) else f"{k}={v}"
-                       for k, v in e.key.items())
+    key_str = " ".join(
+        f"{k}={v:#x}" if isinstance(v, int) else f"{k}={v}" for k, v in e.key.items()
+    )
     old = e.old_value or {}
     new = e.new_value or {}
     # Lead with the field that actually changed — usually `name`,
     # `body`, or `c_type` — to keep the row a glanceable diff.
     diff_field = None
     for cand in ("canonical", "name", "body", "c_type"):
-        if old.get(cand) != new.get(cand) and (
-            cand in old or cand in new
-        ):
+        if old.get(cand) != new.get(cand) and (cand in old or cand in new):
             diff_field = cand
             break
     if diff_field:
@@ -53,15 +52,20 @@ class UndoCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
-            "-n", type=int, default=1,
+            "-n",
+            type=int,
+            default=1,
             help="Number of writes to undo (default 1)",
         )
         parser.add_argument(
-            "--list", action="store_true",
+            "--list",
+            action="store_true",
             help="Print recent undo_log entries without reverting anything",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
 
@@ -76,7 +80,8 @@ class UndoCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -89,14 +94,21 @@ class UndoCommand(BaseCommand):
                     formatter.output_plain("(undo log empty)")
                     return 0
                 if formatter.format_type == OutputFormat.JSON:
-                    formatter.output_json([
-                        {
-                            "undo_id": e.undo_id, "table": e.table_name,
-                            "key": e.key, "old": e.old_value, "new": e.new_value,
-                            "set_by": e.set_by, "ts": e.ts, "undone": e.undone,
-                        }
-                        for e in entries
-                    ])
+                    formatter.output_json(
+                        [
+                            {
+                                "undo_id": e.undo_id,
+                                "table": e.table_name,
+                                "key": e.key,
+                                "old": e.old_value,
+                                "new": e.new_value,
+                                "set_by": e.set_by,
+                                "ts": e.ts,
+                                "undone": e.undone,
+                            }
+                            for e in entries
+                        ]
+                    )
                     return 0
                 for e in entries:
                     formatter.output_plain(_format_entry(e))
@@ -125,11 +137,15 @@ class RedoCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
-            "-n", type=int, default=1,
+            "-n",
+            type=int,
+            default=1,
             help="Number of writes to redo (default 1)",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
 
@@ -144,7 +160,8 @@ class RedoCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")

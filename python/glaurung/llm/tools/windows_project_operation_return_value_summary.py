@@ -31,7 +31,9 @@ from .windows_project_return_value_use_snapshot import (
 
 
 class WindowsProjectOperationReturnValueSummaryArgs(BaseModel):
-    binary_path: str = Field(..., description="Path to the PE binary backing the project.")
+    binary_path: str = Field(
+        ..., description="Path to the PE binary backing the project."
+    )
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
     backlog_path: str | None = Field(
         None,
@@ -45,8 +47,12 @@ class WindowsProjectOperationReturnValueSummaryArgs(BaseModel):
         description="Path to ASB data/kg/pe-sinks.yaml. Defaults to ASB_REPO or sibling repo.",
     )
     target_id: str | None = Field(None, description="Optional target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
-    symbol: str | None = Field(None, description="Optional exact backlog symbol filter.")
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
+    symbol: str | None = Field(
+        None, description="Optional exact backlog symbol filter."
+    )
     required_capability: str = Field(
         "return_value_flow",
         description="Backlog required-capability filter; defaults to return_value_flow.",
@@ -206,9 +212,13 @@ class WindowsProjectOperationReturnValueSummaryTool(
             ),
         )
 
-        matched_sites = _match_backlog_entries(backlog_result.entries, callsite_result.callsites)
+        matched_sites = _match_backlog_entries(
+            backlog_result.entries, callsite_result.callsites
+        )
         groups = _groups(ctx, kb, args, backlog_result.entries, matched_sites)
-        matched_entry_count = sum(1 for entry in backlog_result.entries if entry.id in matched_sites)
+        matched_entry_count = sum(
+            1 for entry in backlog_result.entries if entry.id in matched_sites
+        )
         matched_callsite_count = sum(len(sites) for sites in matched_sites.values())
         sampled_callsite_count = sum(group.sampled_callsite_count for group in groups)
 
@@ -386,7 +396,9 @@ def _coverage(groups: list[WindowsProjectOperationReturnValueGroup]) -> list[str
     return coverage
 
 
-def _missing_capabilities(groups: list[WindowsProjectOperationReturnValueGroup]) -> list[str]:
+def _missing_capabilities(
+    groups: list[WindowsProjectOperationReturnValueGroup],
+) -> list[str]:
     missing = {
         "interprocedural_return_value_flow",
         "path_sensitive_return_value_flow",

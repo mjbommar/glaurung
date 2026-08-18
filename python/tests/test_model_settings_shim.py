@@ -54,8 +54,14 @@ def test_to_model_kwargs_uses_max_tokens_not_output_tokens():
 def test_to_model_kwargs_includes_all_supported_fields():
     params = _build_hyperparameters()
     kwargs = params.to_model_kwargs()
-    for key in ("temperature", "top_p", "max_tokens",
-                "presence_penalty", "frequency_penalty", "seed"):
+    for key in (
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "presence_penalty",
+        "frequency_penalty",
+        "seed",
+    ):
         assert key in kwargs, f"missing {key}"
 
 
@@ -95,7 +101,10 @@ async def test_single_pass_passes_model_settings_not_top_level_kwargs():
     params = _build_hyperparameters()
     state = ExecutionState()
     await sp._execute_with_monitoring(
-        "what is in this file?", context, state, params,
+        "what is in this file?",
+        context,
+        state,
+        params,
     )
 
     fake_pyd_agent.run.assert_awaited_once()
@@ -103,8 +112,14 @@ async def test_single_pass_passes_model_settings_not_top_level_kwargs():
     # First positional arg is the question.
     assert call.args[0] == "what is in this file?"
     # Sampling params MUST NOT appear at the top level.
-    forbidden = {"temperature", "top_p", "max_tokens", "presence_penalty",
-                 "frequency_penalty", "seed"}
+    forbidden = {
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "presence_penalty",
+        "frequency_penalty",
+        "seed",
+    }
     assert not (forbidden & set(call.kwargs.keys())), (
         f"Sampling kwargs leaked to Agent.run top-level: "
         f"{forbidden & set(call.kwargs.keys())}"
@@ -121,7 +136,8 @@ async def test_iterative_refinement_passes_model_settings_not_top_level_kwargs()
     """Same constraint for the iterative agent's per-iteration run."""
     pytest.importorskip("pydantic_ai")
     from glaurung.llm.agents.iterative_refinement import (
-        IterativeRefinementAgent, IterativeConfig,
+        IterativeRefinementAgent,
+        IterativeConfig,
     )
 
     fake_pyd_agent = _FakeAgent()
@@ -140,8 +156,14 @@ async def test_iterative_refinement_passes_model_settings_not_top_level_kwargs()
 
     fake_pyd_agent.run.assert_awaited_once()
     call = fake_pyd_agent.run.await_args
-    forbidden = {"temperature", "top_p", "max_tokens", "presence_penalty",
-                 "frequency_penalty", "seed"}
+    forbidden = {
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "presence_penalty",
+        "frequency_penalty",
+        "seed",
+    }
     assert not (forbidden & set(call.kwargs.keys())), (
         f"Iterative agent leaked sampling kwargs to run(): "
         f"{forbidden & set(call.kwargs.keys())}"

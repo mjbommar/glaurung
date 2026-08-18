@@ -39,9 +39,11 @@ def test_parse_luajit_detected() -> None:
 
 
 def test_parse_returns_none_on_native_binary() -> None:
-    binary = _need(Path(
-        "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
-    ))
+    binary = _need(
+        Path(
+            "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
+        )
+    )
     assert g.analysis.parse_lua_bytecode_path(str(binary)) is None
 
 
@@ -76,9 +78,11 @@ def test_luac_cli_json(tmp_path: Path) -> None:
 def test_luac_cli_rejects_non_lua(tmp_path: Path) -> None:
     from glaurung.cli.main import GlaurungCLI
 
-    binary = _need(Path(
-        "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
-    ))
+    binary = _need(
+        Path(
+            "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug"
+        )
+    )
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):

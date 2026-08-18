@@ -70,8 +70,10 @@ def test_with_layer0_emits_layer0_block_in_json():
     result = _run(
         [
             str(SAMPLE),
-            "--func", "0x1840",
-            "--no-types", "--no-roles",
+            "--func",
+            "0x1840",
+            "--no-types",
+            "--no-roles",
             "--with-layer0",
             "--json",
         ]
@@ -105,8 +107,10 @@ def test_with_layer0_plain_text_banner_shows_counts():
     result = _run(
         [
             str(SAMPLE),
-            "--func", "0x1840",
-            "--no-types", "--no-roles",
+            "--func",
+            "0x1840",
+            "--no-types",
+            "--no-roles",
             "--with-layer0",
         ]
     )
@@ -114,9 +118,7 @@ def test_with_layer0_plain_text_banner_shows_counts():
     assert "// layer0:" in result.stdout
     # The banner mentions all three resolved categories.
     for cat in ("vars=", "strs=", "consts="):
-        assert cat in result.stdout, (
-            f"layer0 banner missing {cat}: {result.stdout!r}"
-        )
+        assert cat in result.stdout, f"layer0 banner missing {cat}: {result.stdout!r}"
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="linux sample missing")
@@ -126,8 +128,10 @@ def test_no_layer0_omits_layer0_block():
     result = _run(
         [
             str(SAMPLE),
-            "--func", "0x1840",
-            "--no-types", "--no-roles",
+            "--func",
+            "0x1840",
+            "--no-types",
+            "--no-roles",
             "--no-layer0",  # explicit
             "--json",
         ]
@@ -150,10 +154,13 @@ def test_with_layer0_cache_dir_hits_on_second_run(tmp_path: Path):
     cache_dir = tmp_path / "glaurung-cache"
     args = [
         str(SAMPLE),
-        "--func", "0x1840",
-        "--no-types", "--no-roles",
+        "--func",
+        "0x1840",
+        "--no-types",
+        "--no-roles",
         "--with-layer0",
-        "--cache-dir", str(cache_dir),
+        "--cache-dir",
+        str(cache_dir),
         "--json",
     ]
     # First run -- populate the cache.
@@ -191,8 +198,10 @@ def test_with_layer0_fastfat_smoke():
     result = _run(
         [
             str(FASTFAT_POST),
-            "--func", hex(FASTFAT_VA),
-            "--no-types", "--no-roles",
+            "--func",
+            hex(FASTFAT_VA),
+            "--no-types",
+            "--no-roles",
             "--with-layer0",
             "--json",
         ]

@@ -36,7 +36,9 @@ def test_export_kb_collects_all_tables(tmp_path: Path) -> None:
     binary = _need(_HELLO)
     db = tmp_path / "exp.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
 
     # Seed a row per table.
@@ -44,19 +46,31 @@ def test_export_kb_collects_all_tables(tmp_path: Path) -> None:
     xref_db.set_comment(kb, 0x1010, "loop start")
     xref_db.set_data_label(kb, 0x4000, "g_table", c_type="int[]", set_by="manual")
     xref_db.set_stack_var(
-        kb, function_va=0x1000, offset=-0x10, name="my_local",
-        c_type="int", set_by="manual",
+        kb,
+        function_va=0x1000,
+        offset=-0x10,
+        name="my_local",
+        c_type="int",
+        set_by="manual",
     )
     xref_db.add_xref(
-        kb, src_va=0x1004, dst_va=0x2000, kind="call",
+        kb,
+        src_va=0x1004,
+        dst_va=0x2000,
+        kind="call",
         src_function_va=0x1000,
     )
     type_db.add_struct(
-        kb, "my_struct", [type_db.StructField(0, "fld", "int", 4)],
+        kb,
+        "my_struct",
+        [type_db.StructField(0, "fld", "int", 4)],
         set_by="manual",
     )
     xref_db.record_evidence(
-        kb, tool="t", args={"x": 1}, summary="seed evidence",
+        kb,
+        tool="t",
+        args={"x": 1},
+        summary="seed evidence",
     )
 
     data = export_kb(kb)
@@ -88,9 +102,7 @@ def test_export_to_json_is_valid_json(tmp_path: Path) -> None:
     out = export_to_json(kb)
     parsed = json.loads(out)
     assert parsed["schema_version"] == "1"
-    assert any(
-        fn["canonical"] == "test_fn" for fn in parsed["function_names"]
-    )
+    assert any(fn["canonical"] == "test_fn" for fn in parsed["function_names"])
     kb.close()
 
 
@@ -98,7 +110,9 @@ def test_export_to_markdown_includes_function_table(tmp_path: Path) -> None:
     binary = _need(_HELLO)
     db = tmp_path / "exp.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
     xref_db.set_function_name(kb, 0x1234, "sample_fn", set_by="manual")
 
@@ -115,7 +129,8 @@ def test_export_to_c_header_renders_struct(tmp_path: Path) -> None:
     db = tmp_path / "exp.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     type_db.add_struct(
-        kb, "exported_struct",
+        kb,
+        "exported_struct",
         [
             type_db.StructField(0, "a", "int", 4),
             type_db.StructField(8, "b", "void *", 8),
@@ -139,10 +154,15 @@ def test_export_to_ida_script_renders_python(tmp_path: Path) -> None:
     xref_db.set_function_name(kb, 0x1234, "my_named_fn", set_by="manual")
     xref_db.set_comment(kb, 0x1238, "stack canary save")
     xref_db.set_data_label(
-        kb, va=0x4000, name="g_table", c_type="int[]", set_by="manual",
+        kb,
+        va=0x4000,
+        name="g_table",
+        c_type="int[]",
+        set_by="manual",
     )
     type_db.add_struct(
-        kb, "exported_struct",
+        kb,
+        "exported_struct",
         [type_db.StructField(0, "a", "int", 4)],
         set_by="manual",
     )
@@ -170,8 +190,8 @@ def test_export_to_binja_script_renders_python(tmp_path: Path) -> None:
     binary = _need(_HELLO)
     db = tmp_path / "exp.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
-    xref_db.set_function_name(kb, 0x12d0, "binja_renamed", set_by="manual")
-    xref_db.set_comment(kb, 0x12d4, "binja comment")
+    xref_db.set_function_name(kb, 0x12D0, "binja_renamed", set_by="manual")
+    xref_db.set_comment(kb, 0x12D4, "binja comment")
     xref_db.set_data_label(kb, va=0x4040, name="g_binja", set_by="manual")
 
     from glaurung.llm.kb.export import export_to_binja_script
@@ -191,8 +211,8 @@ def test_export_to_ghidra_script_renders_python(tmp_path: Path) -> None:
     binary = _need(_HELLO)
     db = tmp_path / "exp.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
-    xref_db.set_function_name(kb, 0x12d0, "ghidra_renamed", set_by="manual")
-    xref_db.set_comment(kb, 0x12d4, "ghidra comment")
+    xref_db.set_function_name(kb, 0x12D0, "ghidra_renamed", set_by="manual")
+    xref_db.set_comment(kb, 0x12D4, "ghidra comment")
     xref_db.set_data_label(kb, va=0x4040, name="g_ghidra", set_by="manual")
 
     from glaurung.llm.kb.export import export_to_ghidra_script

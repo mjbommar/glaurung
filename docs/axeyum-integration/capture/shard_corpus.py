@@ -26,8 +26,16 @@ def load_capture_index(pack: Path) -> tuple[dict[str, object], bytes]:
     index_path = pack / "capture-index-v1.json"
     payload = index_path.read_bytes()
     value = json.loads(payload)
-    if not isinstance(value, dict) or set(value) != {"version", "name", "source", "logic", "files"}:
-        raise ValueError("capture index root must contain exactly version/name/source/logic/files")
+    if not isinstance(value, dict) or set(value) != {
+        "version",
+        "name",
+        "source",
+        "logic",
+        "files",
+    }:
+        raise ValueError(
+            "capture index root must contain exactly version/name/source/logic/files"
+        )
     if value["version"] != 1 or value["logic"] != "QF_BV":
         raise ValueError("capture index must be manifest-v1 QF_BV")
     if not isinstance(value["name"], str) or not value["name"].strip():
@@ -39,16 +47,25 @@ def load_capture_index(pack: Path) -> tuple[dict[str, object], bytes]:
 
     seen: set[str] = set()
     for index, row in enumerate(value["files"]):
-        if not isinstance(row, dict) or set(row) != {"path", "expected", "family", "tiers"}:
+        if not isinstance(row, dict) or set(row) != {
+            "path",
+            "expected",
+            "family",
+            "tiers",
+        }:
             raise ValueError(f"files[{index}] must be a hash-free capture-index entry")
         path = row["path"]
         if not isinstance(path, str):
             raise ValueError(f"files[{index}].path must be a string")
         pure = PurePosixPath(path)
         if pure.parts != ("queries", pure.name) or pure.suffix != ".smt2":
-            raise ValueError(f"files[{index}].path is not normalized queries/HASH.smt2: {path}")
+            raise ValueError(
+                f"files[{index}].path is not normalized queries/HASH.smt2: {path}"
+            )
         if HASH_RE.fullmatch(pure.stem) is None:
-            raise ValueError(f"files[{index}].path does not carry a lowercase SHA-256: {path}")
+            raise ValueError(
+                f"files[{index}].path does not carry a lowercase SHA-256: {path}"
+            )
         if path in seen:
             raise ValueError(f"duplicate capture-index path: {path}")
         seen.add(path)
@@ -60,13 +77,14 @@ def load_capture_index(pack: Path) -> tuple[dict[str, object], bytes]:
             raise ValueError(f"files[{index}] must belong only to the full tier")
 
     disk = {
-        path.relative_to(pack).as_posix()
-        for path in (pack / "queries").glob("*.smt2")
+        path.relative_to(pack).as_posix() for path in (pack / "queries").glob("*.smt2")
     }
     if disk != seen:
         missing = sorted(seen - disk)
         unlisted = sorted(disk - seen)
-        raise ValueError(f"capture-index membership mismatch: missing={missing} unlisted={unlisted}")
+        raise ValueError(
+            f"capture-index membership mismatch: missing={missing} unlisted={unlisted}"
+        )
     return value, payload
 
 

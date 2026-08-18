@@ -135,7 +135,9 @@ class WindowsSymbolSimilarityExtractionPlanTool(
         binary_a = Path(args.binary_a).expanduser()
         binary_b = Path(args.binary_b).expanduser()
         artifact_dir = Path(args.artifact_dir).expanduser()
-        ghidra_project_dir = Path(args.ghidra_project_dir or artifact_dir / "ghidra").expanduser()
+        ghidra_project_dir = Path(
+            args.ghidra_project_dir or artifact_dir / "ghidra"
+        ).expanduser()
         similarity_manifest_path = str(artifact_dir / "external-similarity.yaml")
         identity_output_path = str(artifact_dir / "function-identities.yaml")
 
@@ -368,7 +370,9 @@ def _steps(
                 ready=True,
                 outputs=[similarity_manifest_path],
                 next_tool_name="windows_patch_function_identity_extract",
-                next_tool_args={"external_similarity_manifest_path": similarity_manifest_path},
+                next_tool_args={
+                    "external_similarity_manifest_path": similarity_manifest_path
+                },
                 reason_codes=["normalize_similarity_manifest"],
             ),
             WindowsSymbolSimilarityExtractionStep(

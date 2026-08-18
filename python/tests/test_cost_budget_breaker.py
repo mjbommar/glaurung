@@ -12,10 +12,16 @@ from glaurung.llm.cwe_sweep import (
     sweep_binary,
 )
 from glaurung.llm.findings import (
-    Evidence, FindingsReport, FunctionRef, VulnerabilityFinding,
+    Evidence,
+    FindingsReport,
+    FunctionRef,
+    VulnerabilityFinding,
 )
 from glaurung.llm.usage_tracker import (
-    CostBudgetExceeded, UsageTracker, get_tracker, reset_tracker,
+    CostBudgetExceeded,
+    UsageTracker,
+    get_tracker,
+    reset_tracker,
 )
 
 
@@ -28,7 +34,8 @@ def _ev():
 
 def _finding(cwe="CWE-121", fn="vuln", va=0x140001480):
     return VulnerabilityFinding(
-        cwe=cwe, function=FunctionRef(name=fn, va=va),
+        cwe=cwe,
+        function=FunctionRef(name=fn, va=va),
         root_cause="strcpy of caller-controlled input into stack buffer",
         evidence=_ev(),
     )
@@ -55,16 +62,16 @@ async def test_sweep_returns_partial_findings_when_budget_exceeded():
         if call_count["n"] == 2:
             return FindingsReport(
                 binary_path=path,
-                findings=[_finding(cwe="CWE-134", fn="log_user_msg",
-                                   va=0x140002000)],
+                findings=[_finding(cwe="CWE-134", fn="log_user_msg", va=0x140002000)],
             )
         # Third class hits the budget.
         raise CostBudgetExceeded("running cost $0.50 exceeds budget $0.40")
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run):
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
         merged = await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(), classes=classes,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
             max_parallel=1,
         )
 
@@ -85,10 +92,11 @@ async def test_sweep_no_budget_runs_all_classes():
     async def fake_run(path, args):
         return FindingsReport(binary_path=path, findings=[])
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run) as m:
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run) as m:
         await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(), classes=classes,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
             max_parallel=1,
         )
 
@@ -111,10 +119,11 @@ async def test_sweep_class_other_exception_recorded_does_not_kill_sweep():
             findings=[_finding(cwe="CWE-134", fn="x", va=0x100)],
         )
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run):
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
         merged = await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(), classes=classes,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
             max_parallel=1,
         )
 
@@ -128,23 +137,34 @@ async def test_sweep_class_other_exception_recorded_does_not_kill_sweep():
 
 # ---- UsageTracker.set_budget_usd wiring ----
 
+
 def test_tracker_set_budget_then_record_raises_at_threshold():
     t = UsageTracker(quiet=True)
     t.set_budget_usd(0.001)  # very tight
     # First small call: under budget.
     t.record(
-        SimpleNamespace(usage=SimpleNamespace(
-            input_tokens=1_000, output_tokens=0, requests=1,
-        )),
-        model="openai:gpt-5.4-mini", source="test",
+        SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=1_000,
+                output_tokens=0,
+                requests=1,
+            )
+        ),
+        model="openai:gpt-5.4-mini",
+        source="test",
     )
     # Second large call: pushes total over budget.
     with pytest.raises(CostBudgetExceeded):
         t.record(
-            SimpleNamespace(usage=SimpleNamespace(
-                input_tokens=10_000_000, output_tokens=0, requests=1,
-            )),
-            model="openai:gpt-5.4-mini", source="test",
+            SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=10_000_000,
+                    output_tokens=0,
+                    requests=1,
+                )
+            ),
+            model="openai:gpt-5.4-mini",
+            source="test",
         )
 
 
@@ -156,9 +176,14 @@ def test_tracker_set_budget_then_unset_clears():
     t.set_budget_usd(None)
     # Should NOT raise.
     t.record(
-        SimpleNamespace(usage=SimpleNamespace(
-            input_tokens=10_000_000, output_tokens=0, requests=1,
-        )),
-        model="openai:gpt-5.4-mini", source="test",
+        SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=10_000_000,
+                output_tokens=0,
+                requests=1,
+            )
+        ),
+        model="openai:gpt-5.4-mini",
+        source="test",
     )
     assert t.call_count() == 1

@@ -26,7 +26,9 @@ def test_fallback_model_is_claude_haiku_4_5():
 
 
 def test_preferred_model_keeps_openai_default_when_both_keys_present():
-    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-x", "OPENAI_API_KEY": "sk-y"}):
+    with patch.dict(
+        os.environ, {"ANTHROPIC_API_KEY": "sk-x", "OPENAI_API_KEY": "sk-y"}
+    ):
         cfg = LLMConfig()
         assert cfg.preferred_model() == "openai:gpt-5.4-mini"
 

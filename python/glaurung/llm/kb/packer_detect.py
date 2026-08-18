@@ -23,9 +23,10 @@ from typing import List, Optional
 @dataclass(frozen=True)
 class PackerSignature:
     """One known packer's fingerprint."""
+
     name: str
     family: str
-    indicators: tuple   # tuple of bytes; any one match counts
+    indicators: tuple  # tuple of bytes; any one match counts
     confidence: float = 0.85
 
 
@@ -35,25 +36,31 @@ class PackerSignature:
 # table directly; magic strings + library names are looser.
 _PACKER_SIGS: List[PackerSignature] = [
     PackerSignature(
-        name="UPX", family="upx", confidence=0.95,
+        name="UPX",
+        family="upx",
+        confidence=0.95,
         indicators=(
             b"UPX!",
-            b"UPX0\x00",        # section name (PE/ELF)
+            b"UPX0\x00",  # section name (PE/ELF)
             b"UPX1\x00",
             b"UPX2\x00",
             b"$Info: This file is packed with the UPX",
         ),
     ),
     PackerSignature(
-        name="Themida", family="themida", confidence=0.9,
+        name="Themida",
+        family="themida",
+        confidence=0.9,
         indicators=(
             b".themida",
             b"Themida",
-            b"WinLicense",       # Oreans-stack sibling
+            b"WinLicense",  # Oreans-stack sibling
         ),
     ),
     PackerSignature(
-        name="VMProtect", family="vmprotect", confidence=0.9,
+        name="VMProtect",
+        family="vmprotect",
+        confidence=0.9,
         indicators=(
             b".vmp0",
             b".vmp1",
@@ -62,7 +69,9 @@ _PACKER_SIGS: List[PackerSignature] = [
         ),
     ),
     PackerSignature(
-        name="ASPack", family="aspack", confidence=0.85,
+        name="ASPack",
+        family="aspack",
+        confidence=0.85,
         indicators=(
             b".aspack",
             b".adata",
@@ -70,7 +79,9 @@ _PACKER_SIGS: List[PackerSignature] = [
         ),
     ),
     PackerSignature(
-        name="MPRESS", family="mpress", confidence=0.85,
+        name="MPRESS",
+        family="mpress",
+        confidence=0.85,
         indicators=(
             b".MPRESS1",
             b".MPRESS2",
@@ -78,7 +89,9 @@ _PACKER_SIGS: List[PackerSignature] = [
         ),
     ),
     PackerSignature(
-        name="PECompact", family="pecompact", confidence=0.85,
+        name="PECompact",
+        family="pecompact",
+        confidence=0.85,
         indicators=(
             b"PEC2TO",
             b"PEC2MO",
@@ -86,20 +99,24 @@ _PACKER_SIGS: List[PackerSignature] = [
         ),
     ),
     PackerSignature(
-        name="FSG", family="fsg", confidence=0.85,
-        indicators=(
-            b"FSG!",
-        ),
+        name="FSG",
+        family="fsg",
+        confidence=0.85,
+        indicators=(b"FSG!",),
     ),
     PackerSignature(
-        name="Petite", family="petite", confidence=0.85,
+        name="Petite",
+        family="petite",
+        confidence=0.85,
         indicators=(
             b".petite",
             b"petite",
         ),
     ),
     PackerSignature(
-        name="Enigma", family="enigma", confidence=0.85,
+        name="Enigma",
+        family="enigma",
+        confidence=0.85,
         indicators=(
             b".enigma1",
             b".enigma2",
@@ -107,10 +124,10 @@ _PACKER_SIGS: List[PackerSignature] = [
         ),
     ),
     PackerSignature(
-        name="Obsidium", family="obsidium", confidence=0.85,
-        indicators=(
-            b"Obsidium",
-        ),
+        name="Obsidium",
+        family="obsidium",
+        confidence=0.85,
+        indicators=(b"Obsidium",),
     ),
 ]
 
@@ -118,8 +135,9 @@ _PACKER_SIGS: List[PackerSignature] = [
 @dataclass
 class PackerVerdict:
     """Result of `detect_packer`."""
+
     is_packed: bool
-    packer_name: Optional[str] = None     # None when only entropy is suspicious
+    packer_name: Optional[str] = None  # None when only entropy is suspicious
     family: Optional[str] = None
     confidence: float = 0.0
     indicators: List[str] = field(default_factory=list)
@@ -194,8 +212,10 @@ def detect_packer(binary_path: str) -> PackerVerdict:
             confidence=0.6,
             indicators=[f"high overall entropy {overall_entropy:.3f}"],
             overall_entropy=round(overall_entropy, 4),
-            notes=["no known packer signature matched; "
-                   "entropy alone suggests packed/encrypted code"],
+            notes=[
+                "no known packer signature matched; "
+                "entropy alone suggests packed/encrypted code"
+            ],
         )
 
     return PackerVerdict(
@@ -218,6 +238,7 @@ def _shannon_entropy(data: bytes) -> float:
         counts[b] += 1
     total = len(data)
     import math
+
     entropy = 0.0
     for c in counts:
         if c == 0:

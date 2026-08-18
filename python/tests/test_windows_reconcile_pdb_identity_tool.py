@@ -24,9 +24,19 @@ def _ctx(tmp_path: Path) -> MemoryContext:
     return ctx
 
 
-def _write_pe_with_rsds(tmp_path: Path, pdb_path: str = r"C:\symbols\sample.pdb") -> Path:
+def _write_pe_with_rsds(
+    tmp_path: Path, pdb_path: str = r"C:\symbols\sample.pdb"
+) -> Path:
     pe = tmp_path / "sample.sys"
-    pe.write_bytes(b"MZ" + b"\x00" * 32 + b"RSDS" + GUID_RAW + struct.pack("<I", 1) + pdb_path.encode() + b"\x00")
+    pe.write_bytes(
+        b"MZ"
+        + b"\x00" * 32
+        + b"RSDS"
+        + GUID_RAW
+        + struct.pack("<I", 1)
+        + pdb_path.encode()
+        + b"\x00"
+    )
     return pe
 
 
@@ -112,7 +122,10 @@ def test_windows_reconcile_pdb_identity_reports_manifest_drift(
 
     assert result.manifest.status == "guid_age_mismatch"
     assert any("GUID+age" in issue for issue in result.manifest.issues)
-    assert "missing_from_cache" == result.cache.cache_status or result.cache.cache_status == "unknown"
+    assert (
+        "missing_from_cache" == result.cache.cache_status
+        or result.cache.cache_status == "unknown"
+    )
 
 
 def test_memory_agent_registers_windows_reconcile_pdb_identity() -> None:

@@ -101,7 +101,10 @@ class WindowsTargetSurfaceProfileTool(
             args.surfaces_path,
             "data/kg/pe-surfaces.yaml",
         )
-        targets = [_target_record(entry, manifest_path) for entry in _load_yaml_list(manifest_path)]
+        targets = [
+            _target_record(entry, manifest_path)
+            for entry in _load_yaml_list(manifest_path)
+        ]
         surfaces = {
             surface["id"]: surface
             for surface in (

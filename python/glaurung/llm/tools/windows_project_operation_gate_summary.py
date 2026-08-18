@@ -36,7 +36,9 @@ class WindowsProjectOperationGateSummaryArgs(BaseModel):
         None,
         description="Path to ASB data/kg/pe-gates.yaml. Defaults to ASB_REPO or sibling repo.",
     )
-    binary_id: int | None = Field(None, description="Optional project binary_id filter.")
+    binary_id: int | None = Field(
+        None, description="Optional project binary_id filter."
+    )
     function_va: int | None = Field(
         None,
         description="Optional caller function VA used to filter sink callsites.",
@@ -86,7 +88,9 @@ class WindowsProjectOperationGateGroup(BaseModel):
     required_gates: list[str] = Field(default_factory=list)
     proven_gates: list[str] = Field(default_factory=list)
     missing_required_gates: list[str] = Field(default_factory=list)
-    sample_packets: list[WindowsProjectOperationGateSample] = Field(default_factory=list)
+    sample_packets: list[WindowsProjectOperationGateSample] = Field(
+        default_factory=list
+    )
     confidence: float = Field(ge=0.0, le=1.0)
     provenance: list[str] = Field(default_factory=list)
 
@@ -225,7 +229,9 @@ def _groups(
                     if packet.required_gates and not packet.proven_gates
                 ),
                 gate_status_counts=dict(
-                    sorted(Counter(packet.gate_status for packet in group_packets).items())
+                    sorted(
+                        Counter(packet.gate_status for packet in group_packets).items()
+                    )
                 ),
                 required_gates=_uniq(
                     gate for packet in group_packets for gate in packet.required_gates

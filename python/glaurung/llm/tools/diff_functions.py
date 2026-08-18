@@ -37,9 +37,7 @@ class DiffFunctionsArgs(BaseModel):
     )
     style: str = Field("c", description="Decompile style: 'c' (default) or 'plain'")
     timeout_ms: int = Field(500, description="Per-function decompile timeout")
-    max_diff_lines: int = Field(
-        200, description="Cap on unified-diff lines returned"
-    )
+    max_diff_lines: int = Field(200, description="Cap on unified-diff lines returned")
 
 
 class DiffFunctionsResult(BaseModel):
@@ -64,8 +62,8 @@ class DiffFunctionsTool(MemoryTool[DiffFunctionsArgs, DiffFunctionsResult]):
             ToolMeta(
                 name="diff_functions",
                 description="Diff the decompilations of two functions (same or "
-                            "different binary). Returns unified diff plus a "
-                            "line-level similarity ratio.",
+                "different binary). Returns unified diff plus a "
+                "line-level similarity ratio.",
                 tags=("analysis", "diff"),
             ),
             DiffFunctionsArgs,

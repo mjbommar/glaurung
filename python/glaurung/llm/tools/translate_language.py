@@ -138,16 +138,14 @@ def _build_prompt(args: TranslateLanguageArgs) -> str:
     return "\n\n".join(parts)
 
 
-class TranslateLanguageTool(
-    MemoryTool[TranslateLanguageArgs, TranslateLanguageResult]
-):
+class TranslateLanguageTool(MemoryTool[TranslateLanguageArgs, TranslateLanguageResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="translate_language",
                 description="Translate a clean recovered source tree to a "
-                            "different target language, with per-file idiom "
-                            "notes describing every non-mechanical rewrite.",
+                "different target language, with per-file idiom "
+                "notes describing every non-mechanical rewrite.",
                 tags=("llm", "translate", "layer4"),
             ),
             TranslateLanguageArgs,
@@ -163,8 +161,7 @@ class TranslateLanguageTool(
         if not args.files:
             return TranslateLanguageResult(
                 tree=TranslatedTree(
-                    files=[], idiom_notes=[], confidence=0.1,
-                    summary="empty input tree"
+                    files=[], idiom_notes=[], confidence=0.1, summary="empty input tree"
                 ),
                 source="heuristic",
             )
@@ -175,9 +172,7 @@ class TranslateLanguageTool(
         tree = run_structured_llm(
             prompt=prompt,
             output_type=TranslatedTree,
-            system_prompt=_system_prompt(
-                args.source_language, args.target_language
-            ),
+            system_prompt=_system_prompt(args.source_language, args.target_language),
             fallback=lambda: _heuristic(args),
         )
         source = "llm" if tree.confidence > 0.2 else "heuristic"

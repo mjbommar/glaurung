@@ -293,6 +293,7 @@ class AskCommand(BaseCommand):
         # so repeated calls compose against a single cap).
         from pathlib import Path
         from ...llm.usage_tracker import get_tracker
+
         tracker = get_tracker()
         if getattr(args, "max_cost_usd", None) is not None:
             tracker.set_budget_usd(float(args.max_cost_usd))
@@ -323,6 +324,7 @@ class AskCommand(BaseCommand):
             if getattr(args, "cwe_sweep", False):
                 from ...llm.cwe_sweep import sweep_binary
                 from ...llm.findings_runner import write_findings_report
+
                 # F7: derive a partial-dir alongside the final --findings-json.
                 # On clean completion sweep_binary deletes its own partials.
                 # On crash / SIGTERM / cost-budget abort the .partial.json
@@ -331,9 +333,9 @@ class AskCommand(BaseCommand):
                 final_out = getattr(args, "findings_json", None) or "-"
                 if final_out != "-":
                     from pathlib import Path as _Path
+
                     partial_dir = (
-                        _Path(final_out).with_suffix("").as_posix()
-                        + ".partials"
+                        _Path(final_out).with_suffix("").as_posix() + ".partials"
                     )
                 else:
                     partial_dir = "/tmp/glaurung-sweep-partials"
@@ -351,9 +353,8 @@ class AskCommand(BaseCommand):
                     run_findings_pass,
                     write_findings_report,
                 )
-                report = asyncio.run(
-                    run_findings_pass(str(binary_path), args)
-                )
+
+                report = asyncio.run(run_findings_pass(str(binary_path), args))
                 write_findings_report(report, args.findings_json)
 
             return 0
@@ -516,6 +517,7 @@ class AskCommand(BaseCommand):
                 route_for_question,
                 select_tools_for_question,
             )
+
             first_q = (questions[0] if questions else "") or ""
             tool_filter = set(select_tools_for_question(first_q))
             if getattr(args, "show_routing", False):
@@ -528,7 +530,8 @@ class AskCommand(BaseCommand):
         # Create agent based on strategy
         if args.strategy == "single":
             agent = AnalysisAgentFactory.create_fast_single_pass_agent(
-                model=args.model, timeout=args.timeout,
+                model=args.model,
+                timeout=args.timeout,
                 tool_filter=tool_filter,
             )
         elif args.strategy == "iterative":

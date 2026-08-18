@@ -10,9 +10,7 @@ from glaurung.llm.kb import xref_db
 from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
 
-_POLY_NAMED = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual"
-)
+_POLY_NAMED = Path("samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual")
 _POLY_STRIPPED = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped"
 )
@@ -53,7 +51,9 @@ def test_borrow_lifts_stripped_target_naming(tmp_path: Path) -> None:
     # Check that at least one virtual method now has a real name in the target.
     names = xref_db.list_function_names(kb)
     borrowed = [n for n in names if n.set_by == "borrowed"]
-    assert borrowed, f"no rows ended up with set_by='borrowed'; got {[n.set_by for n in names]}"
+    assert borrowed, (
+        f"no rows ended up with set_by='borrowed'; got {[n.set_by for n in names]}"
+    )
     # Names must look like real C++ symbols, not `sub_*`.
     assert all(not n.canonical.startswith("sub_") for n in borrowed)
     kb.close()
@@ -73,7 +73,10 @@ def test_borrow_does_not_overwrite_dwarf_or_manual(tmp_path: Path) -> None:
         pytest.skip("target has no functions")
     pinned_va = names[0].entry_va
     xref_db.set_function_name(
-        kb, pinned_va, "do_not_clobber_me", set_by="manual",
+        kb,
+        pinned_va,
+        "do_not_clobber_me",
+        set_by="manual",
     )
 
     xref_db.borrow_symbols_from_donor(

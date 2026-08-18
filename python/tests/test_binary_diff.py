@@ -10,13 +10,13 @@ from pathlib import Path
 import pytest
 
 from glaurung.llm.kb.binary_diff import (
-    diff_binaries, render_diff_markdown, to_json,
+    diff_binaries,
+    render_diff_markdown,
+    to_json,
 )
 
 
-_SWITCHY_V1 = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 _SWITCHY_V2 = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
 )
@@ -174,12 +174,14 @@ def test_diff_with_pdb_cache_populates_public_name() -> None:
     walk every undiscovered function, which is unnecessary for the PDB
     wiring assertion below."""
     diff = diff_binaries(
-        str(_NTOSKRNL), str(_NTOSKRNL),
+        str(_NTOSKRNL),
+        str(_NTOSKRNL),
         skip_anonymous=True,
         pdb_cache=str(_PDB_CACHE),
     )
     populated_rows = [
-        r for r in diff.rows
+        r
+        for r in diff.rows
         if r.public_name_pre is not None or r.public_name_post is not None
     ]
     assert populated_rows, "expected at least one PDB-resolved row"

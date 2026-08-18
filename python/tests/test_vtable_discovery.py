@@ -15,9 +15,7 @@ def _need(p: Path) -> Path:
     return p
 
 
-_POLY_NAMED = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual"
-)
+_POLY_NAMED = Path("samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual")
 _POLY_STRIPPED = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped"
 )

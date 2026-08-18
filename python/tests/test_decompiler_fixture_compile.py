@@ -10,6 +10,7 @@ The lanes compile under the pinned toolchain (`tools/fixture_toolchain.py`), whi
 provisions gcc, g++, clang and clang++ with a working C++ runtime — so there is no
 "this host lacks a compiler" skip to take, and no env gap for the C++ lanes.
 """
+
 from __future__ import annotations
 
 import sys

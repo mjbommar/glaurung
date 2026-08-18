@@ -152,8 +152,7 @@ def test_kickoff_analysis_handles_adversarial_root(tmp_path: Path) -> None:
             # Some adversarial samples will fail at PE/ELF triage. That's
             # fine — surface as a known exception, not a panic.
             assert isinstance(e, (RuntimeError, ValueError, OSError)), (
-                f"unexpected exception type {type(e).__name__} "
-                f"on {sample.name}: {e}"
+                f"unexpected exception type {type(e).__name__} on {sample.name}: {e}"
             )
             continue
         # Every successful summary must carry at least the format /

@@ -27,7 +27,9 @@ WindowsArtifactPromotionOperation = Literal["copy", "archive"]
 
 
 class WindowsRunnerArtifactPromotionPlanArgs(BaseModel):
-    artifact_dir: str = Field(..., description="Directory containing reviewed artifacts.")
+    artifact_dir: str = Field(
+        ..., description="Directory containing reviewed artifacts."
+    )
     review_path: str | None = Field(
         None,
         description="Optional runner-artifact-review JSON path. Defaults inside artifact_dir.",
@@ -228,13 +230,25 @@ def _destination_for(
 ) -> Path | None:
     if mode == "ghidra_parity":
         if artifact.endswith("_refresh.json"):
-            return docs_root / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+            return (
+                docs_root
+                / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+            )
         if artifact.endswith("_refresh.md"):
-            return docs_root / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md"
+            return (
+                docs_root
+                / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md"
+            )
         if artifact == "glaurung_vs_ghidra_vendor_windows_30.json":
-            return docs_root / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+            return (
+                docs_root
+                / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+            )
         if artifact == "glaurung_vs_ghidra_vendor_windows_30.md":
-            return docs_root / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md"
+            return (
+                docs_root
+                / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md"
+            )
     if mode == "target_pipeline":
         if artifact.endswith(".json") or artifact.endswith(".md"):
             return docs_root / "runner-artifacts" / artifact
@@ -267,7 +281,9 @@ def _write_result(
         "blockers": blockers,
         "warnings": warnings,
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return str(path)
 
 

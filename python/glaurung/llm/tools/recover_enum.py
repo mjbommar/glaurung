@@ -39,7 +39,7 @@ class EnumCaseEvidence(BaseModel):
     evidence: str = Field(
         ...,
         description="The string printed, constant returned, or function "
-                    "called in this branch. Used as the naming signal.",
+        "called in this branch. Used as the naming signal.",
     )
 
 
@@ -47,7 +47,7 @@ class RecoverEnumArgs(BaseModel):
     switch_pseudocode: str = Field(
         ...,
         description="Full switch body with every branch visible. Keep it "
-                    "terse — a few hundred tokens is usually enough.",
+        "terse — a few hundred tokens is usually enough.",
     )
     cases: List[EnumCaseEvidence] = Field(
         ...,
@@ -59,9 +59,11 @@ class RecoverEnumArgs(BaseModel):
     variant_prefix: Optional[str] = Field(
         None,
         description="Optional prefix for variant names. Defaults based on "
-                    "the enum name (e.g. 'conn_state' → 'CS_').",
+        "the enum name (e.g. 'conn_state' → 'CS_').",
     )
-    underlying_type: Literal["int", "unsigned", "uint8_t", "uint16_t", "uint32_t"] = "int"
+    underlying_type: Literal["int", "unsigned", "uint8_t", "uint16_t", "uint32_t"] = (
+        "int"
+    )
     use_llm: bool = True
 
 
@@ -78,9 +80,7 @@ class EnumDefinition(BaseModel):
     enum_name: str
     variant_prefix: str
     variants: List[EnumVariant] = Field(default_factory=list)
-    c_definition: str = Field(
-        ..., description="Full C enum definition ready to paste"
-    )
+    c_definition: str = Field(..., description="Full C enum definition ready to paste")
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
 
@@ -171,7 +171,7 @@ class RecoverEnumTool(MemoryTool[RecoverEnumArgs, RecoverEnumResult]):
             ToolMeta(
                 name="recover_enum",
                 description="Recover a C enum from a jump-table switch plus "
-                            "the evidence string/constant for each branch.",
+                "the evidence string/constant for each branch.",
                 tags=("llm", "types", "layer1"),
             ),
             RecoverEnumArgs,
@@ -192,7 +192,7 @@ class RecoverEnumTool(MemoryTool[RecoverEnumArgs, RecoverEnumResult]):
                     or _default_prefix(args.enum_hint_name or "recovered_enum"),
                     variants=[],
                     c_definition=f"enum {args.enum_hint_name or 'recovered_enum'} "
-                                 "{ /* empty */ };",
+                    "{ /* empty */ };",
                     confidence=0.1,
                     rationale="no case evidence supplied",
                 ),

@@ -110,7 +110,8 @@ class WindowsOperationClassificationBacklogTool(
             "data/kg/pe-operation-classification-backlog.yaml",
         )
         entries = [
-            _backlog_entry(entry, backlog_path) for entry in _load_yaml_list(backlog_path)
+            _backlog_entry(entry, backlog_path)
+            for entry in _load_yaml_list(backlog_path)
         ]
         entry_count_total = len(entries)
         entries = _filter_entries(entries, args)

@@ -213,6 +213,7 @@ def _triage_wrapper(
     # / GLAURUNG_MAX_READ_BYTES raise the caps for EVERY command that triages through
     # this wrapper (explain, find, name-func, ask, kickoff, ...) without a per-command flag.
     import os as _os
+
     _mfs = _os.environ.get("GLAURUNG_MAX_FILE_SIZE")
     if _mfs:
         try:

@@ -25,7 +25,9 @@ class DecompileFormatter(BaseFormatter):
             return
         if isinstance(data, list):
             for entry in data:
-                text = entry.get("pseudocode") if isinstance(entry, dict) else str(entry)
+                text = (
+                    entry.get("pseudocode") if isinstance(entry, dict) else str(entry)
+                )
                 if text:
                     self.output_plain(text)
             return

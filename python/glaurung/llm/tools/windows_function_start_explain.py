@@ -299,9 +299,7 @@ class _StartContext:
             if row.get("target_va") == va
         ][:max_refs]
         scan_rejections = [
-            row
-            for row in stats.get("scan_rejections") or []
-            if row.get("va") == va
+            row for row in stats.get("scan_rejections") or [] if row.get("va") == va
         ][:max_refs]
         diagnostic_kind: DiagnosticKind = "none"
         diagnostic_entry: dict[str, Any] | None = None

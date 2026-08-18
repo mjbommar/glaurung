@@ -26,6 +26,7 @@ pytestmark = pytest.mark.asyncio
 
 # ---- catalog + class filtering ----
 
+
 def _ev():
     return [Evidence(kind="disasm", location="0x140001500", text="call strcpy")]
 
@@ -35,8 +36,15 @@ def test_default_catalog_covers_expected_cwes():
     rules + corpus binaries around: CWE-121, CWE-134, CWE-190, CWE-416,
     CWE-476, CWE-401, CWE-787."""
     ids = {c.id for c in DEFAULT_CWE_CLASSES}
-    assert {"CWE-121", "CWE-134", "CWE-190", "CWE-416",
-            "CWE-476", "CWE-401", "CWE-787"} <= ids
+    assert {
+        "CWE-121",
+        "CWE-134",
+        "CWE-190",
+        "CWE-416",
+        "CWE-476",
+        "CWE-401",
+        "CWE-787",
+    } <= ids
 
 
 def test_select_classes_userland_filter_excludes_kernel():
@@ -68,6 +76,7 @@ def test_select_classes_any_returns_everything():
 
 
 # ---- sweep_binary orchestration ----
+
 
 async def test_sweep_invokes_one_pass_per_class():
     """Each class in the catalog -> one run_findings_pass call. The
@@ -146,12 +155,14 @@ async def test_sweep_class_error_records_note_does_not_kill_pass():
             raise RuntimeError("API rate limit")
         return FindingsReport(
             binary_path=path,
-            findings=[VulnerabilityFinding(
-                cwe="CWE-134",
-                function=FunctionRef(name="x", va=0x100),
-                root_cause="printf with caller-controlled format argument",
-                evidence=_ev(),
-            )],
+            findings=[
+                VulnerabilityFinding(
+                    cwe="CWE-134",
+                    function=FunctionRef(name="x", va=0x100),
+                    root_cause="printf with caller-controlled format argument",
+                    evidence=_ev(),
+                )
+            ],
         )
 
     with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
@@ -210,8 +221,12 @@ async def test_sweep_applies_to_filter_passes_through():
         return FindingsReport(binary_path=path, findings=[])
 
     with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
-        await sweep_binary("/tmp/x.exe", SimpleNamespace(),
-                           classes=classes, applies_to_filter="userland")
+        await sweep_binary(
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
+            applies_to_filter="userland",
+        )
     # Only the userland class's prompt should have run.
     assert any("p-A" in c for c in captured)
     assert not any("p-B" in c for c in captured)

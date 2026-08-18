@@ -38,7 +38,9 @@ class WindowsSourceSinkOperandMatchArgs(BaseModel):
         description="Source variable name to trace. Used directly or derived from source_arg_index.",
     )
     sink_symbol: str = Field(..., description="Sink call symbol to inspect.")
-    sink_arg_index: int = Field(..., description="Zero-based sink argument index to compare.")
+    sink_arg_index: int = Field(
+        ..., description="Zero-based sink argument index to compare."
+    )
     pseudocode: str | None = Field(
         None,
         description="Optional pseudocode or source-like text to inspect.",
@@ -52,7 +54,9 @@ class WindowsSourceSinkOperandMatchArgs(BaseModel):
         description="Path to ASB data/kg/pe-sinks.yaml. Defaults to ASB_REPO or sibling repo.",
     )
     max_depth: int = Field(2, description="Maximum simple alias depth.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
@@ -137,7 +141,9 @@ class WindowsSourceSinkOperandMatchTool(
         aliases = _trace_aliases(text, source_name, max_depth=args.max_depth)
         tracked = {source_name} | {alias.name for alias in aliases}
         operations = _load_operations(args.sinks_path)
-        operation = _first_operation(args.sink_symbol, _operations_by_symbol(operations))
+        operation = _first_operation(
+            args.sink_symbol, _operations_by_symbol(operations)
+        )
         sink = _find_sink(text, args, operation)
         if sink is None:
             result = _result(
@@ -329,7 +335,9 @@ def _normalize_expression(expression: str) -> str:
     changed = True
     while changed:
         changed = False
-        new = re.sub(r"^\((?:const\s+)?[A-Za-z_][A-Za-z0-9_\s\*]*\)\s*", "", value).strip()
+        new = re.sub(
+            r"^\((?:const\s+)?[A-Za-z_][A-Za-z0-9_\s\*]*\)\s*", "", value
+        ).strip()
         if new != value:
             value = new
             changed = True

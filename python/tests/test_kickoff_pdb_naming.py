@@ -4,6 +4,7 @@ functions BY DEFAULT (no opt-in flag) when a matching PDB is resolvable.
 Uses a real build-26100 driver whose PDB is in the local symbol cache.
 Skips cleanly when the corpus / cache is absent (off-box CI).
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -55,8 +56,10 @@ def test_kickoff_pdb_on_by_default(monkeypatch) -> None:
 
         # Explicit opt-out leaves everything as sub_/exports.
         off = kickoff_analysis(
-            str(_SRVNET), db_path=str(Path(td) / "off.glaurung"),
-            pdb=False, fetch_pdb=False,
+            str(_SRVNET),
+            db_path=str(Path(td) / "off.glaurung"),
+            pdb=False,
+            fetch_pdb=False,
         )
         assert off.functions_named_pdb == 0
 

@@ -3,6 +3,7 @@
 Reports pool tags shared across a driver family (the cross-module
 corruption surface). See glaurung.llm.kb.module_group.
 """
+
 import argparse
 from pathlib import Path
 
@@ -19,7 +20,10 @@ class GroupCommand(BaseCommand):
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
-            "--member", action="append", required=True, metavar="NAME=BINARY",
+            "--member",
+            action="append",
+            required=True,
+            metavar="NAME=BINARY",
             help="A group member as name=path/to/driver.sys (repeatable, >=2)",
         )
 

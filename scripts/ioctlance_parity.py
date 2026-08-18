@@ -12,6 +12,7 @@ broader API modeling, and symbolic code discovery.
 Usage:
   ioctlance_parity.py <driver.sys> [--ioctlance-root DIR] [--glaurung-root DIR] [--timeout S]
 """
+
 import argparse
 import json
 import re
@@ -26,12 +27,24 @@ def run_ioctlance(root: Path, drv: Path, timeout: int) -> dict:
     out = {"codes": set(), "vulns": [], "raw": None}
     try:
         proc = subprocess.run(
-            [str(root / ".venv/bin/python"), "-m", "ioctlance.cli",
-             "--timeout", str(timeout), str(drv)],
-            cwd=root, capture_output=True, text=True, timeout=timeout + 120)
+            [
+                str(root / ".venv/bin/python"),
+                "-m",
+                "ioctlance.cli",
+                "--timeout",
+                str(timeout),
+                str(drv),
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 120,
+        )
         out["raw"] = proc.stdout + proc.stderr
         for m in re.finditer(r"Discovered \d+ IOCTL codes?: \[([^\]]*)\]", out["raw"]):
-            out["codes"] |= {c.strip().strip("'\"") for c in m.group(1).split(",") if c.strip()}
+            out["codes"] |= {
+                c.strip().strip("'\"") for c in m.group(1).split(",") if c.strip()
+            }
         for m in re.finditer(r"^\s*-\s*(.+)$", out["raw"], re.M):
             t = m.group(1).strip()
             if t and "vulnerab" not in t.lower():
@@ -58,11 +71,15 @@ def run_glaurung(root: Path, drv: Path, timeout: int) -> dict:
     surf = root / "target/release/examples/ioctl_surface_scan"
     try:
         if surf.exists():
-            s = subprocess.run([str(surf), str(drv)], capture_output=True, text=True, timeout=120)
+            s = subprocess.run(
+                [str(surf), str(drv)], capture_output=True, text=True, timeout=120
+            )
             for line in s.stdout.splitlines():
                 if line.startswith("CODES "):
                     out["codes"] |= {c for c in line[6:].split()}
-        p = subprocess.run([str(exe), str(drv)], capture_output=True, text=True, timeout=timeout + 60)
+        p = subprocess.run(
+            [str(exe), str(drv)], capture_output=True, text=True, timeout=timeout + 60
+        )
         out["raw"] = p.stderr
         m = re.search(r"high-confidence=(\d+)", p.stderr)
         if m:
@@ -78,7 +95,9 @@ def run_glaurung(root: Path, drv: Path, timeout: int) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("driver")
-    ap.add_argument("--ioctlance-root", default="/nas4/data/workspace-infosec/ioctlance")
+    ap.add_argument(
+        "--ioctlance-root", default="/nas4/data/workspace-infosec/ioctlance"
+    )
     ap.add_argument("--glaurung-root", default="/nas4/data/workspace-infosec/glaurung")
     ap.add_argument("--timeout", type=int, default=120)
     args = ap.parse_args()
@@ -90,23 +109,34 @@ def main() -> int:
     fcodes, gcodes = ifork["codes"], glau["codes"]
     code_recall = len(fcodes & gcodes) / len(fcodes) if fcodes else float("nan")
     print(f"== ioctlance-parity: {drv.name} ==")
-    print(f"  IOCTL codes   fork={len(fcodes)} glaurung={len(gcodes)} "
-          f"shared={len(fcodes & gcodes)} code-recall={code_recall:.0%}")
+    print(
+        f"  IOCTL codes   fork={len(fcodes)} glaurung={len(gcodes)} "
+        f"shared={len(fcodes & gcodes)} code-recall={code_recall:.0%}"
+    )
     print(f"    fork-only:     {sorted(fcodes - gcodes)}")
     print(f"    glaurung-only: {sorted(gcodes - fcodes)}")
     print(f"  fork vulns ({len(ifork['vulns'])}): {ifork['vulns']}")
     print(f"  glaurung high-confidence sinks: {glau['hi']}  by-kind={glau['by_kind']}")
     # crude vuln-class parity: does glaurung surface a matching kind for each fork vuln?
-    KMAP = {"stack": "stack-overflow", "write": "arbitrary-write", "read": "arbitrary-read",
-            "null": "null-deref", "double free": "double-free", "use after": "use-after-free",
-            "overflow": "integer-overflow", "physical": "physical-memory"}
+    KMAP = {
+        "stack": "stack-overflow",
+        "write": "arbitrary-write",
+        "read": "arbitrary-read",
+        "null": "null-deref",
+        "double free": "double-free",
+        "use after": "use-after-free",
+        "overflow": "integer-overflow",
+        "physical": "physical-memory",
+    }
     gkinds = set(glau["by_kind"])
     matched = 0
     for v in ifork["vulns"]:
         want = next((gk for key, gk in KMAP.items() if key in v.lower()), None)
         hit = want in gkinds if want else False
         matched += hit
-        print(f"    fork vuln '{v[:50]}' -> glaurung {'HAS' if hit else 'MISSING'} {want}")
+        print(
+            f"    fork vuln '{v[:50]}' -> glaurung {'HAS' if hit else 'MISSING'} {want}"
+        )
     if ifork["vulns"]:
         print(f"  VULN-CLASS RECALL: {matched}/{len(ifork['vulns'])}")
     return 0

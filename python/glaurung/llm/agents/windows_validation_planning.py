@@ -479,13 +479,10 @@ def run_windows_validation_planning_batch(
         )
     if loaded.operation_backlog_path:
         notes.append(
-            "loaded operation-backlog packets from "
-            f"{loaded.operation_backlog_path}"
+            f"loaded operation-backlog packets from {loaded.operation_backlog_path}"
         )
     if loaded.patch_diff_packet_count:
-        notes.append(
-            f"loaded {loaded.patch_diff_packet_count} patch-diff packet(s)"
-        )
+        notes.append(f"loaded {loaded.patch_diff_packet_count} patch-diff packet(s)")
     if loaded.build_corpus_manifest_path:
         notes.append(
             "loaded build-corpus project sink-call packets from "

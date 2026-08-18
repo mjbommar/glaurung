@@ -71,9 +71,7 @@ def test_windows_surface_metadata_filters_sources(tmp_path: Path) -> None:
 
     assert result.source_count_total == 1
     assert result.gate_count_total == 1
-    assert [source.id for source in result.sources] == [
-        "nt_query_system_information"
-    ]
+    assert [source.id for source in result.sources] == ["nt_query_system_information"]
     assert result.sources[0].roles[1].role == "inout_buffer"
     assert result.sources[0].roles[1].paired_length == 2
     assert result.gates == []

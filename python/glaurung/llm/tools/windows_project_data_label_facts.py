@@ -257,7 +257,7 @@ def _labels(
         query = f"""
 SELECT dl.va, dl.name, dl.c_type, dl.size, dl.set_by
 FROM data_labels dl
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY dl.va
 LIMIT ?
 """
@@ -290,7 +290,7 @@ LEFT JOIN xrefs x ON
     x.binary_id = dl.binary_id
     AND x.dst_va = dl.va
     AND x.kind IN ('data_read', 'data_write')
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 GROUP BY dl.va, dl.name, dl.c_type, dl.size, dl.set_by
 ORDER BY xref_count DESC, dl.va
 LIMIT ?
@@ -351,7 +351,7 @@ SELECT
     {label_select}
 FROM xrefs x
 {joins}
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY x.src_va, x.xref_id
 LIMIT ?
 """
@@ -398,7 +398,7 @@ SELECT
     GROUP_CONCAT(x.src_va, ',') AS sample_source_vas
 FROM xrefs x
 LEFT JOIN data_labels dl ON dl.binary_id = x.binary_id AND dl.va = x.dst_va
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 GROUP BY x.dst_va
 ORDER BY xref_count DESC, x.dst_va
 LIMIT ?
@@ -464,7 +464,7 @@ def _count_labeled_xrefs(
 SELECT COUNT(*)
 FROM xrefs x
 JOIN data_labels dl ON dl.binary_id = x.binary_id AND dl.va = x.dst_va
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 """
     row = conn.execute(query, params).fetchone()
     return int(row[0] or 0) if row else 0
@@ -570,7 +570,7 @@ JOIN xrefs cx ON
 JOIN function_names callee ON
     callee.binary_id = cx.binary_id
     AND callee.entry_va = cx.dst_va
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY dx.dst_va, cx.src_va
 """
     rows = conn.execute(query, params).fetchall()

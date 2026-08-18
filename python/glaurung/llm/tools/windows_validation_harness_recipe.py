@@ -21,10 +21,18 @@ class WindowsValidationHarnessRecipeArgs(BaseModel):
             "Defaults to ASB_REPO or sibling repo."
         ),
     )
-    profile_id: str | None = Field(None, description="Optional component profile id filter.")
-    target_id: str | None = Field(None, description="Optional build-corpus target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
-    surface_id: str | None = Field(None, description="Optional attacker surface filter.")
+    profile_id: str | None = Field(
+        None, description="Optional component profile id filter."
+    )
+    target_id: str | None = Field(
+        None, description="Optional build-corpus target id filter."
+    )
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
+    surface_id: str | None = Field(
+        None, description="Optional attacker surface filter."
+    )
     trigger_kind: str | None = Field(None, description="Optional trigger kind filter.")
     add_to_kb: bool = Field(
         False,
@@ -84,7 +92,10 @@ class WindowsValidationHarnessRecipeTool(
             args.recipes_path,
             "data/kg/pe-validation-harness-recipes.yaml",
         )
-        recipes = [_recipe_record(entry, recipes_path) for entry in _load_yaml_list(recipes_path)]
+        recipes = [
+            _recipe_record(entry, recipes_path)
+            for entry in _load_yaml_list(recipes_path)
+        ]
         recipe_count_total = len(recipes)
         recipes = _filter_recipes(recipes, args)
 

@@ -98,7 +98,9 @@ class WindowsRankCandidatePacketsTool(
                     props={
                         "input_count": len(args.packets),
                         "ranked_count": len(ranked),
-                        "top_candidate": ranked[0].packet.candidate_id if ranked else None,
+                        "top_candidate": ranked[0].packet.candidate_id
+                        if ranked
+                        else None,
                     },
                 )
             )
@@ -207,7 +209,8 @@ def _validation_ready(
 ) -> bool:
     attacker = packet.attacker_class.lower()
     reachable = any(
-        token in attacker for token in ("remote", "network", "unpriv", "low", "appcontainer", "lpac")
+        token in attacker
+        for token in ("remote", "network", "unpriv", "low", "appcontainer", "lpac")
     )
     gate_concern = packet.gate_status in {
         "missing",

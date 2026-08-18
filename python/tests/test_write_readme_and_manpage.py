@@ -83,9 +83,7 @@ def test_heuristic_handles_minimal_inputs() -> None:
     assert "## Modules" not in docs.readme
 
 
-def test_orchestrator_helper_falls_back_when_tool_raises(
-    tmp_path, monkeypatch
-) -> None:
+def test_orchestrator_helper_falls_back_when_tool_raises(tmp_path, monkeypatch) -> None:
     """When WriteReadmeAndManpageTool.run raises, _emit_readme_with_fallback
     must still return a fully-shaped result with a non-empty README — the
     project must never ship with a missing docs file (Bug N)."""
@@ -104,9 +102,9 @@ def test_orchestrator_helper_falls_back_when_tool_raises(
     # validation error, transient pydantic-ai failure, etc.).
     def _raise(*a, **kw):
         raise RuntimeError("simulated tool failure")
+
     monkeypatch.setattr(
-        "glaurung.llm.tools.write_readme_and_manpage."
-        "WriteReadmeAndManpageTool.run",
+        "glaurung.llm.tools.write_readme_and_manpage.WriteReadmeAndManpageTool.run",
         _raise,
     )
 
@@ -139,8 +137,7 @@ def test_orchestrator_helper_falls_back_when_tool_returns_bad_shape(
     spec.loader.exec_module(rs)
 
     monkeypatch.setattr(
-        "glaurung.llm.tools.write_readme_and_manpage."
-        "WriteReadmeAndManpageTool.run",
+        "glaurung.llm.tools.write_readme_and_manpage.WriteReadmeAndManpageTool.run",
         lambda *a, **kw: "this is not a result object",
     )
 

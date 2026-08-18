@@ -63,7 +63,9 @@ class BuildCorpusTests(unittest.TestCase):
             self.assertNotIn("content_hash", capture["files"][0])
             self.assertIn("zero exclusions", capture["source"])
 
-    def test_single_validation_can_emit_separate_representative_and_full_packs(self) -> None:
+    def test_single_validation_can_emit_separate_representative_and_full_packs(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             raw = self.make_raw(
@@ -81,7 +83,9 @@ class BuildCorpusTests(unittest.TestCase):
                 (root / "representative" / "capture-index-v1.json").read_text()
             )
             full = json.loads((root / "full" / "capture-index-v1.json").read_text())
-            self.assertEqual({row["tiers"][0] for row in representative["files"]}, {"representative"})
+            self.assertEqual(
+                {row["tiers"][0] for row in representative["files"]}, {"representative"}
+            )
             self.assertEqual({row["tiers"][0] for row in full["files"]}, {"full"})
 
     def test_rejects_conflicting_duplicate_verdict(self) -> None:

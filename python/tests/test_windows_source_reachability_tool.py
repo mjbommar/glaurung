@@ -129,8 +129,7 @@ def test_windows_source_reachability_filters_by_surface_attacker_and_adds_eviden
     assert "windows-appcontainer" in result.records[0].surface_attacker_classes
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_source_reachability"
+        node.kind == NodeKind.evidence and node.label == "windows_source_reachability"
         for node in ctx.kb.nodes()
     )
 

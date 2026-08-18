@@ -45,13 +45,13 @@ class DescribeCallSiteArgs(BaseModel):
     call_site_snippet: str = Field(
         ...,
         description="10–15 lines of pseudocode around the indirect call. "
-                    "Include the target pointer's load so the LLM can see "
-                    "where it came from.",
+        "Include the target pointer's load so the LLM can see "
+        "where it came from.",
     )
     context_hint: str = Field(
         "",
         description="Optional — the name or role of the containing function, "
-                    "or a caller name. Cheap extra signal.",
+        "or a caller name. Cheap extra signal.",
     )
     use_llm: bool = True
 
@@ -64,8 +64,8 @@ class CallSiteDescription(BaseModel):
     inferred_callee: str = Field(
         "",
         description="Best-guess symbolic name of the callee — e.g. "
-                    "'conn->vt->recv' or 'handlers[opcode]' or the name "
-                    "of a specific function if we can nail it down.",
+        "'conn->vt->recv' or 'handlers[opcode]' or the name "
+        "of a specific function if we can nail it down.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
@@ -89,9 +89,7 @@ _VTABLE_RE = re.compile(
     r".*call\s+\*\s*\(?\s*\w+\s*\+\s*(?:0x[0-9a-f]+|\d+))",
     re.IGNORECASE,
 )
-_FIELD_PTR_RE = re.compile(
-    r"call\s+\*\s*\(\s*\w+\s*\+\s*(?:0x[0-9a-f]+|\d+)\s*\)"
-)
+_FIELD_PTR_RE = re.compile(r"call\s+\*\s*\(\s*\w+\s*\+\s*(?:0x[0-9a-f]+|\d+)\s*\)")
 _TABLE_RE = re.compile(r"\w+\[\s*\w+\s*\]\s*\(")
 # Register-indirect: "call %rax" — require a percent-sign prefix (or a
 # bare single-word register name) so plain ``call 0x401230`` is *not*
@@ -106,7 +104,8 @@ _DIRECT_RE = re.compile(r"\bcall\s+0x[0-9a-f]+\b", re.IGNORECASE)
 def _heuristic(snippet: str) -> CallSiteDescription:
     # Direct call — nothing indirect to describe.
     if _DIRECT_RE.search(snippet) and not any(
-        r.search(snippet) for r in (_VTABLE_RE, _TABLE_RE, _FIELD_PTR_RE, _REG_INDIRECT_RE)
+        r.search(snippet)
+        for r in (_VTABLE_RE, _TABLE_RE, _FIELD_PTR_RE, _REG_INDIRECT_RE)
     ):
         return CallSiteDescription(
             kind="direct",
@@ -118,8 +117,7 @@ def _heuristic(snippet: str) -> CallSiteDescription:
     if _VTABLE_RE.search(snippet):
         return CallSiteDescription(
             kind="vtable",
-            description="looks like a virtual-method dispatch through a "
-                        "vtable pointer",
+            description="looks like a virtual-method dispatch through a vtable pointer",
             inferred_callee="obj->vt->method",
             confidence=0.55,
             rationale="double-deref pattern (load vtable, then load slot)",
@@ -128,7 +126,7 @@ def _heuristic(snippet: str) -> CallSiteDescription:
         return CallSiteDescription(
             kind="table_lookup",
             description="indirect call through an array/table indexed by a "
-                        "runtime value",
+            "runtime value",
             inferred_callee="table[index]",
             confidence=0.5,
             rationale="indexed function-pointer array",
@@ -145,7 +143,7 @@ def _heuristic(snippet: str) -> CallSiteDescription:
         return CallSiteDescription(
             kind="register_indirect",
             description="indirect call through a register — source of pointer "
-                        "not obvious from the snippet",
+            "not obvious from the snippet",
             inferred_callee="",
             confidence=0.3,
             rationale="bare register-indirect call",
@@ -175,22 +173,18 @@ def _build_prompt(snippet: str, hint: str) -> str:
     if hint:
         parts.append(f"Context: {hint}")
     parts.append(f"Snippet:\n```\n{snippet}\n```")
-    parts.append(
-        "Return kind, description, inferred_callee, confidence, rationale."
-    )
+    parts.append("Return kind, description, inferred_callee, confidence, rationale.")
     return "\n\n".join(parts)
 
 
-class DescribeCallSiteTool(
-    MemoryTool[DescribeCallSiteArgs, DescribeCallSiteResult]
-):
+class DescribeCallSiteTool(MemoryTool[DescribeCallSiteArgs, DescribeCallSiteResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="describe_call_site",
                 description="Describe an indirect-call site (vtable dispatch, "
-                            "table lookup, struct-field pointer, register-"
-                            "indirect) and guess the callee.",
+                "table lookup, struct-field pointer, register-"
+                "indirect) and guess the callee.",
                 tags=("llm", "callgraph", "layer0"),
             ),
             DescribeCallSiteArgs,

@@ -147,7 +147,9 @@ def test_windows_pipeline_blocker_task_plan_turns_artifacts_into_tasks(
 
     assert result.claim_level == "pipeline_blocker_task_plan_not_finding"
     assert result.task_count == 2
-    project_task = next(item for item in result.tasks if item.kind == "project_cache_refresh")
+    project_task = next(
+        item for item in result.tasks if item.kind == "project_cache_refresh"
+    )
     assert project_task.source_kind == "preflight"
     assert project_task.target_ids == ["missing_project"]
     assert project_task.next_tool_name == "windows_bootstrap_project_facts"

@@ -123,7 +123,10 @@ class WindowsBuildCorpusTool(
             args.manifest_path,
             "data/kg/pe-build-corpus.yaml",
         )
-        targets = [_target_record(entry, manifest_path) for entry in _load_yaml_list(manifest_path)]
+        targets = [
+            _target_record(entry, manifest_path)
+            for entry in _load_yaml_list(manifest_path)
+        ]
         target_count_total = len(targets)
         targets = _filter_targets(targets, args)
 

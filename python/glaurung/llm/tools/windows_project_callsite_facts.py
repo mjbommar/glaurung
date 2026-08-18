@@ -108,7 +108,10 @@ class WindowsProjectCallsiteFactsTool(
             raise ValueError(f"{project_path}: .glaurung project does not exist")
 
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        operations = [_operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)]
+        operations = [
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
+        ]
         operations_by_symbol = _operations_by_symbol(operations)
 
         conn = sqlite3.connect(f"file:{project_path}?mode=ro", uri=True)
@@ -122,7 +125,9 @@ class WindowsProjectCallsiteFactsTool(
         facts: list[ProjectCallsiteFact] = []
         for row in rows:
             callee_names = _callee_match_names(row)
-            if args.call_symbol and not _call_symbol_matches(callee_names, args.call_symbol):
+            if args.call_symbol and not _call_symbol_matches(
+                callee_names, args.call_symbol
+            ):
                 continue
             operation = _first_matching_operation(callee_names, operations_by_symbol)
             if args.operation_only and operation is None:
@@ -180,7 +185,9 @@ def _present_tables(conn: sqlite3.Connection) -> set[str]:
 def _first_binary_id(conn: sqlite3.Connection, present: set[str]) -> int | None:
     if "binaries" not in present:
         return None
-    row = conn.execute("SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1").fetchone()
+    row = conn.execute(
+        "SELECT binary_id FROM binaries ORDER BY binary_id LIMIT 1"
+    ).fetchone()
     return int(row[0]) if row else None
 
 
@@ -377,7 +384,9 @@ def _callee_aliases(row: dict[str, Any]) -> list[str]:
 
 
 def _normalized_callee_names(row: dict[str, Any], aliases: list[str]) -> list[str]:
-    names = _string_values(row.get("callee_demangled"), row.get("callee_name"), *aliases)
+    names = _string_values(
+        row.get("callee_demangled"), row.get("callee_name"), *aliases
+    )
     out: list[str] = []
     for name in names:
         out.extend(_normalized_symbol_variants(name))
@@ -475,8 +484,7 @@ def _coverage(
     if "function_names" in present and any(f.callee_name for f in facts):
         coverage.append("callee_names")
     if any(
-        f.callee_aliases or f.callee_resolution_kind != "direct_name"
-        for f in facts
+        f.callee_aliases or f.callee_resolution_kind != "direct_name" for f in facts
     ):
         coverage.append("import_thunk_symbol_normalization")
     if "function_prototypes" in present and any(f.callee_prototype for f in facts):
@@ -496,7 +504,9 @@ def _missing_capabilities(
         missing.append("project_call_xrefs")
     if "function_names" not in present or not any(f.callee_name for f in facts):
         missing.append("callee_names")
-    if "function_prototypes" not in present or not any(f.callee_prototype for f in facts):
+    if "function_prototypes" not in present or not any(
+        f.callee_prototype for f in facts
+    ):
         missing.append("callee_prototypes")
     missing.append("call_argument_operands")
     missing.append("native_ir_memory_references")

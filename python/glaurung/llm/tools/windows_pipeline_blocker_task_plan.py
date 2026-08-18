@@ -248,7 +248,11 @@ def _preflight_tasks(
             continue
         for blocker in target.blockers:
             if "project cache missing" in blocker.lower():
-                tasks.append(_project_cache_task(target.target_id, blocker, target, args, targets_by_id))
+                tasks.append(
+                    _project_cache_task(
+                        target.target_id, blocker, target, args, targets_by_id
+                    )
+                )
             elif "corpus binary missing" in blocker.lower():
                 tasks.append(_corpus_binary_task(target.target_id, blocker, target))
             else:
@@ -275,11 +279,20 @@ def _project_cache_task(
     targets_by_id: dict[str, WindowsBuildCorpusTarget],
 ) -> WindowsPipelineBlockerTask:
     build_target = targets_by_id.get(target_id)
-    pe_path = _first([*target.corpus_paths, *(_target_corpus_paths(build_target) if build_target else [])])
+    pe_path = _first(
+        [
+            *target.corpus_paths,
+            *(_target_corpus_paths(build_target) if build_target else []),
+        ]
+    )
     project_path = _first(
         [
             *target.project_paths,
-            *(_expected_project_paths(build_target, args.project_root) if build_target else []),
+            *(
+                _expected_project_paths(build_target, args.project_root)
+                if build_target
+                else []
+            ),
         ]
     )
     next_args: dict[str, Any] = {"target_id": target_id}
@@ -349,7 +362,10 @@ def _project_cache_task(
         next_tool_name="windows_bootstrap_project_facts",
         next_tool_args=next_args,
         commands=commands,
-        reason_codes=["preflight_project_cache_missing", "windows_bootstrap_project_facts"],
+        reason_codes=[
+            "preflight_project_cache_missing",
+            "windows_bootstrap_project_facts",
+        ],
     )
 
 
@@ -402,7 +418,9 @@ def _task_from_work_item(
     )
 
 
-def _task_kind(kind: WindowsTargetPipelineBlockerKind) -> WindowsPipelineBlockerTaskKind:
+def _task_kind(
+    kind: WindowsTargetPipelineBlockerKind,
+) -> WindowsPipelineBlockerTaskKind:
     if kind == "project_cache":
         return "project_cache_refresh"
     if kind == "source_gate_metadata":
@@ -525,7 +543,9 @@ def _basic_task(
     )
 
 
-def _rank_tasks(tasks: list[WindowsPipelineBlockerTask]) -> list[WindowsPipelineBlockerTask]:
+def _rank_tasks(
+    tasks: list[WindowsPipelineBlockerTask],
+) -> list[WindowsPipelineBlockerTask]:
     keyed: dict[tuple[str, tuple[str, ...], str], WindowsPipelineBlockerTask] = {}
     for task in tasks:
         key = (task.kind, tuple(task.target_ids), ";".join(task.blockers))
@@ -535,7 +555,9 @@ def _rank_tasks(tasks: list[WindowsPipelineBlockerTask]) -> list[WindowsPipeline
             continue
         keyed[key] = existing.model_copy(
             update={
-                "candidate_ids": _dedupe([*existing.candidate_ids, *task.candidate_ids]),
+                "candidate_ids": _dedupe(
+                    [*existing.candidate_ids, *task.candidate_ids]
+                ),
                 "stages": _dedupe([*existing.stages, *task.stages]),
                 "blocker_count": existing.blocker_count + task.blocker_count,
                 "reason_codes": _dedupe([*existing.reason_codes, *task.reason_codes]),
@@ -608,7 +630,9 @@ def _write_result(
         "source_paths": source_paths,
         "warnings": _dedupe(warnings),
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return str(path)
 
 

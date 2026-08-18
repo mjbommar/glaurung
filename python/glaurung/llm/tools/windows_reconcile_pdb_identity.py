@@ -30,7 +30,9 @@ LiveCacheStatus = Literal["cached", "missing_from_cache", "unknown"]
 
 
 class WindowsReconcilePdbIdentityArgs(BaseModel):
-    pe_path: str = Field(..., description="Path to a PE binary to inspect for CodeView RSDS.")
+    pe_path: str = Field(
+        ..., description="Path to a PE binary to inspect for CodeView RSDS."
+    )
     pdb_cache_dir: str | None = Field(
         None,
         description="Optional Microsoft-style PDB cache directory to check for a matching PDB.",
@@ -42,8 +44,12 @@ class WindowsReconcilePdbIdentityArgs(BaseModel):
             "Defaults to ASB_REPO or sibling repo."
         ),
     )
-    target_id: str | None = Field(None, description="Optional manifest target id filter.")
-    build_label: str | None = Field(None, description="Optional manifest build label filter.")
+    target_id: str | None = Field(
+        None, description="Optional manifest target id filter."
+    )
+    build_label: str | None = Field(
+        None, description="Optional manifest build label filter."
+    )
     struct_names: list[str] = Field(
         default_factory=list,
         description="Optional PDB struct/class names to request when cache analysis succeeds.",
@@ -224,7 +230,11 @@ def _pdb_fact_summary(
     cache: LivePdbCacheSummary,
     notes: list[str],
 ) -> LivePdbFactSummary:
-    if not args.analyze_types or not args.pdb_cache_dir or cache.cache_status != "cached":
+    if (
+        not args.analyze_types
+        or not args.pdb_cache_dir
+        or cache.cache_status != "cached"
+    ):
         return LivePdbFactSummary()
 
     summary = LivePdbFactSummary(analysis_attempted=True)
@@ -280,7 +290,9 @@ def _compare_manifest(
         args.identity_path,
         "data/kg/pe-identity-manifest.yaml",
     )
-    records = [_record(entry, identity_path) for entry in _load_yaml_list(identity_path)]
+    records = [
+        _record(entry, identity_path) for entry in _load_yaml_list(identity_path)
+    ]
     record = _matching_record(records, binary_filename, codeview, args)
     if record is None:
         return PdbIdentityManifestComparison(
@@ -294,11 +306,17 @@ def _compare_manifest(
             issues.append(
                 f"manifest expected {record.expected_pdb_name}, live PE has {codeview.pdb_name}"
             )
-        if record.codeview_guid_age and record.codeview_guid_age != codeview.pdb_guid_age:
+        if (
+            record.codeview_guid_age
+            and record.codeview_guid_age != codeview.pdb_guid_age
+        ):
             issues.append(
                 f"manifest GUID+age {record.codeview_guid_age} != live {codeview.pdb_guid_age}"
             )
-        if record.cache_status == "cached" and cache.cache_status == "missing_from_cache":
+        if (
+            record.cache_status == "cached"
+            and cache.cache_status == "missing_from_cache"
+        ):
             issues.append("manifest says cached but live cache path is missing")
         if record.cache_status != "cached" and cache.cache_status == "cached":
             issues.append("manifest says not cached but live cache path exists")
@@ -324,9 +342,13 @@ def _matching_record(
 ) -> PdbIdentityRecord | None:
     candidates = records
     if args.target_id:
-        candidates = [record for record in candidates if record.target_id == args.target_id]
+        candidates = [
+            record for record in candidates if record.target_id == args.target_id
+        ]
     if args.build_label:
-        candidates = [record for record in candidates if record.build_label == args.build_label]
+        candidates = [
+            record for record in candidates if record.build_label == args.build_label
+        ]
     if codeview is not None:
         by_guid = [
             record

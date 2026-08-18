@@ -141,7 +141,9 @@ class WindowsProjectOnehopSinkChainsTool(
                 binary_id,
                 args.helper_function_name,
             )
-            helper_rows = _helper_call_rows(conn, present, binary_id, caller_va, helper_va)
+            helper_rows = _helper_call_rows(
+                conn, present, binary_id, caller_va, helper_va
+            )
             sink_rows = _helper_sink_rows(conn, present, binary_id, helper_va)
         finally:
             conn.close()
@@ -300,7 +302,7 @@ SELECT
     {helper_select}
 FROM xrefs x
 {joins}
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY x.src_va
 """
     return _rows(conn, query, params)
@@ -343,7 +345,7 @@ SELECT
     {sink_select}
 FROM xrefs x
 {joins}
-WHERE {' AND '.join(clauses)}
+WHERE {" AND ".join(clauses)}
 ORDER BY x.src_va
 """
     return _rows(conn, query, params)

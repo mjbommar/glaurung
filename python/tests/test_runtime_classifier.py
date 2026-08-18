@@ -16,24 +16,28 @@ from glaurung.llm.runtime_classifier import (
 
 # ---- known mingw / msvcrt / libgcc helpers ----
 
-@pytest.mark.parametrize("name", [
-    "__pei386_runtime_relocator",
-    "_pei386_runtime_relocator",
-    "__mingw_invalidParameterHandler",
-    "__mingw_printf",
-    "__gcc_register_frame",
-    "__gcc_deregister_frame",
-    "__tmainCRTStartup",
-    "WinMainCRTStartup",
-    "mainCRTStartup",
-    "atexit",
-    "_initterm",
-    "__main",
-    "__C_specific_handler",
-    "__chkstk",
-    "_Unwind_Resume",
-    "__cxa_throw",
-])
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "__pei386_runtime_relocator",
+        "_pei386_runtime_relocator",
+        "__mingw_invalidParameterHandler",
+        "__mingw_printf",
+        "__gcc_register_frame",
+        "__gcc_deregister_frame",
+        "__tmainCRTStartup",
+        "WinMainCRTStartup",
+        "mainCRTStartup",
+        "atexit",
+        "_initterm",
+        "__main",
+        "__C_specific_handler",
+        "__chkstk",
+        "_Unwind_Resume",
+        "__cxa_throw",
+    ],
+)
 def test_classify_runtime_helpers(name):
     assert classify_function(name) == "runtime_helper", (
         f"{name} should be runtime_helper, got {classify_function(name)}"
@@ -42,29 +46,37 @@ def test_classify_runtime_helpers(name):
 
 # ---- import stubs ----
 
-@pytest.mark.parametrize("name", [
-    "__imp_strcpy",
-    "__imp_KERNEL32.dll!CreateFileA",
-    "__imp__malloc",
-])
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "__imp_strcpy",
+        "__imp_KERNEL32.dll!CreateFileA",
+        "__imp__malloc",
+    ],
+)
 def test_classify_import_stubs(name):
     assert classify_function(name) == "library_import_stub"
 
 
 # ---- application code ----
 
-@pytest.mark.parametrize("name", [
-    "main",
-    "vuln",
-    "secret_win",
-    "build_source_path",
-    "dispatch_to_console",
-    "parse_packet_array",
-    "session_create",
-    "Cwe476DeviceControl",
-    "DriverEntry",
-    "VulnTouch",
-])
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "main",
+        "vuln",
+        "secret_win",
+        "build_source_path",
+        "dispatch_to_console",
+        "parse_packet_array",
+        "session_create",
+        "Cwe476DeviceControl",
+        "DriverEntry",
+        "VulnTouch",
+    ],
+)
 def test_classify_application_code(name):
     assert classify_function(name) == "application", (
         f"{name} should be application, got {classify_function(name)}"
@@ -73,12 +85,14 @@ def test_classify_application_code(name):
 
 # ---- unknown sub_<va> fallback ----
 
+
 def test_classify_sub_unknown():
     assert classify_function("sub_140001480") == "unknown"
     assert classify_function("sub_deadbeef") == "unknown"
 
 
 # ---- section-locality shortcut ----
+
 
 def test_classify_crt_section_forces_runtime():
     assert classify_function("foo", section=".CRT$XCA") == "runtime_helper"
@@ -93,6 +107,7 @@ def test_classify_section_text_doesnt_override_app_check():
 
 # ---- is_runtime convenience ----
 
+
 def test_is_runtime_covers_both_runtime_and_stub():
     assert is_runtime("__mingw_printf") is True
     assert is_runtime("__imp_strcpy") is True
@@ -101,6 +116,7 @@ def test_is_runtime_covers_both_runtime_and_stub():
 
 
 # ---- partition_functions / application_functions ----
+
 
 def _fn(name: str, va: int = 0):
     return SimpleNamespace(name=name, entry_point=SimpleNamespace(value=va))

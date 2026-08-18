@@ -85,7 +85,9 @@ class WindowsFunctionArgRolesTool(
         kb: KnowledgeBase,
         args: WindowsFunctionArgRolesArgs,
     ) -> WindowsFunctionArgRolesResult:
-        sources_path = _resolve_metadata_path(args.sources_path, "data/kg/pe-sources.yaml")
+        sources_path = _resolve_metadata_path(
+            args.sources_path, "data/kg/pe-sources.yaml"
+        )
         entries = _load_source_entries(sources_path)
         source_matches = [
             _source_match(entry)
@@ -192,7 +194,9 @@ def _parse_parameters(c_prototype: str) -> list[dict[str, str]]:
         text = " ".join(text.split())
         if not text:
             continue
-        name_match = re.search(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^]]*\])?$", text)
+        name_match = re.search(
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^]]*\])?$", text
+        )
         if not name_match:
             continue
         name = name_match.group("name")

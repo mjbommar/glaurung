@@ -67,7 +67,9 @@ class _CriticVerdict(BaseModel):
         ..., description="One of: true, partial, false"
     )
     critique: str = Field(
-        ..., min_length=4, max_length=400,
+        ...,
+        min_length=4,
+        max_length=400,
         description="One short sentence naming the most important issue.",
     )
 
@@ -85,6 +87,7 @@ def _resolve_evidence_for_prompt(
         lines.append(f"    agent_quote: {ev.text}")
         if ev.kind == "disasm":
             from .finding_verifier import _parse_va
+
             va = _parse_va(ev.location) or _parse_va(ev.text)
             if va is not None:
                 for af in binary_ctx.functions_by_va.values():
@@ -96,11 +99,11 @@ def _resolve_evidence_for_prompt(
                         break
                 else:
                     lines.append(
-                        f"    resolved: VA 0x{va:x} NOT inside any "
-                        "analyzed function"
+                        f"    resolved: VA 0x{va:x} NOT inside any analyzed function"
                     )
         elif ev.kind == "import":
             import re
+
             m = re.match(r"imports?\[(?P<n>[^\]]+)\]", ev.location)
             sym = m.group("n") if m else ev.location.strip()
             in_table = sym in binary_ctx.imports if binary_ctx.imports else None
@@ -161,10 +164,12 @@ async def critique_finding(
     # thinking burns 2-8K just on thinking before emitting the small
     # _CriticVerdict JSON; 512 truncates inside reasoning).
     critic_settings: dict[str, object] = {
-        "temperature": 0.0, "max_tokens": 4_096,
+        "temperature": 0.0,
+        "max_tokens": 4_096,
     }
     if model_name and model_name.startswith(("openai:", "openai-responses:")):
         from .config import get_config
+
         tier = get_config().openai_service_tier
         if tier and tier != "default":
             critic_settings["extra_body"] = {"service_tier": tier}
@@ -173,6 +178,7 @@ async def critique_finding(
     # failure. tool_calls_limit=0 forbids tool use entirely (defensive
     # if a future critic prompt accidentally tempts the agent).
     from .usage_limits import build_usage_limits
+
     critic_usage_limits = build_usage_limits(
         model_name=model_name,
         request_limit=2,
@@ -187,8 +193,11 @@ async def critique_finding(
     # F4: cost telemetry.
     try:
         from .usage_tracker import get_tracker
+
         get_tracker().record(
-            result, model=model_name, source="finding_critic",
+            result,
+            model=model_name,
+            source="finding_critic",
         )
     except Exception:  # pragma: no cover
         pass
@@ -234,6 +243,7 @@ async def critique_report(
     """
     if binary_ctx is None:
         from .finding_verifier import _BinaryContext
+
         binary_ctx = _BinaryContext.build(report.binary_path)
 
     for finding in report.findings:
@@ -245,9 +255,7 @@ async def critique_report(
         ):
             first_issue = finding.verification_issues[0]
             finding.evidence_supports_claim = "false"
-            finding.critique = (
-                f"skipped (L4 verifier already flagged): {first_issue}"
-            )
+            finding.critique = f"skipped (L4 verifier already flagged): {first_issue}"
             continue
         try:
             await critique_finding(finding, binary_ctx, model_name=model_name)

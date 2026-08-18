@@ -97,7 +97,9 @@ class WindowsEmitValidationHarnessTemplateTool(
     ) -> WindowsEmitValidationHarnessTemplateResult:
         template = _build_template(args)
         if args.output_dir:
-            template.output_files = _write_template_files(Path(args.output_dir), template)
+            template.output_files = _write_template_files(
+                Path(args.output_dir), template
+            )
 
         evidence_node_id = None
         if args.add_to_kb:
@@ -188,12 +190,17 @@ def _harness_strategy(
         strategy.append(f"{recipe.trigger_kind}: " + "; ".join(recipe.setup_steps[:3]))
     if plan is not None:
         strategy.extend(plan.harness_strategy)
-    if packet.component_profile is not None and packet.component_profile.harness_strategy:
+    if (
+        packet.component_profile is not None
+        and packet.component_profile.harness_strategy
+    ):
         strategy.append(packet.component_profile.harness_strategy)
     strategy.extend(
         step
         for step in packet.next_validation
-        if any(token in step.lower() for token in ("harness", "ioctl", "alpc", "rpc", "vm"))
+        if any(
+            token in step.lower() for token in ("harness", "ioctl", "alpc", "rpc", "vm")
+        )
     )
     return _dedupe(strategy)
 
@@ -286,10 +293,10 @@ def _skeleton_commands(
         f"$Binary = '{packet.binary}'",
         f"$Entrypoint = '{packet.entrypoint}'",
         f"$Sink = '{packet.sink_symbol}'",
-        "Write-Host \"TODO: verify binary and PDB identity\"",
-        "Write-Host \"TODO: run component-specific trigger\"",
-        "Write-Host \"TODO: copy KDNET transcript, serial log, stdout, stderr, and dumps\"",
-        "Write-Host \"TODO: compute SHA256 for every required artifact\"",
+        'Write-Host "TODO: verify binary and PDB identity"',
+        'Write-Host "TODO: run component-specific trigger"',
+        'Write-Host "TODO: copy KDNET transcript, serial log, stdout, stderr, and dumps"',
+        'Write-Host "TODO: compute SHA256 for every required artifact"',
     ]
     if plan is not None:
         commands.insert(5, f"$Snapshot = '{plan.snapshot_name}'")
@@ -321,7 +328,9 @@ def _blockers(
     if plan is None:
         blockers.append("VM validation plan is missing")
     elif plan.blockers:
-        blockers.append("VM validation plan has blockers: " + "; ".join(plan.blockers[:6]))
+        blockers.append(
+            "VM validation plan has blockers: " + "; ".join(plan.blockers[:6])
+        )
     if mapping is not None:
         if mapping.mapping_blockers:
             blockers.append(
@@ -336,7 +345,9 @@ def _blockers(
     if not artifacts:
         blockers.append("runtime artifact requirements are missing")
     if recipe is not None and recipe.known_blockers:
-        blockers.append("harness recipe has known blockers: " + "; ".join(recipe.known_blockers[:6]))
+        blockers.append(
+            "harness recipe has known blockers: " + "; ".join(recipe.known_blockers[:6])
+        )
     return _dedupe(blockers)
 
 
@@ -403,7 +414,9 @@ def _write_template_files(
     readme = output_dir / "README.md"
     script = output_dir / "run-validation-template.ps1"
     readme.write_text(template.markdown, encoding="utf-8")
-    script.write_text("\n".join(template.skeleton_commands).rstrip() + "\n", encoding="utf-8")
+    script.write_text(
+        "\n".join(template.skeleton_commands).rstrip() + "\n", encoding="utf-8"
+    )
     return [str(readme), str(script)]
 
 

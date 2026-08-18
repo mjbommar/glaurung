@@ -84,7 +84,7 @@ class NameStringLiteralArgs(BaseModel):
     use_sites: List[str] = Field(
         default_factory=list,
         description="Optional — pseudocode snippets where the string is used. "
-                    "Help the LLM name format arguments semantically.",
+        "Help the LLM name format arguments semantically.",
     )
     use_llm: bool = True
 
@@ -103,7 +103,7 @@ class NamedString(BaseModel):
     format_args: List[FormatArgument] = Field(
         default_factory=list,
         description="Positional format arguments when text is a template; "
-                    "empty when the string is static.",
+        "empty when the string is static.",
     )
     is_template: bool = False
     confidence: float = Field(ge=0.0, le=1.0)
@@ -133,7 +133,7 @@ def _heuristic(text: str) -> NamedString:
                     name=f"arg{i}",
                     c_type=ctype,
                     rationale=f"from '%{m.group('length') or ''}{m.group('spec')}' "
-                              "token width/type",
+                    "token width/type",
                 )
             )
         return NamedString(
@@ -168,9 +168,7 @@ _SYSTEM_PROMPT = (
 def _build_prompt(text: str, use_sites: List[str]) -> str:
     parts = [f"String: {text!r}"]
     if use_sites:
-        parts.append(
-            "Call sites:\n" + "\n".join(f"  - {s}" for s in use_sites[:5])
-        )
+        parts.append("Call sites:\n" + "\n".join(f"  - {s}" for s in use_sites[:5]))
     parts.append(
         "Give it a SCREAMING_SNAKE_CASE name. If it is a template, name "
         "each positional argument semantically and give its C type."
@@ -178,17 +176,15 @@ def _build_prompt(text: str, use_sites: List[str]) -> str:
     return "\n\n".join(parts)
 
 
-class NameStringLiteralTool(
-    MemoryTool[NameStringLiteralArgs, NameStringLiteralResult]
-):
+class NameStringLiteralTool(MemoryTool[NameStringLiteralArgs, NameStringLiteralResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="name_string_literal",
                 description="Propose a SCREAMING_SNAKE_CASE symbol name for "
-                            "a string literal and, when it is a printf "
-                            "template, semantically name and type each "
-                            "positional argument.",
+                "a string literal and, when it is a printf "
+                "template, semantically name and type each "
+                "positional argument.",
                 tags=("llm", "strings", "layer0"),
             ),
             NameStringLiteralArgs,
@@ -215,9 +211,7 @@ class NameStringLiteralTool(
             fallback=lambda: heur,
         )
         source = "heuristic" if named is heur else "llm"
-        return NameStringLiteralResult(
-            text=args.text, named=named, source=source
-        )
+        return NameStringLiteralResult(text=args.text, named=named, source=source)
 
 
 def build_tool() -> MemoryTool[NameStringLiteralArgs, NameStringLiteralResult]:

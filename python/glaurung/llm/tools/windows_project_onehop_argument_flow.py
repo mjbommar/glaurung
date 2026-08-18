@@ -21,7 +21,9 @@ from .windows_project_onehop_sink_chains import (
 
 
 class WindowsProjectOnehopArgumentFlowArgs(BaseModel):
-    binary_path: str = Field(..., description="Path to the PE binary backing the project.")
+    binary_path: str = Field(
+        ..., description="Path to the PE binary backing the project."
+    )
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
     sinks_path: str | None = Field(
         None,
@@ -44,7 +46,9 @@ class WindowsProjectOnehopArgumentFlowArgs(BaseModel):
         None,
         description="Optional helper function name used when helper_function_va is absent.",
     )
-    sink_symbol: str | None = Field(None, description="Optional helper-local sink symbol.")
+    sink_symbol: str | None = Field(
+        None, description="Optional helper-local sink symbol."
+    )
     sink_kind: str | None = Field(None, description="Optional ASB sink kind filter.")
     source_arg: str | None = Field(
         None,
@@ -235,13 +239,19 @@ def _flows_for_chain(
 ) -> list[WindowsProjectOnehopArgumentFlow]:
     out: list[WindowsProjectOnehopArgumentFlow] = []
     for helper_arg in helper_args:
-        if args.source_arg_index is not None and helper_arg.index != args.source_arg_index:
+        if (
+            args.source_arg_index is not None
+            and helper_arg.index != args.source_arg_index
+        ):
             continue
         if args.source_arg and not _argument_matches(args.source_arg, helper_arg):
             continue
         expected = f"caller_arg{helper_arg.index}"
         for sink_arg in sink_args:
-            if args.sink_arg_index is not None and sink_arg.index != args.sink_arg_index:
+            if (
+                args.sink_arg_index is not None
+                and sink_arg.index != args.sink_arg_index
+            ):
                 continue
             if sink_arg.expression != expected:
                 continue

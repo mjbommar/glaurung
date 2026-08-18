@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # from any subtree of a repo that has a .env file Just Works.
 try:
     from dotenv import find_dotenv, load_dotenv  # type: ignore
+
     _dotenv_path = find_dotenv(usecwd=True)
     if _dotenv_path:
         load_dotenv(_dotenv_path, override=False)
@@ -69,7 +70,7 @@ class LLMConfig:
     # windows; the request_limit fail-fast cap is the new default.
     #
     # Override via env (one-off) or per-call (build_usage_limits(...)).
-    default_request_limit: int = 12         # max tool-turns per Agent.run()
+    default_request_limit: int = 12  # max tool-turns per Agent.run()
     default_input_tokens_limit: int = 400_000
     default_total_tokens_limit: int = 500_000
     default_max_output_tokens: int = 32_768

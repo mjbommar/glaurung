@@ -404,6 +404,7 @@ class IterativeRefinementAgent:
         # each iteration gets its own pydantic-ai request_limit budget.
         from pydantic_ai.settings import ModelSettings
         from ..usage_limits import build_usage_limits
+
         model_kwargs = params.to_model_kwargs(model_name=self.model)
         run_kwargs: dict[str, Any] = {
             "deps": context,
@@ -421,8 +422,10 @@ class IterativeRefinementAgent:
         # F4: session-wide cost telemetry.
         try:
             from ..usage_tracker import get_tracker
+
             get_tracker().record(
-                result, model=self.model or "test",
+                result,
+                model=self.model or "test",
                 source="iterative_refinement",
             )
         except Exception:  # pragma: no cover

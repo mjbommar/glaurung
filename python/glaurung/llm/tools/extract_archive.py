@@ -37,8 +37,18 @@ from .base import MemoryTool, ToolMeta
 
 
 ArchiveFormat = Literal[
-    "zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gz", "bz2", "xz",
-    "7z", "rar", "zstd", "unknown",
+    "zip",
+    "tar",
+    "tar.gz",
+    "tar.bz2",
+    "tar.xz",
+    "gz",
+    "bz2",
+    "xz",
+    "7z",
+    "rar",
+    "zstd",
+    "unknown",
 ]
 
 
@@ -129,16 +139,14 @@ class EnumerateArchiveResult(BaseModel):
     total_uncompressed_size: int
 
 
-class EnumerateArchiveTool(
-    MemoryTool[EnumerateArchiveArgs, EnumerateArchiveResult]
-):
+class EnumerateArchiveTool(MemoryTool[EnumerateArchiveArgs, EnumerateArchiveResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="enumerate_archive",
                 description="List entries in a zip / tar / gz / bz2 / xz / "
-                            "7z / zstd archive without extracting bodies. "
-                            "Reports per-entry size and encryption status.",
+                "7z / zstd archive without extracting bodies. "
+                "Reports per-entry size and encryption status.",
                 tags=("extract", "container", "layer1"),
             ),
             EnumerateArchiveArgs,
@@ -174,8 +182,10 @@ class EnumerateArchiveTool(
         elif fmt in ("tar", "tar.gz", "tar.bz2", "tar.xz"):
             try:
                 mode = {
-                    "tar": "r:", "tar.gz": "r:gz",
-                    "tar.bz2": "r:bz2", "tar.xz": "r:xz",
+                    "tar": "r:",
+                    "tar.gz": "r:gz",
+                    "tar.bz2": "r:bz2",
+                    "tar.xz": "r:xz",
                 }[fmt]
                 with tarfile.open(path, mode) as tf:
                     for m in tf.getmembers():
@@ -198,7 +208,10 @@ class EnumerateArchiveTool(
                     body = f.read()
                 entries.append(
                     ArchiveEntry(
-                        name=path.stem, size=len(body), offset=0, is_dir=False,
+                        name=path.stem,
+                        size=len(body),
+                        offset=0,
+                        is_dir=False,
                     )
                 )
                 total = len(body)
@@ -230,7 +243,7 @@ class ExtractArchiveEntryArgs(BaseModel):
     out_path: Optional[str] = Field(
         None,
         description="Output file path. When None, write to a temp file and "
-                    "return its path.",
+        "return its path.",
     )
 
 
@@ -247,7 +260,7 @@ class ExtractArchiveEntryTool(
             ToolMeta(
                 name="extract_archive_entry",
                 description="Extract one named entry from an archive to disk. "
-                            "Streams to a temp file when out_path is None.",
+                "Streams to a temp file when out_path is None.",
                 tags=("extract", "container", "layer1"),
             ),
             ExtractArchiveEntryArgs,
@@ -268,15 +281,14 @@ class ExtractArchiveEntryTool(
             # going. The bytes_written=0 result is the "no extraction"
             # signal.
             return ExtractArchiveEntryResult(
-                extracted_to="", bytes_written=0,
+                extracted_to="",
+                bytes_written=0,
             )
         if args.out_path:
             out = Path(args.out_path)
             out.parent.mkdir(parents=True, exist_ok=True)
         else:
-            tmp = tempfile.NamedTemporaryFile(
-                delete=False, prefix="glaurung_extract_"
-            )
+            tmp = tempfile.NamedTemporaryFile(delete=False, prefix="glaurung_extract_")
             out = Path(tmp.name)
             tmp.close()
 
@@ -286,8 +298,10 @@ class ExtractArchiveEntryTool(
                     body = src.read()
         elif fmt in ("tar", "tar.gz", "tar.bz2", "tar.xz"):
             mode = {
-                "tar": "r:", "tar.gz": "r:gz",
-                "tar.bz2": "r:bz2", "tar.xz": "r:xz",
+                "tar": "r:",
+                "tar.gz": "r:gz",
+                "tar.bz2": "r:bz2",
+                "tar.xz": "r:xz",
             }[fmt]
             with tarfile.open(path, mode) as tf:
                 m = tf.getmember(args.entry_name)
@@ -305,7 +319,8 @@ class ExtractArchiveEntryTool(
 
         out.write_bytes(body)
         return ExtractArchiveEntryResult(
-            extracted_to=str(out), bytes_written=len(body),
+            extracted_to=str(out),
+            bytes_written=len(body),
         )
 
 
@@ -353,16 +368,14 @@ def _safe_join(base: Path, name: str) -> Optional[Path]:
     return target
 
 
-class ExtractArchiveAllTool(
-    MemoryTool[ExtractArchiveAllArgs, ExtractArchiveAllResult]
-):
+class ExtractArchiveAllTool(MemoryTool[ExtractArchiveAllArgs, ExtractArchiveAllResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="extract_archive_all",
                 description="Extract every entry of an archive into out_dir, "
-                            "with bounds on file count and total bytes. "
-                            "Refuses zip-slip / path-traversal entries.",
+                "with bounds on file count and total bytes. "
+                "Refuses zip-slip / path-traversal entries.",
                 tags=("extract", "container", "layer1"),
             ),
             ExtractArchiveAllArgs,
@@ -419,8 +432,10 @@ class ExtractArchiveAllTool(
                 pass
         elif fmt in ("tar", "tar.gz", "tar.bz2", "tar.xz"):
             mode = {
-                "tar": "r:", "tar.gz": "r:gz",
-                "tar.bz2": "r:bz2", "tar.xz": "r:xz",
+                "tar": "r:",
+                "tar.gz": "r:gz",
+                "tar.bz2": "r:bz2",
+                "tar.xz": "r:xz",
             }[fmt]
             try:
                 with tarfile.open(path, mode) as tf:
@@ -485,16 +500,14 @@ class RecursiveUnpackResult(BaseModel):
     truncated: bool = False
 
 
-class RecursiveUnpackTool(
-    MemoryTool[RecursiveUnpackArgs, RecursiveUnpackResult]
-):
+class RecursiveUnpackTool(MemoryTool[RecursiveUnpackArgs, RecursiveUnpackResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="recursive_unpack",
                 description="Recursively unpack archives until every file is "
-                            "a non-archive. Bounded by max_depth and "
-                            "max_total_bytes to defuse zip bombs.",
+                "a non-archive. Bounded by max_depth and "
+                "max_total_bytes to defuse zip bombs.",
                 tags=("extract", "container", "layer1"),
             ),
             RecursiveUnpackArgs,
@@ -538,7 +551,8 @@ class RecursiveUnpackTool(
 
             sub_dir = out_root / sub / f"depth_{depth}"
             inner = ExtractArchiveAllTool().run(
-                ctx, kb,
+                ctx,
+                kb,
                 ExtractArchiveAllArgs(
                     path=str(cur_path),
                     out_dir=str(sub_dir),
@@ -571,7 +585,5 @@ class RecursiveUnpackTool(
         )
 
 
-def build_recursive_unpack() -> MemoryTool[
-    RecursiveUnpackArgs, RecursiveUnpackResult
-]:
+def build_recursive_unpack() -> MemoryTool[RecursiveUnpackArgs, RecursiveUnpackResult]:
     return RecursiveUnpackTool()

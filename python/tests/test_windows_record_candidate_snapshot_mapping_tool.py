@@ -193,7 +193,9 @@ def test_windows_record_candidate_snapshot_mapping_ready_with_inventory_and_bund
     assert mapping.mapping_blockers == []
     assert mapping.runtime_blockers == []
     assert any("candidate_id matches" in item for item in mapping.mapping_evidence)
-    assert any("inventory build_label matches" in item for item in mapping.mapping_evidence)
+    assert any(
+        "inventory build_label matches" in item for item in mapping.mapping_evidence
+    )
     assert result.evidence_node_id is not None
     assert any(
         node.kind == NodeKind.evidence
@@ -213,7 +215,9 @@ def test_windows_record_candidate_snapshot_mapping_blocks_mismatches(
         ctx,
         ctx.kb,
         tool.input_model(
-            candidate_packet=_packet(candidate_id="candidate-1", build_label="wrong-build"),
+            candidate_packet=_packet(
+                candidate_id="candidate-1", build_label="wrong-build"
+            ),
             validation_plan=_plan(candidate_id="other-candidate"),
             validation_inventory_path=str(_write_inventory(tmp_path)),
             require_artifact_bundle=True,
@@ -223,9 +227,16 @@ def test_windows_record_candidate_snapshot_mapping_blocks_mismatches(
     mapping = result.mapping
     assert mapping.mapping_confidence == "blocked"
     assert mapping.ready_for_runtime_validation is False
-    assert any("candidate_id mismatch" in blocker for blocker in mapping.mapping_blockers)
-    assert any("build label mismatch" in blocker for blocker in mapping.mapping_blockers)
-    assert any("ready artifact bundle is required" in blocker for blocker in mapping.mapping_blockers)
+    assert any(
+        "candidate_id mismatch" in blocker for blocker in mapping.mapping_blockers
+    )
+    assert any(
+        "build label mismatch" in blocker for blocker in mapping.mapping_blockers
+    )
+    assert any(
+        "ready artifact bundle is required" in blocker
+        for blocker in mapping.mapping_blockers
+    )
 
 
 def test_windows_record_candidate_snapshot_mapping_keeps_runtime_blockers_separate(

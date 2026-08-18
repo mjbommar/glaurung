@@ -28,9 +28,7 @@ from glaurung.llm.kb.binary_diff import (
 from glaurung.llm.kb.structural_fingerprint import FunctionStructure
 
 
-_SWITCHY_V1 = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 _SWITCHY_STRIPPED = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-stripped"
 )
@@ -210,10 +208,12 @@ def test_rematch_picks_best_partner_greedily() -> None:
     # sub_Y_good has Jaccard ~1.0 with sub_X; sub_Y_close has ~0.86.
     structures_b = {
         "sub_Y_good": _mk_structure(
-            ("h1", "h2", "h3", "h4", "h5"), n_blocks=5,
+            ("h1", "h2", "h3", "h4", "h5"),
+            n_blocks=5,
         ),
         "sub_Y_close": _mk_structure(
-            ("h1", "h2", "h3", "h4", "h6"), n_blocks=5,
+            ("h1", "h2", "h3", "h4", "h6"),
+            n_blocks=5,
         ),
     }
 
@@ -295,12 +295,17 @@ def test_switchy_stripped_cross_name_collapses_at_least_one_pair() -> None:
     a, b = _need(_SWITCHY_V1), _need(_SWITCHY_STRIPPED)
     with_pass = diff_binaries(str(a), str(b), skip_anonymous=False)
     without_pass = diff_binaries(
-        str(a), str(b), skip_anonymous=False, cross_name_threshold=None,
+        str(a),
+        str(b),
+        skip_anonymous=False,
+        cross_name_threshold=None,
     )
     # The pass MUST find at least one rename.
     assert with_pass.cross_name_matched >= 1
     # And it MUST reduce the unmatched set.
-    assert with_pass.added + with_pass.removed < without_pass.added + without_pass.removed
+    assert (
+        with_pass.added + with_pass.removed < without_pass.added + without_pass.removed
+    )
     # The conservation invariant: matched pairs move one added + one
     # removed into one changed row each.
     assert with_pass.changed - without_pass.changed == with_pass.cross_name_matched

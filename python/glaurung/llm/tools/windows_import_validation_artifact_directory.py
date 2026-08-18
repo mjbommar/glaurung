@@ -105,7 +105,9 @@ class WindowsImportValidationArtifactDirectoryTool(
         bundle = WindowsValidationArtifactBundle(
             candidate_id=args.candidate_id,
             validation_id=(
-                args.validation_plan.validation_id if args.validation_plan is not None else None
+                args.validation_plan.validation_id
+                if args.validation_plan is not None
+                else None
             ),
             execution_status=args.execution_status,
             artifact_count=len(artifacts),
@@ -199,7 +201,12 @@ def _classify_artifact(path: Path, root: Path) -> WindowsValidationArtifactKind:
         return "stock_transcript"
     if _has_part(path, root, "current"):
         return "current_transcript"
-    if "sha256" in rel or "manifest" in rel or "note" in rel or suffix in {".md", ".json"}:
+    if (
+        "sha256" in rel
+        or "manifest" in rel
+        or "note" in rel
+        or suffix in {".md", ".json"}
+    ):
         return "operator_note"
     if suffix in {".log", ".txt"}:
         return "harness_stdout"
@@ -232,12 +239,17 @@ def _runtime_blockers(
     artifacts: list[WindowsValidationArtifact],
 ) -> list[str]:
     blockers: list[str] = []
-    if args.validation_plan is not None and args.validation_plan.candidate_id != args.candidate_id:
+    if (
+        args.validation_plan is not None
+        and args.validation_plan.candidate_id != args.candidate_id
+    ):
         blockers.append(
             "validation plan candidate_id does not match artifact directory candidate_id"
         )
     if args.execution_status in {"not_run", "partial", "inconclusive"}:
-        blockers.append(f"validation execution is not complete: {args.execution_status}")
+        blockers.append(
+            f"validation execution is not complete: {args.execution_status}"
+        )
     if not artifacts:
         blockers.append("no runtime artifacts were imported")
     if missing_required:

@@ -63,7 +63,9 @@ def test_cfg_db_persists_basic_blocks_and_edges(
             None,
         )
 
-    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
+    monkeypatch.setattr(
+        g.analysis, "analyze_functions_path", fake_analyze_functions_path
+    )
     pe = tmp_path / "driver.sys"
     pe.write_bytes(b"MZ")
     project_path = tmp_path / "driver.glaurung"
@@ -73,10 +75,15 @@ def test_cfg_db_persists_basic_blocks_and_edges(
         assert cfg_db.index_cfg(project, str(pe)) == 3
         assert cfg_db.is_indexed(project)
         assert cfg_db.cfg_counts(project).edge_count == 2
-        assert project._conn.execute(
-            "SELECT block_id FROM basic_blocks WHERE is_entry = 1"
-        ).fetchone()[0] == "entry"
-        assert project._conn.execute("SELECT COUNT(*) FROM cfg_edges").fetchone()[0] == 2
+        assert (
+            project._conn.execute(
+                "SELECT block_id FROM basic_blocks WHERE is_entry = 1"
+            ).fetchone()[0]
+            == "entry"
+        )
+        assert (
+            project._conn.execute("SELECT COUNT(*) FROM cfg_edges").fetchone()[0] == 2
+        )
         assert cfg_db.index_cfg(project, str(pe)) == 3
     finally:
         project.close()
@@ -103,7 +110,9 @@ def test_cfg_db_precomputes_dominance_summaries(
             None,
         )
 
-    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
+    monkeypatch.setattr(
+        g.analysis, "analyze_functions_path", fake_analyze_functions_path
+    )
     pe = tmp_path / "driver.sys"
     pe.write_bytes(b"MZ")
     project_path = tmp_path / "driver.glaurung"
@@ -158,7 +167,9 @@ def test_cfg_db_persists_branch_condition_facts(
             ]
         return []
 
-    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
+    monkeypatch.setattr(
+        g.analysis, "analyze_functions_path", fake_analyze_functions_path
+    )
     monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
     pe = tmp_path / "driver.sys"
     pe.write_bytes(b"MZ")
@@ -218,7 +229,9 @@ def test_cfg_db_persists_arithmetic_flag_branch_facts(
             ]
         return []
 
-    monkeypatch.setattr(g.analysis, "analyze_functions_path", fake_analyze_functions_path)
+    monkeypatch.setattr(
+        g.analysis, "analyze_functions_path", fake_analyze_functions_path
+    )
     monkeypatch.setattr(g.disasm, "disassemble_window_at", fake_disassemble_window_at)
     pe = tmp_path / "driver.sys"
     pe.write_bytes(b"MZ")

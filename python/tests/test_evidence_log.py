@@ -29,9 +29,10 @@ def test_record_get_round_trip(tmp_path: Path) -> None:
     cid = xref_db.record_evidence(
         kb,
         tool="view_hex",
-        args={"va": 0x12d0, "length": 32},
+        args={"va": 0x12D0, "length": 32},
         summary="hex dump @main entry",
-        va_start=0x12d0, va_end=0x12d0 + 32,
+        va_start=0x12D0,
+        va_end=0x12D0 + 32,
         output={"bytes_hex": "55488..."},
     )
     assert cid >= 1
@@ -39,10 +40,10 @@ def test_record_get_round_trip(tmp_path: Path) -> None:
     rec = xref_db.get_evidence(kb, cid)
     assert rec is not None
     assert rec.tool == "view_hex"
-    assert rec.args["va"] == 0x12d0
+    assert rec.args["va"] == 0x12D0
     assert rec.summary == "hex dump @main entry"
-    assert rec.va_start == 0x12d0
-    assert rec.va_end == 0x12d0 + 32
+    assert rec.va_start == 0x12D0
+    assert rec.va_end == 0x12D0 + 32
     assert rec.output and rec.output["bytes_hex"].startswith("55")
     kb.close()
 
@@ -56,7 +57,10 @@ def test_cite_ids_are_monotonic(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     ids = [
         xref_db.record_evidence(
-            kb, tool="t", args={}, summary=f"row {i}",
+            kb,
+            tool="t",
+            args={},
+            summary=f"row {i}",
         )
         for i in range(5)
     ]
@@ -88,15 +92,26 @@ def test_list_evidence_filters_by_va(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     xref_db.record_evidence(
-        kb, tool="t", args={}, summary="covers main",
-        va_start=0x1000, va_end=0x2000,
+        kb,
+        tool="t",
+        args={},
+        summary="covers main",
+        va_start=0x1000,
+        va_end=0x2000,
     )
     xref_db.record_evidence(
-        kb, tool="t", args={}, summary="covers init",
-        va_start=0x3000, va_end=0x3100,
+        kb,
+        tool="t",
+        args={},
+        summary="covers init",
+        va_start=0x3000,
+        va_end=0x3100,
     )
     xref_db.record_evidence(
-        kb, tool="t", args={}, summary="whole-file",
+        kb,
+        tool="t",
+        args={},
+        summary="whole-file",
         # no va_start → matches every va query
     )
 
@@ -113,7 +128,9 @@ def test_render_markdown_compact(tmp_path: Path) -> None:
     db = tmp_path / "ev.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     cid = xref_db.record_evidence(
-        kb, tool="scan_until_byte", args={"file_offset": 0x100},
+        kb,
+        tool="scan_until_byte",
+        args={"file_offset": 0x100},
         summary="found null at offset 0x150",
         file_offset=0x150,
     )
@@ -131,10 +148,12 @@ def test_rename_function_audited_records_evidence(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     # Pre-populate function_names so we have a "before" name to rename.
-    xref_db.set_function_name(kb, 0x12d0, "sub_12d0", set_by="analyzer")
+    xref_db.set_function_name(kb, 0x12D0, "sub_12d0", set_by="analyzer")
 
     cite_id, new = xref_db.set_function_name_audited(
-        kb, 0x12d0, "parse_request",
+        kb,
+        0x12D0,
+        "parse_request",
         set_by="manual",
         rationale="calls recv() then strchr('\\n')",
     )
@@ -150,7 +169,7 @@ def test_rename_function_audited_records_evidence(tmp_path: Path) -> None:
     assert rec.args["old_name"] == "sub_12d0"
     assert rec.args["new_name"] == "parse_request"
     assert rec.args["rationale"]
-    assert rec.va_start == 0x12d0
+    assert rec.va_start == 0x12D0
     kb.close()
 
 
@@ -160,14 +179,16 @@ def test_set_comment_audited_records_evidence(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     cite_id = xref_db.set_comment_audited(
-        kb, va=0x12cf, body="stack canary save",
+        kb,
+        va=0x12CF,
+        body="stack canary save",
     )
     rec = xref_db.get_evidence(kb, cite_id)
     assert rec is not None
     assert rec.tool == "set_comment"
     assert rec.args["body"] == "stack canary save"
     # Underlying comment table also got the row.
-    assert xref_db.get_comment(kb, 0x12cf) == "stack canary save"
+    assert xref_db.get_comment(kb, 0x12CF) == "stack canary save"
     kb.close()
 
 
@@ -180,8 +201,11 @@ def test_args_complex_types_round_trip(tmp_path: Path) -> None:
     args = {"pattern": "48 8b ?? f8", "matches": [{"va": 0x1234, "off": 0x100}]}
     output = {"hits": 3, "samples": ["abc", "def"]}
     cid = xref_db.record_evidence(
-        kb, tool="search_byte_pattern",
-        args=args, summary="found 3 hits", output=output,
+        kb,
+        tool="search_byte_pattern",
+        args=args,
+        summary="found 3 hits",
+        output=output,
     )
     rec = xref_db.get_evidence(kb, cid)
     assert rec is not None

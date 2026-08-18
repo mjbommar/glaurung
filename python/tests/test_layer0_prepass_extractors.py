@@ -120,18 +120,14 @@ def test_extract_strings_handles_no_strings():
 
 
 def test_extract_constants_skips_trivial_set():
-    pseudo = (
-        "x = 0x0 + 0x1 + 0x4 + 0x8 + 0x10 + 0x40 + 0x100 + 0x1000 + 0x4002"
-    )
+    pseudo = "x = 0x0 + 0x1 + 0x4 + 0x8 + 0x10 + 0x40 + 0x100 + 0x1000 + 0x4002"
     got = _extract_constants(pseudo)
     # Only 0x4002 survives -- everything else is in _TRIVIAL_CONSTANTS.
     assert got == [0x4002]
 
 
 def test_extract_constants_keeps_unusual_values():
-    pseudo = (
-        "if value == 0xdeadbeef then ret = 0xCAFEBABE else ret = 0x80000003"
-    )
+    pseudo = "if value == 0xdeadbeef then ret = 0xCAFEBABE else ret = 0x80000003"
     got = _extract_constants(pseudo)
     assert 0xDEADBEEF in got
     assert 0xCAFEBABE in got
@@ -218,8 +214,11 @@ def test_layer0_result_to_json_shape():
     )
     r.variables_audit.append(
         Layer0Pair(
-            input="var0", output="fd", source="llm",
-            confidence=0.8, rationale="passed to read()",
+            input="var0",
+            output="fd",
+            source="llm",
+            confidence=0.8,
+            rationale="passed to read()",
         )
     )
     js = r.to_json()

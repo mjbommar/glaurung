@@ -21,7 +21,7 @@ class DecompileFunctionArgs(BaseModel):
     style: str = Field(
         "c",
         description="Rendering style: 'c' for C-like (default) or 'plain' for "
-                    "the register-level form with type annotations.",
+        "the register-level form with type annotations.",
     )
     timeout_ms: int = Field(500, description="Per-function analysis timeout in ms")
     pdb_cache: str = Field(
@@ -40,9 +40,7 @@ class DecompileFunctionResult(BaseModel):
     )
 
 
-class DecompileFunctionTool(
-    MemoryTool[DecompileFunctionArgs, DecompileFunctionResult]
-):
+class DecompileFunctionTool(MemoryTool[DecompileFunctionArgs, DecompileFunctionResult]):
     """Decompile one function and return its pseudocode string."""
 
     MAX_LINES = 400
@@ -52,9 +50,9 @@ class DecompileFunctionTool(
             ToolMeta(
                 name="decompile_function",
                 description="Decompile the function at the given entry VA and "
-                            "return C-like pseudocode. Use style='c' for "
-                            "compact output or 'plain' for register-level "
-                            "detail.",
+                "return C-like pseudocode. Use style='c' for "
+                "compact output or 'plain' for register-level "
+                "detail.",
                 tags=("analysis", "decompiler"),
             ),
             DecompileFunctionArgs,

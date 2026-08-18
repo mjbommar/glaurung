@@ -634,6 +634,7 @@ def _apply_tool_filter(agent, tool_filter: set[str]) -> None:
     refusing to start.
     """
     import logging
+
     log = logging.getLogger(__name__)
     toolset = getattr(agent, "_function_toolset", None)
     if toolset is None:
@@ -650,11 +651,14 @@ def _apply_tool_filter(agent, tool_filter: set[str]) -> None:
             tools.pop(n, None)
         log.debug(
             "tool_filter retained %d/%d tools (dropped %d)",
-            len(tools), len(tools) + len(drop), len(drop),
+            len(tools),
+            len(tools) + len(drop),
+            len(drop),
         )
         return
-    log.warning("tool registry has unexpected shape (%s); filter skipped",
-                type(tools).__name__)
+    log.warning(
+        "tool registry has unexpected shape (%s); filter skipped", type(tools).__name__
+    )
 
 
 def _register_analysis_tools_inner(
@@ -1839,5 +1843,7 @@ def create_memory_agent(
     """
     agent = create_foundation_agent(model=model)
     return register_analysis_tools(
-        agent, model_name=model, tool_filter=tool_filter,
+        agent,
+        model_name=model,
+        tool_filter=tool_filter,
     )

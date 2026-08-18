@@ -44,10 +44,16 @@ def test_strings_xrefs_lists_strings(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "strings-xrefs", str(db), "--binary", str(binary),
-            "--limit", "10",
-        ])
+        rc = cli.run(
+            [
+                "strings-xrefs",
+                str(db),
+                "--binary",
+                str(binary),
+                "--limit",
+                "10",
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     # Header columns visible.
@@ -68,10 +74,15 @@ def test_strings_xrefs_used_only_filter(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "strings-xrefs", str(db), "--binary", str(binary),
-            "--used-only",
-        ])
+        rc = cli.run(
+            [
+                "strings-xrefs",
+                str(db),
+                "--binary",
+                str(binary),
+                "--used-only",
+            ]
+        )
     assert rc == 0
     assert "no strings matched" in buf.getvalue()
 
@@ -108,7 +119,10 @@ def test_strings_xrefs_resolves_seeded_xref(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     xref_db.set_function_name(kb, 0x1110, "use_string_fn", set_by="manual")
     xref_db.add_xref(
-        kb, src_va=0x1234, dst_va=target_va, kind="data_read",
+        kb,
+        src_va=0x1234,
+        dst_va=target_va,
+        kind="data_read",
         src_function_va=0x1110,
     )
     kb.close()
@@ -116,10 +130,17 @@ def test_strings_xrefs_resolves_seeded_xref(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "strings-xrefs", str(db), "--binary", str(binary),
-            "--used-only", "--limit", "20",
-        ])
+        rc = cli.run(
+            [
+                "strings-xrefs",
+                str(db),
+                "--binary",
+                str(binary),
+                "--used-only",
+                "--limit",
+                "20",
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     assert "use_string_fn" in out
@@ -145,22 +166,24 @@ def test_strings_xrefs_can_index_real_pe_data_refs(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "strings-xrefs",
-            str(db),
-            "--binary",
-            str(binary),
-            "--index-data-xrefs",
-            "--used-only",
-            "--limit",
-            "200",
-            "--max-functions",
-            "512",
-            "--timeout-ms",
-            "30000",
-            "--format",
-            "json",
-        ])
+        rc = cli.run(
+            [
+                "strings-xrefs",
+                str(db),
+                "--binary",
+                str(binary),
+                "--index-data-xrefs",
+                "--used-only",
+                "--limit",
+                "200",
+                "--max-functions",
+                "512",
+                "--timeout-ms",
+                "30000",
+                "--format",
+                "json",
+            ]
+        )
     assert rc == 0
     rows = json.loads(buf.getvalue())
     assert any(
@@ -178,10 +201,18 @@ def test_strings_xrefs_json_output(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "strings-xrefs", str(db), "--binary", str(binary),
-            "--limit", "5", "--format", "json",
-        ])
+        rc = cli.run(
+            [
+                "strings-xrefs",
+                str(db),
+                "--binary",
+                str(binary),
+                "--limit",
+                "5",
+                "--format",
+                "json",
+            ]
+        )
     assert rc == 0
     rows = json.loads(buf.getvalue())
     assert isinstance(rows, list)

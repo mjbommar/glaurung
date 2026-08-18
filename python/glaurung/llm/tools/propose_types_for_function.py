@@ -49,7 +49,7 @@ class ProposedSignature(BaseModel):
     signature: str = Field(
         ...,
         description="Full proposed C-style prototype, e.g. "
-                    "'int parse_config(const char *path, size_t len);'",
+        "'int parse_config(const char *path, size_t len);'",
     )
     return_type: str
     parameters: List[ProposedParameter] = Field(default_factory=list)
@@ -63,17 +63,15 @@ class ProposeTypesResult(BaseModel):
     used_llm: bool
 
 
-class ProposeTypesForFunctionTool(
-    MemoryTool[ProposeTypesArgs, ProposeTypesResult]
-):
+class ProposeTypesForFunctionTool(MemoryTool[ProposeTypesArgs, ProposeTypesResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="propose_types_for_function",
                 description="Propose a C-style prototype (return type + "
-                            "parameter types) for the function at `va`, based "
-                            "on its decompilation. Uses the configured LLM by "
-                            "default.",
+                "parameter types) for the function at `va`, based "
+                "on its decompilation. Uses the configured LLM by "
+                "default.",
                 tags=("analysis", "llm", "types"),
             ),
             ProposeTypesArgs,
@@ -166,9 +164,7 @@ class ProposeTypesForFunctionTool(
         except Exception:
             return None
 
-    def _heuristic_signature(
-        self, pseudocode: str, va: int
-    ) -> ProposedSignature:
+    def _heuristic_signature(self, pseudocode: str, va: int) -> ProposedSignature:
         # Try to parse the glaurung header ``fn <name>(arg0: T, ..) -> RT {``.
         import re
 
@@ -198,7 +194,7 @@ class ProposeTypesForFunctionTool(
                             name=name,
                             c_type=_rust_like_to_c(ty),
                             rationale="Inherited from decompiler's type-"
-                                      "recovery pass; no LLM refinement.",
+                            "recovery pass; no LLM refinement.",
                         )
                     )
 
@@ -227,19 +223,21 @@ class ProposeTypesForFunctionTool(
                         name=f"arg{n}",
                         c_type="long",
                         rationale="Read before any write — structural marker "
-                                  "of an incoming parameter register.",
+                        "of an incoming parameter register.",
                     )
                 )
-        sig_str = f"{return_type} sub_{va:x}(" + ", ".join(
-            f"{p.c_type} {p.name}" for p in params
-        ) + ");"
+        sig_str = (
+            f"{return_type} sub_{va:x}("
+            + ", ".join(f"{p.c_type} {p.name}" for p in params)
+            + ");"
+        )
         return ProposedSignature(
             signature=sig_str,
             return_type=return_type,
             parameters=params,
             confidence=0.35,
             rationale="Fallback: heuristic read of the decompiler-emitted "
-                      "header, no LLM input.",
+            "header, no LLM input.",
         )
 
 

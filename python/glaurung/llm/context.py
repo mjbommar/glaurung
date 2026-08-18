@@ -64,7 +64,9 @@ class MemoryContext:
         from .kb.persistent import PersistentKnowledgeBase
 
         kb = PersistentKnowledgeBase.open(
-            db_path, binary_path=file_path, session=session,
+            db_path,
+            binary_path=file_path,
+            session=session,
         )
         return cls(
             file_path=file_path,

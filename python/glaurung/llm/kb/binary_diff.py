@@ -76,13 +76,16 @@ class FunctionFingerprint:
     name: str
     entry_va: int
     size: int
-    body_hash: str        # 16-hex truncated sha256 of primary chunk bytes
-    structural_hash: str  # 16-hex structural fingerprint (see structural_fingerprint.py)
+    body_hash: str  # 16-hex truncated sha256 of primary chunk bytes
+    structural_hash: (
+        str  # 16-hex structural fingerprint (see structural_fingerprint.py)
+    )
 
 
 @dataclass
 class FunctionDiff:
     """One row in the diff result."""
+
     name: str
     status: str  # "same" | "changed" | "added" | "removed"
     a: Optional[FunctionFingerprint] = None
@@ -144,11 +147,15 @@ def fingerprint_function(raw: bytes, func) -> Optional[FunctionFingerprint]:
     valid byte range."""
     try:
         import glaurung as g
+
         rng = func.range
         if rng is None or rng.size == 0:
             return None
         off = g.analysis.va_to_file_offset_path(
-            "", int(rng.start.value), 100_000_000, 100_000_000,
+            "",
+            int(rng.start.value),
+            100_000_000,
+            100_000_000,
         )
     except Exception:
         # Fall back to in-memory translation via the func's chunks; if
@@ -208,7 +215,10 @@ def _fingerprint_via_path(
     if buf is None:
         try:
             off = g.analysis.va_to_file_offset_path(
-                str(binary_path), start_va, 100_000_000, 100_000_000,
+                str(binary_path),
+                start_va,
+                100_000_000,
+                100_000_000,
             )
         except Exception:
             return None
@@ -314,7 +324,10 @@ def diff_binaries(
     """
     import glaurung as g
     from .structural_fingerprint import (
-        FunctionStructure, build_va_table, resolve_iat_map, similarity_score,
+        FunctionStructure,
+        build_va_table,
+        resolve_iat_map,
+        similarity_score,
     )
 
     funcs_a, _ = g.analysis.analyze_functions_path(str(binary_a))
@@ -409,7 +422,8 @@ def diff_binaries(
                 # First-wins for duplicates; usually a cold-section copy.
                 continue
             fp = _fingerprint_via_path(
-                path, f,
+                path,
+                f,
                 iat_by_va=iat_by_va,
                 structures=scratch,
                 data=data if va_table else None,
@@ -431,10 +445,22 @@ def diff_binaries(
         return out_fp, out_struct
 
     idx_a, structures_a = _index(
-        funcs_a, binary_a, iat_a, data_a, va_table_a, disasm_a, pdb_map_a,
+        funcs_a,
+        binary_a,
+        iat_a,
+        data_a,
+        va_table_a,
+        disasm_a,
+        pdb_map_a,
     )
     idx_b, structures_b = _index(
-        funcs_b, binary_b, iat_b, data_b, va_table_b, disasm_b, pdb_map_b,
+        funcs_b,
+        binary_b,
+        iat_b,
+        data_b,
+        va_table_b,
+        disasm_b,
+        pdb_map_b,
     )
 
     diff = BinaryDiff(
@@ -677,7 +703,9 @@ def _rematch_unnamed_by_structure(
     diff.changed += n_matched
 
 
-def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: Optional[str]) -> Dict[int, str]:
+def _resolve_pdb_symbol_map(
+    binary_path: str, pdb_cache: Optional[str]
+) -> Dict[int, str]:
     """Build VA -> PDB public-symbol dict for one binary. Empty when the
     cache is missing or the binary has no matching PDB. Never raises --
     we'd rather diff without PDB names than fail the whole diff."""
@@ -685,6 +713,7 @@ def _resolve_pdb_symbol_map(binary_path: str, pdb_cache: Optional[str]) -> Dict[
         return {}
     try:
         import glaurung as g
+
         return dict(g.symbols.pdb_symbol_map(str(binary_path), str(pdb_cache)))
     except Exception:  # pragma: no cover - best-effort PDB lookup
         return {}
@@ -700,7 +729,9 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
     table. Single-block patches (similarity ≈ 1 - 1/blocks) bubble up
     just below whole-function rewrites (similarity ≈ 0)."""
     lines: List[str] = []
-    lines.append(f"# Binary diff — {Path(diff.binary_a).name} ↔ {Path(diff.binary_b).name}")
+    lines.append(
+        f"# Binary diff — {Path(diff.binary_a).name} ↔ {Path(diff.binary_b).name}"
+    )
     lines.append("")
     lines.append(diff.summary_line())
     if diff.cross_name_matched:
@@ -714,7 +745,9 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
     if diff.changed:
         lines.append("## Changed functions")
         lines.append("")
-        lines.append("| similarity | function | a struct | b struct | a size | b size |")
+        lines.append(
+            "| similarity | function | a struct | b struct | a size | b size |"
+        )
         lines.append("|---:|---|---|---|---:|---:|")
         rows = sorted(
             diff.changed_rows(),
@@ -732,8 +765,7 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
             else:
                 label = f"`{r.name}`"
             lines.append(
-                f"| {sim_str} | {label} | `{sa}` | `{sb}` "
-                f"| {r.a.size} | {r.b.size} |"
+                f"| {sim_str} | {label} | `{sa}` | `{sb}` | {r.a.size} | {r.b.size} |"
             )
         if max_rows > 0 and diff.changed > max_rows:
             lines.append(f"_… {diff.changed - max_rows} more_")
@@ -778,14 +810,17 @@ def to_json(diff: BinaryDiff) -> str:
         "functions_a": diff.functions_a,
         "functions_b": diff.functions_b,
         "summary": {
-            "same": diff.same, "changed": diff.changed,
-            "added": diff.added, "removed": diff.removed,
+            "same": diff.same,
+            "changed": diff.changed,
+            "added": diff.added,
+            "removed": diff.removed,
         },
         "cross_name_matched": diff.cross_name_matched,
         "cross_name_threshold": diff.cross_name_threshold,
         "rows": [
             {
-                "name": r.name, "status": r.status,
+                "name": r.name,
+                "status": r.status,
                 "a": asdict(r.a) if r.a else None,
                 "b": asdict(r.b) if r.b else None,
                 "public_name_pre": r.public_name_pre,

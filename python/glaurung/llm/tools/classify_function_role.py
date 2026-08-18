@@ -77,12 +77,22 @@ def _heuristic(pseudocode: str, proto: Optional[str]) -> RoleLabel:
 
     # Specific-role checks fire before the generic "short = wrapper" rule
     # so that a 3-line network_io function isn't misclassified as wrapper.
-    if any(k in text for k in ("aes_", "sha_", "md5_", "rc4", "chacha", "s_box", "sbox")):
-        return RoleLabel(role="crypto_core", confidence=0.7, rationale="crypto-family identifiers")
+    if any(
+        k in text for k in ("aes_", "sha_", "md5_", "rc4", "chacha", "s_box", "sbox")
+    ):
+        return RoleLabel(
+            role="crypto_core", confidence=0.7, rationale="crypto-family identifiers"
+        )
     if any(k in text for k in ("socket(", "connect(", "sendto(", "recvfrom(", "bind(")):
-        return RoleLabel(role="network_io", confidence=0.7, rationale="socket-family calls")
-    if any(k in text for k in ("fopen(", "fread(", "fwrite(", "open(", "read(", "write(")):
-        return RoleLabel(role="file_io", confidence=0.65, rationale="POSIX file-IO calls")
+        return RoleLabel(
+            role="network_io", confidence=0.7, rationale="socket-family calls"
+        )
+    if any(
+        k in text for k in ("fopen(", "fread(", "fwrite(", "open(", "read(", "write(")
+    ):
+        return RoleLabel(
+            role="file_io", confidence=0.65, rationale="POSIX file-IO calls"
+        )
     if re.search(r"switch\s*\(", text) and text.count("case") >= 3:
         return RoleLabel(
             role="dispatch_table",
@@ -90,9 +100,7 @@ def _heuristic(pseudocode: str, proto: Optional[str]) -> RoleLabel:
             rationale="switch with ≥3 cases",
         )
     if (
-        re.search(
-            r"return\s+\*?\s*\(\s*\w+\s*\+\s*(?:0x[0-9a-f]+|\d+)\s*\)", text
-        )
+        re.search(r"return\s+\*?\s*\(\s*\w+\s*\+\s*(?:0x[0-9a-f]+|\d+)\s*\)", text)
         and len(atoms) <= 5
     ):
         return RoleLabel(
@@ -154,9 +162,9 @@ class ClassifyFunctionRoleTool(
             ToolMeta(
                 name="classify_function_role",
                 description="Assign one function to a small role vocabulary "
-                            "(parser / serializer / validator / crypto_core "
-                            "/ network_io / file_io / dispatch_table / …). "
-                            "Steers rewrite style and naming.",
+                "(parser / serializer / validator / crypto_core "
+                "/ network_io / file_io / dispatch_table / …). "
+                "Steers rewrite style and naming.",
                 tags=("llm", "functions", "layer2"),
             ),
             ClassifyFunctionRoleArgs,
@@ -184,7 +192,5 @@ class ClassifyFunctionRoleTool(
         return ClassifyFunctionRoleResult(label=label, source=source)
 
 
-def build_tool() -> MemoryTool[
-    ClassifyFunctionRoleArgs, ClassifyFunctionRoleResult
-]:
+def build_tool() -> MemoryTool[ClassifyFunctionRoleArgs, ClassifyFunctionRoleResult]:
     return ClassifyFunctionRoleTool()

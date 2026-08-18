@@ -268,8 +268,7 @@ public class Outer {
 
     assert result.success is True
     assert any(
-        repair.kind == "replace_unavailable_anonymous_placeholder"
-        and repair.applied
+        repair.kind == "replace_unavailable_anonymous_placeholder" and repair.applied
         for repair in result.repairs
     )
     repaired = source.read_text(encoding="utf-8")

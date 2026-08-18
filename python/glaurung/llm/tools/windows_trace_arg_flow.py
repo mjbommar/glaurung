@@ -40,7 +40,9 @@ class WindowsTraceArgFlowArgs(BaseModel):
     )
     max_depth: int = Field(2, description="Maximum simple alias depth.")
     max_flows: int = Field(64, description="Maximum call-argument flow hits.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",

@@ -797,8 +797,7 @@ def test_windows_validation_planning_batch_invokes_operation_backlog_packets(
     assert packet.sink_symbol == "RtlCopyMemory"
     assert "destination_range_gate" in packet.required_gates
     assert (
-        result.evidence_bundle.subject.attributes["operation_backlog_packet_count"]
-        == 1
+        result.evidence_bundle.subject.attributes["operation_backlog_packet_count"] == 1
     )
 
 

@@ -48,7 +48,9 @@ class WindowsListOperationSinksArgs(BaseModel):
         description="Optional operation kind filter, e.g. copy, free, completion, lock.",
     )
     max_sinks: int = Field(64, description="Maximum operation hits to return.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
@@ -105,7 +107,10 @@ class WindowsListOperationSinksTool(
         args: WindowsListOperationSinksArgs,
     ) -> WindowsListOperationSinksResult:
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        operations = [_operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)]
+        operations = [
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
+        ]
         operations_by_symbol = _operations_by_symbol(operations)
         text, source, notes = _scan_text(ctx, args)
         calls = _extract_calls(text)

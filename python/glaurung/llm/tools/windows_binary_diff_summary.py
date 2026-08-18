@@ -21,7 +21,9 @@ class WindowsBinaryDiffSummaryArgs(BaseModel):
         None,
         description="Optional status filter: same, changed, added, or removed.",
     )
-    function: str | None = Field(None, description="Optional exact function name filter.")
+    function: str | None = Field(
+        None, description="Optional exact function name filter."
+    )
     name_contains: str | None = Field(
         None,
         description="Optional case-sensitive function-name substring filter.",

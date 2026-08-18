@@ -148,8 +148,15 @@ def kernel_struct_pack_for_role(role: str | None) -> List[StructDef]:
     # matches because the role labels are LLM-emitted strings.
     role_lower = role.lower()
     kernel_markers = (
-        "irp", "wdm", "wdf", "minifilter", "kernel", "driver",
-        "network_io", "fs_op", "ioctl",
+        "irp",
+        "wdm",
+        "wdf",
+        "minifilter",
+        "kernel",
+        "driver",
+        "network_io",
+        "fs_op",
+        "ioctl",
     )
     if any(m in role_lower for m in kernel_markers):
         return list(_PACKS["network_io"])

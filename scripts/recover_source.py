@@ -45,63 +45,89 @@ import glaurung as g
 
 from glaurung.llm.context import MemoryContext, Budgets
 from glaurung.llm.tools.audit_recovered_source import (
-    AuditRecoveredSourceArgs, AuditRecoveredSourceTool, BinaryMetadata,
+    AuditRecoveredSourceArgs,
+    AuditRecoveredSourceTool,
+    BinaryMetadata,
     FunctionSummaryEntry,
 )
 from glaurung.llm.tools.classify_constant import (
-    ClassifyConstantArgs, ClassifyConstantTool,
+    ClassifyConstantArgs,
+    ClassifyConstantTool,
 )
 from glaurung.llm.tools.classify_function_role import (
-    ClassifyFunctionRoleArgs, ClassifyFunctionRoleTool,
+    ClassifyFunctionRoleArgs,
+    ClassifyFunctionRoleTool,
 )
 from glaurung.llm.tools.classify_loop_idiom import (
-    ClassifyLoopIdiomArgs, ClassifyLoopIdiomTool,
+    ClassifyLoopIdiomArgs,
+    ClassifyLoopIdiomTool,
 )
 from glaurung.llm.tools.classify_string_purpose import (
-    ClassifyStringPurposeArgs, ClassifyStringPurposeTool,
+    ClassifyStringPurposeArgs,
+    ClassifyStringPurposeTool,
 )
 from glaurung.llm.tools.cluster_functions_into_modules import (
-    CallEdge, ClusterFunctionsIntoModulesArgs,
-    ClusterFunctionsIntoModulesTool, FunctionSummary,
+    CallEdge,
+    ClusterFunctionsIntoModulesArgs,
+    ClusterFunctionsIntoModulesTool,
+    FunctionSummary,
 )
 from glaurung.llm.tools.explain_rewrite_delta import (
-    ExplainRewriteDeltaArgs, ExplainRewriteDeltaTool,
+    ExplainRewriteDeltaArgs,
+    ExplainRewriteDeltaTool,
 )
 from glaurung.llm.tools.identify_compiler_and_runtime import (
-    IdentifyCompilerArgs, IdentifyCompilerAndRuntimeTool,
+    IdentifyCompilerArgs,
+    IdentifyCompilerAndRuntimeTool,
 )
 from glaurung.llm.tools.infer_build_system import (
-    InferBuildSystemArgs, InferBuildSystemTool, ModuleBuildInfo,
+    InferBuildSystemArgs,
+    InferBuildSystemTool,
+    ModuleBuildInfo,
 )
 from glaurung.llm.tools.infer_function_signature import (
-    CallerSnippet, InferFunctionSignatureArgs, InferFunctionSignatureTool,
+    CallerSnippet,
+    InferFunctionSignatureArgs,
+    InferFunctionSignatureTool,
 )
 from glaurung.llm.tools.name_local_variable import (
-    NameLocalVariableArgs, NameLocalVariableTool,
+    NameLocalVariableArgs,
+    NameLocalVariableTool,
 )
 from glaurung.llm.tools.name_string_literal import (
-    NameStringLiteralArgs, NameStringLiteralTool,
+    NameStringLiteralArgs,
+    NameStringLiteralTool,
 )
 from glaurung.llm.tools.propose_function_name_post_rewrite import (
-    ProposeFunctionNamePostRewriteArgs, ProposeFunctionNamePostRewriteTool,
+    ProposeFunctionNamePostRewriteArgs,
+    ProposeFunctionNamePostRewriteTool,
 )
 from glaurung.llm.tools.reconcile_function_identity import (
-    CandidateName, ReconcileFunctionIdentityArgs, ReconcileFunctionIdentityTool,
+    CandidateName,
+    ReconcileFunctionIdentityArgs,
+    ReconcileFunctionIdentityTool,
 )
 from glaurung.llm.tools.reconcile_global_naming import (
-    IdentifierEntry, ReconcileGlobalNamingArgs, ReconcileGlobalNamingTool,
+    IdentifierEntry,
+    ReconcileGlobalNamingArgs,
+    ReconcileGlobalNamingTool,
 )
 from glaurung.llm.tools.rewrite_function_idiomatic import (
-    RewriteFunctionArgs, RewriteFunctionIdiomaticTool,
+    RewriteFunctionArgs,
+    RewriteFunctionIdiomaticTool,
 )
 from glaurung.llm.tools.synthesize_docstring import (
-    SynthesizeDocstringArgs, SynthesizeDocstringTool,
+    SynthesizeDocstringArgs,
+    SynthesizeDocstringTool,
 )
 from glaurung.llm.tools.verify_semantic_equivalence import (
-    VerifySemanticEquivalenceArgs, VerifySemanticEquivalenceTool,
+    VerifySemanticEquivalenceArgs,
+    VerifySemanticEquivalenceTool,
 )
 from glaurung.llm.tools.write_readme_and_manpage import (
-    CliFlagDoc, ModuleDescription, WriteReadmeAndManpageArgs,
+    CliFlagDoc,
+    ModuleDescription,
+    WriteReadmeAndManpageArgs,
     WriteReadmeAndManpageTool,
 )
 
@@ -116,36 +142,57 @@ CACHE_VERSION = 3  # source post-processing happens at emission, not in cache
 # these functions are inlined copies of libstdc++/libc++ code, not user code,
 # and should become externs rather than part of the recovered tree.
 _STDLIB_PREFIXES = (
-    "_ZSt", "_ZNSt", "_ZNKSt", "_ZN9__gnu_cxx", "_ZNK9__gnu_cxx",
+    "_ZSt",
+    "_ZNSt",
+    "_ZNKSt",
+    "_ZN9__gnu_cxx",
+    "_ZNK9__gnu_cxx",
 )
 
 # Compiler-emitted runtime scaffolding — belongs in crt/, not src/.
-_CRT_FUNCTION_NAMES = frozenset({
-    "_start", "deregister_tm_clones", "register_tm_clones",
-    "__do_global_dtors_aux", "frame_dummy", "_GLOBAL__sub_I_main",
-    "__libc_csu_init", "__libc_csu_fini",
-})
+_CRT_FUNCTION_NAMES = frozenset(
+    {
+        "_start",
+        "deregister_tm_clones",
+        "register_tm_clones",
+        "__do_global_dtors_aux",
+        "frame_dummy",
+        "_GLOBAL__sub_I_main",
+        "__libc_csu_init",
+        "__libc_csu_fini",
+    }
+)
 
 # Names that the linker / runtime resolves by exact symbol — the rewriter
 # is not allowed to rename these even when post-rewrite naming proposes
 # something more descriptive. Without this protection, `main` gets
 # renamed to e.g. `run_greeter_and_sum_args`, the audit reports `main`
 # as missing, and the resulting binary will not link.
-_RESERVED_FUNCTION_NAMES = frozenset({
-    "main", "_start", "_init", "_fini",
-    "__libc_start_main", "__libc_csu_init", "__libc_csu_fini",
-    "__do_global_dtors_aux", "_GLOBAL__sub_I_main",
-    "deregister_tm_clones", "register_tm_clones", "frame_dummy",
-    # Bug S: gfortran's mangled program-unit name. Without this entry
-    # the post-rewrite naming pass renames `MAIN__` → `main` (after
-    # _safe_filename strips trailing underscores) → `fortran_main_program`
-    # (collision-rename to avoid clobbering the real C `main`), and the
-    # gfortran-emitted main() loses its call target. The Bug L audit
-    # called this out as [medium] module_coherence: "renaming MAIN__
-    # to 'hello_program_main' loses the gfortran name-mangling contract
-    # … anything linking against the original mangled symbol will fail."
-    "MAIN__",
-})
+_RESERVED_FUNCTION_NAMES = frozenset(
+    {
+        "main",
+        "_start",
+        "_init",
+        "_fini",
+        "__libc_start_main",
+        "__libc_csu_init",
+        "__libc_csu_fini",
+        "__do_global_dtors_aux",
+        "_GLOBAL__sub_I_main",
+        "deregister_tm_clones",
+        "register_tm_clones",
+        "frame_dummy",
+        # Bug S: gfortran's mangled program-unit name. Without this entry
+        # the post-rewrite naming pass renames `MAIN__` → `main` (after
+        # _safe_filename strips trailing underscores) → `fortran_main_program`
+        # (collision-rename to avoid clobbering the real C `main`), and the
+        # gfortran-emitted main() loses its call target. The Bug L audit
+        # called this out as [medium] module_coherence: "renaming MAIN__
+        # to 'hello_program_main' loses the gfortran name-mangling contract
+        # … anything linking against the original mangled symbol will fail."
+        "MAIN__",
+    }
+)
 
 
 def _log(msg: str) -> None:
@@ -194,79 +241,54 @@ def _is_crt_function(name: str) -> bool:
 # the symbol but does not already declare it.
 _FORTRAN_RUNTIME_PROTOTYPES: Dict[str, str] = {
     # Process-startup helpers (called from gfortran-emitted main()).
-    "_gfortran_set_args":
-        "extern void _gfortran_set_args(int argc, char **argv);",
-    "_gfortran_set_options":
-        "extern void _gfortran_set_options(int n, int *opts);",
+    "_gfortran_set_args": "extern void _gfortran_set_args(int argc, char **argv);",
+    "_gfortran_set_options": "extern void _gfortran_set_options(int n, int *opts);",
     # The gfortran-emitted main() also references the `options[]` array.
     # In the binary it's a LOCAL static (file-scope), not an extern
     # import; Bug W's _emit_file_scope_static_defs synthesises a real
     # definition for it. Keep the name out of the extern registry so
     # the two passes don't fight.
     # The Fortran program unit's mangled name.
-    "MAIN__":
-        "extern void MAIN__(void);",
+    "MAIN__": "extern void MAIN__(void);",
     # libgfortran I/O — the most common runtime calls in any non-trivial
     # Fortran program.
-    "_gfortran_st_write":
-        "extern void _gfortran_st_write(void *dt);",
-    "_gfortran_st_write_done":
-        "extern void _gfortran_st_write_done(void *dt);",
-    "_gfortran_st_read":
-        "extern void _gfortran_st_read(void *dt);",
-    "_gfortran_st_read_done":
-        "extern void _gfortran_st_read_done(void *dt);",
-    "_gfortran_transfer_character":
-        "extern void _gfortran_transfer_character(void *dt, char *s, int len);",
-    "_gfortran_transfer_character_write":
-        "extern void _gfortran_transfer_character_write(void *dt, "
-        "const char *s, int len);",
-    "_gfortran_transfer_integer":
-        "extern void _gfortran_transfer_integer(void *dt, void *p, int kind);",
-    "_gfortran_transfer_integer_write":
-        "extern void _gfortran_transfer_integer_write(void *dt, "
-        "const void *p, int kind);",
-    "_gfortran_transfer_real":
-        "extern void _gfortran_transfer_real(void *dt, void *p, int kind);",
-    "_gfortran_transfer_real_write":
-        "extern void _gfortran_transfer_real_write(void *dt, "
-        "const void *p, int kind);",
-    "_gfortran_transfer_logical":
-        "extern void _gfortran_transfer_logical(void *dt, void *p, int kind);",
-    "_gfortran_transfer_array":
-        "extern void _gfortran_transfer_array(void *dt, void *desc, "
-        "int kind, int charlen);",
+    "_gfortran_st_write": "extern void _gfortran_st_write(void *dt);",
+    "_gfortran_st_write_done": "extern void _gfortran_st_write_done(void *dt);",
+    "_gfortran_st_read": "extern void _gfortran_st_read(void *dt);",
+    "_gfortran_st_read_done": "extern void _gfortran_st_read_done(void *dt);",
+    "_gfortran_transfer_character": "extern void _gfortran_transfer_character(void *dt, char *s, int len);",
+    "_gfortran_transfer_character_write": "extern void _gfortran_transfer_character_write(void *dt, "
+    "const char *s, int len);",
+    "_gfortran_transfer_integer": "extern void _gfortran_transfer_integer(void *dt, void *p, int kind);",
+    "_gfortran_transfer_integer_write": "extern void _gfortran_transfer_integer_write(void *dt, "
+    "const void *p, int kind);",
+    "_gfortran_transfer_real": "extern void _gfortran_transfer_real(void *dt, void *p, int kind);",
+    "_gfortran_transfer_real_write": "extern void _gfortran_transfer_real_write(void *dt, "
+    "const void *p, int kind);",
+    "_gfortran_transfer_logical": "extern void _gfortran_transfer_logical(void *dt, void *p, int kind);",
+    "_gfortran_transfer_array": "extern void _gfortran_transfer_array(void *dt, void *desc, "
+    "int kind, int charlen);",
     # Command-argument intrinsics.
-    "_gfortran_iargc":
-        "extern int _gfortran_iargc(void);",
-    "_gfortran_get_command_argument_i4":
-        "extern void _gfortran_get_command_argument_i4(int *idx, char *buf, "
-        "int unused1, int unused2, int buflen);",
-    "_gfortran_get_command_i4":
-        "extern void _gfortran_get_command_i4(char *buf, int unused1, "
-        "int unused2, int buflen);",
+    "_gfortran_iargc": "extern int _gfortran_iargc(void);",
+    "_gfortran_get_command_argument_i4": "extern void _gfortran_get_command_argument_i4(int *idx, char *buf, "
+    "int unused1, int unused2, int buflen);",
+    "_gfortran_get_command_i4": "extern void _gfortran_get_command_i4(char *buf, int unused1, "
+    "int unused2, int buflen);",
     # String intrinsics.
-    "_gfortran_string_len_trim":
-        "extern int _gfortran_string_len_trim(int buflen, const char *buf);",
-    "_gfortran_string_index":
-        "extern int _gfortran_string_index(int buflen, const char *buf, "
-        "int sublen, const char *sub, int back);",
-    "_gfortran_concat_string":
-        "extern void _gfortran_concat_string(int destlen, char *dest, "
-        "int alen, const char *a, int blen, const char *b);",
-    "_gfortran_compare_string":
-        "extern int _gfortran_compare_string(int alen, const char *a, "
-        "int blen, const char *b);",
+    "_gfortran_string_len_trim": "extern int _gfortran_string_len_trim(int buflen, const char *buf);",
+    "_gfortran_string_index": "extern int _gfortran_string_index(int buflen, const char *buf, "
+    "int sublen, const char *sub, int back);",
+    "_gfortran_concat_string": "extern void _gfortran_concat_string(int destlen, char *dest, "
+    "int alen, const char *a, int blen, const char *b);",
+    "_gfortran_compare_string": "extern int _gfortran_compare_string(int alen, const char *a, "
+    "int blen, const char *b);",
     # Program-control / error path.
-    "_gfortran_stop_string":
-        "extern void _gfortran_stop_string(const char *s, int len, "
-        "int quiet) __attribute__((noreturn));",
-    "_gfortran_error_stop_string":
-        "extern void _gfortran_error_stop_string(const char *s, int len, "
-        "int quiet) __attribute__((noreturn));",
-    "_gfortran_runtime_error":
-        "extern void _gfortran_runtime_error(const char *fmt, ...) "
-        "__attribute__((noreturn));",
+    "_gfortran_stop_string": "extern void _gfortran_stop_string(const char *s, int len, "
+    "int quiet) __attribute__((noreturn));",
+    "_gfortran_error_stop_string": "extern void _gfortran_error_stop_string(const char *s, int len, "
+    "int quiet) __attribute__((noreturn));",
+    "_gfortran_runtime_error": "extern void _gfortran_runtime_error(const char *fmt, ...) "
+    "__attribute__((noreturn));",
     # Math / numeric — added on demand; keep this list focused on the
     # symbols actually seen in samples/ + Bug L audit.
 }
@@ -452,10 +474,12 @@ def _module_uses_cxx_runtime(body: str) -> bool:
     """
     if not body:
         return False
-    return bool(re.search(
-        r"\b(?:std__string|std__vector_string|operator_delete)\b",
-        body,
-    ))
+    return bool(
+        re.search(
+            r"\b(?:std__string|std__vector_string|operator_delete)\b",
+            body,
+        )
+    )
 
 
 def _module_uses_gfortran_dt(body: str) -> bool:
@@ -533,24 +557,21 @@ _FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS: Dict[str, str] = {
     # Runtime options array passed to _gfortran_set_options. Seven
     # int32 entries; values reflect the gfortran -O2 defaults observed
     # in samples/binaries/.../hello-gfortran-O2 (.rodata @ 0x20d0).
-    "options":
-        "/* Bug W: gfortran's compile-time options array (LOCAL "
-        "static in the binary). 7 int entries encode language "
-        "standard / range-check / backtrace flags. */\n"
-        "static int options[7] = {\n"
-        "    0x844, 0x0fff, 0x0, 0x1, 0x1, 0x0, 0x1f,\n"
-        "};",
+    "options": "/* Bug W: gfortran's compile-time options array (LOCAL "
+    "static in the binary). 7 int entries encode language "
+    "standard / range-check / backtrace flags. */\n"
+    "static int options[7] = {\n"
+    "    0x844, 0x0fff, 0x0, 0x1, 0x1, 0x0, 0x1f,\n"
+    "};",
     # SAVE'd locals from Fortran subroutines that the rewriter
     # promoted to file scope. Zero-init matches the binary's .bss
     # layout in the original.
-    "subroutine_invocations":
-        "/* Bug W: SAVE'd local from a Fortran subroutine — "
-        "zero-init matches the binary's .bss layout. */\n"
-        "static int subroutine_invocations;",
-    "call_count_1":
-        "/* Bug W: SAVE'd local from a Fortran subroutine — "
-        "zero-init matches the binary's .bss layout. */\n"
-        "static int call_count_1;",
+    "subroutine_invocations": "/* Bug W: SAVE'd local from a Fortran subroutine — "
+    "zero-init matches the binary's .bss layout. */\n"
+    "static int subroutine_invocations;",
+    "call_count_1": "/* Bug W: SAVE'd local from a Fortran subroutine — "
+    "zero-init matches the binary's .bss layout. */\n"
+    "static int call_count_1;",
 }
 
 
@@ -579,7 +600,10 @@ def _emit_file_scope_static_defs(bodies: List[str]) -> List[str]:
             continue
         # Must NOT already have a concrete (non-extern) definition.
         text_no_externs = re.sub(
-            r"^\s*extern\s+[^;]*;\s*\n", "", text, flags=re.MULTILINE,
+            r"^\s*extern\s+[^;]*;\s*\n",
+            "",
+            text,
+            flags=re.MULTILINE,
         )
         defined_re = re.compile(
             rf"^\s*(?:static\s+)?[A-Za-z_][\w\s\*]*?\b{re.escape(symbol)}\s*"
@@ -635,7 +659,9 @@ def _emit_runtime_externs(bodies: List[str]) -> List[str]:
     out: List[str] = []
     for symbol, decl in _FORTRAN_RUNTIME_PROTOTYPES.items():
         # Reference: symbol appears as a whole-word token.
-        if not re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text):
+        if not re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text
+        ):
             continue
         # Skip if already declared. We don't try to validate signatures —
         # just spot any line that looks like a prototype for this symbol.
@@ -731,12 +757,8 @@ def _wrap_cxx_runtime_externs_with_c_linkage(body: str) -> str:
     for m in reversed(matches):
         if _inside_extern_c(m.start()):
             continue
-        wrapped = (
-            'extern "C" {\n'
-            f'{m.group("full").strip()}\n'
-            '}'
-        )
-        out = out[: m.start()] + wrapped + out[m.end():]
+        wrapped = f'extern "C" {{\n{m.group("full").strip()}\n}}'
+        out = out[: m.start()] + wrapped + out[m.end() :]
     return out
 
 
@@ -756,8 +778,12 @@ def _language_to_target(lang: Optional[str]) -> str:
     if not lang:
         return "c"
     m = {
-        "c": "c", "c++": "cpp", "cpp": "cpp",
-        "rust": "rust", "go": "go", "python": "python",
+        "c": "c",
+        "c++": "cpp",
+        "cpp": "cpp",
+        "rust": "rust",
+        "go": "go",
+        "python": "python",
         "fortran": "c",  # rewriter emits C lowering of libgfortran calls
     }
     return m.get(lang.lower(), "c")
@@ -783,8 +809,10 @@ def _emit_readme_with_fallback(ctx: "MemoryContext", readme_args):
     heuristic so the project never ships without README/manpage (Bug N).
     """
     from glaurung.llm.tools.write_readme_and_manpage import (
-        WriteReadmeAndManpageResult, WriteReadmeAndManpageTool, _heuristic,
+        WriteReadmeAndManpageResult,
+        _heuristic,
     )
+
     try:
         doc = WriteReadmeAndManpageTool().run(ctx, ctx.kb, readme_args)
     except Exception as e:
@@ -793,7 +821,8 @@ def _emit_readme_with_fallback(ctx: "MemoryContext", readme_args):
     if doc is None or not hasattr(getattr(doc, "docs", None), "readme"):
         _log("  README: using heuristic fallback")
         doc = WriteReadmeAndManpageResult(
-            docs=_heuristic(readme_args), source="heuristic",
+            docs=_heuristic(readme_args),
+            source="heuristic",
         )
     return doc
 
@@ -807,6 +836,7 @@ def _resolve_call_targets(pseudocode: str, va_to_symbol: Dict[int, str]) -> str:
     """Replace ``call 0xNNNN`` with ``call <name>`` when the VA maps to a
     known symbol (PLT entry, exported function, or internally-discovered
     function). Dramatically reduces rewriter guesswork."""
+
     def _sub(m: "re.Match[str]") -> str:
         try:
             va = int(m.group(1), 16)
@@ -817,6 +847,7 @@ def _resolve_call_targets(pseudocode: str, va_to_symbol: Dict[int, str]) -> str:
             return m.group(0)
         # Keep the VA in a trailing comment so the rewriter can still disambiguate.
         return f"call {name} /* {m.group(1)} */"
+
     return re.sub(r"call\s+(0x[0-9a-fA-F]+)", _sub, pseudocode)
 
 
@@ -869,6 +900,7 @@ def _restore_pool_literals(source: str, pool: Dict[str, str]) -> str:
     if not pool:
         return source
     import difflib
+
     pool_texts = list(pool.keys())
 
     def _replace(m: "re.Match[str]") -> str:
@@ -1091,9 +1123,7 @@ def _augment_canonical_types(
             # "void *" (the trailing * already separates the type token
             # from the field; either spacing is legal C).
             sep = "" if ty.endswith("*") else " "
-            injection_lines.append(
-                f"    {ty}{sep}{f}; /* TODO: refine type */"
-            )
+            injection_lines.append(f"    {ty}{sep}{f}; /* TODO: refine type */")
         injection += "\n".join(injection_lines) + "\n"
         # Find the last `}` in the decl and inject before it.
         idx = decl.rfind("}")
@@ -1118,7 +1148,8 @@ def _augment_canonical_types(
         out[name] = (
             f"struct {name} {{\n"
             "    /* synthesized from cross-function field accesses */\n"
-            + "\n".join(body_lines) + "\n};"
+            + "\n".join(body_lines)
+            + "\n};"
         )
     return out
 
@@ -1126,7 +1157,9 @@ def _augment_canonical_types(
 _POOL_SYM_RE = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
 
 
-def _collect_pool_references(source: str, pool_by_symbol: Dict[str, str]) -> Dict[str, str]:
+def _collect_pool_references(
+    source: str, pool_by_symbol: Dict[str, str]
+) -> Dict[str, str]:
     """Find every pool symbol that appears in the source.
 
     Returns a {symbol: literal} map containing only the entries actually
@@ -1247,7 +1280,8 @@ def build_string_pool(
     for text in strings:
         try:
             res = tool.run(
-                ctx, ctx.kb,
+                ctx,
+                ctx.kb,
                 NameStringLiteralArgs(text=text, use_llm=use_llm),
             )
             out[text] = res.named.symbolic_name
@@ -1284,10 +1318,13 @@ def collect_function_evidence(
         slice_ = _def_use_slice(pseudocode, tok)
         try:
             res = vtool.run(
-                ctx, ctx.kb,
+                ctx,
+                ctx.kb,
                 NameLocalVariableArgs(
-                    current_id=tok, recovered_type="int",
-                    def_use_slice=slice_, role_hint="local",
+                    current_id=tok,
+                    recovered_type="int",
+                    def_use_slice=slice_,
+                    role_hint="local",
                     use_llm=True,
                 ),
             )
@@ -1303,10 +1340,13 @@ def collect_function_evidence(
     for value, snippet in constants:
         try:
             res = ctool.run(
-                ctx, ctx.kb,
+                ctx,
+                ctx.kb,
                 ClassifyConstantArgs(
-                    value=value, context_snippet=snippet[:160],
-                    call_site_hint="", use_llm=True,
+                    value=value,
+                    context_snippet=snippet[:160],
+                    call_site_hint="",
+                    use_llm=True,
                 ),
             )
             if res.label.symbolic and res.label.symbolic != hex(value):
@@ -1321,13 +1361,13 @@ def collect_function_evidence(
     for idx, body in enumerate(loops):
         try:
             res = ltool.run(
-                ctx, ctx.kb,
+                ctx,
+                ctx.kb,
                 ClassifyLoopIdiomArgs(loop_body=body, use_llm=True),
             )
             if res.label.idiom != "custom" and res.label.library_call:
                 loop_idioms.append(
-                    f"loop {idx+1}: {res.label.idiom} → "
-                    f"{res.label.library_call}"
+                    f"loop {idx + 1}: {res.label.idiom} → {res.label.library_call}"
                 )
         except Exception:
             pass
@@ -1377,15 +1417,16 @@ def caller_snippets(
     for cv in callers_vas:
         caller_name = va_to_name.get(cv, f"sub_{cv:x}")
         try:
-            text = g.ir.decompile_at(
-                str(ctx.file_path), cv, timeout_ms=500, style="c"
-            )
+            text = g.ir.decompile_at(str(ctx.file_path), cv, timeout_ms=500, style="c")
         except Exception:
             continue
         snippet = "\n".join(text.splitlines()[:60])
-        out.append(CallerSnippet(
-            caller_name=_demangle(caller_name), pseudocode=snippet,
-        ))
+        out.append(
+            CallerSnippet(
+                caller_name=_demangle(caller_name),
+                pseudocode=snippet,
+            )
+        )
     return out
 
 
@@ -1420,7 +1461,10 @@ def recover_function(
 
     try:
         pseudocode_raw = g.ir.decompile_at(
-            str(ctx.file_path), entry_va, timeout_ms=800, style="c",
+            str(ctx.file_path),
+            entry_va,
+            timeout_ms=800,
+            style="c",
         )
     except Exception as e:
         _log(f"  [{raw_name}] decompile failed: {e}")
@@ -1458,19 +1502,25 @@ def recover_function(
 
     # Fix #5: collect Layer-0 evidence.
     evidence = collect_function_evidence(
-        ctx, entry_va, pseudocode, string_pool,
+        ctx,
+        entry_va,
+        pseudocode,
+        string_pool,
     )
 
     # Signature with callers.
     caller_snips = caller_snippets(ctx, funcs, callgraph, entry_va)
     try:
         sig_res = InferFunctionSignatureTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             InferFunctionSignatureArgs(
                 va=entry_va,
                 callee_pseudocode=pseudocode,
                 caller_snippets=caller_snips,
-                target_language=target_language if target_language in ("c", "rust", "go") else "c",
+                target_language=target_language
+                if target_language in ("c", "rust", "go")
+                else "c",
                 use_llm=True,
             ),
         )
@@ -1482,9 +1532,12 @@ def recover_function(
     # Role.
     try:
         role_res = ClassifyFunctionRoleTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             ClassifyFunctionRoleArgs(
-                pseudocode=pseudocode, c_prototype=c_prototype, use_llm=True,
+                pseudocode=pseudocode,
+                c_prototype=c_prototype,
+                use_llm=True,
             ),
         )
         role = role_res.label.role
@@ -1496,8 +1549,13 @@ def recover_function(
     # rename) happens at emission time, not here, so the cache is stable
     # across orchestrator iteration — only raw rewriter output is cached.
     rewrite_res = _rewrite(
-        ctx, entry_va, pseudocode, c_prototype, role,
-        target_language, evidence,
+        ctx,
+        entry_va,
+        pseudocode,
+        c_prototype,
+        role,
+        target_language,
+        evidence,
     )
     source = rewrite_res["source"]
     assumptions = rewrite_res["assumptions"]
@@ -1517,15 +1575,21 @@ def recover_function(
     retries = 0
     max_retries = 1  # at most one retry; more isn't helping in practice
     while retries < max_retries and (
-        len(assumptions) >= 10
-        or any("[high]" in d for d in divergences)
+        len(assumptions) >= 10 or any("[high]" in d for d in divergences)
     ):
-        _log(f"    retry {retries+1}: {len(assumptions)} assumptions, "
-             f"{sum(1 for d in divergences if '[medium]' in d or '[high]' in d)} divergences")
+        _log(
+            f"    retry {retries + 1}: {len(assumptions)} assumptions, "
+            f"{sum(1 for d in divergences if '[medium]' in d or '[high]' in d)} divergences"
+        )
         retries += 1
         rewrite_res = _rewrite(
-            ctx, entry_va, pseudocode, c_prototype, role,
-            target_language, evidence,
+            ctx,
+            entry_va,
+            pseudocode,
+            c_prototype,
+            role,
+            target_language,
+            evidence,
             negative_guidance=assumptions + divergences,
         )
         source = rewrite_res["source"]
@@ -1538,7 +1602,8 @@ def recover_function(
     # Docstring.
     try:
         doc_res = SynthesizeDocstringTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             SynthesizeDocstringArgs(
                 source=source,
                 style="doxygen",
@@ -1553,7 +1618,8 @@ def recover_function(
     # Post-rewrite naming.
     try:
         name_res = ProposeFunctionNamePostRewriteTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             ProposeFunctionNamePostRewriteArgs(
                 entry_va=entry_va,
                 rewritten_source=source,
@@ -1628,7 +1694,8 @@ def _rewrite(
         )
     try:
         res = RewriteFunctionIdiomaticTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             RewriteFunctionArgs(
                 entry_va=entry_va,
                 pseudocode=pseudocode,
@@ -1638,7 +1705,9 @@ def _rewrite(
                 constant_labels=evidence.get("constant_labels", {}),
                 string_names=evidence.get("string_names", {}),
                 loop_idioms=loop_idioms,
-                target_language=target_language if target_language in ("c", "rust", "go", "python") else "c",
+                target_language=target_language
+                if target_language in ("c", "rust", "go", "python")
+                else "c",
             ),
         )
         return {
@@ -1662,7 +1731,8 @@ def _verify(
 ) -> dict:
     try:
         ver_res = VerifySemanticEquivalenceTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             VerifySemanticEquivalenceArgs(
                 original_pseudocode=pseudocode,
                 rewritten_source=source,
@@ -1698,13 +1768,17 @@ def build_verify(out_dir: Path) -> Tuple[bool, str]:
     try:
         cfg = subprocess.run(
             ["cmake", "-S", str(out_dir), "-B", str(build_dir)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if cfg.returncode != 0:
             return False, f"cmake configure failed:\n{cfg.stderr}\n{cfg.stdout}"
         make = subprocess.run(
             ["cmake", "--build", str(build_dir), "--parallel"],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
         if make.returncode != 0:
             return False, f"build failed:\n{make.stderr}\n{make.stdout}"
@@ -1728,14 +1802,12 @@ def main() -> int:
     parser.add_argument("--out", type=str, default="out/recovered")
     parser.add_argument("--project-name", type=str, default=None)
     parser.add_argument("--max-functions", type=int, default=20)
+    parser.add_argument("--skip-trivial", action="store_true", default=True)
+    parser.add_argument("--no-skip-trivial", dest="skip_trivial", action="store_false")
     parser.add_argument(
-        "--skip-trivial", action="store_true", default=True
-    )
-    parser.add_argument(
-        "--no-skip-trivial", dest="skip_trivial", action="store_false"
-    )
-    parser.add_argument(
-        "--skip-build", action="store_true", default=False,
+        "--skip-build",
+        action="store_true",
+        default=False,
         help="Skip the cmake build-and-verify step",
     )
     a = parser.parse_args()
@@ -1772,7 +1844,9 @@ def main() -> int:
     # Fix #2: identify language + target.
     try:
         id_res = IdentifyCompilerAndRuntimeTool().run(
-            ctx, ctx.kb, IdentifyCompilerArgs(),
+            ctx,
+            ctx.kb,
+            IdentifyCompilerArgs(),
         )
         language = id_res.language or "C"
         compiler = id_res.compiler or "unknown"
@@ -1781,7 +1855,9 @@ def main() -> int:
         compiler = "unknown"
     target_language = _language_to_target(language)
     file_ext = _target_extension(language)
-    _log(f"language={language} compiler={compiler} target={target_language} ext=.{file_ext}")
+    _log(
+        f"language={language} compiler={compiler} target={target_language} ext=.{file_ext}"
+    )
 
     # Fix #4: build string pool once.
     _log("building string pool…")
@@ -1811,8 +1887,15 @@ def main() -> int:
         if budget <= 0:
             break
         s = recover_function(
-            ctx, f, funcs, callgraph, string_pool, va_to_symbol,
-            target_language, cache_dir, a.skip_trivial,
+            ctx,
+            f,
+            funcs,
+            callgraph,
+            string_pool,
+            va_to_symbol,
+            target_language,
+            cache_dir,
+            a.skip_trivial,
         )
         if s is not None:
             summaries.append(s)
@@ -1822,10 +1905,11 @@ def main() -> int:
     # -------- Fix #3: partition into stdlib / crt / user --------
     stdlib_summaries = [s for s in summaries if s.get("stdlib")]
     crt_summaries = [s for s in summaries if s.get("crt")]
-    user_summaries = [s for s in summaries
-                      if not s.get("stdlib") and not s.get("crt")]
-    _log(f"partition: {len(user_summaries)} user, "
-         f"{len(crt_summaries)} crt, {len(stdlib_summaries)} stdlib")
+    user_summaries = [s for s in summaries if not s.get("stdlib") and not s.get("crt")]
+    _log(
+        f"partition: {len(user_summaries)} user, "
+        f"{len(crt_summaries)} crt, {len(stdlib_summaries)} stdlib"
+    )
 
     # Write stdlib externs header (no source bodies).
     if stdlib_summaries:
@@ -1852,7 +1936,8 @@ def main() -> int:
             role=s["role"],
             one_line_summary=(
                 (s.get("docstring") or "").splitlines()[0][:100]
-                if s.get("docstring") else ""
+                if s.get("docstring")
+                else ""
             ),
         )
         for s in user_summaries
@@ -1869,13 +1954,17 @@ def main() -> int:
         cv = va_by_cg.get(e.caller)
         tv = va_by_cg.get(e.callee)
         if cv in user_vas and tv in user_vas:
-            edges.append(CallEdge(
-                caller=va_to_canonical[cv], callee=va_to_canonical[tv],
-            ))
+            edges.append(
+                CallEdge(
+                    caller=va_to_canonical[cv],
+                    callee=va_to_canonical[tv],
+                )
+            )
     if user_summaries:
         _log("clustering into modules…")
         cluster_res = ClusterFunctionsIntoModulesTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             ClusterFunctionsIntoModulesArgs(
                 functions=fsummaries,
                 edges=edges,
@@ -1895,7 +1984,8 @@ def main() -> int:
             continue
         candidates = [
             CandidateName(
-                name=s["short_name"], source_tool="propose_function_name_post_rewrite",
+                name=s["short_name"],
+                source_tool="propose_function_name_post_rewrite",
                 confidence=0.7,
             )
         ] + [
@@ -1904,9 +1994,12 @@ def main() -> int:
         ]
         try:
             rec = ReconcileFunctionIdentityTool().run(
-                ctx, ctx.kb,
+                ctx,
+                ctx.kb,
                 ReconcileFunctionIdentityArgs(
-                    entry_va=s["entry_va"], candidates=candidates, use_llm=True,
+                    entry_va=s["entry_va"],
+                    candidates=candidates,
+                    use_llm=True,
                 ),
             )
             if rec.reconciled.canonical_name != s["short_name"]:
@@ -1924,7 +2017,8 @@ def main() -> int:
     # Global naming style.
     try:
         gn = ReconcileGlobalNamingTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             ReconcileGlobalNamingArgs(
                 identifiers=[
                     IdentifierEntry(current=s["short_name"], kind="function")
@@ -1969,11 +2063,17 @@ def main() -> int:
     ):
         # Synthesize a description for the catch-all module so the build
         # manifest and README mention it honestly instead of inventing one.
-        from glaurung.llm.tools.cluster_functions_into_modules import Module as _ClusterModule
-        populated_modules.append(_ClusterModule(
-            name=default_mod, purpose="catch-all for unclustered functions",
-            members=[],
-        ))
+        from glaurung.llm.tools.cluster_functions_into_modules import (
+            Module as _ClusterModule,
+        )
+
+        populated_modules.append(
+            _ClusterModule(
+                name=default_mod,
+                purpose="catch-all for unclustered functions",
+                members=[],
+            )
+        )
 
     # Build system.
     _log("inferring build system…")
@@ -1982,12 +2082,11 @@ def main() -> int:
         binary_imports = list(summary_ext.import_names or [])
     except Exception:
         binary_imports = []
-    module_build = [
-        ModuleBuildInfo(path=m.name, imports=[]) for m in populated_modules
-    ]
+    module_build = [ModuleBuildInfo(path=m.name, imports=[]) for m in populated_modules]
     try:
         bs = InferBuildSystemTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             InferBuildSystemArgs(
                 target_language="c",
                 project_name=project_name,
@@ -2004,8 +2103,7 @@ def main() -> int:
     # README.
     _log("writing README + manpage…")
     mod_descs = [
-        ModuleDescription(path=m.name, purpose=m.purpose)
-        for m in populated_modules
+        ModuleDescription(path=m.name, purpose=m.purpose) for m in populated_modules
     ]
     readme_args = WriteReadmeAndManpageArgs(
         project_name=project_name,
@@ -2041,13 +2139,19 @@ def main() -> int:
 
     includes_for_lang = {
         "c": [
-            "#include <stdio.h>", "#include <stdlib.h>", "#include <string.h>",
+            "#include <stdio.h>",
+            "#include <stdlib.h>",
+            "#include <string.h>",
             "#include <stdint.h>",
         ],
         "cpp": [
-            "#include <cstdio>", "#include <cstdlib>", "#include <cstring>",
+            "#include <cstdio>",
+            "#include <cstdlib>",
+            "#include <cstring>",
             "#include <cstdint>",  # uint32_t is used by inline-immediate reconstructions
-            "#include <iostream>", "#include <string>", "#include <vector>",
+            "#include <iostream>",
+            "#include <string>",
+            "#include <vector>",
         ],
     }.get(file_ext, ["#include <stdio.h>"])
 
@@ -2077,7 +2181,9 @@ def main() -> int:
     all_bodies = [s["emit_source"] for members in grouped.values() for s in members]
     field_accesses = _collect_struct_field_accesses(all_bodies)
     canonical_types = _augment_canonical_types(
-        canonical_types, field_accesses, source_bodies=all_bodies,
+        canonical_types,
+        field_accesses,
+        source_bodies=all_bodies,
     )
     if canonical_types:
         # Strip duplicates from per-function bodies so the header is the
@@ -2093,7 +2199,9 @@ def main() -> int:
     used_symbols: Dict[str, str] = {}
     for members in grouped.values():
         for s in members:
-            used_symbols.update(_collect_pool_references(s["emit_source"], pool_by_symbol))
+            used_symbols.update(
+                _collect_pool_references(s["emit_source"], pool_by_symbol)
+            )
 
     strings_header = ""
     if used_symbols:
@@ -2219,8 +2327,10 @@ def main() -> int:
         runtime_externs = _emit_runtime_externs(body_texts)
         if runtime_externs:
             buf.append("")
-            buf.append("/* Task Q: extern prototypes for libgfortran /"
-                       " Fortran-runtime symbols referenced below. */")
+            buf.append(
+                "/* Task Q: extern prototypes for libgfortran /"
+                " Fortran-runtime symbols referenced below. */"
+            )
             buf.extend(runtime_externs)
         # Bug W: synthesise stub definitions for any binary-LOCAL static
         # the rewriter mistakenly declared `extern`. Without these the
@@ -2235,9 +2345,11 @@ def main() -> int:
                     s.get("emit_source", s["source"])
                 )
             buf.append("")
-            buf.append("/* Bug W: stub definitions for binary-LOCAL "
-                       "statics (file-scope statics in the original "
-                       "binary, not external imports). */")
+            buf.append(
+                "/* Bug W: stub definitions for binary-LOCAL "
+                "statics (file-scope statics in the original "
+                "binary, not external imports). */"
+            )
             buf.extend(local_static_defs)
         # Bug GG: wrap any libstdc++ / itanium-ABI runtime extern
         # declarations in `extern "C"` so g++ doesn't re-mangle them.
@@ -2281,9 +2393,7 @@ def main() -> int:
             lines.append("")
             lines.append(f"- Demangled: `{s['demangled']}`")
             lines.append(f"- Role: `{s.get('role', 'other')}`")
-            lines.append(
-                f"- Confidence: {s.get('rewrite_confidence', 0.0):.2f}"
-            )
+            lines.append(f"- Confidence: {s.get('rewrite_confidence', 0.0):.2f}")
             lines.append("")
             if s.get("docstring"):
                 # Strip Doxygen `/** */` framing for the markdown body.
@@ -2307,15 +2417,28 @@ def main() -> int:
     # CMakeLists, which would clobber the real recovered source we just
     # wrote. Only accept build-control filetypes here.
     _BUILD_CONTROL_SUFFIXES = {
-        ".txt", ".toml", ".cfg", ".ini", ".cmake", ".mk", ".am",
-        ".in", "", ".gradle", ".lock",
+        ".txt",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".cmake",
+        ".mk",
+        ".am",
+        ".in",
+        "",
+        ".gradle",
+        ".lock",
     }
     if bs is not None:
         for bf in bs.build.files:
             ext = Path(bf.path).suffix.lower()
             if ext not in _BUILD_CONTROL_SUFFIXES and Path(bf.path).name not in (
-                "Makefile", "GNUmakefile", "BUILD", "BUILD.bazel",
-                "go.mod", "go.sum",
+                "Makefile",
+                "GNUmakefile",
+                "BUILD",
+                "BUILD.bazel",
+                "go.mod",
+                "go.sum",
             ):
                 _log(f"  skipping non-build file from build tool: {bf.path}")
                 continue
@@ -2347,7 +2470,8 @@ def main() -> int:
             module=module_of_va.get(s["entry_va"], default_mod),
             summary=(
                 (s.get("docstring") or "").splitlines()[0][:100]
-                if s.get("docstring") else ""
+                if s.get("docstring")
+                else ""
             ),
             confidence=s.get("rewrite_confidence", 0.5),
             assumptions=s.get("assumptions", []),
@@ -2356,7 +2480,8 @@ def main() -> int:
     ]
     try:
         audit_res = AuditRecoveredSourceTool().run(
-            ctx, ctx.kb,
+            ctx,
+            ctx.kb,
             AuditRecoveredSourceArgs(
                 project_name=project_name,
                 functions=audit_entries,
@@ -2388,9 +2513,12 @@ def main() -> int:
         )
         audit_path = out_dir / "AUDIT.md"
         audit_lines = [
-            f"# Audit — {project_name}", "",
-            audit_res.report.summary, "",
-            f"passed: **{audit_res.report.passed}**", "",
+            f"# Audit — {project_name}",
+            "",
+            audit_res.report.summary,
+            "",
+            f"passed: **{audit_res.report.passed}**",
+            "",
         ]
         for f_finding in audit_res.report.findings:
             audit_lines.append(
@@ -2398,7 +2526,9 @@ def main() -> int:
                 f"{f_finding.description}  → _{f_finding.recommended_action}_"
             )
         audit_path.write_text("\n".join(audit_lines))
-        _log(f"  passed={audit_res.report.passed} findings={len(audit_res.report.findings)}")
+        _log(
+            f"  passed={audit_res.report.passed} findings={len(audit_res.report.findings)}"
+        )
     except Exception as e:
         _log(f"  audit failed: {e}")
 
@@ -2411,7 +2541,8 @@ def main() -> int:
             continue
         try:
             delta = ExplainRewriteDeltaTool().run(
-                ctx, ctx.kb,
+                ctx,
+                ctx.kb,
                 ExplainRewriteDeltaArgs(
                     function_name=s["short_name"],
                     entry_va=s["entry_va"],

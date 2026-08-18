@@ -158,9 +158,7 @@ class WindowsPatchFunctionIdentityExtractTool(
                         "diff_row_count": len(diff.rows),
                         "identity_count": len(identities),
                         "pdb_identity_record_count": len(pdb_records),
-                        "external_similarity_record_count": len(
-                            external_similarity
-                        ),
+                        "external_similarity_record_count": len(external_similarity),
                         "external_similarity_manifest_path": args.external_similarity_manifest_path,
                         "identity_output_path": output_path,
                     },
@@ -257,7 +255,9 @@ def _identities(
             continue
         external = external_similarity.get(row.name)
         score = (
-            external.similarity_score if external is not None else _similarity_score(row)
+            external.similarity_score
+            if external is not None
+            else _similarity_score(row)
         )
         if record is None and score is not None and score < min_similarity_score:
             continue

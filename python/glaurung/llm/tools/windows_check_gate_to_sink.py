@@ -46,7 +46,9 @@ class WindowsCheckGateToSinkArgs(BaseModel):
     gate_kind: str | None = Field(None, description="Optional gate kind filter.")
     sink_symbol: str | None = Field(None, description="Optional sink symbol filter.")
     sink_kind: str | None = Field(None, description="Optional sink kind filter.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
@@ -118,9 +120,12 @@ class WindowsCheckGateToSinkTool(
     ) -> WindowsCheckGateToSinkResult:
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        gates = [_gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)]
+        gates = [
+            _gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)
+        ]
         operations = [
-            _operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
         ]
         text, source, notes = _scan_text(ctx, args)
         calls = _extract_calls(text)
@@ -252,7 +257,11 @@ def _assess_sink(
                 f"gate {gate.call.symbol} appears before sink {sink.call.symbol}; "
                 "ordering is not dominance"
             ),
-            provenance=["asb_pe_gate_metadata", "asb_pe_sink_metadata", provenance_source],
+            provenance=[
+                "asb_pe_gate_metadata",
+                "asb_pe_sink_metadata",
+                provenance_source,
+            ],
         )
     if same_line:
         gate = same_line[0]
@@ -264,7 +273,11 @@ def _assess_sink(
             reason=(
                 f"gate {gate.call.symbol} and sink {sink.call.symbol} appear on the same line"
             ),
-            provenance=["asb_pe_gate_metadata", "asb_pe_sink_metadata", provenance_source],
+            provenance=[
+                "asb_pe_gate_metadata",
+                "asb_pe_sink_metadata",
+                provenance_source,
+            ],
         )
     if after:
         gate = after[0]
@@ -274,7 +287,11 @@ def _assess_sink(
             gate=gate,
             confidence=0.45,
             reason=f"nearest gate {gate.call.symbol} appears after sink {sink.call.symbol}",
-            provenance=["asb_pe_gate_metadata", "asb_pe_sink_metadata", provenance_source],
+            provenance=[
+                "asb_pe_gate_metadata",
+                "asb_pe_sink_metadata",
+                provenance_source,
+            ],
         )
     return GateSinkAssessment(
         sink=sink,

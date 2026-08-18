@@ -23,7 +23,9 @@ from .base import MemoryTool, ToolMeta
 
 class StringXrefsArgs(BaseModel):
     query: str = Field(..., description="Substring of a string literal to locate")
-    case_sensitive: bool = Field(False, description="Case-sensitive match (default off)")
+    case_sensitive: bool = Field(
+        False, description="Case-sensitive match (default off)"
+    )
     regex: bool = Field(False, description="Treat query as a Python regex")
     max_functions: int = Field(
         64, description="Maximum functions to decompile while searching"
@@ -31,8 +33,8 @@ class StringXrefsArgs(BaseModel):
     max_snippet_chars: int = Field(
         120,
         description="Length of the surrounding pseudocode snippet returned for "
-                    "each hit (helps the agent see context without pulling the "
-                    "full decompilation).",
+        "each hit (helps the agent see context without pulling the "
+        "full decompilation).",
     )
     timeout_ms: int = Field(400, description="Per-function decompile timeout")
 
@@ -58,9 +60,9 @@ class GetStringXrefsTool(MemoryTool[StringXrefsArgs, StringXrefsResult]):
             ToolMeta(
                 name="get_string_xrefs",
                 description="Return every function whose decompilation contains "
-                            "the given string substring. Case-insensitive by "
-                            "default; set regex=True to match a pattern. "
-                            "Capped at max_functions decompilations.",
+                "the given string substring. Case-insensitive by "
+                "default; set regex=True to match a pattern. "
+                "Capped at max_functions decompilations.",
                 tags=("analysis", "strings", "xrefs"),
             ),
             StringXrefsArgs,
@@ -78,9 +80,7 @@ class GetStringXrefsTool(MemoryTool[StringXrefsArgs, StringXrefsResult]):
             try:
                 pattern = re.compile(args.query, flags)
             except re.error:
-                return StringXrefsResult(
-                    query=args.query, hits=[], functions_scanned=0
-                )
+                return StringXrefsResult(query=args.query, hits=[], functions_scanned=0)
             matcher = pattern.search
         else:
             needle = args.query if args.case_sensitive else args.query.lower()

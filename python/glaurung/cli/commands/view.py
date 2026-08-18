@@ -45,9 +45,7 @@ def _hex_pane(file_path: str, va: int, window: int = 64) -> List[str]:
         chunk = data[i : i + 16]
         line_va = start_va + i
         hex_str = " ".join(f"{b:02x}" for b in chunk).ljust(48)
-        ascii_str = "".join(
-            chr(b) if 0x20 <= b < 0x7F else "." for b in chunk
-        )
+        ascii_str = "".join(chr(b) if 0x20 <= b < 0x7F else "." for b in chunk)
         marker = " ←" if line_va <= va < line_va + 16 else ""
         out.append(f"{line_va:#10x}  {hex_str}  |{ascii_str}|{marker}")
     return out
@@ -58,8 +56,10 @@ def _disasm_pane(file_path: str, va: int, window_bytes: int = 96) -> List[str]:
     the highlighted one; subsequent instructions follow naturally."""
     try:
         instrs = g.disasm.disassemble_window_at(
-            file_path, int(va),
-            window_bytes=window_bytes, max_instructions=12,
+            file_path,
+            int(va),
+            window_bytes=window_bytes,
+            max_instructions=12,
         )
     except Exception as e:
         return [f"(disasm failed: {e})"]
@@ -78,7 +78,9 @@ def _disasm_pane(file_path: str, va: int, window_bytes: int = 96) -> List[str]:
 
 
 def _pseudo_pane(
-    kb, binary_path: str, va: int,
+    kb,
+    binary_path: str,
+    va: int,
     *,
     max_lines: int = 30,
     function_va: Optional[int] = None,
@@ -88,6 +90,7 @@ def _pseudo_pane(
     rendered output that contains `va`. Highlights any line whose
     leading address matches the target."""
     from glaurung.llm.kb import windows_boundaries, xref_db
+
     fn_va = function_va
     config = config or WindowsAnalysisConfig()
     boundary = None
@@ -149,9 +152,7 @@ def _pseudo_pane(
                 pdb_cache=config.pdb_cache_dir or "",
             )
         except Exception as range_exc:
-            return [
-                f"(decompile failed: {e}; range fallback failed: {range_exc})"
-            ]
+            return [f"(decompile failed: {e}; range fallback failed: {range_exc})"]
     lines = text.splitlines()
     return lines[:max_lines]
 
@@ -169,7 +170,9 @@ class ViewCommand(BaseCommand):
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument("va", help="Target VA (hex with 0x or decimal)")
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
         parser.add_argument(
@@ -186,19 +189,26 @@ class ViewCommand(BaseCommand):
             help="Optional PDB cache override for pseudocode name resolution.",
         )
         parser.add_argument(
-            "--hex-window", type=int, default=64,
+            "--hex-window",
+            type=int,
+            default=64,
             help="Bytes of hex view (default 64)",
         )
         parser.add_argument(
-            "--disasm-window", type=int, default=96,
+            "--disasm-window",
+            type=int,
+            default=96,
             help="Bytes window for disassembly (default 96)",
         )
         parser.add_argument(
-            "--pseudo-lines", type=int, default=30,
+            "--pseudo-lines",
+            type=int,
+            default=30,
             help="Max pseudocode lines (default 30)",
         )
         parser.add_argument(
-            "--pane", choices=("hex", "disasm", "pseudo", "all"),
+            "--pane",
+            choices=("hex", "disasm", "pseudo", "all"),
             default="all",
             help="Show only one pane (default all)",
         )
@@ -225,7 +235,8 @@ class ViewCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -246,11 +257,13 @@ class ViewCommand(BaseCommand):
 
             hex_lines = (
                 _hex_pane(bin_str, va, window=args.hex_window)
-                if args.pane in ("hex", "all") else []
+                if args.pane in ("hex", "all")
+                else []
             )
             disasm_lines = (
                 _disasm_pane(bin_str, va, window_bytes=args.disasm_window)
-                if args.pane in ("disasm", "all") else []
+                if args.pane in ("disasm", "all")
+                else []
             )
             pseudo_lines = (
                 _pseudo_pane(
@@ -260,16 +273,19 @@ class ViewCommand(BaseCommand):
                     max_lines=args.pseudo_lines,
                     config=config,
                 )
-                if args.pane in ("pseudo", "all") else []
+                if args.pane in ("pseudo", "all")
+                else []
             )
 
             if formatter.format_type == OutputFormat.JSON:
-                formatter.output_json({
-                    "va": va,
-                    "hex": hex_lines,
-                    "disasm": disasm_lines,
-                    "pseudo": pseudo_lines,
-                })
+                formatter.output_json(
+                    {
+                        "va": va,
+                        "hex": hex_lines,
+                        "disasm": disasm_lines,
+                        "pseudo": pseudo_lines,
+                    }
+                )
                 return 0
 
             if args.pane in ("hex", "all"):

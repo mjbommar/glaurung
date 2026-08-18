@@ -9,9 +9,7 @@ import pytest
 from glaurung.llm.kb.binary_diff import diff_binaries
 
 
-_SWITCHY_V1 = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 _SWITCHY_V2 = Path(
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
 )
@@ -89,9 +87,11 @@ def test_switchy_v1_v2_unchanged_functions_classified_as_same() -> None:
     # matches — these are precisely the "same code, shifted addresses"
     # cases that v2 fixes.
     body_shifted_but_structurally_same = [
-        r for r in diff.rows
+        r
+        for r in diff.rows
         if r.status == "same"
-        and r.a is not None and r.b is not None
+        and r.a is not None
+        and r.b is not None
         and r.a.body_hash != r.b.body_hash
         and r.a.structural_hash == r.b.structural_hash
     ]
@@ -106,6 +106,7 @@ def test_to_json_emits_structural_hash_and_similarity() -> None:
     downstream consumers (the LLM agent, the diff UI) can act on them."""
     import json
     from glaurung.llm.kb.binary_diff import to_json
+
     a = _need(_SWITCHY_V1)
     b = _need(_SWITCHY_V2)
     diff = diff_binaries(str(a), str(b))

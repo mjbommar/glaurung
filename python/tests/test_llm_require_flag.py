@@ -61,8 +61,7 @@ class TestRequireLLMHardFail:
 
     def test_no_credentials_raises(self):
         """No API key → LLMUnavailable, not heuristic."""
-        with patch("glaurung.llm.tools._llm_helpers.can_call_llm",
-                   return_value=False):
+        with patch("glaurung.llm.tools._llm_helpers.can_call_llm", return_value=False):
             with pytest.raises(LLMUnavailable, match="no provider credentials"):
                 run_structured_llm(
                     prompt="test",
@@ -74,8 +73,7 @@ class TestRequireLLMHardFail:
 
     def test_no_credentials_falls_back_when_not_required(self):
         """Default behaviour: silent fallback to heuristic."""
-        with patch("glaurung.llm.tools._llm_helpers.can_call_llm",
-                   return_value=False):
+        with patch("glaurung.llm.tools._llm_helpers.can_call_llm", return_value=False):
             result = run_structured_llm(
                 prompt="test",
                 output_type=DummyOutput,
@@ -87,8 +85,7 @@ class TestRequireLLMHardFail:
 
     def test_env_var_triggers_hard_fail(self):
         """GLAURUNG_REQUIRE_LLM=1 → LLMUnavailable on missing creds."""
-        with patch("glaurung.llm.tools._llm_helpers.can_call_llm",
-                   return_value=False):
+        with patch("glaurung.llm.tools._llm_helpers.can_call_llm", return_value=False):
             with patch.dict(os.environ, {"GLAURUNG_REQUIRE_LLM": "1"}):
                 with pytest.raises(LLMUnavailable):
                     run_structured_llm(
@@ -100,10 +97,13 @@ class TestRequireLLMHardFail:
 
     def test_nested_event_loop_raises_when_required(self):
         """Inside running loop → LLMUnavailable when required."""
-        with patch("glaurung.llm.tools._llm_helpers.can_call_llm",
-                   return_value=True), \
-             patch("glaurung.llm.tools._llm_helpers.in_running_event_loop",
-                   return_value=True):
+        with (
+            patch("glaurung.llm.tools._llm_helpers.can_call_llm", return_value=True),
+            patch(
+                "glaurung.llm.tools._llm_helpers.in_running_event_loop",
+                return_value=True,
+            ),
+        ):
             with pytest.raises(LLMUnavailable, match="asyncio loop"):
                 run_structured_llm(
                     prompt="test",
@@ -115,8 +115,7 @@ class TestRequireLLMHardFail:
 
     def test_warning_emitted_on_fallback(self, capsys):
         """Non-required fallback should still emit a stderr warning."""
-        with patch("glaurung.llm.tools._llm_helpers.can_call_llm",
-                   return_value=False):
+        with patch("glaurung.llm.tools._llm_helpers.can_call_llm", return_value=False):
             run_structured_llm(
                 prompt="test",
                 output_type=DummyOutput,

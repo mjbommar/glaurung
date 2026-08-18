@@ -24,11 +24,21 @@ class WindowsPdbIdentityManifestArgs(BaseModel):
             "Defaults to ASB_REPO or sibling repo."
         ),
     )
-    target_id: str | None = Field(None, description="Optional build-corpus target id filter.")
-    binary_filename: str | None = Field(None, description="Optional PE filename filter.")
-    pdb_name: str | None = Field(None, description="Optional expected PDB filename filter.")
-    build_label: str | None = Field(None, description="Optional build/corpus label filter.")
-    cache_status: CacheStatus | None = Field(None, description="Optional PDB cache status filter.")
+    target_id: str | None = Field(
+        None, description="Optional build-corpus target id filter."
+    )
+    binary_filename: str | None = Field(
+        None, description="Optional PE filename filter."
+    )
+    pdb_name: str | None = Field(
+        None, description="Optional expected PDB filename filter."
+    )
+    build_label: str | None = Field(
+        None, description="Optional build/corpus label filter."
+    )
+    cache_status: CacheStatus | None = Field(
+        None, description="Optional PDB cache status filter."
+    )
     requires_fact: str | None = Field(
         None,
         description="Optional fact coverage requirement, e.g. pdb_type_layouts.",
@@ -98,7 +108,9 @@ class WindowsPdbIdentityManifestTool(
             args.identity_path,
             "data/kg/pe-identity-manifest.yaml",
         )
-        records = [_record(entry, identity_path) for entry in _load_yaml_list(identity_path)]
+        records = [
+            _record(entry, identity_path) for entry in _load_yaml_list(identity_path)
+        ]
         record_count_total = len(records)
         cached_count_total = sum(record.cache_status == "cached" for record in records)
         missing_count_total = sum(record.cache_status != "cached" for record in records)

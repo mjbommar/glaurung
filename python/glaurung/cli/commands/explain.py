@@ -314,8 +314,7 @@ class ExplainCommand(BaseCommand):
             "--timeout-ms",
             type=int,
             default=2000,
-            help="Per-stage analysis / LLM timeout in milliseconds "
-            "(default: 2000).",
+            help="Per-stage analysis / LLM timeout in milliseconds (default: 2000).",
         )
         parser.add_argument(
             "--pdb-cache",
@@ -377,6 +376,7 @@ class ExplainCommand(BaseCommand):
         # kwarg through every layer.
         if getattr(args, "require_llm", False):
             import os
+
             os.environ["GLAURUNG_REQUIRE_LLM"] = "1"
 
         as_json = formatter.format_type in (OutputFormat.JSON, OutputFormat.JSONL)
@@ -489,6 +489,7 @@ class ExplainCommand(BaseCommand):
         struct_pack: list[Any] = []
         if args.fidelity == "annotated":
             from ._kernel_struct_pack import kernel_struct_pack_for_role
+
             struct_pack = kernel_struct_pack_for_role(role)
         try:
             rewrite = _rewrite_idiomatic(
@@ -503,9 +504,7 @@ class ExplainCommand(BaseCommand):
                 variable_names=(
                     layer0_result.variable_names if layer0_result else None
                 ),
-                string_names=(
-                    layer0_result.string_names if layer0_result else None
-                ),
+                string_names=(layer0_result.string_names if layer0_result else None),
                 constant_labels=(
                     layer0_result.constant_labels if layer0_result else None
                 ),

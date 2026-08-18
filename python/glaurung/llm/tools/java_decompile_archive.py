@@ -477,9 +477,7 @@ def _decompile_one_class(
                                     "merge_compile_verified"
                                 )
                             else:
-                                write_stop_reasons.append(
-                                    "inner_merge_compile_failed"
-                                )
+                                write_stop_reasons.append("inner_merge_compile_failed")
                                 inner_reconstruction_notes.append(
                                     f"merge_compile_failed diagnostics={diagnostics}"
                                 )
@@ -537,9 +535,7 @@ def _decompile_one_class(
         compile_diagnostic_count=selected.compile_diagnostic_count if selected else 0,
         attempted_engines=attempts,
         source_file=source_file,
-        inner_reconstruction_compile_success=(
-            inner_reconstruction_compile_success
-        ),
+        inner_reconstruction_compile_success=(inner_reconstruction_compile_success),
         inner_reconstruction_notes=inner_reconstruction_notes,
         bytecode_method_count=correlation.bytecode_method_count,
         bytecode_field_count=correlation.bytecode_field_count,

@@ -43,9 +43,7 @@ class DetectPackerCommand(BaseCommand):
         lines = []
         if verdict.is_packed:
             label = verdict.packer_name or f"{verdict.family or 'unknown'} (generic)"
-            lines.append(
-                f"PACKED: {label}  (confidence {verdict.confidence:.0%})"
-            )
+            lines.append(f"PACKED: {label}  (confidence {verdict.confidence:.0%})")
             for ind in verdict.indicators:
                 lines.append(f"  indicator: {ind}")
         else:

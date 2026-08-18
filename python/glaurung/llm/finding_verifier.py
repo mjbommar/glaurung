@@ -74,7 +74,8 @@ class _BinaryContext:
     @classmethod
     def build(cls, binary_path: str) -> "_BinaryContext":
         result = g.analysis.analyze_functions_path(
-            binary_path, max_functions=2000,
+            binary_path,
+            max_functions=2000,
         )
         # analyze_functions_path returns (functions, callgraph) or
         # (functions, callgraph, stats) depending on the build. We only
@@ -115,7 +116,9 @@ class _BinaryContext:
             if end <= va:
                 end = va + 1
             af = _AnalysedFunction(
-                name=name, entry_va=va, end_va=end,
+                name=name,
+                entry_va=va,
+                end_va=end,
                 function_class=classify_function(name),
             )
             functions_by_va[va] = af
@@ -135,9 +138,13 @@ class _BinaryContext:
             return self.decompile_cache[va]
         try:
             text = g.ir.decompile_at(
-                self.binary_path, va,
-                timeout_ms=5_000, max_blocks=256, max_instructions=2_000,
-                types=True, style="",
+                self.binary_path,
+                va,
+                timeout_ms=5_000,
+                max_blocks=256,
+                max_instructions=2_000,
+                types=True,
+                style="",
             )
         except Exception as e:
             logger.debug("decompile_at(%s, 0x%x) failed: %s", self.binary_path, va, e)
@@ -223,8 +230,11 @@ def verify_finding(
     # 1. Function reference: must resolve to a discovered function.
     fn = binary_ctx.function_for(finding.function)
     if fn is None:
-        ref_text = finding.function.name or f"0x{finding.function.va:x}" \
-            if finding.function.va is not None else "<unspecified>"
+        ref_text = (
+            finding.function.name or f"0x{finding.function.va:x}"
+            if finding.function.va is not None
+            else "<unspecified>"
+        )
         issues.append(f"function {ref_text!r} not found in analysis")
     elif fn.function_class in ("runtime_helper", "library_import_stub"):
         # D3: a finding pointing at compiler-runtime / import-stub code is
@@ -286,9 +296,7 @@ def _verify_evidence(
         for af in binary_ctx.functions_by_va.values():
             if af.contains(va):
                 return None
-        return (
-            f"disasm evidence at 0x{va:x} is not inside any analyzed function"
-        )
+        return f"disasm evidence at 0x{va:x} is not inside any analyzed function"
 
     if kind == "xref":
         va = _parse_va(loc)
@@ -319,7 +327,8 @@ def _verify_evidence(
         sample = ev.text or loc
         salient = max(
             (w for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", sample)),
-            key=len, default="",
+            key=len,
+            default="",
         )
         if salient and salient not in text:
             return (

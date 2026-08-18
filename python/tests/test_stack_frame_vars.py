@@ -63,25 +63,37 @@ def test_set_get_list_round_trip(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     xref_db.set_stack_var(
-        kb, function_va=0x12d0, offset=-0x10, name="argc_storage",
-        c_type="int", set_by="manual",
+        kb,
+        function_va=0x12D0,
+        offset=-0x10,
+        name="argc_storage",
+        c_type="int",
+        set_by="manual",
     )
     xref_db.set_stack_var(
-        kb, function_va=0x12d0, offset=-0x18, name="argv_storage",
-        c_type="char **", set_by="manual",
+        kb,
+        function_va=0x12D0,
+        offset=-0x18,
+        name="argv_storage",
+        c_type="char **",
+        set_by="manual",
     )
     xref_db.set_stack_var(
-        kb, function_va=0x12d0, offset=0x10, name="ret_addr",
-        set_by="auto", use_count=3,
+        kb,
+        function_va=0x12D0,
+        offset=0x10,
+        name="ret_addr",
+        set_by="auto",
+        use_count=3,
     )
 
-    rec = xref_db.get_stack_var(kb, 0x12d0, -0x10)
+    rec = xref_db.get_stack_var(kb, 0x12D0, -0x10)
     assert rec is not None
     assert rec.name == "argc_storage"
     assert rec.c_type == "int"
     assert rec.set_by == "manual"
 
-    listing = xref_db.list_stack_vars(kb, function_va=0x12d0)
+    listing = xref_db.list_stack_vars(kb, function_va=0x12D0)
     assert len(listing) == 3
     # Sorted by offset: -0x18, -0x10, +0x10
     assert [s.offset for s in listing] == [-0x18, -0x10, 0x10]
@@ -95,18 +107,26 @@ def test_manual_entries_survive_auto_overwrite_attempt(tmp_path: Path) -> None:
 
     # Analyst names a slot.
     xref_db.set_stack_var(
-        kb, function_va=0x12d0, offset=-0x8, name="my_size",
-        c_type="size_t", set_by="manual",
+        kb,
+        function_va=0x12D0,
+        offset=-0x8,
+        name="my_size",
+        c_type="size_t",
+        set_by="manual",
     )
     # Auto-discovery later finds the same slot.
     xref_db.set_stack_var(
-        kb, function_va=0x12d0, offset=-0x8, name="var_8",
-        set_by="auto", use_count=5,
+        kb,
+        function_va=0x12D0,
+        offset=-0x8,
+        name="var_8",
+        set_by="auto",
+        use_count=5,
     )
 
-    rec = xref_db.get_stack_var(kb, 0x12d0, -0x8)
+    rec = xref_db.get_stack_var(kb, 0x12D0, -0x8)
     assert rec is not None
-    assert rec.name == "my_size"            # manual preserved
+    assert rec.name == "my_size"  # manual preserved
     assert rec.c_type == "size_t"
     # use_count from the auto pass DOES land — it's evidence, not a name.
     assert rec.use_count == 5
@@ -126,9 +146,7 @@ def test_discover_stack_vars_finds_real_locals(tmp_path: Path) -> None:
         pytest.skip("main not discovered in sample")
 
     n = xref_db.discover_stack_vars(kb, str(binary), int(main.entry_point.value))
-    assert n >= 2, (
-        f"expected to find at least 2 stack-frame slots in main; got {n}"
-    )
+    assert n >= 2, f"expected to find at least 2 stack-frame slots in main; got {n}"
     listing = xref_db.list_stack_vars(kb, function_va=int(main.entry_point.value))
     assert len(listing) == n
     # Locals: at least one negative-offset slot, named var_*.

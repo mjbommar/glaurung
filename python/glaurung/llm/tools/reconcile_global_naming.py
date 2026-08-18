@@ -47,7 +47,7 @@ class ReconcileGlobalNamingArgs(BaseModel):
     project_prefix: Optional[str] = Field(
         None,
         description="Optional short project prefix to apply to top-level "
-                    "symbols (e.g. 'http_', 'kvs_').",
+        "symbols (e.g. 'http_', 'kvs_').",
     )
     use_llm: bool = True
 
@@ -62,12 +62,12 @@ class RenameMap(BaseModel):
     renames: Dict[str, str] = Field(
         default_factory=dict,
         description="Old name → new name mapping covering every identifier "
-                    "that should change.",
+        "that should change.",
     )
     style_report: List[StyleReportEntry] = Field(
         default_factory=list,
         description="Every project-level naming decision the LLM made and "
-                    "why — reviewer-facing summary.",
+        "why — reviewer-facing summary.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -118,8 +118,14 @@ def _heuristic(args: ReconcileGlobalNamingArgs) -> RenameMap:
         if args.project_prefix and e.kind in ("function", "struct", "enum"):
             pref = _to_style(args.project_prefix.rstrip("_"), target_style)
             # Avoid double-prefixing.
-            if not new_name.lower().startswith(pref.lower() + ("_" if target_style == "snake_case" else "")):
-                join = "_" if target_style in ("snake_case", "SCREAMING_SNAKE_CASE") else ""
+            if not new_name.lower().startswith(
+                pref.lower() + ("_" if target_style == "snake_case" else "")
+            ):
+                join = (
+                    "_"
+                    if target_style in ("snake_case", "SCREAMING_SNAKE_CASE")
+                    else ""
+                )
                 new_name = pref + join + new_name
         if new_name != e.current:
             mapping[e.current] = new_name
@@ -129,8 +135,8 @@ def _heuristic(args: ReconcileGlobalNamingArgs) -> RenameMap:
             topic="style",
             observation="applied canonical style per identifier kind",
             decision=f"functions={args.preferred_style_functions}, "
-                     f"types={args.preferred_style_types}, "
-                     f"constants={args.preferred_style_constants}",
+            f"types={args.preferred_style_types}, "
+            f"constants={args.preferred_style_constants}",
         )
     ]
     if args.project_prefix:
@@ -188,8 +194,8 @@ class ReconcileGlobalNamingTool(
             ToolMeta(
                 name="reconcile_global_naming",
                 description="Enforce project-wide naming style and abbreviation "
-                            "vocabulary. Produces a flat rename map the "
-                            "orchestrator applies mechanically.",
+                "vocabulary. Produces a flat rename map the "
+                "orchestrator applies mechanically.",
                 tags=("llm", "naming", "layer3"),
             ),
             ReconcileGlobalNamingArgs,
@@ -217,7 +223,5 @@ class ReconcileGlobalNamingTool(
         return ReconcileGlobalNamingResult(map=rmap, source=source)
 
 
-def build_tool() -> MemoryTool[
-    ReconcileGlobalNamingArgs, ReconcileGlobalNamingResult
-]:
+def build_tool() -> MemoryTool[ReconcileGlobalNamingArgs, ReconcileGlobalNamingResult]:
     return ReconcileGlobalNamingTool()

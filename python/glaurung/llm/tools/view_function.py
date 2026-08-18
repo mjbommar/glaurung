@@ -301,13 +301,17 @@ class ViewFunctionTool(MemoryTool[ViewFunctionArgs, ViewFunctionResult]):
                         # Best-effort: if no strings resolved, scan file for a visible 'hello' token
                         # to provide minimal signal in simple hello samples.
                         (
-                            lambda path: [
-                                FunctionStringRef(va=0, text="hello", encoding="ascii")
-                            ]
-                            if (lambda data: (b"hello" in data.lower()))(
-                                open(path, "rb").read()
+                            lambda path: (
+                                [
+                                    FunctionStringRef(
+                                        va=0, text="hello", encoding="ascii"
+                                    )
+                                ]
+                                if (lambda data: b"hello" in data.lower())(
+                                    open(path, "rb").read()
+                                )
+                                else []
                             )
-                            else []
                         )(ctx.file_path)
                     )
                 )()

@@ -33,6 +33,7 @@ def _open(tmp_path: Path) -> tuple[Path, Path]:
 
 # --- direct API tests ---------------------------------------------------
 
+
 def test_add_and_list_bookmarks_round_trip(tmp_path: Path) -> None:
     db, binary = _open(tmp_path)
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
@@ -88,6 +89,7 @@ def test_delete_journal(tmp_path: Path) -> None:
 
 # --- CLI smoke tests ----------------------------------------------------
 
+
 def test_bookmark_cli_add_list_delete(tmp_path: Path) -> None:
     from glaurung.cli.main import GlaurungCLI
 
@@ -96,18 +98,30 @@ def test_bookmark_cli_add_list_delete(tmp_path: Path) -> None:
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        cli.run([
-            "bookmark", str(db), "add", "0x1234",
-            "look at this branch later",
-            "--binary", str(binary),
-        ])
+        cli.run(
+            [
+                "bookmark",
+                str(db),
+                "add",
+                "0x1234",
+                "look at this branch later",
+                "--binary",
+                str(binary),
+            ]
+        )
     assert "0x1234" in buf.getvalue()
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "bookmark", str(db), "list", "--binary", str(binary),
-        ])
+        rc = cli.run(
+            [
+                "bookmark",
+                str(db),
+                "list",
+                "--binary",
+                str(binary),
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     assert "0x1234" in out
@@ -119,10 +133,16 @@ def test_bookmark_cli_add_list_delete(tmp_path: Path) -> None:
     kb.close()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        cli.run([
-            "bookmark", str(db), "delete", str(bid),
-            "--binary", str(binary),
-        ])
+        cli.run(
+            [
+                "bookmark",
+                str(db),
+                "delete",
+                str(bid),
+                "--binary",
+                str(binary),
+            ]
+        )
     assert "deleted" in buf.getvalue()
 
 
@@ -138,10 +158,17 @@ def test_bookmark_cli_va_filter(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "bookmark", str(db), "list", "--va", "0x1000",
-            "--binary", str(binary),
-        ])
+        rc = cli.run(
+            [
+                "bookmark",
+                str(db),
+                "list",
+                "--va",
+                "0x1000",
+                "--binary",
+                str(binary),
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     assert "alpha" in out
@@ -153,15 +180,30 @@ def test_bookmark_cli_json(tmp_path: Path) -> None:
 
     db, binary = _open(tmp_path)
     cli = GlaurungCLI()
-    cli.run([
-        "bookmark", str(db), "add", "0x1234", "n", "--binary", str(binary),
-    ])
+    cli.run(
+        [
+            "bookmark",
+            str(db),
+            "add",
+            "0x1234",
+            "n",
+            "--binary",
+            str(binary),
+        ]
+    )
     buf = io.StringIO()
     with redirect_stdout(buf):
-        cli.run([
-            "bookmark", str(db), "list",
-            "--binary", str(binary), "--format", "json",
-        ])
+        cli.run(
+            [
+                "bookmark",
+                str(db),
+                "list",
+                "--binary",
+                str(binary),
+                "--format",
+                "json",
+            ]
+        )
     rows = json.loads(buf.getvalue())
     assert rows
     assert rows[0]["va"] == 0x1234
@@ -174,18 +216,29 @@ def test_journal_cli_add_list_delete(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        cli.run([
-            "journal", str(db), "add",
-            "today: figured out the C2 protocol",
-            "--binary", str(binary),
-        ])
+        cli.run(
+            [
+                "journal",
+                str(db),
+                "add",
+                "today: figured out the C2 protocol",
+                "--binary",
+                str(binary),
+            ]
+        )
     assert "today" in buf.getvalue()
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "journal", str(db), "list", "--binary", str(binary),
-        ])
+        rc = cli.run(
+            [
+                "journal",
+                str(db),
+                "list",
+                "--binary",
+                str(binary),
+            ]
+        )
     assert rc == 0
     assert "today" in buf.getvalue()
 
@@ -197,8 +250,14 @@ def test_journal_empty_list(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "journal", str(db), "list", "--binary", str(binary),
-        ])
+        rc = cli.run(
+            [
+                "journal",
+                str(db),
+                "list",
+                "--binary",
+                str(binary),
+            ]
+        )
     assert rc == 0
     assert "no journal" in buf.getvalue().lower()

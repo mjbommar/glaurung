@@ -4,6 +4,7 @@ through the guard indirection, and never emit a held-state claim it can't
 back. Regression for the 2026-06-01 false "wrong-lock" finding, where a
 tracer that saw only raw imports missed a wrapper acquire entirely.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,8 +30,9 @@ def kb_db():
     os.environ["GLAURUNG_PDB_CACHE"] = str(_CACHE)
     td = tempfile.mkdtemp(prefix="glaurung-locktest-")
     db = str(Path(td) / "dxgmms2.glaurung")
-    kickoff_analysis(str(_BIN), db_path=db, fetch_pdb=False,
-                     max_functions_for_kb_lift=0)
+    kickoff_analysis(
+        str(_BIN), db_path=db, fetch_pdb=False, max_functions_for_kb_lift=0
+    )
     return db
 
 
@@ -41,8 +43,11 @@ def test_raw_ke_spinlock_modeled(kb_db):
     prims = {o.primitive for o in rep.ops}
     assert any("KeAcquireInStackQueuedSpinLock" in p for p in prims)
     # The device scheduler lock is at object offset +0x7c0.
-    assert any(o.lock_id and o.lock_id.endswith("0x7c0")
-               for o in rep.ops if o.kind == "acquire")
+    assert any(
+        o.lock_id and o.lock_id.endswith("0x7c0")
+        for o in rep.ops
+        if o.kind == "acquire"
+    )
 
 
 def test_raii_wrapper_acquire_is_modeled(kb_db):
@@ -50,8 +55,9 @@ def test_raii_wrapper_acquire_is_modeled(kb_db):
     same +0x7c0 lock the raw-API sibling uses -- not silently ignored."""
     from glaurung.llm.kb.lock_state import analyze_locks
 
-    rep = analyze_locks(str(_BIN), db_path=kb_db,
-                        function="VidSchSignalSyncObjectsFromCpu")
+    rep = analyze_locks(
+        str(_BIN), db_path=kb_db, function="VidSchSignalSyncObjectsFromCpu"
+    )
     acquires = [o for o in rep.ops if o.kind == "acquire"]
     assert acquires, "wrapper acquire was missed entirely (the 2026-06-01 bug)"
     assert any("Acquire@AcquireSpinLock" in o.primitive for o in acquires)
@@ -66,11 +72,13 @@ def test_cfg_dataflow_must_held(kb_db):
     free-reaching call must be provably holding +0x7c0 (not a linear sweep)."""
     from glaurung.llm.kb.lock_state import analyze_locks
 
-    rep = analyze_locks(str(_BIN), db_path=kb_db,
-                        function="VidSchSignalSyncObjectsFromCpu")
+    rep = analyze_locks(
+        str(_BIN), db_path=kb_db, function="VidSchSignalSyncObjectsFromCpu"
+    )
     assert rep.cfg_blocks > 0 and rep.cfg_edges > 0  # real glaurung CFG used
-    inner = [h for h in rep.held_at_calls
-             if "VidSchiSignalSyncObjectsFromCpu" in h.callee]
+    inner = [
+        h for h in rep.held_at_calls if "VidSchiSignalSyncObjectsFromCpu" in h.callee
+    ]
     assert inner, "expected a held-at-call record for the inner signal call"
     assert "+0x7c0" in inner[0].must  # provably held on ALL paths
 
@@ -78,11 +86,14 @@ def test_cfg_dataflow_must_held(kb_db):
 def test_coverage_is_honest(kb_db):
     from glaurung.llm.kb.lock_state import analyze_locks
 
-    rep = analyze_locks(str(_BIN), db_path=kb_db,
-                        function="VidSchSignalSyncObjectsFromCpu")
+    rep = analyze_locks(
+        str(_BIN), db_path=kb_db, function="VidSchSignalSyncObjectsFromCpu"
+    )
     d = rep.to_dict()
     caveats = " ".join(d["coverage"]["caveats"]).lower()
     assert "intraprocedural" in caveats  # the limit that bit us is declared
     assert d["coverage"]["facts"]["indirect calls unresolved"] == 0
-    assert any("Acquire@AcquireSpinLock" in p
-               for p in d["coverage"]["facts"]["lock primitives modeled"])
+    assert any(
+        "Acquire@AcquireSpinLock" in p
+        for p in d["coverage"]["facts"]["lock primitives modeled"]
+    )

@@ -13,9 +13,7 @@ from glaurung.llm.kb.patch import (
 )
 
 
-_SWITCHY = Path(
-    "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-)
+_SWITCHY = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 
 
 def _need(p: Path) -> Path:
@@ -45,6 +43,7 @@ def test_patch_writes_bytes_at_va_and_preserves_rest(tmp_path: Path) -> None:
 
     # Read original bytes at the function entry to know what to expect.
     import glaurung as g
+
     funcs, _ = g.analysis.analyze_functions_path(str(src))
     target = next((f for f in funcs if f.name == "main"), None)
     if target is None:
@@ -52,7 +51,10 @@ def test_patch_writes_bytes_at_va_and_preserves_rest(tmp_path: Path) -> None:
     va = int(target.entry_point.value)
 
     result = patch_at_va(
-        str(src), str(out), va, payload="90 90 90 90",  # 4-byte NOP sled
+        str(src),
+        str(out),
+        va,
+        payload="90 90 90 90",  # 4-byte NOP sled
     )
     assert result.va == va
     assert result.patched_hex == "90909090"
@@ -81,7 +83,10 @@ def test_patch_refuses_overwrite_without_force(tmp_path: Path) -> None:
         patch_at_va(str(src), str(out), funcs_va, payload="90 90")
     # With force=True, overwrite succeeds.
     result = patch_at_va(
-        str(src), str(out), funcs_va, payload="90 90",
+        str(src),
+        str(out),
+        funcs_va,
+        payload="90 90",
         overwrite_output=True,
     )
     assert result.patched_hex == "9090"
@@ -92,17 +97,21 @@ def test_patch_rejects_payload_past_eof(tmp_path: Path) -> None:
     out = tmp_path / "x.bin"
     # Pick a bogus VA — should fail at va_to_file_offset.
     with pytest.raises((ValueError, RuntimeError)):
-        patch_at_va(str(src), str(out), 0xdeadbeef, payload="90")
+        patch_at_va(str(src), str(out), 0xDEADBEEF, payload="90")
 
 
 def test_render_patch_markdown_includes_before_after(tmp_path: Path) -> None:
     src = _need(_SWITCHY)
     out = tmp_path / "rendered.bin"
     import glaurung as g
+
     funcs, _ = g.analysis.analyze_functions_path(str(src))
     target = next((f for f in funcs if f.name == "main"))
     result = patch_at_va(
-        str(src), str(out), int(target.entry_point.value), payload="90",
+        str(src),
+        str(out),
+        int(target.entry_point.value),
+        payload="90",
     )
     md = render_patch_markdown(result, input_path=str(src))
     assert "Patch applied" in md
@@ -121,6 +130,7 @@ def test_cli_subcommand(tmp_path: Path) -> None:
     out = tmp_path / "patched.bin"
 
     import glaurung as g
+
     funcs, _ = g.analysis.analyze_functions_path(str(src))
     main = next(f for f in funcs if f.name == "main")
     va = int(main.entry_point.value)
@@ -128,10 +138,17 @@ def test_cli_subcommand(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "patch", str(src), str(out),
-            "--va", hex(va), "--bytes", "90 90",
-        ])
+        rc = cli.run(
+            [
+                "patch",
+                str(src),
+                str(out),
+                "--va",
+                hex(va),
+                "--bytes",
+                "90 90",
+            ]
+        )
     assert rc == 0
     assert out.exists()
     assert "Patch applied" in buf.getvalue()

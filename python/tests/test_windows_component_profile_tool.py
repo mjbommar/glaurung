@@ -105,8 +105,7 @@ def test_windows_component_profile_filters_rule_and_adds_evidence(
     assert [profile.target_id for profile in result.profiles] == ["tcpip"]
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_component_profile"
+        node.kind == NodeKind.evidence and node.label == "windows_component_profile"
         for node in ctx.kb.nodes()
     )
 

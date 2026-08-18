@@ -31,6 +31,7 @@ from .base import MemoryTool, ToolMeta
 # verify_compile
 # ---------------------------------------------------------------------------
 
+
 class VerifyCompileArgs(BaseModel):
     source: str = Field(..., description="Recovered C / C++ source to syntax-check")
     language: str = Field("c", description='"c" or "cpp"')
@@ -59,19 +60,26 @@ class VerifyCompileTool(MemoryTool[VerifyCompileArgs, VerifyCompileResult]):
                 ),
                 tags=("verify", "compile"),
             ),
-            VerifyCompileArgs, VerifyCompileResult,
+            VerifyCompileArgs,
+            VerifyCompileResult,
         )
 
     def run(
-        self, ctx: MemoryContext, kb: KnowledgeBase, args: VerifyCompileArgs,
+        self,
+        ctx: MemoryContext,
+        kb: KnowledgeBase,
+        args: VerifyCompileArgs,
     ) -> VerifyCompileResult:
         from ..kb.verify_recovery import compile_check
+
         r = compile_check(
-            args.source, language=args.language,
+            args.source,
+            language=args.language,
             timeout_seconds=args.timeout_seconds,
         )
         return VerifyCompileResult(
-            ok=r.ok, compiler=r.compiler,
+            ok=r.ok,
+            compiler=r.compiler,
             stderr=(r.stderr or "")[:4000],  # cap the agent context bloat
             exit_code=r.exit_code,
         )
@@ -84,6 +92,7 @@ def build_verify_compile_tool() -> VerifyCompileTool:
 # ---------------------------------------------------------------------------
 # verify_runtime
 # ---------------------------------------------------------------------------
+
 
 class VerifyRuntimeArgs(BaseModel):
     source: str = Field(..., description="Recovered C / C++ source")
@@ -126,19 +135,27 @@ class VerifyRuntimeTool(MemoryTool[VerifyRuntimeArgs, VerifyRuntimeResult]):
                 ),
                 tags=("verify", "run"),
             ),
-            VerifyRuntimeArgs, VerifyRuntimeResult,
+            VerifyRuntimeArgs,
+            VerifyRuntimeResult,
         )
 
     def run(
-        self, ctx: MemoryContext, kb: KnowledgeBase, args: VerifyRuntimeArgs,
+        self,
+        ctx: MemoryContext,
+        kb: KnowledgeBase,
+        args: VerifyRuntimeArgs,
     ) -> VerifyRuntimeResult:
         from ..kb.verify_recovery import (
-            build_and_run, compare_runtime_to_target,
+            build_and_run,
+            compare_runtime_to_target,
         )
+
         if args.target_binary:
             cmp = compare_runtime_to_target(
-                args.source, args.target_binary,
-                args=args.args, stdin=args.stdin,
+                args.source,
+                args.target_binary,
+                args=args.args,
+                stdin=args.stdin,
                 language=args.language,
                 timeout_seconds=args.timeout_seconds,
             )
@@ -157,8 +174,11 @@ class VerifyRuntimeTool(MemoryTool[VerifyRuntimeArgs, VerifyRuntimeResult]):
                 target_stdout=(tgt.stdout or "")[:4000],
             )
         rr = build_and_run(
-            args.source, args=args.args, stdin=args.stdin,
-            language=args.language, timeout_seconds=args.timeout_seconds,
+            args.source,
+            args=args.args,
+            stdin=args.stdin,
+            language=args.language,
+            timeout_seconds=args.timeout_seconds,
         )
         return VerifyRuntimeResult(
             compile_ok=rr.compile_ok,

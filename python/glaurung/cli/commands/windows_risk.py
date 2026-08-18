@@ -437,7 +437,9 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     _annotate_string_api_hints(function_rows, imports)
 
     # 0 = unlimited; treat any non-positive cap as "keep everything".
-    cap_candidates = args.max_candidates if args.max_candidates > 0 else len(function_rows)
+    cap_candidates = (
+        args.max_candidates if args.max_candidates > 0 else len(function_rows)
+    )
     candidates = _select_candidates(function_rows, cap_candidates)
     if not args.no_decompile:
         _annotate_decompile_hits(path_str, args, candidates, imports)
@@ -452,7 +454,9 @@ def build_windows_risk_report(path: Path, args: argparse.Namespace) -> dict[str,
     # of going from sub_XXX -> NetrGetJoinInformation).
     _annotate_public_names(risk_items, candidates, path_str, args)
 
-    final_functions = candidates if args.max_candidates <= 0 else candidates[: args.max_candidates]
+    final_functions = (
+        candidates if args.max_candidates <= 0 else candidates[: args.max_candidates]
+    )
     return {
         "summary": {
             "path": path_str,
@@ -1248,7 +1252,9 @@ def _annotate_decompile_hits(
 ) -> None:
     risk_api_names = _risk_api_name_pool(imports)
     # 0 = unlimited; respect explicit cap if positive.
-    targets = candidates if args.max_decompile <= 0 else candidates[: args.max_decompile]
+    targets = (
+        candidates if args.max_decompile <= 0 else candidates[: args.max_decompile]
+    )
     for row in targets:
         try:
             pseudocode = g.ir.decompile_at(
@@ -1484,7 +1490,9 @@ def _call_summary(row: dict[str, Any]) -> dict[str, Any]:
         target = str(call.get("target", ""))
         if not target:
             continue
-        if target in imports or _api_stem(target) in {_api_stem(name) for name in imports}:
+        if target in imports or _api_stem(target) in {
+            _api_stem(name) for name in imports
+        }:
             import_calls.append(target)
         elif call.get("target_va") is not None:
             internal_calls.append(target)

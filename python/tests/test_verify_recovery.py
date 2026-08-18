@@ -61,7 +61,8 @@ def test_compile_check_reports_no_compiler_clean(monkeypatch) -> None:
     """Pretend gcc/clang/cc are all gone; the helper should report
     a clean failure rather than crash."""
     monkeypatch.setattr(
-        "shutil.which", lambda _name: None,
+        "shutil.which",
+        lambda _name: None,
     )
     result = compile_check("int main(void) { return 0; }")
     assert not result.ok
@@ -74,9 +75,7 @@ def test_byte_similarity_against_target_smoke(tmp_path: Path) -> None:
     something — exact value depends on the compiler's codegen, but
     the report must be well-shaped."""
     _need_compiler()
-    target = Path(
-        "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2"
-    )
+    target = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
     if not target.exists():
         pytest.skip(f"missing sample {target}")
 
@@ -181,7 +180,9 @@ def test_compare_runtime_to_target_reports_agreement() -> None:
         src_path.write_text(src)
         proc = subprocess.run(
             ["gcc", "-O0", "-w", "-o", str(bin_path), str(src_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if proc.returncode != 0:
             pytest.skip(f"target compile failed: {proc.stderr}")
@@ -189,7 +190,9 @@ def test_compare_runtime_to_target_reports_agreement() -> None:
         from glaurung.llm.kb.verify_recovery import compare_runtime_to_target
 
         cmp = compare_runtime_to_target(
-            src, str(bin_path), args=["a", "b", "c"],
+            src,
+            str(bin_path),
+            args=["a", "b", "c"],
         )
         # Identical sources → identical outputs.
         assert cmp.same_exit_code
@@ -215,7 +218,9 @@ def test_compare_runtime_detects_disagreement() -> None:
         src_path.write_text(target_src)
         proc = subprocess.run(
             ["gcc", "-O0", "-w", "-o", str(bin_path), str(src_path)],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if proc.returncode != 0:
             pytest.skip(f"target compile failed: {proc.stderr}")

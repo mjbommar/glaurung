@@ -27,7 +27,11 @@ def test_set_get_list_remove_round_trip(tmp_path: Path) -> None:
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
 
     xref_db.set_data_label(
-        kb, va=0x4000, name="g_config", c_type="struct config", size=128,
+        kb,
+        va=0x4000,
+        name="g_config",
+        c_type="struct config",
+        size=128,
     )
     xref_db.set_data_label(kb, va=0x4080, name="g_log_buf", c_type="char[]", size=4096)
     xref_db.set_data_label(kb, va=0x5000, name="g_quit_flag", c_type="int")
@@ -56,7 +60,10 @@ def test_manual_entries_survive_analyzer_overwrite(tmp_path: Path) -> None:
     xref_db.set_data_label(kb, va=0x4000, name="my_secret_table", set_by="manual")
     # Auto-import later tries to clobber with the symbol-table name.
     xref_db.set_data_label(
-        kb, va=0x4000, name="something_generic", set_by="analyzer",
+        kb,
+        va=0x4000,
+        name="something_generic",
+        set_by="analyzer",
     )
     rec = xref_db.get_data_label(kb, 0x4000)
     assert rec is not None

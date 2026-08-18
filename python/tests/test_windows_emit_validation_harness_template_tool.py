@@ -177,11 +177,17 @@ def test_windows_emit_validation_harness_template_writes_operator_scaffold(
     assert template.claim_level == "harness_template_not_execution"
     assert template.ready_to_collect_artifacts is False
     assert template.harness_id == "win-harness-candidate-1"
-    assert any("placeholder policy sequence" in item for item in template.harness_strategy)
-    assert any("C:\\Windows\\MEMORY.DMP" in item for item in template.artifact_requirements)
+    assert any(
+        "placeholder policy sequence" in item for item in template.harness_strategy
+    )
+    assert any(
+        "C:\\Windows\\MEMORY.DMP" in item for item in template.artifact_requirements
+    )
     assert any("Registry export" in item for item in template.artifact_requirements)
     assert any("run-cldflt.ps1" in item for item in template.skeleton_commands)
-    assert any("harness recipe has known blockers" in item for item in template.blockers)
+    assert any(
+        "harness recipe has known blockers" in item for item in template.blockers
+    )
     assert template.ready_to_collect_artifacts is False
     assert "$CandidateId = 'candidate-1'" in template.skeleton_commands
     assert "# Windows Validation Harness Template: candidate-1" in template.markdown
@@ -223,8 +229,13 @@ def test_windows_emit_validation_harness_template_surfaces_plan_and_mapping_bloc
 
     template = result.template
     assert template.ready_to_collect_artifacts is False
-    assert any("VM validation plan has blockers" in blocker for blocker in template.blockers)
-    assert any("candidate snapshot mapping has blockers" in blocker for blocker in template.blockers)
+    assert any(
+        "VM validation plan has blockers" in blocker for blocker in template.blockers
+    )
+    assert any(
+        "candidate snapshot mapping has blockers" in blocker
+        for blocker in template.blockers
+    )
     assert any("runtime blockers" in blocker for blocker in template.blockers)
     assert "Ready to collect artifacts: no" in template.markdown
 

@@ -163,9 +163,10 @@ def test_options_global_is_handled_by_bug_w_not_q():
     # No `extern int options` anywhere in Q's output. (Token-bounded
     # check — _gfortran_set_options is allowed.)
     import re as _re
-    assert not any(
-        _re.search(r"\bextern\s+int\s+options\b", e) for e in externs
-    ), f"Q emitted an extern for options: {externs!r}"
+
+    assert not any(_re.search(r"\bextern\s+int\s+options\b", e) for e in externs), (
+        f"Q emitted an extern for options: {externs!r}"
+    )
     # Bug W's registry has it instead.
     assert "options" in _FORTRAN_FILE_SCOPE_STATIC_DEFINITIONS
 
@@ -183,6 +184,7 @@ def test_extern_decl_lines_are_not_duplicated_across_runs():
 # -----------------------------------------------------------------------
 # Task P — canonical gfc_dt / st_parameter_dt struct emission
 # -----------------------------------------------------------------------
+
 
 def test_module_uses_gfortran_dt_detects_both_spellings():
     """Detection must fire on either ``gfc_dt`` or ``st_parameter_dt``."""
@@ -298,9 +300,18 @@ void use_dt(void) {
 }
 """)
     result = subprocess.run(
-        ["gcc", "-O2", "-Wall", "-Werror", "-c",
-         str(test_c), "-o", str(tmp_path / "ut.o")],
-        capture_output=True, text=True,
+        [
+            "gcc",
+            "-O2",
+            "-Wall",
+            "-Werror",
+            "-c",
+            str(test_c),
+            "-o",
+            str(tmp_path / "ut.o"),
+        ],
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, (
         f"compile failed:\nstdout={result.stdout}\nstderr={result.stderr}"
@@ -310,6 +321,7 @@ void use_dt(void) {
 # -----------------------------------------------------------------------
 # Bug W — stub definitions for gfortran-emitted file-scope statics
 # -----------------------------------------------------------------------
+
 
 def test_emit_file_scope_static_defs_emits_options_when_extern_declared():
     """The most common gfortran case: main.c has
@@ -408,9 +420,18 @@ void MAIN__(void) { /* stub for the test */ }
     main_c.write_text("\n".join(stubs) + "\n" + stripped)
 
     result = subprocess.run(
-        ["gcc", "-O2", "-Wall", "-Werror", "-c",
-         str(main_c), "-o", str(tmp_path / "ut.o")],
-        capture_output=True, text=True,
+        [
+            "gcc",
+            "-O2",
+            "-Wall",
+            "-Werror",
+            "-c",
+            str(main_c),
+            "-o",
+            str(tmp_path / "ut.o"),
+        ],
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, (
         f"Bug W stub-definition pipeline produced uncompilable C:\n"
@@ -422,6 +443,7 @@ void MAIN__(void) { /* stub for the test */ }
 # -----------------------------------------------------------------------
 # Bug GG — extern "C" wrapping for libstdc++ / Itanium runtime symbols
 # -----------------------------------------------------------------------
+
 
 def test_wrap_runtime_externs_targets_libstdcxx_mangled_names():
     """The pass must wrap any extern declaring an Itanium-mangled
@@ -515,9 +537,9 @@ extern void _Unwind_Resume(void *exc) __attribute__((noreturn));
     test_cpp = tmp_path / "ut.cpp"
     test_cpp.write_text(wrapped)
     result = subprocess.run(
-        ["g++", "-c", "-Wall", "-Werror", str(test_cpp), "-o",
-         str(tmp_path / "ut.o")],
-        capture_output=True, text=True,
+        ["g++", "-c", "-Wall", "-Werror", str(test_cpp), "-o", str(tmp_path / "ut.o")],
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, (
         f"wrapped C++ failed to compile under -Wall -Werror:\n"
@@ -528,6 +550,7 @@ extern void _Unwind_Resume(void *exc) __attribute__((noreturn));
 # -----------------------------------------------------------------------
 # Bug HH — canonical cxx_runtime.h emission for C++-recovered trees
 # -----------------------------------------------------------------------
+
 
 def test_cxx_runtime_header_defines_libstdcxx_approximations():
     """The header must declare the libstdc++ approximation types
@@ -564,9 +587,7 @@ def test_module_uses_cxx_runtime_detects_approximation_types():
 def test_module_uses_cxx_runtime_token_boundaries():
     """No false positives on substring matches."""
     # `std__string_view` is a hypothetical superset name.
-    assert _module_uses_cxx_runtime(
-        "void *p = my_std__string_view_helper();"
-    ) is False
+    assert _module_uses_cxx_runtime("void *p = my_std__string_view_helper();") is False
 
 
 def test_cxx_runtime_header_compiles_under_gcc_wall_werror(tmp_path):
@@ -605,13 +626,11 @@ void use(std__vector_string *v) {
     # recovered tree intentionally doesn't use -Werror, so this
     # gate matches that — -Wall stays on, -Werror does not.
     result = subprocess.run(
-        ["gcc", "-O2", "-Wall", "-c",
-         str(test_c), "-o", str(tmp_path / "ut.o")],
-        capture_output=True, text=True,
+        ["gcc", "-O2", "-Wall", "-c", str(test_c), "-o", str(tmp_path / "ut.o")],
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, (
         f"cxx_runtime.h failed to compile / use:\n"
         f"stdout={result.stdout}\nstderr={result.stderr}"
     )
-
-

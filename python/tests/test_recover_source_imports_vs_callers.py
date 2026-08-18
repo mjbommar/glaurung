@@ -27,8 +27,7 @@ import glaurung as g
 
 _REPO = Path(__file__).resolve().parents[2]
 _SAMPLE = _REPO / (
-    "samples/binaries/platforms/linux/amd64/export/fortran/"
-    "hello-gfortran-O2"
+    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2"
 )
 _RECOVERED = _REPO / "out/hello-fortran-recovered"
 
@@ -37,15 +36,18 @@ _RECOVERED = _REPO / "out/hello-fortran-recovered"
 # code. These are NOT expected to appear as call sites in the
 # recovered .c files — they're called from _start, __do_global_dtors_aux,
 # and the GNU IFUNC machinery.
-_CRT_IMPORTS = frozenset({
-    "_ITM_deregisterTMCloneTable",
-    "_ITM_registerTMCloneTable",
-    "__cxa_finalize",
-    "__gmon_start__",
-    "__libc_start_main",
-    # Common variants that may show up on different toolchains.
-    "_init", "_fini",
-})
+_CRT_IMPORTS = frozenset(
+    {
+        "_ITM_deregisterTMCloneTable",
+        "_ITM_registerTMCloneTable",
+        "__cxa_finalize",
+        "__gmon_start__",
+        "__libc_start_main",
+        # Common variants that may show up on different toolchains.
+        "_init",
+        "_fini",
+    }
+)
 
 
 @pytest.mark.skipif(not _SAMPLE.exists(), reason="hello-gfortran sample missing")
@@ -62,8 +64,7 @@ def test_every_user_code_import_has_a_caller_in_the_recovered_tree():
 
     user_code_imports = [n for n in imports if n not in _CRT_IMPORTS]
     assert user_code_imports, (
-        "every import was classified as CRT — _CRT_IMPORTS is "
-        "probably overly broad."
+        "every import was classified as CRT — _CRT_IMPORTS is probably overly broad."
     )
 
     # Concatenate every emitted .c body once.

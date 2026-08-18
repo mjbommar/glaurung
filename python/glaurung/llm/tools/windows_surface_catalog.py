@@ -106,7 +106,9 @@ class WindowsSurfaceCatalogTool(
             args.surfaces_path,
             "data/kg/pe-surfaces.yaml",
         )
-        sources_path = _optional_metadata_path(args.sources_path, "data/kg/pe-sources.yaml")
+        sources_path = _optional_metadata_path(
+            args.sources_path, "data/kg/pe-sources.yaml"
+        )
         build_corpus_path = _optional_metadata_path(
             args.build_corpus_path,
             "data/kg/pe-build-corpus.yaml",

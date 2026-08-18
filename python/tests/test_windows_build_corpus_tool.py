@@ -53,12 +53,7 @@ def _write_corpus(tmp_path: Path) -> tuple[Path, Path]:
     corpus_root = tmp_path / "corpus"
     nt_path = corpus_root / "windows-11-x64" / "26100" / "System32" / "ntoskrnl.exe"
     tcp_path = (
-        corpus_root
-        / "windows-11-x64"
-        / "26100"
-        / "System32"
-        / "drivers"
-        / "tcpip.sys"
+        corpus_root / "windows-11-x64" / "26100" / "System32" / "drivers" / "tcpip.sys"
     )
     nt_path.parent.mkdir(parents=True)
     tcp_path.parent.mkdir(parents=True)

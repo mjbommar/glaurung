@@ -42,9 +42,13 @@ def test_macho_stubs_map_returns_stubs_and_laptr():
     by_va = {int(va): str(name) for va, name in entries}
 
     for va, name in EXPECTED_STUB_VAS.items():
-        assert by_va.get(va) == name, f"expected {name} at 0x{va:x}, got {by_va.get(va)!r}"
+        assert by_va.get(va) == name, (
+            f"expected {name} at 0x{va:x}, got {by_va.get(va)!r}"
+        )
     for va, name in EXPECTED_LAPTR_VAS.items():
-        assert by_va.get(va) == name, f"expected {name} at 0x{va:x}, got {by_va.get(va)!r}"
+        assert by_va.get(va) == name, (
+            f"expected {name} at 0x{va:x}, got {by_va.get(va)!r}"
+        )
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="Mach-O sample not present")

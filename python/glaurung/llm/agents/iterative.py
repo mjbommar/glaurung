@@ -101,8 +101,10 @@ class IterativeAgent:
             try:
                 # Run agent with current context (F2: usage_limits cap).
                 from ..usage_limits import build_usage_limits
+
                 result = await self.agent.run(
-                    prompt, deps=context,
+                    prompt,
+                    deps=context,
                     usage_limits=build_usage_limits(),
                 )
 

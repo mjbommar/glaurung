@@ -53,7 +53,9 @@ def test_discover_emits_struct_candidates_on_cpp_binary(tmp_path: Path) -> None:
     binary = _need(_HELLO_DEBUG)
     db = tmp_path / "auto.glaurung"
     kb = PersistentKnowledgeBase.open(
-        db, binary_path=binary, auto_load_stdlib=True,
+        db,
+        binary_path=binary,
+        auto_load_stdlib=True,
     )
     xref_db.index_callgraph(kb, str(binary))
 
@@ -63,7 +65,9 @@ def test_discover_emits_struct_candidates_on_cpp_binary(tmp_path: Path) -> None:
         if not f.basic_blocks:
             continue
         total += type_db.discover_struct_candidates(
-            kb, str(binary), int(f.entry_point.value),
+            kb,
+            str(binary),
+            int(f.entry_point.value),
         )
     assert total >= 3, (
         f"expected ≥3 struct candidates from C++ method bodies; got {total}"
@@ -98,7 +102,9 @@ def test_min_field_count_filter(tmp_path: Path) -> None:
 
     # Restrict to >= 100 fields → impossible bar, should always be 0.
     n = type_db.discover_struct_candidates(
-        kb, str(binary), int(main.entry_point.value),
+        kb,
+        str(binary),
+        int(main.entry_point.value),
         min_field_count=100,
     )
     assert n == 0
@@ -113,28 +119,37 @@ def test_manual_structs_survive_auto_overwrite(tmp_path: Path) -> None:
 
     # Pre-name a struct that the auto pass would otherwise create.
     funcs, _ = g.analysis.analyze_functions_path(str(binary))
-    f = next((f for f in funcs if not f.name.startswith("sub_") and f.basic_blocks), None)
+    f = next(
+        (f for f in funcs if not f.name.startswith("sub_") and f.basic_blocks), None
+    )
     if f is None:
         pytest.skip("no named function with blocks")
 
     # Run once to discover the auto name.
     type_db.discover_struct_candidates(
-        kb, str(binary), int(f.entry_point.value),
+        kb,
+        str(binary),
+        int(f.entry_point.value),
     )
-    autos_before = [t for t in type_db.list_types(kb, kind="struct") if t.set_by == "auto"]
+    autos_before = [
+        t for t in type_db.list_types(kb, kind="struct") if t.set_by == "auto"
+    ]
     if not autos_before:
         pytest.skip("auto-discovery produced no candidates for this function")
     target = autos_before[0]
 
     # Analyst overrides.
     type_db.add_struct(
-        kb, target.name,
+        kb,
+        target.name,
         [type_db.StructField(0, "manual_field", "void *", 8)],
         set_by="manual",
     )
     # Re-run auto-discovery — manual entry must win.
     type_db.discover_struct_candidates(
-        kb, str(binary), int(f.entry_point.value),
+        kb,
+        str(binary),
+        int(f.entry_point.value),
     )
     after = type_db.get_type(kb, target.name)
     assert after is not None

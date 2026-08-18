@@ -43,12 +43,12 @@ class InferFunctionSignatureArgs(BaseModel):
     callee_pseudocode: Optional[str] = Field(
         None,
         description="Pseudocode for the callee. When omitted, the tool calls "
-                    "g.ir.decompile_at itself.",
+        "g.ir.decompile_at itself.",
     )
     caller_snippets: List[CallerSnippet] = Field(
         default_factory=list,
         description="Optional caller-side context. Supply 2–4 snippets for "
-                    "the best result.",
+        "the best result.",
     )
     target_language: Literal["c", "rust", "go"] = "c"
     timeout_ms: int = 500
@@ -63,7 +63,7 @@ class InferredParameter(BaseModel):
     owned: bool = Field(
         False,
         description="True when the callee takes ownership (e.g. free()s it "
-                    "or stores it beyond the call).",
+        "or stores it beyond the call).",
     )
     rationale: str = ""
 
@@ -74,12 +74,12 @@ class FunctionSignature(BaseModel):
     c_prototype: str = Field(
         ...,
         description="Full prototype as it should appear at the top of the "
-                    "rewritten source, including return type and semicolon.",
+        "rewritten source, including return type and semicolon.",
     )
     side_effects: List[str] = Field(
         default_factory=list,
         description="Non-parameter observable effects — writes a global, "
-                    "spawns a thread, touches errno, etc.",
+        "spawns a thread, touches errno, etc.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
@@ -108,10 +108,19 @@ _HEADER_RE = re.compile(
 def _rust_to_c(ty: str) -> str:
     t = ty.strip().replace(" ", "")
     base_map = {
-        "i8": "int8_t", "i16": "int16_t", "i32": "int", "i64": "long",
-        "u8": "uint8_t", "u16": "uint16_t", "u32": "uint32_t",
-        "u64": "uint64_t", "usize": "size_t", "isize": "ssize_t",
-        "bool": "bool", "void": "void", "()": "void",
+        "i8": "int8_t",
+        "i16": "int16_t",
+        "i32": "int",
+        "i64": "long",
+        "u8": "uint8_t",
+        "u16": "uint16_t",
+        "u32": "uint32_t",
+        "u64": "uint64_t",
+        "usize": "size_t",
+        "isize": "ssize_t",
+        "bool": "bool",
+        "void": "void",
+        "()": "void",
     }
     stars = 0
     while t.endswith("*"):
@@ -130,9 +139,7 @@ def _heuristic(va: int, pseudocode: str) -> FunctionSignature:
             return_type = _rust_to_c(m.group("ret"))
         raw = (m.group("params") or "").strip()
         if raw:
-            for i, p in enumerate(
-                [x.strip() for x in raw.split(",") if x.strip()]
-            ):
+            for i, p in enumerate([x.strip() for x in raw.split(",") if x.strip()]):
                 if ":" in p:
                     name, ty = [x.strip() for x in p.split(":", 1)]
                 else:
@@ -208,7 +215,8 @@ def _build_prompt(
     parts.append(f"Callee pseudocode:\n```\n{callee}\n```")
     if callers:
         parts.append(
-            "Caller context:\n" + "\n\n".join(
+            "Caller context:\n"
+            + "\n\n".join(
                 f"from `{c.caller_name}`:\n```\n{c.pseudocode}\n```"
                 for c in callers[:4]
             )
@@ -229,8 +237,8 @@ class InferFunctionSignatureTool(
             ToolMeta(
                 name="infer_function_signature",
                 description="Recover a function's full C prototype with "
-                            "parameter directions, nullability, and "
-                            "ownership — reads the callee and a few callers.",
+                "parameter directions, nullability, and "
+                "ownership — reads the callee and a few callers.",
                 tags=("llm", "types", "layer1"),
             ),
             InferFunctionSignatureArgs,

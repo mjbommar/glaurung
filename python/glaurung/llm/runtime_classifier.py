@@ -33,28 +33,48 @@ from typing import Iterable, Literal
 
 
 FunctionClass = Literal[
-    "application", "runtime_helper", "library_import_stub", "unknown",
+    "application",
+    "runtime_helper",
+    "library_import_stub",
+    "unknown",
 ]
 
 
 # Exact-name set: mingw / msvcrt / libgcc helpers we never want to flag.
 # Sourced from inspection of v1/v2 corpus + standard mingw runtime.
-_RUNTIME_HELPER_EXACT: frozenset[str] = frozenset({
-    # mingw / win-CRT startup
-    "_amsg_exit", "_cexit", "_commode", "_initterm", "_fmode",
-    "__getmainargs", "__initenv", "__iob_func", "__set_app_type",
-    "__setusermatherr", "__C_specific_handler",
-    "__tmainCRTStartup", "mainCRTStartup", "WinMainCRTStartup",
-    "atexit", "_atexit", "__main",
-    # mingw pseudo-relocation runtime + register/deregister hooks
-    "__gcc_register_frame", "__gcc_deregister_frame",
-    "_pei386_runtime_relocator", "__pei386_runtime_relocator",
-    # invalid-parameter handler / locale shims
-    "__mingw_invalidParameterHandler",
-    "___lc_codepage_func", "___mb_cur_max_func",
-    # SEH / vectored handlers
-    "SetUnhandledExceptionFilter",
-})
+_RUNTIME_HELPER_EXACT: frozenset[str] = frozenset(
+    {
+        # mingw / win-CRT startup
+        "_amsg_exit",
+        "_cexit",
+        "_commode",
+        "_initterm",
+        "_fmode",
+        "__getmainargs",
+        "__initenv",
+        "__iob_func",
+        "__set_app_type",
+        "__setusermatherr",
+        "__C_specific_handler",
+        "__tmainCRTStartup",
+        "mainCRTStartup",
+        "WinMainCRTStartup",
+        "atexit",
+        "_atexit",
+        "__main",
+        # mingw pseudo-relocation runtime + register/deregister hooks
+        "__gcc_register_frame",
+        "__gcc_deregister_frame",
+        "_pei386_runtime_relocator",
+        "__pei386_runtime_relocator",
+        # invalid-parameter handler / locale shims
+        "__mingw_invalidParameterHandler",
+        "___lc_codepage_func",
+        "___mb_cur_max_func",
+        # SEH / vectored handlers
+        "SetUnhandledExceptionFilter",
+    }
+)
 
 
 # Prefix patterns: anything starting with these is a runtime helper.
@@ -64,25 +84,30 @@ _RUNTIME_HELPER_PREFIXES: tuple[str, ...] = (
     "__pei386_",
     "_pei386_",
     "__gcc_",
-    "__cxa_",          # libstdc++ exception ABI
-    "_Unwind_",        # libgcc unwinder
-    "__udivti3", "__umodti3", "__divti3", "__modti3",  # libgcc soft-divide
-    "_setargv", "_matherr", "__C_specific_handler",
-    "__chkstk",        # stack-probe helper
+    "__cxa_",  # libstdc++ exception ABI
+    "_Unwind_",  # libgcc unwinder
+    "__udivti3",
+    "__umodti3",
+    "__divti3",
+    "__modti3",  # libgcc soft-divide
+    "_setargv",
+    "_matherr",
+    "__C_specific_handler",
+    "__chkstk",  # stack-probe helper
 )
 
 
 # Substring patterns inside symbol names. Used sparingly to avoid
 # misclassifying user code that happens to share a prefix.
 _RUNTIME_HELPER_SUBSTRS: tuple[str, ...] = (
-    "_RTC_",           # MSVC runtime checks
+    "_RTC_",  # MSVC runtime checks
     "_security_check_cookie",
     "__report_gsfailure",
 )
 
 
 _IMPORT_STUB_PREFIXES: tuple[str, ...] = (
-    "__imp_",          # MSVC import-table direct reference
+    "__imp_",  # MSVC import-table direct reference
     "__imp__",
 )
 

@@ -645,7 +645,9 @@ def _blocker_worklist(
         candidate_id: _packet_target_id(packet, target_by_binary)
         for candidate_id, packet in packets_by_candidate.items()
     }
-    aggregated: dict[tuple[WindowsTargetPipelineBlockerKind, str], _BlockerAggregate] = {}
+    aggregated: dict[
+        tuple[WindowsTargetPipelineBlockerKind, str], _BlockerAggregate
+    ] = {}
 
     def add(
         blocker: str,

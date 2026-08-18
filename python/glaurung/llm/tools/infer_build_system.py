@@ -48,7 +48,7 @@ class InferBuildSystemArgs(BaseModel):
     binary_imports: List[str] = Field(
         default_factory=list,
         description="All imported symbols from the binary — used to infer "
-                    "which external libraries must be linked.",
+        "which external libraries must be linked.",
     )
     platform_hint: Optional[str] = Field(
         None, description="'windows' | 'linux' | 'darwin' | None"
@@ -109,8 +109,13 @@ def _heuristic_c(args: InferBuildSystemArgs) -> BuildSystem:
     sources = "\n    ".join(m.path for m in args.modules)
     link_libs = ""
     if deps:
-        link_libs = "\ntarget_link_libraries(" + args.project_name + " PRIVATE " + \
-                    " ".join(deps.keys()) + ")"
+        link_libs = (
+            "\ntarget_link_libraries("
+            + args.project_name
+            + " PRIVATE "
+            + " ".join(deps.keys())
+            + ")"
+        )
     content = (
         f"cmake_minimum_required(VERSION 3.16)\n"
         f"project({args.project_name} C)\n\n"
@@ -201,9 +206,7 @@ def _build_prompt(args: InferBuildSystemArgs) -> str:
     parts.append("Modules:")
     for m in args.modules:
         plat = f" [{m.platform}]" if m.platform else ""
-        parts.append(
-            f"  {m.path}{plat}  imports: {m.imports}"
-        )
+        parts.append(f"  {m.path}{plat}  imports: {m.imports}")
     if args.binary_imports:
         parts.append(
             "Binary import list (sample):\n"
@@ -216,16 +219,14 @@ def _build_prompt(args: InferBuildSystemArgs) -> str:
     return "\n\n".join(parts)
 
 
-class InferBuildSystemTool(
-    MemoryTool[InferBuildSystemArgs, InferBuildSystemResult]
-):
+class InferBuildSystemTool(MemoryTool[InferBuildSystemArgs, InferBuildSystemResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="infer_build_system",
                 description="Produce CMake / Cargo / go.mod / pyproject.toml "
-                            "for a recovered source tree given module layout "
-                            "and the binary's imports.",
+                "for a recovered source tree given module layout "
+                "and the binary's imports.",
                 tags=("llm", "build", "layer3"),
             ),
             InferBuildSystemArgs,

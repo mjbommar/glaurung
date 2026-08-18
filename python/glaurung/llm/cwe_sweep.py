@@ -197,8 +197,10 @@ async def sweep_binary(
     # F5: import the budget exception so we can re-raise it cleanly
     # without being caught by the generic Exception arm below.
     from .usage_tracker import CostBudgetExceeded
+
     # F7: partial-dir setup (write per-class JSON immediately).
     from pathlib import Path
+
     partial_root: Optional[Path] = None
     if partial_dir:
         partial_root = Path(partial_dir)
@@ -235,7 +237,9 @@ async def sweep_binary(
                 # recorded as a note but doesn't kill the whole sweep.
                 logger.warning(
                     "sweep class %s failed for %s: %s",
-                    spec.id, binary_path, e,
+                    spec.id,
+                    binary_path,
+                    e,
                 )
                 return FindingsReport(
                     binary_path=binary_path,
@@ -254,8 +258,7 @@ async def sweep_binary(
                             function=f.function,
                             bug_site=f.bug_site,
                             root_cause=(
-                                f"(agent originally classed as {f.cwe}) "
-                                + f.root_cause
+                                f"(agent originally classed as {f.cwe}) " + f.root_cause
                             ),
                             evidence=list(f.evidence),
                             confidence=f.confidence,
@@ -282,13 +285,16 @@ async def sweep_binary(
         logger.warning(
             "sweep aborted mid-flight on %s: %s -- returning partial "
             "findings (%d classes completed)",
-            binary_path, e, len(reports),
+            binary_path,
+            e,
+            len(reports),
         )
         merged = FindingsReport.merge(reports)
         existing = merged.notes or ""
         sep = "\n" if existing else ""
         object.__setattr__(
-            merged, "notes",
+            merged,
+            "notes",
             f"{existing}{sep}[sweep-aborted-cost-budget] {e}",
         )
         return merged

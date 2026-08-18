@@ -6,6 +6,7 @@ direct call targets and IAT references get named, intra-function jumps do
 NOT pollute the coverage caveats, and name-or-VA both resolve.
 Skips cleanly when the corpus / cached PDB is absent.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -31,8 +32,9 @@ def kb_db(monkeypatch_module=None):
     os.environ["GLAURUNG_PDB_CACHE"] = str(_CACHE)
     td = tempfile.mkdtemp(prefix="glaurung-fdtest-")
     db = str(Path(td) / "dxgmms2.glaurung")
-    s = kickoff_analysis(str(_BIN), db_path=db, fetch_pdb=False,
-                         max_functions_for_kb_lift=0)
+    s = kickoff_analysis(
+        str(_BIN), db_path=db, fetch_pdb=False, max_functions_for_kb_lift=0
+    )
     assert s.functions_named_pdb > 1000
     return db
 
@@ -40,8 +42,9 @@ def kb_db(monkeypatch_module=None):
 def test_named_call_targets_and_clean_coverage(kb_db) -> None:
     from glaurung.llm.kb.function_disasm import disasm_function
 
-    fd = disasm_function(str(_BIN), db_path=kb_db,
-                         function="VidSchiCheckPendingDeviceCommand")
+    fd = disasm_function(
+        str(_BIN), db_path=kb_db, function="VidSchiCheckPendingDeviceCommand"
+    )
     assert fd.name == "VidSchiCheckPendingDeviceCommand"
     assert fd.end_va > fd.start_va
     comments = [i.comment for i in fd.insns if i.comment]
@@ -58,10 +61,10 @@ def test_named_call_targets_and_clean_coverage(kb_db) -> None:
 def test_resolve_by_va_matches_by_name(kb_db) -> None:
     from glaurung.llm.kb.function_disasm import disasm_function
 
-    by_name = disasm_function(str(_BIN), db_path=kb_db,
-                              function="VidSchiCheckPendingDeviceCommand")
-    by_va = disasm_function(str(_BIN), db_path=kb_db,
-                            function=hex(by_name.start_va))
+    by_name = disasm_function(
+        str(_BIN), db_path=kb_db, function="VidSchiCheckPendingDeviceCommand"
+    )
+    by_va = disasm_function(str(_BIN), db_path=kb_db, function=hex(by_name.start_va))
     assert by_va.start_va == by_name.start_va
     assert len(by_va.insns) == len(by_name.insns)
 

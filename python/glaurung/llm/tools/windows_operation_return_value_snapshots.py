@@ -22,9 +22,15 @@ class WindowsOperationReturnValueSnapshotsArgs(BaseModel):
         ),
     )
     target_id: str | None = Field(None, description="Optional target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
-    backlog_id: str | None = Field(None, description="Optional backlog entry id filter.")
-    symbol: str | None = Field(None, description="Optional exact backlog symbol filter.")
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
+    backlog_id: str | None = Field(
+        None, description="Optional backlog entry id filter."
+    )
+    symbol: str | None = Field(
+        None, description="Optional exact backlog symbol filter."
+    )
     use_kind: str | None = Field(
         None,
         description="Optional return-use kind filter, e.g. null_or_status_check.",
@@ -86,7 +92,9 @@ class WindowsOperationReturnValueGroup(BaseModel):
     branch_related_callsite_count: int
     clobbered_callsite_count: int
     ignored_callsite_count: int
-    sample_return_uses: list[WindowsOperationReturnUseSample] = Field(default_factory=list)
+    sample_return_uses: list[WindowsOperationReturnUseSample] = Field(
+        default_factory=list
+    )
     recommended_next_actions: list[str] = Field(default_factory=list)
     notes: str | None = None
 
@@ -162,7 +170,9 @@ class WindowsOperationReturnValueSnapshotsTool(
             _snapshot(entry, args) for entry in _load_yaml_list(snapshots_path)
         ]
         total = len(snapshots)
-        snapshots = [snapshot for snapshot in snapshots if _snapshot_matches(snapshot, args)]
+        snapshots = [
+            snapshot for snapshot in snapshots if _snapshot_matches(snapshot, args)
+        ]
         snapshots = snapshots[: args.max_snapshots]
 
         evidence_node_id = None
@@ -231,7 +241,9 @@ def _snapshot(
         scanned_callsite_count=int(entry.get("scanned_callsite_count") or 0),
         backlog_entry_count_total=int(entry.get("backlog_entry_count_total") or 0),
         matched_backlog_entry_count=int(entry.get("matched_backlog_entry_count") or 0),
-        matched_project_callsite_count=int(entry.get("matched_project_callsite_count") or 0),
+        matched_project_callsite_count=int(
+            entry.get("matched_project_callsite_count") or 0
+        ),
         sampled_callsite_count=int(entry.get("sampled_callsite_count") or 0),
         coverage=[str(value) for value in entry.get("coverage") or []],
         missing_capabilities=[

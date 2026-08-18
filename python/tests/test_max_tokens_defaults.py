@@ -27,23 +27,30 @@ async def test_findings_runner_passes_default_max_output_tokens():
         output=FindingsReport(binary_path="/x", findings=[])
     )
 
-    with patch("glaurung.llm.agents.memory_foundation.create_foundation_agent",
-               return_value=fake), \
-         patch("glaurung.llm.agents.memory_agent.register_analysis_tools",
-               side_effect=lambda a, **kw: a), \
-         patch("glaurung.triage.analyze_path",
-               return_value=SimpleNamespace()), \
-         patch("glaurung.llm.kb.adapters.import_triage",
-               return_value=None), \
-         patch("glaurung.llm.finding_verifier._BinaryContext.build",
-               return_value=None), \
-         patch("glaurung.llm.finding_verifier.verify_report",
-               return_value=None):
+    with (
+        patch(
+            "glaurung.llm.agents.memory_foundation.create_foundation_agent",
+            return_value=fake,
+        ),
+        patch(
+            "glaurung.llm.agents.memory_agent.register_analysis_tools",
+            side_effect=lambda a, **kw: a,
+        ),
+        patch("glaurung.triage.analyze_path", return_value=SimpleNamespace()),
+        patch("glaurung.llm.kb.adapters.import_triage", return_value=None),
+        patch("glaurung.llm.finding_verifier._BinaryContext.build", return_value=None),
+        patch("glaurung.llm.finding_verifier.verify_report", return_value=None),
+    ):
         from glaurung.llm.findings_runner import run_findings_pass
+
         args = SimpleNamespace(
-            model="openai:gpt-5.4-mini", max_read_bytes=1024,
-            max_file_size=1024, max_functions=1, max_instructions=100,
-            disasm_window=512, skip_critique=True,
+            model="openai:gpt-5.4-mini",
+            max_read_bytes=1024,
+            max_file_size=1024,
+            max_functions=1,
+            max_instructions=100,
+            disasm_window=512,
+            skip_critique=True,
         )
         await run_findings_pass("/nonexistent.exe", args)
 
@@ -59,7 +66,9 @@ async def test_findings_runner_passes_default_max_output_tokens():
 async def test_finding_critic_passes_4k_max_tokens_not_512():
     pytest.importorskip("pydantic_ai")
     from glaurung.llm.findings import (
-        VulnerabilityFinding, FunctionRef, Evidence,
+        VulnerabilityFinding,
+        FunctionRef,
+        Evidence,
     )
     from glaurung.llm.finding_verifier import _AnalysedFunction, _BinaryContext
 
@@ -74,12 +83,12 @@ async def test_finding_critic_passes_4k_max_tokens_not_512():
         cwe="CWE-121",
         function=FunctionRef(name="f", va=0x100),
         root_cause="strcpy of caller-controlled buffer with no length cap",
-        evidence=[Evidence(kind="import", location="strcpy",
-                           text="strcpy imported")],
+        evidence=[Evidence(kind="import", location="strcpy", text="strcpy imported")],
     )
 
     fake = _FakeAgent()
     from glaurung.llm.finding_critic import _CriticVerdict
+
     fake.run.return_value = SimpleNamespace(
         output=_CriticVerdict(
             evidence_supports_claim="true",
@@ -88,6 +97,7 @@ async def test_finding_critic_passes_4k_max_tokens_not_512():
     )
     with patch("pydantic_ai.Agent", return_value=fake):
         from glaurung.llm.finding_critic import critique_finding
+
         await critique_finding(finding, ctx, model_name="openai:gpt-5.4-mini")
 
     ms = fake.run.await_args.kwargs.get("model_settings")

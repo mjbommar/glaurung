@@ -45,6 +45,7 @@ DEFAULT_MAX_DECOMPILE_FUNCTIONS = 24
 class BinaryScorecard:
     """One row per binary. Stable, additive schema — never remove fields,
     only add new ones with defaults."""
+
     binary_path: str
     metadata_path: Optional[str]
     source_path: Optional[str]
@@ -128,9 +129,7 @@ class BenchSummary:
                     "stack_frame.functions_with_slots"
                 ),
                 "propagated_slots": total_int("type_kb.propagated_slots"),
-                "auto_struct_candidates": total_int(
-                    "type_kb.auto_struct_candidates"
-                ),
+                "auto_struct_candidates": total_int("type_kb.auto_struct_candidates"),
             },
             "rates": {
                 "name_match_rate_avg": avg("discovery.name_match_rate"),
@@ -201,6 +200,7 @@ def run_one_binary(
     packer_dict: dict = {}
     try:
         from glaurung.llm.kb.packer_detect import detect_packer
+
         verdict = detect_packer(str(binary))
         packer_dict = {
             "is_packed": verdict.is_packed,
@@ -271,7 +271,7 @@ def run_one_binary(
             elif "go.buildid" in haystack or "runtime.gostartcallfn" in haystack:
                 detected_language = "go"
             elif (
-                "_znst" in haystack         # mangled std:: symbols
+                "_znst" in haystack  # mangled std:: symbols
                 or "_znk" in haystack
                 or "__cxa_throw" in haystack
                 or "__cxa_begin_catch" in haystack
@@ -413,10 +413,14 @@ SCHEMA_VERSION = "1"
 
 def _git_head() -> Optional[str]:
     import subprocess
+
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=2, check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
         )
         if out.returncode == 0:
             return out.stdout.strip()
@@ -483,24 +487,35 @@ def to_markdown(summary: BenchSummary) -> str:
         lines.append(f"- Binaries scored: **{agg['ok']}** (errored: {agg['errored']})")
         totals = agg.get("totals", {})
         rates = agg.get("rates", {})
-        lines.append(f"- Functions discovered: **{totals.get('functions_discovered', 0)}** "
-                     f"(named: {totals.get('functions_named', 0)})")
-        lines.append(f"- Multi-chunk functions: **{totals.get('multi_chunk_functions', 0)}** "
-                     f"(cold orphans: {totals.get('cold_orphans', 0)})")
-        lines.append(f"- Decompiled OK: **{totals.get('decompiled_ok', 0)}** "
-                     f"(failed: {totals.get('decompiled_failed', 0)})")
-        lines.append(f"- DWARF types: **{totals.get('dwarf_types', 0)}** "
-                     f"(structs with fields: {totals.get('dwarf_structs_with_fields', 0)})")
-        lines.append(f"- Stack-frame slots: **{totals.get('stack_frame_slots', 0)}** "
-                     f"(across {totals.get('functions_with_stack_slots', 0)} functions)")
-        lines.append(f"- Type-KB lift: **{totals.get('propagated_slots', 0)}** propagated, "
-                     f"**{totals.get('auto_struct_candidates', 0)}** auto-struct candidates")
+        lines.append(
+            f"- Functions discovered: **{totals.get('functions_discovered', 0)}** "
+            f"(named: {totals.get('functions_named', 0)})"
+        )
+        lines.append(
+            f"- Multi-chunk functions: **{totals.get('multi_chunk_functions', 0)}** "
+            f"(cold orphans: {totals.get('cold_orphans', 0)})"
+        )
+        lines.append(
+            f"- Decompiled OK: **{totals.get('decompiled_ok', 0)}** "
+            f"(failed: {totals.get('decompiled_failed', 0)})"
+        )
+        lines.append(
+            f"- DWARF types: **{totals.get('dwarf_types', 0)}** "
+            f"(structs with fields: {totals.get('dwarf_structs_with_fields', 0)})"
+        )
+        lines.append(
+            f"- Stack-frame slots: **{totals.get('stack_frame_slots', 0)}** "
+            f"(across {totals.get('functions_with_stack_slots', 0)} functions)"
+        )
+        lines.append(
+            f"- Type-KB lift: **{totals.get('propagated_slots', 0)}** propagated, "
+            f"**{totals.get('auto_struct_candidates', 0)}** auto-struct candidates"
+        )
         # Packer-detection signal: when ANY scorecard came back with
         # is_packed=True, surface the count so packed-matrix runs
         # produce a regression-trackable line (#213).
         packed_count = sum(
-            1 for c in summary.scorecards
-            if c.packer and c.packer.get("is_packed")
+            1 for c in summary.scorecards if c.packer and c.packer.get("is_packed")
         )
         if packed_count:
             families: dict = {}
@@ -508,23 +523,24 @@ def to_markdown(summary: BenchSummary) -> str:
                 if c.packer and c.packer.get("is_packed"):
                     fam = c.packer.get("packer_name") or "(generic)"
                     families[fam] = families.get(fam, 0) + 1
-            fam_str = ", ".join(
-                f"{n}×{c}" for n, c in sorted(families.items())
-            )
+            fam_str = ", ".join(f"{n}×{c}" for n, c in sorted(families.items()))
             lines.append(
-                f"- Packed binaries: **{packed_count}** "
-                f"(by family: {fam_str})"
+                f"- Packed binaries: **{packed_count}** (by family: {fam_str})"
             )
         lines.append("")
         lines.append("## Rates")
-        lines.append(f"- Symbol-name resolution (avg): **{rates.get('name_match_rate_avg', 0):.1%}**")
-        lines.append(f"- Decompile success (avg): **{rates.get('decompile_success_rate_avg', 0):.1%}**")
-        lines.append(f"- Language detection match: **{rates.get('language_match_rate', 0):.1%}**")
+        lines.append(
+            f"- Symbol-name resolution (avg): **{rates.get('name_match_rate_avg', 0):.1%}**"
+        )
+        lines.append(
+            f"- Decompile success (avg): **{rates.get('decompile_success_rate_avg', 0):.1%}**"
+        )
+        lines.append(
+            f"- Language detection match: **{rates.get('language_match_rate', 0):.1%}**"
+        )
         lines.append("")
 
-    has_packed = any(
-        c.packer and c.packer.get("is_packed") for c in summary.scorecards
-    )
+    has_packed = any(c.packer and c.packer.get("is_packed") for c in summary.scorecards)
     lines.append("## Per binary")
     lines.append("")
     if has_packed:
@@ -535,8 +551,7 @@ def to_markdown(summary: BenchSummary) -> str:
         lines.append("|---|---:|---:|---:|---:|---:|---|---:|---:|")
     else:
         lines.append(
-            "| binary | funcs | named | chunks>1 | cold orphans | "
-            "decompiled | ms |"
+            "| binary | funcs | named | chunks>1 | cold orphans | decompiled | ms |"
         )
         lines.append("|---|---:|---:|---:|---:|---:|---:|")
     for c in summary.scorecards:

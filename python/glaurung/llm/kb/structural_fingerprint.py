@@ -110,7 +110,7 @@ def _bucket_imm(value: Optional[int]) -> str:
         return "s"  # small
     if v < 0x10000:
         return "m"  # medium
-    return "L"      # large (likely a pointer / sentinel)
+    return "L"  # large (likely a pointer / sentinel)
 
 
 def _instr_token(
@@ -190,7 +190,9 @@ def _instr_token(
             continue
         parts.append(f"O[{kind}]")
 
-    if is_call and not any(p.startswith("call(") or p.startswith("M[iat:") for p in parts[1:]):
+    if is_call and not any(
+        p.startswith("call(") or p.startswith("M[iat:") for p in parts[1:]
+    ):
         # An indirect call where the operand wasn't IAT-resolvable
         # (e.g. ``call rax``, ``call [rbx+8]``). Mark it as such so it
         # doesn't collide with direct calls.
@@ -218,7 +220,7 @@ class FunctionStructure:
     fingerprint: str
     block_token_hashes: Tuple[str, ...]
     stats: Tuple[int, ...]  # (n_blocks, n_edges, n_calls, n_indirect_calls,
-                            #  n_mem_reads, n_mem_writes, n_returns)
+    #  n_mem_reads, n_mem_writes, n_returns)
 
 
 def _hash16(s: str) -> str:
@@ -267,9 +269,7 @@ def build_va_table(data: bytes) -> Tuple[List[Tuple[int, int, int]], int]:
         return [], 0
 
 
-def va_to_offset(
-    table: Sequence[Tuple[int, int, int]], va: int
-) -> Optional[int]:
+def va_to_offset(table: Sequence[Tuple[int, int, int]], va: int) -> Optional[int]:
     """Binary-search the section table for ``va`` and return the
     corresponding file offset, or ``None`` if the VA isn't mapped."""
     lo, hi = 0, len(table)
@@ -328,9 +328,7 @@ def structural_fingerprint(
     n_returns = 0
     edges: List[Tuple[int, int]] = []
 
-    fast_path = (
-        data is not None and va_table is not None and disassembler is not None
-    )
+    fast_path = data is not None and va_table is not None and disassembler is not None
 
     # Disassembly cache: VA -> [insns]. On the fast path we issue ONE
     # disassemble_bytes call per function (covering all blocks in the
@@ -353,7 +351,8 @@ def structural_fingerprint(
                         # regions where Capstone walks forever.
                         cap = max(sum(block_insn_caps), 32) * 2
                         all_insns = disassembler.disassemble_bytes(
-                            rng.start, buf,
+                            rng.start,
+                            buf,
                             max_instructions=cap,
                             max_time_ms=500,
                         )
@@ -366,7 +365,10 @@ def structural_fingerprint(
                     for ins in all_insns:
                         va = int(ins.address.value)
                         # Advance cur_idx to the block containing this va.
-                        while cur_idx + 1 < len(block_starts) and block_starts[cur_idx + 1] <= va:
+                        while (
+                            cur_idx + 1 < len(block_starts)
+                            and block_starts[cur_idx + 1] <= va
+                        ):
                             cur_idx += 1
                         if cur_idx >= 0:
                             insns_by_block.setdefault(cur_idx, []).append(ins)
@@ -387,7 +389,10 @@ def structural_fingerprint(
         if not insns and not fast_path:
             try:
                 insns = g.disasm.disassemble_window_at(
-                    str(path), start, max(size, 1), block_insn_caps[idx],
+                    str(path),
+                    start,
+                    max(size, 1),
+                    block_insn_caps[idx],
                 )
             except Exception:
                 insns = []
@@ -425,8 +430,11 @@ def structural_fingerprint(
     # we DO sort the edges, since the per-block emission order of
     # successors is meaningless.
     edges_sorted = sorted(edges)
-    digest_input = "B:" + "|".join(block_hashes) + ";E:" + ",".join(
-        f"{a}>{b}" for a, b in edges_sorted
+    digest_input = (
+        "B:"
+        + "|".join(block_hashes)
+        + ";E:"
+        + ",".join(f"{a}>{b}" for a, b in edges_sorted)
     )
     fingerprint = _hash16(digest_input)
 
@@ -476,6 +484,9 @@ def resolve_iat_map(binary_path: str) -> Dict[int, str]:
     try:
         import glaurung as g
 
-        return {int(va): str(name) for (va, name) in g.analysis.pe_iat_map_path(str(binary_path))}
+        return {
+            int(va): str(name)
+            for (va, name) in g.analysis.pe_iat_map_path(str(binary_path))
+        }
     except Exception:
         return {}

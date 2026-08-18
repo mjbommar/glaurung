@@ -29,7 +29,7 @@ class SearchBytePatternArgs(BaseModel):
     pattern: str = Field(
         ...,
         description="Hex pattern with optional ``??`` wildcards, e.g. "
-                    "'48 8B ?? ?? ?? 89 ??'. Whitespace is optional.",
+        "'48 8B ?? ?? ?? 89 ??'. Whitespace is optional.",
     )
     max_results: int = Field(64, description="Cap on returned matches")
     max_scan_bytes: int | None = Field(
@@ -39,7 +39,7 @@ class SearchBytePatternArgs(BaseModel):
     resolve_va: bool = Field(
         True,
         description="When True, attempt to resolve each match's file offset to "
-                    "a virtual address via the ELF/PE/Mach-O section map.",
+        "a virtual address via the ELF/PE/Mach-O section map.",
     )
     context_bytes: int = Field(
         8,
@@ -74,9 +74,7 @@ def _parse_pattern(pattern: str) -> Tuple[bytes, bytes]:
     """
     stripped = re.sub(r"\s+", "", pattern)
     if not stripped or not _HEX_RE.match(stripped):
-        raise ValueError(
-            f"invalid byte pattern {pattern!r} — expected hex/?? nibbles"
-        )
+        raise ValueError(f"invalid byte pattern {pattern!r} — expected hex/?? nibbles")
     if len(stripped) % 2 != 0:
         raise ValueError(
             f"byte pattern has odd nibble count ({len(stripped)}): {pattern!r}"
@@ -92,9 +90,7 @@ def _parse_pattern(pattern: str) -> Tuple[bytes, bytes]:
         if hi == "?" or lo == "?":
             # Nibble-level wildcarding ("4?" / "?8") is possible but we keep
             # the interface byte-level like IDA's "B".
-            raise ValueError(
-                f"half-byte wildcards are not supported (got '{hi}{lo}')"
-            )
+            raise ValueError(f"half-byte wildcards are not supported (got '{hi}{lo}')")
         needle[i // 2] = int(hi + lo, 16)
         mask[i // 2] = 0xFF
     return bytes(needle), bytes(mask)
@@ -135,16 +131,14 @@ def _search(data: bytes, needle: bytes, mask: bytes, limit: int) -> List[int]:
     return out
 
 
-class SearchBytePatternTool(
-    MemoryTool[SearchBytePatternArgs, SearchBytePatternResult]
-):
+class SearchBytePatternTool(MemoryTool[SearchBytePatternArgs, SearchBytePatternResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="search_byte_pattern",
                 description="Search file bytes for a hex pattern with '??' "
-                            "wildcards (IDA/Ghidra style). Returns file "
-                            "offsets and, when possible, virtual addresses.",
+                "wildcards (IDA/Ghidra style). Returns file "
+                "offsets and, when possible, virtual addresses.",
                 tags=("analysis", "bytes"),
             ),
             SearchBytePatternArgs,

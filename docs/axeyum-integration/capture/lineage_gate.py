@@ -499,20 +499,18 @@ def validate_artifact(artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
         fail(f"unsupported direct-delta policy: {direct_delta!r}")
     direct_sibling_identity = policy.get("direct_sibling_identity", "off")
     if direct_sibling_identity not in {"off", "source-prefix-v1"}:
-        fail(
-            f"unsupported direct-sibling-identity policy: {direct_sibling_identity!r}"
-        )
+        fail(f"unsupported direct-sibling-identity policy: {direct_sibling_identity!r}")
     if direct_delta == "on" and (
         warm_reuse != "adaptive" or warm_owner_transfer != "on"
     ):
-        fail(
-            "direct delta gate requires adaptive reuse and exclusive owner transfer"
-        )
+        fail("direct delta gate requires adaptive reuse and exclusive owner transfer")
     if direct_delta == "on" and serial_sibling_reuse == "on":
         if direct_sibling_identity != "source-prefix-v1":
             fail("direct serial reuse requires source-prefix-v1 identity")
     elif direct_sibling_identity != "off":
-        fail("source-prefix-v1 identity requires direct delta plus serial sibling reuse")
+        fail(
+            "source-prefix-v1 identity requires direct delta plus serial sibling reuse"
+        )
     by_driver: dict[str, list[dict[str, Any]]] = {}
     for run in runs:
         if not isinstance(run, dict):
@@ -685,9 +683,7 @@ def run_gate(args: argparse.Namespace) -> None:
     if args.direct_delta == "on" and (
         args.warm_reuse != "adaptive" or args.warm_owner_transfer != "on"
     ):
-        fail(
-            "direct delta gate requires adaptive reuse and exclusive owner transfer"
-        )
+        fail("direct delta gate requires adaptive reuse and exclusive owner transfer")
     binary = pathlib.Path(args.binary).resolve()
     sample_root = pathlib.Path(args.sample_root).resolve()
     output = pathlib.Path(args.output).resolve()
@@ -847,10 +843,9 @@ def validate_comparison_identity(
             if isinstance(identity, dict)
         }
 
-    if (
-        len(content_identity(before_drivers)) != len(before_drivers)
-        or len(content_identity(after_drivers)) != len(after_drivers)
-    ):
+    if len(content_identity(before_drivers)) != len(before_drivers) or len(
+        content_identity(after_drivers)
+    ) != len(after_drivers):
         fail("comparison driver member identity is not an object")
     if content_identity(before_drivers) != content_identity(after_drivers):
         fail("comparison identity drift in drivers")
@@ -1087,8 +1082,12 @@ def main() -> int:
     compare.add_argument("--allow-serial-sibling-reuse-enablement", action="store_true")
     compare.add_argument("--allow-direct-delta-enablement", action="store_true")
     compare.add_argument("--allow-serial-snapshot-to-direct-delta", action="store_true")
-    compare.add_argument("--allow-direct-source-sibling-enablement", action="store_true")
-    compare.add_argument("--allow-serial-snapshot-to-source-direct", action="store_true")
+    compare.add_argument(
+        "--allow-direct-source-sibling-enablement", action="store_true"
+    )
+    compare.add_argument(
+        "--allow-serial-snapshot-to-source-direct", action="store_true"
+    )
     args = parser.parse_args()
     try:
         if args.command == "run":

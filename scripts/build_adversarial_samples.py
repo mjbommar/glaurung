@@ -26,8 +26,13 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HELLO_C = ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2"
-HELLO_CPP = ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
+HELLO_C = (
+    ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2"
+)
+HELLO_CPP = (
+    ROOT
+    / "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2"
+)
 OUT_DIR = ROOT / "samples/adversarial/embedded"
 
 
@@ -55,11 +60,11 @@ def build_pe_with_overlay() -> Path:
     MZ header and a payload after the formal end. Build a minimal MZ
     + PE header structure followed by a zip overlay.
     """
-    mz_hdr = b"MZ" + b"\x90" * 0x3a + struct.pack("<I", 0x40)
-    pe_hdr = b"PE\x00\x00" + struct.pack("<HH", 0x14c, 0)  # i386, 0 sections
+    mz_hdr = b"MZ" + b"\x90" * 0x3A + struct.pack("<I", 0x40)
+    pe_hdr = b"PE\x00\x00" + struct.pack("<HH", 0x14C, 0)  # i386, 0 sections
     pe_hdr += b"\x00" * 16  # timestamp, ptr to symbols, num symbols
-    pe_hdr += struct.pack("<HH", 0xe0, 0x102)  # opt header size, characteristics
-    pe_hdr += b"\x00" * 0xe0  # opt header padding
+    pe_hdr += struct.pack("<HH", 0xE0, 0x102)  # opt header size, characteristics
+    pe_hdr += b"\x00" * 0xE0  # opt header padding
     stub = mz_hdr + b"\x00" * (0x40 - len(mz_hdr)) + pe_hdr
     overlay = io.BytesIO()
     with zipfile.ZipFile(overlay, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -99,9 +104,7 @@ def build_xor_url_in_elf() -> Path:
     encoded = bytes(b ^ key for b in plaintext)
     payload = HELLO_C.read_bytes()
     out = OUT_DIR / "xor_url_in_elf.elf"
-    out.write_bytes(
-        payload + b"\n# c2-marker\n" + encoded + b"\n# c2-marker-end\n"
-    )
+    out.write_bytes(payload + b"\n# c2-marker\n" + encoded + b"\n# c2-marker-end\n")
     return out
 
 
@@ -149,7 +152,8 @@ def build_tar_with_two_hellos() -> Path:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "--clean", action="store_true",
+        "--clean",
+        action="store_true",
         help="Remove existing samples before building",
     )
     args = ap.parse_args()

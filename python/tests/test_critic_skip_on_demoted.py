@@ -10,7 +10,10 @@ import pytest
 from glaurung.llm.finding_critic import critique_report
 from glaurung.llm.finding_verifier import _AnalysedFunction, _BinaryContext
 from glaurung.llm.findings import (
-    Evidence, FindingsReport, FunctionRef, VulnerabilityFinding,
+    Evidence,
+    FindingsReport,
+    FunctionRef,
+    VulnerabilityFinding,
 )
 
 
@@ -29,8 +32,7 @@ def _ctx() -> _BinaryContext:
 
 
 def _ev():
-    return [Evidence(kind="disasm", location="0x140001500",
-                     text="call strcpy")]
+    return [Evidence(kind="disasm", location="0x140001500", text="call strcpy")]
 
 
 def _healthy_finding():
@@ -48,7 +50,7 @@ def _demoted_finding():
     non-empty. Critic should skip this without an LLM call."""
     f = VulnerabilityFinding(
         cwe="CWE-121",
-        function=FunctionRef(name="ghost", va=0xdeadbeef),
+        function=FunctionRef(name="ghost", va=0xDEADBEEF),
         root_cause="strcpy of caller-controlled buffer into stack array",
         evidence=_ev(),
         confidence="low",
@@ -65,10 +67,12 @@ async def test_critic_skips_demoted_finding_no_llm_call():
         binary_path="/fake",
         findings=[_demoted_finding()],
     )
-    with patch("glaurung.llm.finding_critic.critique_finding",
-               new_callable=AsyncMock) as mock_crit:
-        await critique_report(report, model_name="openai:gpt-5.4-mini",
-                              binary_ctx=_ctx())
+    with patch(
+        "glaurung.llm.finding_critic.critique_finding", new_callable=AsyncMock
+    ) as mock_crit:
+        await critique_report(
+            report, model_name="openai:gpt-5.4-mini", binary_ctx=_ctx()
+        )
 
     # Zero LLM calls.
     mock_crit.assert_not_called()
@@ -85,10 +89,12 @@ async def test_critic_runs_on_healthy_finding():
         binary_path="/fake",
         findings=[_healthy_finding()],
     )
-    with patch("glaurung.llm.finding_critic.critique_finding",
-               new_callable=AsyncMock) as mock_crit:
-        await critique_report(report, model_name="openai:gpt-5.4-mini",
-                              binary_ctx=_ctx())
+    with patch(
+        "glaurung.llm.finding_critic.critique_finding", new_callable=AsyncMock
+    ) as mock_crit:
+        await critique_report(
+            report, model_name="openai:gpt-5.4-mini", binary_ctx=_ctx()
+        )
 
     mock_crit.assert_called_once()
 
@@ -100,10 +106,12 @@ async def test_critic_skips_demoted_runs_healthy_in_same_report():
         binary_path="/fake",
         findings=[_demoted_finding(), _healthy_finding()],
     )
-    with patch("glaurung.llm.finding_critic.critique_finding",
-               new_callable=AsyncMock) as mock_crit:
-        await critique_report(report, model_name="openai:gpt-5.4-mini",
-                              binary_ctx=_ctx())
+    with patch(
+        "glaurung.llm.finding_critic.critique_finding", new_callable=AsyncMock
+    ) as mock_crit:
+        await critique_report(
+            report, model_name="openai:gpt-5.4-mini", binary_ctx=_ctx()
+        )
 
     assert mock_crit.call_count == 1
     # The healthy finding was the one critiqued.
@@ -117,10 +125,15 @@ async def test_force_critique_overrides_skip():
         binary_path="/fake",
         findings=[_demoted_finding()],
     )
-    with patch("glaurung.llm.finding_critic.critique_finding",
-               new_callable=AsyncMock) as mock_crit:
-        await critique_report(report, model_name="openai:gpt-5.4-mini",
-                              binary_ctx=_ctx(), force_critique=True)
+    with patch(
+        "glaurung.llm.finding_critic.critique_finding", new_callable=AsyncMock
+    ) as mock_crit:
+        await critique_report(
+            report,
+            model_name="openai:gpt-5.4-mini",
+            binary_ctx=_ctx(),
+            force_critique=True,
+        )
 
     mock_crit.assert_called_once()
 
@@ -138,8 +151,10 @@ async def test_critic_doesnt_skip_low_confidence_without_verifier_issues():
         # verification_issues left default-empty
     )
     report = FindingsReport(binary_path="/fake", findings=[f])
-    with patch("glaurung.llm.finding_critic.critique_finding",
-               new_callable=AsyncMock) as mock_crit:
-        await critique_report(report, model_name="openai:gpt-5.4-mini",
-                              binary_ctx=_ctx())
+    with patch(
+        "glaurung.llm.finding_critic.critique_finding", new_callable=AsyncMock
+    ) as mock_crit:
+        await critique_report(
+            report, model_name="openai:gpt-5.4-mini", binary_ctx=_ctx()
+        )
     mock_crit.assert_called_once()

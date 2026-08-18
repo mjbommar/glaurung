@@ -18,7 +18,7 @@ class FunctionItem(BaseModel):
     end_va: int | None = Field(
         None,
         description="Max end-address across basic blocks — useful for lining up "
-                    "a function's extent against external data references.",
+        "a function's extent against external data references.",
     )
     size: int | None = None
     blocks: int | None = None
@@ -31,12 +31,12 @@ class FunctionItem(BaseModel):
     calls_made: int | None = Field(
         None,
         description="Number of distinct direct-call targets from this function "
-                    "(callgraph out-degree).",
+        "(callgraph out-degree).",
     )
     callers_count: int | None = Field(
         None,
         description="Number of distinct functions that directly call this one "
-                    "(callgraph in-degree).",
+        "(callgraph in-degree).",
     )
 
 
@@ -56,9 +56,9 @@ class ListFunctionsTool(MemoryTool[ListFunctionsArgs, ListFunctionsResult]):
             ToolMeta(
                 name="list_functions",
                 description="Enumerate discovered functions with entry/end VA, "
-                            "size, block and instruction counts, and callgraph "
-                            "fan-in/out. Useful for prioritising which "
-                            "functions an agent should analyse first.",
+                "size, block and instruction counts, and callgraph "
+                "fan-in/out. Useful for prioritising which "
+                "functions an agent should analyse first.",
                 tags=("analysis", "kb"),
             ),
             ListFunctionsArgs,
@@ -137,9 +137,7 @@ class ListFunctionsTool(MemoryTool[ListFunctionsArgs, ListFunctionsResult]):
                 bbs = list(f.basic_blocks)
                 blocks = len(bbs)
                 edges = sum(len(bb.successor_ids) for bb in bbs)
-                end_va = (
-                    max(int(bb.end_address.value) for bb in bbs) if bbs else None
-                )
+                end_va = max(int(bb.end_address.value) for bb in bbs) if bbs else None
                 total_instr = sum(
                     int(getattr(bb, "instruction_count", 0) or 0) for bb in bbs
                 )
@@ -171,9 +169,7 @@ class ListFunctionsTool(MemoryTool[ListFunctionsArgs, ListFunctionsResult]):
                         else None
                     ),
                     callers_count=(
-                        int(callers_by_va.get(entry_va, 0))
-                        if cg is not None
-                        else None
+                        int(callers_by_va.get(entry_va, 0)) if cg is not None else None
                     ),
                 )
             )

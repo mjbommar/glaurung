@@ -189,7 +189,9 @@ class WindowsComposeCandidatePacketsTool(
             if args.sink_kind and operation.sink_kind != args.sink_kind:
                 continue
             assessment = _matching_assessment(gate_result.assessments, operation)
-            packet = _emit_packet(ctx, kb, args, flow_kind, flow, helper, operation, assessment)
+            packet = _emit_packet(
+                ctx, kb, args, flow_kind, flow, helper, operation, assessment
+            )
             packets.append(
                 WindowsCandidateComposition(
                     packet=packet,
@@ -253,8 +255,7 @@ def _collect_flows(
         notes.extend(result.notes)
         helper_by_name = {helper.name: helper for helper in args.helpers}
         return [
-            ("onehop", flow, helper_by_name.get(flow.helper))
-            for flow in result.flows
+            ("onehop", flow, helper_by_name.get(flow.helper)) for flow in result.flows
         ]
 
     result = WindowsTraceArgFlowTool().run(

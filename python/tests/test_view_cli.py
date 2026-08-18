@@ -31,6 +31,7 @@ def _seed(tmp_path: Path) -> tuple[Path, Path, int]:
     kb.close()
     # Discover functions and pick the first one with a non-trivial body.
     import glaurung as g
+
     funcs, _ = g.analysis.analyze_functions_path(str(binary))
     if not funcs:
         pytest.skip("no functions discovered")
@@ -44,9 +45,15 @@ def test_view_renders_all_three_panes(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "view", str(db), hex(fn_va), "--binary", str(binary),
-        ])
+        rc = cli.run(
+            [
+                "view",
+                str(db),
+                hex(fn_va),
+                "--binary",
+                str(binary),
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     assert "hex @" in out
@@ -61,10 +68,17 @@ def test_view_pane_filter(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "view", str(db), hex(fn_va),
-            "--binary", str(binary), "--pane", "hex",
-        ])
+        rc = cli.run(
+            [
+                "view",
+                str(db),
+                hex(fn_va),
+                "--binary",
+                str(binary),
+                "--pane",
+                "hex",
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     assert "hex @" in out
@@ -80,10 +94,17 @@ def test_view_disasm_pane_marks_target(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "view", str(db), hex(fn_va),
-            "--binary", str(binary), "--pane", "disasm",
-        ])
+        rc = cli.run(
+            [
+                "view",
+                str(db),
+                hex(fn_va),
+                "--binary",
+                str(binary),
+                "--pane",
+                "disasm",
+            ]
+        )
     assert rc == 0
     out = buf.getvalue()
     # ← marker on the first disasm row.
@@ -97,10 +118,17 @@ def test_view_json(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "view", str(db), hex(fn_va),
-            "--binary", str(binary), "--format", "json",
-        ])
+        rc = cli.run(
+            [
+                "view",
+                str(db),
+                hex(fn_va),
+                "--binary",
+                str(binary),
+                "--format",
+                "json",
+            ]
+        )
     assert rc == 0
     data = json.loads(buf.getvalue())
     assert data["va"] == fn_va
@@ -119,10 +147,17 @@ def test_view_unmapped_va(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "view", str(db), "0xdeadbeefdeadbeef",
-            "--binary", str(binary), "--pane", "hex",
-        ])
+        rc = cli.run(
+            [
+                "view",
+                str(db),
+                "0xdeadbeefdeadbeef",
+                "--binary",
+                str(binary),
+                "--pane",
+                "hex",
+            ]
+        )
     # Either resolve-failed or unmapped — both produce a non-crashing
     # explanatory line.
     assert rc == 0

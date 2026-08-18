@@ -98,7 +98,9 @@ class WindowsProjectSinkCallPacketsArgs(BaseModel):
             "candidate source roles for local sink-argument matching."
         ),
     )
-    binary_id: int | None = Field(None, description="Optional project binary_id filter.")
+    binary_id: int | None = Field(
+        None, description="Optional project binary_id filter."
+    )
     function_va: int | None = Field(
         None,
         description="Optional caller function VA used to filter callsites.",
@@ -261,7 +263,9 @@ class WindowsProjectSinkCallPacketsTool(
                 if gate_refinement.cfg_path is not None:
                     cfg_path_count += 1
                 gate_predicate_count += len(gate_refinement.predicates)
-                gate_missing_required_count += len(gate_refinement.missing_required_gates)
+                gate_missing_required_count += len(
+                    gate_refinement.missing_required_gates
+                )
             inferred_roles = _infer_source_roles(ctx, kb, args, callsite)
             if inferred_roles:
                 source_role_inference_count += 1
@@ -376,9 +380,13 @@ def _emit_packet(
         or args.call_symbol
         or callsite.operation.symbols[0]
     )
-    entrypoint = callsite.caller_name or callsite.caller_demangled or _va_label(
-        callsite.caller_va,
-        "function",
+    entrypoint = (
+        callsite.caller_name
+        or callsite.caller_demangled
+        or _va_label(
+            callsite.caller_va,
+            "function",
+        )
     )
     role = _first_arg_role(callsite)
     gate_status: GateStatus = "unknown"
@@ -405,8 +413,7 @@ def _emit_packet(
                 symbol=gate_refinement.gate_symbol,
                 role="gate",
                 evidence=(
-                    f"project gate call xref at VA "
-                    f"0x{gate_refinement.gate_va:x}"
+                    f"project gate call xref at VA 0x{gate_refinement.gate_va:x}"
                 ),
             )
         )
@@ -520,7 +527,8 @@ def _emit_packet(
                 if source_match is not None and args.source_role == "unknown"
                 else args.source_role
             ),
-            source_arg=args.source_arg or (source_match.source_arg if source_match else None),
+            source_arg=args.source_arg
+            or (source_match.source_arg if source_match else None),
             source_refinement_status=source_refinement.status,
             source_refinement_sources=source_refinement.sources,
             source_refinement_blockers=source_refinement.blockers,
@@ -661,20 +669,26 @@ def _refine_gate(
         return None
     try:
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
-        gates = [_gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)]
-        function_calls = WindowsProjectCallsiteFactsTool().run(
-            ctx,
-            kb,
-            WindowsProjectCallsiteFactsArgs(
-                project_path=args.project_path,
-                sinks_path=args.sinks_path,
-                binary_id=args.binary_id,
-                function_va=sink_callsite.caller_va,
-                operation_only=False,
-                max_calls=512,
-                add_to_kb=False,
-            ),
-        ).callsites
+        gates = [
+            _gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)
+        ]
+        function_calls = (
+            WindowsProjectCallsiteFactsTool()
+            .run(
+                ctx,
+                kb,
+                WindowsProjectCallsiteFactsArgs(
+                    project_path=args.project_path,
+                    sinks_path=args.sinks_path,
+                    binary_id=args.binary_id,
+                    function_va=sink_callsite.caller_va,
+                    operation_only=False,
+                    max_calls=512,
+                    add_to_kb=False,
+                ),
+            )
+            .callsites
+        )
     except Exception:
         return None
 
@@ -931,7 +945,10 @@ def _source_value_match(
         return None
 
     for argument in snapshot_args:
-        if args.source_arg_index is not None and argument.index == args.source_arg_index:
+        if (
+            args.source_arg_index is not None
+            and argument.index == args.source_arg_index
+        ):
             return _source_match_from_argument(
                 args,
                 callsite,
@@ -1008,11 +1025,7 @@ def _source_refinement(
     if source_match is not None:
         sources = [
             f"sink_arg{source_match.sink_arg_index}"
-            + (
-                f":{source_match.sink_arg_role}"
-                if source_match.sink_arg_role
-                else ""
-            ),
+            + (f":{source_match.sink_arg_role}" if source_match.sink_arg_role else ""),
             f"source_arg={source_match.source_arg}",
             f"source_role={source_match.source_role}",
         ]
@@ -1041,8 +1054,7 @@ def _source_refinement(
             provenance=["asb_pe_source_metadata"],
             summary=(
                 "source refinement inferred caller source roles but did not "
-                "test sink-argument equivalence: "
-                + "; ".join(role_sources)
+                "test sink-argument equivalence: " + "; ".join(role_sources)
             ),
         )
     if inferred_roles:
@@ -1058,8 +1070,7 @@ def _source_refinement(
             ],
             summary=(
                 "source refinement inferred caller source roles without a local "
-                "sink-argument match: "
-                + "; ".join(role_sources)
+                "sink-argument match: " + "; ".join(role_sources)
             ),
         )
 
@@ -1077,8 +1088,7 @@ def _source_refinement(
         blockers.append("no local sink argument snapshot available")
     if args.source_arg:
         blockers.append(
-            "source expression did not match recovered sink args: "
-            + args.source_arg
+            "source expression did not match recovered sink args: " + args.source_arg
         )
     if args.source_arg_index is not None:
         blockers.append(
@@ -1147,10 +1157,7 @@ def _source_match_from_argument(
 ) -> _SourceValueMatch:
     role = _operation_arg_role(callsite, argument.index)
     expression = argument.expression
-    summary = (
-        f"source {source_role} {source_arg} matches sink arg"
-        f"{argument.index}"
-    )
+    summary = f"source {source_role} {source_arg} matches sink arg{argument.index}"
     if role:
         summary += f" ({role})"
     if expression:
@@ -1189,7 +1196,10 @@ def _argument_matches_inferred_role(
     if role.index is not None:
         if argument.expression == f"caller_arg{role.index}":
             return True
-        if argument.alias_kind == "incoming_arg" and argument.expression == f"caller_arg{role.index}":
+        if (
+            argument.alias_kind == "incoming_arg"
+            and argument.expression == f"caller_arg{role.index}"
+        ):
             return True
     if role.expression and _argument_matches_source(role.expression, argument):
         return True

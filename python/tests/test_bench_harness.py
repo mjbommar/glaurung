@@ -42,10 +42,14 @@ def test_language_from_source_path() -> None:
 
 def test_discovery_metrics_counts_chunks() -> None:
     """Synthetic Function-like objects so we test the metric without a binary."""
+
     class _Range:
         def __init__(self, start: int, size: int) -> None:
-            class _A: pass
-            self.start = _A(); self.start.value = start
+            class _A:
+                pass
+
+            self.start = _A()
+            self.start.value = start
             self.size = size
 
     class _Fn:
@@ -55,17 +59,21 @@ def test_discovery_metrics_counts_chunks() -> None:
             self.chunks = chunks
 
     funcs = [
-        _Fn("main", [object()], [_Range(0x1000, 0x80), _Range(0x2000, 0x10)]),  # multi-chunk
+        _Fn(
+            "main", [object()], [_Range(0x1000, 0x80), _Range(0x2000, 0x10)]
+        ),  # multi-chunk
         _Fn("helper", [object()], [_Range(0x3000, 0x40)]),
-        _Fn("sub_4000", [object()], [_Range(0x4000, 0x20)]),                     # placeholder
-        _Fn("widget.cold", [object()], [_Range(0x5000, 0x10)]),                  # orphan: parent missing
+        _Fn("sub_4000", [object()], [_Range(0x4000, 0x20)]),  # placeholder
+        _Fn(
+            "widget.cold", [object()], [_Range(0x5000, 0x10)]
+        ),  # orphan: parent missing
     ]
     m = discovery_metrics(funcs)
     assert m.total == 4
-    assert m.named_from_symbols == 3       # main, helper, widget.cold (not sub_*)
+    assert m.named_from_symbols == 3  # main, helper, widget.cold (not sub_*)
     assert m.auto_named_sub == 1
     assert m.with_chunks_gt_one == 1
-    assert m.cold_orphans == 1             # `widget.cold` survived → orphan
+    assert m.cold_orphans == 1  # `widget.cold` survived → orphan
     assert 0.0 < m.name_match_rate <= 1.0
 
 
@@ -107,6 +115,7 @@ def test_summary_serialization_round_trip(tmp_path: Path) -> None:
     card = run_one_binary(binary, max_decompile_functions=4)
 
     from glaurung.bench.harness import BenchSummary
+
     summ = BenchSummary(
         schema_version="1",
         glaurung_commit=None,

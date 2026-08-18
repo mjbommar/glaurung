@@ -133,9 +133,7 @@ class JavaAgentContextResult(BaseModel):
     context_node_id: str | None = None
 
 
-class JavaAgentContextTool(
-    MemoryTool[JavaAgentContextArgs, JavaAgentContextResult]
-):
+class JavaAgentContextTool(MemoryTool[JavaAgentContextArgs, JavaAgentContextResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
@@ -175,9 +173,7 @@ class JavaAgentContextTool(
         entrypoints = _entrypoint_facts(ctx, kb, path, args)
         frameworks = _framework_facts(ctx, kb, path, args)
         security = (
-            _security_facts(ctx, kb, path, args)
-            if args.profile == "security"
-            else None
+            _security_facts(ctx, kb, path, args) if args.profile == "security" else None
         )
         recovery = (
             _recovery_facts(ctx, kb, path, args) if args.profile == "recovery" else None
@@ -341,9 +337,7 @@ def _framework_facts(
     return JavaAgentFrameworkFacts(
         framework_count=result.framework_count,
         summary_by_kind=result.summary_by_kind,
-        samples=[
-            f"{item.kind}:{item.name}" for item in result.frameworks[:8]
-        ],
+        samples=[f"{item.kind}:{item.name}" for item in result.frameworks[:8]],
     )
 
 

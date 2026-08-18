@@ -117,11 +117,15 @@ class WindowsRunnerArtifactPromotionApplyTool(
         if not bool(plan.get("promotion_allowed", False)):
             blockers.append("promotion plan is not promotion_allowed")
             blockers.extend(str(item) for item in plan.get("blockers") or [])
-        actions = [
-            _action_result(raw, apply_changes=args.apply_changes)
-            for raw in plan.get("actions") or []
-            if isinstance(raw, dict)
-        ] if not blockers else []
+        actions = (
+            [
+                _action_result(raw, apply_changes=args.apply_changes)
+                for raw in plan.get("actions") or []
+                if isinstance(raw, dict)
+            ]
+            if not blockers
+            else []
+        )
         blockers.extend(blocker for action in actions for blocker in action.blockers)
         warnings.extend(warning for action in actions for warning in action.warnings)
         verification_passed = not blockers and all(
@@ -306,7 +310,9 @@ def _write_result(
         "blockers": blockers,
         "warnings": warnings,
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return str(path)
 
 
@@ -392,11 +398,15 @@ def _review_markdown(
         lines.extend(f"- {warning}" for warning in warnings)
     lines.extend(["", "## Next Actions", ""])
     if baseline_commit_ready:
-        lines.append("- Review the destination diffs and commit the promoted baselines.")
+        lines.append(
+            "- Review the destination diffs and commit the promoted baselines."
+        )
     elif verification_passed and not apply_requested:
         lines.append("- Rerun with `--apply-changes` after reviewing this dry run.")
     else:
-        lines.append("- Resolve blockers before applying or committing promoted baselines.")
+        lines.append(
+            "- Resolve blockers before applying or committing promoted baselines."
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -447,7 +457,9 @@ def _evidence_bundle(
         ),
         reason_codes=["runner_artifact_promotion_apply_not_finding"],
         blockers=blockers,
-        next_actions=[] if apply_requested else ["Rerun with apply_changes=true to copy verified artifacts."],
+        next_actions=[]
+        if apply_requested
+        else ["Rerun with apply_changes=true to copy verified artifacts."],
         notes=notes,
     )
 

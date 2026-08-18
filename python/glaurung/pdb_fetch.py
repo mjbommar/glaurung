@@ -11,6 +11,7 @@ the cache in the canonical layout the resolver expects::
 Pure standard-library (struct + urllib); no pefile / external deps so it
 can be a first-class part of the kickoff pipeline.
 """
+
 from __future__ import annotations
 
 import struct
@@ -51,9 +52,9 @@ IMAGE_DEBUG_TYPE_CODEVIEW = 2
 
 
 class CodeView(NamedTuple):
-    pdb_name: str          # basename, e.g. "srvnet.pdb"
-    guid_age_key: str      # "<GUID><AGE>" symbol-server key
-    pdb_path: str          # full path embedded in the PE
+    pdb_name: str  # basename, e.g. "srvnet.pdb"
+    guid_age_key: str  # "<GUID><AGE>" symbol-server key
+    pdb_path: str  # full path embedded in the PE
 
 
 def _rva_to_off(rva: int, sections: list[tuple[int, int, int, int]]) -> Optional[int]:
@@ -71,7 +72,7 @@ def read_codeview(pe_path: str | Path) -> Optional[CodeView]:
     if data[:2] != b"MZ":
         return None
     e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
-    if data[e_lfanew:e_lfanew + 4] != b"PE\0\0":
+    if data[e_lfanew : e_lfanew + 4] != b"PE\0\0":
         return None
     coff = e_lfanew + 4
     num_sections = struct.unpack_from("<H", data, coff + 2)[0]
@@ -82,7 +83,9 @@ def read_codeview(pe_path: str | Path) -> Optional[CodeView]:
     # NumberOfRvaAndSizes precedes the data directories; debug dir is index 6.
     # Data directories start after the fixed optional-header body.
     dd_off = opt + (112 if is_pe32_plus else 96)
-    dbg_rva, dbg_size = struct.unpack_from("<II", data, dd_off + IMAGE_DIRECTORY_ENTRY_DEBUG * 8)
+    dbg_rva, dbg_size = struct.unpack_from(
+        "<II", data, dd_off + IMAGE_DIRECTORY_ENTRY_DEBUG * 8
+    )
     if dbg_rva == 0 or dbg_size == 0:
         return None
     # section headers follow the optional header
@@ -102,21 +105,19 @@ def read_codeview(pe_path: str | Path) -> Optional[CodeView]:
         praw = struct.unpack_from("<I", data, ent + 24)[0]
         if dtype != IMAGE_DEBUG_TYPE_CODEVIEW or praw == 0:
             continue
-        if data[praw:praw + 4] != b"RSDS":
+        if data[praw : praw + 4] != b"RSDS":
             continue
-        guid = data[praw + 4:praw + 20]
+        guid = data[praw + 4 : praw + 20]
         age = struct.unpack_from("<I", data, praw + 20)[0]
         # GUID string in Microsoft symbol-server spelling.
         d1 = struct.unpack_from("<I", guid, 0)[0]
         d2 = struct.unpack_from("<H", guid, 4)[0]
         d3 = struct.unpack_from("<H", guid, 6)[0]
         rest = guid[8:]
-        guid_string = (
-            f"{d1:08X}{d2:04X}{d3:04X}" + "".join(f"{b:02X}" for b in rest)
-        )
+        guid_string = f"{d1:08X}{d2:04X}{d3:04X}" + "".join(f"{b:02X}" for b in rest)
         key = f"{guid_string}{age:X}"
         end = data.index(b"\0", praw + 24)
-        pdb_path = data[praw + 24:end].decode("utf-8", "replace")
+        pdb_path = data[praw + 24 : end].decode("utf-8", "replace")
         pdb_name = pdb_path.replace("\\", "/").rsplit("/", 1)[-1]
         return CodeView(pdb_name=pdb_name, guid_age_key=key, pdb_path=pdb_path)
     return None

@@ -34,10 +34,14 @@ def test_library_builder_round_trips(tmp_path: Path) -> None:
     output = tmp_path / "tiny.flirt.json"
     rc = subprocess.run(
         [
-            sys.executable, "-m", "glaurung.tools.build_flirt_library",
+            sys.executable,
+            "-m",
+            "glaurung.tools.build_flirt_library",
             str(_HELLO_DEBUG),
-            "--output", str(output),
-            "--arch", "x86_64",
+            "--output",
+            str(output),
+            "--arch",
+            "x86_64",
             "--quiet",
         ],
         check=False,
@@ -82,9 +86,7 @@ def test_flirt_lifts_stripped_binary_naming() -> None:
     # _start is the trivially-discoverable entrypoint; require at least
     # one FLIRT-only match BEYOND it.
     flirt_only = [f for f in named if f.name != "_start"]
-    assert flirt_only, (
-        "no FLIRT-only matches surfaced — only the entrypoint got named"
-    )
+    assert flirt_only, "no FLIRT-only matches surfaced — only the entrypoint got named"
 
 
 def test_flirt_does_not_overwrite_dwarf_names() -> None:

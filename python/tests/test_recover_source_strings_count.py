@@ -21,8 +21,7 @@ import glaurung as g
 
 _REPO = Path(__file__).resolve().parents[2]
 _SAMPLE = _REPO / (
-    "samples/binaries/platforms/linux/amd64/export/fortran/"
-    "hello-gfortran-O2"
+    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2"
 )
 
 
@@ -61,6 +60,7 @@ def test_orchestrator_strings_count_is_threaded_through(monkeypatch):
     the field is non-zero. Catches the exact regression class —
     "someone deleted the line, audit goes back to reporting 0"."""
     import sys
+
     sys.path.insert(0, str(_REPO / "scripts"))
     import recover_source  # noqa: E402
 

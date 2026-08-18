@@ -107,7 +107,9 @@ class WindowsCandidateValidationReportTool(
         result = WindowsCandidateValidationReportResult(
             markdown=markdown,
             candidate_count=len(candidates),
-            validation_ready_count=sum(1 for item in candidates if item.validation_ready),
+            validation_ready_count=sum(
+                1 for item in candidates if item.validation_ready
+            ),
             blocked_count=sum(1 for item in candidates if not item.validation_ready),
             notes=[
                 "report is an operator handoff only; runtime artifacts are required before finding promotion"
@@ -124,7 +126,11 @@ class WindowsCandidateValidationReportTool(
             _add_report_node(kb, result)
             file_node = next((n for n in kb.nodes() if n.kind == NodeKind.file), None)
             if file_node and result.report_node_id:
-                kb.add_edge(Edge(src=file_node.id, dst=result.report_node_id, kind="has_evidence"))
+                kb.add_edge(
+                    Edge(
+                        src=file_node.id, dst=result.report_node_id, kind="has_evidence"
+                    )
+                )
 
         return result
 
@@ -220,7 +226,9 @@ def _render_candidate(
     else:
         lines.append("- Snapshot mapping: none attached")
     if harness_template is not None:
-        harness_status = "ready" if harness_template.ready_to_collect_artifacts else "blocked"
+        harness_status = (
+            "ready" if harness_template.ready_to_collect_artifacts else "blocked"
+        )
         lines.extend(
             [
                 f"- Harness template: {harness_status}",

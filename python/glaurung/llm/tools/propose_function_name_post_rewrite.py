@@ -45,7 +45,7 @@ class ProposeFunctionNamePostRewriteArgs(BaseModel):
     current_name: Optional[str] = Field(
         None,
         description="Name this function was known by before the rewrite "
-                    "(from suggest_function_name or the symbol table).",
+        "(from suggest_function_name or the symbol table).",
     )
     use_llm: bool = True
 
@@ -63,7 +63,7 @@ class PostRewriteName(BaseModel):
     rejected_candidates: List[RejectedCandidate] = Field(
         default_factory=list,
         description="Alternatives considered and why they were rejected — "
-                    "fed into #19 for cross-function reconciliation.",
+        "fed into #19 for cross-function reconciliation.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -145,8 +145,8 @@ class ProposeFunctionNamePostRewriteTool(
             ToolMeta(
                 name="propose_function_name_post_rewrite",
                 description="Pick the final function name from the rewritten "
-                            "source, role label, and printed strings. Runs "
-                            "after #14; outputs are fed into #19.",
+                "source, role label, and printed strings. Runs "
+                "after #14; outputs are fed into #19.",
                 tags=("llm", "naming", "layer2"),
             ),
             ProposeFunctionNamePostRewriteArgs,

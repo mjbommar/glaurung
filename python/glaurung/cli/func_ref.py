@@ -69,7 +69,8 @@ def resolve_func_to_va(name: str, functions: Iterable) -> int:
     if not matches:
         # suffix fallback (e.g. user said `foo` but the binary has `mod!foo`)
         suffix_matches = [
-            fn for fn in candidates
+            fn
+            for fn in candidates
             if fn.name.endswith("!" + name) or fn.name.endswith("." + name)
         ]
         if suffix_matches:
@@ -78,7 +79,8 @@ def resolve_func_to_va(name: str, functions: Iterable) -> int:
     if not matches:
         # Distinguish "stripped binary with only sub_ names" from "wrong name".
         named = sum(
-            1 for fn in candidates
+            1
+            for fn in candidates
             if not fn.name.startswith("sub_") and not fn.name.startswith(".")
         )
         hint = ""
@@ -90,9 +92,9 @@ def resolve_func_to_va(name: str, functions: Iterable) -> int:
         else:
             # First: substring match in either direction.
             similar = [
-                fn.name for fn in candidates
-                if name.lower() in fn.name.lower()
-                or fn.name.lower() in name.lower()
+                fn.name
+                for fn in candidates
+                if name.lower() in fn.name.lower() or fn.name.lower() in name.lower()
             ][:6]
             # Fallback: fuzzy near-misses via difflib.
             if not similar:
@@ -100,9 +102,7 @@ def resolve_func_to_va(name: str, functions: Iterable) -> int:
                 similar = difflib.get_close_matches(name, pool, n=5, cutoff=0.4)
             if similar:
                 hint = f" Did you mean: {', '.join(similar)}?"
-        raise FuncResolutionError(
-            f"no function named '{name}' in this binary.{hint}"
-        )
+        raise FuncResolutionError(f"no function named '{name}' in this binary.{hint}")
 
     if len(matches) > 1:
         addrs = ", ".join(f"0x{m.entry_point.value:x}" for m in matches)

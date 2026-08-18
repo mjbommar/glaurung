@@ -19,7 +19,9 @@ def _ctx(tmp_path: Path) -> MemoryContext:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def test_windows_runner_artifact_review_accepts_clean_high_volume_run(
@@ -191,8 +193,13 @@ def test_windows_runner_artifact_review_accepts_clean_ghidra_refresh(
     assert result.review_ready is True
     assert result.promotion_ready is True
     assert result.blockers == []
-    assert "glaurung_vs_ghidra_vendor_windows_30_refresh.json" in result.promotable_artifacts
-    assert "glaurung_vs_ghidra_vendor_windows_30_refresh.md" in result.promotable_artifacts
+    assert (
+        "glaurung_vs_ghidra_vendor_windows_30_refresh.json"
+        in result.promotable_artifacts
+    )
+    assert (
+        "glaurung_vs_ghidra_vendor_windows_30_refresh.md" in result.promotable_artifacts
+    )
 
 
 def test_windows_runner_artifact_review_cli_json(tmp_path: Path, capsys) -> None:
@@ -219,7 +226,11 @@ def test_windows_runner_artifact_review_cli_json(tmp_path: Path, capsys) -> None
     )
     _write_json(
         artifacts / "blocker-task-plan.json",
-        {"claim_level": "pipeline_blocker_task_plan_not_finding", "task_count": 0, "tasks": []},
+        {
+            "claim_level": "pipeline_blocker_task_plan_not_finding",
+            "task_count": 0,
+            "tasks": [],
+        },
     )
 
     rc = GlaurungCLI().run(

@@ -81,8 +81,7 @@ def test_windows_ghidra_delta_manifest_filters_blocking_type_gaps(
     assert "struct_fields" in record.missing_capabilities
     assert result.evidence_node_id is not None
     assert any(
-        node.kind == NodeKind.evidence
-        and node.label == "windows_ghidra_delta_manifest"
+        node.kind == NodeKind.evidence and node.label == "windows_ghidra_delta_manifest"
         for node in ctx.kb.nodes()
     )
 

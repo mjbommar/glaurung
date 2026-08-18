@@ -55,7 +55,9 @@ from .windows_surface_metadata import GateRecord, _resolve_metadata_path
 
 
 class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
-    binary_path: str = Field(..., description="Path to the PE binary backing the project.")
+    binary_path: str = Field(
+        ..., description="Path to the PE binary backing the project."
+    )
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
     binary: str = Field(..., description="Binary or driver filename.")
     build: str | None = Field(None, description="Windows build or corpus label.")
@@ -115,7 +117,9 @@ class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
         le=512,
         description="Maximum helper CFG block ids to include in gate path evidence.",
     )
-    binary_id: int | None = Field(None, description="Optional project binary_id filter.")
+    binary_id: int | None = Field(
+        None, description="Optional project binary_id filter."
+    )
     caller_function_va: int | None = Field(
         None,
         description="Optional caller function VA used to filter chain starts.",
@@ -132,7 +136,9 @@ class WindowsProjectOnehopFlowPacketsArgs(BaseModel):
         None,
         description="Optional helper function name used when helper_function_va is absent.",
     )
-    sink_symbol: str | None = Field(None, description="Optional helper-local sink symbol.")
+    sink_symbol: str | None = Field(
+        None, description="Optional helper-local sink symbol."
+    )
     sink_kind: str | None = Field(None, description="Optional ASB sink kind filter.")
     source_arg: str | None = Field(
         None,
@@ -312,8 +318,8 @@ def _emit_packet(
     flow: WindowsProjectOnehopArgumentFlow,
     gate_refinement: "_HelperGateRefinement | None",
 ) -> WindowsReviewPacket:
-    source_arg = args.source_arg or flow.caller_arg_expression or (
-        f"arg{flow.caller_arg_index}"
+    source_arg = (
+        args.source_arg or flow.caller_arg_expression or (f"arg{flow.caller_arg_index}")
     )
     entrypoint = flow.caller_name or _va_label(flow.caller_va, "function")
     helper = flow.helper_name or _va_label(flow.helper_va, "helper")
@@ -375,9 +381,7 @@ def _emit_packet(
                     symbol=flow.sink_symbol,
                     arg_index=flow.helper_sink_arg_index,
                     role=flow.helper_sink_arg_role,
-                    evidence=(
-                        f"helper invokes sink at VA 0x{flow.sink_callsite_va:x}"
-                    ),
+                    evidence=(f"helper invokes sink at VA 0x{flow.sink_callsite_va:x}"),
                 ),
             ],
             evidence=[
@@ -449,20 +453,26 @@ def _refine_helper_gate(
         return None
     try:
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
-        gates = [_gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)]
-        function_calls = WindowsProjectCallsiteFactsTool().run(
-            ctx,
-            kb,
-            WindowsProjectCallsiteFactsArgs(
-                project_path=args.project_path,
-                sinks_path=args.sinks_path,
-                binary_id=args.binary_id,
-                function_va=flow.helper_va,
-                operation_only=False,
-                max_calls=512,
-                add_to_kb=False,
-            ),
-        ).callsites
+        gates = [
+            _gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)
+        ]
+        function_calls = (
+            WindowsProjectCallsiteFactsTool()
+            .run(
+                ctx,
+                kb,
+                WindowsProjectCallsiteFactsArgs(
+                    project_path=args.project_path,
+                    sinks_path=args.sinks_path,
+                    binary_id=args.binary_id,
+                    function_va=flow.helper_va,
+                    operation_only=False,
+                    max_calls=512,
+                    add_to_kb=False,
+                ),
+            )
+            .callsites
+        )
     except Exception:
         return None
 

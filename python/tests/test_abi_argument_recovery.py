@@ -44,7 +44,8 @@ def test_operand_destination_register_with_win64_table() -> None:
     ]
     for op, expected in cases:
         got = xref_db._operand_destination_register(
-            op, arg_regs=xref_db._WIN64_ARG_REGS_X64,
+            op,
+            arg_regs=xref_db._WIN64_ARG_REGS_X64,
         )
         assert got == expected, f"Win64 {op!r} → {got!r}, want {expected!r}"
 
@@ -62,7 +63,8 @@ def test_operand_destination_register_with_aapcs64_table() -> None:
     ]
     for op, expected in cases:
         got = xref_db._operand_destination_register(
-            op, arg_regs=xref_db._AAPCS64_ARG_REGS,
+            op,
+            arg_regs=xref_db._AAPCS64_ARG_REGS,
         )
         assert got == expected, f"AAPCS64 {op!r} → {got!r}, want {expected!r}"
 
@@ -80,7 +82,9 @@ def test_select_arg_regs_picks_aarch64_for_arm64_binary() -> None:
     """`_select_arg_regs` must pick AAPCS64 when the binary is ARM64.
     Use the actual ARM64 sample to drive this — no mocking."""
     candidates = [
-        Path("samples/binaries/platforms/linux/arm64/export/native/gcc/O2/hello-gcc-O2"),
+        Path(
+            "samples/binaries/platforms/linux/arm64/export/native/gcc/O2/hello-gcc-O2"
+        ),
         Path("samples/binaries/platforms/linux/arm64/export/fortran/hello-gfortran-O2"),
     ]
     arm_path = next((p for p in candidates if p.exists()), None)
@@ -111,7 +115,9 @@ def test_select_arg_regs_picks_win64_for_pe_x86_64() -> None:
     # Use whatever PE sample we have; the only branch under test is
     # format=PE + arch=x86_64 → Win64 table.
     pe_candidates = [
-        Path("samples/binaries/platforms/linux/amd64/cross/windows-x86_64/hello-c-x86_64-mingw.exe"),
+        Path(
+            "samples/binaries/platforms/linux/amd64/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
+        ),
     ]
     pe = next((p for p in pe_candidates if p.exists()), None)
     if pe is None:

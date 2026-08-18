@@ -17,7 +17,10 @@ import pytest
 
 from glaurung.llm.cwe_sweep import CWEClassSpec, sweep_binary
 from glaurung.llm.findings import (
-    Evidence, FindingsReport, FunctionRef, VulnerabilityFinding,
+    Evidence,
+    FindingsReport,
+    FunctionRef,
+    VulnerabilityFinding,
 )
 from glaurung.llm.usage_tracker import CostBudgetExceeded
 
@@ -26,13 +29,13 @@ pytestmark = pytest.mark.asyncio
 
 
 def _ev():
-    return [Evidence(kind="disasm", location="0x140001500",
-                     text="call strcpy")]
+    return [Evidence(kind="disasm", location="0x140001500", text="call strcpy")]
 
 
 def _finding(cwe):
     return VulnerabilityFinding(
-        cwe=cwe, function=FunctionRef(name="vuln", va=0x100),
+        cwe=cwe,
+        function=FunctionRef(name="vuln", va=0x100),
         root_cause="strcpy of caller-controlled buffer into stack array",
         evidence=_ev(),
     )
@@ -49,17 +52,20 @@ async def test_clean_sweep_deletes_partials(tmp_path):
     async def fake_run(path, args):
         if "CWE-121" in getattr(args, "cwe_class_prompt", ""):
             return FindingsReport(
-                binary_path=path, findings=[_finding("CWE-121")],
+                binary_path=path,
+                findings=[_finding("CWE-121")],
             )
         return FindingsReport(
-            binary_path=path, findings=[_finding("CWE-134")],
+            binary_path=path,
+            findings=[_finding("CWE-134")],
         )
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run):
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
         merged = await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(),
-            classes=classes, max_parallel=1,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
+            max_parallel=1,
             partial_dir=str(tmp_path),
         )
 
@@ -80,15 +86,17 @@ async def test_partials_survive_mid_sweep_budget_abort(tmp_path):
     async def fake_run(path, args):
         if "CWE-121" in getattr(args, "cwe_class_prompt", ""):
             return FindingsReport(
-                binary_path=path, findings=[_finding("CWE-121")],
+                binary_path=path,
+                findings=[_finding("CWE-121")],
             )
         raise CostBudgetExceeded("budget exceeded mid-sweep")
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run):
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
         merged = await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(),
-            classes=classes, max_parallel=1,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
+            max_parallel=1,
             partial_dir=str(tmp_path),
         )
 
@@ -100,8 +108,7 @@ async def test_partials_survive_mid_sweep_budget_abort(tmp_path):
     # Partial for the finished class survives.
     partial_121 = tmp_path / "CWE-121.partial.json"
     assert partial_121.exists(), (
-        f"partial JSON for completed CWE-121 missing; "
-        f"got: {list(tmp_path.iterdir())}"
+        f"partial JSON for completed CWE-121 missing; got: {list(tmp_path.iterdir())}"
     )
     parsed = json.loads(partial_121.read_text())
     assert parsed["findings"][0]["cwe"] == "CWE-121"
@@ -123,15 +130,17 @@ async def test_partials_survive_generic_class_exception(tmp_path):
     async def fake_run(path, args):
         if "CWE-121" in getattr(args, "cwe_class_prompt", ""):
             return FindingsReport(
-                binary_path=path, findings=[_finding("CWE-121")],
+                binary_path=path,
+                findings=[_finding("CWE-121")],
             )
         raise RuntimeError("transient")
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run):
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
         merged = await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(),
-            classes=classes, max_parallel=1,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
+            max_parallel=1,
             partial_dir=str(tmp_path),
         )
 
@@ -148,14 +157,16 @@ async def test_no_partial_dir_doesnt_crash(tmp_path):
 
     async def fake_run(path, args):
         return FindingsReport(
-            binary_path=path, findings=[_finding("CWE-121")],
+            binary_path=path,
+            findings=[_finding("CWE-121")],
         )
 
-    with patch("glaurung.llm.cwe_sweep.run_findings_pass",
-               side_effect=fake_run):
+    with patch("glaurung.llm.cwe_sweep.run_findings_pass", side_effect=fake_run):
         merged = await sweep_binary(
-            "/tmp/x.exe", SimpleNamespace(),
-            classes=classes, max_parallel=1,
+            "/tmp/x.exe",
+            SimpleNamespace(),
+            classes=classes,
+            max_parallel=1,
             partial_dir=None,
         )
 

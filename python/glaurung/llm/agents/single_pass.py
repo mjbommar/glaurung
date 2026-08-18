@@ -194,6 +194,7 @@ class SinglePassAgent:
             # tool-using agent fails fast instead of burning 50 round-trips.
             from pydantic_ai.settings import ModelSettings
             from ..usage_limits import build_usage_limits
+
             model_kwargs = params.to_model_kwargs(model_name=self.model)
             run_kwargs: dict[str, Any] = {
                 "deps": context,
@@ -211,6 +212,7 @@ class SinglePassAgent:
             # F4: record usage for the session-wide cost tracker.
             try:
                 from ..usage_tracker import get_tracker
+
                 get_tracker().record(
                     result,
                     model=self.model or "test",

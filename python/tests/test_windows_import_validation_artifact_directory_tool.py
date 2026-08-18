@@ -100,7 +100,9 @@ def test_windows_import_validation_artifact_directory_builds_ready_bundle(
         "harness_stderr",
         "binary_identity",
     } <= kinds
-    kdnet = next(artifact for artifact in bundle.artifacts if artifact.kind == "kdnet_attach_log")
+    kdnet = next(
+        artifact for artifact in bundle.artifacts if artifact.kind == "kdnet_attach_log"
+    )
     assert kdnet.sha256 == hashlib.sha256(paths["kdnet"].read_bytes()).hexdigest()
     assert kdnet.exists is True
     assert result.evidence_node_id is not None
@@ -136,7 +138,10 @@ def test_windows_import_validation_artifact_directory_reports_missing_required_k
     assert "kdnet_attach_log: no artifact of this required kind was imported" in (
         result.bundle.missing_required_artifacts
     )
-    assert any("required artifact kinds are missing" in blocker for blocker in result.bundle.runtime_blockers)
+    assert any(
+        "required artifact kinds are missing" in blocker
+        for blocker in result.bundle.runtime_blockers
+    )
 
 
 def test_windows_import_validation_artifact_directory_blocks_plan_candidate_mismatch(
@@ -158,11 +163,16 @@ def test_windows_import_validation_artifact_directory_blocks_plan_candidate_mism
     )
 
     assert result.bundle.ready_for_review is False
-    assert any("candidate_id does not match" in blocker for blocker in result.bundle.runtime_blockers)
+    assert any(
+        "candidate_id does not match" in blocker
+        for blocker in result.bundle.runtime_blockers
+    )
 
 
 def test_memory_agent_registers_windows_import_validation_artifact_directory() -> None:
     from glaurung.llm.agents.memory_agent import create_memory_agent
 
     agent = create_memory_agent(model="test")
-    assert "windows_import_validation_artifact_directory" in agent._function_toolset.tools
+    assert (
+        "windows_import_validation_artifact_directory" in agent._function_toolset.tools
+    )

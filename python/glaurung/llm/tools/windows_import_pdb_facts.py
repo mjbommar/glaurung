@@ -14,7 +14,9 @@ from .base import MemoryTool, ToolMeta
 
 class WindowsImportPdbFactsArgs(BaseModel):
     project_path: str = Field(..., description="Path to the .glaurung SQLite project.")
-    pe_path: str = Field(..., description="Path to the PE binary whose PDB should be imported.")
+    pe_path: str = Field(
+        ..., description="Path to the PE binary whose PDB should be imported."
+    )
     pdb_cache_dir: str = Field(
         ...,
         description="Microsoft-style PDB cache directory containing <pdb>/<GUIDAGE>/<pdb>.",

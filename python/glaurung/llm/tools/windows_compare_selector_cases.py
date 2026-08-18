@@ -76,7 +76,9 @@ class WindowsCompareSelectorCasesArgs(BaseModel):
     gate_kind: str | None = Field(None, description="Optional gate kind filter.")
     sink_kind: str | None = Field(None, description="Optional sink kind filter.")
     max_cases: int = Field(64, description="Maximum cases to compare.")
-    timeout_ms: int = Field(500, description="Decompile timeout when function_va is used.")
+    timeout_ms: int = Field(
+        500, description="Decompile timeout when function_va is used."
+    )
     pdb_cache: str = Field(
         "",
         description="Optional Microsoft-style PDB cache directory for decompile name recovery.",
@@ -122,12 +124,17 @@ class WindowsCompareSelectorCasesTool(
     ) -> WindowsCompareSelectorCasesResult:
         gates_path = _resolve_metadata_path(args.gates_path, "data/kg/pe-gates.yaml")
         sinks_path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
-        gates = [_gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)]
+        gates = [
+            _gate_record(entry, gates_path) for entry in _load_yaml_list(gates_path)
+        ]
         operations = [
-            _operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)
+            _operation_record(entry, sinks_path)
+            for entry in _load_yaml_list(sinks_path)
         ]
         text, source, notes = _scan_text(ctx, args)
-        selector, case_blocks = _case_blocks(text, args.selector, max_cases=args.max_cases)
+        selector, case_blocks = _case_blocks(
+            text, args.selector, max_cases=args.max_cases
+        )
         if not case_blocks:
             notes.append("no switch/case blocks found")
         tool_args = WindowsCheckGateToSinkArgs(
@@ -336,7 +343,9 @@ def _missing_differences(
         {
             item_id
             for case in cases
-            for item_id in (case.operation_ids if kind == "operation" else case.gate_ids)
+            for item_id in (
+                case.operation_ids if kind == "operation" else case.gate_ids
+            )
         }
     )
     for item_id in all_ids:

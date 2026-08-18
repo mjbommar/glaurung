@@ -22,12 +22,16 @@ ARM32_SAMPLE = Path(
 
 
 def _make_arm32_disasm() -> g.disasm.PyDisassembler:
-    cfg = g.DisassemblerConfig(architecture=g.Architecture.ARM, endianness=g.Endianness.Little)
+    cfg = g.DisassemblerConfig(
+        architecture=g.Architecture.ARM, endianness=g.Endianness.Little
+    )
     return g.disasm.PyDisassembler(cfg)
 
 
 def test_set_thumb_mode_is_noop_on_arm64():
-    cfg = g.DisassemblerConfig(architecture=g.Architecture.ARM64, endianness=g.Endianness.Little)
+    cfg = g.DisassemblerConfig(
+        architecture=g.Architecture.ARM64, endianness=g.Endianness.Little
+    )
     d = g.disasm.PyDisassembler(cfg)
     # Should not raise and should return the requested mode label.
     assert d.set_thumb_mode(True) == "thumb"

@@ -146,15 +146,11 @@ def _build_prompt(args: ClusterFunctionsIntoModulesArgs) -> str:
     parts.append(f"Target language: {args.target_language}")
     parts.append("Functions (name, role, summary):")
     for f in args.functions:
-        parts.append(
-            f"  {f.name}  role={f.role!r}  -- {f.one_line_summary[:80]}"
-        )
+        parts.append(f"  {f.name}  role={f.role!r}  -- {f.one_line_summary[:80]}")
     if args.edges:
         parts.append(
             "Callgraph edges (caller → callee):\n"
-            + "\n".join(
-                f"  {e.caller} -> {e.callee}" for e in args.edges[:200]
-            )
+            + "\n".join(f"  {e.caller} -> {e.callee}" for e in args.edges[:200])
         )
     parts.append(
         "Return a ModuleLayout with modules (name/purpose/members), "
@@ -164,18 +160,16 @@ def _build_prompt(args: ClusterFunctionsIntoModulesArgs) -> str:
 
 
 class ClusterFunctionsIntoModulesTool(
-    MemoryTool[
-        ClusterFunctionsIntoModulesArgs, ClusterFunctionsIntoModulesResult
-    ]
+    MemoryTool[ClusterFunctionsIntoModulesArgs, ClusterFunctionsIntoModulesResult]
 ):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="cluster_functions_into_modules",
                 description="Propose the source-file layout of a recovered "
-                            "project — module names and function-to-module "
-                            "assignments — from roles, summaries, and the "
-                            "callgraph.",
+                "project — module names and function-to-module "
+                "assignments — from roles, summaries, and the "
+                "callgraph.",
                 tags=("llm", "modules", "layer3"),
             ),
             ClusterFunctionsIntoModulesArgs,
@@ -191,7 +185,9 @@ class ClusterFunctionsIntoModulesTool(
         if not args.functions:
             return ClusterFunctionsIntoModulesResult(
                 layout=ModuleLayout(
-                    modules=[], unassigned=[], confidence=0.1,
+                    modules=[],
+                    unassigned=[],
+                    confidence=0.1,
                     rationale="no functions supplied",
                 ),
                 source="heuristic",

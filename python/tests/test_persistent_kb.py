@@ -17,9 +17,7 @@ from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
 
 def _hello_path() -> Path:
-    p = Path(
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
-    )
+    p = Path("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2")
     if not p.exists():
         pytest.skip(f"missing sample binary {p}")
     return p
@@ -38,7 +36,7 @@ def test_round_trip_basic(tmp_path: Path) -> None:
         Node(
             kind=NodeKind.function,
             label="parse_config",
-            props={"entry_va": 0x10c0},
+            props={"entry_va": 0x10C0},
             tags=["recovered", "high-confidence"],
         )
     )
@@ -54,7 +52,7 @@ def test_round_trip_basic(tmp_path: Path) -> None:
     assert len(edges) == 1
     fn_round_trip = next(n for n in nodes if n.kind == NodeKind.function)
     assert fn_round_trip.label == "parse_config"
-    assert fn_round_trip.props["entry_va"] == 0x10c0
+    assert fn_round_trip.props["entry_va"] == 0x10C0
     assert sorted(fn_round_trip.tags) == ["high-confidence", "recovered"]
     edge = edges[0]
     assert edge.kind == "has_function"
@@ -140,13 +138,19 @@ def test_memory_context_open_persistent(tmp_path: Path) -> None:
 
     art = g.triage.analyze_path(str(binary))
     ctx = MemoryContext.open_persistent(
-        file_path=str(binary), artifact=art, db_path=db, session="main",
+        file_path=str(binary),
+        artifact=art,
+        db_path=db,
+        session="main",
     )
     ctx.kb.add_node(Node(kind=NodeKind.note, label="via-ctx", text="hello"))
     ctx.kb.close()
 
     ctx2 = MemoryContext.open_persistent(
-        file_path=str(binary), artifact=art, db_path=db, session="main",
+        file_path=str(binary),
+        artifact=art,
+        db_path=db,
+        session="main",
     )
     labels = [n.label for n in ctx2.kb.nodes()]
     assert "via-ctx" in labels

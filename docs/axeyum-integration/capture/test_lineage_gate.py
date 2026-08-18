@@ -731,7 +731,9 @@ class LineageGateTests(unittest.TestCase):
             allow_direct_source_sibling_enablement=True,
         )
 
-    def test_cross_policy_identity_allows_serial_snapshot_to_source_direct(self) -> None:
+    def test_cross_policy_identity_allows_serial_snapshot_to_source_direct(
+        self,
+    ) -> None:
         baseline = {
             "system": {"machine": "x86_64"},
             "policy": {

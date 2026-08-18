@@ -31,8 +31,9 @@ pytestmark = pytest.mark.asyncio
 def _fake_ctx() -> _BinaryContext:
     fns_by_va = {
         0x140001480: _AnalysedFunction("vuln", 0x140001480, 0x140001500),
-        0x140002000: _AnalysedFunction("__pei386_runtime_relocator",
-                                       0x140002000, 0x140002100),
+        0x140002000: _AnalysedFunction(
+            "__pei386_runtime_relocator", 0x140002000, 0x140002100
+        ),
     }
     fns_by_name = {fn.name: [fn] for fn in fns_by_va.values()}
     return _BinaryContext(
@@ -55,14 +56,14 @@ def _strcpy_finding() -> VulnerabilityFinding:
         root_cause="strcpy of caller-controlled argv[1] into 32-byte stack buffer",
         evidence=[
             Evidence(kind="import", location="strcpy", text="strcpy imported"),
-            Evidence(kind="disasm", location="0x140001488",
-                     text="call strcpy"),
+            Evidence(kind="disasm", location="0x140001488", text="call strcpy"),
         ],
         confidence="high",
     )
 
 
 # ---- evidence resolution for the prompt ----
+
 
 async def test_resolve_evidence_includes_each_evidence_line():
     f = _strcpy_finding()
@@ -78,8 +79,7 @@ async def test_resolve_evidence_includes_each_evidence_line():
 
 async def test_resolve_evidence_flags_va_outside_any_function():
     f = _strcpy_finding()
-    f.evidence = [Evidence(kind="disasm", location="0xffffff00",
-                           text="bogus")]
+    f.evidence = [Evidence(kind="disasm", location="0xffffff00", text="bogus")]
     ctx = _fake_ctx()
     block = _resolve_evidence_for_prompt(f, ctx)
     assert "NOT inside any" in block
@@ -87,7 +87,9 @@ async def test_resolve_evidence_flags_va_outside_any_function():
 
 async def test_resolve_evidence_includes_verifier_issues():
     f = _strcpy_finding()
-    f.verification_issues = ["disasm evidence at 0xffffff00 is not inside any analyzed function"]
+    f.verification_issues = [
+        "disasm evidence at 0xffffff00 is not inside any analyzed function"
+    ]
     ctx = _fake_ctx()
     block = _resolve_evidence_for_prompt(f, ctx)
     assert "verifier_issues:" in block
@@ -95,6 +97,7 @@ async def test_resolve_evidence_includes_verifier_issues():
 
 
 # ---- critique_finding: wiring with mocked critic ----
+
 
 async def test_critique_finding_true_keeps_confidence():
     f = _strcpy_finding()
@@ -147,8 +150,11 @@ async def test_critique_finding_false_demotes_to_low():
         bug_site=AddressRef(va=0x140002010),
         root_cause="multiplication of count by element size before allocator wraps on 32-bit",
         evidence=[
-            Evidence(kind="disasm", location="0x140002010",
-                     text="imul edx, ecx ; no overflow check"),
+            Evidence(
+                kind="disasm",
+                location="0x140002010",
+                text="imul edx, ecx ; no overflow check",
+            ),
         ],
         confidence="high",
     )

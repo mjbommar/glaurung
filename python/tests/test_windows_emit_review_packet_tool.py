@@ -500,10 +500,7 @@ def test_windows_emit_review_packet_carries_notebook_decisions(
         "attached notebook decision blocks promotion" in item
         for item in packet.promotion_blockers
     )
-    assert (
-        "analyst_notebook_decisions"
-        in result.evidence_bundle.coverage.fact_coverage
-    )
+    assert "analyst_notebook_decisions" in result.evidence_bundle.coverage.fact_coverage
     notebook_refs = [
         ref
         for ref in result.evidence_bundle.evidence_refs

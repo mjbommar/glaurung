@@ -132,7 +132,9 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
                 _ranked_candidate(
                     "blocked-candidate",
                     validation_ready=False,
-                    validation_blockers=["KDNET attach is not validated: not_configured"],
+                    validation_blockers=[
+                        "KDNET attach is not validated: not_configured"
+                    ],
                 ),
             ],
             artifact_bundles=[
@@ -205,7 +207,9 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
     assert result.blocked_count == 1
     assert result.markdown_path == str(report_path)
     assert "# Windows Candidate Validation Report" in result.markdown
-    assert "Claim level: operator validation handoff, not reproduction." in result.markdown
+    assert (
+        "Claim level: operator validation handoff, not reproduction." in result.markdown
+    )
     assert "## Rank 1: ready-candidate" in result.markdown
     assert "Validation substrate: win11_ltsc_v4_cold_postlogon" in result.markdown
     assert "KDNET attach proof: /evidence/kdnet-attach.log" in result.markdown
@@ -219,7 +223,10 @@ def test_windows_candidate_validation_report_renders_and_writes_markdown(
     assert "Harness template: none attached" in result.markdown
     assert "Runtime artifacts: ready" in result.markdown
     assert "Runtime execution: executed" in result.markdown
-    assert "Runtime artifact summaries: kdnet_attach_log:aaaaaaaaaaaa:/evidence/kdnet-attach.log" in result.markdown
+    assert (
+        "Runtime artifact summaries: kdnet_attach_log:aaaaaaaaaaaa:/evidence/kdnet-attach.log"
+        in result.markdown
+    )
     assert "Runtime artifacts: none attached" in result.markdown
     assert report_path.read_text(encoding="utf-8") == result.markdown
     assert result.report_node_id is not None

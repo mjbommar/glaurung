@@ -73,6 +73,7 @@ def _looks_like(data: bytes) -> str:
         return "empty"
     try:
         import glaurung as g
+
         sniff = g.strings.sniff_bytes(data)
         if sniff is not None:
             mime, ext, label = sniff
@@ -89,11 +90,12 @@ def _looks_like(data: bytes) -> str:
     sample = data[:128]
     try:
         import glaurung as g
+
         ratio = g.strings.printable_ascii_ratio(sample)
     except Exception:
-        ratio = sum(
-            1 for b in sample if 32 <= b < 127 or b in (9, 10, 13)
-        ) / max(1, len(sample))
+        ratio = sum(1 for b in sample if 32 <= b < 127 or b in (9, 10, 13)) / max(
+            1, len(sample)
+        )
     if ratio >= 0.85:
         return "printable text"
     return "unknown binary"
@@ -136,9 +138,9 @@ class FindBase64BlobsTool(MemoryTool[FindBase64BlobsArgs, FindBase64BlobsResult]
             ToolMeta(
                 name="find_base64_blobs",
                 description="Scan a file for runs of base64-alphabet "
-                            "characters and try to decode each. Reports "
-                            "decoded size and a magic-byte guess at what "
-                            "the decoded content is.",
+                "characters and try to decode each. Reports "
+                "decoded size and a magic-byte guess at what "
+                "the decoded content is.",
                 tags=("extract", "encoded", "layer1"),
             ),
             FindBase64BlobsArgs,
@@ -181,9 +183,7 @@ class FindBase64BlobsTool(MemoryTool[FindBase64BlobsArgs, FindBase64BlobsResult]
         return FindBase64BlobsResult(path=str(path), blobs=blobs)
 
 
-def build_find_base64_blobs() -> MemoryTool[
-    FindBase64BlobsArgs, FindBase64BlobsResult
-]:
+def build_find_base64_blobs() -> MemoryTool[FindBase64BlobsArgs, FindBase64BlobsResult]:
     return FindBase64BlobsTool()
 
 
@@ -220,8 +220,8 @@ class FindHexBlobsTool(MemoryTool[FindHexBlobsArgs, FindHexBlobsResult]):
             ToolMeta(
                 name="find_hex_blobs",
                 description="Scan for runs of hex digits at least min_bytes "
-                            "long and decode them. Catches hex-encoded "
-                            "payloads in config files / strings tables.",
+                "long and decode them. Catches hex-encoded "
+                "payloads in config files / strings tables.",
                 tags=("extract", "encoded", "layer1"),
             ),
             FindHexBlobsArgs,
@@ -301,8 +301,8 @@ class FindPemBlocksTool(MemoryTool[FindPemBlocksArgs, FindPemBlocksResult]):
             ToolMeta(
                 name="find_pem_blocks",
                 description="Find PEM-armored blocks (-----BEGIN ... / "
-                            "-----END ...-----). Detects keys, certs, CSRs, "
-                            "and arbitrary BEGIN <TYPE> payloads.",
+                "-----END ...-----). Detects keys, certs, CSRs, "
+                "and arbitrary BEGIN <TYPE> payloads.",
                 tags=("extract", "encoded", "layer1"),
             ),
             FindPemBlocksArgs,
@@ -341,9 +341,7 @@ class FindPemBlocksTool(MemoryTool[FindPemBlocksArgs, FindPemBlocksResult]):
         return FindPemBlocksResult(path=str(path), blocks=blocks)
 
 
-def build_find_pem_blocks() -> MemoryTool[
-    FindPemBlocksArgs, FindPemBlocksResult
-]:
+def build_find_pem_blocks() -> MemoryTool[FindPemBlocksArgs, FindPemBlocksResult]:
     return FindPemBlocksTool()
 
 
@@ -355,12 +353,33 @@ def build_find_pem_blocks() -> MemoryTool[
 # Letter-frequency log probabilities for English (rough). Used as a
 # scoring function to recognise plausibly-decoded plaintext.
 _EN_LETTER_FREQ = {
-    "a": 0.082, "b": 0.015, "c": 0.028, "d": 0.043, "e": 0.127,
-    "f": 0.022, "g": 0.020, "h": 0.061, "i": 0.070, "j": 0.002,
-    "k": 0.008, "l": 0.040, "m": 0.024, "n": 0.067, "o": 0.075,
-    "p": 0.019, "q": 0.001, "r": 0.060, "s": 0.063, "t": 0.091,
-    "u": 0.028, "v": 0.010, "w": 0.024, "x": 0.002, "y": 0.020,
-    "z": 0.001, " ": 0.180,
+    "a": 0.082,
+    "b": 0.015,
+    "c": 0.028,
+    "d": 0.043,
+    "e": 0.127,
+    "f": 0.022,
+    "g": 0.020,
+    "h": 0.061,
+    "i": 0.070,
+    "j": 0.002,
+    "k": 0.008,
+    "l": 0.040,
+    "m": 0.024,
+    "n": 0.067,
+    "o": 0.075,
+    "p": 0.019,
+    "q": 0.001,
+    "r": 0.060,
+    "s": 0.063,
+    "t": 0.091,
+    "u": 0.028,
+    "v": 0.010,
+    "w": 0.024,
+    "x": 0.002,
+    "y": 0.020,
+    "z": 0.001,
+    " ": 0.180,
 }
 
 
@@ -373,9 +392,7 @@ def _english_score(b: bytes) -> float:
     if not b:
         return 0.0
     n = len(b)
-    printable = sum(
-        1 for x in b if 32 <= x < 127 or x in (9, 10, 13)
-    )
+    printable = sum(1 for x in b if 32 <= x < 127 or x in (9, 10, 13))
     if printable / n < 0.7:
         return 0.0
     s = 0.0
@@ -422,9 +439,9 @@ class TryXorBruteTool(MemoryTool[TryXorBruteArgs, TryXorBruteResult]):
             ToolMeta(
                 name="try_xor_brute",
                 description="Brute-force XOR-decode a byte range with all "
-                            "256 single-byte keys (or all keys of the given "
-                            "lengths). Returns the top-K candidates ranked "
-                            "by English-plaintext plausibility.",
+                "256 single-byte keys (or all keys of the given "
+                "lengths). Returns the top-K candidates ranked "
+                "by English-plaintext plausibility.",
                 tags=("extract", "encoded", "layer1"),
             ),
             TryXorBruteArgs,
@@ -442,7 +459,7 @@ class TryXorBruteTool(MemoryTool[TryXorBruteArgs, TryXorBruteResult]):
             data = path.read_bytes()
         except Exception:
             return TryXorBruteResult(path=str(path), candidates=[])
-        slice_ = data[args.offset: args.offset + args.length]
+        slice_ = data[args.offset : args.offset + args.length]
         if not slice_:
             return TryXorBruteResult(path=str(path), candidates=[])
 
@@ -472,7 +489,8 @@ class TryXorBruteTool(MemoryTool[TryXorBruteArgs, TryXorBruteResult]):
 
         cands.sort(key=lambda c: -c.score)
         return TryXorBruteResult(
-            path=str(path), candidates=cands[: args.top_k],
+            path=str(path),
+            candidates=cands[: args.top_k],
         )
 
 
@@ -490,7 +508,7 @@ class ScanXorEncodedStringsArgs(BaseModel):
     window: int = Field(
         32,
         description="Width of the sliding window in bytes — the minimum "
-                    "length of the encoded plaintext to detect.",
+        "length of the encoded plaintext to detect.",
     )
     stride: int = Field(8, description="Window step size")
     min_score: float = Field(
@@ -521,9 +539,9 @@ class ScanXorEncodedStringsTool(
             ToolMeta(
                 name="scan_xor_encoded_strings",
                 description="Slide a window across a file, brute-force "
-                            "single-byte XOR each window, and report any "
-                            "region whose top-scoring decode looks like "
-                            "plain English (printable + letter-frequency).",
+                "single-byte XOR each window, and report any "
+                "region whose top-scoring decode looks like "
+                "plain English (printable + letter-frequency).",
                 tags=("extract", "encoded", "layer1"),
             ),
             ScanXorEncodedStringsArgs,
@@ -547,6 +565,7 @@ class ScanXorEncodedStringsTool(
         # has high letter frequencies.
         try:
             import glaurung as g  # noqa: F401
+
             _has_search = True
         except Exception:
             _has_search = False
@@ -567,14 +586,12 @@ class ScanXorEncodedStringsTool(
         last_offset = -10_000_000
         window, stride = args.window, args.stride
         for off in range(0, len(data) - window, stride):
-            slice_ = data[off: off + window]
+            slice_ = data[off : off + window]
             # Skip windows whose source bytes already look mostly like
             # text — XOR-decoding plaintext with any key yields more
             # printable text and trivially scores well, which would
             # flood the result with the symbol table / strings table.
-            src_printable = sum(
-                1 for b in slice_ if 32 <= b < 127 or b in (9, 10, 13)
-            )
+            src_printable = sum(1 for b in slice_ if 32 <= b < 127 or b in (9, 10, 13))
             if src_printable / len(slice_) >= 0.5:
                 continue
             best_key, best_score, best_decoded = 0, 0.0, b""
@@ -591,8 +608,11 @@ class ScanXorEncodedStringsTool(
                     best_key, best_score, best_decoded = k, score, decoded
             if best_score >= args.min_score:
                 # Coalesce adjacent windows reporting the same key.
-                if regions and regions[-1].key_hex == bytes([best_key]).hex() \
-                   and off - last_offset <= window:
+                if (
+                    regions
+                    and regions[-1].key_hex == bytes([best_key]).hex()
+                    and off - last_offset <= window
+                ):
                     regions[-1] = XorRegion(
                         offset=regions[-1].offset,
                         length=off + window - regions[-1].offset,
@@ -600,20 +620,19 @@ class ScanXorEncodedStringsTool(
                         score=max(regions[-1].score, best_score),
                         decoded=(
                             regions[-1].decoded
-                            + best_decoded.decode("latin-1", errors="replace")[
-                                stride:
-                            ]
+                            + best_decoded.decode("latin-1", errors="replace")[stride:]
                         )[:200],
                     )
                 else:
                     regions.append(
                         XorRegion(
-                            offset=off, length=window,
+                            offset=off,
+                            length=window,
                             key_hex=bytes([best_key]).hex(),
                             score=best_score,
-                            decoded=best_decoded.decode(
-                                "latin-1", errors="replace"
-                            )[:200],
+                            decoded=best_decoded.decode("latin-1", errors="replace")[
+                                :200
+                            ],
                         )
                     )
                 last_offset = off
@@ -621,7 +640,8 @@ class ScanXorEncodedStringsTool(
                     break
         regions.sort(key=lambda r: -r.score)
         return ScanXorEncodedStringsResult(
-            path=str(path), regions=regions[: args.max_results],
+            path=str(path),
+            regions=regions[: args.max_results],
         )
 
 
@@ -649,7 +669,9 @@ _COMPRESSED_SIGNATURES = [
 ]
 
 
-def _try_decompress(data: bytes, fmt: str, max_out: int = 4 * 1024 * 1024) -> Optional[bytes]:
+def _try_decompress(
+    data: bytes, fmt: str, max_out: int = 4 * 1024 * 1024
+) -> Optional[bytes]:
     """Try to decompress ``data`` as ``fmt``. Tolerates a truncated input
     (the caller often passes a probe slice that doesn't include the
     full stream) by reading incrementally where the format supports it.
@@ -662,6 +684,7 @@ def _try_decompress(data: bytes, fmt: str, max_out: int = 4 * 1024 * 1024) -> Op
                 return f.read(max_out)
         if fmt == "zlib":
             import zlib
+
             d = zlib.decompressobj()
             return d.decompress(data, max_out)
         if fmt == "bzip2":
@@ -688,8 +711,8 @@ class FindCompressedBlobsArgs(BaseModel):
     probe_bytes: int = Field(
         4096,
         description="When a magic match is found, attempt to decompress this "
-                    "many trailing bytes to confirm. Larger = slower but "
-                    "fewer false positives.",
+        "many trailing bytes to confirm. Larger = slower but "
+        "fewer false positives.",
     )
 
 
@@ -716,8 +739,8 @@ class FindCompressedBlobsTool(
             ToolMeta(
                 name="find_compressed_blobs",
                 description="Scan for gzip / zlib / bzip2 / xz / zstd magics "
-                            "and confirm each by trial-decompressing a small "
-                            "prefix. Returns offsets that survive the probe.",
+                "and confirm each by trial-decompressing a small "
+                "prefix. Returns offsets that survive the probe.",
                 tags=("extract", "encoded", "layer1"),
             ),
             FindCompressedBlobsArgs,

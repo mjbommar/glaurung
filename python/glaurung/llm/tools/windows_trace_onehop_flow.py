@@ -65,7 +65,9 @@ class WindowsTraceOnehopFlowArgs(BaseModel):
         None,
         description="Path to ASB data/kg/pe-sinks.yaml. Defaults to ASB_REPO or sibling repo.",
     )
-    max_depth: int = Field(2, description="Maximum simple alias depth in each function.")
+    max_depth: int = Field(
+        2, description="Maximum simple alias depth in each function."
+    )
     max_flows: int = Field(64, description="Maximum one-hop flow hits to return.")
     timeout_ms: int = Field(
         500,
@@ -123,7 +125,9 @@ class WindowsTraceOnehopFlowTool(
             notes.append("source_name could not be resolved in caller")
             return _result(args, source_name, [], [], 0, caller_source, notes, None)
 
-        caller_aliases = _trace_aliases(caller_text, source_name, max_depth=args.max_depth)
+        caller_aliases = _trace_aliases(
+            caller_text, source_name, max_depth=args.max_depth
+        )
         tracked_names = {source_name} | {alias.name for alias in caller_aliases}
         helper_by_key = _helpers_by_key(args.helpers)
         operations = _load_operations(args.sinks_path)

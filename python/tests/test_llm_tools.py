@@ -17,9 +17,13 @@ from glaurung.llm.tools.view_entry import build_tool as build_view_entry
 from glaurung.llm.tools.view_strings import build_tool as build_view_strings
 
 
-def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(tmp_path: "__import__('pathlib').Path"):
+def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(
+    tmp_path: "__import__('pathlib').Path",
+):
     """build_naming_prompt should embed decompiler output when available."""
-    sample = Path("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2")
+    sample = Path(
+        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
+    )
     if not sample.exists():
         pytest.skip("sample missing")
 
@@ -72,7 +76,7 @@ def test_build_naming_prompt_falls_back_when_decompile_unavailable(tmp_path):
     )
     assert "glaurung --style c" not in prompt
     assert "puts@plt" in prompt
-    assert "'hello'" in prompt or "\"hello\"" in prompt
+    assert "'hello'" in prompt or '"hello"' in prompt
     assert "mov rax" in prompt
 
 
@@ -199,9 +203,7 @@ class TestDisasmAndAgent:
         empty_artifact.symbols = None
 
         AnalysisContext = MemoryContext
-        AnalysisContext(
-            file_path="/test", artifact=empty_artifact, session_id="test"
-        )
+        AnalysisContext(file_path="/test", artifact=empty_artifact, session_id="test")
         # Should return empty results: no triage strings / symbols available
         strings = []
         assert strings == []

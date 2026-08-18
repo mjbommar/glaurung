@@ -27,13 +27,29 @@ from .windows_project_call_argument_snapshot import (
 
 
 RETURN_ALIASES = {"rax"}
-CONDITIONAL_BRANCH_PREFIXES = ("ja", "jb", "jc", "je", "jg", "jl", "jn", "jo", "jp", "js", "jz")
+CONDITIONAL_BRANCH_PREFIXES = (
+    "ja",
+    "jb",
+    "jc",
+    "je",
+    "jg",
+    "jl",
+    "jn",
+    "jo",
+    "jp",
+    "js",
+    "jz",
+)
 
 
 class WindowsProjectReturnValueUseSnapshotArgs(BaseModel):
-    binary_path: str = Field(..., description="Path to the PE binary backing the project.")
+    binary_path: str = Field(
+        ..., description="Path to the PE binary backing the project."
+    )
     project_path: str = Field(..., description="Path to a .glaurung SQLite project.")
-    callsite_va: int = Field(..., description="Exact callsite VA from persisted call xrefs.")
+    callsite_va: int = Field(
+        ..., description="Exact callsite VA from persisted call xrefs."
+    )
     binary_id: int | None = Field(None, description="Optional binary_id filter.")
     max_window_bytes: int = Field(
         4096,
@@ -136,7 +152,9 @@ class WindowsProjectReturnValueUseSnapshotTool(
 
         instructions = _disassemble_around_callsite(binary_path, row, args)
         callsite_text = _callsite_text(instructions, args.callsite_va)
-        after = _instructions_after_callsite(instructions, args.callsite_va, args.max_after_instructions)
+        after = _instructions_after_callsite(
+            instructions, args.callsite_va, args.max_after_instructions
+        )
         uses = _return_value_uses(after)
         coverage = _coverage(row, instructions, after, uses)
         missing = _missing_capabilities(row, instructions, after, uses)
@@ -240,12 +258,16 @@ def _instructions_after_callsite(
     return out
 
 
-def _return_value_uses(instructions: list[g.Instruction]) -> list[ProjectReturnValueUseFact]:
+def _return_value_uses(
+    instructions: list[g.Instruction],
+) -> list[ProjectReturnValueUseFact]:
     uses: list[ProjectReturnValueUseFact] = []
     aliases: set[str] = set(RETURN_ALIASES)
     for index, instruction in enumerate(instructions):
         mnemonic = str(instruction.mnemonic or "").lower()
-        operands = [str(op).strip() for op in getattr(instruction, "operands", []) or []]
+        operands = [
+            str(op).strip() for op in getattr(instruction, "operands", []) or []
+        ]
         next_branch = _next_conditional_branch(instructions, index + 1)
 
         if mnemonic == "call":
@@ -258,7 +280,9 @@ def _return_value_uses(instructions: list[g.Instruction]) -> list[ProjectReturnV
                         "clobbered_by_call",
                         instruction,
                         confidence=0.82,
-                        notes=["nested call overwrites RAX before a local return-value use was proven"],
+                        notes=[
+                            "nested call overwrites RAX before a local return-value use was proven"
+                        ],
                     )
                 )
             aliases.discard("rax")
@@ -301,7 +325,9 @@ def _return_value_uses(instructions: list[g.Instruction]) -> list[ProjectReturnV
                         "clobbered_by_write",
                         instruction,
                         confidence=0.82,
-                        notes=["RAX was overwritten before a local return-value use was proven"],
+                        notes=[
+                            "RAX was overwritten before a local return-value use was proven"
+                        ],
                     )
                 )
             aliases.discard(assigned)
@@ -313,10 +339,15 @@ def _return_value_uses(instructions: list[g.Instruction]) -> list[ProjectReturnV
                 instruction_va=int(instructions[-1].address.value),
                 instruction_text=_instruction_text(instructions[-1]),
                 mnemonic=str(instructions[-1].mnemonic or "").lower(),
-                operands=[str(op).strip() for op in getattr(instructions[-1], "operands", []) or []],
+                operands=[
+                    str(op).strip()
+                    for op in getattr(instructions[-1], "operands", []) or []
+                ],
                 expression=None,
                 confidence=0.55,
-                notes=["no RAX use or clobber was observed in the inspected post-call window"],
+                notes=[
+                    "no RAX use or clobber was observed in the inspected post-call window"
+                ],
             )
         )
     return uses
@@ -334,7 +365,11 @@ def _comparison_fact(
     if not any(_operand_mentions_alias(operand, aliases) for operand in operands):
         return None
     use_kind = "comparison_gate"
-    if mnemonic == "test" and len(operands) >= 2 and _same_register(operands[0], operands[1]):
+    if (
+        mnemonic == "test"
+        and len(operands) >= 2
+        and _same_register(operands[0], operands[1])
+    ):
         use_kind = "null_or_status_check"
     return _fact(
         use_kind,
@@ -346,7 +381,9 @@ def _comparison_fact(
     )
 
 
-def _store_fact(instruction: g.Instruction, aliases: set[str]) -> ProjectReturnValueUseFact | None:
+def _store_fact(
+    instruction: g.Instruction, aliases: set[str]
+) -> ProjectReturnValueUseFact | None:
     mnemonic = str(instruction.mnemonic or "").lower()
     operands = [str(op).strip() for op in getattr(instruction, "operands", []) or []]
     if mnemonic not in {"mov", "movsxd", "movzx", "lea"} or len(operands) < 2:
@@ -354,7 +391,9 @@ def _store_fact(instruction: g.Instruction, aliases: set[str]) -> ProjectReturnV
     dst = operands[0]
     src = operands[1]
     if not _operand_mentions_alias(src, aliases):
-        if _operand_mentions_alias(dst, aliases) and not _is_register(_canonical_register(dst)):
+        if _operand_mentions_alias(dst, aliases) and not _is_register(
+            _canonical_register(dst)
+        ):
             return _fact(
                 "return_used_as_address",
                 instruction,
@@ -556,7 +595,9 @@ def _operand_mentions_alias(operand: str, aliases: set[str]) -> bool:
     if register in aliases:
         return True
     text = _strip_memory_prefix(operand)
-    for token in re.findall(r"\b(?:r(?:1[0-5]|[abcd]x|[sd]i|[bs]p|[89])|e[abcd]x|r[89]d|[abcd][lh])\b", text):
+    for token in re.findall(
+        r"\b(?:r(?:1[0-5]|[abcd]x|[sd]i|[bs]p|[89])|e[abcd]x|r[89]d|[abcd][lh])\b", text
+    ):
         if _canonical_register(token) in aliases:
             return True
     return False

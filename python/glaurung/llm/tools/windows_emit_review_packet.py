@@ -1127,7 +1127,9 @@ def _notebook_decision_summaries(
 
 
 def _notebook_decision_summary(decision: WindowsNotebookDecision) -> str:
-    value = decision.name or decision.state or decision.comment or decision.reason or "-"
+    value = (
+        decision.name or decision.state or decision.comment or decision.reason or "-"
+    )
     return f"{decision.kind}@0x{decision.va:x}:{value}"
 
 

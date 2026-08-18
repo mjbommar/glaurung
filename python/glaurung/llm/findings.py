@@ -26,12 +26,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 ConfidenceLevel = Literal["low", "medium", "high"]
 EvidenceKind = Literal[
-    "import",      # PE import-table entry (caller named a function from a DLL)
-    "string",      # an embedded string adjacent to the bug site
-    "disasm",      # a specific instruction at a VA
-    "decompile",   # a specific decompiler line / pseudocode snippet
-    "fact_bundle", # a row from the Lane-4 fact-bundle (per-function evidence)
-    "xref",        # an xref edge (caller -> callee or read/write site)
+    "import",  # PE import-table entry (caller named a function from a DLL)
+    "string",  # an embedded string adjacent to the bug site
+    "disasm",  # a specific instruction at a VA
+    "decompile",  # a specific decompiler line / pseudocode snippet
+    "fact_bundle",  # a row from the Lane-4 fact-bundle (per-function evidence)
+    "xref",  # an xref edge (caller -> callee or read/write site)
 ]
 EvidenceSupport = Literal["true", "partial", "false"]
 
@@ -163,9 +163,7 @@ class VulnerabilityFinding(BaseModel):
       * ``function`` carries at least a name or a VA.
     """
 
-    cwe: str = Field(
-        ..., description="Canonical CWE id, e.g. 'CWE-121'."
-    )
+    cwe: str = Field(..., description="Canonical CWE id, e.g. 'CWE-121'.")
     cwe_name: Optional[str] = Field(
         default=None,
         description=(
@@ -173,9 +171,7 @@ class VulnerabilityFinding(BaseModel):
             "when omitted and the id is in the table."
         ),
     )
-    function: FunctionRef = Field(
-        ..., description="The function where the bug lives."
-    )
+    function: FunctionRef = Field(..., description="The function where the bug lives.")
     bug_site: Optional[AddressRef] = Field(
         default=None,
         description="VA of the specific instruction implementing the bug.",
@@ -247,9 +243,7 @@ class FindingsReport(BaseModel):
     group findings by source.
     """
 
-    binary_path: str = Field(
-        ..., description="Path of the analysed binary."
-    )
+    binary_path: str = Field(..., description="Path of the analysed binary.")
     findings: list[VulnerabilityFinding] = Field(
         default_factory=list,
         description="Zero or more candidate findings.",

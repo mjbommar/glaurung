@@ -14,6 +14,7 @@ from glaurung.llm.usage_limits import build_usage_limits, default_max_output_tok
 
 # ---- LLMConfig defaults ----
 
+
 def test_llmconfig_has_request_limit_default():
     c = LLMConfig()
     assert c.default_request_limit == 12
@@ -48,13 +49,15 @@ def test_llmconfig_env_overrides_max_output():
 
 def test_llmconfig_invalid_env_logs_and_keeps_default():
     """Garbage env value must NOT crash config init."""
-    with patch.dict(os.environ, {"GLAURUNG_REQUEST_LIMIT": "not-a-number"},
-                    clear=False):
+    with patch.dict(
+        os.environ, {"GLAURUNG_REQUEST_LIMIT": "not-a-number"}, clear=False
+    ):
         c = LLMConfig()
         assert c.default_request_limit == 12  # untouched
 
 
 # ---- build_usage_limits ----
+
 
 def test_build_usage_limits_uses_config_defaults_when_no_kwargs():
     ul = build_usage_limits()
@@ -100,8 +103,7 @@ def test_build_usage_limits_env_override_propagates_through_helper():
     """
     _config_mod._config = None  # bust the cached singleton
     try:
-        with patch.dict(os.environ, {"GLAURUNG_REQUEST_LIMIT": "3"},
-                        clear=False):
+        with patch.dict(os.environ, {"GLAURUNG_REQUEST_LIMIT": "3"}, clear=False):
             ul = build_usage_limits()
         assert ul.request_limit == 3
     finally:
@@ -115,8 +117,9 @@ def test_default_max_output_tokens_returns_config_value():
 def test_default_max_output_tokens_respects_env():
     _config_mod._config = None
     try:
-        with patch.dict(os.environ, {"GLAURUNG_MAX_OUTPUT_TOKENS": "8192"},
-                        clear=False):
+        with patch.dict(
+            os.environ, {"GLAURUNG_MAX_OUTPUT_TOKENS": "8192"}, clear=False
+        ):
             assert default_max_output_tokens() == 8_192
     finally:
         _config_mod._config = None

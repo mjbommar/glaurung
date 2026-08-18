@@ -42,25 +42,36 @@ from ..context import MemoryContext
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
 from .extract_archive import (
-    EnumerateArchiveTool, EnumerateArchiveArgs,
-    ExtractArchiveAllTool, ExtractArchiveAllArgs,
+    EnumerateArchiveTool,
+    EnumerateArchiveArgs,
+    ExtractArchiveAllTool,
+    ExtractArchiveAllArgs,
     _peek_format,
 )
 from .find_embedded_executables import (
-    FindEmbeddedExecutablesTool, FindEmbeddedExecutablesArgs,
+    FindEmbeddedExecutablesTool,
+    FindEmbeddedExecutablesArgs,
 )
 from .find_encoded_blobs import (
-    FindBase64BlobsTool, FindBase64BlobsArgs,
-    FindCompressedBlobsTool, FindCompressedBlobsArgs,
-    FindPemBlocksTool, FindPemBlocksArgs,
+    FindBase64BlobsTool,
+    FindBase64BlobsArgs,
+    FindCompressedBlobsTool,
+    FindCompressedBlobsArgs,
+    FindPemBlocksTool,
+    FindPemBlocksArgs,
     _try_decompress,
 )
 from .find_structured_blobs import (
-    FindEmbeddedImagesTool, FindEmbeddedImagesArgs,
-    FindXmlBlobsTool, FindXmlBlobsArgs,
-    FindJsonBlobsTool, FindJsonBlobsArgs,
-    FindPlistBlobsTool, FindPlistBlobsArgs,
-    FindIniBlobsTool, FindIniBlobsArgs,
+    FindEmbeddedImagesTool,
+    FindEmbeddedImagesArgs,
+    FindXmlBlobsTool,
+    FindXmlBlobsArgs,
+    FindJsonBlobsTool,
+    FindJsonBlobsArgs,
+    FindPlistBlobsTool,
+    FindPlistBlobsArgs,
+    FindIniBlobsTool,
+    FindIniBlobsArgs,
 )
 
 
@@ -71,6 +82,7 @@ from .find_structured_blobs import (
 
 class TriageNode(BaseModel):
     """One step in the recursive-triage tree."""
+
     depth: int
     parent_id: Optional[int] = None
     node_id: int
@@ -82,12 +94,12 @@ class TriageNode(BaseModel):
     kind: str = Field(
         ...,
         description="archive | executable | image | xml | json | plist | "
-                    "ini | pem | base64 | compressed | unknown",
+        "ini | pem | base64 | compressed | unknown",
     )
     extra: Dict[str, str] = Field(
         default_factory=dict,
         description="Per-kind metadata — e.g. archive format, exec format, "
-                    "PEM type, root XML element.",
+        "PEM type, root XML element.",
     )
 
 
@@ -96,8 +108,8 @@ class AnalyzeRecursivelyArgs(BaseModel):
     out_dir: Optional[str] = Field(
         None,
         description="Where to write extracted blobs. None creates a temp "
-                    "directory which the caller is responsible for cleaning "
-                    "up via the result's `temp_root` path.",
+        "directory which the caller is responsible for cleaning "
+        "up via the result's `temp_root` path.",
     )
     max_depth: int = 4
     max_total_bytes: int = 256 * 1024 * 1024
@@ -122,6 +134,7 @@ class AnalyzeRecursivelyResult(BaseModel):
 def _sniff(path: Path) -> Optional[str]:
     try:
         import glaurung as g
+
         head = path.read_bytes()[:4096]
         s = g.strings.sniff_bytes(head)
         if s is None:
@@ -139,7 +152,10 @@ def _is_executable(label: Optional[str]) -> bool:
     return any(
         marker in label
         for marker in (
-            "x-executable", "elf", "x-mach-binary", "x-msdownload",
+            "x-executable",
+            "elf",
+            "x-mach-binary",
+            "x-msdownload",
             "vnd.microsoft.portable-executable",
         )
     )
@@ -175,9 +191,9 @@ class AnalyzeRecursivelyTool(
             ToolMeta(
                 name="analyze_recursively",
                 description="Triage a file and recursively unpack / decode "
-                            "every container, encoded blob, and embedded "
-                            "structured payload. Bounded by max_depth, "
-                            "max_total_bytes, max_nodes.",
+                "every container, encoded blob, and embedded "
+                "structured payload. Bounded by max_depth, "
+                "max_total_bytes, max_nodes.",
                 tags=("extract", "recursive", "triage", "layer1"),
             ),
             AnalyzeRecursivelyArgs,
@@ -191,7 +207,8 @@ class AnalyzeRecursivelyTool(
         args: AnalyzeRecursivelyArgs,
     ) -> AnalyzeRecursivelyResult:
         out_root = (
-            Path(args.out_dir) if args.out_dir
+            Path(args.out_dir)
+            if args.out_dir
             else Path(tempfile.mkdtemp(prefix="glaurung_triage_"))
         )
         out_root.mkdir(parents=True, exist_ok=True)
@@ -203,17 +220,25 @@ class AnalyzeRecursivelyTool(
         truncated = [False]
 
         def _new_node(
-            depth: int, parent_id: Optional[int], path: Path,
-            kind: str, sniff_label: Optional[str], extra: Dict[str, str],
+            depth: int,
+            parent_id: Optional[int],
+            path: Path,
+            kind: str,
+            sniff_label: Optional[str],
+            extra: Dict[str, str],
         ) -> Optional[TriageNode]:
             if len(nodes) >= args.max_nodes:
                 truncated[0] = True
                 return None
             node = TriageNode(
-                depth=depth, parent_id=parent_id, node_id=next_id[0],
+                depth=depth,
+                parent_id=parent_id,
+                node_id=next_id[0],
                 path=str(path),
                 size=path.stat().st_size if path.exists() else 0,
-                sniff_label=sniff_label, kind=kind, extra=extra,
+                sniff_label=sniff_label,
+                kind=kind,
+                extra=extra,
             )
             next_id[0] += 1
             nodes.append(node)
@@ -249,16 +274,22 @@ class AnalyzeRecursivelyTool(
             # 1. Container archives — unpack and queue children.
             if fmt != "unknown":
                 node = _new_node(
-                    depth, parent_id, cur, "archive", sniff,
+                    depth,
+                    parent_id,
+                    cur,
+                    "archive",
+                    sniff,
                     {"format": fmt},
                 )
                 if node is None:
                     break
                 sub_dir = out_root / f"node_{node.node_id}"
                 inner = ExtractArchiveAllTool().run(
-                    ctx, kb,
+                    ctx,
+                    kb,
                     ExtractArchiveAllArgs(
-                        path=str(cur), out_dir=str(sub_dir),
+                        path=str(cur),
+                        out_dir=str(sub_dir),
                         max_bytes=args.max_total_bytes - total_bytes[0],
                     ),
                 )
@@ -273,58 +304,95 @@ class AnalyzeRecursivelyTool(
             # disabled here to avoid false positives in symbol tables.
             is_exec = _is_executable(sniff)
             self_node = _new_node(
-                depth, parent_id, cur,
-                "executable" if is_exec else "unknown", sniff,
+                depth,
+                parent_id,
+                cur,
+                "executable" if is_exec else "unknown",
+                sniff,
                 {"format": (sniff or "").split(";")[0]} if is_exec else {},
             )
             if self_node is None:
                 break
 
             # Embedded executables.
-            for em in FindEmbeddedExecutablesTool().run(
-                ctx, kb,
-                FindEmbeddedExecutablesArgs(path=str(cur), skip_first_match=True),
-            ).matches:
+            for em in (
+                FindEmbeddedExecutablesTool()
+                .run(
+                    ctx,
+                    kb,
+                    FindEmbeddedExecutablesArgs(path=str(cur), skip_first_match=True),
+                )
+                .matches
+            ):
                 _new_node(
-                    depth + 1, self_node.node_id, cur, "executable_embedded",
+                    depth + 1,
+                    self_node.node_id,
+                    cur,
+                    "executable_embedded",
                     None,
                     {"format": em.format, "offset": str(em.offset)},
                 )
 
             # Compressed blobs — decode and recurse.
-            for cb in FindCompressedBlobsTool().run(
-                ctx, kb, FindCompressedBlobsArgs(path=str(cur), max_results=8),
-            ).blobs:
-                decoded = _try_decompress(data[cb.offset:], cb.format)
+            for cb in (
+                FindCompressedBlobsTool()
+                .run(
+                    ctx,
+                    kb,
+                    FindCompressedBlobsArgs(path=str(cur), max_results=8),
+                )
+                .blobs
+            ):
+                decoded = _try_decompress(data[cb.offset :], cb.format)
                 if decoded is None or not decoded:
                     continue
-                child_path = out_root / f"node_{self_node.node_id}_compressed_{cb.offset:x}.bin"
+                child_path = (
+                    out_root / f"node_{self_node.node_id}_compressed_{cb.offset:x}.bin"
+                )
                 child_path.write_bytes(decoded)
                 work.append((child_path, depth + 1, self_node.node_id, child_path.name))
 
             # Base64 blobs — decode and recurse.
-            for bb in FindBase64BlobsTool().run(
-                ctx, kb, FindBase64BlobsArgs(path=str(cur), max_results=16, min_len=64),
-            ).blobs:
+            for bb in (
+                FindBase64BlobsTool()
+                .run(
+                    ctx,
+                    kb,
+                    FindBase64BlobsArgs(path=str(cur), max_results=16, min_len=64),
+                )
+                .blobs
+            ):
                 try:
                     raw = base64.b64decode(
-                        data[bb.offset: bb.offset + bb.encoded_length],
+                        data[bb.offset : bb.offset + bb.encoded_length],
                         validate=True,
                     )
                 except Exception:
                     continue
                 if not raw:
                     continue
-                child_path = out_root / f"node_{self_node.node_id}_b64_{bb.offset:x}.bin"
+                child_path = (
+                    out_root / f"node_{self_node.node_id}_b64_{bb.offset:x}.bin"
+                )
                 child_path.write_bytes(raw)
                 work.append((child_path, depth + 1, self_node.node_id, child_path.name))
 
             # PEM blocks — record as leaves.
-            for pb in FindPemBlocksTool().run(
-                ctx, kb, FindPemBlocksArgs(path=str(cur)),
-            ).blocks:
+            for pb in (
+                FindPemBlocksTool()
+                .run(
+                    ctx,
+                    kb,
+                    FindPemBlocksArgs(path=str(cur)),
+                )
+                .blocks
+            ):
                 _new_node(
-                    depth + 1, self_node.node_id, cur, "pem", None,
+                    depth + 1,
+                    self_node.node_id,
+                    cur,
+                    "pem",
+                    None,
                     {"pem_type": pb.pem_type, "offset": str(pb.offset)},
                 )
 
@@ -332,13 +400,23 @@ class AnalyzeRecursivelyTool(
             # via length-walk OR via the Rust content sniffer. A bare
             # magic match with no validation is too noisy (BM, RIFF
             # are common byte sequences in random data).
-            for img in FindEmbeddedImagesTool().run(
-                ctx, kb, FindEmbeddedImagesArgs(path=str(cur)),
-            ).images:
+            for img in (
+                FindEmbeddedImagesTool()
+                .run(
+                    ctx,
+                    kb,
+                    FindEmbeddedImagesArgs(path=str(cur)),
+                )
+                .images
+            ):
                 if img.length == 0 and not img.confirmed_via_sniff:
                     continue
                 _new_node(
-                    depth + 1, self_node.node_id, cur, "image", None,
+                    depth + 1,
+                    self_node.node_id,
+                    cur,
+                    "image",
+                    None,
                     {
                         "format": img.format,
                         "offset": str(img.offset),
@@ -349,32 +427,72 @@ class AnalyzeRecursivelyTool(
             # Structured-config blobs — only run on non-executables to
             # avoid drowning in symbol-table false positives.
             if not is_exec:
-                for xml in FindXmlBlobsTool().run(
-                    ctx, kb, FindXmlBlobsArgs(path=str(cur)),
-                ).blobs:
+                for xml in (
+                    FindXmlBlobsTool()
+                    .run(
+                        ctx,
+                        kb,
+                        FindXmlBlobsArgs(path=str(cur)),
+                    )
+                    .blobs
+                ):
                     _new_node(
-                        depth + 1, self_node.node_id, cur, "xml", None,
+                        depth + 1,
+                        self_node.node_id,
+                        cur,
+                        "xml",
+                        None,
                         {"root_element": xml.root_element, "offset": str(xml.offset)},
                     )
-                for j in FindJsonBlobsTool().run(
-                    ctx, kb, FindJsonBlobsArgs(path=str(cur)),
-                ).blobs:
+                for j in (
+                    FindJsonBlobsTool()
+                    .run(
+                        ctx,
+                        kb,
+                        FindJsonBlobsArgs(path=str(cur)),
+                    )
+                    .blobs
+                ):
                     _new_node(
-                        depth + 1, self_node.node_id, cur, "json", None,
+                        depth + 1,
+                        self_node.node_id,
+                        cur,
+                        "json",
+                        None,
                         {"top_level": j.top_level_kind, "offset": str(j.offset)},
                     )
-                for p in FindPlistBlobsTool().run(
-                    ctx, kb, FindPlistBlobsArgs(path=str(cur)),
-                ).blobs:
+                for p in (
+                    FindPlistBlobsTool()
+                    .run(
+                        ctx,
+                        kb,
+                        FindPlistBlobsArgs(path=str(cur)),
+                    )
+                    .blobs
+                ):
                     _new_node(
-                        depth + 1, self_node.node_id, cur, "plist", None,
+                        depth + 1,
+                        self_node.node_id,
+                        cur,
+                        "plist",
+                        None,
                         {"format": p.format, "offset": str(p.offset)},
                     )
-                for ini in FindIniBlobsTool().run(
-                    ctx, kb, FindIniBlobsArgs(path=str(cur)),
-                ).blobs:
+                for ini in (
+                    FindIniBlobsTool()
+                    .run(
+                        ctx,
+                        kb,
+                        FindIniBlobsArgs(path=str(cur)),
+                    )
+                    .blobs
+                ):
                     _new_node(
-                        depth + 1, self_node.node_id, cur, "ini", None,
+                        depth + 1,
+                        self_node.node_id,
+                        cur,
+                        "ini",
+                        None,
                         {
                             "sections": str(ini.section_count),
                             "offset": str(ini.offset),
@@ -382,9 +500,7 @@ class AnalyzeRecursivelyTool(
                     )
 
             # Update kind from "unknown" → "scanned" if we found something.
-            children = [
-                n for n in nodes if n.parent_id == self_node.node_id
-            ]
+            children = [n for n in nodes if n.parent_id == self_node.node_id]
             if children:
                 # Mutate in-place — Pydantic models allow attribute assignment
                 # by default.
@@ -399,7 +515,5 @@ class AnalyzeRecursivelyTool(
         )
 
 
-def build_tool() -> MemoryTool[
-    AnalyzeRecursivelyArgs, AnalyzeRecursivelyResult
-]:
+def build_tool() -> MemoryTool[AnalyzeRecursivelyArgs, AnalyzeRecursivelyResult]:
     return AnalyzeRecursivelyTool()

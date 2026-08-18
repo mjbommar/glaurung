@@ -106,7 +106,7 @@ def test_MAIN__call_has_zero_arguments():
     match = bad.search(code_only)
     assert match is None, (
         f"MAIN__ is invoked with arguments in {_MAIN_C}: "
-        f"{code_only[match.start():match.start() + 40]!r} — "
+        f"{code_only[match.start() : match.start() + 40]!r} — "
         f"Bug T regression. gfortran's MAIN__ is zero-arg."
     )
 
@@ -133,6 +133,7 @@ def test_MAIN__is_in_reserved_function_names():
     collision-rename to ``fortran_main_program`` — losing the
     gfortran ABI contract the linker depends on."""
     import sys
+
     sys.path.insert(0, str(_REPO / "scripts"))
     import recover_source  # noqa: E402
 
@@ -150,6 +151,7 @@ def test_safe_filename_strips_underscores_demonstrates_why_reservation_needed():
     same logic eats ``MAIN__``'s trailing pair, hence the need for
     the reserved-name override."""
     import sys
+
     sys.path.insert(0, str(_REPO / "scripts"))
     import recover_source  # noqa: E402
 
@@ -191,9 +193,19 @@ def test_main_compiles_under_wall_werror():
         pytest.skip("gcc not available")
     proj = _MAIN_C.parent
     result = subprocess.run(
-        ["gcc", "-O2", "-Wall", "-Werror", "-c",
-         str(_MAIN_C), "-o", "/tmp/_test_main.o"],
-        capture_output=True, text=True, cwd=proj,
+        [
+            "gcc",
+            "-O2",
+            "-Wall",
+            "-Werror",
+            "-c",
+            str(_MAIN_C),
+            "-o",
+            "/tmp/_test_main.o",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=proj,
     )
     assert result.returncode == 0, (
         f"main.c failed to compile clean:\n"

@@ -21,36 +21,46 @@ class PatchCommand(BaseCommand):
         parser.add_argument("input", help="Source binary")
         parser.add_argument("output", help="Output binary path")
         parser.add_argument(
-            "--va", required=True,
+            "--va",
+            required=True,
             help="Virtual address to patch (hex with 0x or decimal)",
         )
         parser.add_argument(
-            "--bytes", dest="payload", default=None,
+            "--bytes",
+            dest="payload",
+            default=None,
             help='Hex byte payload, e.g. "90 90 90" or "488b45f8"',
         )
         parser.add_argument(
-            "--nop", action="store_true",
+            "--nop",
+            action="store_true",
             help="NOP out the instruction at --va (size-preserving)",
         )
         parser.add_argument(
-            "--jmp", dest="jmp_target", default=None,
+            "--jmp",
+            dest="jmp_target",
+            default=None,
             help="Replace the instruction at --va with `jmp <target>` "
-                 "(size-preserving, NOP-padded). Argument is target VA.",
+            "(size-preserving, NOP-padded). Argument is target VA.",
         )
         parser.add_argument(
-            "--force-branch", choices=("true", "false"), default=None,
+            "--force-branch",
+            choices=("true", "false"),
+            default=None,
             help="Force the conditional branch at --va: true = always "
-                 "taken (JMP to original target); false = always not "
-                 "taken (NOPs).",
+            "taken (JMP to original target); false = always not "
+            "taken (NOPs).",
         )
         parser.add_argument(
-            "--verify", action="store_true",
+            "--verify",
+            action="store_true",
             help="After patching, re-disassemble at --va and print "
-                 "the resulting instruction so the analyst can confirm "
-                 "the byte-level change decodes as intended.",
+            "the resulting instruction so the analyst can confirm "
+            "the byte-level change decodes as intended.",
         )
         parser.add_argument(
-            "--force", action="store_true",
+            "--force",
+            action="store_true",
             help="Overwrite output if it exists",
         )
 
@@ -70,26 +80,35 @@ class PatchCommand(BaseCommand):
         # Mode dispatch: exactly one of --bytes / --nop / --jmp /
         # --force-branch must be set.
         modes = sum(
-            1 for x in (
-                args.payload, args.nop, args.jmp_target, args.force_branch,
-            ) if x
+            1
+            for x in (
+                args.payload,
+                args.nop,
+                args.jmp_target,
+                args.force_branch,
+            )
+            if x
         )
         if modes != 1:
             formatter.output_plain(
-                "Error: pass exactly one of --bytes / --nop / --jmp / "
-                "--force-branch"
+                "Error: pass exactly one of --bytes / --nop / --jmp / --force-branch"
             )
             return 2
 
         from glaurung.llm.kb.patch import (
-            patch_at_va, patch_nop, patch_jmp, patch_force_branch,
+            patch_at_va,
+            patch_nop,
+            patch_jmp,
+            patch_force_branch,
             render_patch_markdown,
         )
 
         try:
             if args.nop:
                 result = patch_nop(
-                    str(args.input), str(args.output), va,
+                    str(args.input),
+                    str(args.output),
+                    va,
                     overwrite_output=args.force,
                 )
             elif args.jmp_target is not None:
@@ -101,18 +120,27 @@ class PatchCommand(BaseCommand):
                     )
                     return 2
                 result = patch_jmp(
-                    str(args.input), str(args.output), va, target,
+                    str(args.input),
+                    str(args.output),
+                    va,
+                    target,
                     overwrite_output=args.force,
                 )
             elif args.force_branch is not None:
-                taken = (args.force_branch == "true")
+                taken = args.force_branch == "true"
                 result = patch_force_branch(
-                    str(args.input), str(args.output), va, taken,
+                    str(args.input),
+                    str(args.output),
+                    va,
+                    taken,
                     overwrite_output=args.force,
                 )
             else:
                 result = patch_at_va(
-                    str(args.input), str(args.output), va, args.payload,
+                    str(args.input),
+                    str(args.output),
+                    va,
+                    args.payload,
                     overwrite_output=args.force,
                 )
         except FileExistsError as e:
@@ -125,19 +153,18 @@ class PatchCommand(BaseCommand):
         verify_str = ""
         if args.verify:
             import glaurung as g
+
             try:
                 ins = g.disasm.disassemble_window_at(
-                    str(args.output), int(va),
-                    window_bytes=16, max_instructions=1,
+                    str(args.output),
+                    int(va),
+                    window_bytes=16,
+                    max_instructions=1,
                 )
                 if ins:
                     head = ins[0]
-                    ops = ", ".join(
-                        str(o) for o in getattr(head, "operands", []) or []
-                    )
-                    verify_str = (
-                        f"verify: {head.mnemonic} {ops}".strip()
-                    )
+                    ops = ", ".join(str(o) for o in getattr(head, "operands", []) or [])
+                    verify_str = f"verify: {head.mnemonic} {ops}".strip()
                 else:
                     verify_str = "verify: (no instruction decoded)"
             except Exception as e:

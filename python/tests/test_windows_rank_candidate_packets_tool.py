@@ -131,7 +131,9 @@ def test_windows_rank_candidate_packets_orders_by_validation_priority(
     result = tool.run(
         ctx,
         ctx.kb,
-        tool.input_model(packets=[lower, blocked, higher, partial_gate], add_to_kb=True),
+        tool.input_model(
+            packets=[lower, blocked, higher, partial_gate], add_to_kb=True
+        ),
     )
 
     assert result.input_count == 4
@@ -140,15 +142,21 @@ def test_windows_rank_candidate_packets_orders_by_validation_priority(
     assert result.ranked[0].validation_ready is True
     assert any("remote or network" in reason for reason in result.ranked[0].reasons)
     blocked_rank = next(
-        item for item in result.ranked if item.packet.candidate_id == "blocked-missing-facts"
+        item
+        for item in result.ranked
+        if item.packet.candidate_id == "blocked-missing-facts"
     )
     assert blocked_rank.validation_ready is False
     assert any("promotion preconditions" in reason for reason in blocked_rank.reasons)
     partial_rank = next(
-        item for item in result.ranked if item.packet.candidate_id == "partial-gate-coverage"
+        item
+        for item in result.ranked
+        if item.packet.candidate_id == "partial-gate-coverage"
     )
     assert partial_rank.validation_ready is False
-    assert any("missing required gate semantics" in reason for reason in partial_rank.reasons)
+    assert any(
+        "missing required gate semantics" in reason for reason in partial_rank.reasons
+    )
     assert result.ranked[-1].packet.candidate_id == "internal-safe"
     assert result.ranked[-1].validation_ready is False
     assert result.evidence_node_id is not None
@@ -226,7 +234,9 @@ def test_windows_rank_candidate_packets_carries_validation_plan_blockers(
         expected_artifacts=["C:\\Windows\\MEMORY.DMP"],
         stock_current_comparison=["Run stock", "Run current"],
         operator_steps=["Boot VM", "Run harness"],
-        blockers=["KDNET attach is not validated: guest_configured_host_forward_missing"],
+        blockers=[
+            "KDNET attach is not validated: guest_configured_host_forward_missing"
+        ],
         ready_for_validation=False,
     )
 

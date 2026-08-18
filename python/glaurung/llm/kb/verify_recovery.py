@@ -41,6 +41,7 @@ from typing import List, Optional
 @dataclass
 class CompileResult:
     """Outcome of a syntax-only compile attempt."""
+
     ok: bool
     compiler: str
     flags: List[str]
@@ -60,6 +61,7 @@ class SimilarityReport:
     nothing in common at the byte level. v1 adds instruction-stream
     similarity for resilience against relocation / register-alloc
     drift."""
+
     function_name: str
     target_size: int
     recovered_size: int
@@ -100,25 +102,41 @@ def compile_check(
     cc = _resolve_compiler(compiler)
     if cc is None:
         return CompileResult(
-            ok=False, compiler=compiler or "(none-found)", flags=[],
+            ok=False,
+            compiler=compiler or "(none-found)",
+            flags=[],
             stderr="no C/C++ compiler available on PATH",
             exit_code=-1,
         )
     if flags is None:
-        flags = ["-fsyntax-only", "-Wall", "-Wno-error", "-Wno-unused-variable",
-                 "-Wno-unused-but-set-variable", "-Wno-unused-function",
-                 "-Wno-unused-parameter", "-Wno-int-conversion",
-                 "-Wno-incompatible-pointer-types", "-Wno-implicit-function-declaration"]
+        flags = [
+            "-fsyntax-only",
+            "-Wall",
+            "-Wno-error",
+            "-Wno-unused-variable",
+            "-Wno-unused-but-set-variable",
+            "-Wno-unused-function",
+            "-Wno-unused-parameter",
+            "-Wno-int-conversion",
+            "-Wno-incompatible-pointer-types",
+            "-Wno-implicit-function-declaration",
+        ]
     lang_flag = "c++" if language in ("cpp", "c++", "cxx") else "c"
     argv = [cc, *flags, "-x", lang_flag, "-"]
     try:
         proc = subprocess.run(
-            argv, input=source, text=True, capture_output=True,
-            timeout=timeout_seconds, check=False,
+            argv,
+            input=source,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return CompileResult(
-            ok=False, compiler=cc, flags=flags,
+            ok=False,
+            compiler=cc,
+            flags=flags,
             stderr=f"compiler timed out after {timeout_seconds}s",
             exit_code=-2,
         )
@@ -157,8 +175,11 @@ def compile_to_object(
     argv = [cc, *flags, "-o", str(obj_path), str(src_path)]
     try:
         proc = subprocess.run(
-            argv, capture_output=True, text=True,
-            timeout=timeout_seconds, check=False,
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return None
@@ -168,13 +189,15 @@ def compile_to_object(
 
 
 def _function_bytes_from_object(
-    obj_path: Path, function_name: str,
+    obj_path: Path,
+    function_name: str,
 ) -> Optional[bytes]:
     """Read the bytes of a named function out of an ELF object.
     Uses the `object` crate via Glaurung's binding — same path the
     rest of the analyser uses."""
     try:
         import glaurung as g
+
         pairs = g.symbol_address_map(str(obj_path)) or []
     except Exception:
         return None
@@ -194,6 +217,7 @@ def _function_bytes_from_object(
 @dataclass
 class RunResult:
     """Outcome of compiling and executing a source snippet."""
+
     compile_ok: bool
     exit_code: int = 0
     stdout: str = ""
@@ -206,6 +230,7 @@ class RunResult:
 class RuntimeComparison:
     """Side-by-side comparison of recovered vs target binary output
     on the same input. Used to verify behavioral equivalence."""
+
     same_exit_code: bool
     same_stdout: bool
     same_stderr: bool
@@ -241,7 +266,8 @@ def build_and_run(
     cc = _resolve_compiler(compiler)
     if cc is None:
         return RunResult(
-            compile_ok=False, exit_code=-1,
+            compile_ok=False,
+            exit_code=-1,
             stderr="no C/C++ compiler available on PATH",
             notes=["compiler-missing"],
         )
@@ -257,12 +283,16 @@ def build_and_run(
         compile_argv = [cc, *flags, "-o", str(bin_path), str(src_path)]
         try:
             cproc = subprocess.run(
-                compile_argv, capture_output=True, text=True,
-                timeout=15.0, check=False,
+                compile_argv,
+                capture_output=True,
+                text=True,
+                timeout=15.0,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             return RunResult(
-                compile_ok=False, exit_code=-2,
+                compile_ok=False,
+                exit_code=-2,
                 stderr="compiler timed out",
                 notes=["compile-timeout"],
             )
@@ -277,17 +307,21 @@ def build_and_run(
 
         run_argv = [str(bin_path), *(args or [])]
         import time as _time
+
         t0 = _time.perf_counter()
         try:
             rproc = subprocess.run(
                 run_argv,
                 input=stdin,
-                capture_output=True, text=True,
-                timeout=timeout_seconds, check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             return RunResult(
-                compile_ok=True, exit_code=-2,
+                compile_ok=True,
+                exit_code=-2,
                 stderr=f"runtime exceeded {timeout_seconds}s",
                 notes=["run-timeout"],
             )
@@ -318,22 +352,27 @@ def run_target_binary(
     `compare_runtime_to_target` to capture the canonical output."""
     if not Path(target_binary).exists():
         return RunResult(
-            compile_ok=False, exit_code=-1,
+            compile_ok=False,
+            exit_code=-1,
             stderr=f"target not found: {target_binary}",
             notes=["target-missing"],
         )
     import time as _time
+
     t0 = _time.perf_counter()
     try:
         proc = subprocess.run(
             [str(target_binary), *(args or [])],
             input=stdin,
-            capture_output=True, text=True,
-            timeout=timeout_seconds, check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return RunResult(
-            compile_ok=True, exit_code=-2,
+            compile_ok=True,
+            exit_code=-2,
             stderr=f"target exceeded {timeout_seconds}s",
             notes=["run-timeout"],
         )
@@ -366,12 +405,17 @@ def compare_runtime_to_target(
     binary for every input the agent tests. v0 doesn't do
     differential fuzzing yet — the caller picks the inputs."""
     target_run = run_target_binary(
-        target_binary, args=args, stdin=stdin,
+        target_binary,
+        args=args,
+        stdin=stdin,
         timeout_seconds=timeout_seconds,
     )
     recovered_run = build_and_run(
-        source, args=args, stdin=stdin,
-        compiler=compiler, language=language,
+        source,
+        args=args,
+        stdin=stdin,
+        compiler=compiler,
+        language=language,
         timeout_seconds=timeout_seconds,
     )
     return RuntimeComparison(
@@ -398,7 +442,9 @@ def byte_similarity_against_target(
     if obj is None:
         return SimilarityReport(
             function_name=function_name,
-            target_size=0, recovered_size=0, score=0.0,
+            target_size=0,
+            recovered_size=0,
+            score=0.0,
             notes=["compile failed; cannot compute similarity"],
         )
 
@@ -406,34 +452,44 @@ def byte_similarity_against_target(
     if rec is None:
         return SimilarityReport(
             function_name=function_name,
-            target_size=0, recovered_size=0, score=0.0,
+            target_size=0,
+            recovered_size=0,
+            score=0.0,
             notes=[f"`{function_name}` not found in compiled object"],
         )
 
     # Pull the target function's bytes via Glaurung's analysis.
     try:
         import glaurung as g
+
         funcs, _ = g.analysis.analyze_functions_path(str(target_binary))
     except Exception as e:
         return SimilarityReport(
             function_name=function_name,
-            target_size=0, recovered_size=len(rec), score=0.0,
+            target_size=0,
+            recovered_size=len(rec),
+            score=0.0,
             notes=[f"target analysis failed: {e}"],
         )
     target_fn = next(
-        (f for f in funcs if f.name == function_name), None,
+        (f for f in funcs if f.name == function_name),
+        None,
     )
     if target_fn is None or target_fn.range is None:
         return SimilarityReport(
             function_name=function_name,
-            target_size=0, recovered_size=len(rec), score=0.0,
+            target_size=0,
+            recovered_size=len(rec),
+            score=0.0,
             notes=[f"`{function_name}` not found in target binary"],
         )
 
     try:
         off = g.analysis.va_to_file_offset_path(
-            str(target_binary), int(target_fn.range.start.value),
-            100_000_000, 100_000_000,
+            str(target_binary),
+            int(target_fn.range.start.value),
+            100_000_000,
+            100_000_000,
         )
     except Exception:
         off = None
@@ -441,12 +497,12 @@ def byte_similarity_against_target(
     if off is None or target_size <= 0:
         return SimilarityReport(
             function_name=function_name,
-            target_size=target_size, recovered_size=len(rec), score=0.0,
+            target_size=target_size,
+            recovered_size=len(rec),
+            score=0.0,
             notes=["could not resolve target function bytes"],
         )
-    target_bytes = Path(target_binary).read_bytes()[
-        int(off) : int(off) + target_size
-    ]
+    target_bytes = Path(target_binary).read_bytes()[int(off) : int(off) + target_size]
 
     # Byte-overlap / length-ratio heuristic: the score is a Jaccard-ish
     # estimate that's robust to size differences but punishes mismatch.

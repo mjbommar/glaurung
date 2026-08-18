@@ -28,11 +28,12 @@ from typing import List, Optional
 @dataclass
 class PatchResult:
     """Outcome of applying one patch."""
+
     output_path: str
     va: int
     file_offset: int
-    original_hex: str   # bytes that were at the target before patch
-    patched_hex: str    # bytes that were written
+    original_hex: str  # bytes that were at the target before patch
+    patched_hex: str  # bytes that were written
     notes: List[str]
 
 
@@ -45,13 +46,9 @@ def _parse_hex(s: str) -> bytes:
     if not cleaned:
         raise ValueError("empty patch payload")
     if len(cleaned) % 2 != 0:
-        raise ValueError(
-            f"hex payload has odd nibble count ({len(cleaned)}): {s!r}"
-        )
+        raise ValueError(f"hex payload has odd nibble count ({len(cleaned)}): {s!r}")
     if not re.match(r"^[0-9a-fA-F]+$", cleaned):
-        raise ValueError(
-            f"non-hex characters in payload: {s!r}"
-        )
+        raise ValueError(f"non-hex characters in payload: {s!r}")
     return bytes.fromhex(cleaned)
 
 
@@ -91,7 +88,10 @@ def patch_at_va(
     # Resolve VA → file offset.
     try:
         off = g.analysis.va_to_file_offset_path(
-            str(inp), int(va), 100_000_000, 100_000_000,
+            str(inp),
+            int(va),
+            100_000_000,
+            100_000_000,
         )
     except Exception as e:
         raise RuntimeError(f"va_to_file_offset failed: {e}")
@@ -123,8 +123,7 @@ def patch_at_va(
         original_hex=original.hex(),
         patched_hex=payload_bytes.hex(),
         notes=[
-            f"patched {len(payload_bytes)} bytes at VA {va:#x} "
-            f"(file offset {foff:#x})",
+            f"patched {len(payload_bytes)} bytes at VA {va:#x} (file offset {foff:#x})",
         ],
     )
 
@@ -134,9 +133,13 @@ def _instruction_at(file_path: str, va: int):
     Raises ValueError when nothing decodes — the caller can't safely
     patch over an unknown-length region."""
     import glaurung as g
+
     try:
         ins = g.disasm.disassemble_window_at(
-            file_path, int(va), window_bytes=16, max_instructions=1,
+            file_path,
+            int(va),
+            window_bytes=16,
+            max_instructions=1,
         )
     except Exception as e:
         raise ValueError(f"disassembly failed at {va:#x}: {e}")
@@ -150,11 +153,13 @@ def _instruction_at(file_path: str, va: int):
 # encode JMP relatives. Other architectures raise; iced-x86-driven
 # encoding for arm64 lands in the v1 follow-up.
 
+
 def _check_x86_64(file_path: str) -> None:
     """Raise unless the binary is x86_64 — the manual encoders below
     only emit x86_64 bytes. Use the existing disassembler probe to
     determine the architecture."""
     import glaurung as g
+
     try:
         cfg = g.disasm.disassembler_for_path(file_path)
         arch_val = cfg.arch() if callable(getattr(cfg, "arch", None)) else cfg.arch
@@ -200,7 +205,10 @@ def encode_jmp(from_va: int, target_va: int, want_size: int = 0) -> bytes:
 
 
 def patch_nop(
-    input_path: str, output_path: str, va: int, *,
+    input_path: str,
+    output_path: str,
+    va: int,
+    *,
     overwrite_output: bool = False,
 ) -> PatchResult:
     """Replace the instruction at ``va`` with NOP bytes of the same
@@ -212,14 +220,22 @@ def patch_nop(
         raise ValueError(f"instruction at {va:#x} has zero length")
     payload = encode_nop(n).hex()
     return patch_at_va(
-        input_path, output_path, va, payload,
+        input_path,
+        output_path,
+        va,
+        payload,
         overwrite_output=overwrite_output,
     )
 
 
 def patch_jmp(
-    input_path: str, output_path: str, from_va: int, target_va: int,
-    *, overwrite_output: bool = False, preserve_length: bool = True,
+    input_path: str,
+    output_path: str,
+    from_va: int,
+    target_va: int,
+    *,
+    overwrite_output: bool = False,
+    preserve_length: bool = True,
 ) -> PatchResult:
     """Replace the instruction at ``from_va`` with `jmp target_va`. By
     default, the new instruction's size matches the original (NOP-pad
@@ -243,7 +259,10 @@ def patch_jmp(
             pad = orig_size - len(jmp_bytes)
             payload = (jmp_bytes + encode_nop(pad) if pad else jmp_bytes).hex()
             return patch_at_va(
-                input_path, output_path, from_va, payload,
+                input_path,
+                output_path,
+                from_va,
+                payload,
                 overwrite_output=overwrite_output,
             )
         raise ValueError(
@@ -252,7 +271,10 @@ def patch_jmp(
         )
     payload = encode_jmp(from_va, target_va).hex()
     return patch_at_va(
-        input_path, output_path, from_va, payload,
+        input_path,
+        output_path,
+        from_va,
+        payload,
         overwrite_output=overwrite_output,
     )
 
@@ -263,8 +285,10 @@ def patch_jmp(
 # 0F 8x. We cover the common ones; less-common predicates fall
 # through and the function refuses to force-branch them with a clear
 # "unsupported branch" error, instead of silently mis-patching.
-_JCC_REL8 = set(range(0x70, 0x80))   # JO/JNO/JB/JNB/JZ/JNZ/JBE/JA/JS/JNS/JP/JNP/JL/JNL/JLE/JG
-_JCC_REL32_PREFIX = 0x0F             # next byte 0x80..0x8F
+_JCC_REL8 = set(
+    range(0x70, 0x80)
+)  # JO/JNO/JB/JNB/JZ/JNZ/JBE/JA/JS/JNS/JP/JNP/JL/JNL/JLE/JG
+_JCC_REL32_PREFIX = 0x0F  # next byte 0x80..0x8F
 
 
 def _conditional_branch_target(ins) -> Optional[int]:
@@ -288,8 +312,12 @@ def _conditional_branch_target(ins) -> Optional[int]:
 
 
 def patch_force_branch(
-    input_path: str, output_path: str, va: int, taken: bool,
-    *, overwrite_output: bool = False,
+    input_path: str,
+    output_path: str,
+    va: int,
+    taken: bool,
+    *,
+    overwrite_output: bool = False,
 ) -> PatchResult:
     """Force the conditional branch at ``va`` to either always-taken
     (``taken=True``: replace J<cc> with JMP to the original target,
@@ -299,7 +327,9 @@ def patch_force_branch(
     ins = _instruction_at(input_path, va)
     if not taken:
         return patch_nop(
-            input_path, output_path, va,
+            input_path,
+            output_path,
+            va,
             overwrite_output=overwrite_output,
         )
     target = _conditional_branch_target(ins)
@@ -309,8 +339,12 @@ def patch_force_branch(
             f"branch (mnemonic={ins.mnemonic})"
         )
     return patch_jmp(
-        input_path, output_path, va, target,
-        overwrite_output=overwrite_output, preserve_length=True,
+        input_path,
+        output_path,
+        va,
+        target,
+        overwrite_output=overwrite_output,
+        preserve_length=True,
     )
 
 

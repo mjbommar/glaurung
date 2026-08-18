@@ -21,12 +21,22 @@ class WindowsComponentProfileArgs(BaseModel):
             "Defaults to ASB_REPO or sibling repo."
         ),
     )
-    target_id: str | None = Field(None, description="Optional build-corpus target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
+    target_id: str | None = Field(
+        None, description="Optional build-corpus target id filter."
+    )
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
     priority: str | None = Field(None, description="Optional priority filter.")
-    surface_id: str | None = Field(None, description="Optional attacker surface filter.")
-    attacker_class: str | None = Field(None, description="Optional caller class filter.")
-    required_gate: str | None = Field(None, description="Optional required-gate filter.")
+    surface_id: str | None = Field(
+        None, description="Optional attacker surface filter."
+    )
+    attacker_class: str | None = Field(
+        None, description="Optional caller class filter."
+    )
+    required_gate: str | None = Field(
+        None, description="Optional required-gate filter."
+    )
     initial_rule: str | None = Field(None, description="Optional initial rule filter.")
     add_to_kb: bool = Field(
         False,
@@ -93,7 +103,10 @@ class WindowsComponentProfileTool(
             args.profiles_path,
             "data/kg/pe-component-profiles.yaml",
         )
-        profiles = [_profile_record(entry, profiles_path) for entry in _load_yaml_list(profiles_path)]
+        profiles = [
+            _profile_record(entry, profiles_path)
+            for entry in _load_yaml_list(profiles_path)
+        ]
         profile_count_total = len(profiles)
         profiles = _filter_profiles(profiles, args)
 
@@ -147,7 +160,9 @@ def _profile_record(entry: dict[str, Any], path: Path) -> ComponentProfileRecord
         for raw_entrypoint in entry.get("entrypoints") or []
     ]
     if not entrypoints:
-        raise ValueError(f"{path}: component profile {entry.get('id')!r} has no entrypoints")
+        raise ValueError(
+            f"{path}: component profile {entry.get('id')!r} has no entrypoints"
+        )
     return ComponentProfileRecord(
         id=_required_str(entry, "id", path),
         target_id=_required_str(entry, "target_id", path),
@@ -205,7 +220,9 @@ def _filter_profiles(
             if args.attacker_class in profile.attacker_classes
         ]
     if args.required_gate:
-        out = [profile for profile in out if args.required_gate in profile.required_gates]
+        out = [
+            profile for profile in out if args.required_gate in profile.required_gates
+        ]
     if args.initial_rule:
         out = [profile for profile in out if args.initial_rule in profile.initial_rules]
     return out

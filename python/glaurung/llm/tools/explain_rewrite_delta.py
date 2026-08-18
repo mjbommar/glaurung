@@ -36,13 +36,13 @@ class ExplainRewriteDeltaArgs(BaseModel):
     assumptions: List[str] = Field(
         default_factory=list,
         description="The 'assumptions' list produced by #14 (and carried "
-                    "through #17/#24 as appropriate).",
+        "through #17/#24 as appropriate).",
     )
     divergences: List[str] = Field(
         default_factory=list,
         description="Short description of any divergences #17 flagged — "
-                    "included in the delta note so reviewers see the "
-                    "verification history alongside the rewrite.",
+        "included in the delta note so reviewers see the "
+        "verification history alongside the rewrite.",
     )
     use_llm: bool = True
 
@@ -55,8 +55,8 @@ class RewriteDeltaNote(BaseModel):
     review_checklist: List[str] = Field(
         default_factory=list,
         description="Short bullet list of specific things a reviewer should "
-                    "verify before merging. Extracted so orchestrators can "
-                    "aggregate all checklists into a top-level review TODO.",
+        "verify before merging. Extracted so orchestrators can "
+        "aggregate all checklists into a top-level review TODO.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -134,8 +134,7 @@ def _build_prompt(args: ExplainRewriteDeltaArgs) -> str:
         )
     if args.divergences:
         parts.append(
-            "Divergences flagged:\n"
-            + "\n".join(f"  - {d}" for d in args.divergences)
+            "Divergences flagged:\n" + "\n".join(f"  - {d}" for d in args.divergences)
         )
     parts.append(
         "Return a RewriteDeltaNote with a markdown body and a flat "
@@ -152,8 +151,8 @@ class ExplainRewriteDeltaTool(
             ToolMeta(
                 name="explain_rewrite_delta",
                 description="Write a per-function markdown note explaining "
-                            "what the pipeline did, what it assumed, and "
-                            "what a reviewer should verify.",
+                "what the pipeline did, what it assumed, and "
+                "what a reviewer should verify.",
                 tags=("llm", "docs", "audit", "layer4"),
             ),
             ExplainRewriteDeltaArgs,
@@ -185,7 +184,5 @@ class ExplainRewriteDeltaTool(
         )
 
 
-def build_tool() -> MemoryTool[
-    ExplainRewriteDeltaArgs, ExplainRewriteDeltaResult
-]:
+def build_tool() -> MemoryTool[ExplainRewriteDeltaArgs, ExplainRewriteDeltaResult]:
     return ExplainRewriteDeltaTool()

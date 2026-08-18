@@ -47,10 +47,24 @@ ConstantKind = Literal[
 # ---------------------------------------------------------------------------
 
 _ERRNO_TABLE = {
-    1: "EPERM", 2: "ENOENT", 5: "EIO", 9: "EBADF", 11: "EAGAIN",
-    12: "ENOMEM", 13: "EACCES", 14: "EFAULT", 17: "EEXIST", 21: "EISDIR",
-    22: "EINVAL", 23: "ENFILE", 24: "EMFILE", 28: "ENOSPC", 32: "EPIPE",
-    38: "ENOSYS", 110: "ETIMEDOUT", 111: "ECONNREFUSED",
+    1: "EPERM",
+    2: "ENOENT",
+    5: "EIO",
+    9: "EBADF",
+    11: "EAGAIN",
+    12: "ENOMEM",
+    13: "EACCES",
+    14: "EFAULT",
+    17: "EEXIST",
+    21: "EISDIR",
+    22: "EINVAL",
+    23: "ENFILE",
+    24: "EMFILE",
+    28: "ENOSPC",
+    32: "EPIPE",
+    38: "ENOSYS",
+    110: "ETIMEDOUT",
+    111: "ECONNREFUSED",
 }
 
 # POSIX open(2) flags — values are Linux glibc canonical.
@@ -94,13 +108,13 @@ class ClassifyConstantArgs(BaseModel):
     context_snippet: str = Field(
         "",
         description="Short pseudocode snippet where the constant appears — "
-                    "e.g. 'open(path, 0x4002)' or 'if arg0 == 0x41'.",
+        "e.g. 'open(path, 0x4002)' or 'if arg0 == 0x41'.",
     )
     call_site_hint: str = Field(
         "",
         description="Optional name of the library function this constant is "
-                    "passed to (open, mmap, ioctl, …). Dramatically improves "
-                    "classification quality.",
+        "passed to (open, mmap, ioctl, …). Dramatically improves "
+        "classification quality.",
     )
     use_llm: bool = True
 
@@ -110,7 +124,7 @@ class ConstantLabel(BaseModel):
     symbolic: str = Field(
         ...,
         description="The form to emit in rewritten source, e.g. "
-                    "\"O_RDWR | O_DIRECT\" or \"'A'\" or \"PAGE_SIZE\".",
+        '"O_RDWR | O_DIRECT" or "\'A\'" or "PAGE_SIZE".',
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
@@ -122,9 +136,7 @@ class ClassifyConstantResult(BaseModel):
     source: str = Field(..., description="'table' | 'heuristic' | 'llm'")
 
 
-def _table_lookup(
-    value: int, call_site_hint: str
-) -> Optional[ConstantLabel]:
+def _table_lookup(value: int, call_site_hint: str) -> Optional[ConstantLabel]:
     hint = call_site_hint.lower()
 
     # Context-dependent tables first.
@@ -210,17 +222,15 @@ def _build_prompt(value: int, snippet: str, hint: str) -> str:
     return "\n\n".join(parts)
 
 
-class ClassifyConstantTool(
-    MemoryTool[ClassifyConstantArgs, ClassifyConstantResult]
-):
+class ClassifyConstantTool(MemoryTool[ClassifyConstantArgs, ClassifyConstantResult]):
     def __init__(self) -> None:
         super().__init__(
             ToolMeta(
                 name="classify_constant",
                 description="Classify a single integer/float literal and "
-                            "produce its symbolic rendering (O_RDWR | "
-                            "O_CREAT, 'A', PAGE_SIZE, …). Curated table "
-                            "first; LLM for residual.",
+                "produce its symbolic rendering (O_RDWR | "
+                "O_CREAT, 'A', PAGE_SIZE, …). Curated table "
+                "first; LLM for residual.",
                 tags=("llm", "constants", "layer0"),
             ),
             ClassifyConstantArgs,
@@ -262,9 +272,7 @@ class ClassifyConstantTool(
             fallback=lambda: default,
         )
         source = "heuristic" if label is default else "llm"
-        return ClassifyConstantResult(
-            value=int(args.value), label=label, source=source
-        )
+        return ClassifyConstantResult(value=int(args.value), label=label, source=source)
 
 
 def build_tool() -> MemoryTool[ClassifyConstantArgs, ClassifyConstantResult]:

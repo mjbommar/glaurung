@@ -4,9 +4,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-BASELINE = (
-    REPO / "docs" / "windows-port" / "glaurung_vs_ghidra_vendor_windows.json"
-)
+BASELINE = REPO / "docs" / "windows-port" / "glaurung_vs_ghidra_vendor_windows.json"
 CORPUS_MANIFEST = (
     REPO
     / "samples"
@@ -85,12 +83,12 @@ def test_windows_ghidra_parity_baseline_tracks_real_corpus():
     assert sum(row["ghidra"]["metrics"]["le32_body_bytes"] for row in rows) > 0
 
     glaurung_funcs = sum(row["glaurung"]["functions"] for row in rows)
-    ghidra_internal = sum(row["ghidra"]["metrics"]["internal_functions"] for row in rows)
+    ghidra_internal = sum(
+        row["ghidra"]["metrics"]["internal_functions"] for row in rows
+    )
     assert glaurung_funcs / ghidra_internal >= 0.96
 
-    glaurung_thunks = sum(
-        row["glaurung"]["stats"]["thunk_functions"] for row in rows
-    )
+    glaurung_thunks = sum(row["glaurung"]["stats"]["thunk_functions"] for row in rows)
     ghidra_thunks = sum(row["ghidra"]["metrics"]["thunk_functions"] for row in rows)
     assert glaurung_thunks / ghidra_thunks >= 0.95
 
@@ -98,43 +96,53 @@ def test_windows_ghidra_parity_baseline_tracks_real_corpus():
     assert sum(row["glaurung"]["stats"]["pdata_entries"] for row in rows) >= sum(
         row["glaurung"]["stats"]["pdata_function_starts"] for row in rows
     )
-    assert all(
-        "pdata_zero_size_rejected" in row["glaurung"]["stats"] for row in rows
-    )
-    assert all(
-        "pdata_overlapping_entries" in row["glaurung"]["stats"] for row in rows
-    )
-    assert sum(
-        row["glaurung"]["stats"]["pdata_chained_unwind_parsed"] for row in rows
-    ) > 0
+    assert all("pdata_zero_size_rejected" in row["glaurung"]["stats"] for row in rows)
+    assert all("pdata_overlapping_entries" in row["glaurung"]["stats"] for row in rows)
     assert (
-        sum(row["glaurung"]["stats"]["pdata_chained_unwind_parse_failed"] for row in rows)
+        sum(row["glaurung"]["stats"]["pdata_chained_unwind_parsed"] for row in rows) > 0
+    )
+    assert (
+        sum(
+            row["glaurung"]["stats"]["pdata_chained_unwind_parse_failed"]
+            for row in rows
+        )
         == 0
     )
     assert sum(row["glaurung"]["stats"]["tail_call_seeds_added"] for row in rows) > 0
     assert sum(row["glaurung"]["stats"]["indirect_call_targets"] for row in rows) > 0
-    assert sum(
-        row["glaurung"]["stats"]["tiny_stub_scan_seeds_inserted"] for row in rows
-    ) > 0
-    assert sum(
-        row["glaurung"]["stats"]["raw_call_target_seeds_inserted"] for row in rows
-    ) > 0
-    assert sum(
-        row["glaurung"]["stats"]["raw_call_target_body_split_seeds_inserted"]
-        for row in rows
-    ) > 0
+    assert (
+        sum(row["glaurung"]["stats"]["tiny_stub_scan_seeds_inserted"] for row in rows)
+        > 0
+    )
+    assert (
+        sum(row["glaurung"]["stats"]["raw_call_target_seeds_inserted"] for row in rows)
+        > 0
+    )
+    assert (
+        sum(
+            row["glaurung"]["stats"]["raw_call_target_body_split_seeds_inserted"]
+            for row in rows
+        )
+        > 0
+    )
     assert all(
         "data_ref_code_pointer_candidates" in row["glaurung"]["stats"] for row in rows
     )
     assert all("seed_kind_counts" in row["glaurung"]["stats"] for row in rows)
     assert all("code_label_count" in row["glaurung"]["stats"] for row in rows)
-    assert sum(
-        row["glaurung"]["stats"]["data_ref_code_pointer_candidates"] for row in rows
-    ) > 0
-    assert sum(
-        row["glaurung"]["stats"]["data_ref_code_pointer_seeds_inserted"]
-        for row in rows
-    ) >= 8
+    assert (
+        sum(
+            row["glaurung"]["stats"]["data_ref_code_pointer_candidates"] for row in rows
+        )
+        > 0
+    )
+    assert (
+        sum(
+            row["glaurung"]["stats"]["data_ref_code_pointer_seeds_inserted"]
+            for row in rows
+        )
+        >= 8
+    )
     assert sum(row["glaurung"]["stats"]["code_label_count"] for row in rows) > 1000
     assert sum(row["address_gap"]["missing_entries"] for row in rows) < 10
     assert sum(row["address_gap"]["missing_le32"] for row in rows) > 0
@@ -164,7 +172,9 @@ def test_windows_ghidra_parity_extra_entries_do_not_start_on_simd_continuations(
         for entry in extra_entries:
             file_offset = _pe_va_to_file_offset(data, int(entry, 16))
             assert file_offset is not None, (row["file"], entry)
-            assert not _is_simd_continuation_head(data[file_offset : file_offset + 3]), (
+            assert not _is_simd_continuation_head(
+                data[file_offset : file_offset + 3]
+            ), (
                 row["file"],
                 entry,
             )

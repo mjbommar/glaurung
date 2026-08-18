@@ -215,9 +215,7 @@ def run_windows_corpus_curator(
     if manifest_drift:
         notes.append(f"detected {len(manifest_drift)} corpus manifest drift item(s)")
     if accepted_drift:
-        notes.append(
-            f"accepted {len(accepted_drift)} intentional corpus drift item(s)"
-        )
+        notes.append(f"accepted {len(accepted_drift)} intentional corpus drift item(s)")
     if unaccepted_manifest_drift:
         notes.append(
             f"{len(unaccepted_manifest_drift)} corpus drift item(s) remain unaccepted"
@@ -812,8 +810,7 @@ def _evidence_bundle(
     notes: list[str],
 ) -> WindowsEvidenceBundle:
     blockers = [
-        f"unaccepted corpus drift: {item.file} field={item.field} "
-        f"reason={item.reason}"
+        f"unaccepted corpus drift: {item.file} field={item.field} reason={item.reason}"
         for item in unaccepted_manifest_drift
     ]
     return make_windows_evidence_bundle(

@@ -45,9 +45,7 @@ log = logging.getLogger(__name__)
 # %var0, var0, arg0, stack_0, t7 -- the canonical local-id shapes the
 # Rust lifter emits. The leading '%' is optional because we see both
 # forms across the codebase (raw IR vs cosmetic render).
-_LOCAL_RE = re.compile(
-    r"%?\b((?:var|arg|t)\d+|stack_\d+)\b"
-)
+_LOCAL_RE = re.compile(r"%?\b((?:var|arg|t)\d+|stack_\d+)\b")
 
 # String literal in pseudocode. Decompiled output uses double-quoted
 # strings for embedded constants; we tolerate \" escapes inside.
@@ -60,17 +58,29 @@ _HEX_CONST_RE = re.compile(r"\b(0x[0-9a-fA-F]+)\b")
 # Trivial constants the pre-pass refuses to send to Tool #2. These are
 # the constants the rewriter does NOT need symbolic forms for (and the
 # constant-classifier wouldn't produce useful output for either).
-_TRIVIAL_CONSTANTS: frozenset[int] = frozenset({
-    # arithmetic identities + small integers used as counters
-    0, 1, -1, 2, 3,
-    # word sizes
-    4, 8, 16, 32, 64,
-    # common widths / alignments
-    128, 256, 512,
-    # page size (the table in classify_constant.py already labels this,
-    # so calling the tool is just a slow table lookup)
-    0x1000,
-})
+_TRIVIAL_CONSTANTS: frozenset[int] = frozenset(
+    {
+        # arithmetic identities + small integers used as counters
+        0,
+        1,
+        -1,
+        2,
+        3,
+        # word sizes
+        4,
+        8,
+        16,
+        32,
+        64,
+        # common widths / alignments
+        128,
+        256,
+        512,
+        # page size (the table in classify_constant.py already labels this,
+        # so calling the tool is just a slow table lookup)
+        0x1000,
+    }
+)
 
 
 def _extract_locals(pseudocode: str) -> list[str]:
@@ -376,9 +386,7 @@ def _run_name_string_literal(
             ),
         )
     except Exception as exc:  # pragma: no cover - tool internal failure
-        log.warning(
-            "name_string_literal failed for %r: %s", text[:32], exc
-        )
+        log.warning("name_string_literal failed for %r: %s", text[:32], exc)
         return None
     return {
         "name": result.named.symbolic_name,
@@ -571,7 +579,9 @@ def run_layer0_prepass(
         if payload is None:
             result.variables_audit.append(
                 Layer0Pair(
-                    input=ident, output=ident, source="error",
+                    input=ident,
+                    output=ident,
+                    source="error",
                     rationale="tool execution failed",
                 )
             )
@@ -584,7 +594,8 @@ def run_layer0_prepass(
         if name == ident:
             result.variables_audit.append(
                 Layer0Pair(
-                    input=ident, output=name,
+                    input=ident,
+                    output=name,
                     source=str(payload.get("source") or "heuristic"),
                     confidence=float(payload.get("confidence") or 0.0),
                     rationale=str(payload.get("rationale") or ""),
@@ -595,7 +606,8 @@ def run_layer0_prepass(
         result.variable_names[ident] = name
         result.variables_audit.append(
             Layer0Pair(
-                input=ident, output=name,
+                input=ident,
+                output=name,
                 source=str(payload.get("source") or "heuristic"),
                 confidence=float(payload.get("confidence") or 0.0),
                 rationale=str(payload.get("rationale") or ""),
@@ -628,7 +640,9 @@ def run_layer0_prepass(
             if not name or conf < 0.30:
                 result.strings_audit.append(
                     Layer0Pair(
-                        input=text, output=name, source="cache_skipped",
+                        input=text,
+                        output=name,
+                        source="cache_skipped",
                         confidence=conf,
                         rationale=str(cached.get("rationale") or "")
                         + " | cache-hit skipped: empty-or-low-confidence",
@@ -639,7 +653,9 @@ def run_layer0_prepass(
                 result.string_names[text] = name
                 result.strings_audit.append(
                     Layer0Pair(
-                        input=text, output=name, source="cache",
+                        input=text,
+                        output=name,
+                        source="cache",
                         confidence=conf,
                         rationale=str(cached.get("rationale") or ""),
                     )
@@ -647,12 +663,17 @@ def run_layer0_prepass(
                 continue
 
         payload = _run_name_string_literal(
-            ctx=ctx, text=text, use_sites=use_sites, use_llm=use_llm,
+            ctx=ctx,
+            text=text,
+            use_sites=use_sites,
+            use_llm=use_llm,
         )
         if payload is None:
             result.strings_audit.append(
                 Layer0Pair(
-                    input=text, output="", source="error",
+                    input=text,
+                    output="",
+                    source="error",
                     rationale="tool execution failed",
                 )
             )
@@ -664,7 +685,8 @@ def run_layer0_prepass(
             result.string_names[text] = name
         result.strings_audit.append(
             Layer0Pair(
-                input=text, output=name,
+                input=text,
+                output=name,
                 source=str(payload.get("source") or "heuristic"),
                 confidence=float(payload.get("confidence") or 0.0),
                 rationale=str(payload.get("rationale") or ""),
@@ -698,7 +720,9 @@ def run_layer0_prepass(
             if not symbolic or symbolic == const_key or conf < 0.30:
                 result.constants_audit.append(
                     Layer0Pair(
-                        input=const_key, output=symbolic, source="cache_skipped",
+                        input=const_key,
+                        output=symbolic,
+                        source="cache_skipped",
                         confidence=conf,
                         rationale=str(cached.get("rationale") or "")
                         + " | cache-hit skipped: empty-identity-or-low-confidence",
@@ -709,7 +733,9 @@ def run_layer0_prepass(
                 result.constant_labels[const_key] = symbolic
                 result.constants_audit.append(
                     Layer0Pair(
-                        input=const_key, output=symbolic, source="cache",
+                        input=const_key,
+                        output=symbolic,
+                        source="cache",
                         confidence=conf,
                         rationale=str(cached.get("rationale") or ""),
                     )
@@ -717,12 +743,17 @@ def run_layer0_prepass(
                 continue
 
         payload = _run_classify_constant(
-            ctx=ctx, value=val, snippet=snippet, use_llm=use_llm,
+            ctx=ctx,
+            value=val,
+            snippet=snippet,
+            use_llm=use_llm,
         )
         if payload is None:
             result.constants_audit.append(
                 Layer0Pair(
-                    input=f"0x{val:x}", output="", source="error",
+                    input=f"0x{val:x}",
+                    output="",
+                    source="error",
                     rationale="tool execution failed",
                 )
             )
@@ -735,7 +766,8 @@ def run_layer0_prepass(
             result.constant_labels[const_key] = symbolic
         result.constants_audit.append(
             Layer0Pair(
-                input=const_key, output=symbolic,
+                input=const_key,
+                output=symbolic,
                 source=str(payload.get("source") or "heuristic"),
                 confidence=float(payload.get("confidence") or 0.0),
                 rationale=str(payload.get("rationale") or ""),

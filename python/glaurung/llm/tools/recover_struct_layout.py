@@ -33,19 +33,17 @@ AccessKind = Literal["read", "write", "read_write", "call_through"]
 
 class AccessTrace(BaseModel):
     offset: int = Field(..., description="Byte offset from struct base")
-    width: int = Field(
-        ..., description="Access width in bytes (1, 2, 4, 8, 16)"
-    )
+    width: int = Field(..., description="Access width in bytes (1, 2, 4, 8, 16)")
     kind: AccessKind
     type_hint: str = Field(
         "",
         description="Layer-0 type label for this offset — 'u8*', 'size_t', "
-                    "'function_pointer', 'FILE *', …",
+        "'function_pointer', 'FILE *', …",
     )
     use_snippet: str = Field(
         "",
         description="One short pseudocode line showing the access — e.g. "
-                    "'strlen(*(obj + 0x8))' or '*(obj + 0x10) += 1'.",
+        "'strlen(*(obj + 0x8))' or '*(obj + 0x10) += 1'.",
     )
 
 
@@ -53,7 +51,7 @@ class RecoverStructLayoutArgs(BaseModel):
     struct_hint_name: Optional[str] = Field(
         None,
         description="Optional project-level name hint (e.g. from a nearby "
-                    "function name). The LLM is free to override.",
+        "function name). The LLM is free to override.",
     )
     accesses: List[AccessTrace] = Field(
         ...,
@@ -62,7 +60,7 @@ class RecoverStructLayoutArgs(BaseModel):
     context: str = Field(
         "",
         description="Optional extra context — e.g. 'constructed by "
-                    "http_request_new, freed by http_request_free'.",
+        "http_request_new, freed by http_request_free'.",
     )
     use_llm: bool = True
 
@@ -85,7 +83,7 @@ class StructLayout(BaseModel):
     unresolved_offsets: List[int] = Field(
         default_factory=list,
         description="Offsets seen in access traces that the LLM could not "
-                    "name — likely padding or fields we did not observe.",
+        "name — likely padding or fields we did not observe.",
     )
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = ""
@@ -174,7 +172,7 @@ def _heuristic(args: RecoverStructLayoutArgs) -> StructLayout:
         unresolved_offsets=unresolved,
         confidence=0.4,
         rationale="field widths/kinds from access traces; names are generic "
-                  "placeholders",
+        "placeholders",
     )
 
 
@@ -219,8 +217,8 @@ class RecoverStructLayoutTool(
             ToolMeta(
                 name="recover_struct_layout",
                 description="Recover a C struct from clustered field accesses. "
-                            "Names the struct and each field, emits a ready-"
-                            "to-paste definition.",
+                "Names the struct and each field, emits a ready-"
+                "to-paste definition.",
                 tags=("llm", "types", "layer1"),
             ),
             RecoverStructLayoutArgs,

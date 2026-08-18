@@ -108,7 +108,9 @@ def test_windows_regression_fixture_catalog_can_omit_pseudocode(
     )
 
     assert len(result.fixtures) == 2
-    assert all(case.pseudocode == "" for fixture in result.fixtures for case in fixture.cases)
+    assert all(
+        case.pseudocode == "" for fixture in result.fixtures for case in fixture.cases
+    )
 
 
 def test_memory_agent_registers_windows_regression_fixture_catalog() -> None:

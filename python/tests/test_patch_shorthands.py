@@ -11,7 +11,11 @@ import pytest
 
 import glaurung as g
 from glaurung.llm.kb.patch import (
-    encode_jmp, encode_nop, patch_force_branch, patch_jmp, patch_nop,
+    encode_jmp,
+    encode_nop,
+    patch_force_branch,
+    patch_jmp,
+    patch_nop,
 )
 
 
@@ -79,7 +83,10 @@ def test_patch_nop_actually_writes_nops_to_disk(tmp_path: Path) -> None:
     patch_nop(str(binary), str(output), va)
     # Re-disasm at the patched VA — should report `nop`.
     ins = g.disasm.disassemble_window_at(
-        str(output), va, window_bytes=16, max_instructions=1,
+        str(output),
+        va,
+        window_bytes=16,
+        max_instructions=1,
     )
     assert ins
     assert ins[0].mnemonic.lower() == "nop"
@@ -95,7 +102,10 @@ def test_patch_jmp_preserves_length_with_padding(tmp_path: Path) -> None:
     funcs, _ = g.analysis.analyze_functions_path(str(binary))
     fn_va = int(funcs[0].entry_point.value)
     instrs = g.disasm.disassemble_window_at(
-        str(binary), fn_va, window_bytes=64, max_instructions=8,
+        str(binary),
+        fn_va,
+        window_bytes=64,
+        max_instructions=8,
     )
     target_ins = None
     for ins in instrs:
@@ -123,10 +133,14 @@ def test_patch_jmp_round_trip_decodes_as_jmp(tmp_path: Path) -> None:
     funcs, _ = g.analysis.analyze_functions_path(str(binary))
     fn_va = int(funcs[0].entry_point.value)
     instrs = g.disasm.disassemble_window_at(
-        str(binary), fn_va, window_bytes=64, max_instructions=8,
+        str(binary),
+        fn_va,
+        window_bytes=64,
+        max_instructions=8,
     )
     target_ins = next(
-        (ins for ins in instrs if len(ins.bytes or b"") >= 2), None,
+        (ins for ins in instrs if len(ins.bytes or b"") >= 2),
+        None,
     )
     if target_ins is None:
         pytest.skip("no >=2-byte instruction")
@@ -135,7 +149,10 @@ def test_patch_jmp_round_trip_decodes_as_jmp(tmp_path: Path) -> None:
     patch_jmp(str(binary), str(output), from_va, target_va)
 
     ins = g.disasm.disassemble_window_at(
-        str(output), from_va, window_bytes=16, max_instructions=1,
+        str(output),
+        from_va,
+        window_bytes=16,
+        max_instructions=1,
     )
     assert ins
     assert ins[0].mnemonic.lower() == "jmp"
@@ -152,10 +169,18 @@ def test_patch_cli_nop_mode(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "patch", str(binary), str(output),
-            "--va", hex(va), "--nop", "--verify", "--force",
-        ])
+        rc = cli.run(
+            [
+                "patch",
+                str(binary),
+                str(output),
+                "--va",
+                hex(va),
+                "--nop",
+                "--verify",
+                "--force",
+            ]
+        )
     assert rc == 0
     out = buf.getvalue().lower()
     assert "patch applied" in out
@@ -174,11 +199,19 @@ def test_patch_cli_force_branch_false(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "patch", str(binary), str(output),
-            "--va", hex(va), "--force-branch", "false",
-            "--verify", "--force",
-        ])
+        rc = cli.run(
+            [
+                "patch",
+                str(binary),
+                str(output),
+                "--va",
+                hex(va),
+                "--force-branch",
+                "false",
+                "--verify",
+                "--force",
+            ]
+        )
     assert rc == 0
 
 
@@ -191,10 +224,19 @@ def test_patch_cli_requires_exactly_one_mode(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "patch", str(binary), str(output),
-            "--va", "0x1000", "--bytes", "90", "--nop", "--force",
-        ])
+        rc = cli.run(
+            [
+                "patch",
+                str(binary),
+                str(output),
+                "--va",
+                "0x1000",
+                "--bytes",
+                "90",
+                "--nop",
+                "--force",
+            ]
+        )
     assert rc == 2
     assert "exactly one" in buf.getvalue().lower()
 
@@ -208,11 +250,20 @@ def test_patch_cli_json_includes_verify(tmp_path: Path) -> None:
     cli = GlaurungCLI()
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = cli.run([
-            "patch", str(binary), str(output),
-            "--va", hex(va), "--nop", "--verify", "--force",
-            "--format", "json",
-        ])
+        rc = cli.run(
+            [
+                "patch",
+                str(binary),
+                str(output),
+                "--va",
+                hex(va),
+                "--nop",
+                "--verify",
+                "--force",
+                "--format",
+                "json",
+            ]
+        )
     assert rc == 0
     data = json.loads(buf.getvalue())
     assert data["va"] == va

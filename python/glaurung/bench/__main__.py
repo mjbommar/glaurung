@@ -110,43 +110,61 @@ def main(argv: list[str] | None = None) -> int:
         description="Glaurung deterministic benchmark harness (#159)",
     )
     p.add_argument(
-        "--root", type=Path, action="append", default=[],
+        "--root",
+        type=Path,
+        action="append",
+        default=[],
         help="Recursively search this directory for binaries. Can repeat.",
     )
     p.add_argument(
-        "--binary", type=Path, action="append", default=[],
+        "--binary",
+        type=Path,
+        action="append",
+        default=[],
         help="Explicit binary path. Can repeat.",
     )
     p.add_argument(
-        "--ci-matrix", action="store_true",
+        "--ci-matrix",
+        action="store_true",
         help="Use the built-in CI matrix (small, fast, language coverage).",
     )
     p.add_argument(
-        "--packed-matrix", action="store_true",
+        "--packed-matrix",
+        action="store_true",
         help="Score the UPX-packed corpus under samples/packed/. "
-             "Regression anchor for #187 packer detection: every "
-             "binary should report packer=UPX, entropy>7.0, and the "
-             "deeper analysis short-circuits.",
+        "Regression anchor for #187 packer detection: every "
+        "binary should report packer=UPX, entropy>7.0, and the "
+        "deeper analysis short-circuits.",
     )
     p.add_argument(
-        "--output", type=Path, default=None,
+        "--output",
+        type=Path,
+        default=None,
         help="Write JSON scorecard to this path (defaults to stdout).",
     )
     p.add_argument(
-        "--markdown", type=Path, default=None,
+        "--markdown",
+        type=Path,
+        default=None,
         help="Write Markdown summary to this path. If omitted and --output "
         "is set, writes alongside as .md.",
     )
     p.add_argument(
-        "--max-functions", type=int, default=DEFAULT_MAX_FUNCTIONS,
+        "--max-functions",
+        type=int,
+        default=DEFAULT_MAX_FUNCTIONS,
         help="Cap on functions analysed per binary.",
     )
     p.add_argument(
-        "--max-decompile-functions", type=int, default=DEFAULT_MAX_DECOMPILE_FUNCTIONS,
+        "--max-decompile-functions",
+        type=int,
+        default=DEFAULT_MAX_DECOMPILE_FUNCTIONS,
         help="Cap on functions decompiled per binary.",
     )
     p.add_argument(
-        "--decompile-timeout-ms", type=int, default=DECOMPILE_TIMEOUT_MS,
+        "--decompile-timeout-ms",
+        type=int,
+        default=DECOMPILE_TIMEOUT_MS,
         help="Per-function decompile timeout in ms.",
     )
     p.add_argument("--quiet", action="store_true", help="Hide per-binary progress.")
@@ -160,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
 
     binaries = _discover_binaries(args.root, explicit)
     if not binaries:
-        print("error: no binaries to score (use --root, --binary, or --ci-matrix)", file=sys.stderr)
+        print(
+            "error: no binaries to score (use --root, --binary, or --ci-matrix)",
+            file=sys.stderr,
+        )
         return 2
 
     summary = run_harness(

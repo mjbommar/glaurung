@@ -99,11 +99,15 @@ def test_windows_high_volume_preflight_reports_ready_and_blocked_targets(
     assert result.metadata_ready is True
     assert result.optional_metadata_ready is False
     assert any(item.target_id == "driver" and item.ready for item in result.targets)
-    missing = next(item for item in result.targets if item.target_id == "missing_project")
+    missing = next(
+        item for item in result.targets if item.target_id == "missing_project"
+    )
     assert missing.corpus_match_count == 1
     assert missing.project_match_count == 0
     assert "project cache missing for target missing_project" in missing.blockers
-    assert any("pe-operation-classification-backlog.yaml" in item for item in result.warnings)
+    assert any(
+        "pe-operation-classification-backlog.yaml" in item for item in result.warnings
+    )
     assert result.high_volume_command
     assert "--blocker-worklist-path" in result.high_volume_command
     assert result.evidence_bundle.coverage.validation_ready is False

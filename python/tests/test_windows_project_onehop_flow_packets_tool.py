@@ -142,7 +142,7 @@ CREATE TABLE cfg_branch_facts (
                 0x2040,
                 "jne",
                 '["0x2050"]',
-                0x203c,
+                0x203C,
                 "test",
                 '["rdx", "rdx"]',
                 "not_equal",
@@ -420,8 +420,7 @@ def test_windows_project_onehop_flow_packets_refines_helper_gate(
         "branch_conditions",
     ]
     assert any(
-        step.symbol == "ProbeForWrite" and step.role == "gate"
-        for step in packet.path
+        step.symbol == "ProbeForWrite" and step.role == "gate" for step in packet.path
     )
     assert any(
         evidence.source == "windows_project_onehop_helper_gate_dominance"

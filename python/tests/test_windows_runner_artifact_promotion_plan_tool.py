@@ -19,7 +19,9 @@ def _ctx(tmp_path: Path) -> MemoryContext:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _write_clean_ghidra_artifacts(tmp_path: Path) -> tuple[Path, Path]:
@@ -74,8 +76,12 @@ def test_windows_runner_artifact_promotion_plan_maps_ghidra_refresh_to_docs(
     assert result.promotion_allowed is True
     assert result.action_count == 2
     destinations = {Path(action.destination_path).name for action in result.actions}
-    assert "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json" in destinations
-    assert "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md" in destinations
+    assert (
+        "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json" in destinations
+    )
+    assert (
+        "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md" in destinations
+    )
     assert all(action.operation == "copy" for action in result.actions)
     assert all(action.source_sha256 for action in result.actions)
     assert result.evidence_bundle.coverage.validation_ready is True
@@ -169,9 +175,9 @@ def test_windows_runner_artifact_promotion_plan_maps_target_pipeline_artifacts(
 
     assert result.promotion_allowed is True
     assert result.action_count == 5
-    assert {
-        Path(action.destination_path).parent.name for action in result.actions
-    } == {"runner-artifacts"}
+    assert {Path(action.destination_path).parent.name for action in result.actions} == {
+        "runner-artifacts"
+    }
     assert {Path(action.destination_path).name for action in result.actions} == {
         "pipeline-export.json",
         "evidence-export.json",

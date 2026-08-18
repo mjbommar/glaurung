@@ -33,31 +33,30 @@ from .base import MemoryTool, ToolMeta
 
 # First 32 bytes of the AES forward S-box — distinctive enough on its own.
 _AES_SBOX_32 = bytes.fromhex(
-    "637c777bf26b6fc53001672bfed7ab76"
-    "ca82c97dfa5947f0add4a2af9ca472c0"
+    "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0"
 )
 
 # MD5 init words (A B C D little-endian) as they appear contiguously in
 # reference implementations.
 _MD5_INIT = bytes.fromhex("0123456789abcdeffedcba9876543210")
-_MD5_INIT_LE = bytes.fromhex("01234567" "89abcdef" "fedcba98" "76543210")
+_MD5_INIT_LE = bytes.fromhex("0123456789abcdeffedcba9876543210")
 
 # SHA-256 first four round constants (K[0..3]), packed big-endian, which
 # is how most C reference tables store them.
-_SHA256_K_BE = bytes.fromhex("428a2f98" "71374491" "b5c0fbcf" "e9b5dba5")
+_SHA256_K_BE = bytes.fromhex("428a2f9871374491b5c0fbcfe9b5dba5")
 
 # SHA-1 IV H[0..4]
-_SHA1_IV = bytes.fromhex("67452301" "efcdab89" "98badcfe" "10325476" "c3d2e1f0")
+_SHA1_IV = bytes.fromhex("67452301efcdab8998badcfe10325476c3d2e1f0")
 
 # ChaCha20/Salsa20 nonce — "expand 32-byte k" — universal marker.
 _CHACHA_MAGIC = b"expand 32-byte k"
 _SALSA_MAGIC = b"expand 16-byte k"
 
 # DES SBOX1 first row (hex of ref impl — borrowed from RFC 4772-era code).
-_DES_SBOX1 = bytes.fromhex("0e" "04" "0d" "01" "02" "0f" "0b" "08")
+_DES_SBOX1 = bytes.fromhex("0e040d01020f0b08")
 
 # Blowfish P-box first four words.
-_BLOWFISH_P = bytes.fromhex("243f6a88" "85a308d3" "13198a2e" "03707344")
+_BLOWFISH_P = bytes.fromhex("243f6a8885a308d313198a2e03707344")
 
 
 _CONSTANT_MARKERS: List[tuple[str, bytes]] = [
@@ -104,7 +103,7 @@ class CryptoHit(BaseModel):
     offset: int | None = Field(
         None,
         description="File offset of the matched constant (populated for "
-                    "constant-fingerprint hits only).",
+        "constant-fingerprint hits only).",
     )
 
 
@@ -122,8 +121,8 @@ class DetectCryptoUsageTool(MemoryTool[DetectCryptoArgs, DetectCryptoResult]):
             ToolMeta(
                 name="detect_crypto_usage",
                 description="Detect crypto algorithms by scanning for S-box / "
-                            "IV / round-constant fingerprints and matching "
-                            "well-known library API imports.",
+                "IV / round-constant fingerprints and matching "
+                "well-known library API imports.",
                 tags=("triage", "crypto"),
             ),
             DetectCryptoArgs,

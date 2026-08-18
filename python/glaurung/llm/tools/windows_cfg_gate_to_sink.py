@@ -62,7 +62,9 @@ class WindowsCfgGateToSinkArgs(BaseModel):
     max_functions: int = Field(256, description="Native function discovery cap.")
     max_blocks: int = Field(512, description="Native per-function basic block cap.")
     max_instructions: int = Field(20_000, description="Native instruction cap.")
-    timeout_ms: int = Field(1000, description="Native analysis timeout in milliseconds.")
+    timeout_ms: int = Field(
+        1000, description="Native analysis timeout in milliseconds."
+    )
     add_to_kb: bool = Field(
         False,
         description="If true, add a compact CFG gate-to-sink evidence node to the KB.",
@@ -124,7 +126,9 @@ class WindowsCfgGateToSinkTool(
         operation = _select_operation(args, sinks_path)
 
         if gate is None or operation is None:
-            result = _missing_metadata_result(args, gates_path, sinks_path, gate, operation)
+            result = _missing_metadata_result(
+                args, gates_path, sinks_path, gate, operation
+            )
         else:
             dominance = WindowsCfgDominanceTool().run(
                 ctx,
@@ -180,13 +184,17 @@ def _select_gate(args: WindowsCfgGateToSinkArgs, gates_path) -> GateRecord | Non
     return matches[0] if matches else None
 
 
-def _select_operation(args: WindowsCfgGateToSinkArgs, sinks_path) -> OperationRecord | None:
+def _select_operation(
+    args: WindowsCfgGateToSinkArgs, sinks_path
+) -> OperationRecord | None:
     operations = [
         _operation_record(entry, sinks_path) for entry in _load_yaml_list(sinks_path)
     ]
     matches = _matches_by_symbol(args.sink_symbol, _operations_by_symbol(operations))
     if args.sink_kind:
-        matches = [operation for operation in matches if operation.sink_kind == args.sink_kind]
+        matches = [
+            operation for operation in matches if operation.sink_kind == args.sink_kind
+        ]
     return matches[0] if matches else None
 
 

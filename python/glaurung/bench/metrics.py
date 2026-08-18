@@ -18,10 +18,10 @@ class FunctionDiscoveryMetrics:
     named_from_symbols: int
     auto_named_sub: int
     with_basic_blocks: int
-    with_chunks_gt_one: int           # multi-chunk functions (e.g. main + .cold)
-    cold_orphans: int                  # `<x>.cold` that did NOT get folded into a parent
-    name_match_rate: float             # named_from_symbols / total
-    chunk_merge_evidence: int          # functions whose chunk-count > 1
+    with_chunks_gt_one: int  # multi-chunk functions (e.g. main + .cold)
+    cold_orphans: int  # `<x>.cold` that did NOT get folded into a parent
+    name_match_rate: float  # named_from_symbols / total
+    chunk_merge_evidence: int  # functions whose chunk-count > 1
 
 
 def _is_sub_placeholder(name: str) -> bool:
@@ -53,7 +53,16 @@ def discovery_metrics(funcs: Sequence) -> FunctionDiscoveryMetrics:
         # Any `<name>.cold` that survives discovery is an orphan — the
         # chunk-merge pass should have folded it into a parent.
         if name.endswith(".cold") or any(
-            name.endswith(s) for s in (".cold.0", ".cold.1", ".cold.2", ".cold.3", ".part.0", ".part.1", ".part.2")
+            name.endswith(s)
+            for s in (
+                ".cold.0",
+                ".cold.1",
+                ".cold.2",
+                ".cold.3",
+                ".part.0",
+                ".part.1",
+                ".part.2",
+            )
         ):
             cold_orphans += 1
 
@@ -172,6 +181,7 @@ class TypeKBMetrics:
     builds when `auto_load_stdlib=True` runs on this binary. Tracks
     everything #172/#163/#195 produce: stdlib prototypes, propagated
     slot types, auto-discovered struct candidates."""
+
     stdlib_prototypes: int = 0
     propagated_slots: int = 0
     auto_struct_candidates: int = 0
@@ -198,7 +208,9 @@ def type_kb_metrics(
         with tempfile.TemporaryDirectory() as td:
             db = _Path(td) / "bench-typekb.glaurung"
             kb = PersistentKnowledgeBase.open(
-                db, binary_path=_Path(binary_path), auto_load_stdlib=True,
+                db,
+                binary_path=_Path(binary_path),
+                auto_load_stdlib=True,
             )
             stdlib_protos = len(_xref_db.list_function_prototypes(kb))
             _xref_db.index_callgraph(kb, binary_path)
@@ -208,13 +220,19 @@ def type_kb_metrics(
             for f in named:
                 try:
                     _xref_db.discover_stack_vars(
-                        kb, binary_path, int(f.entry_point.value),
+                        kb,
+                        binary_path,
+                        int(f.entry_point.value),
                     )
                     propagated += _xref_db.propagate_types_at_callsites(
-                        kb, binary_path, int(f.entry_point.value),
+                        kb,
+                        binary_path,
+                        int(f.entry_point.value),
                     )
                     auto_structs += _type_db.discover_struct_candidates(
-                        kb, binary_path, int(f.entry_point.value),
+                        kb,
+                        binary_path,
+                        int(f.entry_point.value),
                     )
                 except Exception:
                     continue
@@ -235,6 +253,7 @@ class StackFrameMetrics:
     functions. Drives a regression signal for #191/#192/#194 — every
     decompiler improvement should lift the count of recoverable slots
     or shrink the number of functions with zero-slot frames."""
+
     functions_scanned: int = 0
     total_slots: int = 0
     functions_with_slots: int = 0
@@ -274,7 +293,9 @@ def stack_frame_metrics(
             for f in named:
                 try:
                     n = _xref_db.discover_stack_vars(
-                        kb, binary_path, int(f.entry_point.value),
+                        kb,
+                        binary_path,
+                        int(f.entry_point.value),
                     )
                 except Exception:
                     n = 0
@@ -302,6 +323,7 @@ class DebugInfoMetrics:
     the metric exists so a future regression that breaks DWARF
     ingestion shows up immediately.
     """
+
     dwarf_types_total: int = 0
     dwarf_structs: int = 0
     dwarf_enums: int = 0
@@ -314,6 +336,7 @@ def debug_info_metrics(binary_path: str) -> DebugInfoMetrics:
     the binary has no debug info or the bridge raises."""
     try:
         import glaurung as g
+
         types = g.debug.extract_dwarf_types_path(binary_path)
     except Exception:
         return DebugInfoMetrics()
@@ -321,8 +344,7 @@ def debug_info_metrics(binary_path: str) -> DebugInfoMetrics:
     enums = sum(1 for t in types if t.get("kind") == "enum")
     typedefs = sum(1 for t in types if t.get("kind") == "typedef")
     structs_with_fields = sum(
-        1 for t in types
-        if t.get("kind") == "struct" and t.get("fields")
+        1 for t in types if t.get("kind") == "struct" and t.get("fields")
     )
     return DebugInfoMetrics(
         dwarf_types_total=len(types),

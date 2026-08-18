@@ -100,12 +100,17 @@ class WindowsSourceReachabilityTool(
         kb: KnowledgeBase,
         args: WindowsSourceReachabilityArgs,
     ) -> WindowsSourceReachabilityResult:
-        sources_path = _resolve_metadata_path(args.sources_path, "data/kg/pe-sources.yaml")
+        sources_path = _resolve_metadata_path(
+            args.sources_path, "data/kg/pe-sources.yaml"
+        )
         surfaces_path = _resolve_metadata_path(
             args.surfaces_path,
             "data/kg/pe-surfaces.yaml",
         )
-        sources = [_source_record(entry, sources_path) for entry in _load_yaml_list(sources_path)]
+        sources = [
+            _source_record(entry, sources_path)
+            for entry in _load_yaml_list(sources_path)
+        ]
         surfaces = {
             surface["id"]: surface
             for surface in (
@@ -203,7 +208,9 @@ def _source_role(raw: Any, path: Path, owner: Any) -> SourceReachabilityRole:
         raise ValueError(f"{path}: role for {owner!r} missing role")
     return SourceReachabilityRole(
         index=int(raw["index"]) if raw.get("index") is not None else None,
-        expression=str(raw["expression"]) if raw.get("expression") is not None else None,
+        expression=str(raw["expression"])
+        if raw.get("expression") is not None
+        else None,
         role=role,
         paired_length=raw.get("paired_length"),
         selector=raw.get("selector"),

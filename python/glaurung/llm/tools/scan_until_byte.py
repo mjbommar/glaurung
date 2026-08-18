@@ -28,7 +28,8 @@ from .base import MemoryTool, ToolMeta
 
 class ScanUntilByteArgs(BaseModel):
     va: Optional[int] = Field(
-        None, description="Virtual address to start scanning from (exclusive with file_offset)"
+        None,
+        description="Virtual address to start scanning from (exclusive with file_offset)",
     )
     file_offset: Optional[int] = Field(
         None, description="File offset to start scanning from (exclusive with va)"
@@ -73,7 +74,8 @@ class ScanUntilByteResult(BaseModel):
     start_va: Optional[int] = None
     start_offset: Optional[int] = None
     found: bool = Field(
-        ..., description="True iff a sentinel byte was hit before max_scan_bytes ran out."
+        ...,
+        description="True iff a sentinel byte was hit before max_scan_bytes ran out.",
     )
     sentinel_value: Optional[int] = Field(
         None, description="The sentinel byte that hit, or None if not found."
@@ -86,10 +88,12 @@ class ScanUntilByteResult(BaseModel):
         None, description="VA of the sentinel byte if a starting VA was provided."
     )
     bytes_consumed: int = Field(
-        ..., description="Number of bytes returned in `data_hex` (length of the scanned slice)."
+        ...,
+        description="Number of bytes returned in `data_hex` (length of the scanned slice).",
     )
     data_hex: str = Field(
-        ..., description="Hex of the scanned slice. By default does NOT include the sentinel."
+        ...,
+        description="Hex of the scanned slice. By default does NOT include the sentinel.",
     )
     truncated: bool = Field(
         ...,

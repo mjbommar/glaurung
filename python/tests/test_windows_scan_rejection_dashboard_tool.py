@@ -13,7 +13,9 @@ SURFACE_PEN = Path(
     "samples/binaries/platforms/windows/vendor/realworld/"
     "windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
 )
-VWIFIFLT = Path("samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys")
+VWIFIFLT = Path(
+    "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys"
+)
 
 
 def _ctx(tmp_path: Path) -> MemoryContext:
@@ -111,7 +113,9 @@ def test_windows_scan_rejection_dashboard_native_replay_real_pe(
     assert result.total_rejection_count > 0
     reasons = {row.reason for row in result.rows}
     assert "body_overlap:tiny_stub" in reasons
-    body_overlap = next(row for row in result.rows if row.reason == "body_overlap:tiny_stub")
+    body_overlap = next(
+        row for row in result.rows if row.reason == "body_overlap:tiny_stub"
+    )
     assert body_overlap.native_count > 0
     assert body_overlap.samples
     assert all(sample.path == str(SURFACE_PEN) for sample in body_overlap.samples)

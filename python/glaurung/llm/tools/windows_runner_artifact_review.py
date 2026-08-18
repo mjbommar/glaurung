@@ -125,15 +125,16 @@ class WindowsRunnerArtifactReviewTool(
             _get_int(parsed.get("target_pipeline"), "blocker_work_item_count"),
             _get_int(parsed.get("blocker_worklist"), "blocker_work_item_count"),
         )
-        task_count = (
-            _get_int(parsed.get("blocker_task_plan"), "task_count")
-            + _get_int(parsed.get("preflight_task_plan"), "task_count")
+        task_count = _get_int(parsed.get("blocker_task_plan"), "task_count") + _get_int(
+            parsed.get("preflight_task_plan"), "task_count"
         )
         review_ready = any(entry.exists for entry in artifacts) and not any(
             entry.blockers for entry in artifacts
         )
         promotion_ready = review_ready and not blockers and task_count == 0
-        promotable_artifacts = _promotable_artifacts(mode, parsed, artifacts, promotion_ready)
+        promotable_artifacts = _promotable_artifacts(
+            mode, parsed, artifacts, promotion_ready
+        )
         next_actions = _next_actions(parsed)
         output_path = _write_result(
             args.output_path,
@@ -356,7 +357,9 @@ def _review_blockers(
     warnings: list[str] = []
     if mode == "ghidra_parity":
         corpus_guard = parsed.get("corpus_guard")
-        if isinstance(corpus_guard, dict) and not corpus_guard.get("drift_guard_passed", False):
+        if isinstance(corpus_guard, dict) and not corpus_guard.get(
+            "drift_guard_passed", False
+        ):
             blockers.append("corpus guard did not pass")
         for kind in ("ghidra_parity_json", "ghidra_parity_markdown"):
             if not _entry_exists(artifacts, kind):
@@ -401,7 +404,8 @@ def _promotable_artifacts(
         return [
             entry.name
             for entry in artifacts
-            if entry.exists and entry.kind in {"ghidra_parity_json", "ghidra_parity_markdown"}
+            if entry.exists
+            and entry.kind in {"ghidra_parity_json", "ghidra_parity_markdown"}
         ]
     names = []
     for key in ("pipeline_export", "evidence_export", "target_pipeline"):
@@ -487,7 +491,9 @@ def _write_result(
         "warnings": warnings,
         "next_actions": next_actions,
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return str(path)
 
 

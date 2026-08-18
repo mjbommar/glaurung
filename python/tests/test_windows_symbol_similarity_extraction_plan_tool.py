@@ -66,10 +66,9 @@ def test_windows_symbol_similarity_extraction_plan_writes_runner_script(
         result.identity_extract_args["external_similarity_manifest_path"]
         == result.similarity_manifest_path
     )
-    assert (
-        result.identity_extract_args["pdb_identity_manifest"]["identity_path"]
-        == str(tmp_path / "pe-identity-manifest.yaml")
-    )
+    assert result.identity_extract_args["pdb_identity_manifest"][
+        "identity_path"
+    ] == str(tmp_path / "pe-identity-manifest.yaml")
     assert result.evidence_bundle.coverage.validation_ready is False
 
 
@@ -102,7 +101,10 @@ def test_windows_symbol_similarity_extraction_plan_cli_json(
     output = json.loads(capsys.readouterr().out)
     assert output["ready_to_execute"] is True
     assert output["identity_extract_args"]["binary_a"] == str(a)
-    assert output["steps"][-1]["next_tool_name"] == "windows_patch_function_identity_extract"
+    assert (
+        output["steps"][-1]["next_tool_name"]
+        == "windows_patch_function_identity_extract"
+    )
 
 
 def test_memory_agent_registers_windows_symbol_similarity_extraction_plan() -> None:

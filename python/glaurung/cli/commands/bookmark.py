@@ -33,21 +33,26 @@ class BookmarkCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
-            "action", choices=("add", "list", "delete"),
+            "action",
+            choices=("add", "list", "delete"),
             help="`add`, `list`, or `delete`",
         )
         parser.add_argument(
-            "rest", nargs="*",
+            "rest",
+            nargs="*",
             help="For `add`: <va> <note...>. "
-                 "For `delete`: <bookmark_id>. "
-                 "For `list`: optional --va <va> filter (no positional).",
+            "For `delete`: <bookmark_id>. "
+            "For `list`: optional --va <va> filter (no positional).",
         )
         parser.add_argument(
-            "--va", default=None,
+            "--va",
+            default=None,
             help="For `list`: filter to a specific VA (hex or decimal)",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
 
@@ -62,7 +67,8 @@ class BookmarkCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -71,9 +77,7 @@ class BookmarkCommand(BaseCommand):
         try:
             if args.action == "add":
                 if len(args.rest) < 2:
-                    formatter.output_plain(
-                        "Usage: bookmark <db> add <va> <note...>"
-                    )
+                    formatter.output_plain("Usage: bookmark <db> add <va> <note...>")
                     return 2
                 try:
                     va = int(args.rest[0], 0)
@@ -82,16 +86,12 @@ class BookmarkCommand(BaseCommand):
                     return 2
                 note = " ".join(args.rest[1:])
                 bid = xref_db.add_bookmark(kb, va, note)
-                formatter.output_plain(
-                    f"  bookmark #{bid}  0x{va:x}  {note}"
-                )
+                formatter.output_plain(f"  bookmark #{bid}  0x{va:x}  {note}")
                 return 0
 
             if args.action == "delete":
                 if not args.rest:
-                    formatter.output_plain(
-                        "Usage: bookmark <db> delete <bookmark_id>"
-                    )
+                    formatter.output_plain("Usage: bookmark <db> delete <bookmark_id>")
                     return 2
                 try:
                     bid = int(args.rest[0], 0)
@@ -121,14 +121,18 @@ class BookmarkCommand(BaseCommand):
                 return 0
 
             if formatter.format_type == OutputFormat.JSON:
-                formatter.output_json([
-                    {
-                        "bookmark_id": b.bookmark_id, "va": b.va,
-                        "note": b.note, "set_by": b.set_by,
-                        "created_at": b.created_at,
-                    }
-                    for b in bookmarks
-                ])
+                formatter.output_json(
+                    [
+                        {
+                            "bookmark_id": b.bookmark_id,
+                            "va": b.va,
+                            "note": b.note,
+                            "set_by": b.set_by,
+                            "created_at": b.created_at,
+                        }
+                        for b in bookmarks
+                    ]
+                )
                 return 0
 
             header = f"{'id':>4}  {'va':<12}  {'when':<19}  note"
@@ -156,20 +160,26 @@ class JournalCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
-            "action", choices=("add", "list", "delete"),
+            "action",
+            choices=("add", "list", "delete"),
             help="`add`, `list`, or `delete`",
         )
         parser.add_argument(
-            "rest", nargs="*",
+            "rest",
+            nargs="*",
             help="For `add`: <body...>. For `delete`: <entry_id>. "
-                 "`list` takes no positionals.",
+            "`list` takes no positionals.",
         )
         parser.add_argument(
-            "--limit", type=int, default=50,
+            "--limit",
+            type=int,
+            default=50,
             help="For `list`: max entries (default 50)",
         )
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
 
@@ -184,7 +194,8 @@ class JournalCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -202,9 +213,7 @@ class JournalCommand(BaseCommand):
 
             if args.action == "delete":
                 if not args.rest:
-                    formatter.output_plain(
-                        "Usage: journal <db> delete <entry_id>"
-                    )
+                    formatter.output_plain("Usage: journal <db> delete <entry_id>")
                     return 2
                 try:
                     eid = int(args.rest[0], 0)
@@ -226,13 +235,17 @@ class JournalCommand(BaseCommand):
                 return 0
 
             if formatter.format_type == OutputFormat.JSON:
-                formatter.output_json([
-                    {
-                        "entry_id": e.entry_id, "body": e.body,
-                        "set_by": e.set_by, "created_at": e.created_at,
-                    }
-                    for e in entries
-                ])
+                formatter.output_json(
+                    [
+                        {
+                            "entry_id": e.entry_id,
+                            "body": e.body,
+                            "set_by": e.set_by,
+                            "created_at": e.created_at,
+                        }
+                        for e in entries
+                    ]
+                )
                 return 0
 
             for e in entries:

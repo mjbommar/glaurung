@@ -21,9 +21,15 @@ class WindowsGhidraDeltaManifestArgs(BaseModel):
             "Defaults to ASB_REPO or sibling repo."
         ),
     )
-    target_id: str | None = Field(None, description="Optional build-corpus target id filter.")
-    component: str | None = Field(None, description="Optional component filename filter.")
-    build_label: str | None = Field(None, description="Optional build/corpus label filter.")
+    target_id: str | None = Field(
+        None, description="Optional build-corpus target id filter."
+    )
+    component: str | None = Field(
+        None, description="Optional component filename filter."
+    )
+    build_label: str | None = Field(
+        None, description="Optional build/corpus label filter."
+    )
     fact_class: str | None = Field(
         None,
         description="Optional fact-class filter such as cfg_path or type_layout.",

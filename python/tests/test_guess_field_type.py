@@ -17,7 +17,8 @@ import importlib.util
 
 def _load() -> object:
     spec = importlib.util.spec_from_file_location(
-        "recover_source", "scripts/recover_source.py",
+        "recover_source",
+        "scripts/recover_source.py",
     )
     rs = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

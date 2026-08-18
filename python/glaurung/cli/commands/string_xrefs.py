@@ -27,7 +27,8 @@ def _shorten(text: str, width: int = 80) -> str:
 
 
 def _build_offset_to_xref_map(
-    kb, binary_path: str,
+    kb,
+    binary_path: str,
 ) -> Dict[int, List[Tuple[int, int, Optional[int]]]]:
     """Walk every data_read xref, translate its dst_va to a file
     offset, and group by file offset. Each value is a list of
@@ -38,6 +39,7 @@ def _build_offset_to_xref_map(
     can't resolve back to a literal.
     """
     from glaurung.llm.kb import xref_db
+
     xref_db._ensure_schema(kb._conn)
     out: Dict[int, List[Tuple[int, int, Optional[int]]]] = {}
     cur = kb._conn.cursor()
@@ -94,55 +96,78 @@ class StringsXrefsCommand(BaseCommand):
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
-            "--binary", type=Path, default=None,
+            "--binary",
+            type=Path,
+            default=None,
             help="Optional: binary path the KB was opened against",
         )
         parser.add_argument(
-            "--min-len", type=int, default=4, help="Minimum string length",
+            "--min-len",
+            type=int,
+            default=4,
+            help="Minimum string length",
         )
         parser.add_argument(
-            "--encoding", choices=("ascii", "utf8", "utf16le", "utf16be", "any"),
+            "--encoding",
+            choices=("ascii", "utf8", "utf16le", "utf16be", "any"),
             default="any",
             help="Filter by encoding (default: any)",
         )
         parser.add_argument(
-            "--used-only", action="store_true",
+            "--used-only",
+            action="store_true",
             help="Hide strings with no data_read xref pointing at them",
         )
         parser.add_argument(
-            "--limit", type=int, default=200,
+            "--limit",
+            type=int,
+            default=200,
             help="Max rows to render (default 200)",
         )
         parser.add_argument(
-            "--width", type=int, default=80,
+            "--width",
+            type=int,
+            default=80,
             help="Truncate string text to this width (default 80)",
         )
         parser.add_argument(
-            "--index-data-xrefs", action="store_true",
+            "--index-data-xrefs",
+            action="store_true",
             help="Run native data-xref recovery into the KB before rendering",
         )
         parser.add_argument(
-            "--force-index", action="store_true",
+            "--force-index",
+            action="store_true",
             help="Rebuild existing data_read xrefs when used with --index-data-xrefs",
         )
         parser.add_argument(
-            "--max-functions", type=int, default=30_000,
+            "--max-functions",
+            type=int,
+            default=30_000,
             help="Function discovery budget for --index-data-xrefs",
         )
         parser.add_argument(
-            "--max-blocks", type=int, default=1_000_000,
+            "--max-blocks",
+            type=int,
+            default=1_000_000,
             help="Basic-block budget for --index-data-xrefs",
         )
         parser.add_argument(
-            "--max-instructions", type=int, default=30_000_000,
+            "--max-instructions",
+            type=int,
+            default=30_000_000,
             help="Instruction budget for --index-data-xrefs",
         )
         parser.add_argument(
-            "--timeout-ms", type=int, default=600_000,
+            "--timeout-ms",
+            type=int,
+            default=600_000,
             help="Analysis timeout for --index-data-xrefs",
         )
         parser.add_argument(
-            "--max-xrefs", type=int, default=1_000_000,
+            "--max-xrefs",
+            type=int,
+            default=1_000_000,
             help="Maximum data xrefs to recover with --index-data-xrefs",
         )
 
@@ -157,7 +182,8 @@ class StringsXrefsCommand(BaseCommand):
 
         try:
             kb = PersistentKnowledgeBase.open(
-                db_path, binary_path=args.binary,
+                db_path,
+                binary_path=args.binary,
             )
         except Exception as e:
             formatter.output_plain(f"Error opening db: {e}")
@@ -196,7 +222,9 @@ class StringsXrefsCommand(BaseCommand):
             # Extract strings via triage.
             try:
                 art = g.triage.analyze_path(
-                    bin_str, str_min_len=args.min_len, str_max_samples=10_000,
+                    bin_str,
+                    str_min_len=args.min_len,
+                    str_max_samples=10_000,
                 )
             except Exception as e:
                 formatter.output_plain(f"Error analysing binary: {e}")
@@ -215,17 +243,19 @@ class StringsXrefsCommand(BaseCommand):
                 used = _xrefs_for_string_range(xref_map, start, end)
                 if args.used_only and not used:
                     continue
-                rows.append({
-                    "offset": int(s.offset),
-                    "encoding": s.encoding,
-                    "length": len(s.text),
-                    "text": s.text,
-                    "uses": len(used),
-                    "used_at": [
-                        {"src_va": sv, "dst_va": dv, "src_function_va": sf}
-                        for sv, dv, sf in used
-                    ],
-                })
+                rows.append(
+                    {
+                        "offset": int(s.offset),
+                        "encoding": s.encoding,
+                        "length": len(s.text),
+                        "text": s.text,
+                        "uses": len(used),
+                        "used_at": [
+                            {"src_va": sv, "dst_va": dv, "src_function_va": sf}
+                            for sv, dv, sf in used
+                        ],
+                    }
+                )
 
             rows.sort(key=lambda r: r["offset"])
             rows = rows[: args.limit]
@@ -245,8 +275,7 @@ class StringsXrefsCommand(BaseCommand):
                 return 0
 
             header = (
-                f"{'offset':>8}  {'enc':<7}  {'len':>4}  "
-                f"{'uses':>4}  text  →  used_at"
+                f"{'offset':>8}  {'enc':<7}  {'len':>4}  {'uses':>4}  text  →  used_at"
             )
             formatter.output_plain(header)
             formatter.output_plain("-" * 80)

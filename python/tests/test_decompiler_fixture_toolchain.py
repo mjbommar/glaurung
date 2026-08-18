@@ -14,6 +14,7 @@ it are the compilers that check it. Two ways that silently broke before:
 
 These checks are fast (no fixture matrix) and run on every PR.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -37,6 +38,7 @@ def _baseline() -> dict:
 # ---------------------------------------------------------------------------
 # env-missing -> runnable must force a baseline refresh (never a silent skip)
 # ---------------------------------------------------------------------------
+
 
 def test_env_missing_lane_that_became_runnable_requires_a_baseline_refresh():
     base = {"10_cpp:clang:O0": {"__lane__": "env-missing"}}
@@ -71,9 +73,15 @@ def test_env_lane_check_ignores_the_toolchain_key():
 # toolchain fingerprint comparison
 # ---------------------------------------------------------------------------
 
-_FP = {"mode": "docker", "gcc": "gcc 11.4.0", "gpp": "g++ 11.4.0",
-       "clang": "clang 14.0.0", "clangpp": "clang++ 14.0.0",
-       "ld": "ld 2.38", "libc": "glibc 2.35"}
+_FP = {
+    "mode": "docker",
+    "gcc": "gcc 11.4.0",
+    "gpp": "g++ 11.4.0",
+    "clang": "clang 14.0.0",
+    "clangpp": "clang++ 14.0.0",
+    "ld": "ld 2.38",
+    "libc": "glibc 2.35",
+}
 
 
 def test_identical_fingerprints_are_comparable():
@@ -110,6 +118,7 @@ def test_lanes_helper_hides_only_the_reserved_key():
 # ---------------------------------------------------------------------------
 # the pinned toolchain itself
 # ---------------------------------------------------------------------------
+
 
 def test_pinned_toolchain_is_the_default():
     assert TC.mode() == "docker", (
@@ -165,7 +174,9 @@ def test_pinned_toolchain_reports_compile_errors_like_a_direct_invocation(tmp_pa
     src = tmp_path / "bad.c"
     src.write_text("int f(void){ this is not c }\n")
     r = TC.run(["gcc", "-shared", "-fPIC", "-o", str(tmp_path / "bad.so"), str(src)])
-    assert r.returncode != 0 and r.stderr.strip(), "compiler stderr must reach the caller"
+    assert r.returncode != 0 and r.stderr.strip(), (
+        "compiler stderr must reach the caller"
+    )
 
 
 def test_an_unknown_toolchain_mode_is_rejected(monkeypatch):

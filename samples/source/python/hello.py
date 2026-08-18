@@ -9,6 +9,7 @@ import os
 # Global constant
 GLOBAL_COUNTER = 42
 
+
 class HelloWorld:
     """A simple hello world class"""
 
@@ -25,9 +26,11 @@ class HelloWorld:
         """Get the current counter value"""
         return self.counter
 
+
 def calculate_arg_sum(args):
     """Calculate sum of argument lengths"""
     return sum(len(arg) for arg in args)
+
 
 def main():
     """Main function"""
@@ -50,6 +53,7 @@ def main():
     # Create another instance
     hw2 = HelloWorld("Second instance from Python")
     hw2.print_message()
+
 
 if __name__ == "__main__":
     main()

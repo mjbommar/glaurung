@@ -129,7 +129,15 @@ CREATE TABLE xrefs (
                 (1, 0x1000, "HsmFltPreWRITE", "[]", "pdb", None, None),
                 (1, 0x1100, "HsmFltPreREAD", "[]", "pdb", None, None),
                 (1, 0x2000, "HsmpGetStreamSize", "[]", "pdb", None, None),
-                (1, 0x2100, "HsmpAcquireUserRequestRundownProtection", "[]", "pdb", None, None),
+                (
+                    1,
+                    0x2100,
+                    "HsmpAcquireUserRequestRundownProtection",
+                    "[]",
+                    "pdb",
+                    None,
+                    None,
+                ),
             ],
         )
         conn.executemany(
@@ -213,9 +221,14 @@ def test_windows_project_operation_return_value_summary_samples_backlog_callsite
     )
 
 
-def test_memory_agent_registers_windows_project_operation_return_value_summary() -> None:
+def test_memory_agent_registers_windows_project_operation_return_value_summary() -> (
+    None
+):
     from glaurung.llm.agents.memory_agent import create_memory_agent
 
     agent = create_memory_agent(model="test")
 
-    assert "windows_project_operation_return_value_summary" in agent._function_toolset.tools
+    assert (
+        "windows_project_operation_return_value_summary"
+        in agent._function_toolset.tools
+    )
