@@ -514,6 +514,24 @@ fixture's language supports and ratchets both directions, at two precisions:
 REQUIRED functions per function and per message, everything else emitted against
 a per-lane ceiling on totals. Refresh with `tools/gen_defuse_baseline.py`.
 
+That refresh is guarded in one direction only (`tools/defuse_ratchet.py`).
+Lowering a ceiling and adding cells for a new fixture are free; RAISING one is
+refused unless you name the movement and say why:
+
+```bash
+tools/gen_defuse_baseline.py --accept-regression 'rustc:O0=+10: <why>'
+```
+
+The acceptance is written into the baseline's own `accepted_regressions`, so the
+next person to regenerate inherits it and the drift cannot be regenerated away.
+This exists because the refresh is ALSO what the improvement half of the ratchet
+tells you to run, so an unguarded rewrite quietly reset the ceiling upward: at
+`fd0b6455` it took `rustc:O0` from 7525 to 7535 and `rustc:O2` from 4451 to
+4457 with every tracked `required` cell unchanged, and nobody saw it. A new
+fixture does not need the flag: the baseline records per-`fixture:cc:opt`
+totals, so a rise that belongs entirely to fixture-lanes the baseline has never
+seen is not charged to anyone.
+
 Every `glaurung decompile` also now names any function that failed the check on
 **stderr** — stdout stays exactly the payload — so the failure is visible without
 running the gate at all. `GLAURUNG_VERIFY_DEFS=1` adds the per-violation

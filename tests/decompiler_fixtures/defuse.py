@@ -129,6 +129,11 @@ def _lane(job: tuple[str, str, str]) -> tuple[str, dict[str, list[str]] | None, 
     return key, {n: violations_in(b) for n, b in _blocks(run.stdout).items()}, ""
 
 
+def _empty_totals() -> dict[str, int]:
+    """A zeroed counter bucket, shared by the lane and per-fixture rollups."""
+    return {"functions_emitted": 0, "functions_with_violations": 0, "violations": 0}
+
+
 def jobs() -> list[tuple[str, str, str]]:
     """Every (fixture, compiler, optimisation) lane the corpus declares."""
     out: list[tuple[str, str, str]] = []
@@ -151,6 +156,7 @@ def defuse_report(max_workers: int | None = None) -> dict:
         max_workers = H.default_jobs()
     required: dict[str, list[str]] = {}
     lane_totals: dict[str, dict[str, int]] = {}
+    fixture_lane_totals: dict[str, dict[str, int]] = {}
     problems: list[str] = []
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         for key, per_function, error in pool.map(_lane, jobs()):
@@ -162,22 +168,23 @@ def defuse_report(max_workers: int | None = None) -> dict:
             for name in sorted(declared):
                 block = per_function.get(name)
                 required[f"{key}:{name}"] = ["not_emitted"] if block is None else block
-            totals = lane_totals.setdefault(
-                f"{cc}:{opt}",
-                {
-                    "functions_emitted": 0,
-                    "functions_with_violations": 0,
-                    "violations": 0,
-                },
-            )
+            totals = lane_totals.setdefault(f"{cc}:{opt}", _empty_totals())
+            # The same counts split by fixture. The gate does not read these --
+            # its ceiling is still the lane aggregate -- but `tools/defuse_ratchet.py`
+            # needs them to tell "a fixture I already tracked got worse" from "a
+            # new fixture brought new functions", and only the first of those has
+            # to justify itself. See that module's docstring for where the line is.
+            per_fixture = fixture_lane_totals.setdefault(key, _empty_totals())
             for found in per_function.values():
-                totals["functions_emitted"] += 1
-                totals["violations"] += len(found)
-                totals["functions_with_violations"] += 1 if found else 0
+                for bucket in (totals, per_fixture):
+                    bucket["functions_emitted"] += 1
+                    bucket["violations"] += len(found)
+                    bucket["functions_with_violations"] += 1 if found else 0
     return {
         TOOLCHAIN_KEY: TC.fingerprint(),
         "required": required,
         "lane_totals": lane_totals,
+        "fixture_lane_totals": fixture_lane_totals,
         "problems": sorted(problems),
     }
 
