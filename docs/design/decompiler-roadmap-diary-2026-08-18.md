@@ -209,3 +209,82 @@ And a corpus fact worth acting on separately: the 716 fixture binaries produce
 **three** bound-proof dispatches and **zero** trims. The entire trim path has no
 fixture coverage, because every observed trim was `gcc -O1` and
 `REQUIRED_MATRIX` is `gcc/clang × O0/O2`.
+
+## Entry 73 — three corrections to Entry 72's neighbourhood, one of them mine in a commit message
+
+### `ReturnClass::Memory` does not shift arguments
+
+`f252aa4b`'s message says AAPCS64 cannot reuse `ReturnClass::Memory` because
+that variant "encodes System V's contract: hidden pointer in the FIRST ARGUMENT
+REGISTER, every declared argument shifted one slot right." **The second half is
+not implemented.** I checked after an agent said so:
+
+```
+grep -rn "ReturnClass::Memory" src/ --include=*.rs
+```
+
+Three real consumers — `python_bindings/ir.rs:2086`, `types_recover.rs:2309`
+and `:2315`, `return_class.rs:149` — and `apply_locked_parameters` receives the
+unshifted DWARF parameter list regardless of class. Nothing shifts.
+
+The conclusion survives on its other leg: `Memory` maps to `HiddenReturn`, which
+suppresses `materialize_return_values`, and `x8` needs a *size* the variant has
+no field for. But the mechanism as stated is aspirational, and anyone reasoning
+from that commit message would be reasoning from something the code does not do.
+Recorded here rather than by rewriting history.
+
+### The HFA proxy over-refuses, with two concrete falsifications
+
+The committed `aapcs64_return_class` refuses all-SSE eightbytes as a proxy for
+HFA — the reasoning being that every HFA member is floating point, so refusing
+all-float refuses every HFA, and over-refusal is the safe direction. Measured
+against `aarch64-linux-gnu-gcc`, it over-refuses twice in ways that matter:
+
+- `struct {double d; float a; float b;}` at `-O1` returns through
+  `fmov x0, d30` plus `x1`. It is `x0:x1`, and the proxy calls it float.
+- `struct {float a, b;}` is **8 bytes and still an HFA** — `s0` *and* `s1`. A
+  "≤ 8 bytes is one register" shortcut gets this wrong, which is why a real
+  homogeneity walk has to run **before** any size test.
+
+### HFA cannot reuse `SsePair`, and `trio3f` is the proof
+
+`hfa197_trio3f` (three floats) on aarch64, both `-O0` and `-O2`:
+
+```
+fmov s29, s0 ; fmov s30, s1 ; fmov s31, s2        (-O0)
+fcvtzs w3, s0 ; fcvtzs w1, s1 ; fcvtzs w2, s2     (-O2)
+```
+
+Three registers, **one member each**, `s3` untouched. SysV packs the same struct
+into `xmm0:xmm1` at two floats apiece, which is why `SsePair` carries a
+`high_bytes` occupancy for a half-used *eightbyte*. **AAPCS64 has no partial
+occupancy anywhere; it needs a member count, up to four.** Different shape,
+different class.
+
+### And the finding that outranks all of it: 197's aarch64 lanes are not an ABI problem
+
+`abi::result_register_candidates` answers `None` for `CallConv::Aarch64`, so
+**every** AArch64 call is annotated `result = x0` unconditionally. SysV, Win64,
+Cdecl32 and ArmHardFloat all have first-read-wins float/integer candidate lists;
+AArch64 has none. `ast::float_gate::scalar_float_semantics_proof` then shuts the
+whole function's scalar-float lowering, because a non-VFP call result means the
+float registers cannot be assumed caller-saved:
+
+```
+[float-gate] va=0xbec call result=%x0  no vfp result,
+             float regs NOT all caller-saved -> gate SHUTS
+```
+
+Every `fcvtzs` after that renders `/* asm: vcvt.s32.f32(...) */` with its
+destination undefined. So `hfa197_scalar_control` — a plain `double` return with
+no aggregate anywhere — was red for a reason that has nothing to do with return
+classes, and my brief describing it as a passing cell that "must stay refused"
+was wrong about a cell that was never green.
+
+The one-line candidate list was measured and then reverted rather than shipped:
+**11 improvements instead of 7 across 44 aarch64 lanes, zero regressions**, with
+`197:aarch64:O2:hfa197_trio3f_roundtrip` passing only when the HFA class is
+present too — the two compose. It was reverted because 44 lanes is not proof for
+a change that touches every AArch64 call annotation, which is the correct call
+and the reason it is being re-measured against the full aarch64 lane set before
+it lands.
