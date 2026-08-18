@@ -30,6 +30,8 @@ use object::{ObjectSection, ObjectSymbol};
 
 mod ctrl_flow;
 mod entry_shape;
+mod function_build;
+mod must_dataflow;
 mod pe_tables;
 mod repair;
 mod scan;
@@ -60,6 +62,10 @@ use entry_shape::{
     pe_tail_target_looks_like_function_start, pe_xref_seed_looks_like_function_start,
     read_i32_le_at, rel_target, PeThunkKind,
 };
+
+use function_build::build_function;
+
+use must_dataflow::{address_fixed_point, bound_fixed_point};
 
 use pe_tables::{parse_pdata_function_starts, parse_pe_export_function_starts};
 
@@ -1396,132 +1402,21 @@ fn discover_function(
         }
     }
 
-    // Prove loop-carried value ranges over the completed speculative graph.
-    // This is deliberately separate from the one-edge `index_bounds` map: a
-    // compiler may remove a switch guard after proving that an enum/state
-    // register is always in range.  Candidate table arms make those state
-    // transitions reachable for analysis, but final validation below keeps
-    // only the exact prefix justified by this fixed point.
     let thumb =
         arm32_mode.map(|mode| matches!(mode, crate::analysis::arm32_mode::Arm32Mode::Thumb));
-    let mut final_bound_inputs: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
-    let mut final_bound_outputs: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
-    let mut bound_queue: VecDeque<u64> = VecDeque::from([entry.value]);
-    let mut bound_queued = std::collections::HashSet::from([entry.value]);
-    let bound_step_limit = blocks.len().saturating_mul(256).max(256);
-    let mut bound_steps = 0usize;
-    while let Some(block_start) = bound_queue.pop_front() {
-        bound_queued.remove(&block_start);
-        bound_steps += 1;
-        if bound_steps > bound_step_limit {
-            // Failure to converge means no range proof is trustworthy.  The
-            // speculative dispatches will consequently be rejected below.
-            final_bound_inputs.clear();
-            final_bound_outputs.clear();
-            break;
-        }
-        let Some(&(block_end, _)) = blocks.get(&block_start) else {
-            continue;
-        };
-        let predecessors: Vec<u64> = edges
-            .iter()
-            .filter_map(|(source, target, _)| (*target == block_start).then_some(*source))
-            .collect();
-        let input = if block_start == entry.value {
-            crate::analysis::dispatch::Bounds::default()
-        } else {
-            let reachable: Vec<_> = predecessors
-                .iter()
-                .filter_map(|predecessor| final_bound_outputs.get(predecessor))
-                .collect();
-            if reachable.is_empty() {
-                continue;
-            }
-            join_dispatch_bounds(reachable.into_iter())
-        };
-        final_bound_inputs.insert(block_start, input.clone());
-        let Some((tracker, _)) = replay_dispatch_block(
-            facts.image,
-            data,
-            arch,
-            end,
-            thumb,
-            block_start,
-            block_end,
-            Some(input),
-            None,
-            None,
-        ) else {
-            continue;
-        };
-        let output = tracker.export_stable_bounds();
-        if final_bound_outputs.get(&block_start) == Some(&output) {
-            continue;
-        }
-        final_bound_outputs.insert(block_start, output);
-        for successor in edges
-            .iter()
-            .filter_map(|(source, target, _)| (*source == block_start).then_some(*target))
-        {
-            if bound_queued.insert(successor) {
-                bound_queue.push_back(successor);
-            }
-        }
-    }
-
-    // Recompute concrete-address facts to a fixed point over the now-complete
-    // graph. The streaming walk above sees predecessors incrementally; a loop
-    // back-edge discovered after its header can invalidate a table-base fact
-    // that looked unique on the first visit. Must-dataflow makes that loss
-    // propagate through every downstream block before tentative table edges are
-    // accepted.
-    let mut final_address_inputs: HashMap<u64, HashMap<String, u64>> = HashMap::new();
-    final_address_inputs.insert(entry.value, HashMap::new());
-    let mut address_queue: VecDeque<u64> = VecDeque::from([entry.value]);
-    let mut address_steps = 0usize;
-    let address_step_limit = blocks.len().saturating_mul(64).max(64);
-    while let Some(block_start) = address_queue.pop_front() {
-        address_steps += 1;
-        if address_steps > address_step_limit {
-            // The domain is finite and only shrinks after first arrival; hitting
-            // this limit indicates malformed graph churn. Clear inherited facts
-            // so validation fails closed rather than trusting an incomplete run.
-            final_address_inputs.clear();
-            final_address_inputs.insert(entry.value, HashMap::new());
-            break;
-        }
-        let Some(&(block_end, _)) = blocks.get(&block_start) else {
-            continue;
-        };
-        let input = final_address_inputs
-            .get(&block_start)
-            .cloned()
-            .unwrap_or_default();
-        let Some((tracker, _)) = replay_dispatch_block(
-            facts.image,
-            data,
-            arch,
-            end,
-            thumb,
-            block_start,
-            block_end,
-            index_bounds.get(&block_start).cloned(),
-            Some(&input),
-            None,
-        ) else {
-            continue;
-        };
-        let output = tracker.export_addresses();
-        let successors: Vec<u64> = edges
-            .iter()
-            .filter_map(|(source, target, _)| (*source == block_start).then_some(*target))
-            .collect();
-        for successor in successors {
-            if merge_dispatch_addresses(&mut final_address_inputs, successor, output.clone()) {
-                address_queue.push_back(successor);
-            }
-        }
-    }
+    let final_bound_inputs =
+        bound_fixed_point(facts, data, arch, end, thumb, &entry, &blocks, &edges);
+    let final_address_inputs = address_fixed_point(
+        facts,
+        data,
+        arch,
+        end,
+        thumb,
+        &entry,
+        &blocks,
+        &edges,
+        &index_bounds,
+    );
 
     let mut invalid_dispatches: Vec<(u64, u64, Vec<u64>, crate::analysis::dispatch::Unresolved)> =
         Vec::new();
@@ -1664,130 +1559,15 @@ fn discover_function(
             .any(|(start, (end, _))| *site >= *start && *site < *end)
     });
 
-    // Build Function object
-    let fname = format!("sub_{:x}", entry.value);
-    let mut func = Function::new(fname, entry.clone(), FunctionKind::Normal).ok()?;
-    if matches!(
+    let func = build_function(
+        &entry,
+        bits,
         arm32_mode,
-        Some(crate::analysis::arm32_mode::Arm32Mode::Thumb)
-    ) {
-        func.add_flag(FunctionFlags::IS_THUMB);
-    }
-
-    // Build BasicBlocks with successor/predecessor IDs
-    let mut bb_ids: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
-    for (&start, &(end, instrs)) in &blocks {
-        let id = format!("bb_{:x}", start);
-        bb_ids.insert(start, id.clone());
-        let bb = BasicBlock::new(
-            id,
-            Address::new(AddressKind::VA, start, bits, None, None).ok()?,
-            Address::new(AddressKind::VA, end, bits, None, None).ok()?,
-            instrs,
-            None,
-            None,
-        );
-        func.add_basic_block(bb);
-    }
-
-    // Populate successors/predecessors and function edges
-    let mut succs: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    let mut preds: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for (src_va, dst_va, kind) in &edges {
-        // Only add CFG edges when both endpoints are block starts
-        if let (Some(sid), Some(did)) = (bb_ids.get(src_va), bb_ids.get(dst_va)) {
-            succs.entry(sid.clone()).or_default().push(did.clone());
-            preds.entry(did.clone()).or_default().push(sid.clone());
-            // Also track as function-level edge from start of block -> start of dest
-            let saddr = Address::new(AddressKind::VA, *src_va, bits, None, None).ok()?;
-            let daddr = Address::new(AddressKind::VA, *dst_va, bits, None, None).ok()?;
-            // We encode only control flow transitions; calls already tagged with Call in `edges`, but we emit CFG fallthrough/branch here.
-            if matches!(
-                kind,
-                ControlFlowEdgeKind::Fallthrough | ControlFlowEdgeKind::Branch
-            ) {
-                func.add_edge(saddr, daddr);
-            }
-        }
-    }
-    // Blocks whose terminator is an indirect transfer this pass declined.
-    //
-    // Their successor list is empty because the targets were never recovered,
-    // not because the block has no successors — and `relationships_known` was
-    // set true for them along with everyone else, which made
-    // `BasicBlock::is_exit_block()` (`relationships_known && successors.empty()`)
-    // answer TRUE for a `jmp *%rax` with forty arms. Measured over the 758
-    // fixture objects: 2909 of the 28169 blocks claiming to be exits, 10.3%.
-    //
-    // The flag is one bit covering both directions, so the honest single-bit
-    // answer for these blocks is `false`. That also withdraws
-    // `is_entry_block()` from 45 of them, which is the correct direction:
-    // both predicates are knowledge-shaped (`false` means "not known to be",
-    // not "known not to be"), so clearing the flag turns a claim into an
-    // absence of one, while leaving it set turned an absence into a claim.
-    let declined_dispatch_blocks: std::collections::BTreeSet<&str> = stats
-        .unresolved_indirect
-        .iter()
-        .filter_map(|(site, _)| {
-            blocks
-                .iter()
-                .find(|(start, (end, _))| *site >= **start && *site < *end)
-                .and_then(|(start, _)| bb_ids.get(start))
-                .map(String::as_str)
-        })
-        .collect();
-
-    // Patch blocks with relationships (best-effort): replace blocks with enriched copies
-    for bb in &mut func.basic_blocks {
-        let id = bb.id.clone();
-        if let Some(s) = succs.get(&id) {
-            bb.successor_ids = s.clone();
-        }
-        if let Some(p) = preds.get(&id) {
-            bb.predecessor_ids = p.clone();
-        }
-        bb.relationships_known = !declined_dispatch_blocks.contains(id.as_str());
-    }
-
-    // Seed the function's primary chunk from the basic-block extents so
-    // every discovered function has at least one entry in `chunks`. The
-    // chunk-merge pass relies on this — without it, parents that haven't
-    // had `range` set explicitly silently swallow their cold splits but
-    // expose `chunks=[<cold only>]` to consumers.
-    if !func.basic_blocks.is_empty() {
-        let entry_va = func.entry_point.value;
-        let max_end = func
-            .basic_blocks
-            .iter()
-            .map(|bb| bb.end_address.value)
-            .max()
-            .unwrap_or(entry_va);
-        if max_end > entry_va {
-            if let Ok(start) = Address::new(AddressKind::VA, entry_va, bits, None, None) {
-                if let Ok(range) = AddressRange::new(start, max_end - entry_va, None) {
-                    func.add_chunk(range);
-                }
-            }
-        }
-    }
-
-    // Retain exact interprocedural targets on the function object.  Address-scoped
-    // decompilation intentionally stops discovery once all requested entries are
-    // found, but its name map still needs these xrefs in order to render an
-    // anonymous terminal jump as `sub_<va>(...)` rather than a dangling local goto.
-    for xref in &call_edges {
-        if let Ok(callee) = Address::new(AddressKind::VA, xref.target_va, bits, None, None) {
-            func.add_callee(callee);
-        }
-    }
-
-    // The truncation record travels on the body it describes. This is the ONLY
-    // place it is written, and it is written from the stats of the single walk
-    // that just produced `func` -- which is what makes it impossible for one
-    // function's budget hit to mark a different function incomplete.
-    record_cfg_incompleteness(&mut func, &stats);
+        &blocks,
+        &edges,
+        &call_edges,
+        &stats,
+    )?;
 
     Some((func, call_edges, stats))
 }
@@ -4108,7 +3888,8 @@ mod analysis_deadline_tests {
         );
         assert!(stats.hit_total_timeout, "the 1ms ceiling must be reported");
         assert_eq!(
-            stats.eh_frame_candidates, 0,
+            stats.eh_frame_candidates,
+            0,
             "a scan that starts after the ceiling has passed must return nothing, \
              not sweep {} bytes and report {} candidates",
             data.len(),
