@@ -193,7 +193,6 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     "triage/config.rs": "accepted: triage configuration and its defaults/validation.",
     # -- symbolic-execution engine (out of decompiler scope, still in src/) --
     "symbolic/solver/mod.rs": "accepted: the solver facade and its shared query plumbing.",
-    "symbolic/explore.rs": "accepted: the symbolic path explorer, one search loop.",
     "symbolic/ordered_trace.rs": "accepted: the ordered trace format and its writer.",
     "symbolic/ordered_replay.rs": "accepted: ordered replay against a pinned configuration.",
 }
