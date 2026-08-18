@@ -2545,6 +2545,36 @@ items below mostly are not:
 
 **Status at end of 2026-08-16: items 1 and 2 CLOSED, 3 and 5 open, 4 promoted.**
 
+**Inserted 2026-08-17, ahead of all of the above: the overflow flags after a
+multiply were poison, and the readers of those flags are overflow checks.**
+CLOSED. `Mnemonic::Imul` marked CF/OF undefined under a comment that stated the
+defect ("x86 IMUL defines CF/OF, but product truncation overflow is not
+modelled"). The readers are `seto`/`jo`: Rust's `overflowing_mul` /
+`checked_mul` / `saturating_mul`, and — the case that matters most —
+`33_knapsack:clang:O2`, where Clang range-checks an allocation byte count with
+`mul %rdx; seto %r8b`. **The decompiler was rendering integer-overflow checks as
+reads of an explicitly poisoned value**, which for a vulnerability-discovery
+substrate is close to the worst available failure: the analyst is shown a
+program in which the check is not there. Fixed for the truncating forms at
+8/16/32 bits and for the one-operand form at every width including 64 (the high
+half is already materialised in `rdx`, so no 128-bit value is needed). 64-bit
+*truncating* `imul` still poisons, and the comment now names that one case. Six
+fixture cells `fail -> pass`, zero `pass -> fail` over all 752 lanes; the
+"explicitly undefined" class in the def-use census is now empty (320 -> 313
+required violations, seven removed, none added). Diary Entry 67.
+
+**A structural fact behind items 4 and 5, recorded 2026-08-17.** `Op::Unknown`
+is `{ mnemonic: String }` — one field, no operands — and `Op::opaque` builds
+`Op::Intrinsic { ins: [], outs: [], reads_mem: true, writes_mem: true }`.
+**Neither fallback declares a register write.** So an unmodelled instruction is
+not conservatively modelled, it is invisible to register dataflow: the census
+believes the destination was never written, and the previous value flows on.
+That is the same shape as item 4's "stale value flows on" and item 5's
+undefined read, and it means those items are not really about `lower_scalar_float`
+or about one control — they are about what an unmodelled instruction costs.
+`movlpd`/`movhpd`/`movlps`/`movhps` have no arm anywhere in `src/ir/` and take
+this path (item 4's mechanism, confirmed).
+
 - **1 closed** by `fdbcf58` — `ReturnClass::SsePair`, 11 cells, −15 undefined
   reads. Its successor is the **mirror class**: `hfa197_pair2d_roundtrip` now has
   a fully correct RETURN and still fails on the ARGUMENT side, because a 16-byte

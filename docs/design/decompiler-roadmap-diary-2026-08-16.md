@@ -2432,3 +2432,116 @@ produced by earlier cuts in this same program.
 Both are one-line repairs and both stayed out of the patches, because a content
 edit inside a moved region destroys the purity claim that is the only evidence a
 move is safe. They are queued as their own change.
+
+## Entry 67 — A comment that stated its own defect, and the overflow checks it was deleting
+
+`src/ir/lift_x86.rs`, in the `Mnemonic::Imul` arm, has read this for as long as
+the arm has existed:
+
+```rust
+append_undef_flags(
+    &mut ops,
+    &[Flag::C, Flag::O],
+    "x86 IMUL defines CF/OF, but product truncation overflow is not modelled",
+);
+```
+
+The comment is the bug report. IMUL *defines* CF and OF — SDM Vol. 2A: they are
+set "when the signed integer value of the intermediate product differs from the
+sign extended operand-size-truncated product". Marking them undefined is not the
+conservative choice. A conservative fallback would clobber; this one declares the
+value meaningless, so every later reader is reading poison.
+
+### What it was deleting
+
+The reader of OF after a multiply is an overflow check. Two populations found it:
+
+- Rust's `overflowing_mul` / `checked_mul` / `saturating_mul` — `imul` then
+  `seto`. Six functions in `171_rust_overflow`.
+- **`33_knapsack:clang:O2:knapsack_best_value`**, which is C, not Rust:
+
+```
+1213:  mov    $0x4,%edx
+1218:  mul    %rdx
+121b:  seto   %r8b
+```
+
+That is Clang range-checking an allocation byte count — element count times
+element size, capture the overflow. Verified with `objdump` on the same
+`build/33_knapsack-clang-O2.so` the lane uses, which is the control I now insist
+on after disassembling the wrong binary cost seven probes in Entry 64.
+
+So the decompiler was rendering an **integer-overflow check as a read of an
+explicitly poisoned value**. For a tool whose stated purpose includes an LLM
+vulnerability-discovery substrate, silently discarding the overflow checks is
+close to the worst available failure: the analyst is shown a program in which the
+check is not there.
+
+### Three things I got wrong, all corrected by measurement
+
+I wrote the tasking from a histogram of `defuse_baseline.json` and got three
+things wrong in it:
+
+1. **"8 violations."** It is **7**. My normalising regex was
+   `\b(var|tmp|t|v|of|stack)\d+\b`, which does not match `of_1` — the underscore
+   defeats `\d+` directly after the word — so the class fragmented across five
+   buckets and I added them up wrong.
+2. **"all in `171_rust_overflow`."** Six are; the seventh is `33_knapsack`, a C
+   fixture. The most interesting instance was the one I excluded by assertion.
+3. **"three shapes."** There are **four** families, and the same regex hid the
+   sizes: I reported 28 `varN is read but never defined` when the real family is
+   **279**, because every other variable-name prefix landed in its own bucket. The
+   fourth family — `rbp is declared as a local and never assigned, so reading it
+   (and any address computed from it) is an uninitialised read`, 6 occurrences —
+   I did not see at all.
+
+The correct census of the `required` subset, 320 violations:
+
+```
+279  X is read but never defined
+ 25  ret is read before it is defined
+  7  X reads an explicitly undefined value
+  6  rbp is declared as a local and never assigned ...
+  2  ret is read but never defined
+  1  stack_top is read but never defined
+```
+
+A normalisation that fragments its own buckets is worse than no normalisation,
+because it produces a small confident number instead of an obviously incomplete
+one.
+
+### And one place I was wrong about the fix
+
+I instructed: leave 64-bit alone, it needs a 128-bit intermediate. Correct for
+the *truncating* forms and wrong for the one-operand form, and the agent said so:
+at 64 bits the one-operand `mul`/`imul` has already **materialised** the high half
+into `rdx`, so no wide value is needed —
+
+```
+CF = OF = Ne(rdx, 0)                       ; MUL
+Sar t = rax >> 63 ;  CF = OF = Ne(rdx, t)  ; IMUL
+```
+
+That is the `33_knapsack` case, which I would have left broken. 64-bit
+*truncating* `imul rax, rbx` does still poison both flags, and the comment now
+names that as the one remaining case instead of claiming nothing is modelled.
+
+Below 64 the predicate is built from the **multiplicands**, not from the `hi`/`lo`
+registers the instruction just defined — at 16 bits those are `dx`/`ax`,
+bit-preserving views `regview::ssa_parent` declines to merge, so reading one back
+is reading a name nothing in the function defines. That is the hazard
+`wide_mul_ops`' accumulator snapshot already exists to avoid, and it would have
+been an easy way to write a plausible, wrong fix.
+
+### Result
+
+The **"explicitly undefined" class is now empty**: 320 required violations -> 313,
+all seven removed, none added, confirmed by an entry-by-entry diff of a scoped
+`--dry-run` census against the committed file. Six fixture cells `fail -> pass`,
+**zero `pass -> fail`** across `@o0` + `@o2` + the rustc lanes, which is 752 of
+752 lanes — full corpus coverage. Rust suite 2,601 -> 2,604 (three new tests).
+
+One pre-existing test asserted the multiply was `ops[1]` positionally and broke
+when the overflow prologue landed in front of it. It was rewritten to find the
+`Op::Bin{Mul}` that writes `ecx` — what it actually meant — rather than
+renumbered, which would have re-armed the same trap for the next change.
