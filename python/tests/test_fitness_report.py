@@ -459,3 +459,122 @@ def test_cfg_any_test_is_not_test_only_and_is_kept(fr):
 def test_a_feature_literally_named_test_is_not_a_test_predicate(fr):
     text = '#[cfg(feature = "test")]\nfn shipped() {\n    x();\n}\n'
     assert "shipped" in fr.strip_test_items(text)
+
+
+# --- per-owner trend ----------------------------------------------------------
+#
+# Every ratcheted measure is an aggregate over the whole tree, so a single file
+# growing is only visible if no other file shrank by as much in the same
+# baseline window. `check_owner_trend` is the per-file view. Added 2026-08-18
+# after `src/ir/ast/dec_render.rs` went 1,727 -> 1,788 with the ratchet
+# reporting "no regressions" throughout, and was noticed only by hand-auditing
+# a stale table in the roadmap.
+
+
+def test_one_owner_growing_is_reported(fr):
+    baseline = {"oversized_files": {"ir/ast/dec_render.rs": 1727}}
+    current = {"oversized_files": {"ir/ast/dec_render.rs": 1788}}
+    assert fr.check_owner_trend(current, baseline) == [
+        "ir/ast/dec_render.rs: 1727 -> 1788 (+61)"
+    ]
+
+
+def test_an_owner_that_shrank_is_not_reported(fr):
+    baseline = {"oversized_files": {"ir/ast.rs": 2195}}
+    current = {"oversized_files": {"ir/ast.rs": 1661}}
+    assert fr.check_owner_trend(current, baseline) == []
+
+
+def test_the_aggregate_ratchet_cannot_see_what_the_per_owner_view_sees(fr):
+    """The reason this measure exists, as one assertion.
+
+    `product_loc_above_1000` is a SUM over oversized files. One owner growing by
+    61 while another is cut by 500 leaves the sum 439 lines BETTER, so the
+    ratchet passes -- correctly, by its own definition. Modelled on the real
+    2026-08-18 numbers: the committed baseline's sum was 55,210 against a
+    measured 39,232, which is 15,978 lines of slack for any single file to grow
+    into unseen.
+    """
+    measures_before = dict.fromkeys(fr.RATCHET_KEYS, 0)
+    measures_before["product_loc_above_1000"] = 55210
+    measures_after = dict(measures_before)
+    measures_after["product_loc_above_1000"] = 55210 - 500 + 61
+    baseline = {
+        "measures": measures_before,
+        "oversized_files": {"ir/ast/dec_render.rs": 1727, "analysis/cfg.rs": 3120},
+    }
+    current = {
+        "measures": measures_after,
+        "oversized_files": {"ir/ast/dec_render.rs": 1788, "analysis/cfg.rs": 2620},
+    }
+    assert fr.check_ratchet(current, baseline) == []  # blind, and not wrong
+    assert fr.check_owner_trend(current, baseline) == [
+        "ir/ast/dec_render.rs: 1727 -> 1788 (+61)"
+    ]
+
+
+def test_a_brand_new_owner_is_left_to_the_review_gate(fr):
+    """A file that crossed 1,000 for the first time has no baseline size to have
+    grown from. `test_large_module_review.py` already refuses it until a review
+    is written, so reporting it here would be a second voice on one decision."""
+    baseline = {"oversized_files": {"ir/ast.rs": 1661}}
+    current = {"oversized_files": {"ir/ast.rs": 1661, "ir/brand_new.rs": 1200}}
+    assert fr.check_owner_trend(current, baseline) == []
+
+
+def test_growth_is_reported_largest_first(fr):
+    baseline = {"oversized_files": {"a.rs": 1000, "b.rs": 2000, "c.rs": 3000}}
+    current = {"oversized_files": {"a.rs": 1010, "b.rs": 2100, "c.rs": 3001}}
+    assert fr.check_owner_trend(current, baseline) == [
+        "b.rs: 2000 -> 2100 (+100)",
+        "a.rs: 1000 -> 1010 (+10)",
+        "c.rs: 3000 -> 3001 (+1)",
+    ]
+
+
+def test_the_trend_works_against_a_baseline_written_before_the_measure_existed(fr):
+    """`oversized_files` is new; every committed baseline predating it carries
+    only the top-15 `largest_files` list. The check falls back to that list
+    rather than requiring a baseline regeneration first -- a measure whose first
+    act is to rewrite its own reference point can only ever record the state it
+    was born into."""
+    baseline = {"largest_files": [{"path": "ir/ast/dec_render.rs", "loc": 1727}]}
+    current = {"oversized_files": {"ir/ast/dec_render.rs": 1788}}
+    assert fr.check_owner_trend(current, baseline) == [
+        "ir/ast/dec_render.rs: 1727 -> 1788 (+61)"
+    ]
+
+
+def test_the_real_tree_records_every_oversized_file_not_just_the_top_15(fr):
+    report = fr.build_report(SRC)
+    oversized = report["oversized_files"]
+    assert len(oversized) == report["measures"]["product_files_above_1000"]
+    assert len(oversized) > len(report["largest_files"])
+    assert all(loc > fr.OVERSIZED_LOC for loc in oversized.values())
+
+
+def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
+    """Not a synthetic case: the tree as committed. If this file is later split
+    or its growth is deliberately accepted into a regenerated baseline, this
+    assertion is the thing that must be updated, which is the point."""
+    baseline = fr.load_baseline(BASELINE)
+    current = fr.build_report(SRC)
+    assert fr.check_ratchet(current, baseline) == []
+    grown = fr.check_owner_trend(current, baseline)
+    assert [row.split(":")[0] for row in grown] == ["ir/ast/dec_render.rs"]
+
+
+def test_owner_growth_is_never_fatal(fr):
+    """Deliberate: an oversized file grows when a defect inside it is fixed, and
+    a gate that fails on that teaches people to stop fixing them. The claim is
+    only that the growth is impossible to not see."""
+    baseline = {
+        "measures": dict.fromkeys(fr.RATCHET_KEYS, 0),
+        "oversized_files": {"ir/ast/dec_render.rs": 1727},
+    }
+    current = {
+        "measures": dict.fromkeys(fr.RATCHET_KEYS, 0),
+        "oversized_files": {"ir/ast/dec_render.rs": 1788},
+    }
+    assert fr.check_owner_trend(current, baseline) != []
+    assert fr.check_ratchet(current, baseline) == []

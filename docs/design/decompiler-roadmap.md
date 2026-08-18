@@ -1203,7 +1203,7 @@ while `ast.rs` was at 11,582 nobody looked past it.
 | 2,038 | `ir/lift_arm64.rs` | 2 cuts; 2,516 -> 2,038. `arith` family measured as the next cut |
 | 1,941 | `ir/lift_arm32.rs` | 3 cuts; 2,998 -> 1,941. `lift_one_decoded` is 76% and needs a `return`->`Some` rewrite, so not pure |
 | 1,888 | `ir/types_recover.rs` | 3 cuts; 3,058 -> 1,888 |
-| 1,789 | `ir/ast/dec_render.rs` | **GREW.** Created at 2,195, cut to 1,727, now 1,789 — the only row here moving the wrong way, and the previous table presented 1,727 as a finished success |
+| 1,797 | `ir/ast/dec_render.rs` | Created at 2,195, cut to 1,727, now 1,797 — the only row that has moved the wrong way. **Reviewed 2026-08-18: no further split.** The growth was one commit at review time (`4d3353c0`, +62, the `_Bool` return narrowing) and has since taken +9 more from the aggregate-return work; 11 of the file's 46 functions form a single 903-line strongly-connected component that every candidate cut slices through. **This row is no longer the thing that notices** — `--check-ratchet` now prints `GREW: ir/ast/dec_render.rs: 1727 -> 1797 (+70)` on every run, which is how the +9 was caught rather than by rereading the table. See the `REVIEWED_LARGE_MODULES` entry for the co-change numbers and the three conditions that would overturn it |
 | 1,668 | `ir/structure.rs` | 3 cuts; 2,607 -> 1,668. `detect_if_shape` (353 lines) measured as the next cut |
 | 1,650 | `ir/ast.rs` | 8 cuts; 11,582 -> 1,650, **-86%**. The file this program started on |
 | 1,422 | `python_bindings/ir.rs` | 3 cuts; 2,738 -> 1,422. Seven of its eight PyO3 items would be mis-cut by a keyword scan — the attributes sit between doc and item |
@@ -1230,6 +1230,19 @@ them — `ir/ast/dec_render.rs` — was presented as a shrink while the file had
 actually grown. A table that exists to stop people ranking by memory had itself
 gone back to being remembered. It is now regenerated from
 `tools/fitness_report.py:product_loc` rather than edited row by row.
+
+Regenerating it by hand is still a manual act, and on 2026-08-18 three rows
+had gone stale again within a day (`lift_x86.rs` +43, `ast.rs` +11,
+`java_class.rs` listed at 2,644 "untouched" when it had been split to 509).
+So the growth case no longer depends on anyone rebuilding this table:
+`tools/fitness_report.py --check-ratchet` now prints a **per-owner trend**
+line for every oversized file that grew since the committed baseline. The
+aggregate measures could not do this — `product_loc_above_1000` is a SUM, and
+with 15,978 lines of slack against the baseline any single file could grow by
+that much while the ratchet printed "no regressions", which is exactly what
+happened to `dec_render.rs`. It is reported, not enforced: an oversized file
+grows when a defect inside it is fixed, and a gate that fails on that teaches
+people to stop fixing them.
 
 Priority splits, performed only as ownership migrates:
 
@@ -1282,7 +1295,21 @@ Priority splits, performed only as ownership migrates:
   a *closed* sub-graph never calling a statement printer. It left as the
   `dec_render::stmt` **child** module (526 lines), which is why it cost zero
   widenings: a descendant already sees its parent's privates. 2,195 -> 1,727,
-  and `product_files_above_2000` 13 -> 12.
+  and `product_files_above_2000` 13 -> 12. **That was the last acyclic seam in
+  the file, and the expression side is now closed to further splitting
+  (reviewed 2026-08-18).** Four candidates were derived from the items and
+  measured: a `dec_render/float.rs`, the call-argument family, the
+  destination/representation cluster, and the six pure pattern-recognisers.
+  All four cut through a single 11-function, 903-line strongly-connected
+  component that is 54% of the file's item lines, and none reaches the
+  co-change cohesion the `stmt` cut scored (36% of its commits touch nothing
+  else in the file; the best remaining candidate is 24%). The float
+  hypothesis in particular fails on its own evidence: one function renders
+  floats, the scalar-float intrinsic tables are already `ast/float_gate.rs`,
+  and the union type-punning predates this file. The one candidate that is
+  structurally closed — zero outbound references — has the WORST co-change
+  score of the five, at 11%, which is the reason to measure change and not
+  just the call graph.
 - `lift_x86.rs`, `lift_arm32.rs`, `lift_arm64.rs`: shared builder plus
   instruction-family modules.
 - `call_args.rs`: ABI classification, evidence, solver, and HIR projection.
@@ -1862,7 +1889,7 @@ behavior.
   Audited 2026-08-15. The SESSION half is done and the RESULT half has not
   started. `glaurung.ir.DecompilerSession` exists with `path`,
   `discovery_cache_stats`, `artifact_cache_stats`, `clear_caches` and
-  `decompile_at`; it is typed in `python/glaurung/__init__.pyi`, and
+  `decompile_at`; it is typed in `python/glaurung/_native/ir.pyi`, and
   `test_decompiler_session.py` pins on a real compiled binary that a session
   query is byte-identical to the module-level `decompile_at`. What is missing:
   `decompile_at` returns a bare `str`, so there is no result object to carry

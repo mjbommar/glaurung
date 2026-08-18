@@ -167,3 +167,176 @@ non-array, non-union shapes**, and I misattributed the reason in a commit
 message. Fixing the extractor may be worth more than fixing the remaining
 classes, because it converts a batch of `structural` cells into real verdicts
 that would then say whether those classes are broken at all.
+
+## Entry 83 — the extractor was worth more than the classes, and it settled a misattribution
+
+Entry 82 ended with a guess: that fixing `extract_dwarf_signatures_path` might
+be worth more than implementing the missing return classes, because it converts
+`structural` cells into real verdicts. That guess was measured, and it held.
+
+The extractor dropped any aggregate containing a float member, any array member,
+and every union. Its stated reason — that the SysV eightbyte classifier puts an
+all-float aggregate in SSE registers, so supporting one would mean guessing an
+ABI the module cannot state — **describes a step that does not exist.** Nothing
+in `src/debug/dwarf_signatures.rs` ever classified an eightbyte. libffi does
+that, from the layout the descriptor already carries. `union {int64_t; double;}`
+and `struct {int32_t v[2];}` were verified to return by value correctly through
+`ctypes` before the descriptor was written at all.
+
+Fixture 197 went from **6 signatures to 11**, and **70 cells left `structural`**
+for a real verdict: 58 to `fail`, 8 to `pass`, 2 to `incomparable` (i386
+`bv195_make_mixed`, correctly refused — 12 bytes there against 16 on the host
+reference). Zero `pass -> fail` anywhere, across `@o0`, `@o2`, `@returns`,
+`@aggregates` and the i386/armv7/aarch64 arch lanes.
+
+Fifty-eight new `fail` verdicts is the point of the exercise. They were always
+failing; the harness simply had no way to say so.
+
+### The misattribution, now resolved
+
+Entry 82 recorded that `bv195_make_big` was declined for size. It was declined
+for its **array member**. The two reasons shared one detail string, so they were
+indistinguishable in the output — which is exactly how a wrong reason survives
+in a commit message. The string is now split, `"aggregate return of 32 bytes —
+past the register cutoff"` against `"layout not describable from DWARF"`, and
+`bv195_make_big` is now described (32 bytes, `int64_t[4]`) and declined for size
+after all. It arrived at the same verdict by a different road, which is not the
+same thing as having been right.
+
+### The blocker that was real, and not the one that was stopping us
+
+The stated reason for not implementing `HomogeneousFloat`, `SplitBanks` and
+`SsePair` was that a synthesised struct tag cannot survive DecBench's snippet
+slicing — and that is true, with the code to prove it: `split_c_functions` cuts
+each snippet at the signature line and discards everything above, so a sliced
+signature would name an undeclared tag, and C makes returning an incomplete type
+an error.
+
+But it was never a blocker for the lanes that prove soundness.
+`tools/diff_decompile.py` builds the **whole** emitted unit into a shared object
+and `dlopen`s it; above-signature emission already happens there today. And even
+for DecBench it is dissolvable without a contract change, since C permits the
+definition in the declaration specifiers:
+
+```c
+struct __glaurung_hfa_2d { double __m0; double __m1; } hfa197_make_pair2d(int a) { … }
+```
+
+which compiles clean under `-std=c11 -Wall -Wextra` on both `x86_64` and
+`aarch64-linux-gnu`.
+
+**The real blocker is representational.** `Stmt::Return { value: Option<Expr> }`
+carries one expression and `Expr` has no aggregate-literal variant. `IntegerPair`
+escaped because a double-word integer *is* a scalar: `(u128)lo | ((u128)hi << 64)`
+is an ordinary expression that dead-store elimination and `verify_before_render`
+already understand. The other three classes put bytes in two different *banks*,
+so they need `return (TAG){ lo, hi };` with both operands visible to DSE or the
+high half is deleted before it can be printed. Adding an `Expr` variant touches
+56 files. The bit-pun shortcut does not work either: the reaching value of
+`xmm1`/`d1` is float-typed in the AST, so widening it converts the number
+instead of the bits.
+
+That last sentence turned out to be the thread worth pulling — see Entry 85.
+
+## Entry 84 — a five-line file blanked a typed dependency, and I had the diagnosis backwards
+
+I recorded that the native extension had **no** type stubs, so `ty` reported
+1,487 false attribute errors. It had stubs. That was the problem.
+
+```
+git show HEAD:python/pytest/__init__.pyi   | wc -l  →     5
+git show HEAD:python/glaurung/__init__.pyi | wc -l  → 1,532
+```
+
+The five-line file was committed 2025-09-03 and sat on the first-party search
+path, where **a `.pyi` shadows the module it describes**. It blanked the whole of
+a fully typed pytest 9.1.1: **417 diagnostics** from one file nobody had opened
+in a year. The 1,532-line hand-written stub of the extension had drifted far
+enough to account for roughly 1,400 more — reporting real functions as missing
+while silently vouching for signatures nobody had checked in months. It denied
+`glaurung.debug` exists.
+
+**A stale stub is strictly worse than no stub**, because it makes the checker
+confidently wrong rather than merely blind. `ty` went **2,004 → 386**.
+
+Both are deleted. `tools/gen_native_stub.py` introspects the *built* `.so` and
+emits eleven files under `python/glaurung/_native/` plus six alias stubs.
+Everything is typed `Any`, deliberately: PyO3 exposes `__text_signature__` —
+names, arity, defaults — and no type information at all. `Any` keeps the stub
+**sound**. It catches a call with the wrong arity or a misspelled keyword, and it
+never invents a constraint the Rust does not impose.
+
+`python/tests/test_native_stub_current.py` is what stops the replacement going
+the same way, and its most interesting test is `test_the_comparison_is_not_vacuous`:
+a stub regenerated from a stale `.so` matches a stale extension and passes while
+both are wrong, so the test skips loudly when `build_guard` says the `.so`
+predates its Rust. That is the same trap `tools/build_guard.py` exists to close
+for fixture verdicts, reappearing one layer up.
+
+I mutation-tested the guard rather than trusting it. One invented symbol appended
+to `_native/ir.pyi`:
+
+```
+FAILED test_every_stub_matches_the_built_module
+  ir.pyi: 33 lines on disk vs 32 generated
+```
+
+and green again on restore. It fails on drift, which is the only property that
+matters.
+
+### Three live defects fell out of making the checker usable
+
+All three are hidden behind a bare `except`, and none would ever have surfaced as
+a test failure.
+
+1. `llm/agents/iterative.py:275` calls `kb.add_node(id=…, type=…, properties=…)`
+   against `def add_node(self, node: Node)`. Guaranteed `TypeError`, swallowed at
+   line 141 — so **every low-confidence refinement iteration dies at its feedback
+   step and records the crash as a "failed attempt."** The loop looks like it ran.
+2. `symbol_address_map` is called on a module that does not export it, at five
+   sites, each inside `except Exception: pairs = []`. Measured: it is reachable
+   from neither `glaurung` nor `glaurung.symbols`. It has been silently returning
+   nothing.
+3. Fifty-nine names in `triage.py:395-500` are referenced inside a
+   `try/except AttributeError: pass`. None exists, so the block dies on its first
+   line and `__all__` never gains any of them.
+
+The pattern is one sentence long: **a bare `except` turned a hard failure into
+silence, and the type checker was the only thing that could see it — which it
+could not do while a five-line file was shadowing pytest.**
+
+## Entry 85 — a ratchet you are routinely told to reset
+
+Auditing my own commit found that `fd0b6455` raised `rustc:O0` undefined-read
+violations from **7,525 to 7,535**, and nothing said a word.
+
+```
+git show 9dfd8457:tests/decompiler_fixtures/defuse_baseline.json → 7525
+git show fd0b6455:tests/decompiler_fixtures/defuse_baseline.json → 7535
+git rev-list 9dfd8457..fd0b6455                                  → one commit
+```
+
+A per-cell diff of every tracked cell between the two: **0 added, 0 removed, 0
+changed.** All ten regressions are in functions the manifest makes no
+per-function claim about — invisible to every per-cell assertion, visible only in
+one aggregate integer.
+
+`test_decompiler_defuse_census.py:115` is a real ceiling and would have caught
+it. It did not, because I regenerated the baseline, which rewrote the ceiling to
+the new and worse number.
+
+The structural problem is not that I ran the generator. It is that the ratchet's
+*other* half, `test_improvements_require_a_baseline_refresh`, **instructs** you
+to run it, and adding any fixture requires refreshing all four baselines — and
+`tools/gen_defuse_baseline.py` has no guard whatsoever. `grep -n
+"recorded\|existing\|ceiling\|--allow"` matches nothing but `raise SystemExit(main())`.
+
+**A ratchet that the documented workflow resets with an unguarded command is not
+a ratchet. It is a record of the last time someone ran it.** This is the same
+failure the fitness ratchet had, in a different file, four days later.
+
+The fix is to make the generator refuse an upward move without an explicit
+reason recorded in the file, while leaving downward moves and new-fixture cells
+frictionless. The ten regressions themselves have names by now — they are real
+rendering defects bought for the 24 execution cells that commit turned green,
+and until this audit nobody had looked at them.

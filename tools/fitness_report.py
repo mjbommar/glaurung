@@ -155,6 +155,11 @@ _TOLERANCE = 1e-6
 #: mean, and the percentage.
 _MEDIAN_KEYS = frozenset({"product_median_loc", "ir_median_loc"})
 
+#: The line above which a file is an "owner" for per-owner trend purposes. Same
+#: threshold as `files_above_1000` and as `test_large_module_review.py`'s review
+#: gate, so the three agree on which files are being watched.
+OVERSIZED_LOC = 1000
+
 
 class FitnessError(ValueError):
     """Raised when the source tree or baseline cannot be measured/compared."""
@@ -338,6 +343,17 @@ def build_report(
             {"path": str(path), "loc": size}
             for path, size in sorted(rows, key=lambda row: -row[1])[:15]
         ],
+        # Per-owner sizes for EVERY oversized file, not just the top 15. This is
+        # the population `check_owner_trend` compares, and the same population
+        # `python/tests/test_large_module_review.py` requires a written review
+        # for. `largest_files` is a top-N display list: an owner that grows while
+        # falling out of the top 15 leaves it entirely, which is exactly the
+        # blindness this record exists to close.
+        "oversized_files": {
+            str(path): size
+            for path, size in sorted(rows, key=lambda row: -row[1])
+            if size > OVERSIZED_LOC
+        },
     }
 
 
@@ -432,6 +448,63 @@ def check_ratchet(current: JsonObject, baseline: JsonObject) -> list[str]:
     return problems
 
 
+def _owner_sizes(report: JsonObject) -> dict[str, int]:
+    """Per-owner LOC from a report or baseline, whichever record it carries.
+
+    Prefers `oversized_files` (every file above `OVERSIZED_LOC`). Falls back to
+    the top-15 `largest_files` list, which every baseline written before
+    `oversized_files` existed already contains -- so the trend check works
+    against the committed baseline without regenerating it first. Regenerating a
+    baseline to enable a measure is how the measure ends up recording only the
+    state it was born into.
+    """
+    oversized = report.get("oversized_files")
+    if isinstance(oversized, dict):
+        return {str(path): int(loc) for path, loc in oversized.items()}
+    return {
+        str(row["path"]): int(row["loc"])
+        for row in report.get("largest_files") or []
+        if isinstance(row, dict) and "path" in row and "loc" in row
+    }
+
+
+def check_owner_trend(current: JsonObject, baseline: JsonObject) -> list[str]:
+    """Report every individual oversized file that grew since the baseline.
+
+    Why this is not covered by the measures above. `product_loc_above_1000` is
+    the only ratcheted measure that can see a single owner growing, and it is a
+    SUM: one owner's growth nets against every other owner's cut inside the same
+    baseline window. On 2026-08-18 that window had 15,978 lines of slack
+    (baseline 55,210, current 39,232), so any one file could have grown by up to
+    15,978 lines with the ratchet still printing "no regressions" -- and
+    `ir/ast/dec_render.rs` did grow, 1,727 -> 1,788, entirely unseen. It was
+    caught by hand-auditing a stale table in the roadmap, which is not a control.
+
+    Deliberately NOT part of `check_ratchet`, and deliberately not fatal. An
+    oversized file grows when a real defect is fixed inside it: that 1,727 ->
+    1,788 is +62 from ONE commit (`4d3353c0`, the `_Bool` return narrowing) and
+    -1 from the next. A gate that fails on those teaches people to stop fixing
+    defects in large files, or to regenerate the baseline without reading it --
+    the exact failure `_accepted_regressions` was written to prevent. The claim
+    being made here is only that per-owner growth should be impossible to NOT
+    see.
+
+    Returns:
+        Human-readable growth descriptions, largest growth first; empty if no
+        owner grew. Files absent from the baseline are new owners, which
+        `test_large_module_review.py` already gates, and are not reported here.
+    """
+    before = _owner_sizes(baseline)
+    after = _owner_sizes(current)
+    grown = [
+        (after[path] - before[path], path, before[path], after[path])
+        for path in after
+        if path in before and after[path] > before[path]
+    ]
+    grown.sort(key=lambda row: (-row[0], row[1]))
+    return [f"{path}: {was} -> {now} (+{delta})" for delta, path, was, now in grown]
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -488,10 +561,18 @@ def _accepted_regressions(report: JsonObject, baseline_path: Path) -> list[JsonO
             return history
         history = list(previous.get("accepted_regressions") or [])
         problems = check_ratchet(report, previous)
-        if problems:
-            history.append(
-                {"measures": previous.get("measures", {}), "worsened": problems}
-            )
+        grown = check_owner_trend(report, previous)
+        if problems or grown:
+            entry: JsonObject = {"measures": previous.get("measures", {})}
+            if problems:
+                entry["worsened"] = problems
+            # Per-owner growth is recorded even when no aggregate measure
+            # regressed, because that is the whole case it covers: the sum
+            # absorbed it. Recording it here is what makes it cumulative --
+            # the next `--write-baseline` inherits the list and has to look.
+            if grown:
+                entry["owners_grew"] = grown
+            history.append(entry)
     return history[-50:]
 
 
@@ -511,6 +592,17 @@ def _print_drift(report: JsonObject) -> None:
             and was != is_now
         ):
             print(f"  drift since first recorded: {key}: {was} -> {is_now}")
+    # How often each owner has been recorded growing. A single +61 is a defect
+    # fix; the same file appearing in ten consecutive entries is a file that is
+    # not being decomposed, and that is only visible cumulatively.
+    repeats: dict[str, int] = {}
+    for entry in history:
+        for row in entry.get("owners_grew") or []:
+            path = str(row).split(":", 1)[0]
+            repeats[path] = repeats.get(path, 0) + 1
+    for path, count in sorted(repeats.items(), key=lambda kv: (-kv[1], kv[0])):
+        if count > 1:
+            print(f"  owner grew in {count} recorded regenerations: {path}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -538,6 +630,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 1
             print("fitness ratchet: no regressions")
+            # Non-fatal by design (see `check_owner_trend`): an owner that grew
+            # while the aggregate stayed flat is a thing to look at, not a thing
+            # to block. Printed unconditionally so it cannot be missed.
+            grown = check_owner_trend(report, baseline)
+            if grown:
+                print(
+                    f"per-owner trend: {len(grown)} oversized file(s) grew "
+                    "since the baseline"
+                )
+                for row in grown:
+                    print(f"  GREW: {row}")
     except FitnessError as error:
         raise SystemExit(f"fitness report failed: {error}") from error
 
