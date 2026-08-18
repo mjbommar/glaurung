@@ -109,7 +109,7 @@ pub(super) fn arm32_word(ins: &Instruction) -> Option<u32> {
 /// as one extra trailing immediate operand. So `add ip, pc, #0, #12` arrives
 /// with FOUR operands and `mov r0, #0x40, #30` with THREE.
 ///
-/// Every arity check in [`lift_one_decoded`] is written against the folded
+/// Every arity check in [`super::lift_one_decoded`] is written against the folded
 /// shape, so the unfolded form matched nothing and fell through to
 /// [`Op::Unknown`] — which `lift_function` then turns into an opaque intrinsic
 /// declaring that it reads and writes all memory. That is what a register-plus-
@@ -284,7 +284,7 @@ pub(super) const SHIFT_TEMP: u32 = 6;
 
 /// Materialise `value <shift>` and return the shifted value, or `None` when the
 /// shift cannot be modelled (`rrx` reads the carry flag, which this lifter
-/// deliberately does not fabricate — see [`flags_for_arith`]).
+/// deliberately does not fabricate — see [`super::flags::flags_for_arith`]).
 ///
 /// `ror` is expanded as `(x >> n) | (x << (32-n))` over the 32-bit value; every
 /// ARM32 core register is exactly 32 bits wide, so the width is not inferred.

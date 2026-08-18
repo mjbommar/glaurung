@@ -90,7 +90,7 @@ pub(super) fn signed_view(value: Value, width: Width, temp: VReg, ops: &mut Vec<
 
 /// Materialise the ZERO-extended 64-bit view of a sub-width operand — the
 /// unsigned word the machine actually compares. The parent's high half is
-/// normally already clear (see [`with_parent_zero_extension`]), but not when the
+/// normally already clear (see [`super::with_parent_zero_extension`]), but not when the
 /// last write to it was a 64-bit one, as in `ldr x0,[..]` followed by `cbz w0`.
 pub(super) fn unsigned_view(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>) -> Value {
     if width.bits() >= 64 {

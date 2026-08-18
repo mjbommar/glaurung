@@ -100,7 +100,6 @@ pub(super) fn a32_predicate(ins: &Instruction, mnemonic: &str) -> Option<(String
     Some((base.to_string(), cond, inverted))
 }
 
-/// The four flag writes an ARM `cmp a, b` performs — identical to x86/AArch64.
 /// Flags written by an `S`-suffixed data-processing instruction.
 ///
 /// `subs Rd, Rn, Op2` sets exactly the flags of `cmp Rn, Op2` — `cmp` is

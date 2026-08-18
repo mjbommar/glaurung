@@ -41,7 +41,7 @@ use super::{
 /// Untyped entry point (blanket `long`) — used by unit tests and any consumer
 /// that has no recovered types.
 /// Untyped DecBench rendering of an already-prepared function (see
-/// [`prepare_for_decbench`]). Formatting only.
+/// [`super::prepare::prepare_for_decbench`]). Formatting only.
 pub fn render_decbench(f: &Function) -> String {
     render_decbench_typed(f, None, None)
 }
@@ -52,7 +52,7 @@ pub fn render_decbench(f: &Function) -> String {
 /// survive register renaming; a later pass will type stack slots by size).
 /// Render an already-prepared function as DecBench C. FORMATTING ONLY: this must
 /// not change definitions, uses, control flow, or value identities — run
-/// [`prepare_for_decbench`] first (the pipeline does).
+/// [`super::prepare::prepare_for_decbench`] first (the pipeline does).
 pub fn render_decbench_typed(
     f: &Function,
     tm: Option<&TypeMap>,

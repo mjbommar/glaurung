@@ -789,13 +789,14 @@ fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
     pure(expression)
 }
 
-/// A promoted stack slot is represented as a store whose bare-register address
-/// is the source variable itself (`Store local_x = value`). It is assignment
-/// semantics, not an indirect write through a pointer named `local_x`.
 /// Expressions whose evaluation may be moved from a promoted temporary store
 /// to its sole later use. Effectful calls and memory loads are excluded because
 /// moving either can change observable behavior; unknown expressions remain
 /// rooted where the lifter placed them.
+///
+/// A promoted stack slot is represented as a store whose bare-register address
+/// is the source variable itself (`Store local_x = value`). It is assignment
+/// semantics, not an indirect write through a pointer named `local_x`.
 fn is_deferable_promoted_value(e: &Expr) -> bool {
     !contains_deref(e) && !contains_unknown(e)
 }
@@ -1432,7 +1433,7 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
     changed
 }
 
-// --- expression/statement read-counting and substitution ---------------------
+// --- expression/statement substitution ---------------------------------------
 
 /// Substitute copies in an indirect-store address without changing its lvalue
 /// category into a promoted-local assignment.

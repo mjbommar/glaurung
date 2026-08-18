@@ -696,7 +696,6 @@ fn elf_plt_stub_ranges(
         .collect()
 }
 
-/// Discover a single function starting at `entry` within executable regions.
 /// Merge one predecessor's concrete address facts into a block input.
 ///
 /// The first predecessor establishes the candidate map; later predecessors can
@@ -975,6 +974,7 @@ fn scan_within<T: Default>(
     scan()
 }
 
+/// Discover a single function starting at `entry` within executable regions.
 fn discover_function(
     data: &[u8],
     arch: BArch,

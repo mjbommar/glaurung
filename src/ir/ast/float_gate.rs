@@ -94,7 +94,8 @@ fn arm_conversion_end(text: &str) -> Option<ScalarType> {
 /// `lift_arm64` emits the same canonical name for AArch64's `scvtf`, `fcvtzs`
 /// and `fcvt`, whose mnemonics carry the same two ends in a different notation.
 /// One lowering therefore serves both producers, the choice
-/// [`wide_integer_intrinsic`] records for `umulh`/`sdiv`.
+/// `lower_ops::wide_integer_intrinsic` records for `umulh`/`sdiv`. (Not a link:
+/// that function is private to a sibling module, so no path names it from here.)
 ///
 /// The returned width is the RESULT's, matching
 /// [`x86_scalar_float_intrinsic`]: it is what types the destination.

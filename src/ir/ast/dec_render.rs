@@ -1,6 +1,6 @@
 //! The typed C ("dec") **expression** printer.
 //!
-//! [`render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types`]
+//! [`super::decbench_render::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types`]
 //! (the DecBench front door, in the parent module) installs a
 //! [`DeclarationPlan`](super::DeclarationPlan) and a handful of render-scoped
 //! thread-locals (global address set, wide-local set, named-call-prototype
