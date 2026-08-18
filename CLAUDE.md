@@ -64,6 +64,10 @@ uv run python -m glaurung.bench
 uvx ruff format python/
 uvx ruff check python/ --fix
 uvx ty check python/
+
+# Type stubs for the PyO3 extension — regenerate after ANY binding change
+uv run python tools/gen_native_stub.py          # rewrite python/glaurung/_native/*.pyi
+uv run python tools/gen_native_stub.py --check  # exit 1 if stale
 ```
 
 ## Tooling conventions (non-negotiable)
@@ -117,6 +121,19 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   `build.rs` on any machine without Bitwuzla. It runs now and is red (260
   pre-existing clippy errors under `-D warnings`), which is why the pre-push
   path uses the build gate instead.
+- **Never hand-write a `.pyi`.** A stub shadows the module it describes, so a
+  stale one does not merely lose coverage — it makes `ty` confidently wrong.
+  On 2026-08-18 `uvx ty check python/` reported 2,004 diagnostics; 1,618 of them
+  (81%) were two hand-written stubs lying. `python/glaurung/__init__.pyi` was a
+  1,532-line hand transcription of the native surface that had drifted so far it
+  denied the existence of functions the `.so` exports. `python/pytest/__init__.pyi`
+  was **five lines** on the first-party search path that shadowed the real,
+  fully typed pytest and blanked the entire module — 417 diagnostics, including
+  every `pytest.mark` and `pytest.raises` in the suite. Deleting both and
+  generating `python/glaurung/_native/*.pyi` from the built module
+  (`tools/gen_native_stub.py`) took the total to 386.
+  `python/tests/test_native_stub_current.py` regenerates and diffs, so the
+  replacement cannot go stale silently.
 - **A split has four side files to refresh, not one.** Beyond the four fixture
   baselines: `python/tests/test_large_module_review.py` (a file that drops under
   1,000 LOC must have its `REVIEWED_LARGE_MODULES` entry DELETED, or

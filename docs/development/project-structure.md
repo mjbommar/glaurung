@@ -53,7 +53,10 @@ The exact module list evolves; `src/lib.rs` and `Cargo.toml` are authoritative.
 - `llm/` for model configuration, agents, tools, and usage controls;
 - `python/glaurung/llm/kb/` for SQLite-backed persistent project workflows;
 - format- and analysis-specific Python helpers; and
-- `_native.pyi`, `triage.pyi`, and `py.typed` for the native typing surface.
+- `_native/*.pyi` and `py.typed` for the native typing surface. Those stubs
+  are generated from the built extension by `tools/gen_native_stub.py`; never
+  edit them by hand, and `python/tests/test_native_stub_current.py` fails if
+  they drift from the `.so`.
 
 The console entry point is declared in `pyproject.toml` as
 `glaurung = "glaurung.cli:main"`.
