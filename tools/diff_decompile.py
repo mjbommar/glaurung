@@ -595,7 +595,7 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
             if pointee_kind == "int":
                 try:
                     initializer = ", ".join(str(int(item)) for item in value)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     return None
             else:
                 aggregates: list[str] = []
@@ -611,7 +611,7 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
                                 initializer_fields, item
                             )
                         )
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         return None
                     aggregates.append("{" + fields + "}")
                 initializer = ", ".join(aggregates)
@@ -843,7 +843,7 @@ def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
             style="decbench",
             max_functions=max(1, len(requested)),
         )
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return {}
     recovered: dict[int, str] = {}
     for _name, va, code in rows:
@@ -1799,6 +1799,33 @@ def _pointee_ctype(d, forced_u8):
 _STRUCT_CTYPES: dict[str, type[ctypes.Structure]] = {}
 
 
+def _struct_return_is_comparable(d):
+    """Whether an aggregate return can be marshalled back through ctypes.
+
+    `_struct_ctype` needs every member's offset and a size; a struct whose
+    fields DWARF did not describe would build an empty layout and compare equal
+    to anything, which is worse than declining it.
+    """
+    fields = d.get("fields")
+    width = d.get("w")
+    if not fields or not width:
+        return False
+    # MEMORY-class returns (over two eightbytes) go through a hidden pointer the
+    # caller allocates. `_struct_ctype` builds a `_pack_ = 1` layout, and libffi
+    # marshals that differently from the ABI's own hidden-pointer contract --
+    # measured: `bv195_make_big` (32 bytes) and `agr198_make_five` (20) both
+    # SIGSEGV the worker. Register-returned aggregates are exactly the ones
+    # libffi and the ABI agree about, so they are the ones we execute; the
+    # larger classes stay `structural` and are still covered by their wrappers.
+    if width > 16:
+        return False
+    try:
+        _struct_ctype(d)
+    except Exception:
+        return False
+    return True
+
+
 def _struct_ctype(d):
     """Build an exact packed ctypes layout from DWARF offsets and size."""
     key = json.dumps(d, sort_keys=True)
@@ -1957,6 +1984,15 @@ def _ctypes_fn(lib, sig, forced_u8):
         fn.restype = None
     elif ret["k"] == "ptr":
         fn.restype = ctypes.POINTER(_pointee_ctype(ret, forced_u8))
+    elif ret["k"] == "struct":
+        # An aggregate return IS comparable: `_struct_ctype` already builds the
+        # exact packed layout from DWARF offsets, and libffi applies the
+        # platform's own return-class rules to it -- which is precisely the
+        # thing under test. Before this, `exec_class` declined every struct
+        # return, so fixtures 195/197/198 exercised their aggregate returns only
+        # through `int32_t`-returning wrappers and every aggregate-return fix
+        # was validated one step removed from the thing it fixed.
+        fn.restype = _struct_ctype(ret)
     else:
         fn.restype = _scalar_ctype(ret)
     fn.argtypes = [
@@ -2090,6 +2126,21 @@ def worker(spec_path: str) -> int:
             return 0
         # Scalar restype is the exact DWARF width/signedness, so this is a full-
         # width comparison (including high halves and sign extension).
+        elif ret["k"] == "struct":
+            # Compare the aggregate's bytes, not the ctypes objects -- two
+            # Structure instances never compare equal, and the padding a
+            # non-multiple-of-8 return leaves unspecified must not be read.
+            ob, db = bytes(memoryview(ro)), bytes(memoryview(rd))
+            if ob != db:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "detail": f"return {ob.hex()} != {db.hex()} on {vec}",
+                        }
+                    )
+                )
+                return 0
         elif ret["k"] not in ("void", "float") and ro != rd:
             print(json.dumps({"ok": False, "detail": f"return {ro} != {rd} on {vec}"}))
             return 0
@@ -2134,8 +2185,8 @@ def exec_class(sig, fixture, lane: str | None = None) -> tuple[str, str]:
     has_ptr = any(_as_desc(p)["k"] == "ptr" for p in sig["params"])
     if ret["k"] == "ptr" and "pointer_return_arg" not in ov:
         return "structural", "pointer return — addresses not comparable"
-    if ret["k"] == "struct":
-        return "structural", "aggregate return — not execution-differential"
+    if ret["k"] == "struct" and not _struct_return_is_comparable(ret):
+        return "structural", "aggregate return — layout not describable from DWARF"
     if any(
         _as_desc(param)["k"] == "struct" and _as_desc(param)["w"] > 8
         for param in sig["params"]
@@ -2316,7 +2367,7 @@ def run_function(
     try:
         last_input = json.loads(progress_path.read_text())
         input_detail = f" on {last_input}"
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         input_detail = ""
     if r.returncode == -signal.SIGALRM:
         # Alarmed twice, on a loaded machine and again on retry: the original
@@ -2337,7 +2388,7 @@ def run_function(
         }
     try:
         verdict = json.loads(r.stdout.strip().splitlines()[-1])
-    except (json.JSONDecodeError, IndexError):
+    except json.JSONDecodeError, IndexError:
         return {
             "status": "fail",
             "detail": "worker produced no verdict",
