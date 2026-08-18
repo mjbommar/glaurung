@@ -1104,17 +1104,17 @@ uv run python tools/fitness_report.py
 |---|---:|---:|---:|
 | measure | target | 2026-08-13 | 2026-08-18 |
 |---|---:|---:|---:|
-| product mean LOC | 450 | 515.9 | **437.1 — MET** |
-| files over 2,000 LOC | 5 | 13 | **4 — MET** |
-| product LOC in files over 1,000 | 25% | 44.5% | **24.4% — MET** |
-| product LOC in files over 1,000 | 42,000 | — | **41,847 — MET** |
-| files over 1,000 LOC | 35 | — | **27 — MET** |
-| src/ir median | 500 | — | **434 — MET** |
-| product median LOC | 250 | — | 311 |
+| product mean LOC | 450 | 515.9 | **430.3 — MET** |
+| files over 2,000 LOC | 5 | 13 | **3 — MET** |
+| product LOC in files over 1,000 | 25% | 44.5% | **22.6% — MET** |
+| product LOC in files over 1,000 | 42,000 | — | **39,264 — MET** |
+| files over 1,000 LOC | 35 | — | **26 — MET** |
+| src/ir median | 500 | — | **429.5 — MET** |
+| product median LOC | 250 | — | 311.5 |
 | src/ir files over 1,000 | 5 | — | 15 |
-| **largest product file** | 1,000 | 11,582 | **2,644** (`analysis/java_class.rs`, not a decompiler file) |
+| **largest product file** | 1,000 | 11,582 | **2,466** (`analysis/cfg.rs`) |
 
-**Seven of the nine measures now pass.** The two that do not are the two that
+**Seven of the nine measures pass (measured 2026-08-19).** Three files remain over 2,000 lines against a target of five, and the tree carries 39,264 LOC in files over 1,000 against a 42,000 ceiling. The two that do not are the two that
 cannot be satisfied by moving code between files: `product_median_loc` and
 `src/ir files above 1,000`, both of which ask for a tree with many more, much
 smaller modules than this one has. They are worth restating as directions rather
