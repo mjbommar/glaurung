@@ -1102,28 +1102,39 @@ uv run python tools/fitness_report.py
 
 | measure | target | 2026-08-13 | 2026-08-17 |
 |---|---:|---:|---:|
-| **largest product file** | 1,000 | 11,582 | **3,357** (not a decompiler file) |
-| product mean LOC | 450 | 515.9 | **463.3** |
-| product LOC in files over 1,000 | 25% | 44.5% | **30.6%** |
-| files over 2,000 LOC | 5 | 13 | **11** |
+| **largest product file** | 1,000 | 11,582 | **2,742** (not a decompiler file) |
+| product mean LOC | 450 | 515.9 | **444.7 — MET** |
+| product LOC in files over 1,000 | 25% | 44.5% | **26.9%** |
+| files over 2,000 LOC | 5 | 13 | **6** |
 
-`fitness ratchet: no regressions` — the first rounds in this program where every
-measure moved the right way at once. Of the six largest files in the tree, four
-are now `symbolic/`, `python_bindings/` and `analysis/java_class.rs`; the
-largest decompiler file is `analysis/cfg.rs` at 2,634.
+`fitness ratchet: no regressions` throughout. **The mean crossed under its
+target on 2026-08-17**, the first of the seven measures to be met, and
+`files_above_2000` is 15 -> 6. Of the six largest files in the tree, four are
+now outside the decompiler entirely — `symbolic/explore.rs`,
+`python_bindings/ir.rs`, `analysis/java_class.rs`, `python_bindings/analysis.rs`
+— and the largest decompiler file is `analysis/cfg.rs` at 2,414.
 
 Per owner, product LOC, `#[cfg(test)]` excluded:
 
 | owner | start | now | cuts |
 |---|---:|---:|---:|
 | `ir/ast.rs` | 11,582 | 1,650 | 8 |
-| `analysis/cfg.rs` | 6,248 | 2,634 | 6 |
-| `ir/lift_x86.rs` | 4,998 | 2,161 | 8 |
-| `ir/call_args.rs` | 3,920 | 2,175 | 5 |
+| `analysis/cfg.rs` | 6,248 | 2,414 | 8 |
+| `ir/lift_x86.rs` | 4,998 | 2,163 | 9 |
+| `ir/call_args.rs` | 3,920 | 1,327 | 7 |
+| `symbolic/solver/axeyum_backend.rs` | 3,357 | 925 | 6 |
 | `ir/stack_locals.rs` | 3,241 | 767 | 4 |
-| `ir/types_recover.rs` | 3,058 | 2,358 | 2 |
+| `ir/types_recover.rs` | 3,058 | 1,893 | 3 |
 | `ir/lift_arm32.rs` | 2,998 | 1,941 | 3 |
-| `ir/structure.rs` | 2,607 | 2,044 | 2 |
+| `ir/structure.rs` | 2,607 | 1,671 | 3 |
+| `ir/lift_arm64.rs` | 2,516 | 2,038 | 2 |
+| `ir/copy_prop.rs` | 2,068 | 1,630 | 2 |
+
+Fifty-one cuts. `symbolic/solver/axeyum_backend.rs` is in the table because it
+was the file `product_max_loc` pointed at once every decompiler owner came down
+— it is not a decompiler file, and splitting it is what found that **all three
+SMT solver backends had not compiled for seventeen days** and that no workflow
+builds any solver feature.
 
 Two findings that change how the remaining cuts get planned:
 

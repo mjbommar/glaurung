@@ -2545,3 +2545,165 @@ One pre-existing test asserted the multiply was `ops[1]` positionally and broke
 when the overflow prologue landed in front of it. It was rewritten to find the
 `Op::Bin{Mul}` that writes `ecx` — what it actually meant — rather than
 renumbered, which would have re-armed the same trap for the next change.
+
+## Entry 68 — The corpus asked one question 638 times
+
+The return-type census. `tools/../return_type_census.py` parsed every function
+*definition* in the corpus — 900 of them across `.c`, `.cpp` and `.rs`, with a
+`--check` mode that validates it against `REQUIRED_FUNCTIONS` — and the answer
+is a single point:
+
+```
+int32_t / int / uint32_t / i32     638 of 624 required functions
+double / float                      17
+64-bit                              14
+void                                 5
+uint8_t                              1   (11_call_shapes:wrap_byte)
+a pointer                            1   (192_pointer_chased_list:l192_find_key)
+```
+
+Zero required functions return `int8_t`, `int16_t`, `char`, `short`, `_Bool`,
+`void*`, `const T*`, `T**`, or an `enum`. All 32 required C++ functions return
+`extern "C" int`. Every required Rust function returns `i32`/`u32`, while
+`Option<&T>`, `Result`, `Box<dyn Trait>` and `&'static dyn Op` helpers sit in the
+sources **unrequired and therefore never run**.
+
+Three fixtures closed the gaps that are closable: `194_narrow_return_widths`,
+`198_aggregate_return_edges`, `199_pointer_return_kinds`. 31 functions, nine
+failing host cells, fifty across six architectures.
+
+### The controls did the work, again
+
+This is the third round where a function written only as a negative control
+found or localised the defect.
+
+`nrw194_u8_value_control` shares its **body** with `nrw194_u8_mix` and differs
+only in returning `int32_t`. It fails identically — which proves the defect is
+the multiply, not the return width, and cleanly separates two defects that
+present as one cluster. Without it the obvious reading of "the `uint8_t` lanes
+fail" is "narrow returns are broken", and the 8-bit `mul` gap would have been
+found later and by accident.
+
+`agr198_i64_control` is eight bytes in `rax` that are *not* an aggregate.
+`ptr199_find_index` returns the **index** from the same scan the pointer version
+walks — the most plausible mis-recovery, and otherwise indistinguishable from
+the correct one.
+
+### Three things that are not defects in the decompiler and are worse
+
+**Five Go fixtures that nothing builds and no gate declares.**
+`_fixture_sources()` globs `*.c`, `*.cpp`, `*.rs`; `assert_fixtures_declared()`
+requires exact set equality over those same three suffixes, so the `.go` stems
+are absent from `REQUIRED_FUNCTIONS` and no gate notices. `structural.py`'s own
+comment says the corpus "carries Rust (`.rs`), Go (`.go`) and hand-written
+assembly (`.S`) fixtures". It does not.
+
+**rustc is not in the committed Dockerfile.** `rust_lanes_enabled()`'s docstring
+says "the pinned toolchain image now provisions rustc (see `toolchain/Dockerfile`)
+and `_VERSION_PROBES` records its version". Both halves are false. Twelve
+`rustc:*` lanes carry committed verdicts against a compiler the fingerprint does
+not record — so a rustc upgrade would move them with nothing to flag it, and a
+fresh checkout loses all twelve.
+
+**`dectest` says "no regressions in scope" on a fixture with no baseline.** Nine
+failing cells, and the headline says nothing is wrong, because a failure on a
+fresh fixture is not a regression against anything. That is the third instance
+of one family: #49 (non-required functions invisible until the first refresh),
+`--arch` unable to reach an unbaselined fixture at all, and now this. **The
+general rule they point at: a gate that compares against a baseline must
+distinguish "matches the baseline" from "the baseline has nothing to say".**
+
+### And the one that reframes three months of work
+
+`exec_class` returns `structural` for **every** struct return, because the
+ctypes restype builder knows only integers and floats. `_value_ctype` handles
+structs — but only for arguments.
+
+So fixtures 195, 197 and now 198 exercise their aggregate returns **only through
+`int32_t`-returning wrappers**. Every aggregate-return defect this program has
+fixed was validated one step removed from the thing under test. That is not a
+criticism of the fixtures; it is forced by the harness, and nobody had noticed
+because the wrappers work. It also means a whole class of defect is invisible:
+anything that goes wrong in the struct return and is masked by the wrapper's
+arithmetic.
+
+### The baselines, and the discipline that made them safe
+
+All four regenerated and diffed key-by-key against snapshots:
+
+```
+baseline.json             2910 -> 3034   +124   91 pass, 24 structural,  9 fail
+structural_baseline.json  3147 -> 3272   +125   gaps stayed empty
+defuse_baseline.json      2644 -> 2744   +100   4 new violations, all gcc:O2
+arch_baseline.json        8226 -> 8598   +372  248 pass, 72 structural, 50 fail, 2 incomparable
+```
+
+**Zero keys removed and zero pre-existing cells moved in any of the four.** The
+arch gate was regenerated at load 19 — the exact condition that once wrote a
+false `tail_countdown` failure into it — so its diff was the one that mattered,
+and it came back clean. The twelve "changed" cells in the def-use census are all
+`lane_totals` aggregate counters, which arithmetic requires when 63-69 new
+functions are emitted per lane; not one per-function verdict moved.
+
+That is the whole value of the rule: the regeneration was *not* done on a quiet
+machine, and the diff is what made it safe to keep rather than the conditions.
+
+## Entry 69 — The largest file in the tree had not compiled in seventeen days
+
+`product_max_loc` had been pinned at 3,357 by `symbolic/solver/axeyum_backend.rs`
+since every decompiler owner came down. Splitting it (3,357 -> 925 across six
+children, whole-file token conservation, **tokens lost: none**) found this:
+
+```
+cargo build --features solver-axeyum
+error[E0004]: non-exhaustive patterns: `BinOp::LogicalAnd` and `BinOp::LogicalOr`
+              not covered  --> axeyum_backend.rs:3189
+```
+
+`b03d5057` ("decompiler: recover shared validation guards", 2026-07-31) added
+those two variants to `crate::ir::types::BinOp` and updated `symbolic/expr.rs`,
+but no backend. I verified it at HEAD myself. The same 10-arm match with neither
+variant is in `z3_backend.rs` and `bitwuzla_backend.rs` — **all three solver
+backends are uncompilable.**
+
+The root cause is not the missing arms:
+
+```
+grep -rln "solver-axeyum\|solver-z3\|solver-bitwuzla" .github/ scripts/ Makefile*
+   (nothing)
+```
+
+No workflow, script or Makefile passes any solver feature. This is the same
+shape as `CLAUDE.md`'s standing warning that plain `cargo test` never compiles
+`src/python_bindings/` — **a green result over code it never built** — and it
+says the feature-gated blind spot is bigger than that note admits. `python-ext`
+is documented; the solver features were not; nobody has enumerated the rest.
+
+Two smaller findings from the same split, both about gates rather than code:
+
+- `REVIEWED_LARGE_MODULES` carried "accepted: one solver backend and its
+  warm-reuse protocol" for a file whose own module doc announces **two** `Solver`
+  implementations behind two feature flags. That is the third stale licence found
+  this week; the other two are `ir/call_args.rs` (names four destination modules
+  that never existed) and `ir/copy_prop.rs` (claims "one pass" for eight `pub`
+  entry points scheduled at seven distinct pipeline positions).
+- `test_src_dependency_boundaries.py`'s env-var allowlist is **keyed by file
+  path**, so splitting any module that reads env vars silently breaks it. That is
+  not in `CLAUDE.md`'s list of what a split must refresh, and it should be.
+
+### Where the program stands
+
+```
+uv run python tools/fitness_report.py
+```
+
+| measure | target | 2026-08-13 | now |
+|---|---:|---:|---:|
+| product mean LOC | 450 | 515.9 | **444.7 — MET** |
+| files over 2,000 | 5 | 13 | **6** |
+| LOC in files over 1,000 | 25% | 44.5% | **26.9%** |
+| largest product file | 1,000 | 11,582 | 2,742 |
+
+Fifty-one cuts. The mean is the first of the seven measures to be met. The
+remaining gap is concentrated: six files over 2,000, of which four are outside
+the decompiler.
