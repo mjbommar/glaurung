@@ -6168,6 +6168,97 @@ mod tests {
         );
     }
 
+    /// The census predicate of
+    /// [`unmodelled_instructions_that_silently_claim_no_register_write`],
+    /// factored out so it can be demonstrated on single encodings as well as
+    /// swept over the corpus.
+    ///
+    /// Two op shapes tell [`crate::ir::use_def`] that no register was written.
+    /// [`Op::Unknown`] declares no footprint at all, in memory or in registers,
+    /// so it is an undeclared residue whatever surrounds it. An
+    /// [`Op::Intrinsic`] with empty `outs` — the shape [`Op::opaque`] builds —
+    /// declares its MEMORY footprint honestly and says nothing about registers,
+    /// so it is a lie only when nothing else in the same lift declares the
+    /// write.
+    ///
+    /// That qualification is why this is not simply `outs.is_empty()`, and it
+    /// is measured rather than supposed: `rep stos` emits a `memory.fill.*`
+    /// intrinsic with empty `outs` beside ORDINARY LLIR that updates RDI and
+    /// RCX, and over the committed corpus the unqualified predicate adds
+    /// `stosd` (38) and `stosq` (16) for declaring their register writes in the
+    /// place the IR is meant to declare them. In the same sweep no
+    /// `Op::Unknown` shares a lift with a physical-register definition, so the
+    /// asymmetry between the two clauses changes no entry today and only
+    /// decides how a future arm is read.
+    fn hides_its_register_writes(ops: &[Op]) -> bool {
+        if ops.iter().any(|op| matches!(op, Op::Unknown { .. })) {
+            return true;
+        }
+        ops.iter()
+            .any(|op| matches!(op, Op::Intrinsic { outs, .. } if outs.is_empty()))
+            && !ops.iter().any(|op| {
+                crate::ir::use_def::defs_uses(op)
+                    .0
+                    .iter()
+                    .any(|register| matches!(register, VReg::Phys(_)))
+            })
+    }
+
+    /// The new half of the census predicate, demonstrated rather than asserted.
+    ///
+    /// The bypass the census exists to close is one edit wide: replace an arm's
+    /// `Op::Unknown { mnemonic }` with `Op::opaque(mnemonic)` and the mnemonic
+    /// leaves `SILENT_REGISTER_WRITERS` while its destination remains exactly as
+    /// invisible to register dataflow as it was. Both spellings of `bsr` below
+    /// are therefore caught; and `rep stosq`, which really does declare its
+    /// register writes and merely keeps its memory effect in an operandless
+    /// intrinsic, is not.
+    #[test]
+    fn the_census_predicate_reads_op_opaque_as_the_lie_it_is() {
+        assert!(
+            hides_its_register_writes(&[Op::Unknown {
+                mnemonic: "bsr".into()
+            }]),
+            "an Op::Unknown declares no footprint at all"
+        );
+        assert!(
+            hides_its_register_writes(&[Op::opaque("bsr")]),
+            "Op::opaque is an Op::Intrinsic with empty outs, which declares no \
+             register write either -- rewriting an arm to it must not be a way \
+             off the list"
+        );
+
+        // `rep stosq` (f3 48 ab). Its lift pairs an operandless `memory.fill.*`
+        // intrinsic with ordinary LLIR that updates RDI and RCX, so the empty
+        // `outs` is a memory declaration, not a hidden register write.
+        let ops = lift_one(&decode64(&[0xf3, 0x48, 0xab]), 64);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Intrinsic { outs, .. } if outs.is_empty())),
+            "the qualification is only exercised if this lift really does \
+             contain an empty-outs intrinsic: {ops:#?}"
+        );
+        assert!(
+            !hides_its_register_writes(&ops),
+            "rep stosq declares RDI and RCX in ordinary ops: {ops:#?}"
+        );
+
+        // A fully modelled instruction is not on the list for any reason.
+        assert!(
+            !hides_its_register_writes(&lift_one(&decode64(&[0x48, 0x0f, 0xc8]), 64)),
+            "bswap rax lifts to a declared, single-output intrinsic"
+        );
+    }
+
+    /// Decode exactly one 64-bit instruction, the way the corpus sweep does.
+    fn decode64(bytes: &[u8]) -> iced_x86::Instruction {
+        let mut decoder =
+            iced_x86::Decoder::with_ip(64, bytes, 0x1000, iced_x86::DecoderOptions::NONE);
+        let instruction = decoder.decode();
+        assert!(!instruction.is_invalid(), "{bytes:02x?} did not decode");
+        instruction
+    }
+
     /// CENSUS — every x86-64 mnemonic this lifter leaves unmodelled while the
     /// ISA says it WRITES a register.
     ///
@@ -6180,6 +6271,24 @@ mod tests {
     /// over-approximated but INVISIBLE: the def-use census believes the
     /// destination was never written, and whatever the register held before
     /// flows on to every later reader as if the instruction were not there.
+    ///
+    /// BOTH of those shapes are swept, because they tell register dataflow
+    /// the same lie and only one of them looks like a gap. Flagging
+    /// `Op::Unknown` alone would leave a documented bypass: rewrite the arm
+    /// as `Op::opaque(mnemonic)` and the mnemonic leaves this list while its
+    /// destination stays exactly as invisible as before. No arm of `lift_one`
+    /// has taken that route, so the list is the same thirty-five mnemonics it
+    /// was, and the point of covering the shape is that taking it now fails the
+    /// test instead of shrinking it.
+    ///
+    /// One place already has: [`lift_bytes_with_x87`] emits
+    /// `Op::opaque("x87.<mnemonic>")` for every x87 instruction whose stack
+    /// depth is unproven, and `lift_function` reaches the lifter through THAT,
+    /// not through `lift_one`. This sweep therefore sees the x87 family as
+    /// `Op::Unknown` (`fadd`, `fmul`, `fstp` and six more below) where the
+    /// pipeline sees it as the opaque shape. Same lie about ST(i), counted
+    /// once; a census over the pipeline entry point would be a different and
+    /// larger test than this one.
     ///
     /// That is the mechanism, not a hypothesis. `movlpd` had no arm anywhere in
     /// `src/ir/`, and on `197_homogeneous_float_aggregates:clang:O0` it silently
@@ -6220,15 +6329,16 @@ mod tests {
         /// without claiming to compute the value. Both routes satisfy this
         /// guard, and only the first claims to know the answer.
         ///
-        /// NOTE what this guard does NOT catch, which is the shape the second
-        /// route could have taken and deliberately did not: `Op::opaque` builds
-        /// an `Op::Intrinsic` with EMPTY `ins`/`outs`, and the sweep below only
-        /// looks for `Op::Unknown`. Rewriting an unmodelled instruction as
-        /// `Op::opaque` therefore leaves this list while telling register
-        /// dataflow exactly the same lie. `lower_unknowns` does precisely that
-        /// to whatever survives lifting, so the pipeline this census is a proxy
-        /// for has that hole in it by construction; the census measures the
-        /// lifter, not the pipeline.
+        /// The list covers the shape the second route could have taken and
+        /// deliberately did not, as well as the one it did. `Op::opaque`
+        /// builds an `Op::Intrinsic` with EMPTY `ins`/`outs`, so an arm
+        /// rewritten from `Op::Unknown` to `Op::opaque` would be just as
+        /// invisible to register dataflow; `lower_unknowns` performs exactly
+        /// that rewrite on whatever survives lifting, so the pipeline this
+        /// census is a proxy for is built out of the second shape. The
+        /// census still measures the lifter rather than the pipeline, but it
+        /// can no longer be satisfied by moving an entry between the two
+        /// shapes.
         ///
         /// The guard is DEMONSTRATED, not asserted: deleting this commit's two
         /// dispatch arms and re-running puts `"movhps": 26` back on the list,
@@ -6238,6 +6348,15 @@ mod tests {
         /// corpus, which is compiled rather than committed and so cannot be
         /// swept from a unit test. This is the committed-corpus slice of the
         /// question, not the whole of it.
+        ///
+        /// The opaque half is demonstrated the same way, by taking the bypass
+        /// and checking the list does not move. Rewriting `bit_scan_ops`'
+        /// `unsupported()` fallback from `Op::Unknown` to `Op::opaque(mnemonic)`
+        /// — one line, no change whatever to what the LLIR says about a
+        /// register — drops `bsr` and `shrd` from the pre-2026-08-18 predicate,
+        /// which reads as two mnemonics fixed and invites whoever is holding
+        /// the constant to delete them. The predicate here keeps all thirty-five
+        /// and passes unchanged.
         const SILENT_REGISTER_WRITERS: &[&str] = &[
             "aesenc",
             "bsr",
@@ -6351,7 +6470,7 @@ mod tests {
                         continue;
                     }
                     let ops = lift_one(&instruction, 64);
-                    if !ops.iter().any(|op| matches!(op, Op::Unknown { .. })) {
+                    if !hides_its_register_writes(&ops) {
                         continue;
                     }
                     let writes_a_register =
@@ -6379,7 +6498,9 @@ mod tests {
             observed, SILENT_REGISTER_WRITERS,
             "an unmodelled instruction with a register destination declares no \
              write at all, so its destination silently keeps its previous value. \
-             Occurrences: {silent:?}"
+             An `Op::Unknown` and an `Op::opaque` that nothing else in the lift \
+             covers count the same here, because register dataflow cannot tell \
+             them apart. Occurrences: {silent:?}"
         );
     }
 

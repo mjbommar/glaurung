@@ -28,6 +28,7 @@ use crate::ir::regview;
 use crate::ir::types::{CallEffects, LlirFunction, Op, VReg};
 use crate::ir::use_def::def_uses;
 
+pub mod result_projection;
 mod return_spelling;
 // Re-exported at their original `crate::ir::abi::` paths: the split is a
 // file boundary, not an API change, so no caller moves.
@@ -505,6 +506,12 @@ pub fn argument_slots(cc: CallConv) -> &'static [&'static [&'static str]] {
 }
 
 /// Every spelling of the return register, widest first.
+///
+/// This is the PER-CONVENTION answer. The convention-agnostic one — what the
+/// AST passes that have no `CallConv` in scope match against, and which of
+/// these names they project onto a bare machine `ret` — lives in
+/// [`result_projection`], along with the census that keeps the two from
+/// drifting apart the way they did until 2026-08-18.
 pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
     match cc {
         // The SSE class returns in `xmm0`, and it is the ONLY place a `float`
@@ -554,6 +561,11 @@ pub fn integer_return_registers(cc: CallConv) -> &'static [&'static str] {
 }
 
 /// Floating-point storage aliases for one scalar result.
+///
+/// Adding a spelling here without a matching decision in
+/// [`result_projection`] is a compile-green, test-red change by design: the
+/// census there fails until the new name is either projected onto a bare `ret`
+/// or listed as deliberately unprojected with a reason.
 pub fn float_return_registers(cc: CallConv) -> &'static [&'static str] {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => &["xmm0", "ymm0", "zmm0"],

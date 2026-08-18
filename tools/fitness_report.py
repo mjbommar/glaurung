@@ -484,7 +484,7 @@ def _accepted_regressions(report: JsonObject, baseline_path: Path) -> list[JsonO
     if baseline_path.is_file():
         try:
             previous = json.loads(baseline_path.read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             return history
         history = list(previous.get("accepted_regressions") or [])
         problems = check_ratchet(report, previous)

@@ -5,7 +5,17 @@
 //! register or an authoritative prototype proves that the live-in parameter is
 //! itself the direct result. Keeping that policy outside the renderer prevents
 //! `return 0` fabrication while leaving void and unknown outputs untouched.
+//!
+//! WHICH registers count as result storage is not decided here. This module
+//! owns the AST walk; [`crate::ir::abi::result_projection`] owns the two tiers
+//! of names it walks for, why they are two tiers rather than one, and the test
+//! that cross-checks both against the per-convention ABI tables. Keeping a
+//! private copy of that list here is what let x86-64's `xmm0` go missing while
+//! ARM32's `s0`/`d0` were present, and cost eleven fixture cells.
 
+use crate::ir::abi::result_projection::{
+    is_fallback_result_register, is_projected_result_register, is_projected_result_storage,
+};
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
@@ -146,19 +156,17 @@ fn clear_body_return_values(body: &mut [Stmt]) {
     }
 }
 
+/// The first-tier result register the body writes, in body order.
+///
+/// `ret` — the canonical role name `apply_role_names` leaves behind — is one of
+/// the first-tier names, so [`is_return_reg`] already covers it. It was also
+/// restated as a second disjunct on both arms below until 2026-08-18, which was
+/// dead in a way that read as load-bearing.
 fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
     for statement in body {
         let found = match statement {
-            Stmt::Assign { dst, .. }
-                if is_return_reg(dst) || matches!(dst, VReg::Phys(name) if name == "ret") =>
-            {
-                Some(dst.clone())
-            }
-            Stmt::Call { dst: Some(dst), .. }
-                if is_return_reg(dst) || matches!(dst, VReg::Phys(name) if name == "ret") =>
-            {
-                Some(dst.clone())
-            }
+            Stmt::Assign { dst, .. } if is_return_reg(dst) => Some(dst.clone()),
+            Stmt::Call { dst: Some(dst), .. } if is_return_reg(dst) => Some(dst.clone()),
             Stmt::If {
                 then_body,
                 else_body,
@@ -213,48 +221,15 @@ fn apply_default_return(body: &mut [Stmt], return_register: &VReg) {
     }
 }
 
-const RETURN_REGS: &[&str] = &[
-    "rax", "eax", "ax", "al", // x86 / x86-64
-    "x0", "w0", // AArch64
-    "r0", // ARM32 AAPCS
-    "s0", "d0",  // ARM32 AAPCS hard-float
-    "ret", // canonical role name after apply_role_names
-];
-
-/// x86-64 result storage for the SSE class, which is NOT in [`RETURN_REGS`].
+/// The fallback-tier result register, if the body writes it.
 ///
-/// Both x86-64 conventions return a `float`/`double` in `xmm0` and nowhere
-/// else, and [`crate::ir::abi::return_registers`] has said so since the naming
-/// pass needed it. This module kept a second, disagreeing list: ARM32's
-/// hard-float `s0`/`d0` are in `RETURN_REGS` above, x86-64's `xmm0` was in
-/// neither list, and the consequence was that a float-returning function's
-/// recovered result had nothing to attach a bare machine `ret` to. GCC's `-O0`
-/// `float negate(float v) { return -v; }` computed the right value into `xmm0`
-/// and then rendered `return 0;`, because the value was written to a register
-/// this pass did not believe was result storage.
-///
-/// It is a SEPARATE list, consulted only when the body writes no integer result
-/// register at all, rather than four more entries in `RETURN_REGS`. On x86-64
-/// `xmm0` is also the first float ARGUMENT register and the ordinary float
-/// scratch, so a function that writes both `rax` and `xmm0` returns through
-/// `rax` and used `xmm0` for arithmetic on the way — the same precedence
-/// `abi::return_registers` documents for its own alias order, and the reason
-/// this cannot be a flat merge into the list above.
-const FLOAT_RESULT_REGS: &[&str] = &["xmm0"];
-
-/// The SSE result register, if the body writes it.
-///
-/// Only consulted after [`find_written_return_reg`] has found no integer result
-/// storage anywhere in the body — see [`FLOAT_RESULT_REGS`].
+/// Only consulted after [`find_written_return_reg`] has found no first-tier
+/// result storage anywhere in the body. Both tiers, the reason there are two of
+/// them, and the census that keeps them honest against the per-convention ABI
+/// tables live in [`crate::ir::abi::result_projection`].
 fn find_written_float_result_reg(body: &[Stmt]) -> Option<VReg> {
-    // UNVERSIONED only, exactly as `is_return_reg` is. A versioned write is
-    // some interior value of the register, and on this shape there is always
-    // one: GCC's `-O0` float body reloads its spilled argument into `xmm0#1`
-    // before computing the result into the register's exit definition. Matching
-    // the SSA base would take the first of those and return the function's own
-    // input instead of what it computed.
     fn is_float_result_reg(value: &VReg) -> bool {
-        matches!(value, VReg::Phys(name) if FLOAT_RESULT_REGS.contains(&name.as_str()))
+        matches!(value, VReg::Phys(name) if is_fallback_result_register(name))
     }
     for statement in body {
         let found = match statement {
@@ -283,8 +258,12 @@ fn find_written_float_result_reg(body: &[Stmt]) -> Option<VReg> {
     None
 }
 
+/// Whether a `VReg` is first-tier result storage, unversioned.
+///
+/// The table is [`crate::ir::abi::result_projection::PROJECTED_RESULT_REGISTERS`];
+/// this is only its `VReg` shape.
 pub(crate) fn is_return_reg(value: &VReg) -> bool {
-    matches!(value, VReg::Phys(name) if RETURN_REGS.iter().any(|register| name == *register))
+    matches!(value, VReg::Phys(name) if is_projected_result_register(name))
 }
 
 /// Whether an exact value identity is backed by machine result storage.
@@ -294,10 +273,7 @@ pub(crate) fn is_return_reg(value: &VReg) -> bool {
 /// infer a value merely because it sees a versioned write, while a return whose
 /// operand already names that exact version may safely fold its adjacent writer.
 pub(crate) fn is_exact_return_storage(value: &VReg) -> bool {
-    matches!(value, VReg::Phys(name) if {
-        let base = crate::ir::abi::ssa_base(name);
-        RETURN_REGS.iter().any(|register| base == *register)
-    })
+    matches!(value, VReg::Phys(name) if is_projected_result_storage(name))
 }
 
 #[cfg(test)]
