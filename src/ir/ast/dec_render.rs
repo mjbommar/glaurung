@@ -90,11 +90,6 @@ fn dec_is_stack_object(name: &str) -> bool {
     dec_plan(|plan| plan.is_stack_object(&displayed))
 }
 
-/// The C spelling of an `size`-byte *unsigned* integer, for logical-shift casts.
-fn unsigned_ctype(size: u8) -> &'static str {
-    int_ctype(false, size)
-}
-
 /// The unsigned-cast width for a logical right shift `lhs >> rhs`. The shift
 /// must happen at the operand's machine width so a negative narrow value is not
 /// sign-extended into the high half before the zero-fill. Narrowing is applied
@@ -127,7 +122,11 @@ fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
     }
     if let (Some(w), Expr::Const(k)) = (expr_machine_width(lhs), rhs) {
         if *k >= 0 && (*k as u64) < (w as u64) * 8 {
-            return unsigned_ctype(w);
+            // Target-parametric, not `int_ctype`: the two agree for one, two
+            // and four bytes, and disagree for eight, where ILP32's `unsigned
+            // long` is only a single machine word and would truncate the very
+            // operand this cast exists to keep wide.
+            return target_int_ctype(false, w);
         }
     }
     target_int_ctype(false, 8)

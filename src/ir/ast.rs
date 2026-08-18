@@ -1515,6 +1515,16 @@ fn signed_shift_operand<'a>(lhs: &'a Expr, rhs: &Expr) -> (&'static str, &'a Exp
 /// A load carries its exact access width in the AST. Any genuinely unknown
 /// operand (such as an untyped local) yields `None`, so the shift render
 /// conservatively keeps `unsigned long`.
+///
+/// An [`Expr::Cast`] is the AST's most explicit width statement — it is the
+/// extension or truncation the machine actually performed — so it answers here
+/// exactly and not through its operand. Missing that made every shift over a
+/// recovered extension fall through to the eight-byte default: on ARM32,
+/// `lsr r2, r3, #31` over a sign-extended byte rendered as
+/// `(unsigned long long)(narrowed) >> 31`, which is `0x1ffffffff` for a
+/// negative value rather than the sign bit the machine extracts. Widths with no
+/// C integer spelling (a 16-byte aggregate transport) still answer `None`,
+/// because the shift renderers turn this number straight into a cast.
 fn expr_machine_width(e: &Expr) -> Option<u8> {
     match e {
         Expr::Named { name, .. } => dec_int_width(name),
@@ -1522,6 +1532,7 @@ fn expr_machine_width(e: &Expr) -> Option<u8> {
         Expr::Deref { size, .. } => Some(*size),
         Expr::Const(_) => None,
         Expr::Select { width, .. } => Some(*width),
+        Expr::Cast { width, .. } => Some(*width).filter(|w| matches!(w, 1 | 2 | 4 | 8)),
         Expr::Bin { op, lhs, rhs } if is_width_preserving_arith(*op) => {
             let lw = expr_machine_width(lhs);
             let rw = expr_machine_width(rhs);
@@ -7441,6 +7452,62 @@ function f @ 0x1000 {
         assert_eq!(operand32, &Expr::Reg(VReg::phys("var0")));
         let (ctype64, _) = signed_shift_operand(&nested, &Expr::Const(63));
         assert_eq!(ctype64, "long");
+    }
+
+    /// An `Expr::Cast` states a machine width exactly — it *is* the extension
+    /// or truncation the machine performed — so `expr_machine_width` must read
+    /// it rather than fall through to the eight-byte default.
+    ///
+    /// Reading past it is how ARM32's `-O0` signed divide-by-two lost its sign
+    /// bias: `lsr r2, r3, #31` over a sign-extended byte is `Shr((int)((signed
+    /// char)x), 31)` in the AST, and answering `None` here spelled it
+    /// `(unsigned long long)(x) >> 31`, which is `0x1ffffffff` for a negative
+    /// byte instead of `1`.
+    #[test]
+    fn a_cast_states_the_machine_width_of_the_expression_it_wraps() {
+        let byte_in_a_word = Expr::Cast {
+            signed: true,
+            width: 4,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 1,
+                expr: Box::new(Expr::Reg(VReg::phys("narrowed"))),
+            }),
+        };
+        assert_eq!(expr_machine_width(&byte_in_a_word), Some(4));
+
+        // The nearest cast wins, not the widest one anywhere in the chain.
+        assert_eq!(
+            expr_machine_width(&Expr::Cast {
+                signed: false,
+                width: 2,
+                expr: Box::new(byte_in_a_word.clone()),
+            }),
+            Some(2)
+        );
+
+        // A cast is width-preserving arithmetic's operand like any other, so
+        // `(int)x + 1` is four bytes wide rather than unknown.
+        assert_eq!(
+            expr_machine_width(&Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(byte_in_a_word),
+                rhs: Box::new(Expr::Const(1)),
+            }),
+            Some(4)
+        );
+
+        // A width with no C integer spelling (a 16-byte aggregate transport)
+        // must stay unknown: both shift renderers turn this number straight
+        // into a cast, and `int_ctype(_, 16)` is `long`.
+        assert_eq!(
+            expr_machine_width(&Expr::Cast {
+                signed: true,
+                width: 16,
+                expr: Box::new(Expr::Reg(VReg::phys("pair"))),
+            }),
+            None
+        );
     }
 
     #[test]

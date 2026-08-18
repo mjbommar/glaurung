@@ -8227,7 +8227,7 @@
     "nrw194_char_divide": "pass",
     "nrw194_i16_divide": "pass",
     "nrw194_i32_control": "pass",
-    "nrw194_i8_divide": "fail",
+    "nrw194_i8_divide": "pass",
     "nrw194_u16_mix": "pass",
     "nrw194_u8_mix": "pass",
     "nrw194_u8_value_control": "pass"
@@ -8251,7 +8251,7 @@
     "nrw194_char_divide": "pass",
     "nrw194_i16_divide": "pass",
     "nrw194_i32_control": "pass",
-    "nrw194_i8_divide": "fail",
+    "nrw194_i8_divide": "pass",
     "nrw194_u16_mix": "pass",
     "nrw194_u8_mix": "pass",
     "nrw194_u8_value_control": "pass"

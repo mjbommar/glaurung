@@ -120,3 +120,78 @@ fn decbench_ilp32_declares_a_prototype_proven_wide_call_result_exactly() {
         "a logical shift must use the prototype-proven destination width:\n{text}"
     );
 }
+
+/// ARM32's `-O0` signed divide-by-two takes the sign bit out of the **32-bit**
+/// register holding a sign-extended byte:
+///
+/// ```text
+/// ldrsb.w r3,[r7,#15]
+/// lsrs    r2,r3,#31
+/// ```
+///
+/// The AST states that width exactly — `Shr((int)((signed char)narrowed), 31)`
+/// — but `expr_machine_width` used to look straight past `Expr::Cast` and
+/// answer `None`, so the render fell through to its eight-byte default and
+/// emitted `(unsigned long long)(narrowed) >> 31`. For a negative byte that is
+/// `0x1ffffffff`, not the sign bit, and the bias it feeds is wrong by four
+/// billion. The cast is the machine width; the shift must be spelled at it.
+#[test]
+fn decbench_ilp32_logical_shift_uses_the_cast_width_not_the_wide_default() {
+    let narrowed = Expr::Cast {
+        signed: true,
+        width: 4,
+        expr: Box::new(Expr::Cast {
+            signed: true,
+            width: 1,
+            expr: Box::new(Expr::Reg(VReg::phys("narrowed"))),
+        }),
+    };
+    let function = Function {
+        name: "sign_bias".to_string(),
+        entry_va: 0x1000,
+        body: vec![Stmt::Return {
+            value: Some(Expr::Bin {
+                op: BinOp::Shr,
+                lhs: Box::new(narrowed),
+                rhs: Box::new(Expr::Const(31)),
+            }),
+        }],
+    };
+    let text = render_ilp32(&function, &int_types("narrowed", true, 1));
+
+    assert!(
+        text.contains("((unsigned int)((int)((signed char)(narrowed))) >> 31)"),
+        "a logical shift over a 32-bit sign extension must shift 32 bits:\n{text}"
+    );
+    assert!(
+        !text.contains("unsigned long long"),
+        "the eight-byte default must not survive an explicit four-byte cast:\n{text}"
+    );
+}
+
+/// The dual of the case above, one width up and unsigned: a 16-bit cast is a
+/// width statement too, and a shift over it happens at 16 bits.
+#[test]
+fn decbench_ilp32_logical_shift_uses_a_two_byte_cast_width() {
+    let function = Function {
+        name: "halfword_top_bit".to_string(),
+        entry_va: 0x1000,
+        body: vec![Stmt::Return {
+            value: Some(Expr::Bin {
+                op: BinOp::Shr,
+                lhs: Box::new(Expr::Cast {
+                    signed: false,
+                    width: 2,
+                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                }),
+                rhs: Box::new(Expr::Const(15)),
+            }),
+        }],
+    };
+    let text = render_ilp32(&function, &int_types("arg0", true, 4));
+
+    assert!(
+        text.contains("((unsigned short)(arg0) >> 15)"),
+        "a two-byte cast is the shift's operand width:\n{text}"
+    );
+}
