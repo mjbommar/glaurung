@@ -495,3 +495,129 @@ And the dead-code counts needed `touch src/lib.rs` to force re-emission, because
 cargo replays a cached build with **zero** warnings. Read naively that is a
 100 → 0 improvement. The measurement instrument lies when it is not made to
 speak.
+
+## Entry 78 — I called it the highest-value defect; it was worth one cell
+
+I traced the vanished `abs`/`negate` bodies to the one-directional XMM scalar/lane
+view sync, dumped the LLIR to prove the mechanism, filed it as the highest-value
+open defect, and estimated it covered ~70 float failures.
+
+The mechanism was real. Almost everything else I said about it was wrong.
+
+**On its own the mirror moved 1 cell of 764.** The agent built it, dumped the
+result, and the LLIR was already correct: `xmm0_d0 = trunc(xmm0); d1=d2=d3=0;
+xor; concat` — clean SSA, no undefined lane. And `negate_binary32` *still*
+rendered `return 0;`, because `prepare_for_decbench` deleted the whole body,
+twenty statements down to five. The correct value was sitting in `xmm0` and the
+dead-store eliminator did not believe `xmm0` was result storage.
+
+### The actual defect was a second list nobody could see next to the first
+
+```rust
+// src/ir/direct_output.rs
+const RETURN_REGS: &[&str] = &[
+    "rax", "eax", "ax", "al",   // x86 / x86-64
+    "x0", "w0",                 // AArch64
+    "r0",                       // ARM32 AAPCS
+    "s0", "d0",                 // ARM32 AAPCS hard-float
+    "ret",
+];
+```
+
+**ARM32's hard-float result registers are in it. x86-64's `xmm0` is not.** That
+one absence erased the body of every float-returning x86-64 function whose result
+reached a bare machine `ret`. Eleven of the twelve improvements came from adding
+it; the mirror I was so confident about contributed one.
+
+The asymmetry is invisible in the source, because `abi::return_registers` — which
+has known about `xmm0` since the naming pass needed it — is in a different file.
+Two sources of truth for "which register holds a result", and the bug lived in
+the gap for months.
+
+### And the cluster was not a cluster
+
+I claimed 70 float failures shared this mechanism. The agent censused all 104
+cells for the actual crossing — a packed read of a register whose live definition
+was a scalar write:
+
+```
+22 of 70   contain the crossing at all   (9 now fixed, 13 still failing)
+48 of 70   contain no such crossing anywhere in the function
+```
+
+I had generalised from one disassembly to a whole cluster. **Two-thirds of what I
+attributed to this defect is something else**, and I would have kept attributing
+it if the agent had not counted.
+
+### Two alternatives, measured and rejected — the second is the useful one
+
+Narrow lane loads from memory instead of `Trunc`/`Extract` from the scalar name:
+same twelve improvements **and three regressions**. That is an independent
+reproduction of "bit-identical is not inference-identical", arrived at by a
+different route than the `movlpd` case that first taught it. The stack-object
+recovery reads access widths as layout evidence, and it will keep punishing
+lowerings chosen by analogy.
+
+Restricting the table to MOVSS/MOVSD only: identical fixture verdicts, but
+298/171 def-use violations against 297/170. The arithmetic and conversion rows
+earn their keep by three violations — a difference no fixture cell could show.
+Both measurements are now in the doc comment rather than in someone's head.
+
+## Entry 79 — the census got worse when the IR got better
+
+I asked an agent to prefer "effect-only" lowering for the SSE string family: an
+`Op::Intrinsic` that declares its `ins`/`outs` honestly without claiming to
+compute the value. I called it "likely the highest-value option".
+
+It implemented that. The unmodelled-instruction census went from 52 mnemonics to
+35, 1,388 occurrences. And the **def-use census went +529**.
+
+```
+              committed   effect-only   effect-only + renderer fix
+clang:O2            245           320          243
+rustc:O0           7530          7805         7525
+rustc:O2           4454          4633         4451
+gcc:O0               94            94           94
+gcc:O2              115           115          115
+```
+
+Both gcc lanes did not move at all — and they contain none of the family, while
+`clang:O2` has 244 occurrences and the rustc lanes 580 and 373. The lanes that
+moved are exactly the lanes that contain the code.
+
+**The cause: `ast/lower_ops.rs` discarded an `Op::Intrinsic`'s `outs` at render
+time.** The LLIR said "this defines `xmm0_d0`"; the rendered C said nothing;
+every later reader of that lane became an undefined read. Effect-only fixed the
+lie in the IR and left it in the product.
+
+It was invisible until the *readers* were exactly lifted. The definition gap was
+unchanged — `Op::Unknown` defined nothing either — so the only thing that changed
+was that someone was now looking.
+
+The third column is the point: fixing the renderer does not merely cancel the
++529, it goes **ten violations below the committed baseline**, and every movement
+in the required set is a resolution rather than a new violation.
+
+### The regression that was a prototype mismatch
+
+Adding the assignment first showed `31_edit_distance:clang:O2` going
+`pass -> fail`, which is precisely what the agent had predicted would need its own
+campaign: `__unknown` returns 0, so a destination that used to keep a stale
+register value now reads zero.
+
+That prediction was sound and the failure was not it:
+
+```
+error: conflicting types for '__unknown'
+  have     'long int(long int, ...)'   <- what decbench_render.rs:509 declares
+  previous 'long int(long int)'        <- what the harness prelude defines
+```
+
+A fixed-arity definition against a variadic declaration. It could only surface
+once a function contained **both** an unmodelled intrinsic with arguments and one
+without — which is exactly what assigning the destination made common. One word
+in the harness prelude, and the cell passes.
+
+**A predicted risk and an observed failure that arrive together are not
+necessarily the same thing.** Reading the error rather than accepting the
+prediction is what separated them.
