@@ -505,9 +505,33 @@ fn fold_stored_value(src: &mut Expr, size: u8) {
 }
 
 fn fold_expr(e: &mut Expr) {
+    fold_expr_at(e, false);
+}
+
+/// `shift_left_operand` marks the one position where a widening cast over a
+/// LITERAL carries meaning rather than restating it.
+///
+/// C gives a shift the type of its promoted LEFT operand, so `(uint64_t)1 << 40`
+/// and `1 << 40` are not the same expression: the first is 2^40, the second is
+/// undefined behaviour that x86 answers as `1 << 8`. Everywhere else a cast over
+/// a constant only spells out a value the literal already has, and collapsing it
+/// is what keeps the recovered source readable — so the suppression is exactly
+/// one edge wide.
+///
+/// Measured, not supposed. `bts %rsi,%rax` lifts to `dst | (mask << index)` with
+/// `mask` the widened literal one; with the cast collapsed the recovered
+/// `value | (1 << (index & 63))` disagreed with the original for EVERY index at
+/// or above 32, and at 63 returned 0xffffffff80000000 where the machine returns
+/// 0x8000000000000000.
+fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
-        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+        Expr::Bin { op, lhs, rhs } => {
+            let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
+            fold_expr_at(lhs, shift);
+            fold_expr(rhs);
+        }
+        Expr::Cmp { lhs, rhs, .. } => {
             fold_expr(lhs);
             fold_expr(rhs);
         }
@@ -580,7 +604,7 @@ fn fold_expr(e: &mut Expr) {
     if let Some(replacement) = subsumed_inner_cast {
         *e = replacement;
         // Re-run: a chain of three or more collapses one layer per visit.
-        fold_expr(e);
+        fold_expr_at(e, shift_left_operand);
         return;
     }
 
@@ -671,6 +695,12 @@ fn fold_expr(e: &mut Expr) {
     } = e
     {
         let replacement = match expr.as_ref() {
+            // Ordered before the two collapses below so a literal on a shift's
+            // left operand cannot reach either of them — `is_exact_boolean`
+            // accepts the constants 0 and 1, so guarding only the arm that
+            // names `Expr::Const` would leave `(uint64_t)1 << n` collapsing
+            // through the boolean one.
+            Expr::Const(_) if shift_left_operand => None,
             Expr::Const(value) if cast_preserves_constant(*value, *signed, *width) => {
                 Some(Expr::Const(*value))
             }
@@ -2401,6 +2431,81 @@ mod tests {
 
     /// A NARROWING inner cast is a real truncation and must survive: dropping
     /// it would silently widen the value the outer cast sees.
+    /// A widening cast over a LITERAL is load-bearing in exactly one position:
+    /// the left operand of a shift, whose type C takes as the type of the whole
+    /// expression. Collapsing it there turns `(uint64_t)1 << 40` into
+    /// `1 << 40`, which is undefined behaviour that x86 answers as `1 << 8`.
+    ///
+    /// This is the shape `bts`/`btr`/`btc` lift to (`dst | (mask << index)`),
+    /// and with the cast collapsed the recovered C disagreed with the original
+    /// for every bit index at or above 32.
+    #[test]
+    fn a_widening_cast_over_a_literal_survives_on_a_shifts_left_operand() {
+        let widened_one = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Const(1)),
+        };
+        let mut function = one_stmt(Expr::Bin {
+            op: BinOp::Shl,
+            lhs: Box::new(widened_one.clone()),
+            rhs: Box::new(Expr::Reg(reg("rcx"))),
+        });
+        fold_constants(&mut function);
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!()
+        };
+        assert_eq!(
+            *src,
+            Expr::Bin {
+                op: BinOp::Shl,
+                lhs: Box::new(widened_one),
+                rhs: Box::new(Expr::Reg(reg("rcx"))),
+            },
+            "the shifted literal lost the width that gives the shift its type"
+        );
+    }
+
+    /// The suppression above is exactly one edge wide. Anywhere else the cast
+    /// only restates a value the literal already has, and collapsing it is what
+    /// keeps the recovered source readable — including the shift's COUNT, whose
+    /// type C does not propagate to the result.
+    #[test]
+    fn a_widening_cast_over_a_literal_still_collapses_everywhere_else() {
+        let widened = |value: i64| Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Const(value)),
+        };
+        for expression in [
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(widened(1)),
+                rhs: Box::new(Expr::Reg(reg("rcx"))),
+            },
+            Expr::Bin {
+                op: BinOp::Shl,
+                lhs: Box::new(Expr::Reg(reg("rcx"))),
+                rhs: Box::new(widened(3)),
+            },
+            Expr::Un {
+                op: crate::ir::types::UnOp::Not,
+                src: Box::new(widened(1)),
+            },
+        ] {
+            let mut function = one_stmt(expression.clone());
+            fold_constants(&mut function);
+            let Stmt::Assign { src, .. } = &function.body[0] else {
+                panic!()
+            };
+            let rendered = format!("{src:?}");
+            assert!(
+                !rendered.contains("Cast"),
+                "{expression:?} kept a cast that restates its literal: {rendered}"
+            );
+        }
+    }
+
     #[test]
     fn narrowing_inner_cast_is_preserved() {
         // (u64)((u8)rax) must keep the u8 truncation.

@@ -31,15 +31,20 @@ use iced_x86::{Code, Decoder, DecoderOptions, Mnemonic, OpKind, Register};
 use crate::ir::regview;
 use crate::ir::types::*;
 
+mod bit_ops;
 mod conditions;
 mod flags;
 mod mul_flags;
 mod packed;
+mod packed_halves;
 mod packed_string;
 mod scalar_float;
 mod string_ops;
 mod wide_arith;
 mod xmm_views;
+use bit_ops::{
+    bit_test_ops, count_trailing_zeros_ops, population_count_ops, rotate_carry_right_ops, BitTest,
+};
 use conditions::{
     cmovcc_condition_for, condition_for_suffix, condition_suffix, materialize_condition,
     setcc_condition_for,
@@ -56,9 +61,9 @@ use packed::{
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
     packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_qword_binary_ops,
-    packed_qword_half_move_ops, packed_qword_move_ops, packed_qword_unpack_low_ops,
-    packed_word_extract_ops, xorps_ops, XmmHalf,
+    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops, xorps_ops,
 };
+use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
     packed_byte_compare_ops, packed_byte_shuffle_ops, packed_byte_sign_mask_ops,
     packed_byte_unpack_low_ops, packed_double_shuffle_ops, packed_dword_compare_greater_ops,
@@ -1156,59 +1161,22 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: "mul".into(),
             }]
         }),
-        // bt reg, imm/reg: CF = (reg >> (offset & (w-1))) & 1. (bts/btr/btc,
-        // which also modify the bit, and memory forms are not modelled yet.)
-        Mnemonic::Bt => {
-            if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
-                let r_name = reg_name(instr.op_register(0));
-                let w = phys_reg_width(&r_name).unwrap_or(Width::W64);
-                let wmask = (w.bits() as i64) - 1;
-                if let Some(raw_bit) = value_of_operand(instr, 1) {
-                    let r = VReg::phys(r_name);
-                    let mut ops = Vec::new();
-                    let bit = match raw_bit {
-                        Value::Const(c) => Value::Const(c & wmask),
-                        other => {
-                            let t0 = VReg::Temp(0);
-                            ops.push(Op::Bin {
-                                dst: t0.clone(),
-                                op: BinOp::And,
-                                lhs: other,
-                                rhs: Value::Const(wmask),
-                            });
-                            Value::Reg(t0)
-                        }
-                    };
-                    let t1 = VReg::Temp(1);
-                    ops.push(Op::Bin {
-                        dst: t1.clone(),
-                        op: BinOp::Shr,
-                        lhs: Value::Reg(r),
-                        rhs: bit,
-                    });
-                    let t2 = VReg::Temp(2);
-                    ops.push(Op::Bin {
-                        dst: t2.clone(),
-                        op: BinOp::And,
-                        lhs: Value::Reg(t1),
-                        rhs: Value::Const(1),
-                    });
-                    ops.push(Op::Assign {
-                        dst: VReg::Flag(Flag::C),
-                        src: Value::Reg(t2),
-                    });
-                    append_undef_flags(
-                        &mut ops,
-                        &[Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
-                        "x86 BT leaves OF/ZF/SF/PF/AF architecturally undefined",
-                    );
-                    return ops;
-                }
-            }
-            vec![Op::Unknown {
-                mnemonic: "bt".into(),
-            }]
-        }
+        // The single-bit family. `bt` reads the selected bit into CF and stops;
+        // `bts`/`btr`/`btc` additionally set, clear, or invert it in the
+        // destination. See `bit_ops` for why the flag write is an ordinary op
+        // rather than a second intrinsic output.
+        Mnemonic::Bt => bit_test_ops(instr, BitTest::Read, bits),
+        Mnemonic::Bts => bit_test_ops(instr, BitTest::Set, bits),
+        Mnemonic::Btr => bit_test_ops(instr, BitTest::Reset, bits),
+        Mnemonic::Btc => bit_test_ops(instr, BitTest::Complement, bits),
+        // Pure functions of one operand that C spells exactly, lowered through
+        // single-output intrinsics the AST renders as `__builtin_ctz` /
+        // `__builtin_popcount` at the encoded width.
+        Mnemonic::Tzcnt => count_trailing_zeros_ops(instr),
+        Mnemonic::Popcnt => population_count_ops(instr),
+        // `rcr reg, 1` — the only rotate-through-carry width this IR can state
+        // exactly; see `bit_ops::rotate_carry_right_ops`.
+        Mnemonic::Rcr => rotate_carry_right_ops(instr, bits),
         // bswap reg: byte-reverse. Emitted as a typed intrinsic executed by a
         // helper (the byte shuffle needs explicit per-byte widths).
         Mnemonic::Bswap => {
@@ -1367,6 +1335,11 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // whole-function float gate on top.
         Mnemonic::Movlpd | Mnemonic::Movlps => packed_qword_half_move_ops(instr, XmmHalf::Low),
         Mnemonic::Movhpd | Mnemonic::Movhps => packed_qword_half_move_ops(instr, XmmHalf::High),
+        // The register/register siblings of the two above: `movlhps` writes the
+        // destination's HIGH half from the source's low one, `movhlps` the
+        // reverse.
+        Mnemonic::Movlhps => packed_qword_half_swap_ops(instr, XmmHalf::High),
+        Mnemonic::Movhlps => packed_qword_half_swap_ops(instr, XmmHalf::Low),
         // As XORPS: the packed-double spelling of the same bitwise lanes, which
         // is how Clang zeroes an `xmm` before a binary64 accumulation and how
         // both compilers flip a sign bit.
@@ -2405,6 +2378,12 @@ mod tests {
             ("shr $3,%eax", vec![0xc1, 0xe8, 0x03]),
             ("imul %ebx,%eax", vec![0x0f, 0xaf, 0xc3]),
             ("bt $0,%eax", vec![0x0f, 0xba, 0xe0, 0x00]),
+            ("bts %rdi,%rdx", vec![0x48, 0x0f, 0xab, 0xfa]),
+            ("btr %rdx,%rcx", vec![0x48, 0x0f, 0xb3, 0xd1]),
+            ("btc %rdx,%rcx", vec![0x48, 0x0f, 0xbb, 0xd1]),
+            ("tzcnt %edx,%ecx", vec![0xf3, 0x0f, 0xbc, 0xca]),
+            ("popcnt %rax,%rdx", vec![0xf3, 0x48, 0x0f, 0xb8, 0xd0]),
+            ("rcr $1,%rdx", vec![0x48, 0xd1, 0xda]),
             ("xadd %ebx,%eax", vec![0x0f, 0xc1, 0xd8]),
             ("cmpxchg %rcx,%rbx", vec![0x48, 0x0f, 0xb1, 0xcb]),
             ("rol $1,%eax", vec![0xd1, 0xc0]),
@@ -2497,6 +2476,16 @@ mod tests {
                 .collect();
         let rotate_changed: std::collections::BTreeSet<Flag> =
             [Flag::C, Flag::O].into_iter().collect();
+        // Intel SDM Vol. 2A, BT/BTS/BTR/BTC: "The CF flag contains the value of
+        // the selected bit. The ZF flag is UNAFFECTED. The OF, SF, AF, and PF
+        // flags are undefined." ZF used to be poisoned here along with the other
+        // four, which is not a conservative approximation: an `Op::Undef` is a
+        // real definition, so it destroys a live comparison result that a
+        // preceding `cmp` produced and a following `je` still reads.
+        let zf_preserved: std::collections::BTreeSet<Flag> =
+            [Flag::C, Flag::P, Flag::A, Flag::S, Flag::O]
+                .into_iter()
+                .collect();
         let cases: &[(&str, &[u8], &std::collections::BTreeSet<Flag>)] = &[
             ("cmp", &[0x39, 0xc3], &all),
             ("test", &[0x85, 0xc0], &all),
@@ -2510,7 +2499,16 @@ mod tests {
             ("shr", &[0xc1, 0xe8, 0x03], &all),
             ("sar", &[0xc1, 0xf8, 0x03], &all),
             ("imul", &[0x0f, 0xaf, 0xc3], &all),
-            ("bt", &[0x0f, 0xba, 0xe0, 0x00], &all),
+            ("bt", &[0x0f, 0xba, 0xe0, 0x00], &zf_preserved),
+            ("bts", &[0x48, 0x0f, 0xab, 0xfa], &zf_preserved),
+            ("btr", &[0x48, 0x0f, 0xb3, 0xd1], &zf_preserved),
+            ("btc", &[0x48, 0x0f, 0xbb, 0xd1], &zf_preserved),
+            // TZCNT defines CF (source was zero) and ZF (result was zero) and
+            // poisons the other four; POPCNT defines ZF and CLEARS the rest.
+            ("tzcnt", &[0xf3, 0x0f, 0xbc, 0xca], &all),
+            ("popcnt", &[0xf3, 0x48, 0x0f, 0xb8, 0xd0], &all),
+            // A rotate through carry by one is a rotate: CF and OF, nothing else.
+            ("rcr", &[0x48, 0xd1, 0xda], &rotate_changed),
             ("xadd", &[0x0f, 0xc1, 0xd8], &all),
             ("cmpxchg", &[0x48, 0x0f, 0xb1, 0xcb], &all),
             ("rol", &[0xd1, 0xc0], &rotate_changed),
@@ -5013,6 +5011,769 @@ mod tests {
         );
     }
 
+    // --- the single-bit and bit-count family (`lift_x86::bit_ops`) ----------
+
+    /// Byte encodings of the family, assembled with GNU `as --64` rather than
+    /// derived from the modrm tables, and read back with `objdump -d -M intel`.
+    mod bit_ops_encodings {
+        pub const BTS_RDX_RDI: &[u8] = &[0x48, 0x0f, 0xab, 0xfa];
+        pub const BTS_RCX_63: &[u8] = &[0x48, 0x0f, 0xba, 0xe9, 0x3f];
+        pub const BTS_ECX_EBX: &[u8] = &[0x0f, 0xab, 0xd9];
+        pub const BTR_RCX_RDX: &[u8] = &[0x48, 0x0f, 0xb3, 0xd1];
+        pub const BTR_ECX_EBX: &[u8] = &[0x0f, 0xb3, 0xd9];
+        pub const BTR_RCX_33: &[u8] = &[0x48, 0x0f, 0xba, 0xf1, 0x21];
+        pub const BTC_RCX_RDX: &[u8] = &[0x48, 0x0f, 0xbb, 0xd1];
+        pub const BT_RCX_5: &[u8] = &[0x48, 0x0f, 0xba, 0xe1, 0x05];
+        pub const TZCNT_ECX_EDX: &[u8] = &[0xf3, 0x0f, 0xbc, 0xca];
+        pub const TZCNT_RAX_RDI: &[u8] = &[0xf3, 0x48, 0x0f, 0xbc, 0xc7];
+        pub const TZCNT_EAX_MEM: &[u8] = &[0xf3, 0x0f, 0xbc, 0x45, 0xfc];
+        pub const POPCNT_RDX_RAX: &[u8] = &[0xf3, 0x48, 0x0f, 0xb8, 0xd0];
+        pub const POPCNT_EAX_EDI: &[u8] = &[0xf3, 0x0f, 0xb8, 0xc7];
+        pub const MOVLHPS_XMM15_XMM0: &[u8] = &[0x44, 0x0f, 0x16, 0xf8];
+        pub const MOVHLPS_XMM1_XMM2: &[u8] = &[0x0f, 0x12, 0xca];
+        pub const RCR_RDX_1: &[u8] = &[0x48, 0xd1, 0xda];
+
+        /// Every encoding above, for the properties asserted of the whole set.
+        pub const ALL: &[&[u8]] = &[
+            BTS_RDX_RDI,
+            BTS_RCX_63,
+            BTS_ECX_EBX,
+            BTR_RCX_RDX,
+            BTR_ECX_EBX,
+            BTR_RCX_33,
+            BTC_RCX_RDX,
+            BT_RCX_5,
+            TZCNT_ECX_EDX,
+            TZCNT_RAX_RDI,
+            TZCNT_EAX_MEM,
+            POPCNT_RDX_RAX,
+            POPCNT_EAX_EDI,
+            MOVLHPS_XMM15_XMM0,
+            MOVHLPS_XMM1_XMM2,
+            RCR_RDX_1,
+        ];
+    }
+
+    /// The encodings really are the instructions the tests below name them.
+    /// A wrong byte would otherwise make every assertion below vacuously true
+    /// against some other lowering.
+    #[test]
+    fn the_bit_operation_encodings_decode_to_their_mnemonics() {
+        use bit_ops_encodings as e;
+        for (bytes, expected) in [
+            (e::BTS_RDX_RDI, "bts rdx,rdi"),
+            (e::BTS_RCX_63, "bts rcx,3Fh"),
+            (e::BTS_ECX_EBX, "bts ecx,ebx"),
+            (e::BTR_RCX_RDX, "btr rcx,rdx"),
+            (e::BTR_ECX_EBX, "btr ecx,ebx"),
+            (e::BTR_RCX_33, "btr rcx,21h"),
+            (e::BTC_RCX_RDX, "btc rcx,rdx"),
+            (e::BT_RCX_5, "bt rcx,5"),
+            (e::TZCNT_ECX_EDX, "tzcnt ecx,edx"),
+            (e::TZCNT_RAX_RDI, "tzcnt rax,rdi"),
+            (e::TZCNT_EAX_MEM, "tzcnt eax,[rbp-4]"),
+            (e::POPCNT_RDX_RAX, "popcnt rdx,rax"),
+            (e::POPCNT_EAX_EDI, "popcnt eax,edi"),
+            (e::MOVLHPS_XMM15_XMM0, "movlhps xmm15,xmm0"),
+            (e::MOVHLPS_XMM1_XMM2, "movhlps xmm1,xmm2"),
+            (e::RCR_RDX_1, "rcr rdx,1"),
+        ] {
+            let instruction = decode64(bytes);
+            let mut text = String::new();
+            iced_x86::Formatter::format(
+                &mut iced_x86::NasmFormatter::new(),
+                &instruction,
+                &mut text,
+            );
+            assert_eq!(text, expected, "{bytes:02x?}");
+        }
+    }
+
+    /// The point of the whole change: none of these leaves a residue that
+    /// declares no register write. This is the census predicate applied to the
+    /// single encodings, so it fails on a regression even when the sample
+    /// corpus is absent.
+    #[test]
+    fn no_bit_operation_hides_its_register_writes() {
+        for bytes in bit_ops_encodings::ALL {
+            let ops = lift_one(&decode64(bytes), 64);
+            assert!(
+                !hides_its_register_writes(&ops),
+                "{bytes:02x?} still declares no register write: {ops:#?}"
+            );
+        }
+    }
+
+    /// `bts rdx, rdi` — CF from the ORIGINAL destination, then `dst |= 1 << n`,
+    /// with the index taken modulo the operand width.
+    #[test]
+    fn bts_reads_carry_from_the_value_it_is_about_to_change() {
+        let ops: Vec<Op> = lift64(bit_ops_encodings::BTS_RDX_RDI)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+
+        assert!(
+            matches!(
+                &ops[0],
+                Op::Bin { dst: VReg::Temp(200), op: BinOp::And, lhs: Value::Reg(lhs), rhs: Value::Const(63) }
+                    if *lhs == VReg::phys("rdi")
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                &ops[1],
+                Op::Bin { dst: VReg::Temp(201), op: BinOp::Shr, lhs: Value::Reg(lhs), rhs: Value::Reg(VReg::Temp(200)) }
+                    if *lhs == VReg::phys("rdx")
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                &ops[2],
+                Op::Bin {
+                    dst: VReg::Flag(Flag::C),
+                    op: BinOp::And,
+                    lhs: Value::Reg(VReg::Temp(201)),
+                    rhs: Value::Const(1)
+                }
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                &ops[3],
+                Op::ZExt {
+                    dst: VReg::Temp(202),
+                    src: Value::Const(1),
+                    from: Width::W8,
+                    to: Width::W64
+                }
+            ),
+            "the mask literal is widened to the operand width BEFORE the shift: \
+             an unadorned `1` is an `int` in the recovered C, so `1 << 40` there \
+             is undefined and the host answers `1 << 8`: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                &ops[4],
+                Op::Bin {
+                    dst: VReg::Temp(202),
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(VReg::Temp(202)),
+                    rhs: Value::Reg(VReg::Temp(200))
+                }
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                &ops[5],
+                Op::Bin { dst, op: BinOp::Or, lhs: Value::Reg(lhs), rhs: Value::Reg(VReg::Temp(202)) }
+                    if *dst == VReg::phys("rdx") && *lhs == VReg::phys("rdx")
+            ),
+            "got: {ops:#?}"
+        );
+
+        // The CF read must come before the write that changes the bit.
+        let carry = ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Op::Bin {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    }
+                )
+            })
+            .expect("no CF definition");
+        let update = ops
+            .iter()
+            .position(
+                |op| matches!(op, Op::Bin { dst, op: BinOp::Or, .. } if *dst == VReg::phys("rdx")),
+            )
+            .expect("no destination update");
+        assert!(carry < update, "CF must be read before the bit is set");
+    }
+
+    /// An immediate index folds to a constant mask instead of a shift, and bit
+    /// 63 is a legal one — `1 << 63` is `i64::MIN`, not an overflow.
+    #[test]
+    fn bts_with_an_immediate_index_folds_the_mask() {
+        let ops: Vec<Op> = lift64(bit_ops_encodings::BTS_RCX_63)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::Or, rhs: Value::Const(mask), .. }
+                    if *dst == VReg::phys("rcx") && *mask == i64::MIN
+            )),
+            "got: {ops:#?}"
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Op::Bin { op: BinOp::Shl, .. })),
+            "a constant index needs no shift: {ops:#?}"
+        );
+    }
+
+    /// `btr` clears the bit, so its mask is the complement — and at 32 bits the
+    /// complement is masked to the operand width rather than left as a 64-bit
+    /// constant whose high half only the parent zero-extension would clear.
+    #[test]
+    fn btr_uses_the_complement_of_the_bit_mask() {
+        let constant: Vec<Op> = lift64(bit_ops_encodings::BTR_RCX_33)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            constant.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::And, rhs: Value::Const(mask), .. }
+                    if *dst == VReg::phys("rcx") && *mask == !(1i64 << 33)
+            )),
+            "got: {constant:#?}"
+        );
+
+        let variable: Vec<Op> = lift64(bit_ops_encodings::BTR_RCX_RDX)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            variable.iter().any(|op| matches!(
+                op,
+                Op::Un {
+                    dst: VReg::Temp(202),
+                    op: UnOp::Not,
+                    src: Value::Reg(VReg::Temp(202))
+                }
+            )),
+            "got: {variable:#?}"
+        );
+        assert!(
+            variable.iter().any(|op| matches!(
+                op,
+                Op::ZExt {
+                    dst: VReg::Temp(202),
+                    src: Value::Const(1),
+                    from: Width::W8,
+                    to: Width::W64
+                }
+            )),
+            "got: {variable:#?}"
+        );
+        assert!(
+            variable.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::And, rhs: Value::Reg(VReg::Temp(202)), .. }
+                    if *dst == VReg::phys("rcx")
+            )),
+            "got: {variable:#?}"
+        );
+    }
+
+    /// `btc` inverts the bit.
+    #[test]
+    fn btc_exclusive_ors_the_bit_mask() {
+        let ops: Vec<Op> = lift64(bit_ops_encodings::BTC_RCX_RDX)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::Xor, rhs: Value::Reg(VReg::Temp(202)), .. }
+                    if *dst == VReg::phys("rcx")
+            )),
+            "got: {ops:#?}"
+        );
+    }
+
+    /// A 32-bit destination zero-extends into its 64-bit parent, exactly as
+    /// every ordinary 32-bit ALU write does. Without the explicit record the IR
+    /// would claim `rcx`'s high half survived an instruction that clears it.
+    #[test]
+    fn a_32_bit_bit_test_zero_extends_its_parent() {
+        for bytes in [
+            bit_ops_encodings::BTS_ECX_EBX,
+            bit_ops_encodings::BTR_ECX_EBX,
+        ] {
+            let ops: Vec<Op> = lift64(bytes)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::ZExt { dst, src: Value::Reg(src), from: Width::W32, to: Width::W64 }
+                        if *dst == VReg::phys("ecx") && *src == VReg::phys("ecx")
+                )),
+                "{bytes:02x?} got: {ops:#?}"
+            );
+            // A 32-bit destination widens its mask to 32 bits, so the shift
+            // stays inside the width the machine operates at.
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::ZExt {
+                        dst: VReg::Temp(202),
+                        src: Value::Const(1),
+                        from: Width::W8,
+                        to: Width::W32
+                    }
+                )),
+                "{bytes:02x?} got: {ops:#?}"
+            );
+            // The index is masked to 31, not 63, at this width.
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::Bin {
+                        dst: VReg::Temp(200),
+                        op: BinOp::And,
+                        rhs: Value::Const(31),
+                        ..
+                    }
+                )),
+                "{bytes:02x?} got: {ops:#?}"
+            );
+        }
+        // A 64-bit destination IS the whole register and needs no such record.
+        let wide: Vec<Op> = lift64(bit_ops_encodings::BTS_RDX_RDI)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            !wide.iter().any(|op| matches!(
+                op,
+                Op::ZExt {
+                    dst: VReg::Phys(_),
+                    ..
+                }
+            )),
+            "the only widening at this width is the bit mask's, which names a \
+             temporary: {wide:#?}"
+        );
+    }
+
+    /// Intel SDM Vol. 2A, BT/BTS/BTR/BTC: "The ZF flag is unaffected."
+    ///
+    /// The `bt` arm this family replaced poisoned ZF along with OF/SF/PF/AF,
+    /// which is not merely imprecise — an `Op::Undef` is a real definition, so
+    /// it would destroy a live comparison result that a preceding `cmp`
+    /// produced and a following `je` still reads.
+    #[test]
+    fn the_bit_test_family_leaves_the_zero_flag_alone() {
+        for bytes in [
+            bit_ops_encodings::BT_RCX_5,
+            bit_ops_encodings::BTS_RDX_RDI,
+            bit_ops_encodings::BTR_RCX_RDX,
+            bit_ops_encodings::BTC_RCX_RDX,
+        ] {
+            let ops: Vec<Op> = lift64(bytes)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                !ops.iter().any(|op| matches!(
+                    crate::ir::use_def::def_uses(op).0,
+                    Some(VReg::Flag(Flag::Z))
+                )),
+                "{bytes:02x?} must not touch ZF: {ops:#?}"
+            );
+            for flag in [Flag::O, Flag::S, Flag::P, Flag::A] {
+                assert!(
+                    ops.iter()
+                        .any(|op| matches!(op, Op::Undef { dst: VReg::Flag(f), .. } if *f == flag)),
+                    "{bytes:02x?} must poison {flag:?}: {ops:#?}"
+                );
+            }
+        }
+    }
+
+    /// `bt` alone still reads the bit into CF and still leaves the destination
+    /// untouched — absorbing it into the family must not have given it the
+    /// write its three siblings have.
+    #[test]
+    fn plain_bt_defines_carry_and_nothing_else() {
+        let ops: Vec<Op> = lift64(bit_ops_encodings::BT_RCX_5)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    dst: VReg::Flag(Flag::C),
+                    op: BinOp::And,
+                    rhs: Value::Const(1),
+                    ..
+                }
+            )),
+            "got: {ops:#?}"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(
+                crate::ir::use_def::def_uses(op).0,
+                Some(VReg::Phys(name)) if name == "rcx"
+            )),
+            "bt does not write its destination: {ops:#?}"
+        );
+    }
+
+    /// `tzcnt` is a single-output intrinsic naming the encoded width, with CF
+    /// reporting a zero SOURCE and ZF a zero RESULT.
+    #[test]
+    fn tzcnt_lowers_to_a_width_stated_single_output_intrinsic() {
+        for (bytes, name, destination, source, width) in [
+            (
+                bit_ops_encodings::TZCNT_ECX_EDX,
+                "x86.ctz.32",
+                "ecx",
+                "edx",
+                Width::W32,
+            ),
+            (
+                bit_ops_encodings::TZCNT_RAX_RDI,
+                "x86.ctz.64",
+                "rax",
+                "rdi",
+                Width::W64,
+            ),
+        ] {
+            let ops: Vec<Op> = lift64(bytes)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            let intrinsic = ops
+                .iter()
+                .find_map(|op| match op {
+                    Op::Intrinsic {
+                        name: n,
+                        ins,
+                        outs,
+                        reads_mem: false,
+                        writes_mem: false,
+                    } if n == name => Some((ins, outs)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {name}: {ops:#?}"));
+            assert_eq!(intrinsic.1.len(), 1, "one output per destination");
+            assert_eq!(intrinsic.1[0], (VReg::phys(destination), width));
+            assert_eq!(intrinsic.0.len(), 1);
+
+            // CF is (source == 0); ZF is (destination == 0).
+            let carry = ops
+                .iter()
+                .find(|op| {
+                    matches!(
+                        op,
+                        Op::Cmp {
+                            dst: VReg::Flag(Flag::C),
+                            ..
+                        }
+                    )
+                })
+                .unwrap_or_else(|| panic!("no CF: {ops:#?}"));
+            assert!(matches!(
+                carry,
+                Op::Cmp {
+                    op: CmpOp::Eq,
+                    rhs: Value::Const(0),
+                    ..
+                }
+            ));
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::Cmp { dst: VReg::Flag(Flag::Z), op: CmpOp::Eq, lhs: Value::Reg(lhs), rhs: Value::Const(0) }
+                        if *lhs == VReg::phys(destination)
+                )),
+                "got: {ops:#?}"
+            );
+            for flag in [Flag::O, Flag::S, Flag::P, Flag::A] {
+                assert!(
+                    ops.iter()
+                        .any(|op| matches!(op, Op::Undef { dst: VReg::Flag(f), .. } if *f == flag)),
+                    "{name} must poison {flag:?}: {ops:#?}"
+                );
+            }
+            // The 32-bit source is narrowed to its encoded width before it is
+            // counted; a 64-bit one already is the whole register.
+            assert_eq!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::ZExt { src: Value::Reg(src), from: Width::W32, to: Width::W64, .. }
+                        if *src == VReg::phys(source)
+                )),
+                width == Width::W32,
+                "got: {ops:#?}"
+            );
+        }
+    }
+
+    /// gcc at -O0 spells `__builtin_ctz` on a spilled local as
+    /// `tzcnt -0x4(%rbp),%eax` — a MEMORY source, which the corpus sweep never
+    /// showed because the samples are all optimised.
+    #[test]
+    fn tzcnt_accepts_a_memory_source_at_the_operand_width() {
+        let ops: Vec<Op> = lift64(bit_ops_encodings::TZCNT_EAX_MEM)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            matches!(
+                &ops[0],
+                Op::Load {
+                    dst: VReg::Temp(203),
+                    ..
+                }
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, outs, .. }
+                    if name == "x86.ctz.32" && outs[0].0 == VReg::phys("eax")
+            )),
+            "got: {ops:#?}"
+        );
+    }
+
+    /// `popcnt` defines every flag: ZF from a zero SOURCE, and the other five
+    /// CLEARED rather than poisoned (Intel SDM Vol. 2B, POPCNT).
+    #[test]
+    fn popcnt_clears_the_flags_it_does_not_compute() {
+        for (bytes, name, destination) in [
+            (bit_ops_encodings::POPCNT_RDX_RAX, "x86.popcnt.64", "rdx"),
+            (bit_ops_encodings::POPCNT_EAX_EDI, "x86.popcnt.32", "eax"),
+        ] {
+            let ops: Vec<Op> = lift64(bytes)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::Intrinsic { name: n, ins, outs, .. }
+                        if n == name && ins.len() == 1 && outs.len() == 1
+                            && outs[0].0 == VReg::phys(destination)
+                )),
+                "got: {ops:#?}"
+            );
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        ..
+                    }
+                )),
+                "got: {ops:#?}"
+            );
+            for flag in [Flag::C, Flag::O, Flag::S, Flag::P, Flag::A] {
+                assert!(
+                    ops.iter().any(|op| matches!(
+                        op,
+                        Op::Assign { dst: VReg::Flag(f), src: Value::Const(0) } if *f == flag
+                    )),
+                    "{name} clears {flag:?} rather than poisoning it: {ops:#?}"
+                );
+            }
+            assert!(
+                !ops.iter().any(|op| matches!(op, Op::Undef { .. })),
+                "popcnt leaves no flag undefined: {ops:#?}"
+            );
+        }
+    }
+
+    /// `movlhps xmm15, xmm0` writes the destination's HIGH lanes from the
+    /// source's low quadword and touches nothing else — in particular not the
+    /// destination's scalar spelling, which IS the low quadword this
+    /// instruction preserves.
+    #[test]
+    fn movlhps_writes_only_the_destinations_high_lanes() {
+        let ops = lift64(bit_ops_encodings::MOVLHPS_XMM15_XMM0);
+        assert_eq!(lanes_defined(&ops, "xmm15"), vec![2, 3], "got: {ops:#?}");
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                crate::ir::use_def::def_uses(&instruction.op).0,
+                Some(VReg::Phys(name)) if name == "xmm15"
+            )),
+            "the low quadword, and so the scalar name, is preserved: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign { dst: VReg::Temp(150), src: Value::Reg(src) }
+                    if *src == VReg::phys("xmm0")
+            )),
+            "the source's low quadword is read through its scalar name: {ops:#?}"
+        );
+    }
+
+    /// `movhlps xmm1, xmm2` is the mirror: the destination's LOW lanes from the
+    /// source's high quadword, which has no scalar spelling and so is assembled
+    /// from its two lanes. Writing lanes 0 and 1 also redefines the
+    /// destination's scalar name, through the ordinary view synchronisation.
+    #[test]
+    fn movhlps_writes_only_the_destinations_low_lanes() {
+        let ops = lift64(bit_ops_encodings::MOVHLPS_XMM1_XMM2);
+        assert_eq!(lanes_defined(&ops, "xmm1"), vec![0, 1], "got: {ops:#?}");
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Concat { dst: VReg::Temp(150), hi: Value::Reg(hi), lo: Value::Reg(lo) }
+                    if *hi == VReg::phys("xmm2_d3") && *lo == VReg::phys("xmm2_d2")
+            )),
+            "got: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                crate::ir::use_def::def_uses(&instruction.op).0,
+                Some(VReg::Phys(name)) if name == "xmm1"
+            )),
+            "a low-lane write is mirrored into the scalar spelling: {ops:#?}"
+        );
+    }
+
+    /// `rcr rdx, 1` rotates the carry into the top bit and the old bottom bit
+    /// out into the carry, and both reads happen before either write.
+    #[test]
+    fn rcr_by_one_rotates_through_the_carry_flag() {
+        let ops: Vec<Op> = lift64(bit_ops_encodings::RCR_RDX_1)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            matches!(
+                &ops[0],
+                Op::Assign {
+                    dst: VReg::Temp(205),
+                    src: Value::Reg(VReg::Flag(Flag::C))
+                }
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                &ops[1],
+                Op::Bin { dst: VReg::Temp(206), op: BinOp::And, lhs: Value::Reg(lhs), rhs: Value::Const(1) }
+                    if *lhs == VReg::phys("rdx")
+            ),
+            "got: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::ZExt {
+                    dst: VReg::Temp(208),
+                    src: Value::Reg(VReg::Temp(205)),
+                    from: Width::W1,
+                    to: Width::W64
+                }
+            )),
+            "the carry is widened before it is shifted 63 places: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    dst: VReg::Temp(208),
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(VReg::Temp(208)),
+                    rhs: Value::Const(63)
+                }
+            )),
+            "got: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::Shr, rhs: Value::Const(1), .. } if *dst == VReg::phys("rdx")
+            )),
+            "got: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::Or, rhs: Value::Reg(VReg::Temp(208)), .. }
+                    if *dst == VReg::phys("rdx")
+            )),
+            "got: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Assign {
+                    dst: VReg::Flag(Flag::C),
+                    src: Value::Reg(VReg::Temp(206))
+                }
+            )),
+            "the outgoing carry is the destination's OLD bit 0: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    dst: VReg::Flag(Flag::O),
+                    op: BinOp::Xor,
+                    lhs: Value::Reg(VReg::Temp(205)),
+                    rhs: Value::Reg(VReg::Temp(207))
+                }
+            )),
+            "OF is the exclusive-or of the result's top two bits: {ops:#?}"
+        );
+    }
+
+    /// A rotate through carry by anything other than one is NOT lifted. It is a
+    /// rotation of a `width + 1` bit quantity, which this IR has no width for,
+    /// and the ISA leaves OF undefined there as well — so it stays visible on
+    /// the census rather than acquiring an invented lowering.
+    #[test]
+    fn a_multi_bit_rotate_through_carry_is_left_unmodelled() {
+        // `rcr rdx, 3` — 48 c1 da 03.
+        let ops = lift_one(&decode64(&[0x48, 0xc1, 0xda, 0x03]), 64);
+        assert_eq!(
+            ops,
+            vec![Op::Unknown {
+                mnemonic: "rcr".into()
+            }],
+            "got: {ops:#?}"
+        );
+        // `rcr rdx, cl` — 48 d3 da.
+        let variable = lift_one(&decode64(&[0x48, 0xd3, 0xda]), 64);
+        assert_eq!(
+            variable,
+            vec![Op::Unknown {
+                mnemonic: "rcr".into()
+            }],
+            "got: {variable:#?}"
+        );
+    }
+
+    /// A 16-bit `bt*` destination is a bit-preserving partial view of a 64-bit
+    /// parent, so the write is a read-modify-write this lowering does not
+    /// perform. Refusing it keeps the mnemonic honest on the census instead of
+    /// silently clobbering the parent's high 48 bits.
+    #[test]
+    fn a_16_bit_bit_test_is_left_unmodelled() {
+        // `bts cx, dx` — 66 0f ab d1.
+        let ops = lift_one(&decode64(&[0x66, 0x0f, 0xab, 0xd1]), 64);
+        assert_eq!(
+            ops,
+            vec![Op::Unknown {
+                mnemonic: "bts".into()
+            }],
+            "got: {ops:#?}"
+        );
+    }
+
     #[test]
     fn sbb_reg_reg_lifts_to_sub_with_carry_dependency() {
         let ops = lift64(&[0x48, 0x19, 0xc8]);
@@ -5150,7 +5911,7 @@ mod tests {
         // Exactly one memory access, at the architectural width. Splitting the
         // transfer into narrow lane loads is bit-identical and changes what the
         // stack-object recovery infers about the frame — see
-        // `packed::packed_qword_half_move_ops`.
+        // `packed_halves::packed_qword_half_move_ops`.
         let loads: Vec<u8> = ops
             .iter()
             .filter_map(|instruction| match &instruction.op {
@@ -6383,9 +7144,6 @@ mod tests {
         const SILENT_REGISTER_WRITERS: &[&str] = &[
             "aesenc",
             "bsr",
-            "btc",
-            "btr",
-            "bts",
             "cpuid",
             "fadd",
             "faddp",
@@ -6396,18 +7154,14 @@ mod tests {
             "fsub",
             "fsubp",
             "fxch",
-            "movlhps",
             "movsb",
             "movsq",
-            "popcnt",
             "popfq",
             "pushfq",
-            "rcr",
             "rdtsc",
             "rdtscp",
             "shrd",
             "syscall",
-            "tzcnt",
             "vmovdqu",
             "vpand",
             "vpbroadcastb",

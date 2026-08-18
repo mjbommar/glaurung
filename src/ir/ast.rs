@@ -164,6 +164,21 @@ pub enum WideArithmetic {
     /// architectural `clz(0) == width_in_bits` (ARM DDI 0487 C6.2.66; AArch64
     /// and ARM32 agree). NOT `__builtin_clz` alone, which is undefined at zero.
     CountLeadingZeros,
+    /// `ctz` — trailing zeros of the operand at the declared width, with the
+    /// architectural `ctz(0) == width_in_bits` (Intel SDM Vol. 2B, TZCNT; the
+    /// AArch64 `rbit`+`clz` idiom and ARM32's `rbit` agree). NOT
+    /// `__builtin_ctz` alone, which is undefined at zero.
+    ///
+    /// Separate from [`Self::CountLeadingZeros`] rather than expressed through
+    /// it because the identity that relates them,
+    /// `ctz(x) = width - 1 - clz(x ^ (x - 1))`, is exact only for a NONZERO
+    /// operand — and the zero case is precisely the half of the meaning this
+    /// enum exists to carry.
+    CountTrailingZeros,
+    /// `popcnt` — the number of set bits in the operand at the declared width.
+    /// Total: unlike the two zero counts it has no undefined argument, so the
+    /// width is the only thing that has to be stated.
+    PopulationCount,
 }
 
 impl WideArithmetic {
@@ -176,6 +191,8 @@ impl WideArithmetic {
             Self::SignedDivQuotient => "sdiv_wide_quotient",
             Self::SignedDivRemainder => "sdiv_wide_remainder",
             Self::CountLeadingZeros => "count_leading_zeros",
+            Self::CountTrailingZeros => "count_trailing_zeros",
+            Self::PopulationCount => "population_count",
         }
     }
 }
@@ -3368,6 +3385,111 @@ function f @ 0x1000 {
         assert!(
             rendered.contains("__builtin_clzll(") && rendered.contains("== 0) ? 64 :"),
             "a 64-bit clz counts 64 bits and answers 64 at zero:\n{rendered}"
+        );
+    }
+
+    /// `ctz` is the mirror of `clz` and needs both halves of its meaning stated
+    /// for the same two reasons — with one difference that is x86's rather than
+    /// ARM's: `tzcnt(0)` is architecturally the operand width, where the `bsf`
+    /// this shares an encoding with instead leaves its destination alone.
+    #[test]
+    fn decbench_count_trailing_zeros_states_its_width_and_its_zero_case() {
+        let narrow = Function {
+            name: "trailing".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::CountTrailingZeros,
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    width: 4,
+                },
+            }],
+        };
+        let rendered = render_decbench(&narrow);
+        assert!(
+            rendered.contains("__builtin_ctz("),
+            "expected an exact trailing-zero count:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("__builtin_ctzll"),
+            "a 32-bit ctz must not count a 64-bit quantity's zeros:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("(unsigned int)"),
+            "the operand's 32-bit width is part of the operation:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("== 0) ? 32 :"),
+            "tzcnt(0) is 32; __builtin_ctz(0) is undefined:\n{rendered}"
+        );
+
+        let wide = Function {
+            name: "trailing64".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::CountTrailingZeros,
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    width: 8,
+                },
+            }],
+        };
+        let rendered = render_decbench(&wide);
+        assert!(
+            rendered.contains("__builtin_ctzll(") && rendered.contains("== 0) ? 64 :"),
+            "a 64-bit ctz counts 64 bits and answers 64 at zero:\n{rendered}"
+        );
+    }
+
+    /// `popcnt` is total, so it needs no zero case — but it still needs its
+    /// width, because counting the set bits of a canonical 64-bit IR value
+    /// would include whatever the parent's stale high half happens to hold.
+    #[test]
+    fn decbench_population_count_states_its_width() {
+        let narrow = Function {
+            name: "ones".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::PopulationCount,
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    width: 4,
+                },
+            }],
+        };
+        let rendered = render_decbench(&narrow);
+        assert!(
+            rendered.contains("__builtin_popcount((unsigned int)("),
+            "expected an exact 32-bit population count:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("__builtin_popcountll"),
+            "a 32-bit popcnt must not count a 64-bit quantity's bits:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("? 32 :"),
+            "popcnt is defined at zero and needs no guard:\n{rendered}"
+        );
+
+        let wide = Function {
+            name: "ones64".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::PopulationCount,
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    width: 8,
+                },
+            }],
+        };
+        let rendered = render_decbench(&wide);
+        assert!(
+            rendered.contains("__builtin_popcountll((unsigned long long)("),
+            "a 64-bit popcnt counts 64 bits:\n{rendered}"
         );
     }
 

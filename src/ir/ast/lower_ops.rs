@@ -187,6 +187,8 @@ fn wide_integer_intrinsic(
         "sdiv_quot" if ins.len() == 3 => WideArithmetic::SignedDivQuotient,
         "sdiv_rem" if ins.len() == 3 => WideArithmetic::SignedDivRemainder,
         "clz" if ins.len() == 1 => WideArithmetic::CountLeadingZeros,
+        "ctz" if ins.len() == 1 => WideArithmetic::CountTrailingZeros,
+        "popcnt" if ins.len() == 1 => WideArithmetic::PopulationCount,
         _ => return None,
     };
     Some((op, (bits / 8) as u8))

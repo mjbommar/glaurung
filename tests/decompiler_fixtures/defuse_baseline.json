@@ -16,8 +16,8 @@
     },
     "clang:O2": {
       "functions_emitted": 2533,
-      "functions_with_violations": 86,
-      "violations": 242
+      "functions_with_violations": 85,
+      "violations": 240
     },
     "gcc:O0": {
       "functions_emitted": 2567,
@@ -30,8 +30,8 @@
       "violations": 114
     },
     "rustc:O0": {
-      "functions_emitted": 3035,
-      "functions_with_violations": 1998,
+      "functions_emitted": 3032,
+      "functions_with_violations": 1997,
       "violations": 7535
     },
     "rustc:O2": {
@@ -2295,10 +2295,7 @@
     "197_homogeneous_float_aggregates:clang:O0:hfa197_tagged_control": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_trio3f_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_pair2d_roundtrip": [],
-    "197_homogeneous_float_aggregates:clang:O2:hfa197_quad4f_roundtrip": [
-      "var13 is read but never defined",
-      "var14 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O2:hfa197_quad4f_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_tagged_control": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_trio3f_roundtrip": [],

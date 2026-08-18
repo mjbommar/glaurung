@@ -1623,13 +1623,13 @@
   "144_inline_asm:gcc:O0": {
     "asm_add_via_constraints": "pass",
     "asm_memory_barrier": "pass",
-    "builtin_bit_intrinsics": "fail",
+    "builtin_bit_intrinsics": "pass",
     "builtin_overflow_checked": "pass"
   },
   "144_inline_asm:gcc:O2": {
     "asm_add_via_constraints": "pass",
     "asm_memory_barrier": "pass",
-    "builtin_bit_intrinsics": "fail",
+    "builtin_bit_intrinsics": "pass",
     "builtin_overflow_checked": "pass"
   },
   "145_control_flow_flattening:clang:O0": {
@@ -2382,7 +2382,7 @@
     "rust_saturating_mul": "pass",
     "rust_saturating_sub": "pass",
     "rust_shift_family": "pass",
-    "rust_u32_bits": "fail",
+    "rust_u32_bits": "pass",
     "rust_u32_rotate": "pass",
     "rust_u32_sub_family": "pass",
     "rust_wrapping_add": "pass",

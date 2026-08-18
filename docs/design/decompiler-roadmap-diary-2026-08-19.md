@@ -340,3 +340,87 @@ reason recorded in the file, while leaving downward moves and new-fixture cells
 frictionless. The ten regressions themselves have names by now — they are real
 rendering defects bought for the 24 execution cells that commit turned green,
 and until this audit nobody had looked at them.
+
+## Entry 86 — seven mnemonics lifted, and the two defects that were not on the list
+
+`SILENT_REGISTER_WRITERS` went **35 mnemonics / 1,372 occurrences to 28 / 1,130**
+— `tzcnt` (130), `bts` (82), `popcnt` (14), `movlhps` (6), `btr` (6), `btc` (2),
+`rcr` (2, count-1 only), plus `movhlps` as the mirror of `movlhps`. The flag
+writes are spelled as ordinary `Op::Bin { dst: VReg::Flag(..) }` rather than
+multi-output intrinsics, so `value_number.rs:515`'s `outs.len() <= 1` guard is
+never approached; the two intrinsics (`x86.ctz.*`, `x86.popcnt.*`) are strictly
+one output.
+
+Two of my premises were measured and overturned.
+
+**"These live in `samples/` library code, not necessarily in the fixture
+corpus."** Wrong, in our favour. Compiling all ~200 fixture sources at O0 and O2
+under gcc and clang and grepping the disassembly found existing lanes for six of
+them. `144_inline_asm:builtin_bit_intrinsics` compiles `__builtin_ctz` to `tzcnt`
+with **no** `-mbmi` — `rep bsf` decodes as `bsf` on pre-BMI parts, so the
+compiler emits it freely — including a memory-source form (`tzcnt -0x4(%rbp),%eax`)
+absent from the sample census entirely. That lane was failing. It passes now, at
+both gcc:O0 and gcc:O2.
+
+**"`bsr` is about 2 occurrences."** It is 4, and all four are 16-bit `bsr si,cx`.
+It stays unlifted, but the *reason in the code* is wrong and should not be
+trusted by whoever picks it up: `bit_scan_ops` claims 16-bit would need an
+`x86.clz.16` answering 16 too high, when `bsr16(x) = 31 - clz32(zext16(x))` is
+exact with today's renderer. The real blocker is a bit-preserving partial view on
+both source and destination, needing `read_view_ops` and `partial_write_ops`.
+
+### The two defects that were not on the list
+
+**`1 << n` was undefined for every n at or above 32.** `bts` lifted to
+`dst | (1 << n)`, and `1` renders as a C `int`, so x86's 64-bit shift became a
+32-bit one. Compiling the recovered text against the original disagreed for
+*every* index from 32 up; at 63 it returned `0xffffffff80000000` where the
+machine returns `0x8000000000000000`. This is a **general renderer defect** —
+anything producing `(uint64_t)1 << n` suffered it — and it needed two fixes, not
+one: the lifter widens the mask before shifting, and `const_fold.rs` had to stop
+collapsing that widening cast back off, because C takes a shift's type from its
+promoted left operand. The guard had to be ordered before the `is_exact_boolean`
+arm, which accepts the constants 0 and 1 and was re-collapsing it.
+
+Verified here directly, on `48 0f ab c8` (`bts rax, rcx`):
+
+```
+zext -> %t202  src=const 1  from=8 to=64
+bin  -> %t202  shl  lhs=%t202  rhs=%t200
+bin  -> rax    or   lhs=rax    rhs=%t202
+```
+
+The mask is widened *before* the shift.
+
+**The `bt` family was poisoning ZF, which the architecture preserves.** Intel SDM
+Vol. 2A, BT/BTS/BTR/BTC: CF receives the selected bit; OF, SF, AF and PF are
+undefined; **ZF is unaffected.** `Op::Undef` is a real definition, so poisoning ZF
+destroyed a live comparison that a preceding `cmp` produced and a following `je`
+still read. The same lift confirms the fix — CF is written by an ordinary `Bin`,
+and the undef list is `%of %sf %pf %af` with **no `%zf`**:
+
+```
+undef -> %of  "x86 BT/BTS/BTR/BTC define CF and leave OF/SF/PF/AF
+               architecturally undefined; ZF is unaffected"
+```
+
+Neither defect was in the brief. Both came out of compiling the recovered C
+beside the original and running them over all 64 bit indices, five payloads and
+2^20 pseudorandom 32-bit values — which is the whole argument for differential
+testing over inspection. A reviewer reading `dst | (1 << n)` sees correct C.
+
+### And the ceiling that only pytest can see
+
+`packed.rs` crossed 1,000 LOC when `movlhps`/`movhlps` landed (963 -> 1,042) and
+failed `test_every_large_product_module_has_a_documented_review` — a **pytest**,
+invisible to `cargo test`, and the second time this session that a Rust change
+was gated by a Python test. It was split rather than review-listed, because the
+test says to and because a 1,042-line "SSE integer and float lowering" file is
+not one owner: `lift_x86/packed_halves.rs` (253) owns the six "move one 64-bit
+half" mnemonics and `packed.rs` is 811.
+
+With this family cleared, the census has a different shape: `syscall` (310),
+`movsb` (242), `aesenc` (222), `movsq` (134). **The string moves are now the
+largest tractable entry, and they were on nobody's list.** They write `rdi`,
+`rsi` and memory — and `rcx` under `rep` — so a loop built on `rep movsq` leaves
+both pointers holding their pre-loop values in the recovered C.

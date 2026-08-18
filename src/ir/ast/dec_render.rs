@@ -591,6 +591,48 @@ fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: 
             write_expr_dec(value, out);
             out.push_str(")))");
         }
+        (WideArithmetic::CountTrailingZeros, [value]) => {
+            // The zero case is spelled out for the same reason the leading
+            // count spells it out: `__builtin_ctz(0)` is UNDEFINED, while
+            // `tzcnt` architecturally answers the operand width. The
+            // `({operand})` cast is the other half — the IR keeps a 32-bit
+            // machine register at its canonical 64-bit width, and counting a
+            // 64-bit quantity's trailing zeros would answer 32 too high for
+            // every operand whose low word is zero.
+            let builtin = if bits >= 64 {
+                "__builtin_ctzll"
+            } else {
+                "__builtin_ctz"
+            };
+            let operand = if bits >= 64 {
+                "unsigned long long"
+            } else {
+                "unsigned int"
+            };
+            let _ = write!(out, "((({operand})(");
+            write_expr_dec(value, out);
+            let _ = write!(out, ") == 0) ? {bits} : {builtin}(({operand})(");
+            write_expr_dec(value, out);
+            out.push_str(")))");
+        }
+        (WideArithmetic::PopulationCount, [value]) => {
+            // Total at every argument, so no zero case — but the width cast is
+            // still load-bearing: a 32-bit `popcnt` must not count set bits in
+            // the parent's stale high half.
+            let builtin = if bits >= 64 {
+                "__builtin_popcountll"
+            } else {
+                "__builtin_popcount"
+            };
+            let operand = if bits >= 64 {
+                "unsigned long long"
+            } else {
+                "unsigned int"
+            };
+            let _ = write!(out, "({builtin}(({operand})(");
+            write_expr_dec(value, out);
+            out.push_str(")))");
+        }
         _ => out.push_str("__unknown(0)"),
     }
 }

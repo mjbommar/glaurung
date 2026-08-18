@@ -2709,6 +2709,28 @@ or about one control — they are about what an unmodelled instruction costs.
 `movlpd`/`movhpd`/`movlps`/`movhps` have no arm anywhere in `src/ir/` and take
 this path (item 4's mechanism, confirmed).
 
+**Measured down, 2026-08-19.** The guard that names these is
+`SILENT_REGISTER_WRITERS`, and it has gone from **35 mnemonics / 1,372
+occurrences to 28 / 1,130** — `tzcnt` (130), `bts` (82), `popcnt` (14),
+`movlhps` (6), `btr` (6), `btc` (2), `rcr` (2), `movhlps`. The `movlpd`/`movhpd`
+family named above was cleared earlier by the same programme.
+
+Two lessons from that pass are worth carrying into the rest of the list. First,
+**the fixture corpus already contains most of these**: compiling all ~200
+fixture sources at O0/O2 under gcc and clang and grepping the disassembly found
+lanes for six mnemonics assumed to exist only in `samples/` library code, and
+one of them (`144_inline_asm:builtin_bit_intrinsics`) was a *failing* lane the
+lift then fixed. Do that scan before ranking anything here by guessed value.
+Second, **an empty-`outs` predicate is not the census**: `stosd`/`stosq` are
+deliberately empty because they lower to a `memory.fill` effect, and any
+predicate that cannot tell them from `movsb`/`movsq` — which really do update
+`rdi`/`rsi` — will rank noise.
+
+What remains, by volume: `syscall` 310, `movsb` 242, `aesenc` 222, `movsq` 134,
+`vmovdqu` 58, `vzeroupper` 26, `fstp` 34, then a long tail of 2s. **The string
+moves are the largest tractable entry** and were on no list until the bit
+family cleared out ahead of them.
+
 - **1 closed** by `fdbcf58` — `ReturnClass::SsePair`, 11 cells, −15 undefined
   reads. Its successor is the **mirror class**: `hfa197_pair2d_roundtrip` now has
   a fully correct RETURN and still fails on the ARGUMENT side, because a 16-byte
