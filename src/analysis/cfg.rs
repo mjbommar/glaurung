@@ -779,6 +779,56 @@ fn combine_dispatch_bounds(
     left
 }
 
+/// Drop the dispatch edges an over-scanned table extent contributed, and report
+/// how many arms the block is left with.
+///
+/// `attached` is the sequence of targets the speculative walk attached to
+/// `block_start`, one entry per table slot and in table order; `retained` is how
+/// many leading slots the whole-CFG range proof stands behind. Everything past
+/// that is scanner over-read — `discover_jump_tables` builds the LONGEST run of
+/// section words that decode to executable addresses, so it runs straight
+/// through the end of one table into whatever follows.
+///
+/// The removal is keyed on how many times each target occurs in the PROVEN
+/// prefix, never on set membership. Duplicate targets are the ordinary shape of
+/// a `switch` whose case labels are shared across indices, so the trimmed suffix
+/// routinely names a VA the proven prefix names too. Deleting every edge
+/// `block_start -> T` whose target appeared anywhere in the suffix therefore
+/// deleted the PROVEN arm as well, and nothing downstream could put it back:
+/// `cfg::repair::rebuild_block_relationships` de-duplicates successor lists, but
+/// de-duplication cannot restore a successor that was never added. Meanwhile the
+/// arm count went on claiming the prefix length, so `stats.resolved_dispatches`
+/// and the edge set disagreed about the same switch.
+///
+/// The count returned is read off the surviving edges rather than assumed, so
+/// the caller records an arm count the graph can actually be checked against.
+fn trim_unproven_dispatch_edges(
+    edges: &mut Vec<(u64, u64, ControlFlowEdgeKind)>,
+    block_start: u64,
+    attached: &[u64],
+    retained: usize,
+) -> usize {
+    let mut quota: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    for target in attached.iter().take(retained) {
+        *quota.entry(*target).or_default() += 1;
+    }
+    let mut kept = 0usize;
+    edges.retain(|(source, target, _)| {
+        if *source != block_start {
+            return true;
+        }
+        match quota.get_mut(target) {
+            Some(remaining) if *remaining > 0 => {
+                *remaining -= 1;
+                kept += 1;
+                true
+            }
+            _ => false,
+        }
+    });
+    kept
+}
+
 #[derive(Debug)]
 struct TentativeDispatchEdges {
     site: u64,
@@ -1477,12 +1527,11 @@ fn discover_function(
         if still_exact {
             if dispatch_edge.needs_bound_proof {
                 let targets = resolved_targets.expect("checked above");
-                let extras = dispatch_edge.attached[targets.len()..].to_vec();
-                if !extras.is_empty() {
+                if targets.len() < dispatch_edge.attached.len() {
                     trimmed_dispatches.push((
                         dispatch_edge.site,
                         dispatch_edge.block_start,
-                        extras,
+                        dispatch_edge.attached.clone(),
                         targets.len(),
                     ));
                 }
@@ -1502,14 +1551,16 @@ fn discover_function(
             ));
         }
     }
-    for (site, block_start, extras, retained) in trimmed_dispatches {
-        edges.retain(|(source, target, _)| !(*source == block_start && extras.contains(target)));
+    for (site, block_start, attached, retained) in trimmed_dispatches {
+        let kept = trim_unproven_dispatch_edges(&mut edges, block_start, &attached, retained);
         if let Some((_, arms)) = stats
             .resolved_dispatches
             .iter_mut()
             .find(|(resolved, _)| *resolved == site)
         {
-            *arms = retained;
+            // `kept`, not `retained`: the arm count is read off the surviving
+            // edges instead of being asserted next to them.
+            *arms = kept;
         }
     }
     for (site, block_start, attached, why) in invalid_dispatches {
@@ -3422,6 +3473,124 @@ mod gcc_dispatch_corpus_tests {
             "the real Clang O2 table jump must contribute all four case arms: {:?}",
             stats.resolved_dispatches
         );
+    }
+}
+
+#[cfg(test)]
+mod dispatch_trim_tests {
+    use super::*;
+
+    fn branch(source: u64, target: u64) -> (u64, u64, ControlFlowEdgeKind) {
+        (source, target, ControlFlowEdgeKind::Branch)
+    }
+
+    fn targets_from(edges: &[(u64, u64, ControlFlowEdgeKind)], source: u64) -> Vec<u64> {
+        edges
+            .iter()
+            .filter(|(edge_source, _, _)| *edge_source == source)
+            .map(|(_, target, _)| *target)
+            .collect()
+    }
+
+    /// A `switch` whose case labels are shared across indices attaches the same
+    /// target more than once, and `discover_jump_tables` scans the LONGEST run
+    /// of executable-looking words rather than the table's real end — so the
+    /// unproven suffix routinely names a VA the proven prefix names too.
+    ///
+    /// Removing edges by target VALUE (`extras.contains(target)`) deleted every
+    /// edge to such a target, proven arm included. Nothing downstream could
+    /// repair it: `cfg::repair` de-duplicates successor lists, and de-duplication
+    /// cannot restore a successor that was never added. The proven arm simply
+    /// left the graph while the recorded arm count still claimed it.
+    #[test]
+    fn a_proven_arm_survives_the_unproven_suffix_naming_it_again() {
+        let block = 0x1000;
+        // Table order: cases 0..5 share three bodies; slots 4 and 5 are scanner
+        // over-read past the proven extent and repeat 0x2010 and 0x2020.
+        let attached = [0x2010, 0x2020, 0x2010, 0x2030, 0x2010, 0x2020];
+        let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = attached
+            .iter()
+            .map(|target| branch(block, *target))
+            .collect();
+        // An unrelated block reaching the same case body must not be disturbed.
+        edges.push(branch(0x1800, 0x2010));
+
+        let kept = trim_unproven_dispatch_edges(&mut edges, block, &attached, 4);
+
+        assert_eq!(
+            targets_from(&edges, block),
+            vec![0x2010, 0x2020, 0x2010, 0x2030],
+            "the four proven slots survive in table order"
+        );
+        assert_eq!(kept, 4, "the arm count is the surviving edge count");
+        assert_eq!(
+            targets_from(&edges, 0x1800),
+            vec![0x2010],
+            "trimming one block's dispatch must not touch another block's edges"
+        );
+    }
+
+    /// The negative control: with all-distinct targets the value-keyed retain and
+    /// the multiplicity-keyed one agree exactly, so the previous behaviour is
+    /// preserved wherever the defect could not fire.
+    #[test]
+    fn an_all_distinct_table_is_trimmed_exactly_as_before() {
+        let block = 0x1000;
+        let attached = [0x2010, 0x2020, 0x2030, 0x2040, 0x2050];
+        let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = attached
+            .iter()
+            .map(|target| branch(block, *target))
+            .collect();
+
+        let kept = trim_unproven_dispatch_edges(&mut edges, block, &attached, 3);
+
+        assert_eq!(targets_from(&edges, block), vec![0x2010, 0x2020, 0x2030]);
+        assert_eq!(kept, 3);
+    }
+
+    /// A repeat entirely inside the proven prefix keeps BOTH of its edges: the
+    /// lifted block's successor list is positional, so collapsing shared case
+    /// labels here would lose which indices reach the shared body.
+    #[test]
+    fn a_repeat_inside_the_proven_prefix_keeps_every_edge() {
+        let block = 0x1000;
+        let attached = [0x2010, 0x2010, 0x2020, 0x2030];
+        let mut edges: Vec<(u64, u64, ControlFlowEdgeKind)> = attached
+            .iter()
+            .map(|target| branch(block, *target))
+            .collect();
+
+        let kept = trim_unproven_dispatch_edges(&mut edges, block, &attached, 3);
+
+        assert_eq!(targets_from(&edges, block), vec![0x2010, 0x2010, 0x2020]);
+        assert_eq!(kept, 3);
+    }
+
+    /// Nothing proven means nothing kept, and a fully proven table is untouched.
+    #[test]
+    fn the_degenerate_extents_behave() {
+        let block = 0x1000;
+        let attached = [0x2010, 0x2020, 0x2010];
+
+        let mut none: Vec<(u64, u64, ControlFlowEdgeKind)> = attached
+            .iter()
+            .map(|target| branch(block, *target))
+            .collect();
+        assert_eq!(
+            trim_unproven_dispatch_edges(&mut none, block, &attached, 0),
+            0
+        );
+        assert!(targets_from(&none, block).is_empty());
+
+        let mut all: Vec<(u64, u64, ControlFlowEdgeKind)> = attached
+            .iter()
+            .map(|target| branch(block, *target))
+            .collect();
+        assert_eq!(
+            trim_unproven_dispatch_edges(&mut all, block, &attached, attached.len()),
+            3
+        );
+        assert_eq!(targets_from(&all, block), attached.to_vec());
     }
 }
 
