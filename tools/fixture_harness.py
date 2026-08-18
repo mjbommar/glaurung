@@ -46,6 +46,40 @@ REQUIRED_MATRIX = [("gcc", "O0"), ("gcc", "O2"), ("clang", "O0"), ("clang", "O2"
 RUST_MATRIX = [("rustc", "O0"), ("rustc", "O2")]
 
 
+def path_remap_flags(compiler: str) -> list[str]:
+    """Flags that erase this checkout's absolute path from the produced object.
+
+    WHY THIS IS NOT COSMETIC. Without it a fixture binary embeds `ROOT` twice
+    over -- in `DW_AT_comp_dir`, in every DWARF file name, in `__FILE__`
+    expansions, and (for rustc) in the panic-location string literal of every
+    `unwrap`/bounds check. Those are STRINGS, so a checkout at a different path
+    depth produces different string lengths, a different `.rodata` layout, and
+    different section addresses; function discovery then finds a different set
+    of functions and every downstream census moves.
+
+    Measured, 2026-08-18: the def-use census in an agent worktree
+    (`<root>/.claude/worktrees/agent-XXXX`) read `rustc:O0 7522 violations in
+    3034 emitted functions` where the same commit in the main checkout read
+    `7525 / 3035`. Two agents on one day reported the committed baseline stale
+    on that evidence. Both were right about their own tree and wrong about
+    master, and either report, if trusted, would have written a bad baseline.
+
+    The map target is `.` rather than a sentinel like `/glaurung` so the
+    recorded paths stay resolvable relative to the compile's working directory,
+    which `compile_fixture` pins to `ROOT` for exactly that reason: the remap
+    only removes the prefix it is given, so a build whose cwd is elsewhere would
+    still bake that cwd into `DW_AT_comp_dir`.
+
+    Proven sufficient by construction, not assumed: building one fixture under
+    two roots whose path lengths differ by 60 characters gives byte-identical
+    objects for gcc, clang, g++ and rustc (`cmp` clean) with these flags, and
+    four different sizes without them.
+    """
+    if compiler == "rustc":
+        return [f"--remap-path-prefix={ROOT}=."]
+    return [f"-ffile-prefix-map={ROOT}=."]
+
+
 def matrix_for(src) -> list[tuple[str, str]]:
     """The compiler/optimization lanes that apply to one fixture source."""
     return RUST_MATRIX if str(src).endswith(".rs") else REQUIRED_MATRIX
@@ -190,12 +224,13 @@ def _compile_rust_fixture(
         f"opt-level={level}",
         "--crate-type",
         "cdylib",
+        *path_remap_flags("rustc"),
         *(["-D", "warnings"] if strict else []),
         "-o",
         str(out),
         str(src),
     ]
-    completed = TC.run(cmd)
+    completed = TC.run(cmd, cwd=ROOT)
     if completed.returncode != 0:
         return None, completed.stderr
     return out, ""
@@ -220,11 +255,12 @@ def compile_fixture(
         "-g",
         f"-{opt}",
         *warn,
+        *path_remap_flags(cc),
         "-o",
         str(out),
         str(src),
     ]
-    r = TC.run(cmd)
+    r = TC.run(cmd, cwd=ROOT)
     if r.returncode != 0:
         return None, (r.stderr.strip().splitlines() or ["?"])[-1]
     return out, ""

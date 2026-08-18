@@ -155,7 +155,7 @@ one (1.2 s for the equivalent `gcc:O2` selector). That is why there is no cache.
 scope. That is the check no metric performs: `structs:dist2` scores a *perfect*
 graph edit distance while reading two locals nothing assigns.
 
-### Two rules it will not let you break
+### Three rules it will not let you break
 
 **A selector that matches nothing is an error.** `03_loop_shape` (missing the
 `s`) exits 2 rather than reporting "no regressions in 0 lanes", which is what
@@ -171,6 +171,32 @@ SCOPED: 1 lane of 56 (2%) — no regressions in scope
 
 Refreshing from a partial run would record fresh verdicts for the lanes that ran
 and leave the rest of the file describing an older build.
+
+**A cell the baseline has never judged is reported, not counted as a pass.**
+"No regressions" is the result of a comparison, and a cell with no baseline entry
+was never compared. On a fixture added since the last refresh, every cell is in
+that state, and the old summary line said:
+
+```text
+SCOPED: 4 lanes of 768 (1%) — no regressions in scope
+```
+
+with thirteen of the twenty cells under it failing. True, and it read as a pass;
+only `--full` showed the verdicts, and even `--full` ended with the same line.
+Those cells are now listed under `UNBASELINED` and counted in the summary:
+
+```text
+SCOPED: 4 lanes of 768 (1%) — NO VERDICT: all 20 cell(s) are unbaselined,
+nothing was compared (use --full to see what they did)
+```
+
+Partial coverage gets the shorter form, `..., N of M cell(s) UNBASELINED and not
+judged (use --full)`. The status stays 0 — an unjudged cell is not a failure, it
+is the absence of a judgement — so the summary line is where it is said out loud.
+The same rule is why `--arch` can now name a fixture that `arch_baseline.json`
+has never recorded (it used to fail as "no function matches", indistinguishable
+from a typo) and why a function present in a built object but in no baseline cell
+gets a `note:` naming it.
 
 ## Named test sets
 
@@ -533,3 +559,23 @@ tools/decbench_matrix.py --write-baseline      # metrics, all 56 cells
 An improvement is reported, never auto-absorbed: `dectest` and the gate both
 tell you the baseline is stale and leave refreshing to you, after you have read
 the changed output.
+
+### A baseline is not a property of the directory you built in
+
+Every fixture compile passes `-ffile-prefix-map=$ROOT=.` (`--remap-path-prefix`
+for rustc) and runs with its working directory pinned to the repository root, so
+the produced object contains no absolute path — see
+`fixture_harness.path_remap_flags`. Without it, `DW_AT_comp_dir`, every DWARF
+file name, `__FILE__`, and (for rustc) every panic-location literal carry the
+checkout's path. Those are strings: a checkout at a different depth has
+different string lengths, a different `.rodata`, different section addresses,
+and therefore a different set of discovered functions.
+
+That is not theoretical. On 2026-08-18 two independent agents, each working in a
+`.claude/worktrees/agent-XXXX` checkout, reported `defuse_baseline.json` stale on
+master; the same commit in the main checkout reproduced the committed numbers
+exactly. Both were right about their own tree and wrong about master, and either
+report, if trusted, would have written a bad baseline. The flags make the objects
+byte-identical across roots (proved by `cmp` over gcc, clang, g++ and rustc at
+two path depths 60 characters apart), so a worktree and the main checkout now
+measure the same corpus.

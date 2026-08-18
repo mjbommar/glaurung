@@ -430,11 +430,11 @@ def test_architecture_verdicts_are_compared_against_the_arch_baseline():
     observed = {"03_loop_shapes:i386:O2": {"for_sum": "fail"}}
     host = {"03_loop_shapes:i386:O2": {"for_sum": "pass"}}
     arch = {"03_loop_shapes:i386:O2": {"for_sum": "fail"}}
-    regressions, _improvements, infra = D.compare(
+    regressions, _improvements, infra, _unbaselined = D.compare(
         observed, host, [lane], arch_baseline=arch
     )
     assert not regressions and not infra
-    regressions, _improvements, _infra = D.compare(
+    regressions, _improvements, _infra, _unbaselined = D.compare(
         observed,
         host,
         [lane],
@@ -532,3 +532,164 @@ def test_unjudged_names_are_empty_when_nothing_is_built(tmp_path, monkeypatch):
     trusted."""
     monkeypatch.setattr(D.H, "BUILD", tmp_path)
     assert D._unjudged_function_names("195_by_value_aggregates", []) == []
+
+
+# --- a gate must never render "nothing to compare against" as a pass ---------
+#
+# The family: three places where `dectest` compared a run to a baseline that had
+# no entry for it, and reported the absence as agreement.
+#
+#   1. a new fixture's non-required functions are outside the selectable
+#      universe until the first refresh -- reported by `unbaselined_fixture_notes`;
+#   2. `--arch` could not reach an unbaselined fixture at all, because
+#      `arch_lane_function_universe` read `arch_baseline.json` alone;
+#   3. and the summary line, below, which said "no regressions in scope" over a
+#      fixture whose forty cells included five failures.
+#
+# The rule they share: a cell the baseline says nothing about is a fourth
+# outcome, not a silent fourth kind of pass.
+
+
+def test_a_cell_with_no_baseline_entry_is_reported_not_swallowed():
+    """The core of instance 3. `fail` against no baseline is not a regression --
+    but it is emphatically not "no regressions" either."""
+    lane = D.Lane("03_loop_shapes", "gcc", "O0", ("for_sum", "while_sum"))
+    observed = {"03_loop_shapes:gcc:O0": {"for_sum": "fail", "while_sum": "pass"}}
+    regressions, improvements, infra, unbaselined = D.compare(observed, {}, [lane])
+    assert not regressions and not improvements and not infra
+    assert len(unbaselined) == 2
+    assert any("for_sum: fail (no baseline entry)" in u for u in unbaselined)
+
+
+def test_a_run_that_judged_nothing_does_not_claim_no_regressions():
+    """The exact shape that cost two agents a session: four lanes, forty cells,
+    five of them failing, and a last line reading `no regressions in scope`."""
+    lanes = D.resolve(["03_loop_shapes:gcc:O0"])
+    cells = sum(len(lane.funcs) for lane in lanes)
+    summary = D.summary_line(
+        lanes,
+        regressions=[],
+        improvements=[],
+        full_matrix=False,
+        unbaselined=[f"c{i}" for i in range(cells)],
+    )
+    assert "no regressions" not in summary
+    assert "NO VERDICT" in summary
+    assert str(cells) in summary
+
+
+def test_a_partly_unbaselined_run_still_says_how_much_it_did_not_judge():
+    lanes = D.resolve(["03_loop_shapes:gcc:O0"])
+    summary = D.summary_line(
+        lanes,
+        regressions=[],
+        improvements=[],
+        full_matrix=False,
+        unbaselined=["03_loop_shapes:gcc:O0:new_helper: fail (no baseline entry)"],
+    )
+    assert "no regressions in scope" in summary
+    assert "1 of" in summary and "UNBASELINED" in summary
+
+
+def test_a_fully_baselined_run_says_nothing_about_unbaselined_cells():
+    """The report has to be rare, or it becomes noise and stops being read."""
+    lanes = D.resolve(["03_loop_shapes:gcc:O0"])
+    summary = D.summary_line(lanes, regressions=[], improvements=[], full_matrix=False)
+    assert "UNBASELINED" not in summary and "NO VERDICT" not in summary
+    assert "no regressions in scope" in summary
+
+
+def test_a_regression_still_outranks_an_unbaselined_cell():
+    lanes = D.resolve(["03_loop_shapes:gcc:O0"])
+    summary = D.summary_line(
+        lanes,
+        regressions=["03_loop_shapes:gcc:O0:for_sum: pass -> fail"],
+        improvements=[],
+        full_matrix=False,
+        unbaselined=["03_loop_shapes:gcc:O0:new_helper: fail (no baseline entry)"],
+    )
+    assert "1 REGRESSION(S)" in summary
+
+
+def test_an_unbaselined_fixture_is_selectable_on_an_architecture(monkeypatch):
+    """Instance 2 of the family. `arch_lane_function_universe` used to be read
+    from `arch_baseline.json` alone, so a fixture added since the last refresh
+    could not be named on ANY architecture -- the selector failed as if it were a
+    typo. It is reachable now because an unjudged verdict is reported rather than
+    hidden."""
+    monkeypatch.setattr(D, "_arch_baseline", dict)
+    universe = D.arch_lane_function_universe()
+    fixture = next(
+        name
+        for name in sorted(M.REQUIRED_FUNCTIONS)
+        if next(p for p in D.FIXTURES.glob(f"src/{name}.*") if p.stem == name).suffix
+        != ".rs"
+    )
+    assert (fixture, "i386", "O0") in universe
+    assert set(universe[(fixture, "i386", "O0")]) == set(M.REQUIRED_FUNCTIONS[fixture])
+
+
+def test_the_arch_universe_union_changes_nothing_for_a_baselined_corpus():
+    """The union must be inert over what is already recorded, or it would quietly
+    widen every existing `--arch` run."""
+    universe = D.arch_lane_function_universe()
+    for cell, fns in D._arch_baseline().items():
+        if cell.startswith("__") or not isinstance(fns, dict) or "__lane__" in fns:
+            continue
+        parts = tuple(cell.split(":"))
+        if len(parts) != 3 or parts[1] not in D.ARCHES:
+            continue
+        recorded = {n for n in fns if not n.startswith("__")}
+        assert set(universe[parts]) == recorded, cell
+
+
+def test_a_declared_arch_gap_is_still_a_gap_not_a_manufactured_lane():
+    """`02_integer_widths` has no i386 form (`__int128` is not a 32-bit type).
+    The manifest union must not resurrect it as a runnable lane -- the probed,
+    declared gap is the more useful answer."""
+    gaps = D.arch_unsupported_lanes()
+    assert gaps, "expected at least one declared gap in arch_baseline.json"
+    universe = D.arch_lane_function_universe()
+    for key in gaps:
+        assert key not in universe, key
+
+
+def test_a_function_the_baseline_has_never_seen_is_named_even_on_a_baselined_fixture(
+    monkeypatch,
+):
+    """Instance 1's harder form: add a function to an EXISTING fixture and it
+    lands in no baseline cell, so no selector reaches it and -- before this --
+    nothing said so. A brand-new fixture at least got its own note."""
+    monkeypatch.setattr(
+        D, "_unjudged_function_names", lambda _fixture, _known: ["brand_new_helper"]
+    )
+    lanes = D.resolve(["03_loop_shapes:gcc:O0"])
+    (note,) = D.unbaselined_fixture_notes(lanes)
+    assert "appear in NO baseline cell" in note
+    assert "brand_new_helper" in note
+
+
+def test_the_new_function_note_compares_against_the_whole_baseline_not_the_selection(
+    monkeypatch,
+):
+    """A scoped selector must not make the note fire. `13_loop_early_exit:gcc:O0:bisect`
+    judges one function of many, and calling the other five "never seen" would
+    make the note noise within a day."""
+    seen = {}
+
+    def spy(fixture, known):
+        seen[fixture] = list(known)
+        return []
+
+    monkeypatch.setattr(D, "_unjudged_function_names", spy)
+    lanes = D.resolve(["03_loop_shapes:gcc:O0:for_sum"])
+    assert D.unbaselined_fixture_notes(lanes) == []
+    assert len(seen["03_loop_shapes"]) > 1, seen
+
+
+def test_the_new_function_note_is_silent_on_the_committed_corpus():
+    """Measured: 194 fixtures, every built lane, zero exports outside the
+    baseline. If this goes red, either a source outgrew its baseline (refresh it)
+    or the note has become noise (fix the note)."""
+    lanes = D.resolve(["@smoke"])
+    assert D.unbaselined_fixture_notes(lanes) == []

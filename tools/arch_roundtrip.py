@@ -242,12 +242,17 @@ def _build_argv(compiler: str, src: Path, opt: str, out: Path, cflags=()) -> lis
     """The fixture compile command line.
 
     Deliberately IDENTICAL to `fixture_harness.compile_fixture`'s execution build
-    (`-shared -fPIC -g -O{opt} -w`) plus whatever selects the target. No extra
-    flags — not even `-fno-stack-protector`, which the prototype added: the
-    x86-64 gate compiles WITH the distribution's default
-    `-fstack-protector-strong`, so turning it off here would mean the control
-    lane was measuring a code shape the real gate never sees, and the other
-    architectures were measuring a code shape no distro ships.
+    (`-shared -fPIC -g -O{opt} -w` + `fixture_harness.path_remap_flags`) plus
+    whatever selects the target. No extra flags — not even
+    `-fno-stack-protector`, which the prototype added: the x86-64 gate compiles
+    WITH the distribution's default `-fstack-protector-strong`, so turning it
+    off here would mean the control lane was measuring a code shape the real
+    gate never sees, and the other architectures were measuring a code shape no
+    distro ships.
+
+    The remap flags come from `fixture_harness` rather than being restated, so
+    the control lane cannot drift from the gate it is the control FOR; see that
+    function for why an absolute build path in the object moves the census.
     """
     return [
         compiler,
@@ -256,6 +261,7 @@ def _build_argv(compiler: str, src: Path, opt: str, out: Path, cflags=()) -> lis
         "-g",
         f"-{opt}",
         "-w",
+        *H.path_remap_flags(compiler),
         *cflags,
         "-o",
         str(out),
@@ -318,12 +324,17 @@ def _cross_build(arch: str, src: Path, opt: str, out: Path) -> tuple[bool, str]:
     """
     compiler = compiler_for(arch, src)
     argv = _build_argv(compiler, src, opt, out, TARGETS[arch].cflags)
+    # cwd is pinned to ROOT because it becomes `DW_AT_comp_dir`, and the remap in
+    # `_build_argv` can only erase the prefix it is given: a build launched from
+    # somewhere else would bake that somewhere else into the object.
     if TARGETS[arch].pinned:
-        r = TC.run(argv)
+        r = TC.run(argv, cwd=ROOT)
     else:
         if shutil.which(compiler) is None:
             return False, f"no such compiler: {compiler}"
-        r = subprocess.run(argv, capture_output=True, text=True, check=False)
+        r = subprocess.run(
+            argv, cwd=str(ROOT), capture_output=True, text=True, check=False
+        )
     return r.returncode == 0, " ".join((r.stderr or "no compiler output").split())
 
 
@@ -336,7 +347,7 @@ def _reference_build(src: Path, opt: str, out: Path) -> tuple[bool, str]:
     verdict a property of that machine.
     """
     compiler = "g++" if src.suffix == ".cpp" else "gcc"
-    r = TC.run(_build_argv(compiler, src, opt, out))
+    r = TC.run(_build_argv(compiler, src, opt, out), cwd=ROOT)
     return r.returncode == 0, " ".join((r.stderr or "no compiler output").split())
 
 

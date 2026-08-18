@@ -126,12 +126,28 @@ def ensure_image() -> str:
     return IMAGE
 
 
+#: Flags whose value is a prefix REWRITE RULE (`from=to`), not an input path.
+#: Splitting one at its first `=` like an ordinary `-I/path` yields the
+#: nonexistent path `<root>=.`, whose *parent* would then be mounted — a
+#: strictly wider mount than the compile needs, and one that changes with the
+#: checkout's depth. The `from` side is always the work directory or an ancestor
+#: of the source, so it is already mounted on its own account.
+_REWRITE_RULE_FLAGS = (
+    "-ffile-prefix-map=",
+    "-fdebug-prefix-map=",
+    "-fmacro-prefix-map=",
+    "--remap-path-prefix=",
+)
+
+
 def _mount_dirs(argv: list[str], cwd: Path) -> list[Path]:
     """Host directories the invocation touches, mounted at their host paths so no
     argument rewriting is needed (and so DWARF `DW_AT_comp_dir`/file paths are
     identical to a host build)."""
     dirs: set[Path] = {cwd.resolve()}
     for tok in argv[1:]:
+        if tok.startswith(_REWRITE_RULE_FLAGS):
+            continue
         if tok.startswith("-") and "/" not in tok:
             continue
         # A flag may carry a path (-o/path, -I/path, --sysroot=/path).

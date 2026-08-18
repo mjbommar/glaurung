@@ -410,8 +410,28 @@ def test_the_control_lane_is_compiled_exactly_like_the_x86_64_gate():
     src = Path("/tmp/x.c")
     out = Path("/tmp/x.so")
     ours = A._build_argv("gcc", src, "O2", out)
-    theirs = ["gcc", "-shared", "-fPIC", "-g", "-O2", "-w", "-o", str(out), str(src)]
+    # The remap flags are taken FROM `fixture_harness` rather than restated, for
+    # the same reason as every other flag here: a control lane compiled unlike
+    # the gate is not a control. See `fixture_harness.path_remap_flags` for why
+    # an absolute build path in the object moves the census.
+    theirs = [
+        "gcc",
+        "-shared",
+        "-fPIC",
+        "-g",
+        "-O2",
+        "-w",
+        *H.path_remap_flags("gcc"),
+        "-o",
+        str(out),
+        str(src),
+    ]
     assert ours == theirs, f"{ours} != fixture_harness.compile_fixture's {theirs}"
+    assert H.path_remap_flags("gcc"), (
+        "the build must erase the checkout path, or a fixture object differs "
+        "between checkouts and every census built on it is a property of the "
+        "build directory"
+    )
     assert A.TARGETS[A.CONTROL_ARCH].cflags == (), (
         "the control lane must add no target-selection flags at all"
     )

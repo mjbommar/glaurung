@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
 import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+import manifest as M  # ty: ignore[unresolved-import]
 
 BASELINE = ROOT / "tests" / "decompiler_fixtures" / "baseline.json"
 
@@ -187,3 +188,89 @@ def test_an_unknown_toolchain_mode_is_rejected(monkeypatch):
         assert "whatever" in str(e)
     else:
         raise AssertionError("an unrecognised toolchain mode must fail closed")
+
+
+# --- the build must not depend on where the checkout lives ------------------
+
+
+def test_a_prefix_map_rule_is_not_mistaken_for_an_input_path(tmp_path):
+    """`-ffile-prefix-map=/a/b=.` splits at its first `=` into `/a/b=.`, which is
+    not a directory, so the generic rule would mount its PARENT -- a wider mount
+    than the compile needs and one that changes with the checkout's depth."""
+    argv = [
+        "gcc",
+        "-c",
+        f"-ffile-prefix-map={tmp_path}=.",
+        "-o",
+        str(tmp_path / "x.o"),
+        str(tmp_path / "x.c"),
+    ]
+    mounts = TC._mount_dirs(argv, tmp_path)
+    assert tmp_path.parent not in mounts, mounts
+    assert mounts == [tmp_path]
+
+
+def test_the_rustc_rule_is_skipped_too(tmp_path):
+    argv = [
+        "rustc",
+        f"--remap-path-prefix={tmp_path}=.",
+        "-o",
+        str(tmp_path / "x.so"),
+        str(tmp_path / "x.rs"),
+    ]
+    assert TC._mount_dirs(argv, tmp_path) == [tmp_path]
+
+
+def test_ordinary_equals_form_flags_are_still_mounted(tmp_path):
+    """The skip must be narrow. `--sysroot=/path` has the same `flag=value`
+    shape as a prefix-map rule and still names a real input directory, so it must
+    survive. Mounted from OUTSIDE the work directory, since anything under it is
+    already covered by the work mount and would prove nothing.
+
+    (`-I/path` in its ATTACHED form is not handled by `_mount_dirs` at all --
+    it has no `=`, so the token keeps its `-I` and resolves to nothing. Nothing
+    in the fixture gate passes one, so this is noted rather than asserted.)
+    """
+    work = tmp_path / "work"
+    sysroot = tmp_path / "sysroot"
+    work.mkdir()
+    sysroot.mkdir()
+    argv = [
+        "gcc",
+        f"--sysroot={sysroot}",
+        f"-ffile-prefix-map={work}=.",
+        "-o",
+        str(work / "x.o"),
+        str(work / "x.c"),
+    ]
+    mounts = TC._mount_dirs(argv, work)
+    assert sysroot in mounts and work in mounts, mounts
+
+
+def test_every_fixture_compiler_erases_the_checkout_path():
+    """The flag is per-front-end: rustc does not accept `-ffile-prefix-map` and
+    gcc/clang do not accept `--remap-path-prefix`."""
+    assert H.path_remap_flags("rustc") == [f"--remap-path-prefix={H.ROOT}=."]
+    for cc in ("gcc", "clang", "g++", "arm-linux-gnueabihf-gcc"):
+        assert H.path_remap_flags(cc) == [f"-ffile-prefix-map={H.ROOT}=."], cc
+
+
+def test_a_built_fixture_contains_no_absolute_checkout_path():
+    """The property the flags exist for, checked on a real object rather than on
+    the command line. A path in the binary is a STRING: its length moves
+    `.rodata`, which moves section addresses, which changes what function
+    discovery finds -- so a census taken in a worktree disagrees with the same
+    commit in the main checkout. Measured 2026-08-18: `rustc:O0` read 7522
+    violations over 3034 functions in an agent worktree and 7525 over 3035 in the
+    main checkout, and two agents reported the committed baseline stale on it."""
+    src = next(
+        p
+        for p in sorted((H.ROOT / "tests/decompiler_fixtures/src").glob("*.c"))
+        if p.stem in M.REQUIRED_FUNCTIONS
+    )
+    so, err = H.compile_fixture(src, "gcc", "O0")
+    assert so is not None, err
+    blob = so.read_bytes()
+    assert bytes(str(H.ROOT), "utf-8") not in blob, (
+        f"{so.name} embeds the checkout path, so its bytes differ between checkouts"
+    )
