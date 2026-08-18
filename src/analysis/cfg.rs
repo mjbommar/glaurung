@@ -4069,6 +4069,53 @@ mod analysis_deadline_tests {
         );
     }
 
+    /// The `.eh_frame` sweep obeys the ceiling like its twelve siblings.
+    ///
+    /// It was the one whole-image seed scan in `seeds` outside `scan_within`,
+    /// so on the byte-only path — the one every `analyze_functions_bytes*`
+    /// entry point takes — it ran a full sweep of the image to completion after
+    /// the ceiling had already passed. A bounded overrun rather than a
+    /// correctness bug, which is why nothing caught it: every other measure of
+    /// the run was unaffected. `eh_frame_candidates` is the observable, because
+    /// it counts what the sweep returned rather than what survived the gates
+    /// after it.
+    /// A large ELF that actually carries `.eh_frame`.
+    ///
+    /// `big_sample()` cannot be used for the sweep test: it is a static Go
+    /// binary, and Go carries its own `pclntab` instead, so the phase returns
+    /// zero candidates there under any budget. Measuring a guard on a scan that
+    /// finds nothing proves nothing.
+    fn big_eh_frame_sample() -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/rust/hello-rust-debug");
+        std::fs::read(path).expect("read the checked-in Rust debug sample")
+    }
+
+    #[test]
+    fn an_impossible_deadline_skips_the_eh_frame_sweep_too() {
+        let data = big_eh_frame_sample();
+        let (_, _cg, full_stats) = analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        assert!(
+            full_stats.eh_frame_candidates > 0,
+            "the sample must actually exercise the .eh_frame phase for this test to mean anything"
+        );
+        let (_, _cg, stats) = analyze_functions_bytes_with_stats(
+            &data,
+            &Budgets {
+                total_timeout_ms: 1,
+                ..Budgets::default()
+            },
+        );
+        assert!(stats.hit_total_timeout, "the 1ms ceiling must be reported");
+        assert_eq!(
+            stats.eh_frame_candidates, 0,
+            "a scan that starts after the ceiling has passed must return nothing, \
+             not sweep {} bytes and report {} candidates",
+            data.len(),
+            stats.eh_frame_candidates
+        );
+    }
+
     /// A budget that is not exceeded must not change what discovery finds. This
     /// is the property the whole change stands on — an enforcement that quietly
     /// drops functions is worse than no enforcement.

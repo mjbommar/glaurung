@@ -337,8 +337,20 @@ pub(super) fn collect_seeds(
     // suppress a proven start. Before this, a stripped ELF was discovered from
     // its entry point and direct calls alone, which recovered 48-57% of these
     // starts on glibc binaries and none at all on small musl ones.
+    // Only the byte-only arm is deadline-guarded, and the asymmetry is the
+    // point. `ProgramImage::eh_frame_functions` returns a stored field — an
+    // index lookup that cannot overrun, and guarding it would drop proven
+    // starts for no gain. The `image == None` arm is a full-image sweep, and it
+    // is the arm every `analyze_functions_bytes*` entry point takes. It was the
+    // only whole-image scan in this module outside `scan_within`, so it ran to
+    // completion after the total-timeout ceiling had already passed while its
+    // twelve siblings returned empty.
     let eh_frame_functions = image.map_or_else(
-        || crate::analysis::exception::eh_frame_functions(data),
+        || {
+            scan_within(deadline, stats, || {
+                crate::analysis::exception::eh_frame_functions(data)
+            })
+        },
         |image| image.eh_frame_functions().to_vec(),
     );
     stats.eh_frame_candidates = eh_frame_functions.len();
