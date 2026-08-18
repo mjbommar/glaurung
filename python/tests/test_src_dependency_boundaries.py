@@ -229,6 +229,13 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     ("program/format_environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("python_bindings/ir.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("python_bindings/ir/callee_contracts.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
+    # The AST pass-list dump and the two LLIR-stage dumps, moved verbatim out of
+    # `python_bindings/ir.rs` when the shared pipeline was split out. Same reads,
+    # same `eprintln!`-only effect.
+    ("python_bindings/ir/pipeline.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
+    # The prepared-AST and rendered-C dumps, moved verbatim out of
+    # `python_bindings/ir.rs` with the DecBench renderer.
+    ("python_bindings/ir/decbench_render.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("python_bindings/ir/dwarf_contracts.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     # `diagnostics_are_disabled()` iterates this exact reviewed list to decide
     # whether the *render cache* may be reused; it never changes what a fresh
@@ -244,7 +251,10 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     # verification itself (`violations`) is always computed; this only gates
     # whether it is echoed as comments in the artifact. See the docstring at
     # `splice_verify_comments`'s call site for the documented reasoning.
-    ("python_bindings/ir.rs", '"GLAURUNG_VERIFY_DEFS"'): "instrumentation",
+    (
+        "python_bindings/ir/decbench_render.rs",
+        '"GLAURUNG_VERIFY_DEFS"',
+    ): "instrumentation",
     # -- decompiler-scope: resource selection --
     # Which FLIRT signature library to consult; has a documented cwd-relative
     # default and a `None` (no-op) fallback if nothing is reachable.

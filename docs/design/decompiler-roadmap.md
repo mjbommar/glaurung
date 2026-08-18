@@ -1181,7 +1181,7 @@ while `ast.rs` was at 11,582 nobody looked past it.
 | 5,371 | `analysis/cfg.rs` | **not in the list below**; cut prepared, not yet landed |
 | 4,183 | `ir/lift_x86.rs` | packed/SSE family out (`ef8a3dc5`); flags family next |
 | 3,526 | `ir/call_args.rs` | cdecl32 out (`90e791e5`); tail calls next, 0 widenings |
-| 3,402 | `python_bindings/ir.rs` | priority split, untouched |
+| 1,422 | `python_bindings/ir.rs` | 3 cuts landed 2026-08-18; 2,738 -> 1,422, **-48%**, and it stopped being `product_max_loc` (2,738 -> 2,644, now `analysis/java_class.rs`) |
 | 767 | `ir/stack_locals.rs` | 4 layers out (3,241 -> 767); **first file taken below 1,000**, review entry deleted |
 | 3,057 | `ir/types_recover.rs` | value-keyed collection out (`90e791e5`) |
 | 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
@@ -1308,7 +1308,42 @@ Priority splits, performed only as ownership migrates:
   frame-anchor predicates, `StackContext`, the data model, naming, and
   `stack_arg_layout`. Its `REVIEWED_LARGE_MODULES` licence has been deleted.
 - `structure.rs`: graph algorithms, regions, selection, verification, and HIR.
-- `python_bindings/ir.rs`: thin adapters over session, engine, and typed results.
+- `python_bindings/ir.rs`: the LLIR dict encoder and lift entry points, the
+  shared LLIR/AST stage pipeline, and the DecBench renderer — leaving the PyO3
+  adapters.
+  **Done in three cuts, 2026-08-18. 2,738 -> 1,422 PRODUCT LOC, down 48%**, and
+  the file stopped being the tree's largest (`product_max_loc` 2,738 -> 2,644,
+  now `analysis/java_class.rs`). `ir/lift.rs` (396) took `encode_op` and its
+  seven helpers plus `lift_for_arch`/`lift_bytes`/`lift_window_at` — the dict
+  shape the module header documents, and its producers, in one owner.
+  `ir/pipeline.rs` (504) took `run_ast_passes`, `prepare_llir_for_lowering`,
+  `PreparedLlir` and the four stage helpers that the four Python entry points
+  share. `ir/decbench_render.rs` (461) took prepare/verify/render of the
+  DecBench C artifact. `@o0`/`@o2` at 376 lanes and `@returns`/`@aggregates`
+  (i386/armv7/aarch64) with **zero regressions AND zero improvements**; dead
+  code unchanged in both configurations (0 with `--features python-ext`, 98
+  without); `MISSING: 0` on both the code-token and the comment-word multiset.
+
+  Two things this split adds to the three learned from `ast.rs` above:
+
+  - **The named destination was fiction and the "thin adapters" premise was
+    false.** This entry used to read "thin adapters over session, engine, and
+    typed results". `session` existed; `engine` and `typed results` named
+    nothing that was ever built. And the four largest items in the file were not
+    adapters at all — `decbench_text_with_installed_environment` (349),
+    `encode_op` (212), `run_ast_passes` (188) and `prepare_llir_for_lowering`
+    (123) are the pipeline itself, which is why the real seams came out as
+    lift/pipeline/render rather than as the three the entry promised.
+  - **Moving a `#[pyfunction]` needs a check no Rust test performs.**
+    `register_ir_bindings` is the only thing that puts an adapter on the module,
+    and it is a plain function body: drop a `wrap_pyfunction!` line and the crate
+    still compiles, `cargo test --features python-ext` still reports 2,613
+    passing, and the dead-code count stays at 0 — the API just quietly loses a
+    function. Keeping the registration list byte-identical is necessary but not
+    sufficient evidence, so the module surface was enumerated after the move: 8
+    attributes on `glaurung._native.ir` (`DecompilerSession` plus the seven
+    functions, unchanged), and `lift_bytes` was then called on real x86-64 bytes
+    to prove the moved adapter and the moved encoder still meet.
 
 End-state fitness targets:
 

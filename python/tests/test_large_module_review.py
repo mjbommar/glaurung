@@ -125,7 +125,25 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "scheduled split: graph algorithms, regions, selection, verification, and HIR."
     ),
     "python_bindings/ir.rs": (
-        "scheduled split: thin adapters over session, engine, and typed results."
+        "scheduled split, three cuts taken 2026-08-18 (2,738 -> 1,422): "
+        "ir/lift.rs (396) took the LLIR dict encoder and the two lift "
+        "entry points the module header is about; ir/pipeline.rs (504) took "
+        "the shared LLIR/AST stage pipeline -- run_ast_passes, "
+        "prepare_llir_for_lowering, PreparedLlir and the four stage helpers; "
+        "ir/decbench_render.rs (461) took prepare/verify/render of the "
+        "DecBench C artifact. Textually pure moves, MISSING: 0 on both the "
+        "code-token and comment-word multisets, costing 19 pub(super) on "
+        "moved privates (seven of them the PreparedLlir type and its six "
+        "destructured fields) and zero pub(crate)/pub. The previous note here "
+        "read 'thin adapters over session, engine, and typed results' and was "
+        "false in both halves: 'engine' and 'typed results' named no "
+        "destination that ever existed, and the file's four largest items "
+        "were not adapters -- decbench_text_with_installed_environment (349), "
+        "encode_op (212), run_ast_passes (188) and prepare_llir_for_lowering "
+        "(123) were the engine itself. What is left IS the adapter layer: "
+        "seven #[pyfunction] entry points, decompile_at_session, the "
+        "registration function, and the decbench prototype contract the "
+        "pipeline locks against."
     ),
     # -- accepted: one owner, one reason to change --
     "analysis/cfg.rs": (
