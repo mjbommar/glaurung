@@ -288,16 +288,27 @@ def test_xorps_self_lifts_to_zero_assign():
     assert all(o["src"] == {"kind": "const", "value": 0} for o in ops)
 
 
-def test_movsd_scalar_lifts_to_assign():
+def test_movsd_scalar_also_defines_the_lanes_it_writes():
+    """A scalar XMM write must mirror itself into the dword lanes.
+
+    `movsd xmm0, xmm1` used to define only the whole-register scalar name, so a
+    later packed read of `xmm0_d0` found a lane nothing had written -- and four
+    undefined lanes XORed together fold to zero, which is how whole function
+    bodies (`abs`, `negate`, `copysign`) rendered as `return 0;`.
+
+    The REGISTER form preserves bits 64..127, so exactly two lanes are defined
+    here. `movsd xmm, m64` zeroes the upper quadword and defines all four; the
+    per-form table lives on `split_xmm_scalar_view`.
+    """
     ops = g.ir.lift_bytes(bytes([0xF2, 0x0F, 0x10, 0xC1]), 0x1000, 64)
-    assert ops == [
-        {
-            "va": 0x1000,
-            "kind": "assign",
-            "dst": "xmm0",
-            "src": {"kind": "reg", "name": "xmm1"},
-        }
+    assert [(o["kind"], o["dst"]) for o in ops] == [
+        ("assign", "xmm0"),
+        ("trunc", "xmm0_d0"),
+        ("extract", "xmm0_d1"),
     ]
+    assert ops[0]["src"] == {"kind": "reg", "name": "xmm1"}
+    # Lanes 2 and 3 are deliberately absent: the register form preserves them.
+    assert not any(o["dst"] in ("xmm0_d2", "xmm0_d3") for o in ops)
 
 
 def test_movsd_string_lifts_to_copy_and_pointer_advance():
@@ -470,8 +481,11 @@ def test_decompile_pe_pdb_cache_applies_outer_function_name():
     assert "KiSystemStartup" in text_pdb.splitlines()[0]
     assert "sub_140a88010" not in text_pdb.splitlines()[0]
     text_c_pdb = g.ir.decompile_at(
-        str(NTOSKRNL_SAMPLE), va, timeout_ms=5000,
-        style="c", pdb_cache=str(MSVC_PDB_CACHE),
+        str(NTOSKRNL_SAMPLE),
+        va,
+        timeout_ms=5000,
+        style="c",
+        pdb_cache=str(MSVC_PDB_CACHE),
     )
     lines_c = text_c_pdb.splitlines()
     assert lines_c[0] == "// PDB: KiSystemStartup"
@@ -494,9 +508,10 @@ def test_pdb_symbol_for_va_returns_none_on_miss():
     """Missing cache / unknown VA / empty path must return None (not raise)."""
     assert g.symbols.pdb_symbol_for_va("", 0, "") is None
     # Non-existent cache directory.
-    assert g.symbols.pdb_symbol_for_va(
-        "/nonexistent/binary", 0x1000, "/nonexistent/cache"
-    ) is None
+    assert (
+        g.symbols.pdb_symbol_for_va("/nonexistent/binary", 0x1000, "/nonexistent/cache")
+        is None
+    )
 
 
 def test_pdb_symbol_map_populates_for_fixture():
