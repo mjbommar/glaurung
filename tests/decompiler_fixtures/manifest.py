@@ -1728,6 +1728,145 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "ptr_len": 8,
         "arg_values": {1: [0, 1, 3, 7, -1, -4]},
     },
+    # Returns narrower than a register. `nrw194_bool_and` needs vectors where
+    # BOTH masks are set, because that is the only case where normalising each
+    # operand to 0/1 before the AND differs from ANDing the raw masks (4 & 8 is
+    # zero). The seeded fuzz draws from -64..63 and hits it often; the explicit
+    # vectors below make it independent of the draw, and pin the neighbouring
+    # cases where exactly one operand is set.
+    ("194_narrow_return_widths", "nrw194_bool_and"): {
+        "extra_vectors": [[4, 8], [4, 0], [0, 8], [12, 24], [-1, -1], [5, 9]],
+    },
+    ("194_narrow_return_widths", "nrw194_bool_wide_control"): {
+        "extra_vectors": [[4, 8], [4, 0], [0, 8], [12, 24], [-1, -1], [5, 9]],
+    },
+    # `x & 0x100` is outside the fuzz draw's -64..63, so without these the bit
+    # this function is about is never set and the answer is a constant 0.
+    ("194_narrow_return_widths", "nrw194_bool_bit"): {
+        "extra_vectors": [[0x100], [0x1FF], [0xFF], [-0x100], [0x101], [0x200]],
+    },
+    # The aggregate return classes 195 and 197 leave out. Same discipline as
+    # those two: the struct/union-returning helpers are reachable only through
+    # their callers, because `exec_class` refuses every aggregate return, and
+    # `seed` is pinned small and exact so no product overflows and the double
+    # written into the union has an exactly representable bit pattern.
+    ("198_aggregate_return_edges", "agr198_one_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_bytes3_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_trio_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_bits_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_arr2_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_five_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_i64_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("198_aggregate_return_edges", "agr198_scalar_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    # POINTER RETURNS. `pointer_return_arg` is what makes them executable at
+    # all: without it `exec_class` refuses a pointer return outright, and with
+    # it the worker compares the returned ELEMENT INDEX inside the named
+    # caller-owned buffer instead of two unrelated process addresses. `n` is the
+    # length (clamped to the buffer); `key`/`k` are values.
+    #
+    # `key` must sometimes HIT and sometimes MISS, or the fixture only ever
+    # measures one branch. The buffer is drawn from -64..63, so the pinned
+    # values below straddle it: 1000 can never occur (NULL), and the small ones
+    # occur often. `extra_vectors` states buffers with a REPEATED key, which is
+    # the only way `ptr199_find_const`'s reverse scan differs from
+    # `ptr199_find_i32`'s forward one, and buffers whose match is in the
+    # INTERIOR, which is where `ptr199_edge_element` stops agreeing with a
+    # recovery that let the match position reach the result.
+    ("199_pointer_return_kinds", "ptr199_find_i32"): {
+        "ptr_len": 8,
+        "pointer_return_arg": 0,
+        "len_args": [1],
+        "non_length_args": [2],
+        "arg_values": {2: [0, 1, -1, 5, 1000]},
+        "extra_vectors": [
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 3],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 5],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 9],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
+        ],
+    },
+    ("199_pointer_return_kinds", "ptr199_find_void"): {
+        "ptr_len": 8,
+        "pointer_return_arg": 0,
+        "len_args": [1],
+        "non_length_args": [2],
+        "arg_values": {2: [0, 1, -1, 5, 1000]},
+        "extra_vectors": [
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 3],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 5],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 9],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
+        ],
+    },
+    ("199_pointer_return_kinds", "ptr199_find_const"): {
+        "ptr_len": 8,
+        "pointer_return_arg": 0,
+        "len_args": [1],
+        "non_length_args": [2],
+        "arg_values": {2: [0, 1, -1, 5, 1000]},
+        "extra_vectors": [
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 3],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 5],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 9],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
+        ],
+    },
+    ("199_pointer_return_kinds", "ptr199_offset"): {
+        "ptr_len": 8,
+        "pointer_return_arg": 0,
+        "len_args": [1],
+        "non_length_args": [2],
+        "arg_values": {2: [0, 1, 7, 8, -1, -9, 2147483647]},
+    },
+    ("199_pointer_return_kinds", "ptr199_edge_element"): {
+        "ptr_len": 8,
+        "pointer_return_arg": 0,
+        "len_args": [1],
+        "non_length_args": [2],
+        "arg_values": {2: [0, 1, -1, 5, 1000]},
+        "extra_vectors": [
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 3],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 5],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 9],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
+        ],
+    },
+    ("199_pointer_return_kinds", "ptr199_find_index"): {
+        "ptr_len": 8,
+        "len_args": [1],
+        "non_length_args": [2],
+        "arg_values": {2: [0, 1, -1, 5, 1000]},
+        "extra_vectors": [
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 3],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 5],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 9],
+            [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
+        ],
+    },
     # The frame-slot controls. `dfs196_indexed_control` masks its seed down to
     # an index, so the vectors have to include values that select the slot the
     # pending load reads (k == 5) as well as ones that do not.
@@ -2948,6 +3087,88 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "hfa197_scalar_control",
         "hfa197_tagged_control",
         "hfa197_trio3f_roundtrip",
+    ],
+    # RETURNS NARROWER THAN A REGISTER. A census of all 900 function definitions
+    # in this corpus found 704 that return a 32-bit integer, 22 float/double, 14
+    # 64-bit, TWO uint8_t, ONE uint16_t (not required) — and zero int8_t, zero
+    # int16_t, zero char and zero _Bool. So the question "what happens when only
+    # the low 8 or 16 bits of the result register are architecturally defined?"
+    # was asked twice, never signed, and never for a normalised boolean.
+    # Each positive narrows and THEN does arithmetic the narrowing changes, so
+    # the low bits differ rather than only the dead high ones. Three controls:
+    # nrw194_i32_control is the same expression at full width (a recovery that
+    # narrows every return fails only there); nrw194_u8_value_control has a
+    # narrow VALUE and a wide RETURN, separating the two notions; and
+    # nrw194_bool_wide_control spells the boolean normalisation out by hand, so
+    # a failure in nrw194_bool_and localises to the _Bool conversion.
+    # nrw194_char_divide is deliberately ABI-dependent: `char` is signed on
+    # x86/x86-64/i386 and unsigned on both ARM targets, so the AArch64 and ARMv7
+    # lanes must decline it as `incomparable` rather than compare a truncation
+    # against a zero-extension.
+    "194_narrow_return_widths": [
+        "nrw194_bool_and",
+        "nrw194_bool_bit",
+        "nrw194_bool_wide_control",
+        "nrw194_char_divide",
+        "nrw194_i16_divide",
+        "nrw194_i32_control",
+        "nrw194_i8_divide",
+        "nrw194_u16_mix",
+        "nrw194_u8_mix",
+        "nrw194_u8_value_control",
+    ],
+    # THE AGGREGATE RETURN CLASSES 195 AND 197 LEAVE OUT. Between them every
+    # aggregate the corpus returns is 8, 12, 16 or 32 bytes and fills its
+    # registers exactly. Absent: a 4-byte struct (the LOW HALF of rax); a 3-byte
+    # one (not a power of two); a 12-byte all-INTEGER one (rax:rdx with rdx half
+    # used — 197 has the float half of that pair and not the integer half); a
+    # union, of which the corpus returns none at all, and whose SysV class MERGE
+    # sends {int64_t,double} back in rax rather than xmm0; an 8-byte struct
+    # whose member is an ARRAY (which `describe_struct` declines, so the harness
+    # must reach it through the wrapper); and a 20-byte MEMORY case that is not
+    # a multiple of eight, where 195's is exactly 32.
+    # agr198_make_i64 is the negative control AND the one directly executable
+    # helper: eight bytes in rax that are NOT an aggregate, so a recovery
+    # classifying by "eight bytes in the result register" fails exactly there.
+    # agr198_scalar_control is the second negative — the same arithmetic and the
+    # same buffer writes with no aggregate anywhere.
+    "198_aggregate_return_edges": [
+        "agr198_arr2_roundtrip",
+        "agr198_bits_roundtrip",
+        "agr198_bytes3_roundtrip",
+        "agr198_five_roundtrip",
+        "agr198_i64_control",
+        "agr198_make_i64",
+        "agr198_one_roundtrip",
+        "agr198_scalar_control",
+        "agr198_trio_roundtrip",
+    ],
+    # POINTER RETURNS. The census found exactly ONE in 900 definitions —
+    # 192_pointer_chased_list:l192_find_key — and it fixes a single point on one
+    # axis: an address recovered from a LOAD. This adds `void *` (a pointee with
+    # no width in the source, given a synthetic u8 one by
+    # `src/debug/dwarf_signatures.rs`), `const T *` (the same address with
+    # `konst: true`, where dropping the qualifier still compiles), and an address
+    # formed by pure ARITHMETIC rather than found by a scan, which is where a
+    # pointer and an integer offset are hardest to tell apart.
+    # Every one is executable only because the manifest names the caller-owned
+    # buffer with `pointer_return_arg`; each returns NULL or an address strictly
+    # inside its own `buf`, never one-past-the-end (which `_relative_pointer`
+    # reports as `external@0x...` and which would differ between the builds for
+    # reasons that say nothing about the decompiler).
+    # ptr199_find_index is the first control: the same scan returning the INDEX,
+    # which is the most plausible mis-recovery here and the one that would
+    # otherwise be indistinguishable. ptr199_edge_element is the second: its
+    # result depends on WHETHER the key occurs and never on WHERE, so a recovery
+    # that lets the match position reach the returned address disagrees on every
+    # vector whose match is in the interior.
+    "199_pointer_return_kinds": [
+        "ptr199_edge_element",
+        "ptr199_find_const",
+        "ptr199_find_i32",
+        "ptr199_find_index",
+        "ptr199_find_void",
+        "ptr199_offset",
     ],
     # A pending load held across a store to a DISJOINT slot of the same frame
     # object. `dfs196_spill_web` is the positive; the three controls are stores

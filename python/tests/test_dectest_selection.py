@@ -359,12 +359,15 @@ def test_the_committed_opt_sets_are_unchanged_by_the_arch_dimension():
 
     The count is pinned, so adding a fixture lands here deliberately rather than
     silently. 368 -> 370 on 2026-08-16: `197_homogeneous_float_aggregates` adds
-    one `gcc` and one `clang` lane to each opt. Update this WITH the fixture, and
-    say which fixture moved it.
+    one `gcc` and one `clang` lane to each opt. 370 -> 376 on 2026-08-17: the
+    return-type census fixtures `194_narrow_return_widths`,
+    `198_aggregate_return_edges` and `199_pointer_return_kinds` add one `gcc` and
+    one `clang` lane each. Update this WITH the fixture, and say which fixture
+    moved it.
     """
     for name in ("o0", "o2"):
         lanes = D.resolve([f"@{name}"])
-        assert len(lanes) == 370, f"@{name} is now {len(lanes)} lanes"
+        assert len(lanes) == 376, f"@{name} is now {len(lanes)} lanes"
         assert not any(lane.is_arch for lane in lanes)
 
 

@@ -114,6 +114,21 @@ selectors = [
     "195_by_value_aggregates",
 ]
 
+[returns]
+description = "Everything about the RESULT of a call: narrow and boolean widths (194), the SysV/AAPCS64 aggregate return classes (195, 197, 198) and pointer returns (199)."
+# A census of all 900 function definitions in the corpus found that 704 of them
+# return a 32-bit integer, and that the return SHAPE — sub-register width,
+# boolean normalisation, register pair, hidden pointer, address — was the axis
+# with the fewest lanes and no named loop of its own. `@aggregates` covers the
+# object; this covers what comes back out of the call.
+selectors = [
+    "194_narrow_return_widths",
+    "195_by_value_aggregates",
+    "197_homogeneous_float_aggregates",
+    "198_aggregate_return_edges",
+    "199_pointer_return_kinds",
+]
+
 [bias]
 description = "Constant-bias array indexing (187) — the shape the affine-index analysis targets, with its value-bias and runtime-bias controls."
 selectors = ["187_*"]
