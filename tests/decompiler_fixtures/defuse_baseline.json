@@ -16,8 +16,8 @@
     },
     "clang:O2": {
       "functions_emitted": 2464,
-      "functions_with_violations": 89,
-      "violations": 245
+      "functions_with_violations": 88,
+      "violations": 244
     },
     "gcc:O0": {
       "functions_emitted": 2504,
@@ -31,13 +31,13 @@
     },
     "rustc:O0": {
       "functions_emitted": 3035,
-      "functions_with_violations": 2007,
-      "violations": 7629
+      "functions_with_violations": 1998,
+      "violations": 7530
     },
     "rustc:O2": {
       "functions_emitted": 1787,
-      "functions_with_violations": 1163,
-      "violations": 4515
+      "functions_with_violations": 1156,
+      "violations": 4454
     }
   },
   "problems": [],
@@ -1719,13 +1719,9 @@
     "171_rust_overflow:rustc:O0:rust_checked_shift": [
       "var3 is read but never defined"
     ],
-    "171_rust_overflow:rustc:O0:rust_overflow_matrix": [
-      "of_30 reads an explicitly undefined value"
-    ],
+    "171_rust_overflow:rustc:O0:rust_overflow_matrix": [],
     "171_rust_overflow:rustc:O0:rust_overflowing_add": [],
-    "171_rust_overflow:rustc:O0:rust_overflowing_mul": [
-      "of_1 reads an explicitly undefined value"
-    ],
+    "171_rust_overflow:rustc:O0:rust_overflowing_mul": [],
     "171_rust_overflow:rustc:O0:rust_saturating_add": [],
     "171_rust_overflow:rustc:O0:rust_saturating_mul": [
       "ret is read before it is defined"
@@ -1744,22 +1740,14 @@
     "171_rust_overflow:rustc:O2:rust_cast_chain": [],
     "171_rust_overflow:rustc:O2:rust_checked_add": [],
     "171_rust_overflow:rustc:O2:rust_checked_div": [],
-    "171_rust_overflow:rustc:O2:rust_checked_mul": [
-      "of_1 reads an explicitly undefined value"
-    ],
+    "171_rust_overflow:rustc:O2:rust_checked_mul": [],
     "171_rust_overflow:rustc:O2:rust_checked_rem": [],
     "171_rust_overflow:rustc:O2:rust_checked_shift": [],
-    "171_rust_overflow:rustc:O2:rust_overflow_matrix": [
-      "of_13 reads an explicitly undefined value"
-    ],
+    "171_rust_overflow:rustc:O2:rust_overflow_matrix": [],
     "171_rust_overflow:rustc:O2:rust_overflowing_add": [],
-    "171_rust_overflow:rustc:O2:rust_overflowing_mul": [
-      "of_2 reads an explicitly undefined value"
-    ],
+    "171_rust_overflow:rustc:O2:rust_overflowing_mul": [],
     "171_rust_overflow:rustc:O2:rust_saturating_add": [],
-    "171_rust_overflow:rustc:O2:rust_saturating_mul": [
-      "of_4 reads an explicitly undefined value"
-    ],
+    "171_rust_overflow:rustc:O2:rust_saturating_mul": [],
     "171_rust_overflow:rustc:O2:rust_saturating_sub": [],
     "171_rust_overflow:rustc:O2:rust_shift_family": [],
     "171_rust_overflow:rustc:O2:rust_u32_bits": [],
@@ -2279,10 +2267,10 @@
       "var17 is read but never defined",
       "var19 is read but never defined",
       "var21 is read but never defined",
-      "var23 is read but never defined",
+      "var22 is read but never defined",
       "var24 is read but never defined",
-      "var28 is read but never defined",
-      "var32 is read but never defined"
+      "var27 is read but never defined",
+      "var31 is read but never defined"
     ],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_tagged_control": [],
@@ -2291,9 +2279,9 @@
       "var15 is read but never defined",
       "var17 is read but never defined",
       "var19 is read but never defined",
-      "var21 is read but never defined",
+      "var20 is read but never defined",
       "var22 is read but never defined",
-      "var26 is read but never defined"
+      "var25 is read but never defined"
     ],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_pair2d_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_quad4f_roundtrip": [
@@ -2412,9 +2400,7 @@
     "32_longest_common_subsequence:gcc:O2:lcs_recover": [],
     "33_knapsack:clang:O0:knapsack_best_value": [],
     "33_knapsack:clang:O0:unbounded_knapsack": [],
-    "33_knapsack:clang:O2:knapsack_best_value": [
-      "of_24 reads an explicitly undefined value"
-    ],
+    "33_knapsack:clang:O2:knapsack_best_value": [],
     "33_knapsack:clang:O2:unbounded_knapsack": [],
     "33_knapsack:gcc:O0:knapsack_best_value": [],
     "33_knapsack:gcc:O0:unbounded_knapsack": [],

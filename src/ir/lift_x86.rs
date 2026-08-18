@@ -43,9 +43,9 @@ use conditions::{
     setcc_condition_for,
 };
 use flags::{
-    adc_ops, append_rotate_flags, append_undef_flags, bin_for, cmp_flag_ops, emit_add_with_flags,
-    emit_inc_dec_with_flags, emit_machine_bin_with_flags, sbb_ops, signed_cmp_value, undef_flag,
-    zero_sign_flags,
+    adc_ops, append_imul_overflow_flags, append_rotate_flags, append_undef_flags, bin_for,
+    cmp_flag_ops, emit_add_with_flags, emit_inc_dec_with_flags, emit_machine_bin_with_flags,
+    imul_wide_product, sbb_ops, signed_cmp_value, undef_flag, zero_sign_flags,
 };
 use packed::{
     movd_ops, packed_dword_and_not_ops, packed_dword_binary_ops, packed_dword_compare_equal_ops,
@@ -897,6 +897,10 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             }];
                         }
                     };
+                    // CF/OF are the truncation verdict on the FULL product, so the
+                    // wide multiply is snapshotted before the narrow one is written.
+                    let width = operand_width(instr, 0);
+                    let product = imul_wide_product(&mut ops, lhs.clone(), rhs.clone(), width);
                     // A partial-view destination is a bit-preserving write of the
                     // product, not a write of a register of its own.
                     match partial_gp_view(&dst_name) {
@@ -917,11 +921,7 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             rhs,
                         }),
                     }
-                    append_undef_flags(
-                        &mut ops,
-                        &[Flag::C, Flag::O],
-                        "x86 IMUL defines CF/OF, but product truncation overflow is not modelled",
-                    );
+                    append_imul_overflow_flags(&mut ops, product, width);
                     append_undef_flags(
                         &mut ops,
                         &[Flag::Z, Flag::S, Flag::P, Flag::A],
@@ -3426,13 +3426,84 @@ mod tests {
         let ops = lift64(&[0x6b, 0x4d, 0xf4, 0x03]);
         assert!(ops.len() >= 2, "expected a load then a multiply: {ops:?}");
         assert!(matches!(&ops[0].op, Op::Load { .. }), "{:?}", ops[0].op);
-        match &ops[1].op {
+        // The architectural multiply is the one that writes the destination
+        // register; the CF/OF overflow predicate contributes a second, wider one.
+        let arch = ops
+            .iter()
+            .find(|ins| {
+                matches!(&ins.op, Op::Bin { dst: VReg::Phys(n), op: BinOp::Mul, .. } if n == "ecx")
+            })
+            .unwrap_or_else(|| panic!("expected a multiply into ecx: {ops:?}"));
+        match &arch.op {
             Op::Bin {
-                op: BinOp::Mul,
                 rhs: Value::Const(3),
                 ..
             } => {}
             other => panic!("expected a multiply by 3, got {other:?}"),
+        }
+    }
+
+    /// x86 IMUL's two- and three-operand forms truncate a `2N`-bit product to `N`
+    /// bits and report that truncation in CF/OF: SDM Vol. 2A says both are set
+    /// "when the signed integer value of the intermediate product differs from the
+    /// sign extended operand-size-truncated product". Marking them `Undef` made a
+    /// later `seto`/`jo` read a value the IR had declared meaningless — which is
+    /// exactly what Rust's `overflowing_mul` / `checked_mul` emit.
+    #[test]
+    fn truncating_imul_defines_cf_and_of_from_the_wide_product() {
+        for (name, bytes) in [
+            // imul %esi,%eax        (0f af c6)
+            ("two-operand", &[0x0f, 0xaf, 0xc6][..]),
+            // imul $0x5,%ecx,%eax   (6b c1 05)
+            ("three-operand", &[0x6b, 0xc1, 0x05][..]),
+        ] {
+            let ops = lift64(bytes);
+            for flag in [Flag::C, Flag::O] {
+                assert!(
+                    !ops.iter().any(
+                        |ins| matches!(&ins.op, Op::Undef { dst, .. } if *dst == VReg::Flag(flag))
+                    ),
+                    "{name} imul still poisons {flag:?}: {ops:?}"
+                );
+                assert!(
+                    ops.iter().any(|ins| matches!(
+                        &ins.op,
+                        Op::Cmp { dst, op: CmpOp::Ne, .. } if *dst == VReg::Flag(flag)
+                    )),
+                    "{name} imul does not define {flag:?} from an inequality: {ops:?}"
+                );
+            }
+            // The predicate is `product != sext_32(trunc_32(product))`.
+            assert!(
+                ops.iter().any(|ins| matches!(
+                    &ins.op,
+                    Op::Trunc { from, to, .. } if *from == Width::W64 && *to == Width::W32
+                )),
+                "{name} imul never truncates the wide product: {ops:?}"
+            );
+            assert!(
+                ops.iter().any(|ins| matches!(
+                    &ins.op,
+                    Op::SExt { from, to, .. } if *from == Width::W32 && *to == Width::W64
+                )),
+                "{name} imul never sign-extends the truncated product: {ops:?}"
+            );
+        }
+    }
+
+    /// A 64-bit IMUL's intermediate product is 128 bits wide, which no IR value
+    /// can hold, so those two flags stay honest poison rather than a wrong answer.
+    #[test]
+    fn sixty_four_bit_imul_keeps_cf_and_of_poisoned() {
+        // imul %rsi,%rax  (48 0f af c6)
+        let ops = lift64(&[0x48, 0x0f, 0xaf, 0xc6]);
+        for flag in [Flag::C, Flag::O] {
+            assert!(
+                ops.iter().any(
+                    |ins| matches!(&ins.op, Op::Undef { dst, .. } if *dst == VReg::Flag(flag))
+                ),
+                "64-bit imul should still poison {flag:?}: {ops:?}"
+            );
         }
     }
 
@@ -4253,6 +4324,71 @@ mod tests {
                 "missing high product for {high_name}: {ops:#?}"
             );
         }
+    }
+
+    /// The one-operand multiplies keep the whole product, so CF/OF answer "does it
+    /// fit in `width` bits" — unsigned for MUL, signed for IMUL. At 32 bits that
+    /// product fits an IR value, so the flags are real; at 64 bits it is 128 bits
+    /// wide and they stay poisoned.
+    #[test]
+    fn one_operand_multiply_defines_cf_and_of_where_the_product_is_representable() {
+        for (bytes, extend_is_signed) in [
+            (&[0xf7, 0xe2][..], false), // mul edx
+            (&[0xf7, 0xea][..], true),  // imul edx
+        ] {
+            let ops = lift64(bytes);
+            for flag in [Flag::C, Flag::O] {
+                assert!(
+                    !ops.iter().any(
+                        |ins| matches!(&ins.op, Op::Undef { dst, .. } if *dst == VReg::Flag(flag))
+                    ),
+                    "32-bit wide multiply still poisons {flag:?}: {ops:?}"
+                );
+                assert!(
+                    ops.iter().any(|ins| matches!(
+                        &ins.op,
+                        Op::Cmp { dst, op: CmpOp::Ne, .. } if *dst == VReg::Flag(flag)
+                    )),
+                    "32-bit wide multiply does not define {flag:?}: {ops:?}"
+                );
+            }
+            // The fit test re-extends the truncated product with the multiply's own
+            // signedness — a zero extension for MUL, a sign extension for IMUL.
+            let widens_back = ops.iter().any(|ins| match &ins.op {
+                Op::SExt { from, to, .. } if extend_is_signed => {
+                    *from == Width::W32 && *to == Width::W64
+                }
+                Op::ZExt { from, to, .. } if !extend_is_signed => {
+                    *from == Width::W32 && *to == Width::W64
+                }
+                _ => false,
+            });
+            assert!(widens_back, "wrong signedness in the fit test: {ops:?}");
+        }
+        // `mul rdx; seto` is how Clang range-checks an allocation size; at 64 bits
+        // there is no wide product to take, but the high half is already an output,
+        // so CF/OF read `rdx != 0` rather than staying poisoned.
+        let wide = lift64(&[0x48, 0xf7, 0xe2]);
+        for flag in [Flag::C, Flag::O] {
+            assert!(
+                wide.iter().any(|ins| matches!(
+                    &ins.op,
+                    Op::Cmp { dst, op: CmpOp::Ne, lhs: Value::Reg(VReg::Phys(n)), rhs: Value::Const(0) }
+                        if *dst == VReg::Flag(flag) && n == "rdx"
+                )),
+                "64-bit mul should define {flag:?} from the high half: {wide:?}"
+            );
+        }
+        // imul rdx — same width, but the high half must equal the low half's sign.
+        let signed_wide = lift64(&[0x48, 0xf7, 0xea]);
+        assert!(
+            signed_wide.iter().any(|ins| matches!(
+                &ins.op,
+                Op::Bin { op: BinOp::Sar, lhs: Value::Reg(VReg::Phys(n)), rhs: Value::Const(63), .. }
+                    if n == "rax"
+            )),
+            "64-bit imul should compare the high half against rax's sign: {signed_wide:?}"
+        );
     }
 
     #[test]
