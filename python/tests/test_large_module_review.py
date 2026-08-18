@@ -201,7 +201,6 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     "ir/dwarf_fields.rs": "accepted: DWARF field/member decoding for one producer surface.",
     "debug/dwarf.rs": "accepted: DWARF section parsing; one input format, one owner.",
     "symbols/pdb.rs": "accepted: PDB ingestion; one input format, one owner.",
-    "analysis/java_class.rs": "accepted: the Java class-file format in one owner.",
     "analysis/ioctl_taint.rs": "accepted: the Windows ioctl taint analysis, one pass.",
     "python_bindings/analysis.rs": (
         "accepted: thin PyO3 adapters; large by row count, not by depth. "
