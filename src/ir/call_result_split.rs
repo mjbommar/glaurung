@@ -124,11 +124,17 @@ impl Splitter {
             // them here was MEASURED on 2026-08-16:
             // `175_float_matrix_kernel:aarch64:O0:dot_product_f32` went
             // pass -> fail, because that caller consumes the bank the call was
-            // not attributed to and AAPCS64 has no modelled aggregate return
-            // class to attribute the other one from (`abi::wide_integer_return_pair`
-            // and `return_class::declared_return_class` are both System V only).
-            // Fail closed: keep the collapse until there is a class to replace
-            // it with.
+            // not attributed to and there was no modelled aggregate return
+            // class to attribute the other one from. Since 2026-08-18 there is
+            // one for the GENERAL-PURPOSE pair — `abi::wide_integer_return_pair`
+            // answers `x0:x1` and `return_class::declared_return_class` proves
+            // the class — but that is not the bank 175 measured: the FLOAT bank
+            // (`v0`/`d0`/`s0`, and AAPCS64's HFA results in `v0`..`v3`) still
+            // has no class. Fail closed there: keep the collapse until it does.
+            //
+            // The pair's HIGH half never reaches this arm at all; it is claimed
+            // by `wide_integer_return_part` above, which is why `x1` gets a
+            // separate identity without this collapse having to change.
             CallConv::Aarch64 => "x0".to_string(),
             // AAPCS hard-float has disjoint integer and FP result banks.  Keep
             // their identities distinct; every call still invalidates all of
@@ -911,6 +917,111 @@ mod tests {
                 "wide call did not define its high ABI part from the scalar result: {function:#?}"
             );
         }
+    }
+
+    /// AAPCS64's register-pair result, and the argument leak that not modelling
+    /// it caused.
+    ///
+    /// `x1` is BOTH the second result register and the second argument
+    /// register. Without the pair, a post-call read of `x1` reaches the
+    /// caller's own second argument — which is how
+    /// `198_aggregate_return_edges:aarch64:*:agr198_trio_roundtrip` stored
+    /// `seed` into the third member of the `{int32_t a,b,c;}` it had just
+    /// received. The high half must therefore be DEFINED from the call result,
+    /// not merely left alone.
+    #[test]
+    fn an_aapcs64_pair_return_defines_x1_instead_of_leaking_the_second_argument() {
+        let prototype = CallPrototype {
+            return_type: "unsigned __int128".to_string(),
+            parameter_types: vec!["int".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let mut function = Function {
+            name: "agr198_trio_roundtrip".to_string(),
+            entry_va: 0,
+            body: vec![
+                // The caller's own second argument, live across the call.
+                Stmt::Assign {
+                    dst: reg("x1"),
+                    src: Expr::Reg(reg("seed")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "agr198_make_trio".to_string(),
+                    },
+                    args: vec![Expr::Reg(reg("x0"))],
+                    dst: Some(reg("x0")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(prototype.clone()),
+                        call_prototype: prototype,
+                    }),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("slot_a")),
+                    src: Expr::Reg(reg("x0")),
+                    size: 4,
+                },
+                // The third member: a 32-bit read of the HIGH half. The
+                // machine spells that `w1`; by the time an AST reaches this
+                // pass SSA has canonicalised it onto its zero-extending parent
+                // (`regview::ssa_parent`, pinned in `abi`'s
+                // `aapcs64_returns_a_two_register_composite_in_x0_and_x1`), so
+                // `x1` is the spelling that actually arrives.
+                Stmt::Store {
+                    addr: Expr::Reg(reg("slot_c")),
+                    src: Expr::Reg(reg("x1")),
+                    size: 4,
+                },
+            ],
+        };
+
+        split_call_result_lifetimes(&mut function, CallConv::Aarch64);
+
+        let call_result = function
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { dst: Some(dst), .. } => Some(dst.clone()),
+                _ => None,
+            })
+            .expect("the pair call kept a scalar destination");
+        let stored = function
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Store {
+                    src: Expr::Reg(src),
+                    ..
+                } => Some(src.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stored.first(), Some(&call_result), "{function:#?}");
+        let high = stored.get(1).expect("the high half lost its consumer");
+        // THE DEFECT, stated as an assertion: reading the pre-call spelling
+        // back is reading the second ARGUMENT.
+        assert_ne!(high, &reg("x1"), "the argument leaked: {function:#?}");
+        assert!(
+            function.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign {
+                    dst,
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr,
+                    },
+                } if dst == high && matches!(
+                    expr.as_ref(),
+                    Expr::Bin { op: BinOp::Shr, lhs, rhs }
+                        if lhs.as_ref() == &Expr::Reg(call_result.clone())
+                            && rhs.as_ref() == &Expr::Const(64)
+                )
+            )),
+            "the high half was not defined from the call result: {function:#?}"
+        );
     }
 
     /// `rax` and `xmm0` are two result BANKS, not two spellings of one, so a

@@ -8349,7 +8349,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:aarch64:O2": {
@@ -8361,7 +8361,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "fail",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:armv7:O0": {
@@ -8727,7 +8727,7 @@
     "agr198_make_trio": "structural",
     "agr198_one_roundtrip": "pass",
     "agr198_scalar_control": "pass",
-    "agr198_trio_roundtrip": "fail"
+    "agr198_trio_roundtrip": "pass"
   },
   "198_aggregate_return_edges:aarch64:O2": {
     "agr198_arr2_roundtrip": "pass",
@@ -8744,7 +8744,7 @@
     "agr198_make_trio": "structural",
     "agr198_one_roundtrip": "pass",
     "agr198_scalar_control": "pass",
-    "agr198_trio_roundtrip": "fail"
+    "agr198_trio_roundtrip": "pass"
   },
   "198_aggregate_return_edges:armv7:O0": {
     "agr198_arr2_roundtrip": "pass",

@@ -83,11 +83,25 @@ pub fn wide_integer_return_pair(
         CallConv::Cdecl32 => Some(("rax", "rdx")),
         CallConv::Arm | CallConv::ArmHardFloat => Some(("r0", "r1")),
         CallConv::SysVAmd64 => Some(("rax", "rdx")),
+        // AAPCS64 (IHI 0055, "Result return"): a Composite Type that is not an
+        // HFA/HVA and is no larger than 16 bytes comes back in the same
+        // registers a by-value ARGUMENT of that type would occupy, which for a
+        // result is `x0` then `x1` — the object copied as if stored to memory,
+        // so a size that is not a multiple of eight leaves the tail of `x1`
+        // unspecified rather than moving the object elsewhere.
+        //
+        // `x1` is BOTH the second result register and the second argument
+        // register, which is why omitting this arm did not merely drop a half:
+        // a caller that read the high half read its own second argument back
+        // instead (`198_aggregate_return_edges:aarch64:*:agr198_trio_roundtrip`
+        // stored `seed` into the third member of a `{int32_t a,b,c;}`).
+        //
         // Win64 returns any aggregate larger than one register through a hidden
-        // pointer, so it has no register-pair result. AAPCS64 uses `x0:x1`, but
-        // there are no fixtures returning a 16-byte aggregate on that target to
-        // measure the change against; keep it fail-closed.
-        CallConv::Win64 | CallConv::Aarch64 => None,
+        // pointer, so it has no register-pair result at all. There is no
+        // Windows lane in `tests/decompiler_fixtures/` to measure a change
+        // against; keep it fail-closed.
+        CallConv::Aarch64 => Some(("x0", "x1")),
+        CallConv::Win64 => None,
     }
 }
 
@@ -95,6 +109,15 @@ pub fn wide_integer_return_pair(
 ///
 /// Sub-register spellings are folded onto their half: a 32-bit write to the
 /// high register still writes the same half of the same logical value.
+///
+/// Only the x86 narrow views are listed, and the asymmetry with AArch64 is the
+/// register model rather than an omission: `al` and `ax` PRESERVE their
+/// parent's upper bits, so `regview::ssa_parent` declines them and this is the
+/// only place that can relate them to `rax`. `w1` ZERO-EXTENDS, so SSA
+/// canonicalises it to `x1` before any caller here sees it. Listing `w0`/`w1`
+/// anyway was tried on 2026-08-18 and moved zero cells:
+/// `198_aggregate_return_edges:aarch64:*:agr198_trio_roundtrip` reads its
+/// third member through exactly that spelling and passes without them.
 pub fn wide_integer_return_part(cc: CallConv, name: &str) -> Option<usize> {
     let base = ssa_base(name);
     let (low, high) = wide_integer_return_pair(cc, wide_integer_return_width(cc))?;
@@ -1222,15 +1245,71 @@ mod tests {
             wide_integer_return_pair(CallConv::Arm, 8),
             Some(("r0", "r1"))
         );
-        // Neither convention has a modelled register-pair result.
-        for cc in [CallConv::Win64, CallConv::Aarch64] {
+        // Win64 has no modelled register-pair result: every aggregate wider
+        // than one register goes back through a hidden pointer.
+        assert_eq!(
+            wide_integer_return_pair(CallConv::Win64, wide_integer_return_width(CallConv::Win64)),
+            None
+        );
+        assert_eq!(wide_integer_return_part(CallConv::Win64, "rdx"), None);
+    }
+
+    /// AAPCS64's pair, and the SPELLINGS a twelve-byte `{int32_t a,b,c;}`
+    /// actually reaches its members through.
+    ///
+    /// `x1` is both the second result register and the second argument
+    /// register, so the cost of not modelling the pair was not a dropped half:
+    /// a caller read its own second argument back out of `x1` and stored it as
+    /// the third member.
+    #[test]
+    fn aapcs64_returns_a_two_register_composite_in_x0_and_x1() {
+        assert_eq!(
+            wide_integer_return_pair(CallConv::Aarch64, 16),
+            Some(("x0", "x1"))
+        );
+        // The guard is the width of the two-machine-word SPELLING the call
+        // boundary uses for this class (`unsigned __int128`), not the size of
+        // the source object: AAPCS64 puts a 9..=16 byte composite in the same
+        // two registers whatever its tail padding. Eight bytes is one register
+        // on an LP64 target and must stay one.
+        assert_eq!(wide_integer_return_pair(CallConv::Aarch64, 8), None);
+        assert_eq!(wide_integer_return_pair(CallConv::Aarch64, 12), None);
+        for (name, part) in [
+            ("x0", Some(0)),
+            ("x0#3", Some(0)),
+            ("x1", Some(1)),
+            ("x1#12", Some(1)),
+            ("x2", None),
+            ("d0", None),
+            ("rdx", None),
+        ] {
             assert_eq!(
-                wide_integer_return_pair(cc, wide_integer_return_width(cc)),
-                None,
-                "{cc:?}"
+                wide_integer_return_part(CallConv::Aarch64, name),
+                part,
+                "{name}"
             );
-            assert_eq!(wide_integer_return_part(cc, "rdx"), None, "{cc:?}");
         }
+        // The narrow spellings are absent from that table on purpose, and this
+        // is the fact that makes their absence safe rather than an oversight: a
+        // `w` view ZERO-EXTENDS, so SSA canonicalises it to its `x` parent and
+        // the third member of a twelve-byte trio arrives here already spelled
+        // `x1`. The x86 low-byte views cannot do this — they preserve their
+        // parent — which is why only they are enumerated above.
+        assert_eq!(
+            regview::ssa_parent(regview::Arch::AArch64, "w1"),
+            Some("x1")
+        );
+        assert_eq!(
+            regview::ssa_parent(regview::Arch::AArch64, "w0"),
+            Some("x0")
+        );
+        assert_eq!(regview::ssa_parent(regview::Arch::X86_64, "al"), None);
+        // `x1` is a PAIR MEMBER, never another spelling of the result: the
+        // alias list must stay unable to claim it, exactly as it cannot claim
+        // `rdx` under System V.
+        assert!(!return_registers(CallConv::Aarch64).contains(&"x1"));
+        assert!(!is_return_register(CallConv::Aarch64, "x1"));
+        assert!(!is_return_register(CallConv::Aarch64, "w1"));
     }
 
     /// Each row is a different ABI contract, and treating them uniformly still

@@ -48,11 +48,16 @@ pub(crate) fn declared_return_class(
     type_env: Option<&DwarfTypeEnv<'_>>,
 ) -> Option<ReturnClass> {
     // The eightbyte algorithm, the 16-byte cutoff, and the `rax:rdx`/`xmm0`
-    // banks are all System V AMD64 facts. Win64 returns every aggregate wider
-    // than one register through a hidden pointer, and AAPCS has its own HFA
-    // rules; neither is modelled, and neither has fixtures to measure against.
-    if cc != CallConv::SysVAmd64 {
-        return None;
+    // banks are all System V AMD64 facts. AAPCS64 has its own, simpler rule and
+    // gets its own reader below. Win64 returns every aggregate wider than one
+    // register through a hidden pointer; it is not modelled, and there is no
+    // Windows lane in `tests/decompiler_fixtures/` to measure it against.
+    match cc {
+        CallConv::SysVAmd64 => {}
+        CallConv::Aarch64 => return aapcs64_return_class(c_type, type_env?),
+        CallConv::Win64 | CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => {
+            return None
+        }
     }
     let type_env = type_env?;
     let layout = type_env.aggregate_layout(c_type)?;
@@ -70,6 +75,79 @@ pub(crate) fn declared_return_class(
     classify_fields(c_type, 0, type_env, &mut eightbytes, 0)?;
     let eightbytes = eightbytes.into_iter().collect::<Option<Vec<_>>>()?;
     sysv_amd64_return_class(size, &eightbytes)
+}
+
+/// How AAPCS64 returns a declared composite result — the one class of it this
+/// model can prove.
+///
+/// THE RULE, from the Arm Procedure Call Standard (IHI 0055, "Result return"):
+/// if `void f(T)` would pass a `T` in registers, a `T` result comes back in
+/// those same registers. Applied through the parameter-passing rules that
+/// means, for a Composite Type:
+///
+/// * larger than 16 bytes -> indirectly, through a caller-allocated block whose
+///   address arrives in `x8`;
+/// * an HFA or HVA (1-4 members, all the SAME floating-point or vector type)
+///   -> `v0`..`v3`;
+/// * otherwise, 16 bytes or fewer -> `x0` and `x1`, the object copied as if
+///   stored to memory and reloaded, so a size that is not a multiple of eight
+///   leaves the tail of the last register UNSPECIFIED.
+///
+/// That last clause is why the class here is not gated on the object filling
+/// both registers: a twelve-byte `{int32_t a,b,c;}` is `x0:x1` with four bytes
+/// of `x1` defined, exactly as a sixteen-byte one is with eight.
+///
+/// AAPCS64 has no equivalent of System V's SPLIT-BANK class. Homogeneity, not
+/// per-eightbyte field class, is what routes a composite to the vector bank, so
+/// `{int32_t; double;}` is not homogeneous and returns wholly in `x0:x1` where
+/// System V would split it across `rax` and `xmm0`.
+///
+/// Only [`ReturnClass::IntegerPair`] is ever answered. The other two outcomes
+/// fail closed, for reasons that are not the same reason:
+///
+/// * over 16 bytes IS the indirect class, but this crate's [`ReturnClass::Memory`]
+///   means System V's contract — hidden pointer in the FIRST ARGUMENT register,
+///   every declared argument shifted one slot right. AAPCS64 uses the dedicated
+///   `x8` and shifts nothing, so answering `Memory` here would relabel every
+///   argument of the call. Saying nothing keeps today's behaviour, which is
+///   merely incomplete rather than wrong.
+/// * an HFA belongs in `v0`..`v3`, and there is no return class for that bank.
+///
+/// The HFA test is the eightbyte classification, used as a PROXY: every member
+/// of an HFA is a floating-point type, so an HFA always classifies all-SSE, and
+/// refusing every all-SSE shape therefore refuses every HFA. It refuses a
+/// little more than that — `{double; float; float;}` is all-SSE without being
+/// homogeneous, and really does return in `x0:x1` — but erring that way keeps
+/// an unmodelled shape on its existing path instead of routing a vector-bank
+/// result through the integer pair.
+fn aapcs64_return_class(c_type: &str, type_env: &DwarfTypeEnv<'_>) -> Option<ReturnClass> {
+    let layout = type_env.aggregate_layout(c_type)?;
+    // A union's eightbyte class is the join over overlapping members, and a
+    // member this reader cannot place would drop silently out of that join;
+    // refuse the whole shape, exactly as the System V reader does.
+    if layout.kind != DwarfTypeKind::Struct {
+        return None;
+    }
+    let size = layout.byte_size;
+    // At or below one register the existing single-register contract is already
+    // right, and above the cutoff the object is not in registers at all.
+    if size <= 8 || size > MAX_REGISTER_RETURN_BYTES {
+        return None;
+    }
+    let mut eightbytes = vec![None::<Eightbyte>; usize::try_from(size.div_ceil(8)).ok()?];
+    classify_fields(c_type, 0, type_env, &mut eightbytes, 0)?;
+    let eightbytes = eightbytes.into_iter().collect::<Option<Vec<_>>>()?;
+    match sysv_amd64_return_class(size, &eightbytes)? {
+        // Two eightbytes, at least one of them holding something that is not
+        // floating point: not homogeneous, therefore the general-purpose pair.
+        ReturnClass::IntegerPair | ReturnClass::SplitBanks { .. } => Some(ReturnClass::IntegerPair),
+        // Possibly an HFA. Fail closed rather than route `v0:v1` through
+        // `x0:x1`.
+        ReturnClass::SsePair { .. } => None,
+        // Unreachable for a 9..=16 byte object; enumerated rather than
+        // wildcarded so that a new class has to be decided for here too.
+        ReturnClass::Single | ReturnClass::Memory => None,
+    }
 }
 
 /// How much of the SECOND eightbyte a declared type occupies when it is passed
@@ -427,7 +505,6 @@ mod tests {
         for cc in [
             CallConv::Win64,
             CallConv::Cdecl32,
-            CallConv::Aarch64,
             CallConv::Arm,
             CallConv::ArmHardFloat,
         ] {
@@ -437,6 +514,79 @@ mod tests {
                 "{cc:?} acquired the System V aggregate contract"
             );
         }
+        // AAPCS64 has a register-pair result of its own and answers with it,
+        // but it must reach that answer by its OWN rule — see
+        // `aapcs64_puts_every_non_homogeneous_composite_in_the_register_pair`,
+        // where `bv195_mixed` is the case the two rules disagree about.
+        assert_eq!(
+            declared_return_class("struct bv195_quad", CallConv::Aarch64, Some(&env)),
+            Some(ReturnClass::IntegerPair)
+        );
+    }
+
+    /// AAPCS64's composite result rule, and every place it parts company with
+    /// System V's.
+    ///
+    /// The register PAIR is the whole point: `x1` is also the second argument
+    /// register, so a caller that does not model it reads its own argument back
+    /// where the high half belongs.
+    #[test]
+    fn aapcs64_puts_every_non_homogeneous_composite_in_the_register_pair() {
+        let mut types = corpus();
+        // `198_aggregate_return_edges`, exactly as it compiles: twelve bytes of
+        // `int32_t`, so `x1` is HALF occupied and the object still comes back
+        // in the pair.
+        types.push(structure(
+            "agr198_trio",
+            12,
+            vec![
+                field(0, "a", "int32_t", 4),
+                field(4, "b", "int32_t", 4),
+                field(8, "c", "int32_t", 4),
+            ],
+        ));
+        let env = DwarfTypeEnv::new(&types);
+        let class = |name: &str| declared_return_class(name, CallConv::Aarch64, Some(&env));
+
+        assert_eq!(class("struct bv195_quad"), Some(ReturnClass::IntegerPair));
+        // Twelve bytes is the same class as sixteen. AAPCS64 copies the object
+        // as if stored to memory, so the tail of `x1` is unspecified rather
+        // than the object being moved somewhere else — which is why the class
+        // is not gated on the pair being full.
+        assert_eq!(class("struct agr198_trio"), Some(ReturnClass::IntegerPair));
+        // THE DISAGREEMENT WITH SYSTEM V. `{int32_t; double;}` classifies
+        // INTEGER,SSE and splits across `rax` and `xmm0` under System V. Under
+        // AAPCS64 what routes a composite to the vector bank is HOMOGENEITY,
+        // and a struct of an int and a double is not homogeneous, so the whole
+        // object is in `x0:x1`.
+        assert_eq!(class("struct bv195_mixed"), Some(ReturnClass::IntegerPair));
+        assert_eq!(class("struct double_first"), Some(ReturnClass::IntegerPair));
+
+        // HFAs belong in `v0`..`v3` and there is no class for that bank; every
+        // all-floating-point shape therefore fails closed rather than being
+        // routed through the integer pair.
+        assert_eq!(class("struct two_doubles"), None);
+        assert_eq!(class("struct hfa197_quad4f"), None);
+        assert_eq!(class("struct hfa197_trio3f"), None);
+
+        // Eight bytes or fewer is ONE register and already has a working
+        // contract.
+        assert_eq!(class("struct bv195_pair"), None);
+        assert_eq!(class("struct hfa197_tagged"), None);
+        assert_eq!(class("struct two_floats"), None);
+        // Over sixteen bytes AAPCS64 returns indirectly through `x8`, which is
+        // NOT this crate's `Memory` — that one means System V's hidden pointer
+        // in the first ARGUMENT register, and answering it here would shift
+        // every declared argument one slot right. Fail closed instead.
+        assert_eq!(class("struct bv195_big"), None);
+        // And the shapes this reader cannot place stay unplaced.
+        assert_eq!(class("union bits"), None);
+        assert_eq!(class("int"), None);
+        assert_eq!(class("struct never_declared"), None);
+        assert_eq!(
+            declared_return_class("struct bv195_quad", CallConv::Aarch64, None),
+            None
+        );
     }
 
     /// A field straddling the boundary makes BOTH eightbytes integer, and a
