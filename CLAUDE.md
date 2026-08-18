@@ -97,6 +97,32 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   plain `cargo build` reported ~98 never-used functions where the shipped
   configuration had 4, and two files totalling 1,782 lines looked unreachable
   while running on every decompile.
+- **`--features python-ext` does not build `src/symbolic/` either, and that is
+  ten times bigger.** `src/lib.rs:65` is `#[cfg(feature = "symbolic")]`, and
+  `symbolic` is in neither `default` nor `python-ext`. **21 files, 14,649 product
+  LOC — 8.6% of the tree — that `cargo test --features python-ext` never
+  compiles.** Proven by experiment on 2026-08-17: appending invalid Rust to
+  `src/symbolic/expr.rs` gives 0 errors under `--features python-ext` and 2 under
+  `--features symbolic`. This is how all three SMT solver backends sat
+  uncompilable for seventeen days (`BinOp::LogicalAnd`/`LogicalOr` added
+  2026-07-31, no backend updated) and how `triage-parsers-extra` stayed broken
+  for 350 days.
+- **Before pushing anything that touches a feature-gated tree, run
+  `scripts/feature-build-gate.sh`** — 11 `cargo check --all-targets` lanes,
+  ~4m30s, exit 1 on any failure. It is the only thing in the repository that
+  builds `solver-*`, `symbolic`, `exec`, `dev-oracle` or
+  `triage-parsers-extra`. Note `scripts/lint-rust.sh` DOES run
+  `cargo clippy --all-targets --all-features`, which would have caught all of
+  the above — but nothing calls it, and until 2026-08-17 it died inside
+  `build.rs` on any machine without Bitwuzla. It runs now and is red (260
+  pre-existing clippy errors under `-D warnings`), which is why the pre-push
+  path uses the build gate instead.
+- **A split has four side files to refresh, not one.** Beyond the four fixture
+  baselines: `python/tests/test_large_module_review.py` (a file that drops under
+  1,000 LOC must have its `REVIEWED_LARGE_MODULES` entry DELETED, or
+  `test_no_review_entry_outlives_the_file_it_reviewed` fails), and
+  `python/tests/test_src_dependency_boundaries.py` (its env-var allowlist is
+  keyed by FILE PATH, so splitting any module that reads an env var breaks it).
 - Surface real results faithfully (if a test fails or a step was skipped, say so).
 - **Never run DecBench / Joern unless explicitly asked.** `tests/decompiler_fixtures/`
   is the corpus we verify against: it executes recompiled output and diffs it
