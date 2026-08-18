@@ -33,6 +33,7 @@ use crate::ir::types::*;
 
 mod conditions;
 mod flags;
+mod mul_flags;
 mod packed;
 mod scalar_float;
 mod string_ops;
@@ -43,10 +44,11 @@ use conditions::{
     setcc_condition_for,
 };
 use flags::{
-    adc_ops, append_imul_overflow_flags, append_rotate_flags, append_undef_flags, bin_for,
-    cmp_flag_ops, emit_add_with_flags, emit_inc_dec_with_flags, emit_machine_bin_with_flags,
-    imul_wide_product, sbb_ops, signed_cmp_value, undef_flag, zero_sign_flags,
+    adc_ops, append_rotate_flags, append_undef_flags, bin_for, cmp_flag_ops, emit_add_with_flags,
+    emit_inc_dec_with_flags, emit_machine_bin_with_flags, sbb_ops, signed_cmp_value, undef_flag,
+    zero_sign_flags,
 };
+use mul_flags::{append_imul_overflow_flags, imul_wide_product};
 use packed::{
     movd_ops, packed_dword_and_not_ops, packed_dword_binary_ops, packed_dword_compare_equal_ops,
     packed_dword_compare_greater_ops, packed_dword_immediate_arithmetic_shift_right_ops,

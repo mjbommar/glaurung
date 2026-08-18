@@ -24,9 +24,8 @@ use iced_x86::OpKind;
 
 use crate::ir::types::*;
 
-use super::flags::{
-    append_undef_flags, append_wide_mul_overflow_flags, cmp_flag_ops, unsigned_cmp_value,
-};
+use super::flags::{append_undef_flags, cmp_flag_ops, unsigned_cmp_value};
+use super::mul_flags::append_wide_mul_overflow_flags;
 use super::{
     accumulator_name_for_width, cmp_operand_as_value, mem_op_of, operand_width, partial_gp_view,
     read_view_ops, reg_name, reg_size,
