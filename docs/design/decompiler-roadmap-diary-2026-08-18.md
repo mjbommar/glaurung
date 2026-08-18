@@ -389,3 +389,109 @@ ARM32 at all and answers with other architectures' registers.** `r0`-`r7` give
 x86's 16-bit `sp`. Its live consumer is the `Sar` arm of `lower_ops.rs`, so on
 ARM32 that protection is inert for `r0`-`r7` and wrong by 2× for `r8`/`r12`.
 No fixture reproduces it — gcc `-O0` keeps these functions in `r0`-`r3`.
+
+## Entry 76 — every aggregate-return fix was validated one step removed from the thing it fixed
+
+`tools/diff_decompile.py`'s `exec_class` declined **every** struct return with
+"aggregate return — not execution-differential". The reason was mechanical:
+`_ctypes_fn` built its restype from `_scalar_ctype`, which knows integers and
+floats. `_value_ctype` handled structs — but only for arguments.
+
+So fixtures 195, 197 and 198 — the three built specifically to pin SysV and
+AAPCS64 return classes — exercised their aggregate returns **only through
+`int32_t`-returning wrapper functions**. Every aggregate-return defect this
+project has closed was verified by a wrapper that hashed the members, never by
+comparing the returned aggregate.
+
+The fix is small because the machinery already existed: `_struct_ctype` builds
+an exact packed layout from DWARF offsets, and libffi then applies the
+platform's own return-class rules to it — which is precisely the thing under
+test. Use it as a restype, compare the returned bytes, stop declining.
+
+### What was behind the curtain
+
+**Twenty host cells and sixty across six architectures became executable. 20
+pass, 40 fail. Zero regressed from a passing state** — every change is
+`structural ->` a real verdict.
+
+`bv195_make_quad` is the clearest, and the shape is worth seeing:
+
+```c
+unsigned long bv195_make_quad(int arg0) {          // declared as ONE word
+    unsigned char local_10[16];
+    *(int *)(&local_10[0])        = arg0 + 1;
+    *(int *)((&local_10[0] + 4))  = arg0 + 2;
+    *(int *)((&local_10[0] + 8))  = arg0 * 3;
+    *(int *)((&local_10[0] + 12)) = arg0 * 5;
+    return *(long *)(&local_10[0]);                // only the first eightbyte
+}
+```
+
+All four members are computed correctly and two are thrown away. This is the
+**callee** side of `IntegerPair`, a class whose **caller** side was fixed weeks
+ago — and a roundtrip wrapper only ever exercises the caller side. The defect
+was structurally invisible to the only test that could have seen it.
+
+### The limit, measured rather than assumed
+
+MEMORY-class returns stay `structural`. `bv195_make_big` (32 bytes) and
+`agr198_make_five` (20) both SIGSEGV the worker, because libffi marshals a
+`_pack_ = 1` layout differently from the ABI's hidden-pointer contract. The
+predicate declines above 16 bytes with that written down. And one crash that
+looked like mine was not: `bv195_big_roundtrip` SIGSEGVs at HEAD with the
+harness unmodified — it takes a struct *parameter*, not a struct return. Checked
+by stashing the change rather than by reasoning about it.
+
+## Entry 77 — a review that could never expire
+
+`analysis/java_class.rs` (2,644 LOC) carried:
+
+```
+"accepted: the Java class-file format in one owner."
+```
+
+I expected another fabricated-destination entry — four were found this week
+naming modules that never existed. This is not that. **It names nothing, so
+there is nothing to fabricate, and nothing to check.**
+
+That is a worse failure mode, and probably a more common one: a review that is
+*formally valid and unfalsifiable*. "One input format, one owner" cannot be
+contradicted by any measurement, so it never expires. It survived a file growing
+to 2,644 lines with seven strictly-layered concerns and 26 of 96 items reachable
+from outside their layer.
+
+"One format" is not "one reason to change". The opcode table changes when the
+JVM adds an opcode; the annotation decoder when JSR-308 grows; the module
+attribute at Java 9. Three other entries use the identical formula —
+`debug/dwarf.rs`, `symbols/pdb.rs`, `ir/dwarf_fields.rs` — and deserve the same
+call-graph test that refuted this one.
+
+**The rule worth adopting: a review entry should state something a later
+measurement can contradict.** "One format" cannot be. "One cluster, measured
+2026-08-18, 96 items / 3 cross-layer references" can.
+
+### The attribute trap has two directions and they are not symmetric
+
+32% of this file's items have a leading line a keyword scan cannot see — but the
+composition is the opposite of the PyO3 file's. **28 of 31 are attribute-
+prefixed with no doc comment at all:** every one of the 26 public types sits
+under a bare `#[derive(Debug, Clone, PartialEq, Eq)]`. Cutting at
+`^pub struct JavaMethod` orphans that derive and every `PartialEq`/`Eq` in the
+file with it. Meanwhile the swallow-the-next-doc trap barely fires here, because
+**65 of the ~66 private functions carry no documentation whatsoever**.
+
+A file's documentation density decides which half of the trap you face. The
+`ast.rs` family was doc-heavy and lost doc blocks; this one is attribute-heavy
+and would have lost derives.
+
+### Two analysis errors the compiler caught, both worth naming
+
+An identifier-level dependency graph put `JavaAnnotation` in `attributes.rs`'s
+imports — a false positive from a **field type** (`Vec<JavaAnnotation>`) rather
+than a call. Trap 8 has a third form: not a comment, not a struct field *name*,
+but a field's *type*.
+
+And the dead-code counts needed `touch src/lib.rs` to force re-emission, because
+cargo replays a cached build with **zero** warnings. Read naively that is a
+100 → 0 improvement. The measurement instrument lies when it is not made to
+speak.
