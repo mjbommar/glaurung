@@ -1837,7 +1837,7 @@
     "big151_flat_cascade": "pass"
   },
   "151_wide_branch_ladder:clang:O2": {
-    "big151_branch_ladder": "fail",
+    "big151_branch_ladder": "pass",
     "big151_flat_cascade": "pass"
   },
   "151_wide_branch_ladder:gcc:O0": {
@@ -2233,11 +2233,11 @@
     "bit165_write_frame": "pass"
   },
   "166_rust_generics:rustc:O0": {
-    "rust_generic_dispatch": "fail",
+    "rust_generic_dispatch": "pass",
     "rust_generic_fill": "fail",
     "rust_generic_i16": "pass",
     "rust_generic_i32": "pass",
-    "rust_generic_i8": "fail",
+    "rust_generic_i8": "pass",
     "rust_generic_max": "fail",
     "rust_generic_mixed": "fail"
   },
@@ -2663,17 +2663,17 @@
     "divide_short_by_seven": "pass",
     "divide_signed_bytes": "pass",
     "divide_signed_shorts": "pass",
-    "divide_unsigned_bytes": "fail",
-    "divide_unsigned_shorts": "fail",
-    "remainder_signed_bytes": "fail",
+    "divide_unsigned_bytes": "pass",
+    "divide_unsigned_shorts": "pass",
+    "remainder_signed_bytes": "pass",
     "remainder_signed_shorts": "pass"
   },
   "185_subword_signed_division:gcc:O0": {
     "divide_short_by_seven": "pass",
     "divide_signed_bytes": "pass",
     "divide_signed_shorts": "pass",
-    "divide_unsigned_bytes": "fail",
-    "divide_unsigned_shorts": "fail",
+    "divide_unsigned_bytes": "pass",
+    "divide_unsigned_shorts": "pass",
     "remainder_signed_bytes": "pass",
     "remainder_signed_shorts": "pass"
   },
@@ -2681,8 +2681,8 @@
     "divide_short_by_seven": "pass",
     "divide_signed_bytes": "pass",
     "divide_signed_shorts": "pass",
-    "divide_unsigned_bytes": "fail",
-    "divide_unsigned_shorts": "fail",
+    "divide_unsigned_bytes": "pass",
+    "divide_unsigned_shorts": "pass",
     "remainder_signed_bytes": "pass",
     "remainder_signed_shorts": "pass"
   },
@@ -2935,7 +2935,7 @@
     "nrw194_u8_value_control": "pass"
   },
   "194_narrow_return_widths:clang:O2": {
-    "nrw194_bool_and": "fail",
+    "nrw194_bool_and": "pass",
     "nrw194_bool_bit": "pass",
     "nrw194_bool_wide_control": "pass",
     "nrw194_char_divide": "pass",
@@ -2955,8 +2955,8 @@
     "nrw194_i32_control": "pass",
     "nrw194_i8_divide": "pass",
     "nrw194_u16_mix": "pass",
-    "nrw194_u8_mix": "fail",
-    "nrw194_u8_value_control": "fail"
+    "nrw194_u8_mix": "pass",
+    "nrw194_u8_value_control": "pass"
   },
   "194_narrow_return_widths:gcc:O2": {
     "nrw194_bool_and": "pass",
@@ -2967,8 +2967,8 @@
     "nrw194_i32_control": "pass",
     "nrw194_i8_divide": "pass",
     "nrw194_u16_mix": "pass",
-    "nrw194_u8_mix": "fail",
-    "nrw194_u8_value_control": "fail"
+    "nrw194_u8_mix": "pass",
+    "nrw194_u8_value_control": "pass"
   },
   "195_by_value_aggregates:clang:O0": {
     "bv195_big_roundtrip": "fail",
@@ -4468,7 +4468,7 @@
   },
   "96_integer_promotion:gcc:O0": {
     "promote_narrow_product": "pass",
-    "promote_then_truncate": "fail",
+    "promote_then_truncate": "pass",
     "short_promotion_sign": "pass",
     "unsigned_conversion_rank": "pass"
   },

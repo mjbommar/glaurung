@@ -4273,6 +4273,185 @@ mod tests {
         );
     }
 
+    /// Every op an instruction lifted to, flags and poison stripped.
+    fn arithmetic_ops(bytes: &[u8]) -> Vec<Op> {
+        lift64(bytes)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .filter(|op| !matches!(op, Op::Undef { .. }))
+            .collect()
+    }
+
+    /// Does any op DEFINE `name` as a bare physical register?
+    fn defines_bare(ops: &[Op], name: &str) -> bool {
+        ops.iter().any(|op| {
+            crate::ir::use_def::defs_uses(op)
+                .0
+                .contains(&VReg::phys(name))
+        })
+    }
+
+    /// Is `parent = parent & mask` present — one half of a masked deposit?
+    fn masks_parent(ops: &[Op], parent: &str, mask: i64) -> bool {
+        ops.iter().any(|op| {
+            matches!(op, Op::Bin { dst, op: BinOp::And, lhs: Value::Reg(source), rhs: Value::Const(m) }
+                if *dst == VReg::phys(parent) && *source == VReg::phys(parent) && *m == mask)
+        })
+    }
+
+    /// `mul r/m8` writes its WHOLE 16-bit product to `AX` — SDM Vol. 2A, MUL —
+    /// so the "pair" is `ah:al`, two byte views of one parent, and there is no
+    /// second register. Until this width had an arm at all the instruction fell
+    /// to the unhandled path: gcc's `uint8_t / 3u` is
+    /// `mov $0xffffffab,%edx ; mul %dl ; shr $0x8,%ax ; shr $1,%dl`, and the
+    /// reciprocal 0xAB appeared nowhere in the recovered C
+    /// (`194_narrow_return_widths:gcc:O0:nrw194_u8_mix`).
+    #[test]
+    fn eight_bit_mul_writes_both_product_bytes_through_rax() {
+        // mul dl  (f6 e2) → AX = AL * DL.
+        let ops = arithmetic_ops(&[0xf6, 0xe2]);
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    dst,
+                    op: BinOp::Mul,
+                    lhs: Value::Reg(VReg::Temp(60)),
+                    rhs: Value::Reg(VReg::Temp(61)),
+                } if *dst == VReg::Temp(62)
+            )),
+            "missing low product: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, ins, outs, .. }
+                    if name == "x86.umul_hi.8"
+                        && *ins == vec![
+                            Value::Reg(VReg::Temp(60)),
+                            Value::Reg(VReg::Temp(61)),
+                        ]
+                        && *outs == vec![(VReg::Temp(63), Width::W8)]
+            )),
+            "missing high product: {ops:#?}"
+        );
+        // Neither half may be DEFINED under its own name: `regview::ssa_parent`
+        // keeps `al`/`ah` separate from `rax`, and every read of either is
+        // lowered as an extract from `rax`, so such a definition is unreachable.
+        for half in ["al", "ah"] {
+            assert!(
+                !defines_bare(&ops, half),
+                "`{half}` was defined as a bare name: {ops:#?}"
+            );
+        }
+        // Both bytes are deposited into `rax`: bits 0..7 keep 0xFF..FF00,
+        // bits 8..15 keep 0xFF..00FF.
+        assert!(
+            masks_parent(&ops, "rax", -256) && masks_parent(&ops, "rax", -65281),
+            "both product bytes must be deposited into rax: {ops:#?}"
+        );
+    }
+
+    /// `div r/m8` divides `AX` — not a register pair — leaving the quotient in
+    /// `AL` and the remainder in `AH` (SDM Vol. 2A, DIV). Both halves are read
+    /// out of `rax` and both are deposited back into it.
+    /// `185_subword_signed_division:gcc:O0:divide_unsigned_bytes` is the lane.
+    #[test]
+    fn eight_bit_div_reads_and_writes_both_accumulator_bytes_through_rax() {
+        // div dl  (f6 f2) → AL = AX / DL, AH = AX % DL.
+        let ops = arithmetic_ops(&[0xf6, 0xf2]);
+        // The dividend halves: `ah` is (rax >> 8) & 0xff, `al` is rax & 0xff.
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::Shr, lhs: Value::Reg(source), rhs: Value::Const(8) }
+                    if *dst == VReg::Temp(70) && *source == VReg::phys("rax")
+            )),
+            "missing `ah` snapshot out of rax: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst, op: BinOp::And, lhs: Value::Reg(source), rhs: Value::Const(0xff) }
+                    if *dst == VReg::Temp(71) && *source == VReg::phys("rax")
+            )),
+            "missing `al` snapshot out of rax: {ops:#?}"
+        );
+        let inputs = vec![
+            Value::Reg(VReg::Temp(70)),
+            Value::Reg(VReg::Temp(71)),
+            Value::Reg(VReg::Temp(72)),
+        ];
+        for (intrinsic, scratch) in [
+            ("x86.udiv_quot.8", VReg::Temp(73)),
+            ("x86.udiv_rem.8", VReg::Temp(74)),
+        ] {
+            assert!(
+                ops.iter().any(|op| matches!(
+                    op,
+                    Op::Intrinsic { name, ins, outs, .. }
+                        if name == intrinsic
+                            && *ins == inputs
+                            && *outs == vec![(scratch.clone(), Width::W8)]
+                )),
+                "missing {intrinsic}: {ops:#?}"
+            );
+        }
+        for half in ["al", "ah"] {
+            assert!(
+                !defines_bare(&ops, half),
+                "`{half}` was defined as a bare name: {ops:#?}"
+            );
+        }
+        assert!(
+            masks_parent(&ops, "rax", -256) && masks_parent(&ops, "rax", -65281),
+            "quotient and remainder must both be deposited into rax: {ops:#?}"
+        );
+    }
+
+    /// The write-side twin of
+    /// [`div_at_sixteen_bits_reads_its_accumulator_halves_out_of_their_parents`].
+    ///
+    /// Reading `dx`/`ax` out of their parents was only half the fix: the
+    /// quotient was still DEPOSITED under the bare name `ax`, which no reader
+    /// can reach for exactly the same reason. `divide_unsigned_shorts` rendered
+    /// `return dividend;` — the `divw` gone without a trace — for four months
+    /// after the read side was corrected.
+    #[test]
+    fn div_at_sixteen_bits_deposits_its_results_into_their_parents() {
+        // div cx  (66 f7 f1) → unsigned dx:ax / cx.
+        let ops = arithmetic_ops(&[0x66, 0xf7, 0xf1]);
+        for half in ["ax", "dx"] {
+            assert!(
+                !defines_bare(&ops, half),
+                "`{half}` was defined as a bare name: {ops:#?}"
+            );
+        }
+        // A 16-bit deposit keeps bits 16..63 of its own parent.
+        assert!(
+            masks_parent(&ops, "rax", -65536) && masks_parent(&ops, "rdx", -65536),
+            "quotient and remainder must be deposited into rax/rdx: {ops:#?}"
+        );
+    }
+
+    /// The 32- and 64-bit halves are canonical SSA names, so their lowerings
+    /// must stay direct architectural writes with no deposit at all.
+    #[test]
+    fn wide_arithmetic_at_canonical_widths_still_writes_its_registers_directly() {
+        for (bytes, lo, hi) in [
+            (&[0x48, 0xf7, 0xf1][..], "rax", "rdx"), // div rcx
+            (&[0xf7, 0xf1][..], "eax", "edx"),       // div ecx
+            (&[0x48, 0xf7, 0xe2][..], "rax", "rdx"), // mul rdx
+            (&[0xf7, 0xe2][..], "eax", "edx"),       // mul edx
+        ] {
+            let ops = arithmetic_ops(bytes);
+            assert!(
+                defines_bare(&ops, lo) && defines_bare(&ops, hi),
+                "{lo}/{hi} must still be written directly: {ops:#?}"
+            );
+        }
+    }
+
     #[test]
     fn idiv_reg_lifts_exact_signed_quotient_and_remainder_outputs() {
         // idiv rcx  (48 f7 f9)

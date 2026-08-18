@@ -8566,6 +8566,129 @@ function f @ 0x1000 {
         );
     }
 
+    /// One `_Bool`-returning function, rendered against a declared prototype.
+    fn render_bool_return(value: Expr) -> String {
+        let function = Function {
+            name: "bool_return".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return { value: Some(value) }],
+        };
+        let prototype = CallPrototype {
+            return_type: "_Bool".into(),
+            parameter_types: vec!["int32_t".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        )
+    }
+
+    /// `arg0 & -256 | arg0 & 1` — the merged register a bit-preserving byte
+    /// write leaves behind.
+    fn merged_partial_byte_write() -> Expr {
+        Expr::Bin {
+            op: BinOp::Or,
+            lhs: Box::new(Expr::Bin {
+                op: BinOp::And,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Const(-256)),
+            }),
+            rhs: Box::new(Expr::Bin {
+                op: BinOp::And,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Const(1)),
+            }),
+        }
+    }
+
+    /// A `_Bool` result lives in `al` alone; C converts to `_Bool` with `!= 0`
+    /// (C23 6.3.1.2), so every surviving high bit of the register becomes
+    /// `true`.
+    ///
+    /// `194_narrow_return_widths:clang:O2:nrw194_bool_and` compiles to
+    /// `and %edi,%eax ; and $0x1,%al` — a bit-preserving byte AND this recovery
+    /// models exactly and then returned whole. At x == y == -64 the merged
+    /// value is 0x1FFFFF00: the source answers 0, the recovery answered `true`.
+    #[test]
+    fn a_bool_return_is_narrowed_to_the_byte_the_abi_defines() {
+        let rendered = render_bool_return(merged_partial_byte_write());
+        assert!(
+            rendered.contains("_Bool bool_return(int32_t arg0)"),
+            "declared `_Bool` prototype was discarded:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("return ((unsigned char)(") && rendered.contains(") != 0);"),
+            "a `_Bool` return must be narrowed to the ABI byte before the \
+             zero test:\n{rendered}"
+        );
+        assert_eq!(
+            rendered.trim_end().lines().last(),
+            Some("}"),
+            "the render must still be one complete function:\n{rendered}"
+        );
+    }
+
+    /// The narrowing is confined to the one conversion C does not perform as a
+    /// truncation. An `int32_t` return of the same expression already truncates
+    /// by 6.3.1.3, so spelling a cast there would be churn on the ~650
+    /// `int32_t`-returning functions in the fixture corpus and nothing else.
+    #[test]
+    fn an_integer_return_of_the_same_value_is_left_to_c_s_own_conversion() {
+        let function = Function {
+            name: "int_return".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(merged_partial_byte_write()),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "int32_t".into(),
+            parameter_types: vec!["int32_t".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        );
+        assert!(
+            !rendered.contains("(unsigned char)"),
+            "an integer return needs no explicit truncation:\n{rendered}"
+        );
+    }
+
+    /// A recovered `setcc` is already 0 or 1 (C23 6.5.9p3), so it gains nothing
+    /// from the narrowing — `nrw194_bool_bit` passes today and must keep its
+    /// output. This is the churn guard, not a correctness one.
+    #[test]
+    fn a_bool_return_that_is_already_a_comparison_is_not_narrowed() {
+        let rendered = render_bool_return(Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Bin {
+                op: BinOp::And,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Const(0x100)),
+            }),
+            rhs: Box::new(Expr::Const(0)),
+        });
+        assert!(
+            !rendered.contains("(unsigned char)"),
+            "a comparison is already normalised:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("return ((arg0 & 256) != 0);"),
+            "the recovered comparison must survive verbatim:\n{rendered}"
+        );
+    }
+
     #[test]
     fn recovered_opaque_typedef_parameter_is_self_contained() {
         let function = Function {

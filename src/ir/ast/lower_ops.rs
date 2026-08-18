@@ -172,7 +172,11 @@ fn wide_integer_intrinsic(
         .or_else(|| name.strip_prefix("arm."))?
         .rsplit_once('.')?;
     let bits: u16 = bits.parse().ok()?;
-    if output_width.bits() != bits || !matches!(bits, 16 | 32 | 64) {
+    // 8 is admitted for x86's byte `mul`/`div`, whose product and dividend are
+    // `AX` alone. `double_width_ctype` already names the `short` intermediate
+    // that width needs, and C's integer promotions compute the whole expression
+    // in `int` regardless — so the lowering is the same one, not a special case.
+    if output_width.bits() != bits || !matches!(bits, 8 | 16 | 32 | 64) {
         return None;
     }
     let op = match stem {

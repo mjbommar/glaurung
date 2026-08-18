@@ -28,7 +28,7 @@ use super::flags::{append_undef_flags, cmp_flag_ops, unsigned_cmp_value};
 use super::mul_flags::append_wide_mul_overflow_flags;
 use super::{
     accumulator_name_for_width, cmp_operand_as_value, mem_op_of, operand_width, partial_gp_view,
-    read_view_ops, reg_name, reg_size,
+    partial_write_ops, read_view_ops, reg_name, reg_size,
 };
 
 /// `shrd dst, src, imm8` / `shld dst, src, imm8` — the double-precision shift.
@@ -421,6 +421,67 @@ fn snapshot_accumulator_half(name: &str, temp: VReg, ops: &mut Vec<Op>) {
     }
 }
 
+/// Which register the op that COMPUTES one architectural half should write.
+///
+/// The write side of [`snapshot_accumulator_half`]'s hazard, and the worse
+/// half of it. At 64 and 32 bits the half names the canonical SSA value (`rax`,
+/// or `eax`, which zero-extends into it), so the computing op writes the
+/// register itself. At 16 and 8 bits the half is a BIT-PRESERVING view — `ax`,
+/// `dx`, `al`, `ah` — that `regview::ssa_parent` refuses to merge with its
+/// parent, and every READ of such a view is lowered as an extract from that
+/// parent. So a definition spelled `ax` is a definition nothing can ever reach:
+/// the def and the use are two unrelated names.
+///
+/// That was not hypothetical. `185_subword_signed_division:divide_unsigned_shorts`
+/// lifts `divw -0x2(%rbp)`, whose quotient this lowering deposited in a bare
+/// `ax`; the `movzwl %ax,%eax` two bytes later read `rax`, found the untouched
+/// dividend, and the function decompiled to `return dividend;` with the divide
+/// silently absent.
+///
+/// A partial half is therefore computed into `scratch` and deposited afterwards
+/// by [`deposit_accumulator_half`].
+fn accumulator_half_destination(name: &str, scratch: VReg) -> VReg {
+    match partial_gp_view(name) {
+        Some(_) => scratch,
+        None => VReg::phys(name),
+    }
+}
+
+/// Deposit a half computed into `scratch` into the parent register it really
+/// lives in, as the masked read-modify-write `mov %al, …` already uses.
+///
+/// A no-op when [`accumulator_half_destination`] gave the computing op the
+/// architectural register directly, which keeps the 32- and 64-bit lowerings
+/// exactly the op sequences they were.
+///
+/// Deposits must follow EVERY computation, never interleave with one: at 8 bits
+/// both halves (`al` and `ah`) live in the same parent, so a deposit performed
+/// before the second half is computed would be read back by that computation.
+fn deposit_accumulator_half(name: &str, scratch: VReg, ops: &mut Vec<Op>) {
+    if let Some(view) = partial_gp_view(name) {
+        ops.extend(partial_write_ops(view, Value::Reg(scratch)));
+    }
+}
+
+/// The `(low, high)` architectural halves of the implicit accumulator pair a
+/// one-operand `mul`/`imul`/`div`/`idiv` of this operand width reads and writes.
+///
+/// Three of the four rows are a register PAIR (`rdx:rax`, `edx:eax`, `dx:ax`).
+/// The byte forms are not: SDM Vol. 2A gives `mul r/m8` the destination `AX`
+/// alone and `div r/m8` the dividend `AX` alone, so the "pair" is the two byte
+/// views of one 16-bit window in `rax` — `al` low, `ah` high. That is why the
+/// halves are named rather than derived from a register number, and why the
+/// deposit discipline above exists: at this width the two halves alias.
+fn accumulator_halves(width: Width) -> Option<(&'static str, &'static str)> {
+    match width.bits() {
+        64 => Some(("rax", "rdx")),
+        32 => Some(("eax", "edx")),
+        16 => Some(("ax", "dx")),
+        8 => Some(("al", "ah")),
+        _ => None,
+    }
+}
+
 /// Exact one-operand x86 multiply: `hi:lo = accumulator * source`.
 ///
 /// Snapshot both inputs before defining either architectural output. Express the
@@ -428,27 +489,31 @@ fn snapshot_accumulator_half(name: &str, temp: VReg, ops: &mut Vec<Op>) {
 /// typed, single-output intrinsic. A multi-output intrinsic cannot currently be
 /// renamed by the SSA/value-numbering layer, which is precisely how the magic
 /// constant remainder sequences emitted by GCC and Clang lost `rdx`.
+///
+/// At 8 bits `hi:lo` is `ah:al` — see [`accumulator_halves`] — and both halves
+/// are deposited into `rax` after both are computed. Byte multiplies are how
+/// GCC divides a `uint8_t` by a constant: `nrw194_u8_mix` lowers `narrowed / 3u`
+/// to `mov $0xffffffab,%edx ; mul %dl ; shr $0x8,%ax ; shr $1,%dl`. While this
+/// returned `None` for that width the instruction fell to the unhandled path
+/// and the reciprocal 0xAB appeared nowhere in the recovered C.
 pub(super) fn wide_mul_ops(instr: &iced_x86::Instruction, signed: bool) -> Option<Vec<Op>> {
     if instr.op_count() != 1 {
         return None;
     }
     let width = operand_width(instr, 0);
-    let (lo_name, hi_name) = match width.bits() {
-        64 => ("rax", "rdx"),
-        32 => ("eax", "edx"),
-        16 => ("ax", "dx"),
-        _ => return None,
-    };
+    let (lo_name, hi_name) = accumulator_halves(width)?;
     let mut ops = Vec::new();
     let source = cmp_operand_as_value(instr, 0, VReg::Temp(59), &mut ops)?;
     snapshot_accumulator_half(lo_name, VReg::Temp(60), &mut ops);
+    let low = accumulator_half_destination(lo_name, VReg::Temp(62));
+    let high = accumulator_half_destination(hi_name, VReg::Temp(63));
     ops.extend([
         Op::Assign {
             dst: VReg::Temp(61),
             src: source,
         },
         Op::Bin {
-            dst: VReg::phys(lo_name),
+            dst: low.clone(),
             op: BinOp::Mul,
             lhs: Value::Reg(VReg::Temp(60)),
             rhs: Value::Reg(VReg::Temp(61)),
@@ -460,11 +525,13 @@ pub(super) fn wide_mul_ops(instr: &iced_x86::Instruction, signed: bool) -> Optio
                 width.bits()
             ),
             ins: vec![Value::Reg(VReg::Temp(60)), Value::Reg(VReg::Temp(61))],
-            outs: vec![(VReg::phys(hi_name), width)],
+            outs: vec![(high.clone(), width)],
             reads_mem: false,
             writes_mem: false,
         },
     ]);
+    deposit_accumulator_half(lo_name, low, &mut ops);
+    deposit_accumulator_half(hi_name, high, &mut ops);
     append_wide_mul_overflow_flags(
         &mut ops,
         Value::Reg(VReg::Temp(60)),
@@ -482,17 +549,17 @@ pub(super) fn wide_mul_ops(instr: &iced_x86::Instruction, signed: bool) -> Optio
 }
 
 /// Exact x86 wide division with independently renameable quotient/remainder.
+///
+/// At 8 bits the dividend is `AX` alone and the results are `AL` (quotient) and
+/// `AH` (remainder) — SDM Vol. 2A, DIV/IDIV. Expressed through
+/// [`accumulator_halves`] that is the same `hi:lo` shape as every other width,
+/// so the three-input intrinsics need no byte-specific spelling.
 pub(super) fn wide_div_ops(instr: &iced_x86::Instruction, signed: bool) -> Option<Vec<Op>> {
     if instr.op_count() != 1 {
         return None;
     }
     let width = operand_width(instr, 0);
-    let (lo_name, hi_name) = match width.bits() {
-        64 => ("rax", "rdx"),
-        32 => ("eax", "edx"),
-        16 => ("ax", "dx"),
-        _ => return None,
-    };
+    let (lo_name, hi_name) = accumulator_halves(width)?;
     let mut ops = Vec::new();
     let divisor = cmp_operand_as_value(instr, 0, VReg::Temp(69), &mut ops)?;
     snapshot_accumulator_half(hi_name, VReg::Temp(70), &mut ops);
@@ -507,22 +574,26 @@ pub(super) fn wide_div_ops(instr: &iced_x86::Instruction, signed: bool) -> Optio
         Value::Reg(VReg::Temp(71)),
         Value::Reg(VReg::Temp(72)),
     ];
+    let quotient = accumulator_half_destination(lo_name, VReg::Temp(73));
+    let remainder = accumulator_half_destination(hi_name, VReg::Temp(74));
     ops.extend([
         Op::Intrinsic {
             name: format!("x86.{kind}_quot.{}", width.bits()),
             ins: inputs.clone(),
-            outs: vec![(VReg::phys(lo_name), width)],
+            outs: vec![(quotient.clone(), width)],
             reads_mem: false,
             writes_mem: false,
         },
         Op::Intrinsic {
             name: format!("x86.{kind}_rem.{}", width.bits()),
             ins: inputs,
-            outs: vec![(VReg::phys(hi_name), width)],
+            outs: vec![(remainder.clone(), width)],
             reads_mem: false,
             writes_mem: false,
         },
     ]);
+    deposit_accumulator_half(lo_name, quotient, &mut ops);
+    deposit_accumulator_half(hi_name, remainder, &mut ops);
     append_undef_flags(
         &mut ops,
         &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],

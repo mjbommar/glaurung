@@ -1551,6 +1551,36 @@ fn write_expr_for_destination_dec(destination_type: &str, src: &Expr, out: &mut 
     });
 }
 
+/// Is `c_type` the C boolean, whose conversion is a zero test rather than a
+/// truncation?
+///
+/// Both spellings reach the renderer: DWARF emits `_Bool` for C and `bool` for
+/// C++, and `dwarf_render_types` passes the source spelling through unchanged.
+fn is_bool_ctype(c_type: &str) -> bool {
+    matches!(c_type.trim(), "_Bool" | "bool")
+}
+
+/// Is this expression already 0 or 1, so that converting it to `_Bool` cannot
+/// change it?
+///
+/// A C relational or equality operator yields 0 or 1 by definition (C23
+/// 6.5.8p6, 6.5.9p3), which is what a recovered `setcc`/`test` renders as, and
+/// a literal states its own value. Narrowing either would be output churn with
+/// no semantic content — and `nrw194_bool_bit` (`test $0x100 ; setne %al`) is
+/// exactly that case, already passing.
+fn is_normalised_boolean(e: &Expr) -> bool {
+    match e {
+        Expr::Cmp { .. } => true,
+        Expr::Const(value) => matches!(value, 0 | 1),
+        // An INTEGER cast (which `Expr::Cast` is by construction) cannot turn
+        // 0 or 1 into anything else: truncation keeps both, and either
+        // extension of them is itself. A float `NumericConvert` deliberately
+        // does not qualify — `(int)3.5` is 3.
+        Expr::Cast { expr, .. } => is_normalised_boolean(expr),
+        _ => false,
+    }
+}
+
 /// Render a value against the declaration that consumes it.
 ///
 /// The AST retains machine values even when type recovery proves that one side
@@ -1628,6 +1658,38 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
 
     if matches!(destination_type, "float" | "double") {
         write_float_expr_dec(src, if destination_type == "float" { 4 } else { 8 }, out);
+        return;
+    }
+
+    if is_bool_ctype(destination_type)
+        && !expression_has_pointer_representation(src)
+        && !is_normalised_boolean(src)
+    {
+        // C converts a value to `_Bool` by comparing it against zero — 6.3.1.2,
+        // "the result is 0 if the value compares equal to 0; otherwise 1" —
+        // and to every OTHER integer type by reducing it modulo that type's
+        // width (6.3.1.3). The modular case is exactly what the machine did, so
+        // the conversion C already performs at the boundary is the right one
+        // and spelling a cast for it would change nothing on the ~650
+        // `int32_t`-returning functions in the corpus. `_Bool` is the sole type
+        // where the language's conversion is a TEST rather than a truncation,
+        // and therefore the sole type where the boundary has to be narrowed
+        // explicitly first.
+        //
+        // It has to be narrowed because the ABI puts a `_Bool` result in `al`
+        // alone and says nothing about the rest of the register (SysV AMD64
+        // psABI 3.2.3; AAPCS64 4.1). `nrw194_bool_and` at clang -O2 is
+        // `and %edi,%eax ; and $0x1,%al` — a bit-preserving byte AND whose
+        // partial write this recovery models exactly, then returns the whole
+        // merged register. For x == y == -64 the source answers 0 while
+        // `(var8 & -256) | (var8 & 1)` is 0x1FFFFF00, which `!= 0` reads as
+        // `true`.
+        //
+        // Narrowing to `unsigned char` and testing that is the ABI's own
+        // reading of the register, and it is what the caller does.
+        out.push_str("((unsigned char)(");
+        write_expr_dec(src, out);
+        out.push_str(") != 0)");
         return;
     }
 
