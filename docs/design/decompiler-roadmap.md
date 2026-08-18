@@ -3066,6 +3066,9 @@ releasable.
 This roadmap supersedes the ordering in the older plans but not their evidence:
 
 - [Architecture redesign](glaurung-architecture-redesign-2026-08-05.md)
+- [Execution diary, 2026-08-19](decompiler-roadmap-diary-2026-08-19.md) —
+  a formatter emitting syntax the project cannot run, a regression `cargo
+  test` structurally could not see, and three causes where I had filed one
 - [Execution diary, 2026-08-18](decompiler-roadmap-diary-2026-08-18.md) —
   the feature blind spot (8.6% of the tree never compiled by the documented
   gate), byte/word division silently discarded, and a correctness bug traced
