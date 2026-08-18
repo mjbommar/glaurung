@@ -288,3 +288,104 @@ present too — the two compose. It was reverted because 44 lanes is not proof f
 a change that touches every AArch64 call annotation, which is the correct call
 and the reason it is being re-measured against the full aarch64 lane set before
 it lands.
+
+## Entry 74 — an unmodelled instruction does not fail to be modelled; it lies
+
+`movlpd`, `movhpd`, `movlps` and `movhps` had no arm anywhere in `src/ir/`. The
+interesting part is what that cost, and why it is not "one missing family".
+
+The two fallbacks in this IR are `Op::Unknown { mnemonic: String }` — one field,
+no operands — and `Op::opaque`, which builds `Op::Intrinsic` with
+`reads_mem: true, writes_mem: true` and **empty `ins`/`outs`**. Conservative
+about memory; silent about registers. So an unmodelled instruction is not
+conservatively modelled, it is **invisible to register dataflow**: the def-use
+census believes the destination was never written, and the previous value flows
+on.
+
+On `197:clang:O0:hfa197_quad4f_roundtrip` a correct `SsePair` return split was
+computed and then **discarded**, because every consumer of `xmm0`/`xmm1` was a
+declined `/* asm: movlpd */`. The split's reads had no users. And the `pd`
+suffix made `movlpd` an unmodelled *float* producer to `float_gate.rs`'s
+`OPAQUE_SUFFIXES`, which shut the whole-function gate — so eight `cvttss2si`
+were declined as well. Ten undefined reads in one function, from one absent
+match arm.
+
+### Bit-identical is not inference-identical
+
+The agent's first lowering emitted two 4-byte lane accesses, matching MOVQ's
+`packed_qword_move_ops`. It removed all ten opaque markers and **the lane stayed
+`fail`**: two 4-byte stores made the spill slot two `int` frame objects, and the
+function's own 8-byte reload then narrowed to the first four bytes, silently
+dropping two members. One 8-byte access with the lanes unpacked through a
+temporary is what turned it green.
+
+The stack-object recovery reads **access widths as layout evidence**. Two
+lowerings that move the same bits are not interchangeable, because a later pass
+is inferring structure from how the bits moved. That is worth remembering
+whenever a lowering is chosen by analogy to a neighbouring one.
+
+### The guard, and its stated limit
+
+A new test sweeps the 238 committed amd64 samples and flags any instruction
+whose lift leaves an `Op::Unknown` while `iced_x86` reports a written register.
+1.8 seconds. Decoding only inside sized `STT_FUNC` bounds matters: a whole-`.text`
+linear sweep invents `aesenc`/`xlatb`/`iretd` out of padding, and that alone cut
+79 mnemonics to 52.
+
+**52 mnemonics**, and the list is the argument:
+
+```
+pcmpeqb 204  punpcklbw 260  pmovmskb 222  pshuflw 232   <- glibc strlen/memcmp
+syscall 310  bsr bts btc btr tzcnt popcnt shrd rcr
+vmovdqu vpand vpbroadcastb vpcmpeqb vpmovmskb vpxor vzeroupper
+movsb movsq  cpuid rdtsc rdtscp xgetbv popfq pushfq
+fadd faddp fchs fisub fmul fstp fsub fsubp fxch
+```
+
+These are the SSE string primitives every statically linked binary's string
+routines are built from. Not exotica.
+
+The guard is **demonstrated rather than asserted** — deleting this commit's two
+dispatch arms puts `"movhps": 26` back on the list, every `movhps` in the
+corpus. And its limit is written into its own doc: **it would not have caught
+`movlpd`**, because the committed samples contain none and its store form writes
+no register. That one needed the fixture corpus, which is compiled rather than
+committed and cannot be swept from a unit test. A guard that names what it
+cannot see is worth more than one that implies it sees everything.
+
+## Entry 75 — three suspects, all innocent, and the dumps said so
+
+`194:{armv7,armv7_a32}:O0:nrw194_i8_divide` rendered
+`(unsigned long long)(narrowed) >> 31` where `narrowed` is a `signed char` —
+`0x1FFFFFFFF` instead of `1`.
+
+I named three candidates: `lift_arm32/shifts.rs`, `ast/abi_widths.rs`,
+`ast/width_semantics.rs`. **All three were innocent**, and the evidence was a
+dump rather than a reading:
+
+- the LLIR is exact — the `Shr` is over `r3`, a 32-bit register, immediately
+  after an explicit `SExt 8 -> 32`;
+- the AST is exact through `insert_widening_casts_for_machine_width` and all
+  twelve passes after it, carrying an explicit `Cast{signed, width: 4}`.
+
+The wrong width appears only in the C text emitted *after* the final pass dump.
+The owner is `expr_machine_width`, which had no `Expr::Cast` arm and answered
+`None`, so `shift_operand_ctype` fell through to its 8-byte default. A separate
+pass then elided the now-unprinted `(int)((signed char)…)`, which is why the bad
+cast ends up sitting on `narrowed` and reads like a type error rather than a
+width default. **Two independent behaviours composing into a symptom that
+resembles neither** is the reason the three-suspect list was wrong.
+
+Blast radius was measured, not argued: every fixture source × {Thumb, A32} ×
+{O0, O2} rendered both ways — **4 of 6,586 renders changed text at all**, two of
+them the target, two an inert 64-bit cast over an already-wrapping 32-bit
+product. So the *failure* is one function; the *mechanism* is not, because the
+8-byte fallback is still the default for any operand whose width cannot be
+established.
+
+And one layer up, filed rather than fixed: **`phys_reg_width` does not model
+ARM32 at all and answers with other architectures' registers.** `r0`-`r7` give
+`None`; `r8`/`r12` hit x86-64's 64-bit table; `lr`/`pc` hit AArch64's; `sp` hits
+x86's 16-bit `sp`. Its live consumer is the `Sar` arm of `lower_ops.rs`, so on
+ARM32 that protection is inert for `r0`-`r7` and wrong by 2× for `r8`/`r12`.
+No fixture reproduces it — gcc `-O0` keeps these functions in `r0`-`r3`.
