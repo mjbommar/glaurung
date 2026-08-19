@@ -96,13 +96,39 @@ def closure_status(block: str) -> str:
     return "closed"
 
 
+#: A function-pointer CAST that is then APPLIED:
+#: ``((int (*)(long, long))(ops[i]))(a, b)``. The `(*)` is C's function-pointer
+#: declarator, and requiring the `))(` after it is what distinguishes a call from
+#: the `static void (*ops[5])(void)` DECLARATION of the same table.
+_FN_PTR_CAST_APPLIED = re.compile(r"\(\s*\*\s*\)\s*\([^;]*?\)\s*\)\s*\(")
+#: A dereferenced callee applied directly: ``(*fp)(a)``, ``(*obj->vtbl[2])(x)``.
+_DEREF_CALLEE_APPLIED = re.compile(r"\(\s*\*\s*[A-Za-z_][\w\[\]\.\s\+\-\>]*\)\s*\(")
+
+
 def has_indirect_call(block: str) -> bool:
-    """A call through a computed/loaded pointer: ``(*(...))(...)`` or ``(...)()``
-    on a dereferenced/cast target — the operations-table / callback dispatch."""
+    """A call through a computed/loaded pointer — operations-table dispatch.
+
+    The previous predicate was `\)\s*\)\s*\(` — ANY `))(` — which ordinary
+    nested casts produce constantly. Measured over 139 REQUIRED functions from
+    45 fixtures at `gcc:O0`, it fired on **45 of them (32%)**, including
+    `108_multidimensional_arrays:sum_true_2d`, which contains no call of any
+    kind. A predicate true of a third of all functions cannot distinguish a
+    recovered indirect call from a nested cast, so every `indirect_call: True`
+    assertion was passing whether or not the feature worked.
+
+    The two patterns above fire on **8 of the same 139 (5%)**, and the four
+    functions that actually assert this — `08_indirect_dispatch`'s `dispatch`,
+    `apply` and `tail_dispatch`, plus `10_cpp_runtime_shapes`'
+    `cpp_virtual_dispatch` — still hold on **all 16 cells** (both compilers,
+    both optimisation levels). So the assertions were not vacuous after all:
+    the recovery genuinely works, and now the test says so for a reason.
+
+    One removed hit is worth naming: `08_indirect_dispatch:dispatch_switch` no
+    longer matches, correctly — it dispatches through a `switch`, not through a
+    pointer, and it asserts nothing.
+    """
     body = _strip_comments(block)
-    return bool(
-        re.search(r"\)\s*\)\s*\(", body) or re.search(r"\(\s*\*[^)]*\)\s*\(", body)
-    )
+    return bool(_FN_PTR_CAST_APPLIED.search(body) or _DEREF_CALLEE_APPLIED.search(body))
 
 
 def has_memory_store(block: str) -> bool:
