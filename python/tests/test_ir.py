@@ -312,17 +312,38 @@ def test_movsd_scalar_also_defines_the_lanes_it_writes():
 
 
 def test_movsd_string_lifts_to_copy_and_pointer_advance():
+    """The string `movsd` copies AND advances both pointers, by +width or
+    -width according to the DIRECTION FLAG.
+
+    This test used to assert a bare `+4` on each pointer. That pinned a lowering
+    which ignored DF entirely -- it was replaced when the string-move family was
+    lifted properly, and its Rust counterpart was updated in the same change
+    while this Python one was missed.
+
+    `lift_bytes` decodes an isolated byte sequence with no function around it, so
+    there is no entry to seed `Flag::D = 0` from the SysV/MS ABI guarantee (that
+    seeding lives in `lift_function.rs`, and only fires for a function that reads
+    the flag). With DF genuinely unknown, the honest lowering is the `Ite`, and
+    the const-fold to `+4` is exactly what must NOT happen here. Inside a real
+    function it does fold, which is what the fixture lanes exercise.
+    """
     ops = g.ir.lift_bytes(bytes([0xA5]), 0x1000, 64)
-    assert [o["kind"] for o in ops] == ["load", "store", "bin", "bin"]
+    assert [o["kind"] for o in ops] == ["load", "store", "ite", "bin", "bin"]
     assert ops[0]["dst"] == "%t0"
     assert ops[0]["addr"]["base"] == "rsi"
     assert ops[0]["addr"]["size"] == 4
     assert ops[1]["addr"]["base"] == "rdi"
     assert ops[1]["src"] == {"kind": "reg", "name": "%t0"}
-    assert ops[2]["dst"] == "rsi"
-    assert ops[2]["rhs"] == {"kind": "const", "value": 4}
-    assert ops[3]["dst"] == "rdi"
-    assert ops[3]["rhs"] == {"kind": "const", "value": 4}
+    # The direction flag selects the sign of the stride; the width is the
+    # operand size, so DF-clear gives +4 and DF-set gives -4.
+    assert ops[2]["cond"] == "%df"
+    assert ops[2]["t"] == {"kind": "const", "value": -4}
+    assert ops[2]["e"] == {"kind": "const", "value": 4}
+    # BOTH pointers advance by that one selected stride.
+    assert ops[3]["dst"] == "rsi"
+    assert ops[3]["rhs"] == {"kind": "reg", "name": ops[2]["dst"]}
+    assert ops[4]["dst"] == "rdi"
+    assert ops[4]["rhs"] == {"kind": "reg", "name": ops[2]["dst"]}
 
 
 def test_fninit_lifts_to_nop_dict():

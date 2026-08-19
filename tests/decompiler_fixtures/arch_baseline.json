@@ -2259,7 +2259,7 @@
     "mutual_parity": "pass",
     "nontail_depth": "pass",
     "recursion_entry": "pass",
-    "tail_countdown": "pass"
+    "tail_countdown": "fail"
   },
   "112_recursion_shapes:i386:O0": {
     "mutual_parity": "pass",
@@ -8662,11 +8662,11 @@
   },
   "197_homogeneous_float_aggregates:x86_64:O0": {
     "hfa197_consume_pair2d": "structural",
-    "hfa197_make_pair2d": "fail",
-    "hfa197_make_quad4f": "fail",
+    "hfa197_make_pair2d": "pass",
+    "hfa197_make_quad4f": "pass",
     "hfa197_make_scalar": "pass",
     "hfa197_make_tagged": "pass",
-    "hfa197_make_trio3f": "fail",
+    "hfa197_make_trio3f": "pass",
     "hfa197_pair2d_roundtrip": "pass",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
@@ -8688,11 +8688,11 @@
   },
   "197_homogeneous_float_aggregates:x86_64_gcc15:O0": {
     "hfa197_consume_pair2d": "structural",
-    "hfa197_make_pair2d": "fail",
-    "hfa197_make_quad4f": "fail",
+    "hfa197_make_pair2d": "pass",
+    "hfa197_make_quad4f": "pass",
     "hfa197_make_scalar": "pass",
     "hfa197_make_tagged": "pass",
-    "hfa197_make_trio3f": "fail",
+    "hfa197_make_trio3f": "pass",
     "hfa197_pair2d_roundtrip": "pass",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
