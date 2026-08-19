@@ -1131,3 +1131,82 @@ giving `rsp` a frame-array base — fixes the *fault* and leaves the *value* wro
 
 **A crash replaced by a silently wrong number is not progress.** That distinction
 is why the second half stays a decision rather than a patch.
+
+## Entry 103 — a branch that re-solved a problem master had fixed four days earlier
+
+`agent/stack-bias` was the last unmerged branch: one commit from 2026-08-12,
+640 insertions into the then-monolithic `stack_locals.rs`, described as a
+snapshot of uncommitted work. It carried `affine_of_expr`,
+`collect_affine_index_defs` and `is_version_stable` — the three symbols a
+2026-08-15 audit had searched for and found absent from `src/`. The roadmap said
+it must not be deleted until landed or judged worthless on its merits.
+
+It has now been judged, and the verdict is worthless-on-its-merits for a reason
+nobody had checked: **the capability had already landed on 2026-08-08**, four
+days BEFORE that snapshot was taken, in `798daf60` "Fix ARM32 O0 affine frame
+addresses" — under different names, in a file that did not exist at the branch
+point.
+
+```
+is_version_stable  ==  is_versioned_local_value   (address_aliases.rs:103)
+    Phys(name) if name.contains('#')  ||  Temp(_)      — verbatim
+```
+
+`scaled_index` already returns a bias and its caller adds it to the
+displacement; the self-rooted-definition guard is at `address_aliases.rs:510`.
+Master's version is strictly stronger — it clears its maps at every
+stack-pointer write and control boundary, where the branch kept one
+whole-function map plus a global ambiguity set, which is the very hazard the
+branch's own comments describe — and it is bounded where the branch was not.
+**The branch's own ARM32 unit test, ported verbatim onto master, passes.**
+
+So the author spent that work re-deriving something they did not have in their
+worktree.
+
+### The audit error, and it is one I made again today
+
+The 2026-08-15 note is *literally* true: `is_version_stable` matches zero times
+in `src/`. It is *substantively* wrong, because the thing it names shipped under
+a different identifier. **A name-based search concluded a capability was absent
+when it was present.**
+
+That is the same failure I hit this morning from the other direction, hashing
+function bodies across `src/ir/`: four product duplications, and **three of them
+carried different names in each location**, so no name search could ever have
+found them. Twice in one day, in opposite directions, from the same mistake —
+searching for the identifier instead of the behaviour.
+
+The rule now written into the roadmap: **search for the behaviour, then confirm
+with the name — never the reverse.**
+
+### And the gate that could not have gated
+
+The roadmap's instruction to whoever took this box was to "add a failing
+slot-recognition assertion on `187_constant_bias_index` before re-deriving the
+helpers." That assertion cannot be written. All five of that fixture's functions
+take the array as a POINTER PARAMETER and none allocates a stack array, so the
+base is `arg0` and `src/ir/stack_locals/` is never on the path. It is a fine
+lane for parameter-pointer bias — 20/20 green across x86_64, armv7 and aarch64 —
+and it is not evidence about the frame path in either direction.
+
+Anyone following that instruction would have watched a green fixture stay green
+and concluded the port was unnecessary. They would have been right, and for
+entirely the wrong reason.
+
+### What the port would actually have bought
+
+Zero. **0 of 79** stripped-lane divergences show the pathology it targets. On
+reflection that is forced: x86-64 SIB addressing has a `disp32` field, so no
+compiler needs to materialise an element bias into a register. The shape is an
+ARM32 immediate-range artefact — and ARM32 is exactly where the capability
+already works, since `address_aliases::expand` returns early unless the calling
+convention is `Arm | ArmHardFloat`.
+
+The residual gap is x86-only and worth nothing today. Meanwhile the branch's own
+recorded casualties — `20_graph_bfs:clang:O2` and `25_kmp_search:i386:O2`, the
+two cells its comments say it broke and had to add guards for — are **green on
+master**. Reintroducing it would have risked two passing cells to fix zero.
+
+Deleted, local and remote, at `4ac76579d0b3b31c9fce453241ee7b7dcb1bc9aa`. Eighty-one
+merged agent branches went with it, all via `git branch -d`, which refuses
+anything unmerged.

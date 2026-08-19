@@ -2175,10 +2175,33 @@ the detail kept there and only the delta recorded here.
   snapshot taken to let a worktree be deleted, explicitly "not a reviewed
   change", and it is 236 commits behind master. It carries `affine_of_expr`,
   `collect_affine_index_defs` and `is_version_stable` — the exact three symbols
-  the 2026-08-15 audit searched for and found absent from `src/`. Whoever takes
-  this box should read that branch before rewriting it from scratch, and it must
-  NOT be deleted in a branch cleanup until it is either landed or judged
-  worthless on its merits.
+  the 2026-08-15 audit searched for and found absent from `src/`.
+
+  **REVIEWED AND DELETED 2026-08-19, on its merits.** The capability had ALREADY
+  LANDED, four days before that snapshot was taken, in `798daf60` "Fix ARM32 O0
+  affine frame addresses" — under different names, in a file that did not exist
+  at the branch point. `is_version_stable` is `is_versioned_local_value`
+  (`stack_locals/address_aliases.rs:103`) VERBATIM; `scaled_index`
+  (`address_recovery.rs:97`) already returns a bias and its caller adds it to the
+  displacement; the self-rooted-definition guard is `address_aliases.rs:510`.
+  Master's version is strictly stronger: it clears its maps at every
+  stack-pointer write and control boundary rather than keeping one whole-function
+  map, and it is bounded (`MAX_AFFINE_COMPONENTS`, `MAX_AFFINE_COMPONENT_NODES`)
+  where the branch was not. The branch's own ARM32 unit test, ported verbatim
+  onto master, PASSES.
+
+  It also could not have been landed: `collect_stack_address_defs` gained a
+  third parameter and an outer joint fixpoint that compares maps for equality,
+  and the branch's `StackAddressDefs` does not derive `PartialEq`; `StackContext`
+  gained a field its test does not construct; and the retype it needs now touches
+  20 signatures across six files rather than one.
+
+  And it would have bought nothing: **0 of 79** stripped-lane divergences show the
+  pathology it targets, because x86-64 SIB has a `disp32` field so no compiler
+  materialises the bias into a register — the shape is an ARM32 immediate-range
+  artefact, and ARM32 is exactly where it already works. Its own recorded
+  casualties (`20_graph_bfs:clang:O2`, `25_kmp_search:i386:O2`) are green today,
+  so reintroducing it would risk two passing cells to fix zero.
   Step 3 of the four-step plan under EPIC 3's "Near-term retained work" landed
   and nothing else did. The fixture exists —
   `tests/decompiler_fixtures/src/187_constant_bias_index.c` (`8f661ff`), five
@@ -2186,13 +2209,29 @@ the detail kept there and only the delta recorded here.
   `[aggregates]` sets in `sets.toml` — but all 20 of its lanes are already
   `pass` in `baseline.json`, because execution equivalence is green whether or
   not the analysis exists. So the coverage is not yet a test the port would flip.
-  The named helpers are absent from master: `affine_of`, `affine_of_expr`,
-  `collect_affine_index_defs` and `is_version_stable` match **zero** times in
-  `src/` and `tests/`. Do not credit `resolve_affine_values`/`AffineFact`
+  **CORRECTED 2026-08-19 — this paragraph was literally true and substantively
+  wrong.** `affine_of`, `affine_of_expr`, `collect_affine_index_defs` and
+  `is_version_stable` do match zero times. The CAPABILITY is present anyway,
+  under other names (see the branch note above): a name-based search concluded a
+  thing was absent when it had shipped. That is the same failure the duplicated-
+  helper audit hit on 2026-08-19, where three of four identical function bodies
+  carried DIFFERENT names in each location and no name search could find them.
+  **Search for the behaviour, then confirm with the name — never the reverse.**
+  Do not credit `resolve_affine_values`/`AffineFact`
   (`src/ir/memory_objects/mir.rs:338`) here — those resolve `root + constant` at
-  scale 1, not `root*scale + bias` folded into a frame displacement. First step:
-  add a failing slot-recognition assertion on `187_constant_bias_index` before
-  re-deriving the helpers, since the execution lane cannot fail.
+  scale 1, not `root*scale + bias` folded into a frame displacement.
+
+  **AND THE PROPOSED FIRST STEP IS NOT POSSIBLE.** The instruction was to "add a
+  failing slot-recognition assertion on `187_constant_bias_index`". That
+  assertion cannot be written: all five of its functions take the array as a
+  POINTER PARAMETER (`bias_forward_sum(const int32_t *values, int32_t count)`
+  and alike) and none allocates a stack array, so the base is `arg0` and
+  `src/ir/stack_locals/` is never on the path. It is a good lane for
+  parameter-pointer bias and is 20/20 green on x86_64, armv7 and aarch64 — but it
+  is not evidence about the frame path in either direction, and anyone gating a
+  port on it would conclude the port is unnecessary for the wrong reason. The
+  residual gap is x86-only (`address_aliases::expand` returns early unless the
+  calling convention is `Arm | ArmHardFloat`) and is worth ZERO cells.
 - [ ] Migrate the first production aggregate consumer from AST to MIR.
   **Blocked, and both halves of the blocker are now verified in code rather than
   suspected.** (1) There is no frame object left to migrate by the time a
