@@ -475,7 +475,15 @@ fn strip_leading_qualifiers(mut spelling: &str) -> &str {
     }
 }
 
-fn valid_c_identifier(name: &str) -> bool {
+/// Whether `name` is spellable as a C identifier: a leading letter or
+/// underscore, then letters, digits or underscores.
+///
+/// `pub(crate)` rather than private because `ast::dwarf_render_types` needs the
+/// same question answered and had an identical copy. The two were byte-for-byte
+/// the same 163 characters, under the same name, in two modules — a duplication
+/// that a name-based search DOES find, unlike the three others measured beside
+/// it, which had diverged in name while staying identical in body.
+pub(crate) fn valid_c_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()

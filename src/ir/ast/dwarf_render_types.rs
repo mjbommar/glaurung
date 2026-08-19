@@ -80,13 +80,7 @@ pub(super) fn source_prototype_forward_declarations(
     declarations
 }
 
-pub(super) fn valid_c_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars
-        .next()
-        .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
+pub(super) use crate::ir::dwarf_type_env::valid_c_identifier;
 
 fn dwarf_scalar_width(c_type: &str, pointer_width: u8) -> Option<u64> {
     let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
