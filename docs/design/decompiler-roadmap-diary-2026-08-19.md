@@ -570,3 +570,141 @@ executing code lost. Not hypothetical either — `libwebsockets.a` carries
 Neither fix moves a single corpus cell, in either direction. That is the correct
 result and it is worth stating plainly: **a change that fixes a real defect and
 moves no cell is evidence about the corpus, not about the change.**
+
+## Entry 90 — three claims re-derived, and only one survived as written
+
+Three roadmap claims went out to be re-measured rather than trusted. The
+scoreboard is the point: **one real, one latent, one simply wrong.**
+
+**Real, and every instance in the sample was broken.** RIP-relative addressing
+does not exist in 32-bit x86, and `classify_pe_thunk_head` took no architecture
+at all — it resolved `FF 25 disp32` as `entry + 6 + disp` unconditionally, while
+`classify_function_shapes` admits `BArch::X86` explicitly. Measured against the
+import table parsed out of the file itself:
+
+```
+thunk entry=0x004071e0  head=ff25fcc14000
+  computed=0x8133e2  (NOT-AN-IAT-SLOT)
+  operand =0x40c1fc  (msvcrt.dll!wcslen)
+thunks whose computed target is NOT a real IAT slot: 35 / 35
+```
+
+Not one PE32 import thunk in that binary had a usable target.
+
+**Latent, not live.** `lower_conds.rs` really did carry two functions named
+`expr_reads_memory`, the nested one shadowing the shared one and disagreeing on
+three `Expr` variants, with two more walkers fail-open on `_`. But mismatches
+attributable to any of it, across **1,128 images**: zero. `WideArithmetic`
+reaches a `while`-header preamble 21 times, so the hole is structurally live —
+five targeted C loops compiled 40 ways render byte-identically before and after.
+Fixed as hygiene; the roadmap wording corrected from "can freeze a loop
+condition" to "latent fail-open".
+
+**Wrong.** `xmm_views.rs:121` demands exactly four lanes under a comment saying
+"every lane the instruction wrote". Logging every call with `lanes_seen` in
+`1..=3` — a strict superset of the disagreement — over the same 1,128 images:
+**197 hits, every one `lanes_seen == 2` with all four lanes written**, and both
+readings decline them. True disagreements: zero. The code was right; the comment
+was the wrong half.
+
+That is the second wrong *reason* in a comment found today, after `bit_scan_ops`
+claimed 16-bit `bsr` would need an `x86.clz.16` answering 16 too high when
+`31 - clz32(zext16(x))` is exact. **A comment that states a reason is a claim,
+and it decays exactly like a number does.**
+
+## Entry 91 — the fix that deletes forty switch arms
+
+The fallthrough-only index bound really is applied to dispatch blocks with other
+predecessors: `cfg.rs:1394` records it as an **edge** fact and `cfg.rs:1127` and
+`:1475` apply it as a **block** fact with no predecessor check. Measured: 6
+occurrences across 78 system ELFs, **0** across 1,107 fixture binaries.
+
+All six are benign, and for a reason worth knowing — GCC tail-duplicates the
+range check, so every extra predecessor carries the *identical* guard and reaches
+the dispatch on the taken edge of a `jbe`, which we do not model at all.
+
+Then the part that matters. Refusing `index_bounds` on multi-predecessor blocks
+— the obvious fix, the one I would have written —
+
+```
+/usr/bin/3cpio 0x2f4cf   resolved 40 arms  ->  0, dispatch invalidated
+```
+
+**Forty real switch arms deleted.** `export_stable_bounds` deliberately strips
+the last-`cmp` bound, so the `jbe` predecessors export nothing and the sound join
+proves nothing; removing the unsound-looking shortcut removes the only fact
+there was. The sound direction is the opposite one: model the taken edge so every
+predecessor proves its own bound.
+
+An agent measured that before proposing it, and reverted the experiment. That is
+the whole value of the rule about measuring before believing a premise, including
+one I supplied.
+
+The same investigation retired a second claim: the trim path is **not**
+`-O1`-only (8 `needs_bound_proof` dispatches, 4 at O1 and 4 at O2, 0 at O0) and
+produces **zero trims at any level**, so the `-O1` axis I had considered would
+have doubled corpus runtime for nothing. What actually creates coverage is
+adjacency of jump tables in `.rodata`, which is now fixture 204 — landing
+deliberately red, pinning a guarded switch that loses all seven arms because its
+guard is a `cmp` against an indexed memory operand the tracker does not accept.
+
+## Entry 92 — I recorded a wrong reason in a baseline, and it is retracted there
+
+The def-use guard refused to raise `rustc:O0` from 7,535 to 7,560. I attributed
+it to a stale fixture build cache, wrote that reason into
+`defuse_baseline.json`, and moved on.
+
+It cannot be true. `compile_fixture` and `_compile_rust_fixture` both recompile
+**unconditionally** — neither has an `exists()` short-circuit — and
+`defuse.jobs()` enumerates **declared lanes**, not files in `build/`. No cached
+object can enter that census. An agent read the code and said so; I had not.
+
+Worse, the 7,535 I compared against was **never measured on a fresh build**. I
+read it from a run whose `.so` had been reverted for an A/B and not rebuilt
+afterwards. `tools/build_guard.py` names that condition in one line
+(`STALE: … is newer than the built extension`) and I had not run it.
+
+The 17 six-day-old objects I measured in `build/` were real, and the cache key
+genuinely omits its compiler flags — that is a defect, filed. It just is not
+*this* defect. **A true observation next to a wrong conclusion is more
+dangerous than a wrong observation**, because the evidence looks like support.
+
+Three attempts to attribute it properly failed: reverting `cfg.rs` to
+`965f8585^` no longer compiles against the current `entry_shape.rs` signature.
+Rather than guess a fourth time, the reason recorded in the baseline is now an
+explicit retraction naming what was ruled out by measurement (the DWARF and
+float-store work contributes zero — byte-identical per-function output with
+those patches stashed) and what remains a candidate.
+
+Two rules came out of it, both now in `CLAUDE.md`: run `build_guard.py` before
+every baseline regeneration, and rebuild in **both** directions of an A/B, not
+just into the before-state.
+
+## Entry 93 — the corpus cannot see stripped binaries, and it turns out it can
+
+Entry 89 recorded that every fixture builds with `-g`, so an entire class of
+defect is invisible. The cheapest fix looked like a second axis nobody would run.
+
+That was wrong, and one measurement settles it:
+
+```
+original: 8 exported symbols (nm -D), 6 debug sections (readelf -S)
+stripped: 8 exported symbols,         0 debug sections
+ctypes.CDLL(stripped.so).f201_f32_slot_bits  ->  callable
+```
+
+`strip` removes `.symtab` and the DWARF and leaves **`.dynsym`** — and a shared
+object's exported functions live in `.dynsym`. So the existing execution
+differential works on a stripped object **unmodified**: same compile, strip the
+output, `dlopen` and call exactly as now. No new harness mechanism.
+
+And the right framing is a differential against the `-g` build of the same
+source, which is stronger than a standalone verdict: **for a correct decompiler,
+debug info should improve naming, never structure.** Any cell that passes with
+`-g` and fails stripped is a real defect carrying its own control.
+
+The landing-pad defect of Entry 89 — 74% of libstdc++'s LSDA sites rejected,
+dangling `goto`s in the emitted C — was invisible to all 198 fixtures for exactly
+this reason. It is the configuration real targets ship in, and it is where the
+decompiler has to work hardest, because extents, signatures and types all come
+from analysis rather than being handed over.
