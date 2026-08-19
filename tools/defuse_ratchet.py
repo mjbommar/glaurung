@@ -263,9 +263,15 @@ def find_regressions(
         after_list = (current.get("required") or {}).get(cell)
         if after_list is None:
             continue
-        new = sorted(set(after_list) - set(before_list))
+        new = sorted(_normalised(after_list) - _normalised(before_list))
         if not new:
             continue
+        # Report the RAW message, not the normalised one: the normalisation is
+        # for deciding whether something moved, and a reader chasing it wants
+        # the actual variable name.
+        new = [
+            m for m in sorted(set(after_list)) if _normalise_violation(m) in set(new)
+        ] or new
         found.append(
             Regression(
                 "required_function",
@@ -278,6 +284,37 @@ def find_regressions(
             )
         )
     return found
+
+
+#: Temporary and slot names carry a serial number that renumbers whenever a
+#: function emits one more or one fewer temporary. Comparing the raw strings
+#: makes that renumbering look like one violation resolved and one appearing.
+_SERIAL = re.compile(r"\b(var|local_|stack_|t)[0-9a-f]+\b")
+
+
+def _normalise_violation(message: str) -> str:
+    """`message` with generated serial numbers replaced by a placeholder.
+
+    A violation is identified by WHAT is undefined and WHERE, not by the number
+    the renderer happened to assign. `var79 is read but never defined` and
+    `var81 is read but never defined` are the same violation at the same
+    position when the only thing between them is a lifter change that emitted
+    one more temporary earlier in the function -- which is exactly what happened
+    to `165_bitstream_reader:clang:O2:bit165_cross_check` when the byte-view
+    `not` fix landed. The ratchet reported `1 -> 1 (+0)` and still demanded a
+    justification, because set-difference on the raw strings yielded one
+    resolved and one new.
+
+    That false positive is not rare: any lifter change that alters how many
+    temporaries a function emits renumbers everything after it. Left uncorrected
+    it trains the reader to accept without looking, which is precisely what the
+    acceptance flag exists to prevent.
+    """
+    return _SERIAL.sub(r"\1#", message)
+
+
+def _normalised(messages: list[str]) -> set[str]:
+    return {_normalise_violation(m) for m in messages}
 
 
 def apply_acceptances(

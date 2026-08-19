@@ -360,3 +360,40 @@ def test_the_drift_report_sums_the_walk_up_rather_than_the_last_step(dr):
 
 def test_no_history_means_no_drift_noise(dr):
     assert dr.drift_lines([]) == []
+
+
+def test_a_renumbered_temporary_is_not_a_regression(dr):
+    """The `var79` -> `var81` case, which cost a spurious accepted regression.
+
+    `165_bitstream_reader:clang:O2:bit165_cross_check` carried exactly one
+    undefined read before and after the byte-view `not` fix, at the same
+    position in the same else-arm. The fix changed how many temporaries the
+    function emits, so every later temporary renumbered. The ratchet compared
+    raw message strings, found one gone and one new, and demanded a
+    justification for a movement whose own printed delta was `+0`.
+
+    Temporary numbering is not a property anyone intends to pin, and any lifter
+    change that emits one more or one fewer temporary renumbers everything after
+    it -- so this false positive would recur across a large fraction of lifter
+    work, training the reader to accept without looking. That is exactly what
+    the acceptance flag exists to prevent.
+    """
+    cell = "165_bitstream_reader:clang:O2:bit165_cross_check"
+    baseline = _census({}, required={cell: ["var79 is read but never defined"]})
+    current = _census({}, required={cell: ["var81 is read but never defined"]})
+    assert dr.find_regressions(current, baseline) == []
+
+
+def test_a_genuinely_new_undefined_read_still_regresses(dr):
+    """The other half: normalising must not blind the gate to a real movement.
+
+    Same cell, same count, but a DIFFERENT KIND of undefined value -- a frame
+    register rather than a temporary. Normalisation collapses serial numbers,
+    never the identity of what is undefined.
+    """
+    cell = "c:gcc:O0:f"
+    baseline = _census({}, required={cell: ["var79 is read but never defined"]})
+    current = _census({}, required={cell: ["rbp is read but never defined"]})
+    found = dr.find_regressions(current, baseline)
+    assert len(found) == 1, found
+    assert "rbp" in found[0].detail
