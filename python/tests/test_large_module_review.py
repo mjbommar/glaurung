@@ -33,6 +33,7 @@ require building the crate.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -120,8 +121,83 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     ),
     # -- accepted: one owner, one reason to change --
     "ir/ast/dec_render.rs": (
-        "accepted (2026-08-18) at 1,788 LOC: one recursive-descent printer "
-        "for one grammar -- an Expr tree in, C text out. Extracted 2026-08-16 "
+        "accepted (2026-08-19) at 2,013 LOC, RENEWING the 2026-08-18 verdict "
+        "at 1,788 LOC after its own trigger (c) fired. One recursive-descent "
+        "printer for one grammar -- an Expr tree in, C text out. The re-review "
+        "asked the right question -- the +225 lines arrived as COHERENT chunks "
+        "(float bit-reinterpretation, shift-width widening, return C types), "
+        "and coherent new functionality is exactly what creates a seam where "
+        "none existed -- and the answer, measured on 16e6b764, is that it did "
+        "not. The SCC did not shrink, it GREW IN STEP: 46 functions -> 49, of "
+        "which 11 spanning 903 lines (53.7% of item lines) -> 12 spanning "
+        "1,029 lines (54.1%). Trigger (a) wanted it below 8 functions or 600 "
+        "lines; it moved the wrong way. 57% of the growth (+126 of +222 fn "
+        "lines) landed INSIDE the SCC: write_wide_arithmetic_dec +42, "
+        "write_expr_dec +36, write_float_bits_expr_dec +27 (new, and it joined "
+        "the SCC on arrival), write_representation_value_dec +21. Only "
+        "float_rendered_width (+57) and wide_left_shift_operand_ctypes (+39) "
+        "landed outside it. THE FLOAT HYPOTHESIS WAS RE-TESTED ON ITS NEW "
+        "EVIDENCE AND FAILED HARDER. It is no longer one function: "
+        "write_float_expr_dec (103L, bits -> float) now has "
+        "float_rendered_width (57L, the predicate that gates it) and "
+        "write_float_bits_expr_dec (27L, float -> bits, the same C99 union "
+        "read from the other member) beside it -- a genuinely coherent trio of "
+        "187 lines. It is still not separable. Under STRICT floating-point "
+        "tokens only 4 of the 49 functions touch an FP type (was 5 of 46), so "
+        "the concentration did not change; the trio's module edge is "
+        "BIDIRECTIONAL in both directions at once (child -> parent: "
+        "write_expr_dec, write_reg_lvalue_dec; parent -> child: 7 call sites "
+        "across write_expr_dec, write_typed_call_arg_dec and "
+        "write_representation_value_dec); and dec_render::stmt ALREADY "
+        "consumes two of the three, so the cut would widen a name the sibling "
+        "reaches through a second hop. Decisively, its CO-CHANGE got WORSE, "
+        "not better: 25% (1/4) for the old one-function scope, 20% (1/5) for "
+        "the new three-function scope -- the two new float functions did not "
+        "arrive in float-only commits. Two seams ARE structurally closed at "
+        "2,013 that were not enumerated before -- shift_operand_ctype + "
+        "wide_left_shift_operand_ctypes + double_width_ctype (3 fns, 99L, ZERO "
+        "outbound references) and its union with the six pure "
+        "pattern-recognisers (9 fns, 285L, also zero) -- and both score far "
+        "below the bar: 25% (2/8) and 15% (2/13). Structural closure without "
+        "change locality is a boundary and no narrowing; that lesson now has a "
+        "second, independent instance. METHOD, stated so the next re-review "
+        "does not have to guess (the 2026-08-18 entry did not, and its "
+        "absolute counts could not be reproduced -- see the caveat below): "
+        "tracked universe = every top-level fn now in dec_render.rs and "
+        "dec_render/stmt.rs; history = all commits touching src/ir/ast.rs or "
+        "src/ir/ast/** (207), because this code lived in ir/ast.rs until "
+        "a792b9ab and moved here by pure move; a commit touches a function "
+        "when a -U0 diff hunk falls inside that function's span in the "
+        "pre- or post-image blob; a candidate's share = commits whose whole "
+        "touched set lies inside the candidate, over commits touching any of "
+        "it. That method reproduces the 2026-08-18 SCC EXACTLY at 282a0055 -- "
+        "46 functions, 11 in the component, 903 lines, the same eleven names "
+        "-- and reproduces two of its five co-change figures exactly (stmt, "
+        "the accepted cut, 36%; float 1/4 = 25%). CAVEAT, recorded rather than "
+        "hidden: it does NOT reproduce the call family's published 24% (5/21), "
+        "reading it instead at 42% (8/19), which is ABOVE the bar trigger (b) "
+        "names. A wider variant of the same method (counting every ast-tree "
+        "function as 'else', not just the tracked set) reads call at 21% "
+        "(4/19), close to the published figure, but then zeroes the accepted "
+        "stmt cut -- so neither reconstruction is the original, and the "
+        "original's absolute denominators (33, 21, 12, 4, 9) were not "
+        "recovered. What BOTH reconstructions agree on is the thing this "
+        "review was called to decide: the call family scored IDENTICALLY "
+        "before and after the growth (42.1% -> 42.1% narrow, 21.1% -> 21.1% "
+        "wide), so the new code created no locality there, and it fails the "
+        "structural test independently -- 3 of its 11 members "
+        "(write_call_dec, write_typed_call_arg_dec, write_call_arg_dec) are "
+        "SCC members, so the cut slices the component and costs 6 outbound "
+        "references to 4 parent items. NO CANDIDATE IMPROVED BECAUSE OF THE "
+        "NEW CODE; the one that got a new scope got worse. Split this file "
+        "when any of: (a) the strongly-connected component falls below 8 "
+        "functions or 600 lines; (b) a candidate that is also ACYCLIC reaches "
+        "the 33% the stmt cut scores under the method above -- the acyclicity "
+        "clause is new, because the only candidate ever to clear the "
+        "co-change bar is the one whose edge runs both ways; (c) the file "
+        "reaches 2,300 LOC. FALSIFY THIS BY MEASURING, not by reading it. "
+        "The 2026-08-18 review, whose structural findings all still hold, "
+        "follows. Extracted 2026-08-16 "
         "from ir/ast.rs's Phase 7 split; it has no state of its own, reading "
         "the parent's installed DeclarationPlan and render-scoped "
         "thread-locals through the parent's private accessors, which is why "
@@ -174,12 +250,12 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "1,788 is +62 from a single commit (4d3353c0, the _Bool return "
         "narrowing) and -1 from 69e55746's shift-operand fix; a third cited "
         "fix (fdbcf58a, the all-SSE return class) landed in write_stmt_dec and "
-        "contributes nothing to this file. FALSIFY THIS BY MEASURING, not by "
-        "reading it. Split this file when any of: (a) the strongly-connected "
-        "component falls below 8 functions or 600 lines; (b) any candidate's "
-        "self-contained-commit share reaches the 36% the stmt cut scored; "
-        "(c) the file re-crosses 2,000 LOC. Until one of those holds, a cut "
-        "here buys a module boundary and no narrowing."
+        "contributes nothing to this file. [Its triggers were: (a) SCC below 8 "
+        "functions or 600 lines; (b) any candidate's self-contained-commit "
+        "share reaching 36%; (c) the file re-crossing 2,000 LOC. Trigger (c) "
+        "fired on 11634706 and produced the 2026-08-19 re-review above, which "
+        "supersedes these three.] A cut here buys a module boundary and no "
+        "narrowing."
     ),
     "analysis/cfg.rs": (
         "accepted, under review: the entry-rooted walk that turns bytes into "
@@ -280,6 +356,57 @@ def test_no_review_entry_outlives_the_file_it_reviewed():
         "REVIEWED_LARGE_MODULES entries for files that are no longer over "
         "1,000 LOC (or no longer exist). Delete them:\n"
         + "\n".join(f"  {path}" for path in stale)
+    )
+
+
+#: How far a reviewed file may drift past the size it was last blessed at
+#: before its review must be redone. Absolute, not proportional: the question
+#: "does this review still describe this file?" does not get easier because the
+#: file was already large, and a percentage would hand the biggest files the
+#: most headroom -- exactly backwards.
+REVIEW_DRIFT_LOC = 150
+
+
+def test_no_review_licence_outlives_the_file_it_was_written_for():
+    """A "no further split" verdict is a licence, and licences must expire.
+
+    `test_no_review_entry_outlives_the_file_it_reviewed` already deletes an
+    entry when its file drops BELOW 1,000 LOC. Nothing checked the other
+    direction, so an entry written about a 1,788-line file kept authorising a
+    2,013-line one -- 225 lines it had never examined, added by four commits in
+    a single day, while `check_ratchet` printed "no regressions" because
+    `product_loc_above_1000` is a SUM with thousands of lines of slack.
+
+    The baseline's `oversized_files` map is the record of the last size anyone
+    deliberately blessed: regenerating it is an explicit act, so a file that has
+    grown well past its recorded size has grown since the last time a human
+    looked. That is precisely when a "no further split" argument -- built on a
+    specific call graph, a specific strongly-connected component, specific
+    co-change numbers -- stops being evidence about the file in front of you.
+
+    Fixing this means EITHER splitting the file OR re-reviewing it and
+    refreshing the baseline. Both are real work; neither is editing a number.
+    """
+    baseline = json.loads((ROOT / "tools" / "fitness_baseline.json").read_text())
+    blessed = fr._owner_sizes(baseline)
+    measured = large_product_modules(SRC)
+    overgrown = {
+        path: (blessed[path], loc)
+        for path, loc in sorted(measured.items())
+        if path in REVIEWED_LARGE_MODULES
+        and path in blessed
+        and loc - blessed[path] > REVIEW_DRIFT_LOC
+    }
+    assert not overgrown, (
+        "review entries now authorising files they never examined "
+        f"(grown more than {REVIEW_DRIFT_LOC} LOC past their last blessed "
+        "size):\n"
+        + "\n".join(
+            f"  {path}: reviewed at {was} LOC, now {now} (+{now - was})"
+            for path, (was, now) in overgrown.items()
+        )
+        + "\n\nSplit the file, or redo the review and regenerate "
+        "tools/fitness_baseline.json so the new size is on the record."
     )
 
 

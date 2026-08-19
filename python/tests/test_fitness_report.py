@@ -308,19 +308,31 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     it along and broken the sibling. `product_median_loc` ticked 305 -> 307,
     the same file-count-bucket effect every cut in this program produces; it is
     exempt from the ratchet and recorded here rather than chased.
+
+    2026-08-19: regenerated after `ir/ast/dec_render.rs` was RE-REVIEWED at
+    2,013 LOC. It crossed 2,000 during a day of decompiler-correctness work
+    (1,797 -> 1,839 -> 1,946 -> 2,013 across four commits), taking
+    `product_files_above_2000` 3 -> 4. The baseline was NOT refreshed to silence
+    the per-owner trend line -- the re-review came first, redid the call-graph
+    and co-change measurement at the new size, and renewed the "no further
+    split" verdict on fresh evidence: the strongly-connected component grew in
+    step (11 fns/903 lines -> 12/1,029, 53.7% -> 54.1% of item lines), and no
+    candidate cut improved. Only then was the size blessed. That ORDER is the
+    whole discipline; reversing it is how a ratchet becomes a record of the last
+    time someone ran the generator.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 15,
-        "ir_median_loc": 493,
-        "product_files_above_1000": 29,
-        "product_files_above_2000": 12,
-        "product_loc_above_1000": 55210,
-        "product_max_loc": 3357,
-        "product_mean_loc": pytest.approx(476.64225352112675),
-        "product_median_loc": 311,
-        "product_pct_loc_above_1000": pytest.approx(32.6284809228878),
+        "ir_median_loc": pytest.approx(440.0),
+        "product_files_above_1000": 26,
+        "product_files_above_2000": 4,
+        "product_loc_above_1000": 39739,
+        "product_max_loc": 2482,
+        "product_mean_loc": pytest.approx(433.4398034398034),
+        "product_median_loc": 313,
+        "product_pct_loc_above_1000": pytest.approx(22.52650076526274),
     }
 
 
@@ -559,6 +571,15 @@ def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
     baseline, this assertion is the thing that must be updated, which is the
     point.
 
+    2026-08-19: the list is EMPTY, and that is the update the docstring above
+    predicted. `ir/ast/dec_render.rs` (1,727 -> 2,013) and `ir/value_number.rs`
+    (1,965 -> 1,991) both grew, both were surfaced by this measure while
+    `check_ratchet` reported nothing, and the larger one was then RE-REVIEWED at
+    its new size before the baseline was regenerated. An empty list here means
+    "every oversized file is at a size someone has looked at", not "nothing
+    grew" -- and the six synthetic cases above are what prove the measure still
+    fires, so this one going empty costs no coverage.
+
     `ir/value_number.rs` joined the list when `live_in_arg_slots_llir` stopped
     treating a versioned read as live-in evidence. The growth is the rule's
     justification -- the worked `37_heapsort` case that makes a one-token
@@ -570,10 +591,7 @@ def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
     current = fr.build_report(SRC)
     assert fr.check_ratchet(current, baseline) == []
     grown = fr.check_owner_trend(current, baseline)
-    assert [row.split(":")[0] for row in grown] == [
-        "ir/ast/dec_render.rs",
-        "ir/value_number.rs",
-    ]
+    assert [row.split(":")[0] for row in grown] == []
 
 
 def test_owner_growth_is_never_fatal(fr):
