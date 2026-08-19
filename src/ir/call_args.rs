@@ -1368,6 +1368,48 @@ mod tests {
         ));
     }
 
+    /// The rejection must reach the CALL, not just the predicate.
+    ///
+    /// [`a_layout_that_skips_leading_slots_is_not_a_parameter_layout`] pins the
+    /// predicate; nothing pinned that `fold_one_call` actually consults it. With
+    /// `[r2, r3]` trusted, the fold installed those two bare live-in registers as
+    /// the argument list and returned before ever looking at the real r0/r1/r2
+    /// setup — so ten distinct callees in `strip_iconv_arm-v7`'s `sub_6fc` all
+    /// received the same two undefined locals, and no call-site value survived
+    /// for string folding to see.
+    #[test]
+    fn an_impossible_callee_layout_does_not_displace_the_call_site_setup() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                assign("r0", 11),
+                assign("r1", 22),
+                assign("r2", 33),
+                call_to("getopt@plt"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("r2"), reg("r3")])]);
+        let mut parameter_slots = Default::default();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::ArmHardFloat,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("setup did not fold into the call: {:#?}", f.body);
+        };
+        assert_eq!(
+            args,
+            &[Expr::Const(11), Expr::Const(22), Expr::Const(33)],
+            "the call site's own argument setup is the evidence, not a layout \
+             that no calling convention could have allocated"
+        );
+    }
+
     fn assign(dst: &str, value: i64) -> Stmt {
         Stmt::Assign {
             dst: reg(dst),

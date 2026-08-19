@@ -160,10 +160,43 @@ ported. The obvious untried candidate is a narrower discriminator: ignore only
 those may-use names that are return-register spellings from a *different*
 parameter bank than `def_name`. Tracked as task #100.
 
+### The three worktree artefacts — discard, minus one test
+
+- **`stash@{1}`** (`copy_prop.rs` +194) is not a capability, it is a *measurement
+  harness*: `measure_load_barrier` returns immediately unless
+  `GLAURUNG_PASS_STATS` is set. It was used, and its output shipped. Its base
+  `76f8d898` is the direct grandparent of `61730974` ("prove disjoint frame slots
+  instead of dropping every load at a store"), whose commit message reports a
+  census whose rows are this harness's stat categories one for one — 1308
+  `stack_same_object_disjoint_offsets`, 543 `needs_pointer_proof`, 116
+  `stack_vs_global`, 9 `stack_distinct_objects`, 8
+  `stack_same_object_overlaps`. The proof it argued for is implemented in
+  `src/ir/copy_prop/alias.rs`, and fixture `196_disjoint_frame_slots` was added
+  by that same commit to guard it.
+- **`241e84ad` (wt-audit)** — its own commit message is wrong: it claims
+  `python_bindings/ir.rs` was committed with conflict markers, and there are
+  none anywhere in that tree. Reviewed on the merits, six of seven hunks landed,
+  several into files that did not exist at its branch point
+  (`lift_arm32/predication.rs`, `types_recover/tagging.rs`). The seventh — a
+  DWARF ARM `Register(7)`/`Register(11)` split — is *correctly* refused: `"r7"`
+  is filtered out at `stack_locals.rs:390-397` because `STACK_BASES` has no
+  `"r7"`, so the change would swap a phantom slot for a dropped hint. A probe
+  confirmed `entry_sp` is the base that merges correctly, which master already
+  reaches via the `CallFrameCfa` arm — and real toolchains only take that arm:
+  `arm-linux-gnueabihf-gcc -g -O0` emits `DW_OP_call_frame_cfa` for
+  `DW_AT_frame_base` under both `-mthumb` and `-marm`, never `DW_OP_breg7/11`.
+- **`4530e6f5` (wt-arm)** — the patch is a duplicate: `0ac458af` already
+  recovered `layout_matches_abi_allocation_order` from this same worktree state
+  ~12h later, and the two function bodies are identical. **One test did not come
+  with it**, and that gap is real: the unit test pins the *predicate*, but
+  nothing pinned that `fold_one_call` actually *consults* it. Proven by mutation
+  — removing the `.filter(...)` at `fold_one_call.rs:79` fails **exactly one**
+  test out of 2,643, and that test is the recovered one. Integrated.
+
 ## What this cost, and what it bought
 
 136 content-bearing objects reviewed — 88 dropped stashes, 32 named stashes,
-and 16 real commits. **One live defect found**, in a dropped
+and 16 real commits. **One live defect found and one coverage gap closed**, in a dropped
 stash that my first partition had misfiled as a stash internal. Everything else
 was already on master — most of it invisible to textual comparison because the
 tree has been split and renamed underneath it.
