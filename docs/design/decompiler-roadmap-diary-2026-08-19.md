@@ -842,3 +842,119 @@ that is supposed to mean tampering.
 
 Two changes that are individually correct, and wrong together. The comment
 explaining why the order was safe is what made it hard to see.
+
+## Entry 97 — `return 0;` typed a whole signature, and a deferral that was never written
+
+Two prototype defects the stripped lane exposed, and both are one-liners with
+large blast radii.
+
+**`0` is simultaneously a valid `int` and C's null pointer constant.**
+`first_return_value_ctype` walked the body pre-order and typed the signature from
+the FIRST `return <expr>` with a recovered type. Nearly every pointer-returning
+function opens `if (!buf) return 0;` — so that literal decided the return type,
+and `int32_t *ptr199_edge_element` came out declared `int`, returning a pointer
+truncated to its low half.
+
+The fix steps over `return 0;` and **uses its answer only if what it found is a
+pointer**. That narrowness was measured, not chosen out of caution: letting any
+later return site outrank the literal healed one extra cell and widened **five
+other prototypes** from `int` to `unsigned long`, on the strength of a `ret` hint
+that defaults to the machine word — while moving no verdict either way to report
+it. `0` is ambiguous between an integer and a pointer. It is not ambiguous
+between two integer widths.
+
+**And a deferral with no implementation.** `types_recover.rs` had
+
+```rust
+let width = if observed.starts_with('d') { 8 } else { 4 };
+```
+
+with a comment saying the width was "a floor, not a claim ... corrected by the
+arithmetic that consumes it otherwise". There was no such arithmetic, and
+`observed` on x86-64 is always `xmm0`/`xmm0_d0` — never `d0`. Verified by lifting
+`addsd`, which yields `xmm0`, `xmm0_d0`, `xmm0_d1`. **So the test was always
+false, and every `double` parameter of every x86-64 function recovered without
+DWARF was declared `float`.**
+
+A comment that says "corrected elsewhere" is a promise, and this one had been
+outstanding long enough that the code around it had been rewritten twice.
+
+### The grouping I published dissolved
+
+I recorded 48 cells as "prototype recovery". Re-derived by diffing each stripped
+prototype against the **true prototype read from the `-g` DWARF** rather than by
+reading rendered C: **20 of them are ABI-invisible.** On SysV x86-64 `long`,
+`int *` and `long *` are the same 8-byte INTEGER register, and a return widened
+4→8 is `rax` written where `eax` is read. Fixing any of them moves nothing —
+those cells fail for other reasons entirely, and `t191_computed_args` reads a
+`var9` that is never defined, a wrong-code bug wearing a prototype defect's
+clothes.
+
+Classifying by rendered text and classifying by ABI descriptor give different
+answers, and only one of them predicts whether a fix will move a cell.
+
+## Entry 98 — four hypotheses, three of them mine, one of them my own change
+
+The def-use census refused `rustc:O0` 7,547 → 7,567 and `rustc:O2` 4,466 → 4,478.
+Attributing it took four experiments, and the shape of the search is the lesson.
+
+Each candidate was reverted **alone**, rebuilt **in both directions**, and
+re-censused. Three gave byte-identical per-function output and were eliminated:
+the prototype work, the DWARF/float-store work, and the source-path
+canonicalisation. The fourth reproduced the recorded ceilings exactly:
+
+```
+revert src/ir/value_number.rs to 11d55613^  ->  rustc:O0 7547, rustc:O2 4466
+```
+
+The **arity fix**. It had shipped without regenerating the def-use baseline, and
+the reason it could is now written down: `test_decompiler_defuse_census.py`
+requires `-m ""` to run at all, so the gate list anyone actually types never
+touches it. Any change to a recovered signature moves that census, silently.
+
+**One of the four eliminated candidates was a change I had made an hour
+earlier**, and it was not innocent — it was wrong in a different way. The
+fingerprint work canonicalised source paths **upward**, to absolute.
+`rustc --remap-path-prefix` rewrites only what matches the prefix, so an absolute
+source becomes `./tests/...` where a relative one stays `tests/...` — and rustc
+embeds it:
+
+```
+relative  sha=966f5ab828ca98f0   embeds `tests/decompiler_fixtures/...`
+absolute  sha=8214c0a6f3727f0d   embeds `./tests/decompiler_fixtures/...`
+```
+
+Every Rust object in the corpus had changed. I had verified byte-identity when I
+made that change — **on a gcc fixture**, where it holds. The canonicalisation now
+goes downward, to the ROOT-relative form the committed baselines were measured
+with, which fixes the fingerprint instability without perturbing a single object.
+
+Two correct-looking changes, an hour apart, and the interaction was invisible in
+both directions until a third change made a counter move.
+
+## Entry 99 — eight regressions that were a disk quota
+
+Partway through, the fixture matrix reported:
+
+```
+SEMANTIC REGRESSIONS:
+  24_merge_sort:clang:O0:merge_sort_i32 (pass->fail)
+  25_kmp_search:clang:O0:kmp_search (pass->fail)
+  ... six more
+```
+
+Entirely convincing, entirely false. The real cause appears only in the sibling
+test's output: `OSError: [Errno 122] Disk quota exceeded`, copying a fixture to
+`/tmp/tmpXXXX/reference.so` — **at 13G free**, because the tmpfs carries a
+per-user quota and 2,273 temp directories from crashed runs had accumulated.
+Clearing them turned the identical run green with no code change.
+
+This is the third `/tmp` incident today. Twice it took the Bash tool down
+completely — every command exiting 1, including `echo` and `true` — while the
+Read and Write tools kept working, which turns out to be the useful liveness
+probe.
+
+CLAUDE.md already warned that "infrastructure exhaustion wearing a product
+defect's clothes costs far more to diagnose than to prevent." It now also says
+what the clothes look like: `pass->fail` in the fixture matrix, and `Errno 122`
+in the log next to it.
