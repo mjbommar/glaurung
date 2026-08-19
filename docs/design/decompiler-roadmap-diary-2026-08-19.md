@@ -958,3 +958,76 @@ CLAUDE.md already warned that "infrastructure exhaustion wearing a product
 defect's clothes costs far more to diagnose than to prevent." It now also says
 what the clothes look like: `pass->fail` in the fixture matrix, and `Errno 122`
 in the log next to it.
+
+## Entry 100 — the guard I built in the morning caught me by evening
+
+`ir/ast/dec_render.rs` reached **2,013 product LOC**, crossing 2,000 and taking
+`product_files_above_2000` from 3 to 4. The growth was four commits in one day —
+1,797, 1,839, 1,946, 2,013 — all decompiler-correctness work, all mine.
+
+`check_ratchet` said "no regressions" the entire time. It is not broken:
+`product_loc_above_1000` is a SUM, and with thousands of lines of slack a single
+file can grow by 286 without moving it. The per-owner trend line added that
+morning is the only thing that saw it, and the first thing it caught was the
+person who added it.
+
+**The harm was not the size. It was the licence.** That file carries a
+`REVIEWED_LARGE_MODULES` entry whose verdict is "no further split" — the most
+carefully argued entry in the dict, and one I wrote — reasoned from a call graph
+measured at 1,788 lines. It was still authorising the file at 2,013: 225 lines it
+had never examined. Its sibling test already deletes an entry when a file drops
+*below* 1,000 LOC. Nothing checked the other direction.
+
+`test_no_review_licence_outlives_the_file_it_was_written_for` closes that: a
+reviewed file may drift 150 LOC past its last blessed size, and then the review
+must be redone. Absolute rather than proportional, because "does this review
+still describe this file?" does not get easier because the file was already
+large, and a percentage hands the biggest files the most headroom.
+
+### The order is the whole thing
+
+The gate failed. **The baseline was not regenerated to make it pass.** That is
+the same reset move this session closed off in three other places — the def-use
+ratchet, the fitness ratchet, the stripped-lane divergence list — and doing it
+here would have retired the argument rather than answering it.
+
+So the re-review came first, and it renewed the verdict on evidence rather than
+by restatement. What makes it trustworthy is that its method reproduces the
+2026-08-18 figures *exactly* — 46 functions, 11 in the strongly-connected
+component, 903 lines, same names, same order. Calibration mattered: a naive
+mention-based edge put `call_argument_pointer_ctype` in the component on the
+strength of a **comment** naming `write_expr_dec`, and stripping comments and
+string literals landed on the published number.
+
+```
+functions      46 -> 49
+SCC members    11 -> 12
+SCC lines     903 -> 1,029
+% item lines 53.7% -> 54.1%
+```
+
+The component grew in step, and 57% of the new lines landed inside it. The
+candidate most expected to have become separable — the float family, since
+`float_rendered_width` and `write_float_bits_expr_dec` had landed since — got
+**worse**: co-change 25% (1/4) at the old one-function scope, 20% (1/5) at the
+new three-function scope. The new float code did not arrive in float-only
+commits.
+
+Two seams the original review never enumerated turned out genuinely **acyclic**
+and scored 25% and 15.4% against the accepted `stmt` cut's 33–36%. Structural
+closure without change locality — the same lesson the first review learned,
+arrived at independently a day later.
+
+### One number it could not reproduce
+
+The reconstruction reads the call family at 42% co-change where the old entry
+says 24%, and three method variants failed to recover the original's
+denominators. The old entry did not state its method. **The new one does**, which
+is the actual repair: a measurement whose method is unrecorded cannot be checked,
+only believed. Both reconstructions agree on the question that mattered — the
+call family scored identically before and after the growth, so the new code
+created no locality there.
+
+The renewed entry also adds an expiry condition the old one lacked: a candidate
+must be **acyclic AND reach 33% co-change**, because the only candidate ever to
+clear the co-change bar was the one whose module edge ran both ways.
