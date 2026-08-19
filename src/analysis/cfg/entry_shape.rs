@@ -42,7 +42,11 @@ use crate::core::binary::Arch as BArch;
 
 use super::{indexed_code_offset, pe_va_to_file_off};
 
-pub(super) fn pe_tail_target_looks_like_function_start(data: &[u8], target_va: u64) -> bool {
+pub(super) fn pe_tail_target_looks_like_function_start(
+    data: &[u8],
+    target_va: u64,
+    is_64bit: bool,
+) -> bool {
     let Some(file_off) = pe_va_to_file_off(data, target_va) else {
         return false;
     };
@@ -53,7 +57,7 @@ pub(super) fn pe_tail_target_looks_like_function_start(data: &[u8], target_va: u
         return true;
     }
     let head_end = std::cmp::min(file_off.saturating_add(16), data.len());
-    classify_pe_thunk_head(target_va, &data[file_off..head_end]).is_some()
+    classify_pe_thunk_head(target_va, &data[file_off..head_end], is_64bit).is_some()
 }
 
 /// Does an x86 ELF direct-jump target carry strong independent function-entry
@@ -248,8 +252,29 @@ pub(super) fn rel_target(entry_va: u64, insn_len: u64, disp: i64) -> Option<u64>
 /// decides whether an xref target is safe to promote into a function seed,
 /// while this one mutates the resulting `Function` metadata. Only canonical
 /// one-block jump/call-wrapper shapes are labelled `FunctionKind::Thunk`.
-pub(super) fn classify_pe_thunk_head(entry_va: u64, head: &[u8]) -> Option<PeThunkMatch> {
-    // jmp rel32
+///
+/// # `is_64bit` is not a formality
+///
+/// `FF /4 disp32` is `jmp [rip+disp32]` on x86-64 and `jmp [disp32]` — a plain
+/// ABSOLUTE address — on 32-bit x86. RIP-relative addressing does not exist in
+/// 32-bit mode, so resolving a PE32 import thunk as `entry + 6 + disp` produces
+/// a VA that points nowhere. Measured on
+/// `samples/binaries/platforms/windows/i386/export/windows/i686/O2/hello-c-mingw32-O2.exe`:
+/// all 34 of its `FF 25` import thunks resolved outside the image (e.g. the
+/// `msvcrt!wcslen` thunk at `0x004071e0` gave `0x8133e2` where the operand names
+/// `0x0040c1fc`), and `classify_function_shapes` stored every one of them in
+/// `Function::thunk_target`. That gate admits `BArch::X86` explicitly, so the
+/// path was live, not hypothetical.
+///
+/// The `0x48` (REX.W) forms are 64-bit-only encodings: in 32-bit mode `0x48` is
+/// `dec eax`, a different instruction, so they are rejected rather than
+/// reinterpreted.
+pub(super) fn classify_pe_thunk_head(
+    entry_va: u64,
+    head: &[u8],
+    is_64bit: bool,
+) -> Option<PeThunkMatch> {
+    // jmp rel32 — relative in both modes.
     if head.len() >= 5 && head[0] == 0xe9 {
         let target_va = rel_target(entry_va, 5, read_i32_le_at(head, 1)? as i64)?;
         return Some(PeThunkMatch {
@@ -258,7 +283,7 @@ pub(super) fn classify_pe_thunk_head(entry_va: u64, head: &[u8]) -> Option<PeThu
             length: 5,
         });
     }
-    // jmp rel8
+    // jmp rel8 — relative in both modes.
     if head.len() >= 2 && head[0] == 0xeb {
         let target_va = rel_target(entry_va, 2, head[1] as i8 as i64)?;
         return Some(PeThunkMatch {
@@ -267,20 +292,29 @@ pub(super) fn classify_pe_thunk_head(entry_va: u64, head: &[u8]) -> Option<PeThu
             length: 2,
         });
     }
-    // jmp qword ptr [rip+disp32] / call qword ptr [rip+disp32]; ret
+    // jmp/call [rip+disp32] (x64) or jmp/call [disp32] (x86).
     if head.len() >= 6 && head[0] == 0xff && (head[1] == 0x25 || head[1] == 0x15) {
         if head[1] == 0x15 && head.get(6) != Some(&0xc3) {
             return None;
         }
-        let target_va = rel_target(entry_va, 6, read_i32_le_at(head, 2)? as i64)?;
+        let operand = read_i32_le_at(head, 2)?;
+        let target_va = if is_64bit {
+            rel_target(entry_va, 6, operand as i64)?
+        } else {
+            u64::from(operand as u32)
+        };
         return Some(PeThunkMatch {
             kind: PeThunkKind::ImportMemory,
             target_va,
             length: if head[1] == 0x15 { 7 } else { 6 },
         });
     }
-    // REX.W jmp/call qword ptr [rip+disp32].
-    if head.len() >= 7 && head[0] == 0x48 && head[1] == 0xff && (head[2] == 0x25 || head[2] == 0x15)
+    // REX.W jmp/call qword ptr [rip+disp32] — a 64-bit-only encoding.
+    if is_64bit
+        && head.len() >= 7
+        && head[0] == 0x48
+        && head[1] == 0xff
+        && (head[2] == 0x25 || head[2] == 0x15)
     {
         if head[2] == 0x15 && head.get(7) != Some(&0xc3) {
             return None;
@@ -292,8 +326,9 @@ pub(super) fn classify_pe_thunk_head(entry_va: u64, head: &[u8]) -> Option<PeThu
             length: if head[2] == 0x15 { 8 } else { 7 },
         });
     }
-    // mov rax, qword ptr [rip+disp32]; jmp rax
-    if head.len() >= 9 && head[0..3] == [0x48, 0x8b, 0x05] && head[7..9] == [0xff, 0xe0] {
+    // mov rax, qword ptr [rip+disp32]; jmp rax — a 64-bit-only encoding.
+    if is_64bit && head.len() >= 9 && head[0..3] == [0x48, 0x8b, 0x05] && head[7..9] == [0xff, 0xe0]
+    {
         let target_va = rel_target(entry_va, 7, read_i32_le_at(head, 3)? as i64)?;
         return Some(PeThunkMatch {
             kind: PeThunkKind::ImportMemory,

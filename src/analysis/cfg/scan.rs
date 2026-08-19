@@ -256,7 +256,9 @@ fn pe_thunk_scan_candidate(data: &[u8], file_off: usize, va: u64, _regions: &[Ex
     if file_off >= data.len() {
         return false;
     }
-    let Some(matched) = classify_pe_thunk_head(va, &data[file_off..]) else {
+    // `scan_pe_thunk_function_starts`, the only caller, returns early unless the
+    // image is 64-bit.
+    let Some(matched) = classify_pe_thunk_head(va, &data[file_off..], true) else {
         return false;
     };
     match matched.kind {
@@ -1020,7 +1022,8 @@ mod prologue_gate_tests {
 
     #[test]
     fn classifies_tail_jump_thunk() {
-        let matched = classify_pe_thunk_head(0x1000, &[0xe9, 0xfb, 0x0f, 0x00, 0x00]).unwrap();
+        let matched =
+            classify_pe_thunk_head(0x1000, &[0xe9, 0xfb, 0x0f, 0x00, 0x00], true).unwrap();
         assert_eq!(matched.kind, PeThunkKind::TailJump);
         assert_eq!(matched.target_va, 0x2000);
         assert_eq!(matched.length, 5);
@@ -1029,7 +1032,7 @@ mod prologue_gate_tests {
     #[test]
     fn classifies_rip_import_jump_thunk() {
         let matched =
-            classify_pe_thunk_head(0x1000, &[0xff, 0x25, 0x10, 0x00, 0x00, 0x00]).unwrap();
+            classify_pe_thunk_head(0x1000, &[0xff, 0x25, 0x10, 0x00, 0x00, 0x00], true).unwrap();
         assert_eq!(matched.kind, PeThunkKind::ImportMemory);
         assert_eq!(matched.target_va, 0x1016);
         assert_eq!(matched.length, 6);
@@ -1038,7 +1041,8 @@ mod prologue_gate_tests {
     #[test]
     fn classifies_cfg_dispatch_memory_jump_thunk() {
         let matched =
-            classify_pe_thunk_head(0x1000, &[0x48, 0xff, 0x25, 0x10, 0x00, 0x00, 0x00]).unwrap();
+            classify_pe_thunk_head(0x1000, &[0x48, 0xff, 0x25, 0x10, 0x00, 0x00, 0x00], true)
+                .unwrap();
         assert_eq!(matched.kind, PeThunkKind::ImportMemory);
         assert_eq!(matched.target_va, 0x1017);
         assert_eq!(matched.length, 7);
@@ -1046,9 +1050,12 @@ mod prologue_gate_tests {
 
     #[test]
     fn classifies_import_call_ret_wrapper() {
-        let matched =
-            classify_pe_thunk_head(0x1000, &[0x48, 0xff, 0x15, 0x20, 0x00, 0x00, 0x00, 0xc3])
-                .unwrap();
+        let matched = classify_pe_thunk_head(
+            0x1000,
+            &[0x48, 0xff, 0x15, 0x20, 0x00, 0x00, 0x00, 0xc3],
+            true,
+        )
+        .unwrap();
         assert_eq!(matched.kind, PeThunkKind::ImportMemory);
         assert_eq!(matched.target_va, 0x1027);
         assert_eq!(matched.length, 8);
@@ -1056,9 +1063,77 @@ mod prologue_gate_tests {
 
     #[test]
     fn rejects_non_wrapper_import_call() {
+        assert!(classify_pe_thunk_head(
+            0x1000,
+            &[0x48, 0xff, 0x15, 0x20, 0x00, 0x00, 0x00, 0x90],
+            true
+        )
+        .is_none());
+    }
+
+    /// `FF /4 disp32` is RIP-relative only in 64-bit mode.
+    ///
+    /// In 32-bit mode the operand is an absolute VA, and resolving it as though
+    /// RIP-relative produced a target outside the image for every import thunk in
+    /// `hello-c-mingw32-O2.exe`. The thunk at `0x004071e0` names the `msvcrt`
+    /// `wcslen` slot at `0x0040c1fc`; the old arithmetic gave `0x008133e2`.
+    #[test]
+    fn classifies_x86_absolute_import_jump_thunk() {
+        let head = [0xff, 0x25, 0xfc, 0xc1, 0x40, 0x00];
+        let matched = classify_pe_thunk_head(0x0040_71e0, &head, false).unwrap();
+        assert_eq!(matched.kind, PeThunkKind::ImportMemory);
+        assert_eq!(matched.target_va, 0x0040_c1fc);
+        assert_eq!(matched.length, 6);
+
+        let as_x64 = classify_pe_thunk_head(0x0040_71e0, &head, true).unwrap();
+        assert_eq!(
+            as_x64.target_va,
+            0x0040_71e0 + 6 + 0x0040_c1fc,
+            "the 64-bit reading is RIP-relative and lands nowhere in a PE32 image"
+        );
+    }
+
+    /// The same absolute rule for the `call [disp32]; ret` wrapper shape.
+    #[test]
+    fn classifies_x86_absolute_import_call_ret_wrapper() {
+        let matched = classify_pe_thunk_head(
+            0x0040_1000,
+            &[0xff, 0x15, 0x00, 0x20, 0x40, 0x00, 0xc3],
+            false,
+        )
+        .unwrap();
+        assert_eq!(matched.kind, PeThunkKind::ImportMemory);
+        assert_eq!(matched.target_va, 0x0040_2000);
+        assert_eq!(matched.length, 7);
+    }
+
+    /// `0x48` is `dec eax` in 32-bit mode, not a REX prefix, so the REX-prefixed
+    /// thunk encodings must not be recognised there.
+    #[test]
+    fn rejects_rex_prefixed_thunk_encodings_in_32_bit_mode() {
         assert!(
-            classify_pe_thunk_head(0x1000, &[0x48, 0xff, 0x15, 0x20, 0x00, 0x00, 0x00, 0x90],)
+            classify_pe_thunk_head(0x1000, &[0x48, 0xff, 0x25, 0x10, 0x00, 0x00, 0x00], false)
                 .is_none()
+        );
+        assert!(classify_pe_thunk_head(
+            0x1000,
+            &[0x48, 0x8b, 0x05, 0x30, 0x00, 0x00, 0x00, 0xff, 0xe0],
+            false
+        )
+        .is_none());
+    }
+
+    /// Relative jumps are relative in both modes: the arch flag must not touch them.
+    #[test]
+    fn tail_jump_targets_do_not_depend_on_mode() {
+        let head = [0xe9, 0xfb, 0x0f, 0x00, 0x00];
+        assert_eq!(
+            classify_pe_thunk_head(0x1000, &head, false)
+                .unwrap()
+                .target_va,
+            classify_pe_thunk_head(0x1000, &head, true)
+                .unwrap()
+                .target_va
         );
     }
 
@@ -1067,6 +1142,7 @@ mod prologue_gate_tests {
         let matched = classify_pe_thunk_head(
             0x1000,
             &[0x48, 0x8b, 0x05, 0x30, 0x00, 0x00, 0x00, 0xff, 0xe0],
+            true,
         )
         .unwrap();
         assert_eq!(matched.kind, PeThunkKind::ImportMemory);

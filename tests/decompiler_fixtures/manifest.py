@@ -1855,6 +1855,114 @@ OVERRIDES: dict[tuple[str, str], dict] = {
             [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
         ],
     },
+    # The bit scan/count corpus. The seeded fuzz draws from -64..63, which never
+    # sets a bit above 5 -- so without explicit vectors every leading-zero count
+    # answers 26..32 and the two halves of `bsc202_count_and_index` never
+    # diverge. The vectors below put a set bit in each octet, cover the zero
+    # case both counts define and `__builtin_ctz`/`__builtin_clz` do not, and
+    # cover an all-ones word where trailing and leading counts are both zero and
+    # a swap between them would be invisible.
+    ("202_bit_scan_and_count", "bsc202_ctz32"): {
+        "extra_vectors": [
+            [0],
+            [1],
+            [2],
+            [0x100],
+            [0x8000],
+            [0x8000_0000],
+            [-1],
+            [0x1234_5678],
+        ],
+    },
+    ("202_bit_scan_and_count", "bsc202_clz32"): {
+        "extra_vectors": [
+            [0],
+            [1],
+            [2],
+            [0x100],
+            [0x8000],
+            [0x8000_0000],
+            [-1],
+            [0x1234_5678],
+        ],
+    },
+    ("202_bit_scan_and_count", "bsc202_ctz64"): {
+        "extra_vectors": [
+            [0],
+            [1],
+            [0x8000_0000],
+            [0x1_0000_0000],
+            [0x4000_0000_0000_0000],
+            [-1],
+            [0x0123_4567_89AB_CDEF],
+        ],
+    },
+    ("202_bit_scan_and_count", "bsc202_clz64"): {
+        "extra_vectors": [
+            [0],
+            [1],
+            [0x8000_0000],
+            [0x1_0000_0000],
+            [0x4000_0000_0000_0000],
+            [-1],
+            [0x0123_4567_89AB_CDEF],
+        ],
+    },
+    # The one function where a count and an index appear side by side, so the
+    # `(BITS - 1) - clz` identity cannot be substituted for either without the
+    # combination changing.
+    ("202_bit_scan_and_count", "bsc202_count_and_index"): {
+        "extra_vectors": [
+            [0],
+            [1],
+            [0x8000_0000],
+            [0x8000_0001],
+            [-1],
+            [0x1234_5678],
+            [0x30],
+        ],
+    },
+    # The bit index is masked to 0..31 inside the function, so every value of it
+    # is legal; these pin one index per octet plus both ends, where an off-by-one
+    # in the mask or a lost complement is most legible.
+    ("202_bit_scan_and_count", "bsc202_set_bit"): {
+        "arg_values": {1: [0, 1, 7, 8, 15, 31, 32, -1]},
+        "extra_vectors": [[0, 0], [0, 31], [-1, 0], [-1, 31], [0x5555_5555, 1]],
+    },
+    ("202_bit_scan_and_count", "bsc202_clear_bit"): {
+        "arg_values": {1: [0, 1, 7, 8, 15, 31, 32, -1]},
+        "extra_vectors": [[0, 0], [0, 31], [-1, 0], [-1, 31], [0x5555_5555, 1]],
+    },
+    ("202_bit_scan_and_count", "bsc202_toggle_bit"): {
+        "arg_values": {1: [0, 1, 7, 8, 15, 31, 32, -1]},
+        "extra_vectors": [[0, 0], [0, 31], [-1, 0], [-1, 31], [0x5555_5555, 1]],
+    },
+    # Both polarities of the same write. The third argument decides which arm
+    # runs, so it has to take both values at every index.
+    ("202_bit_scan_and_count", "bsc202_assign_bit"): {
+        "arg_values": {1: [0, 1, 7, 15, 31], 2: [0, 1]},
+        "extra_vectors": [
+            [0, 0, 1],
+            [0, 31, 1],
+            [-1, 0, 0],
+            [-1, 31, 0],
+            [0x5555_5555, 1, 1],
+            [0x5555_5555, 1, 0],
+        ],
+    },
+    ("202_bit_scan_and_count", "bsc202_scatter_bits"): {
+        "extra_vectors": [[0, 0], [0, -1], [-1, 0], [-1, -1], [0x5555_5555, 0xAAAA]],
+    },
+    # `7 - (at & 7)`. Every residue class matters and none of them is special, so
+    # the vectors are simply all eight, plus a negative, where `& 7` and a signed
+    # remainder part company.
+    ("202_bit_scan_and_count", "bsc202_reflect_in_byte"): {
+        "extra_vectors": [[0], [1], [2], [3], [4], [5], [6], [7], [8], [-1], [-8]],
+    },
+    ("202_bit_scan_and_count", "bsc202_msb_first_bit"): {
+        "arg_values": {1: [0, 1, 2, 3, 4, 5, 6, 7, 8, -1]},
+        "extra_vectors": [[0x80, 0], [0x80, 7], [0x01, 0], [0x01, 7], [-1, 3]],
+    },
     ("199_pointer_return_kinds", "ptr199_find_index"): {
         "ptr_len": 8,
         "len_args": [1],
@@ -3229,6 +3337,37 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "f201_scalar_control",
         "f201_store_through_pointer",
         "f201_word_to_value",
+    ],
+    # Bit SCANS versus bit COUNTS, the bit-modify family, and `not` on a byte
+    # view. Coverage measured over the four compiled lanes rather than assumed:
+    # `tzcnt` reaches all four (GCC and Clang both compile `__builtin_ctz` to
+    # the TZCNT encoding at -O0 and -O2), `bts`/`btr`/`btc` reach both -O2
+    # lanes, `bt` reaches gcc -O2 and clang -O2, `bsr` reaches all four through
+    # the `clz` pair, and `not` on a BYTE view -- the shape whose write lands on
+    # an SSA name nothing reads -- reaches `bsc202_msb_first_bit` at clang -O2.
+    #
+    # `lzcnt` is deliberately NOT covered: it needs `-mlzcnt`/`-mabm`, which
+    # this corpus does not pass, so `__builtin_clz` compiles to `bsr` and the
+    # LZCNT arm has unit coverage only. Saying so here is cheaper than someone
+    # later reading these names and believing it does.
+    #
+    # Each operation is paired with the neighbour it would be confused with:
+    # ctz against clz, set against clear, and `bsc202_count_and_index` against
+    # both -- because a count lowered through the bit-scan identity agrees with
+    # a count on single-bit operands and on nothing else.
+    "202_bit_scan_and_count": [
+        "bsc202_assign_bit",
+        "bsc202_clear_bit",
+        "bsc202_clz32",
+        "bsc202_clz64",
+        "bsc202_count_and_index",
+        "bsc202_ctz32",
+        "bsc202_ctz64",
+        "bsc202_msb_first_bit",
+        "bsc202_reflect_in_byte",
+        "bsc202_scatter_bits",
+        "bsc202_set_bit",
+        "bsc202_toggle_bit",
     ],
     # A pending load held across a store to a DISJOINT slot of the same frame
     # object. `dfs196_spill_web` is the positive; the three controls are stores

@@ -1597,7 +1597,57 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         Mnemonic::Not => {
             if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
-                let r = VReg::phys(reg_name(instr.op_register(0)));
+                let name = reg_name(instr.op_register(0));
+                // A bit-preserving partial destination (`sil`, `ah`, `ax`, ...)
+                // is a read-modify-write of its 64-bit PARENT, not a write to a
+                // register of its own -- for exactly the reason
+                // [`partial_alu_ops`] exists, and the unary forms never got it.
+                //
+                // [`regview::ssa_parent`] canonicalises the parent and the
+                // ZERO-EXTENDING 32-bit views and nothing else, because a byte
+                // write preserves the bits above it and so is not a definition
+                // of the whole register. That makes `sil` an SSA name in its own
+                // right: `not %sil` defined it, and every later reader of
+                // `esi`/`rsi` -- which DO canonicalise together -- saw the value
+                // from before the complement. The instruction was not
+                // mis-modelled, it was disconnected.
+                //
+                // `165_bitstream_reader:clang:O2` is that, and it is silent
+                // wrong code rather than a decline. clang spells
+                // `shift = 7 - (at & 7)` as
+                // `mov %r10d,%esi ; not %sil ; and $0x7,%sil`, and the `and` --
+                // which does take the read-modify-write path -- read `rsi` and
+                // picked up the un-complemented copy. We emitted the bit index
+                // as `at & 7` where the source says `7 - (at & 7)`: a different
+                // bit, at every position, in both poke loops, in C that
+                // compiles and runs.
+                //
+                // NOT touches no flags at all, which is what makes this the
+                // three-op form of `partial_alu_ops`: read the view, complement
+                // it, write it back.
+                //
+                // `neg` HAS THE IDENTICAL DEFECT AND IS DELIBERATELY NOT FIXED
+                // HERE. Its arm below writes `VReg::phys(reg_name(..))` the same
+                // way, so `neg %al` disconnects the same way. Two reasons it is
+                // not folded in: it defines SF/ZF/CF/OF from the result, so it
+                // needs the flag machinery rather than this shape; and it is
+                // unmeasurable from the corpus we have -- all 40 byte-form `neg`
+                // in `tests/decompiler_fixtures/build` are inside unbaselined
+                // Rust `std`/`gimli` symbols, so nothing would prove the fix
+                // right or wrong. Whoever has a failing lane for it should take
+                // it; the mechanism is entirely the one described above.
+                if let Some(view) = partial_gp_view(&name) {
+                    let acc = VReg::Temp(0);
+                    let mut ops = read_view_ops(view, acc.clone());
+                    ops.push(Op::Un {
+                        dst: acc.clone(),
+                        op: UnOp::Not,
+                        src: Value::Reg(acc.clone()),
+                    });
+                    ops.extend(partial_write_ops(view, Value::Reg(acc)));
+                    return ops;
+                }
+                let r = VReg::phys(name);
                 return vec![Op::Un {
                     dst: r.clone(),
                     op: UnOp::Not,
@@ -5093,6 +5143,128 @@ mod tests {
     /// declares no register write. This is the census predicate applied to the
     /// single encodings, so it fails on a regression even when the sample
     /// corpus is absent.
+    // --- `not` on a bit-preserving partial view --------------------------
+
+    /// `not` on a byte view is a read-modify-write of its canonical PARENT, not
+    /// a write to a register of its own.
+    ///
+    /// [`regview::ssa_parent`] canonicalises the parent and the zero-extending
+    /// 32-bit views and nothing else, so `sil` is an SSA name nothing else
+    /// mentions: writing it defined a register no reader ever names, and the
+    /// next read of `esi`/`rsi` saw the value from before the complement.
+    ///
+    /// Unlike everything else on the silent-register-write census, this one
+    /// never showed up there — `Op::Un` DECLARES its destination, so the census
+    /// predicate is satisfied. The write was declared and simply pointed at the
+    /// wrong name, which no "does this declare a write" check can see.
+    #[test]
+    fn not_on_a_byte_view_rewrites_its_parent() {
+        // 40 f6 d6 -> not sil
+        let ops: Vec<Op> = lift64(&[0x40, 0xf6, 0xd6])
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Op::Un { dst: VReg::Phys(n), .. } if n == "sil")),
+            "writing `sil` writes a name no reader of this function mentions: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(
+                |op| matches!(op, Op::Bin { dst: VReg::Phys(n), op: BinOp::Or, .. } if n == "rsi")
+            ),
+            "the complemented byte must be merged back into `rsi`: {ops:#?}"
+        );
+        // The upper 56 bits are PRESERVED. That is what makes this a partial
+        // write rather than a 64-bit `not` of the parent, which would be just as
+        // wrong in the other direction.
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst: VReg::Phys(n), op: BinOp::And, rhs: Value::Const(mask), .. }
+                    if n == "rsi" && *mask == 0xFFFF_FFFF_FFFF_FF00u64 as i64
+            )),
+            "bits 8..63 of the parent are kept: {ops:#?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Un { op: UnOp::Not, .. })),
+            "something must actually complement: {ops:#?}"
+        );
+    }
+
+    /// The exact three-instruction sequence from
+    /// `165_bitstream_reader:clang:O2`, which is where this was found: clang
+    /// spells `shift = 7 - (at & 7)` as `mov %r10d,%esi ; not %sil ;
+    /// and $0x7,%sil`. The `and` already took the read-modify-write path, so it
+    /// read `rsi` — and before this fix picked up the un-complemented copy,
+    /// leaving the recovered C computing `at & 7`.
+    ///
+    /// Asserted as a DATAFLOW property rather than an op list: the value the
+    /// masking step reads must be one this sequence produced, not the one
+    /// `mov %r10d,%esi` left behind.
+    #[test]
+    fn the_complement_reaches_the_mask_that_follows_it() {
+        let ops: Vec<Op> = lift64(&[
+            0x44, 0x89, 0xd6, // mov  %r10d,%esi
+            0x40, 0xf6, 0xd6, // not  %sil
+            0x40, 0x80, 0xe6, 0x07, // and  $0x7,%sil
+        ])
+        .into_iter()
+        .map(|instruction| instruction.op)
+        .collect();
+
+        let complement = ops
+            .iter()
+            .position(|op| matches!(op, Op::Un { op: UnOp::Not, .. }))
+            .expect("the complement must be lifted at all");
+        let parent_write = ops
+            .iter()
+            .position(
+                |op| matches!(op, Op::Bin { dst: VReg::Phys(n), op: BinOp::Or, .. } if n == "rsi"),
+            )
+            .expect("the complement must land in the parent");
+        let mask_read = ops
+            .iter()
+            .skip(parent_write)
+            .position(|op| {
+                matches!(
+                    op,
+                    Op::Bin { op: BinOp::And, lhs: Value::Reg(VReg::Phys(n)), .. } if n == "rsi"
+                )
+            })
+            .map(|offset| offset + parent_write)
+            .expect("the `and $0x7,%sil` reads the parent");
+
+        assert!(
+            complement < parent_write && parent_write < mask_read,
+            "the masking step must read a parent the complement has already \
+             written; before this fix it read the one `mov %r10d,%esi` left: \
+             {ops:#?}"
+        );
+    }
+
+    /// A full-width `not` still writes its register directly. The partial-view
+    /// route must not swallow the ordinary case, whose destination already
+    /// canonicalises to the parent on its own.
+    #[test]
+    fn a_full_width_not_is_left_alone() {
+        // 48 f7 d0 -> not rax
+        let ops: Vec<Op> = lift64(&[0x48, 0xf7, 0xd0])
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![Op::Un {
+                dst: VReg::phys("rax"),
+                op: UnOp::Not,
+                src: Value::Reg(VReg::phys("rax")),
+            }],
+            "got: {ops:#?}"
+        );
+    }
+
     #[test]
     fn no_bit_operation_hides_its_register_writes() {
         for bytes in bit_ops_encodings::ALL {
@@ -7043,6 +7215,153 @@ mod tests {
         instruction
     }
 
+    /// Every committed x86-64 sample, paired with the byte ranges that are
+    /// PROVABLY code: sized `STT_FUNC` symbols and nothing else.
+    ///
+    /// A linear sweep of the whole `.text` also decodes alignment padding, jump
+    /// tables and constant pools as if they were instructions, and the junk it
+    /// invents (`aesenc`, `xlatb`, `iretd`, `in`) dominates any census taken
+    /// over it — 79 mnemonics from padding against 52 real ones when this was
+    /// first measured. A sized `STT_FUNC` symbol is code the producer said is
+    /// code.
+    ///
+    /// Returns an empty vector when the corpus is absent, so a checkout without
+    /// `samples/` degrades to a skip rather than a failure.
+    ///
+    /// Shared by the two sweeps below because they have to agree on the
+    /// population: a false positive only means something if it was measured
+    /// over the same bytes as the census it is qualifying.
+    fn census_corpus() -> Vec<(Vec<u8>, Vec<(usize, usize)>)> {
+        use object::{Object, ObjectSection, ObjectSymbol};
+
+        let root = std::path::Path::new("samples/binaries/platforms/linux/amd64");
+        if !root.exists() {
+            return Vec::new();
+        }
+        let mut binaries: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_none() {
+                    binaries.push(path);
+                }
+            }
+        }
+        binaries.sort();
+        assert!(
+            binaries.len() > 50,
+            "the census needs the committed corpus; found {}",
+            binaries.len()
+        );
+
+        let mut corpus = Vec::new();
+        for path in &binaries {
+            let Ok(data) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(object) = crate::decompile::profile::parse_object(data.as_slice()) else {
+                continue;
+            };
+            if object.architecture() != object::Architecture::X86_64 {
+                continue;
+            }
+            let mut ranges: Vec<(usize, usize)> = Vec::new();
+            for symbol in object.symbols() {
+                if symbol.kind() != object::SymbolKind::Text || symbol.size() == 0 {
+                    continue;
+                }
+                let Some(section) = symbol
+                    .section_index()
+                    .and_then(|index| object.section_by_index(index).ok())
+                else {
+                    continue;
+                };
+                let Some((section_offset, _)) = section.file_range() else {
+                    continue;
+                };
+                let start = (section_offset + (symbol.address() - section.address())) as usize;
+                let end = start + symbol.size() as usize;
+                if end <= data.len() && start < end {
+                    ranges.push((start, end));
+                }
+            }
+            drop(object);
+            if !ranges.is_empty() {
+                corpus.push((data, ranges));
+            }
+        }
+        corpus
+    }
+
+    /// The naive predicate's false positives, MEASURED rather than asserted.
+    ///
+    /// "Any empty `outs`" is the obvious way to write
+    /// [`hides_its_register_writes`], and it is wrong — because an empty `outs`
+    /// is also how a DELIBERATE memory-only effect is spelled. `rep stosd`
+    /// lowers to an operandless `memory.fill.*` intrinsic paired with ordinary
+    /// LLIR that updates RDI and RCX: the empty `outs` is a statement about
+    /// memory, and the register writes are right there in the same lift.
+    ///
+    /// [`the_census_predicate_reads_op_opaque_as_the_lie_it_is`] pins that for
+    /// one hand-written encoding. This pins the POPULATION: over the same bytes
+    /// the census sweeps, the naive predicate fires on exactly two mnemonics
+    /// the qualified one correctly ignores, and both are the string-store
+    /// family. If a third ever appears this fails and names it — which is the
+    /// only way to tell "the predicate found something new" apart from "the
+    /// predicate got sloppier", and the census itself cannot tell them apart
+    /// because a loosened predicate makes its list GROW, which reads exactly
+    /// like a regression somewhere else.
+    ///
+    /// Kept as its own test so that a change to either sweep cannot silently
+    /// absorb the other's failure.
+    #[test]
+    fn the_deliberately_empty_outs_are_exactly_the_string_stores() {
+        use iced_x86::{Decoder, DecoderOptions};
+
+        let corpus = census_corpus();
+        if corpus.is_empty() {
+            eprintln!("sample corpus missing; nothing to sweep");
+            return;
+        }
+        let mut false_positives: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for (data, ranges) in &corpus {
+            for (start, end) in ranges {
+                let mut decoder =
+                    Decoder::with_ip(64, &data[*start..*end], 0x1000, DecoderOptions::NONE);
+                for instruction in decoder.iter() {
+                    if instruction.is_invalid() {
+                        continue;
+                    }
+                    let ops = lift_one(&instruction, 64);
+                    let naive = ops.iter().any(|op| {
+                        matches!(op, Op::Unknown { .. })
+                            || matches!(op, Op::Intrinsic { outs, .. } if outs.is_empty())
+                    });
+                    if naive && !hides_its_register_writes(&ops) {
+                        *false_positives
+                            .entry(format!("{:?}", instruction.mnemonic()).to_ascii_lowercase())
+                            .or_default() += 1;
+                    }
+                }
+            }
+        }
+        let observed: Vec<&str> = false_positives.keys().map(String::as_str).collect();
+        assert_eq!(
+            observed,
+            vec!["stosd", "stosq"],
+            "these are the lifts a naive `empty outs` predicate would report as \
+             hidden register writes and the qualified predicate correctly does \
+             not. Occurrences: {false_positives:?}"
+        );
+    }
+
     /// CENSUS — every x86-64 mnemonic this lifter leaves unmodelled while the
     /// ISA says it WRITES a register.
     ///
@@ -7089,7 +7408,6 @@ mod tests {
     #[test]
     fn unmodelled_instructions_that_silently_claim_no_register_write() {
         use iced_x86::{Decoder, DecoderOptions, InstructionInfoFactory, OpAccess};
-        use object::{Object, ObjectSection, ObjectSymbol};
 
         /// Mnemonics observed to leave an `Op::Unknown` in their lift while
         /// `iced_x86` reports at least one written register, over the committed
@@ -7141,106 +7459,151 @@ mod tests {
         /// which reads as two mnemonics fixed and invites whoever is holding
         /// the constant to delete them. The predicate here keeps all thirty-five
         /// and passes unchanged.
-        const SILENT_REGISTER_WRITERS: &[&str] = &[
-            "aesenc",
-            "bsr",
-            "cpuid",
-            "fadd",
-            "faddp",
-            "fchs",
-            "fisub",
-            "fmul",
-            "fstp",
-            "fsub",
-            "fsubp",
-            "fxch",
-            "movsb",
-            "movsq",
-            "popfq",
-            "pushfq",
-            "rdtsc",
-            "rdtscp",
-            "shrd",
-            "syscall",
-            "vmovdqu",
-            "vpand",
-            "vpbroadcastb",
-            "vpcmpeqb",
-            "vpmovmskb",
-            "vpxor",
-            "vzeroupper",
-            "xgetbv",
+        /// Why a mnemonic on the list below is STILL on it.
+        ///
+        /// A bare list of names is a census nobody reads; the same list with a
+        /// reason per entry is an ALLOWLIST, and the difference shows up when
+        /// someone comes to shrink it. `bsr` and `syscall` sit next to each
+        /// other alphabetically and are not remotely the same problem: one is
+        /// an arm that handles the rest of its family and declines exactly one
+        /// encoding, the other is a register write nothing has ever modelled.
+        /// Ranking the list without that distinction ranks it by occurrence
+        /// count, which is how `syscall` (310) and `aesenc` (222) -- the two
+        /// largest entries, with zero occurrences between them in the fixture
+        /// corpus -- end up looking like the place to start.
+        ///
+        /// Each assignment below is measured, not inferred: the sweep was rerun
+        /// with `instruction.code()` and `InstructionInfoFactory`'s written
+        /// registers printed, so the encoding and the destination behind every
+        /// entry are known rather than assumed.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Silence {
+            /// No dispatch arm exists at all. A register the ISA writes that
+            /// this lifter has never had an opinion about. The prize category.
+            NoArm,
+            /// An arm exists and REFUSES this encoding, for a stated reason,
+            /// rather than guessing. The answer is absent on purpose -- though
+            /// absent invisibly, which is why these are still counted.
+            FormRefused,
+            /// x87. [`lift_bytes_with_x87`] is the pipeline's real entry point
+            /// for these and emits `Op::opaque("x87.<mnemonic>")` whenever the
+            /// stack depth is unproven, so the pipeline tells the same lie
+            /// about `ST(i)` that this sweep sees as an `Op::Unknown`. ONE
+            /// problem -- the x87 stack model -- counted nine times.
+            X87Stack,
+            /// The destination (or the source the destination is computed from)
+            /// is a 256-bit `ymm`, and an XMM register in this IR is four
+            /// 32-bit lanes: 128 bits, full stop. There is no name here to
+            /// write bits 128..255 to. Lowering only the low half would be a
+            /// different wrong answer, not a smaller one.
+            WiderThanTheLaneModel,
+            /// **Correct as it stands.** The instruction's whole architectural
+            /// effect is on state this IR does not represent, so declaring no
+            /// register write is the truth rather than a hole.
+            ///
+            /// `VEX_Vzeroupper` zeroes bits 128..255 of every vector register
+            /// and touches nothing else; in a 128-bit lane model that is a
+            /// no-op, and it appears here only because `iced_x86` reports the
+            /// write at `ZMM0..ZMM15` granularity.
+            ///
+            /// This variant exists so that "correct" and "not done yet" stop
+            /// looking identical in the census. Everything else on the list is
+            /// work; this is a boundary.
+            NoStateThisIrModels,
+        }
+
+        /// The allowlist: 28 mnemonics, 1,130 occurrences over the committed
+        /// corpus. Every entry is a register definition the LLIR does not have;
+        /// the reason says whether that is a gap or a boundary.
+        ///
+        /// Occurrence counts, for whoever ranks what to fix next: `syscall` 310,
+        /// `movsb` 242, `aesenc` 222, `movsq` 134, `vmovdqu` 58, `fstp` 34,
+        /// `vzeroupper` 26, `fxch` 14, `fmul` 12, `vpcmpeqb` 12, `fchs` 10,
+        /// `vpmovmskb` 8, `cpuid` 6, `fadd` 6, `bsr` 4, `fsubp` 4, `shrd` 4,
+        /// `vpxor` 4, and eight more at 2.
+        ///
+        /// **Those counts are the SAMPLE corpus, and it is not the population
+        /// that decides what a fix is worth.** The samples are glibc- and
+        /// OpenSSL-shaped; the decompiler fixture corpus is compiled C written
+        /// to exercise the decompiler, and the two agree on almost nothing. Of
+        /// these 28, **zero** occur in any fixture function that has a
+        /// baselined verdict -- measured by disassembling all 782 objects in
+        /// `tests/decompiler_fixtures/build` and joining the result to
+        /// `baseline.json`. The seven mnemonics that came off this list on
+        /// 2026-08-19 were chosen that way rather than by the counts above:
+        /// `tzcnt` was 130 here and 139 there across 27 fixture functions,
+        /// while `syscall` is 310 here and 0 there.
+        const SILENT_REGISTER_WRITERS: &[(&str, Silence)] = &[
+            ("aesenc", Silence::NoArm),
+            // `Bsr_r16_rm16` only, all four of them: the 16-bit form is the one
+            // `bit_scan_ops` declines. Its stated reason (that a 16-bit count
+            // would need an `x86.clz.16` answering 16 too high) does not hold --
+            // `bsr16(x) = 31 - clz32(zext16(x))` is exact with today's renderer;
+            // the real blocker is that both operands are bit-preserving partial
+            // views and the lowering writes neither through its parent.
+            ("bsr", Silence::FormRefused),
+            ("cpuid", Silence::NoArm),
+            ("fadd", Silence::X87Stack),
+            ("faddp", Silence::X87Stack),
+            ("fchs", Silence::X87Stack),
+            ("fisub", Silence::X87Stack),
+            ("fmul", Silence::X87Stack),
+            ("fstp", Silence::X87Stack),
+            ("fsub", Silence::X87Stack),
+            ("fsubp", Silence::X87Stack),
+            ("fxch", Silence::X87Stack),
+            // `Movsb_m8_m8` / `Movsq_m64_m64`, both writing RDI and RSI.
+            ("movsb", Silence::NoArm),
+            ("movsq", Silence::NoArm),
+            ("popfq", Silence::NoArm),
+            ("pushfq", Silence::NoArm),
+            ("rdtsc", Silence::NoArm),
+            ("rdtscp", Silence::NoArm),
+            // `Shrd_rm64_r64_CL` only: the variable-count form, which
+            // `double_shift_ops` declines because a count of zero is a no-op
+            // that must also leave the flags alone.
+            ("shrd", Silence::FormRefused),
+            // Writes RCX and R11 (the return address and RFLAGS). RAX is the
+            // kernel's doing, not the instruction's, and iced does not claim it.
+            ("syscall", Silence::NoArm),
+            ("vmovdqu", Silence::WiderThanTheLaneModel),
+            ("vpand", Silence::WiderThanTheLaneModel),
+            ("vpbroadcastb", Silence::WiderThanTheLaneModel),
+            ("vpcmpeqb", Silence::WiderThanTheLaneModel),
+            // `VEX_Vpmovmskb_r32_ymm`: the DESTINATION is an ordinary GP
+            // register, but the source is a 256-bit `ymm` this IR cannot spell,
+            // so the mask has no expression to be. The 128-bit `pmovmskb` is
+            // lifted.
+            ("vpmovmskb", Silence::WiderThanTheLaneModel),
+            // Not a width problem: `VEX_Vpxor_xmm_xmm_xmmm128` is 128 bits and
+            // the SSE `pxor` spelling IS lifted. The VEX encoding simply has no
+            // arm.
+            ("vpxor", Silence::NoArm),
+            ("vzeroupper", Silence::NoStateThisIrModels),
+            ("xgetbv", Silence::NoArm),
         ];
 
-        let root = std::path::Path::new("samples/binaries/platforms/linux/amd64");
-        if !root.exists() {
-            eprintln!("sample corpus missing: {}", root.display());
+        // The comparison below is by name in sorted order, so a duplicate or a
+        // misplaced entry would make it depend on how the table was edited.
+        assert!(
+            SILENT_REGISTER_WRITERS
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0),
+            "SILENT_REGISTER_WRITERS must be sorted and free of duplicates"
+        );
+
+        let corpus = census_corpus();
+        if corpus.is_empty() {
+            eprintln!("sample corpus missing; nothing to sweep");
             return;
         }
-        let mut binaries: Vec<std::path::PathBuf> = Vec::new();
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(directory) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&directory) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_none() {
-                    binaries.push(path);
-                }
-            }
-        }
-        binaries.sort();
-        assert!(
-            binaries.len() > 50,
-            "the census needs the committed corpus; found {}",
-            binaries.len()
-        );
 
         let mut factory = InstructionInfoFactory::new();
         let mut silent: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
-        for path in &binaries {
-            let Ok(data) = std::fs::read(path) else {
-                continue;
-            };
-            let Ok(object) = crate::decompile::profile::parse_object(data.as_slice()) else {
-                continue;
-            };
-            if object.architecture() != object::Architecture::X86_64 {
-                continue;
-            }
-            // Decode only inside DECLARED FUNCTION BOUNDS. A linear sweep of the
-            // whole `.text` also decodes alignment padding, jump tables and
-            // constant pools as if they were code, and the junk it invents
-            // (`aesenc`, `xlatb`, `iretd`, `in`) would dominate the census and
-            // hide the real entries. A sized `STT_FUNC` symbol is code the
-            // producer said is code.
-            let mut ranges: Vec<(usize, usize)> = Vec::new();
-            for symbol in object.symbols() {
-                if symbol.kind() != object::SymbolKind::Text || symbol.size() == 0 {
-                    continue;
-                }
-                let Some(section) = symbol
-                    .section_index()
-                    .and_then(|index| object.section_by_index(index).ok())
-                else {
-                    continue;
-                };
-                let Some((section_offset, _)) = section.file_range() else {
-                    continue;
-                };
-                let start = (section_offset + (symbol.address() - section.address())) as usize;
-                let end = start + symbol.size() as usize;
-                if end <= data.len() && start < end {
-                    ranges.push((start, end));
-                }
-            }
-            drop(object);
+        for (data, ranges) in &corpus {
             for (start, end) in ranges {
-                let bytes = &data[start..end];
+                let bytes = &data[*start..*end];
                 let mut decoder = Decoder::with_ip(64, bytes, 0x1000, DecoderOptions::NONE);
                 for instruction in decoder.iter() {
                     if instruction.is_invalid() {
@@ -7271,13 +7634,19 @@ mod tests {
         }
 
         let observed: Vec<&str> = silent.keys().map(String::as_str).collect();
+        let allowed: Vec<&str> = SILENT_REGISTER_WRITERS
+            .iter()
+            .map(|(mnemonic, _)| *mnemonic)
+            .collect();
         assert_eq!(
-            observed, SILENT_REGISTER_WRITERS,
+            observed, allowed,
             "an unmodelled instruction with a register destination declares no \
              write at all, so its destination silently keeps its previous value. \
              An `Op::Unknown` and an `Op::opaque` that nothing else in the lift \
              covers count the same here, because register dataflow cannot tell \
-             them apart. Occurrences: {silent:?}"
+             them apart. A mnemonic ADDED to this diff is a new hole and needs \
+             a lift, not an allowlist entry; a mnemonic REMOVED is one that was \
+             just fixed, and its entry goes with it. Occurrences: {silent:?}"
         );
     }
 

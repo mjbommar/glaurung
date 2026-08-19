@@ -2212,7 +2212,7 @@
     "bit165_write_frame": "pass"
   },
   "165_bitstream_reader:clang:O2": {
-    "bit165_cross_check": "fail",
+    "bit165_cross_check": "pass",
     "bit165_read_bits": "pass",
     "bit165_read_sequence": "pass",
     "bit165_roundtrip": "fail",
@@ -3249,6 +3249,62 @@
     "f201_scalar_control": "pass",
     "f201_store_through_pointer": "fail",
     "f201_word_to_value": "fail"
+  },
+  "202_bit_scan_and_count:clang:O0": {
+    "bsc202_assign_bit": "pass",
+    "bsc202_clear_bit": "pass",
+    "bsc202_clz32": "pass",
+    "bsc202_clz64": "pass",
+    "bsc202_count_and_index": "pass",
+    "bsc202_ctz32": "pass",
+    "bsc202_ctz64": "pass",
+    "bsc202_msb_first_bit": "pass",
+    "bsc202_reflect_in_byte": "pass",
+    "bsc202_scatter_bits": "pass",
+    "bsc202_set_bit": "pass",
+    "bsc202_toggle_bit": "pass"
+  },
+  "202_bit_scan_and_count:clang:O2": {
+    "bsc202_assign_bit": "pass",
+    "bsc202_clear_bit": "pass",
+    "bsc202_clz32": "pass",
+    "bsc202_clz64": "pass",
+    "bsc202_count_and_index": "pass",
+    "bsc202_ctz32": "pass",
+    "bsc202_ctz64": "pass",
+    "bsc202_msb_first_bit": "pass",
+    "bsc202_reflect_in_byte": "pass",
+    "bsc202_scatter_bits": "pass",
+    "bsc202_set_bit": "pass",
+    "bsc202_toggle_bit": "pass"
+  },
+  "202_bit_scan_and_count:gcc:O0": {
+    "bsc202_assign_bit": "pass",
+    "bsc202_clear_bit": "pass",
+    "bsc202_clz32": "pass",
+    "bsc202_clz64": "pass",
+    "bsc202_count_and_index": "pass",
+    "bsc202_ctz32": "pass",
+    "bsc202_ctz64": "pass",
+    "bsc202_msb_first_bit": "pass",
+    "bsc202_reflect_in_byte": "pass",
+    "bsc202_scatter_bits": "pass",
+    "bsc202_set_bit": "pass",
+    "bsc202_toggle_bit": "pass"
+  },
+  "202_bit_scan_and_count:gcc:O2": {
+    "bsc202_assign_bit": "pass",
+    "bsc202_clear_bit": "pass",
+    "bsc202_clz32": "pass",
+    "bsc202_clz64": "pass",
+    "bsc202_count_and_index": "pass",
+    "bsc202_ctz32": "pass",
+    "bsc202_ctz64": "pass",
+    "bsc202_msb_first_bit": "pass",
+    "bsc202_reflect_in_byte": "pass",
+    "bsc202_scatter_bits": "pass",
+    "bsc202_set_bit": "pass",
+    "bsc202_toggle_bit": "pass"
   },
   "20_graph_bfs:clang:O0": {
     "graph_bfs": "pass"

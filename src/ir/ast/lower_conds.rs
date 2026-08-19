@@ -15,6 +15,15 @@
 //! shared by both and are deliberately conservative: every one of them is
 //! consulted to *forbid* a rewrite, so an over-approximation only costs
 //! prettiness while an under-approximation costs correctness.
+//!
+//! "Shared" is load-bearing and was not true until 2026-08-18.
+//! [`hoisting_the_header_is_safe`] carried its own nested `expr_reads_memory`
+//! that shadowed the file-scope one, and the two disagreed: the nested copy
+//! ended in `_ => false`, so `NumericConvert`, `WideArithmetic` and
+//! `FunctionTableEntry` all answered "reads no memory" there and "reads memory"
+//! twelve hundred lines below. A predicate consulted to forbid a rewrite must
+//! never answer with a wildcard, so every walker here is exhaustive and a new
+//! `Expr` variant is a compile error rather than a silent permission.
 
 use super::lower_ops::lower_op;
 use super::{Expr, Stmt, WideArithmetic};
@@ -68,26 +77,32 @@ use crate::ir::types::{BinOp, CmpOp, LlirBlock, LlirFunction, LlirInstr, Op, UnO
 /// When this declines, the caller emits `while (1) { pre; if (!cond) break; body }`,
 /// which is always correct and merely less pretty. Declining is cheap; hoisting
 /// wrongly produces a program that does not terminate.
+///
+/// # Why the two walkers below have no `_ =>` arm
+///
+/// Both of them are consulted to FORBID the hoist, so a variant they fail to
+/// recognise is a permission granted by omission. Until 2026-08-18 both ended in
+/// a wildcard, and both were wrong at it:
+///
+/// * the memory test was a private copy that shadowed the file-scope
+///   [`expr_reads_memory`] and answered `false` for `NumericConvert`,
+///   `WideArithmetic` and `FunctionTableEntry` where the shared one answers
+///   `true`; it is now the shared one;
+/// * `collect_read` did not descend into `NumericConvert`, `WideArithmetic` or
+///   `FunctionTableEntry` and did not name a `StackAddr`'s object, so a preamble
+///   statement built from any of them looked like it read NO registers — which
+///   makes the loop-invariance test vacuous and the hoist unconditional.
+///
+/// `lower_op` builds both `NumericConvert` (`lower_scalar_conversion`) and
+/// `WideArithmetic` (`wide_integer_intrinsic`) with plain `Expr::Reg` operands,
+/// so `t = wide_mul(a, b)` in a header preamble whose body bumps `a` was exactly
+/// the invisible case. Measured before the fix over 752 fixture objects
+/// (`{gcc,clang} x {O0,O2}` over `tests/decompiler_fixtures/src`) and 376
+/// `samples/binaries` images: `WideArithmetic` reaches a header preamble 15
+/// times and NO input flips the verdict, so this was a latent fail-open hole
+/// rather than a live defect. Exhaustive matches keep it that way by making the
+/// next `Expr` variant a compile error.
 pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
-    fn expr_reads_memory(e: &Expr) -> bool {
-        match e {
-            Expr::Deref { .. } | Expr::Call { .. } => true,
-            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                expr_reads_memory(lhs) || expr_reads_memory(rhs)
-            }
-            Expr::Select {
-                cond,
-                if_true,
-                if_false,
-                ..
-            } => {
-                expr_reads_memory(cond) || expr_reads_memory(if_true) || expr_reads_memory(if_false)
-            }
-            Expr::Un { src, .. } => expr_reads_memory(src),
-            Expr::Cast { expr, .. } => expr_reads_memory(expr),
-            _ => false,
-        }
-    }
     // Every register the body assigns, at any nesting depth. Over-approximating this
     // is the safe direction: a register listed here merely blocks a hoist.
     fn collect_assigned(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
@@ -95,6 +110,9 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
             match s {
                 Stmt::Assign {
                     dst: VReg::Phys(n), ..
+                }
+                | Stmt::Pop {
+                    target: VReg::Phys(n),
                 } => {
                     out.insert(n.clone());
                 }
@@ -132,13 +150,30 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                         collect_assigned(b, out);
                     }
                 }
+                // A catch clause binds its exception object and runs ordinary
+                // statements; both define registers a hoisted preamble may read.
+                Stmt::TryCatch { try_body, catches } => {
+                    collect_assigned(try_body, out);
+                    for catch in catches {
+                        if let VReg::Phys(n) = &catch.binding {
+                            out.insert(n.clone());
+                        }
+                        collect_assigned(&catch.body, out);
+                    }
+                }
                 _ => {}
             }
         }
     }
     fn collect_read(e: &Expr, out: &mut std::collections::HashSet<String>) {
         match e {
-            Expr::Reg(VReg::Phys(n)) => {
+            // A `StackAddr` names its object as a register directly, exactly as
+            // `Lea` names its base.
+            Expr::Reg(VReg::Phys(n))
+            | Expr::StackAddr {
+                object: VReg::Phys(n),
+                ..
+            } => {
                 out.insert(n.clone());
             }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
@@ -156,7 +191,7 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                 collect_read(if_false, out);
             }
             Expr::Un { src, .. } => collect_read(src, out),
-            Expr::Cast { expr, .. } => collect_read(expr, out),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_read(expr, out),
             Expr::Deref { addr, .. } => collect_read(addr, out),
             Expr::Call { target, args, .. } => {
                 collect_read(target, out);
@@ -164,6 +199,12 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                     collect_read(argument, out);
                 }
             }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    collect_read(argument, out);
+                }
+            }
+            Expr::FunctionTableEntry { index, .. } => collect_read(index, out),
             // `Lea` and `PdbFieldAddr` name their base/index as registers directly,
             // not as sub-expressions: an address computed from a register the body
             // bumps is loop-carried just as much as an arithmetic one.
@@ -174,7 +215,16 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                     }
                 }
             }
-            _ => {}
+            // Nothing below names a register this analysis tracks. Spelled out
+            // rather than wildcarded so a new variant cannot join them silently.
+            Expr::Reg(_)
+            | Expr::StackAddr { .. }
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => {}
         }
     }
 
@@ -1036,6 +1086,125 @@ mod tests {
             super::hoisting_the_header_is_safe(&forward, &body),
             "a forward-only preamble chain is invariant and must still hoist"
         );
+    }
+
+    /// A register read through an expression variant the walker does not descend
+    /// into is a register the invariance test never sees.
+    ///
+    /// `collect_read` ended in `_ => {}` and never entered `WideArithmetic`,
+    /// `NumericConvert` or `FunctionTableEntry`, and never named a `StackAddr`'s
+    /// object. All four are producible: `lower_op` builds `WideArithmetic` from
+    /// `wide_integer_intrinsic` and `NumericConvert` from
+    /// `lower_scalar_conversion`, both with plain `Expr::Reg` operands. A preamble
+    /// statement built from one of them therefore looked like it read NOTHING,
+    /// which makes the loop-invariance test vacuously true and hoists the
+    /// statement out regardless of what the body does to its inputs — the same
+    /// freeze `a_preamble_reading_a_body_modified_register_is_not_hoistable`
+    /// documents, reached through a variant instead of through the wildcard-free
+    /// arms.
+    #[test]
+    fn a_body_modified_register_read_through_any_expression_variant_blocks_the_hoist() {
+        let bump = vec![Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        }];
+        let carried = [
+            Expr::WideArithmetic {
+                op: crate::ir::ast::WideArithmetic::UnsignedMulHigh,
+                args: vec![Expr::Reg(VReg::phys("i")), Expr::Const(3)],
+                width: 8,
+            },
+            Expr::NumericConvert {
+                from: crate::ir::ast::ScalarType::SignedInt(4),
+                to: crate::ir::ast::ScalarType::Float(8),
+                expr: Box::new(Expr::Reg(VReg::phys("i"))),
+            },
+            Expr::FunctionTableEntry {
+                table_va: 0x4000,
+                table_name: "handlers".into(),
+                pointer_size: 8,
+                index: Box::new(Expr::Reg(VReg::phys("i"))),
+                targets: Vec::new(),
+            },
+            Expr::StackAddr {
+                object: VReg::phys("i"),
+                size: 8,
+            },
+        ];
+        for src in carried {
+            let pre = vec![Stmt::Assign {
+                dst: VReg::phys("t"),
+                src: src.clone(),
+            }];
+            assert!(
+                !super::hoisting_the_header_is_safe(&pre, &bump),
+                "the preamble reads `i`, which the body bumps, so hoisting freezes \
+                 the condition: {src:?}"
+            );
+        }
+    }
+
+    /// A `Stmt::Pop` defines a register exactly as an assignment does.
+    ///
+    /// `collect_assigned` listed `Assign` and `Call` and then fell through to
+    /// `_ => {}`, so a body that pops into `i` looked like a body that never
+    /// writes `i`.
+    #[test]
+    fn a_body_pop_defines_a_register_and_blocks_the_hoist() {
+        let pre = vec![Stmt::Assign {
+            dst: VReg::phys("t"),
+            src: Expr::Reg(VReg::phys("i")),
+        }];
+        let body = vec![Stmt::Pop {
+            target: VReg::phys("i"),
+        }];
+        assert!(
+            !super::hoisting_the_header_is_safe(&pre, &body),
+            "`pop i` is a definition of `i`, so the preamble's read of it is \
+             loop-carried"
+        );
+    }
+
+    /// Nesting inside a recovered `try`/`catch` must not hide the assignment
+    /// either — `collect_assigned` descends into every other statement body.
+    #[test]
+    fn a_try_catch_body_assignment_still_blocks_the_hoist() {
+        let bump = Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        };
+        let pre = vec![Stmt::Assign {
+            dst: VReg::phys("t"),
+            src: Expr::Reg(VReg::phys("i")),
+        }];
+        for body in [
+            vec![Stmt::TryCatch {
+                try_body: vec![bump.clone()],
+                catches: Vec::new(),
+            }],
+            vec![Stmt::TryCatch {
+                try_body: Vec::new(),
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: VReg::phys("caught"),
+                    body: vec![bump.clone()],
+                }],
+            }],
+        ] {
+            assert!(
+                !super::hoisting_the_header_is_safe(&pre, &body),
+                "an assignment inside a try/catch is still a body assignment: \
+                 {body:?}"
+            );
+        }
     }
 
     #[test]

@@ -1236,7 +1236,7 @@ fn discover_function(
                         && data.len() >= 2
                         && &data[..2] == b"MZ"
                         && is_exec_target
-                        && pe_tail_target_looks_like_function_start(data, tgt);
+                        && pe_tail_target_looks_like_function_start(data, tgt, arch.is_64_bit());
                     let is_elf_x86_tail_target = unconditional
                         && !facts.owns(tgt)
                         && tgt != entry.value
@@ -1841,9 +1841,11 @@ fn classify_function_shapes(
             continue;
         }
         let head_end = std::cmp::min(file_off.saturating_add(16), data.len());
-        let Some(matched) =
-            classify_pe_thunk_head(func.entry_point.value, &data[file_off..head_end])
-        else {
+        let Some(matched) = classify_pe_thunk_head(
+            func.entry_point.value,
+            &data[file_off..head_end],
+            arch.is_64_bit(),
+        ) else {
             continue;
         };
         if let Ok(target) = Address::new(AddressKind::VA, matched.target_va, bits, None, None) {

@@ -84,12 +84,36 @@ pub(super) fn synchronise_xmm_views(ops: &mut Vec<Op>) {
     }
 }
 
-/// The single XMM register every written lane of `register` was copied from,
-/// when this instruction is a plain lane-for-lane register move.
+/// The single XMM register `register` was copied from, when this instruction is a
+/// plain lane-for-lane move of ALL FOUR of its dword lanes.
 ///
 /// `None` as soon as any lane is computed, loaded, zeroed, or taken from a
 /// different register — in those cases the destination's own lanes are the only
 /// description of its value and the concat above is the right bridge.
+///
+/// # The count is four, and the comment used to say something else
+///
+/// This line read "every lane the instruction wrote must be accounted for by the
+/// copy", which describes a condition the code does not test: it counts REGISTER
+/// COPIES and compares against the literal 4, never against how many lanes the
+/// instruction actually wrote. The two readings only come apart for an
+/// instruction that writes fewer than four lanes and copies every one of them
+/// lane-for-lane from one source — and no such instruction was found.
+///
+/// Measured 2026-08-18 by logging every call that ends here with a consistent
+/// single source and `lanes_seen` in `1..=3` (a superset of the disagreement),
+/// across 752 fixture objects (`{gcc,clang} x {O0,O2}` over
+/// `tests/decompiler_fixtures/src`) and 376 `samples/binaries` images: 134 hits,
+/// every one of them `lanes_seen == 2` with all FOUR lanes written — a packed
+/// shuffle that computes lanes 0 and 1 and copies lanes 2 and 3. Both readings
+/// decline those, so the general condition would admit exactly nothing extra and
+/// widening the code buys nothing. The comment was the wrong half.
+///
+/// The reason four is also the right number: the fallback this guards is
+/// `Op::Concat { hi: _d1, lo: _d0 }`, which rebuilds the scalar view from the
+/// destination's own low lanes. Taking the SOURCE's scalar view instead is only
+/// equivalent when the destination IS the source, and a partial lane copy does
+/// not establish that.
 fn single_source_of_lane_copy(ops: &[Op], register: &str) -> Option<String> {
     let mut source: Option<String> = None;
     let mut lanes_seen = 0usize;
@@ -118,7 +142,8 @@ fn single_source_of_lane_copy(ops: &[Op], register: &str) -> Option<String> {
         }
         lanes_seen += 1;
     }
-    // Every lane the instruction wrote must be accounted for by the copy.
+    // All four lanes must be accounted for by the copy; see the doc comment for
+    // why this is the literal 4 and not the count of lanes written.
     (lanes_seen == 4).then_some(source?)
 }
 

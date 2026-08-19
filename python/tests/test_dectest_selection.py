@@ -362,13 +362,14 @@ def test_the_committed_opt_sets_are_unchanged_by_the_arch_dimension():
     one `gcc` and one `clang` lane to each opt. 370 -> 376 on 2026-08-17: the
     return-type census fixtures `194_narrow_return_widths`,
     `198_aggregate_return_edges` and `199_pointer_return_kinds` add one `gcc` and
-    one `clang` lane each. 376 -> 378 on 2026-08-19:
-    `201_float_bit_stores` adds one `gcc` and one `clang` lane to each opt.
+    one `clang` lane each. 376 -> 380 on 2026-08-19:
+    `201_float_bit_stores` and `202_bit_scan_and_count` add one `gcc` and one
+    `clang` lane each to each opt -- two fixtures, four lanes per opt.
     Update this WITH the fixture, and say which fixture moved it.
     """
     for name in ("o0", "o2"):
         lanes = D.resolve([f"@{name}"])
-        assert len(lanes) == 378, f"@{name} is now {len(lanes)} lanes"
+        assert len(lanes) == 380, f"@{name} is now {len(lanes)} lanes"
         assert not any(lane.is_arch for lane in lanes)
 
 

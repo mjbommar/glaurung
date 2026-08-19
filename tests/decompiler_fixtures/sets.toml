@@ -231,3 +231,11 @@ selectors = ["183_*", "192_*"]
 [subword-division]
 description = "Signed and unsigned division at 8 and 16 bits (185) — the Cbw/Cwd sign-extension pairs."
 selectors = ["185_*"]
+
+[bit-scan]
+description = "Bit scans, bit counts and the bit-modify family (202), plus the two fixtures that reach them incidentally: the ctz/clz switch in 144 and the bts/btr/cmov poke loops in 165."
+# Deliberately not folded into `coverage`: that set names the 181-186 tranche
+# and its description counts them. 202 is the same KIND of fixture -- written
+# because an instruction family had no lane -- so it gets its own selector
+# rather than making a counted set silently wrong.
+selectors = ["202_*", "144_inline_asm", "165_bitstream_reader"]

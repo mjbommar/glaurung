@@ -48,6 +48,16 @@
       "measure": "functions_with_violations",
       "reason": "the three Abbreviation::new copies, same cause as the violations entry above.",
       "to": 1159
+    },
+    {
+      "attributable_delta": 1,
+      "delta": 0,
+      "from": 1,
+      "key": "165_bitstream_reader:clang:O2:bit165_cross_check",
+      "kind": "required_function",
+      "measure": "undefined_reads",
+      "reason": "NOT a new violation -- a RENUMBERING. Count is 1 before and 1 after (the guard itself prints +0). Same single undefined read at the same position, 'var56 = var81;' in the else arm, with 'long var81;' declared and never assigned; it was 'var79' before. The byte-view 'not' fix changes how many temporaries the function emits, which shifts every subsequent temporary number. The per-cell census keys on the variable NAME, so a pure renumbering registers as one resolved plus one new.",
+      "to": 1
     }
   ],
   "fixture_lane_totals": {
@@ -2291,6 +2301,26 @@
       "functions_with_violations": 0,
       "violations": 0
     },
+    "202_bit_scan_and_count:clang:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "202_bit_scan_and_count:clang:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "202_bit_scan_and_count:gcc:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "202_bit_scan_and_count:gcc:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
     "20_graph_bfs:clang:O0": {
       "functions_emitted": 11,
       "functions_with_violations": 0,
@@ -3894,22 +3924,22 @@
   },
   "lane_totals": {
     "clang:O0": {
-      "functions_emitted": 2675,
+      "functions_emitted": 2695,
       "functions_with_violations": 32,
       "violations": 113
     },
     "clang:O2": {
-      "functions_emitted": 2549,
+      "functions_emitted": 2569,
       "functions_with_violations": 85,
       "violations": 240
     },
     "gcc:O0": {
-      "functions_emitted": 2584,
+      "functions_emitted": 2604,
       "functions_with_violations": 15,
       "violations": 94
     },
     "gcc:O2": {
-      "functions_emitted": 2450,
+      "functions_emitted": 2470,
       "functions_with_violations": 59,
       "violations": 114
     },
@@ -5402,7 +5432,7 @@
     "165_bitstream_reader:clang:O0:bit165_roundtrip": [],
     "165_bitstream_reader:clang:O0:bit165_write_frame": [],
     "165_bitstream_reader:clang:O2:bit165_cross_check": [
-      "var79 is read but never defined"
+      "var81 is read but never defined"
     ],
     "165_bitstream_reader:clang:O2:bit165_read_bits": [],
     "165_bitstream_reader:clang:O2:bit165_read_sequence": [],
@@ -6305,6 +6335,54 @@
     "201_float_bit_stores:gcc:O2:f201_scalar_control": [],
     "201_float_bit_stores:gcc:O2:f201_store_through_pointer": [],
     "201_float_bit_stores:gcc:O2:f201_word_to_value": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_assign_bit": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_clear_bit": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_clz32": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_clz64": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_count_and_index": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_ctz32": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_ctz64": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_msb_first_bit": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_reflect_in_byte": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_scatter_bits": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_set_bit": [],
+    "202_bit_scan_and_count:clang:O0:bsc202_toggle_bit": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_assign_bit": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_clear_bit": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_clz32": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_clz64": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_count_and_index": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_ctz32": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_ctz64": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_msb_first_bit": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_reflect_in_byte": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_scatter_bits": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_set_bit": [],
+    "202_bit_scan_and_count:clang:O2:bsc202_toggle_bit": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_assign_bit": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_clear_bit": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_clz32": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_clz64": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_count_and_index": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_ctz32": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_ctz64": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_msb_first_bit": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_reflect_in_byte": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_scatter_bits": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_set_bit": [],
+    "202_bit_scan_and_count:gcc:O0:bsc202_toggle_bit": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_assign_bit": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_clear_bit": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_clz32": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_clz64": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_count_and_index": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_ctz32": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_ctz64": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_msb_first_bit": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_reflect_in_byte": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_scatter_bits": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_set_bit": [],
+    "202_bit_scan_and_count:gcc:O2:bsc202_toggle_bit": [],
     "20_graph_bfs:clang:O0:graph_bfs": [],
     "20_graph_bfs:clang:O2:graph_bfs": [],
     "20_graph_bfs:gcc:O0:graph_bfs": [],
