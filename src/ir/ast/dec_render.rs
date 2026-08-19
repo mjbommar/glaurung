@@ -1287,6 +1287,92 @@ fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
     }
 }
 
+/// The width of the C floating type a value RENDERS AS, when it renders as one.
+///
+/// The mirror of the question [`write_float_expr_dec`] answers. That direction
+/// is asked "these are bits, how do I spell them as a `float`"; this one is
+/// asked "this spelling IS a `float`, how do I spell its bits". Only a value
+/// whose printed C type is genuinely floating point answers, because the
+/// reinterpretation this gates is not free to apply to a value that was never
+/// a `float`.
+///
+/// Four spellings qualify, and the boundary between them and everything else
+/// is the reason this can be a rule rather than a heuristic:
+///
+///  * a register the type recovery declared `float`/`double` — the machine
+///    moved it with `movss`/`movsd`/`vmov`, which copies bits;
+///  * a recovered conversion whose stated result type is floating, which
+///    `write_expr_dec` prints as `(float)(…)`/`(double)(…)`;
+///  * a floating literal; and
+///  * floating arithmetic over any of those.
+///
+/// A genuine `cvttss2si` is `NumericConvert { to: SignedInt }` and prints as
+/// `(int)(…)`, so it answers `None` and keeps its arithmetic meaning. That is
+/// what stops the reinterpretation from swallowing the conversions C really
+/// does perform, and it is a structural distinction rather than a guess: the
+/// lifter states the conversion's result type, and this reads it.
+///
+/// The recursion is deliberately NOT extended to `Expr::Select`, whose two arms
+/// can disagree, or to a `Deref`, which has no type of its own beyond its
+/// access width — neither has an instance in the fixture corpus and neither is
+/// verified here.
+fn float_rendered_width(expr: &Expr) -> Option<u8> {
+    match expr {
+        Expr::Reg(register @ VReg::Phys(_)) => match declared_reg_ctype(register).as_str() {
+            "float" => Some(4),
+            "double" => Some(8),
+            _ => None,
+        },
+        Expr::NumericConvert {
+            to: ScalarType::Float(width),
+            ..
+        } => Some(*width),
+        Expr::FloatConst { width, .. } => Some(*width),
+        // Floating ARITHMETIC, which `write_float_expr_dec` already renders
+        // recursively — this only decides whether to ask it. One floating
+        // operand is enough, because C's usual arithmetic conversions make the
+        // whole expression floating (C23 6.3.1.8) and the machine agreed: the
+        // instruction was `divss`, not `div`. Bounded to the four operators
+        // that HAVE a floating form, so a bitwise or shift operand (which C
+        // gives no floating operand at all) is not swept in here.
+        Expr::Bin { op, lhs, rhs }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+        {
+            float_rendered_width(lhs).or_else(|| float_rendered_width(rhs))
+        }
+        Expr::Un { op: UnOp::Neg, src } => float_rendered_width(src),
+        _ => None,
+    }
+}
+
+/// Render a floating value's BIT PATTERN, for a destination that is declared
+/// an integer and cannot be respelled.
+///
+/// `unsigned int bits = value;` where `value` is a `float` is a C *value*
+/// conversion — C23 6.3.1.4 truncates toward zero — so `1.5f` was written as
+/// `1`, not `0x3FC00000`. The machine's `movss %xmm0, -0x14(%rbp)` is a bit
+/// copy, and the C spelling for that is the same C99 union
+/// [`write_float_expr_dec`] already uses for the other direction, read from
+/// the member that was not written. `-fno-strict-aliasing` is not required:
+/// reading a different member of a union whose value was set through another
+/// member is what C23 6.5.3.4 footnote 106 defines, and it is the pun both GCC
+/// and Clang document as supported.
+///
+/// The union's integer member is the width of the SOURCE, not of the
+/// destination. Four bytes of `float` reaching an eight-byte lvalue is a
+/// partial register write whose upper half the instruction never defined; the
+/// zero extension C then applies is the same assumption
+/// `write_float_expr_dec`'s fallback makes in the other direction.
+fn write_float_bits_expr_dec(expr: &Expr, width: u8, out: &mut String) {
+    if width == 4 {
+        out.push_str("((union { unsigned int bits; float value; }){ .value = ");
+    } else {
+        out.push_str("((union { unsigned long long bits; double value; }){ .value = ");
+    }
+    write_float_expr_dec(expr, width, out);
+    out.push_str(" }).bits");
+}
+
 /// Render one argument against the exact parameter type consumed by this call.
 ///
 /// C validates a conditional expression's two arms before applying an outer
@@ -1709,6 +1795,27 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     if matches!(destination_type, "float" | "double") {
         write_float_expr_dec(src, if destination_type == "float" { 4 } else { 8 }, out);
         return;
+    }
+
+    // ...and the mirror of it, which did not exist. This function picks the
+    // conversion from the DESTINATION type alone, so an integer-declared
+    // destination fed by a value that renders as a `float` got C's arithmetic
+    // conversion — a truncation toward zero — where the machine had done a bit
+    // copy. GCC's `-O0` `memcpy(&bits, &value, 4)` is `movss %xmm0, -0x14(%rbp)`
+    // then `mov -0x14(%rbp), %eax`, and rendering that as `bits = value;` wrote
+    // `1` for `1.5f` (`174:*:O0:fp174_float_bits`, whose four callers are all
+    // `fail`; `172:gcc:O0:double_precision_horner` is the `double` form).
+    //
+    // `_Bool` is excluded because C's conversion to it is a TEST against zero
+    // (C23 6.3.1.2), which is meaningful on the floating value itself and is
+    // what the arm below spells; punning first would test the bit pattern, and
+    // `-0.0` would read as `true`. Pointers are excluded because a float has no
+    // address semantics to preserve and the pointer arms below own that case.
+    if !is_bool_ctype(destination_type) && !destination_type.ends_with('*') {
+        if let Some(width) = float_rendered_width(src) {
+            write_float_bits_expr_dec(src, width, out);
+            return;
+        }
     }
 
     if is_bool_ctype(destination_type)

@@ -29,15 +29,20 @@
  *                                                  back in `rax` even though
  *                                                  it holds a `double`. Nothing
  *                                                  in the corpus returns a
- *                                                  union at all.
+ *                                                  union at all, and until
+ *                                                  2026-08-18 the DWARF reader
+ *                                                  could not describe one
+ *                                                  either.
  *   struct {int32_t v[2];}        8B   INTEGER  -> rax, but the member is an
- *                                                  ARRAY. `describe_struct` in
- *                                                  `src/debug/dwarf_signatures.rs`
- *                                                  declines array members, so
- *                                                  this is also the case where
- *                                                  the harness must fall back
- *                                                  to the wrapper rather than
- *                                                  marshalling the aggregate.
+ *                                                  ARRAY, which has an extent
+ *                                                  and not just an offset.
+ *                                                  `dwarf_signatures.rs` used
+ *                                                  to decline array members
+ *                                                  outright; since 2026-08-18
+ *                                                  it describes them, so this
+ *                                                  helper is marshalled rather
+ *                                                  than reached only through
+ *                                                  its wrapper.
  *   struct {int32_t a..e;}       20B   MEMORY, and NOT a multiple of eight —
  *                                                  195's memory case is exactly
  *                                                  32B, so the tail-padding

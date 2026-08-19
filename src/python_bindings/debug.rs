@@ -274,8 +274,23 @@ fn _signature_type_to_dict<'py>(
             byte_size,
             fields,
             name,
+        }
+        | T::Union {
+            byte_size,
+            fields,
+            name,
         } => {
-            d.set_item("k", "struct")?;
+            // The KIND is what tells the harness whether the members are laid
+            // out in sequence or share one storage; everything else about the
+            // two is identical, which is why they share this arm.
+            d.set_item(
+                "k",
+                if matches!(ty, T::Union { .. }) {
+                    "union"
+                } else {
+                    "struct"
+                },
+            )?;
             d.set_item("w", *byte_size)?;
             // Emitted only when present, matching the reader this replaces: a
             // by-value aggregate has no `name` key at all there.
@@ -291,6 +306,11 @@ fn _signature_type_to_dict<'py>(
                 items.append(entry)?;
             }
             d.set_item("fields", items)?;
+        }
+        T::Array { element, count } => {
+            d.set_item("k", "array")?;
+            d.set_item("n", *count)?;
+            d.set_item("e", _signature_type_to_dict(py, element)?)?;
         }
     }
     Ok(d)

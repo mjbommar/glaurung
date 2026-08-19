@@ -2459,11 +2459,11 @@
     "widen_long_to_double": "pass"
   },
   "174_float_compare_classify:clang:O0": {
-    "absolute_binary32": "fail",
-    "classify_binary32": "fail",
+    "absolute_binary32": "pass",
+    "classify_binary32": "pass",
     "negate_binary32": "fail",
     "ordered_compare_binary32": "pass",
-    "sign_bit_of_binary32": "fail",
+    "sign_bit_of_binary32": "pass",
     "unordered_compare_flags": "pass",
     "zero_sign_from_product": "fail"
   },
@@ -2478,10 +2478,10 @@
   },
   "174_float_compare_classify:gcc:O0": {
     "absolute_binary32": "fail",
-    "classify_binary32": "fail",
+    "classify_binary32": "pass",
     "negate_binary32": "fail",
     "ordered_compare_binary32": "pass",
-    "sign_bit_of_binary32": "fail",
+    "sign_bit_of_binary32": "pass",
     "unordered_compare_flags": "fail",
     "zero_sign_from_product": "fail"
   },
@@ -2504,11 +2504,11 @@
   },
   "175_float_matrix_kernel:clang:O2": {
     "dot_product_f32": "fail",
-    "dot_product_f64": "fail",
+    "dot_product_f64": "pass",
     "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
     "scale_series_f32": "fail",
-    "sum_of_squares_f32": "fail"
+    "sum_of_squares_f32": "pass"
   },
   "175_float_matrix_kernel:gcc:O0": {
     "dot_product_f32": "fail",
@@ -2523,7 +2523,7 @@
     "dot_product_f64": "fail",
     "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
-    "scale_series_f32": "fail",
+    "scale_series_f32": "pass",
     "sum_of_squares_f32": "pass"
   },
   "17_hash_table:clang:O0": {
@@ -2552,8 +2552,8 @@
   "181_compensated_summation:clang:O2": {
     "compensation_of_step": "pass",
     "difference_of_products": "pass",
-    "kahan_sum_f64": "fail",
-    "naive_sum_f64": "fail",
+    "kahan_sum_f64": "pass",
+    "naive_sum_f64": "pass",
     "summation_disagrees": "fail"
   },
   "181_compensated_summation:gcc:O0": {
@@ -2566,8 +2566,8 @@
   "181_compensated_summation:gcc:O2": {
     "compensation_of_step": "pass",
     "difference_of_products": "pass",
-    "kahan_sum_f64": "fail",
-    "naive_sum_f64": "fail",
+    "kahan_sum_f64": "pass",
+    "naive_sum_f64": "pass",
     "summation_disagrees": "pass"
   },
   "182_cold_and_part_splits:clang:O0": {
@@ -2974,7 +2974,7 @@
     "bv195_big_roundtrip": "fail",
     "bv195_consume_pair": "pass",
     "bv195_make_big": "structural",
-    "bv195_make_mixed": "structural",
+    "bv195_make_mixed": "fail",
     "bv195_make_pair": "pass",
     "bv195_make_quad": "pass",
     "bv195_mixed_roundtrip": "pass",
@@ -2986,7 +2986,7 @@
     "bv195_big_roundtrip": "fail",
     "bv195_consume_pair": "pass",
     "bv195_make_big": "structural",
-    "bv195_make_mixed": "structural",
+    "bv195_make_mixed": "fail",
     "bv195_make_pair": "pass",
     "bv195_make_quad": "pass",
     "bv195_mixed_roundtrip": "pass",
@@ -2998,7 +2998,7 @@
     "bv195_big_roundtrip": "fail",
     "bv195_consume_pair": "pass",
     "bv195_make_big": "structural",
-    "bv195_make_mixed": "structural",
+    "bv195_make_mixed": "fail",
     "bv195_make_pair": "pass",
     "bv195_make_quad": "pass",
     "bv195_mixed_roundtrip": "pass",
@@ -3010,7 +3010,7 @@
     "bv195_big_roundtrip": "fail",
     "bv195_consume_pair": "pass",
     "bv195_make_big": "structural",
-    "bv195_make_mixed": "structural",
+    "bv195_make_mixed": "fail",
     "bv195_make_pair": "pass",
     "bv195_make_quad": "pass",
     "bv195_mixed_roundtrip": "pass",
@@ -3044,11 +3044,11 @@
   },
   "197_homogeneous_float_aggregates:clang:O0": {
     "hfa197_consume_pair2d": "structural",
-    "hfa197_make_pair2d": "structural",
-    "hfa197_make_quad4f": "structural",
+    "hfa197_make_pair2d": "fail",
+    "hfa197_make_quad4f": "fail",
     "hfa197_make_scalar": "pass",
-    "hfa197_make_tagged": "structural",
-    "hfa197_make_trio3f": "structural",
+    "hfa197_make_tagged": "pass",
+    "hfa197_make_trio3f": "fail",
     "hfa197_pair2d_roundtrip": "pass",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
@@ -3057,11 +3057,11 @@
   },
   "197_homogeneous_float_aggregates:clang:O2": {
     "hfa197_consume_pair2d": "structural",
-    "hfa197_make_pair2d": "structural",
-    "hfa197_make_quad4f": "structural",
+    "hfa197_make_pair2d": "fail",
+    "hfa197_make_quad4f": "fail",
     "hfa197_make_scalar": "pass",
-    "hfa197_make_tagged": "structural",
-    "hfa197_make_trio3f": "structural",
+    "hfa197_make_tagged": "fail",
+    "hfa197_make_trio3f": "fail",
     "hfa197_pair2d_roundtrip": "fail",
     "hfa197_quad4f_roundtrip": "fail",
     "hfa197_scalar_control": "pass",
@@ -3070,11 +3070,11 @@
   },
   "197_homogeneous_float_aggregates:gcc:O0": {
     "hfa197_consume_pair2d": "structural",
-    "hfa197_make_pair2d": "structural",
-    "hfa197_make_quad4f": "structural",
+    "hfa197_make_pair2d": "fail",
+    "hfa197_make_quad4f": "fail",
     "hfa197_make_scalar": "pass",
-    "hfa197_make_tagged": "structural",
-    "hfa197_make_trio3f": "structural",
+    "hfa197_make_tagged": "pass",
+    "hfa197_make_trio3f": "fail",
     "hfa197_pair2d_roundtrip": "pass",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
@@ -3083,11 +3083,11 @@
   },
   "197_homogeneous_float_aggregates:gcc:O2": {
     "hfa197_consume_pair2d": "structural",
-    "hfa197_make_pair2d": "structural",
-    "hfa197_make_quad4f": "structural",
+    "hfa197_make_pair2d": "fail",
+    "hfa197_make_quad4f": "fail",
     "hfa197_make_scalar": "pass",
-    "hfa197_make_tagged": "structural",
-    "hfa197_make_trio3f": "structural",
+    "hfa197_make_tagged": "fail",
+    "hfa197_make_trio3f": "fail",
     "hfa197_pair2d_roundtrip": "fail",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
@@ -3100,8 +3100,8 @@
     "agr198_bytes3_roundtrip": "pass",
     "agr198_five_roundtrip": "fail",
     "agr198_i64_control": "pass",
-    "agr198_make_arr2": "structural",
-    "agr198_make_bits": "structural",
+    "agr198_make_arr2": "pass",
+    "agr198_make_bits": "pass",
     "agr198_make_bytes3": "pass",
     "agr198_make_five": "structural",
     "agr198_make_i64": "pass",
@@ -3117,8 +3117,8 @@
     "agr198_bytes3_roundtrip": "pass",
     "agr198_five_roundtrip": "fail",
     "agr198_i64_control": "pass",
-    "agr198_make_arr2": "structural",
-    "agr198_make_bits": "structural",
+    "agr198_make_arr2": "pass",
+    "agr198_make_bits": "pass",
     "agr198_make_bytes3": "pass",
     "agr198_make_five": "structural",
     "agr198_make_i64": "pass",
@@ -3134,8 +3134,8 @@
     "agr198_bytes3_roundtrip": "pass",
     "agr198_five_roundtrip": "fail",
     "agr198_i64_control": "pass",
-    "agr198_make_arr2": "structural",
-    "agr198_make_bits": "structural",
+    "agr198_make_arr2": "pass",
+    "agr198_make_bits": "pass",
     "agr198_make_bytes3": "pass",
     "agr198_make_five": "structural",
     "agr198_make_i64": "pass",
@@ -3151,8 +3151,8 @@
     "agr198_bytes3_roundtrip": "pass",
     "agr198_five_roundtrip": "fail",
     "agr198_i64_control": "pass",
-    "agr198_make_arr2": "structural",
-    "agr198_make_bits": "structural",
+    "agr198_make_arr2": "pass",
+    "agr198_make_bits": "pass",
     "agr198_make_bytes3": "pass",
     "agr198_make_five": "structural",
     "agr198_make_i64": "pass",
@@ -3209,6 +3209,46 @@
   "19_disjoint_set:gcc:O2": {
     "dsu_find": "pass",
     "dsu_union": "pass"
+  },
+  "201_float_bit_stores:clang:O0": {
+    "f201_f32_single_bits": "pass",
+    "f201_f32_slot_bits": "pass",
+    "f201_f32_slot_values": "pass",
+    "f201_f64_copy_then_convert": "pass",
+    "f201_f64_slot_bits": "pass",
+    "f201_scalar_control": "pass",
+    "f201_store_through_pointer": "pass",
+    "f201_word_to_value": "fail"
+  },
+  "201_float_bit_stores:clang:O2": {
+    "f201_f32_single_bits": "fail",
+    "f201_f32_slot_bits": "fail",
+    "f201_f32_slot_values": "pass",
+    "f201_f64_copy_then_convert": "pass",
+    "f201_f64_slot_bits": "fail",
+    "f201_scalar_control": "pass",
+    "f201_store_through_pointer": "fail",
+    "f201_word_to_value": "fail"
+  },
+  "201_float_bit_stores:gcc:O0": {
+    "f201_f32_single_bits": "pass",
+    "f201_f32_slot_bits": "pass",
+    "f201_f32_slot_values": "pass",
+    "f201_f64_copy_then_convert": "pass",
+    "f201_f64_slot_bits": "pass",
+    "f201_scalar_control": "pass",
+    "f201_store_through_pointer": "pass",
+    "f201_word_to_value": "fail"
+  },
+  "201_float_bit_stores:gcc:O2": {
+    "f201_f32_single_bits": "fail",
+    "f201_f32_slot_bits": "fail",
+    "f201_f32_slot_values": "fail",
+    "f201_f64_copy_then_convert": "pass",
+    "f201_f64_slot_bits": "fail",
+    "f201_scalar_control": "pass",
+    "f201_store_through_pointer": "fail",
+    "f201_word_to_value": "fail"
   },
   "20_graph_bfs:clang:O0": {
     "graph_bfs": "pass"

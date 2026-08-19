@@ -259,6 +259,12 @@ _STR_DESC = {
 }
 
 
+#: Descriptor kinds whose value is a LIST of member values. A union is here with
+#: the struct because the two differ only in where the members sit, and every
+#: generator, materializer and snapshot below cares about the member LIST.
+_AGGREGATE_KINDS = ("struct", "union")
+
+
 def _as_desc(x):
     return dict(_STR_DESC[x]) if isinstance(x, str) else x
 
@@ -1552,16 +1558,37 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         pointee = _pointee_desc(d)
         return forced_u8 or (pointee["k"] == "int" and pointee["w"] == 1)
 
+    def array_elements(v, d):
+        """One reproducible seed into every element of an array member."""
+        return [
+            aggregate(v + index * 5, d["e"])
+            if d["e"]["k"] in _AGGREGATE_KINDS
+            else array_elements(v + index * 5, d["e"])
+            if d["e"]["k"] == "array"
+            else _round_to_float_width(float(v + index * 5), d["e"]["w"])
+            if d["e"]["k"] == "float"
+            else _wrap(v + index * 5, d["e"]["w"], d["e"]["s"])
+            for index in range(d["n"])
+        ]
+
     def aggregate(v, d):
         """Turn one reproducible scalar seed into every scalar aggregate field."""
         values = []
         for field_index, field in enumerate(d["fields"]):
             field_type = field["t"]
             field_seed = v if field_index == 0 else -v + field_index * 3
-            if field_type["k"] == "struct":
+            if field_type["k"] in _AGGREGATE_KINDS:
                 values.append(aggregate(field_seed, field_type))
+            elif field_type["k"] == "array":
+                values.append(array_elements(field_seed, field_type))
             elif field_type["k"] == "self_ptr":
                 values.append(-1)
+            elif field_type["k"] == "float":
+                # Rounded to the member's own format for the same reason a
+                # floating-point PARAMETER is (`_round_to_float_width`): the
+                # recorded vector must be the value actually stored, or a
+                # reported counter-example is not reproducible from it.
+                values.append(_round_to_float_width(float(field_seed), field_type["w"]))
             else:
                 values.append(_wrap(field_seed, field_type["w"], field_type["s"]))
         return values
@@ -1603,8 +1630,10 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             # Deterministic cycle through the declared values, seed-independent.
             allowed = arg_values[i]
             return _wrap(allowed[abs(v) % len(allowed)], d["w"], d["s"])
-        if d["k"] == "struct":
+        if d["k"] in _AGGREGATE_KINDS:
             return aggregate(v, d)
+        if d["k"] == "array":
+            return array_elements(v, d)
         if d["k"] == "float":
             # A float cannot be a length: clamping it would hand the callee a
             # fractional bound, and silently rounding one would invent an index
@@ -1737,8 +1766,10 @@ def _pad_ptr(ev, params, ptr_len):
 
 
 def _zero_value(d):
-    if d["k"] == "struct":
+    if d["k"] in _AGGREGATE_KINDS:
         return [_zero_value(field["t"]) for field in d["fields"]]
+    if d["k"] == "array":
+        return [_zero_value(d["e"]) for _ in range(d["n"])]
     if d["k"] == "self_ptr":
         return -1
     # `+0.0`, not the int 0: the padding a manifest vector receives must be a value
@@ -1805,17 +1836,20 @@ def _pointee_ctype(d, forced_u8):
 _STRUCT_CTYPES: dict[str, type[ctypes.Structure]] = {}
 
 
-def _struct_return_is_comparable(d):
-    """Whether an aggregate return can be marshalled back through ctypes.
+def _struct_return_declined(d):
+    """Why an aggregate return cannot be marshalled back, or `None`.
 
-    `_struct_ctype` needs every member's offset and a size; a struct whose
-    fields DWARF did not describe would build an empty layout and compare equal
-    to anything, which is worse than declining it.
+    Two distinct reasons, reported apart because they say different things
+    about the product. A size past the register cutoff is a HARNESS limit that
+    the ABI itself explains; a layout the reader could not state is a gap in
+    what we recover, and reporting both as "not describable from DWARF" hid
+    which of the two a cell was in. `bv195_make_big` read as the second for as
+    long as its array member was undescribable, and was really the first.
     """
     fields = d.get("fields")
     width = d.get("w")
     if not fields or not width:
-        return False
+        return "aggregate return — layout not describable from DWARF"
     # MEMORY-class returns (over two eightbytes) go through a hidden pointer the
     # caller allocates. `_struct_ctype` builds a `_pack_ = 1` layout, and libffi
     # marshals that differently from the ABI's own hidden-pointer contract --
@@ -1824,19 +1858,29 @@ def _struct_return_is_comparable(d):
     # libffi and the ABI agree about, so they are the ones we execute; the
     # larger classes stay `structural` and are still covered by their wrappers.
     if width > 16:
-        return False
+        return f"aggregate return of {width} bytes — past the register cutoff"
     try:
         _struct_ctype(d)
-    except Exception:
-        return False
-    return True
+    except Exception as error:
+        return f"aggregate return — layout not describable from DWARF ({error})"
+    return None
 
 
 def _struct_ctype(d):
-    """Build an exact packed ctypes layout from DWARF offsets and size."""
+    """Build an exact packed ctypes layout from DWARF offsets and size.
+
+    A UNION takes `ctypes.Union` and no padding at all: every member sits at
+    offset zero by definition, so the offset walk below would emit a `_pad`
+    between members that do not follow one another. libffi returns a union by
+    value through the platform's own class-merge rule (SSE meeting INTEGER
+    yields INTEGER), which is exactly what `198_aggregate_return_edges`'s
+    `agr198_make_bits` exists to check, so the layout is all this has to state.
+    """
     key = json.dumps(d, sort_keys=True)
     if key in _STRUCT_CTYPES:
         return _STRUCT_CTYPES[key]
+    if d["k"] == "union":
+        return _union_ctype(d, key)
     cls = type(
         f"DwarfStruct_{len(_STRUCT_CTYPES)}",
         (ctypes.Structure,),
@@ -1877,19 +1921,61 @@ def _struct_ctype(d):
     return cls
 
 
+def _union_ctype(d, key):
+    """Build a `ctypes.Union` from a descriptor whose members all sit at zero."""
+    cls = type(
+        f"DwarfUnion_{len(_STRUCT_CTYPES)}",
+        (ctypes.Union,),
+        {"_pack_": 1},
+    )
+    _STRUCT_CTYPES[key] = cls
+    try:
+        fields = []
+        for index, field in enumerate(d["fields"]):
+            if field["off"] != 0:
+                raise ValueError(f"union member at non-zero offset {field['off']}")
+            field_type = field["t"]
+            ctype = (
+                ctypes.POINTER(cls)
+                if field_type["k"] == "self_ptr"
+                else _value_ctype(field_type)
+            )
+            if ctypes.sizeof(ctype) > d["w"]:
+                raise ValueError("DWARF union member exceeds declared size")
+            fields.append((f"f{index}", ctype))
+        cls._fields_ = fields
+    except Exception:
+        _STRUCT_CTYPES.pop(key, None)
+        raise
+    if ctypes.sizeof(cls) != d["w"]:
+        raise ValueError(
+            f"ctypes union size {ctypes.sizeof(cls)} != DWARF size {d['w']}"
+        )
+    return cls
+
+
 def _value_ctype(d):
     if d["k"] in ("int", "float"):
         return _scalar_ctype(d)
-    if d["k"] == "struct":
+    if d["k"] in _AGGREGATE_KINDS:
         return _struct_ctype(d)
+    if d["k"] == "array":
+        return _value_ctype(d["e"]) * d["n"]
     raise ValueError(f"unsupported ctypes value descriptor {d['k']}")
 
 
 def _materialize_value(d, value):
-    if d["k"] != "struct":
+    if d["k"] == "array":
+        ctype = _value_ctype(d)
+        return ctype(*[_materialize_value(d["e"], element) for element in value])
+    if d["k"] not in _AGGREGATE_KINDS:
         return value
     ctype = _struct_ctype(d)
     obj = ctype()
+    # Members are written in DECLARATION order. For a struct that is simply all
+    # of them; for a union they share one storage and the last write is what the
+    # object holds — which is exactly what the same sequence of assignments does
+    # in C, and is identical on both sides of the differential.
     for index, (field, field_value) in enumerate(zip(d["fields"], value)):
         if field["t"]["k"] != "self_ptr":
             setattr(obj, f"f{index}", _materialize_value(field["t"], field_value))
@@ -1903,8 +1989,13 @@ def _snapshot_value(d, value):
     # only ever compared and never arithmetic, so the pattern is the right value.
     if d["k"] == "float":
         return float_bits(d["w"], value)
-    if d["k"] != "struct":
+    if d["k"] == "array":
+        return [_snapshot_value(d["e"], element) for element in value]
+    if d["k"] not in _AGGREGATE_KINDS:
         return int(value)
+    # Every member, including a union's — each one is a different view of the
+    # SAME bytes, so recording all of them is how one comparison covers the
+    # whole storage without this harness having to say which member was live.
     return [
         _snapshot_value(field["t"], getattr(value, f"f{index}"))
         for index, field in enumerate(d["fields"])
@@ -1990,7 +2081,7 @@ def _ctypes_fn(lib, sig, forced_u8):
         fn.restype = None
     elif ret["k"] == "ptr":
         fn.restype = ctypes.POINTER(_pointee_ctype(ret, forced_u8))
-    elif ret["k"] == "struct":
+    elif ret["k"] in _AGGREGATE_KINDS:
         # An aggregate return IS comparable: `_struct_ctype` already builds the
         # exact packed layout from DWARF offsets, and libffi applies the
         # platform's own return-class rules to it -- which is precisely the
@@ -2132,7 +2223,7 @@ def worker(spec_path: str) -> int:
             return 0
         # Scalar restype is the exact DWARF width/signedness, so this is a full-
         # width comparison (including high halves and sign extension).
-        elif ret["k"] == "struct":
+        elif ret["k"] in _AGGREGATE_KINDS:
             # Compare the aggregate's bytes, not the ctypes objects -- two
             # Structure instances never compare equal, and the padding a
             # non-multiple-of-8 return leaves unspecified must not be read.
@@ -2191,13 +2282,32 @@ def exec_class(sig, fixture, lane: str | None = None) -> tuple[str, str]:
     has_ptr = any(_as_desc(p)["k"] == "ptr" for p in sig["params"])
     if ret["k"] == "ptr" and "pointer_return_arg" not in ov:
         return "structural", "pointer return — addresses not comparable"
-    if ret["k"] == "struct" and not _struct_return_is_comparable(ret):
-        return "structural", "aggregate return — layout not describable from DWARF"
+    if ret["k"] in _AGGREGATE_KINDS:
+        declined = _struct_return_declined(ret)
+        if declined is not None:
+            return "structural", declined
     if any(
-        _as_desc(param)["k"] == "struct" and _as_desc(param)["w"] > 8
+        _as_desc(param)["k"] in _AGGREGATE_KINDS and _as_desc(param)["w"] > 8
         for param in sig["params"]
     ):
         return "structural", "multi-eightbyte aggregate parameter — unsupported ABI"
+    # An ARRAY is not a C value type — a parameter or result spelled as one
+    # decays or is illegal — so a signature claiming a bare array is a shape the
+    # reader should never have produced. Refuse rather than marshal it.
+    if ret["k"] == "array" or any(
+        _as_desc(param)["k"] == "array" for param in sig["params"]
+    ):
+        return "structural", "array parameter or result — not a C value type"
+    # A pointer whose pointee is an aggregate is materialised as a caller-owned
+    # buffer, and only the STRUCT case has a vector generator (`buf_det` /
+    # `buf_rng`). A union or array pointee would fall through to the integer
+    # buffer path and be filled with values of the wrong type.
+    if any(
+        _as_desc(param)["k"] == "ptr"
+        and _pointee_desc(_as_desc(param))["k"] in ("union", "array")
+        for param in sig["params"]
+    ):
+        return "structural", "pointer to a union or array — no buffer generator"
     if ret["k"] == "void" and not has_ptr:
         return "structural", "void return, no buffer — not execution-differential"
     return "exec", ""

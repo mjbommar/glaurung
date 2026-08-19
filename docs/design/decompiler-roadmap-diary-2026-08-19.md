@@ -424,3 +424,149 @@ With this family cleared, the census has a different shape: `syscall` (310),
 largest tractable entry, and they were on nobody's list.** They write `rdi`,
 `rsi` and memory — and `rcx` under `rep` — so a loop built on `rep movsq` leaves
 both pointers holding their pre-loop values in the recovered C.
+
+## Entry 87 — a bare `except` is a defect-hiding machine, and three were hiding behind one
+
+Making the type checker usable (Entry 84) turned up three live failures, none of
+which could ever have failed a test, all three for the same reason.
+
+`llm/agents/iterative.py:275` called `kb.add_node(id=…, type=…, properties=…)`
+against `def add_node(self, node: Node)`. Driving the real path with a real
+`KnowledgeBase`:
+
+```
+RAISED: TypeError KnowledgeBase.add_node() got an unexpected keyword argument 'id'
+kb node count: 0
+```
+
+Line 141 is `except Exception as e: state.failed_attempts.append(str(e))`, so
+**every low-confidence refinement iteration died at its feedback step and
+recorded the crash as a "failed attempt."** The loop looked like it ran. The same
+defect sat at a second site I had not found, `iterative_refinement.py:546`, under
+`except Exception: pass  # Soft fail on feedback injection`.
+
+`symbol_address_map` was reachable from neither `glaurung` nor
+`glaurung.symbols` — `src/lib.rs:89` registers it on the root `_native` module,
+and the `symbols` submodule is a separate `PyModule::new` that never sees it.
+Seven call sites, three different spellings, four of them broken, every one
+inside `except Exception: pairs = []`. On `hello-gcc-O0`, ground truth 125 pairs:
+
+```
+map_symbol_addresses                     0 -> 125 symbols
+xref_db.import_data_symbols_from_binary  0 -> 125 labels
+```
+
+And fixing it un-masked a second bug it would otherwise have caused:
+`import_data_symbols_from_binary` is the only entry point in that module that
+never calls `_ensure_schema`, and it got away with it because the
+`AttributeError` returned 0 before reaching any SQL. Working lookup plus a fresh
+KB gives `sqlite3.OperationalError: no such table: function_names`. **A silent
+no-op was concealing a crash, and repairing the silence is what exposed it.**
+
+Fifty-nine names in `triage.py` were referenced inside
+`try: … except AttributeError: pass`. **Fifty-two have no Rust definition in any
+commit** — `git log --all -S ElfHeaderFlags -- src/` returns zero. They were
+never removed; they were never written. The other seven exist and are registered
+on no Python module.
+
+Three defects, one sentence: **a bare `except` turned a hard failure into
+silence, and the type checker was the only thing that could see it.**
+
+## Entry 88 — the ratchet, and what it was hiding
+
+Entry 85 recorded that `fd0b6455` raised `rustc:O0` from 7,525 to 7,535 with
+nothing said. Two corrections came out of chasing it.
+
+**It is +16, not +10.** `rustc:O2` moved 4,451 -> 4,457 as well, and I had looked
+at one lane and stopped.
+
+**And it is not sixteen defects. It is ONE defect, TWICE, in ONE function,
+replicated across eight statically-linked copies of the Rust standard library.**
+`std::backtrace_rs::symbolize::gimli::resolve` goes 168 -> 170 in every lane that
+emits it — five at O0, three at O2. 5×2 = +10, 3×2 = +6. A second function shows
+up in a naive diff and nets zero: only a temporary's name moved, `var19` ->
+`var21`, because the new lifting emits more temporaries.
+
+The old render was right and the new one is wrong:
+
+```c
+// before -- an EXTRACT from the enclosing slot the machine actually writes
+local_798 = ((unsigned long)((unsigned int)(((unsigned long)(local_bb8) >> 8))) | …);
+// after -- a slot of its own, with no writer anywhere
+// glaurung-verify: local_bb7 is read but never defined
+local_798 = ((unsigned long)((unsigned int)(local_bb7)) | …);
+```
+
+`local_bb8 >> 8` is exactly the bytes at `-0xbb7`. `grep -c bb7` is 0 on the old
+render and 4 on the new, and `local_bb7` never appears on a left-hand side while
+all its neighbours do.
+
+**The trade is sound and I am not fixing it first.** Sixteen undefined reads in
+one Rust std backtrace-symbolizer body that already had 168, is not a corpus
+contract, and is in no execution differential — against 24 execution cells that
+went `fail -> pass` on contracted functions. The gcc and clang lanes cost
+*nothing*: a full 764-lane census reproduces all four committed totals exactly.
+The entire price was paid in Rust std internals.
+
+The obvious fix is a trap. "If the resolved slot is never written, fall back to
+the extract form" needs to know whether a slot is written, and `SlotVal` records
+name, sizes and four flags — nothing about writes. That is a new analysis pass
+over store destinations, inside the code that just bought the 24 cells,
+validated only by an aggregate integer this whole exercise proves unreliable
+per-defect. A fixture producing a misaligned sub-word view over a wider spill
+comes first.
+
+The generator now refuses to raise a ceiling without a recorded reason. I
+mutation-tested it rather than trusting it, and got my own measurement wrong the
+first time — reading `tail`'s exit status instead of the generator's and
+reporting success for the refusing case. The generator's own status is 1.
+
+## Entry 89 — the corpus cannot see the bug, because every lane is built with `-g`
+
+Nine places decide whether to skip an exception region and they do not agree. One
+disagreement is unsound: `repair.rs:175` tests landing-pad ownership against a
+function's **walked** extent, while the FDE extent is used only as a stop bound.
+GCC and Clang park the landing-pad trampoline after the epilogue and inside the
+same FDE, so the test rejects exactly the bytes the pass exists to recover. It is
+circular — code with no normal predecessor is rejected because normal flow did
+not reach it.
+
+On this repository's own `136_cpp_exception_unwinding.cpp` at `g++ -O2` with no
+`-g`: three of five LSDA sites rejected, and the bytes `0x14d5..0x14e1`,
+`0x153b..0x1544`, `0x1567..0x1573` belonged to **no function at all**. The
+emitted pseudocode carried three `goto L_14d0;` and zero `L_14d0:` labels — C
+that will not compile. On libstdc++, 3,248 LSDA sites: **2,415 rejected (74%)
+before, 37 after**; landing pads attached 833 (26%) -> 3,204 (99%).
+
+**And the corpus can never catch it.** `-O0` attaches 5/5. `-O2 -g` attaches 5/5,
+because `apply_dwarf_overrides` hands the function the wide DWARF range. It fails
+only on optimised builds *without* debug info — and `fixture_harness.py:253`
+passes `-g` to every fixture compile, unconditionally.
+
+That is the more important finding. An entire class of defect — anything whose
+recovery depends on function extents when DWARF is absent — is structurally
+invisible to `tests/decompiler_fixtures/`, which is exactly the configuration
+real targets ship in. The cheapest useful answer is probably not a second `-g`
+axis across 200 fixtures, but stripping one existing lane post-link and diffing
+the recovered output against the `-g` version, because the *difference* is the
+signal: for a correct decompiler, debug info should improve **naming**, never
+**structure**.
+
+The sibling finding was also real, and link-order dependent as claimed.
+`merge_compiler_split_chunks` folded each child into its immediate parent, so for
+`foo <- foo.part.0 <- foo.part.0.cold` the leaf could be merged into a fragment
+the pass then deletes. Demonstrated with three real `gcc -O2` objects linked two
+ways:
+
+```
+... mid.o leaf.o     foo 14 blocks, 2 ranges   <- cold fragment gone
+... leaf.o mid.o     foo 17 blocks, 3 ranges
+```
+
+Same objects, same flags, only the link line differs; three basic blocks of
+executing code lost. Not hypothetical either — `libwebsockets.a` carries
+`lws_context_destroy`, `.part.0` and `.part.0.cold` simultaneously.
+
+Neither fix moves a single corpus cell, in either direction. That is the correct
+result and it is worth stating plainly: **a change that fixes a real defect and
+moves no cell is evidence about the corpus, not about the change.**

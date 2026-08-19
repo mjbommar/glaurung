@@ -153,6 +153,30 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   in pytest: `pytest.ini` deselects `-m decbench` by default, so no ordinary test
   run reaches the fork. `docs/design/decompiler-roadmap.md` Appendix A holds the
   metric/evaluation plan and is explicitly not a work queue.
+- **Run `tools/build_guard.py` before EVERY baseline regeneration.** A baseline
+  written against a stale `.so` records the old behaviour under the new commit,
+  and nothing downstream can tell. On 2026-08-19 a measurement sequence that
+  reverted source files to attribute a regression restored them **without
+  rebuilding**; the next `gen_defuse_baseline.py` run measured the reverted
+  binary, reported the committed numbers exactly, and declared two correctly
+  attributed `--accept-regression` entries STALE. The guard names it precisely
+  (`STALE: src/python_bindings/debug.rs is newer than the built extension`) --
+  it just has to be run. Any workflow that does `git stash` / `git checkout --`
+  on `src/` to measure a before-state MUST rebuild before the next measurement,
+  in both directions.
+- **`@o0` and `@o2` are HOST lanes only, so a code change can move cross-arch
+  cells invisibly.** On 2026-08-19 commit `d1365bdb` shipped with `baseline.json`,
+  `structural_baseline.json` and `defuse_baseline.json` refreshed and
+  `arch_baseline.json` NOT refreshed, because `dectest @o0 @o2` reported exactly
+  two improvements and both were host cells. Four further cells
+  (`144_inline_asm` at `i386:{O0,O2}` and `x86_64_gcc15:{O0,O2}`) had also gone
+  `fail -> pass` and were invisible to that command; a parallel agent found them
+  by running `--arch` on a pristine build of that same commit. This is NOT the
+  new-fixture case the bullet below covers — no fixture was added, and the
+  three host baselines were correctly refreshed. Any change to a lifter, the
+  renderer or ABI code needs `dectest --arch i386 --arch armv7 --arch aarch64
+  --arch x86_64_gcc15` before it is called measured, and `arch_baseline.json`
+  refreshed with the other three.
 - **Extend `tests/decompiler_fixtures/` when a shape has no lane.** A new numbered
   fixture plus a `manifest.py` contract is cheap and permanent; adding one requires
   refreshing **four** baselines: `baseline.json`, `structural_baseline.json`,

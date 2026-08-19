@@ -8,36 +8,3920 @@
     "libc": "ldd (Ubuntu GLIBC 2.35-0ubuntu3.13) 2.35",
     "mode": "docker"
   },
+  "accepted_regressions": [
+    {
+      "attributable_delta": 25,
+      "delta": 25,
+      "from": 7535,
+      "key": "rustc:O0",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "NOT a code change -- this is the first census over a CLEAN fixture build cache since the path remap landed in 5ceebc6d. 17 objects in tests/decompiler_fixtures/build/ dated 2026-08-12 predated that flag and still embedded the checkout path; the cache key does not include compiler flags, so they were never rebuilt. Same source and same extension measured 7535 over the mixed cache and 7560 after rm -rf build/. The exception fix is NOT the cause here: it moved rustc:O2 and left rustc:O0 unchanged.",
+      "to": 7560
+    },
+    {
+      "attributable_delta": 5,
+      "delta": 5,
+      "from": 1997,
+      "key": "rustc:O0",
+      "kind": "lane_total",
+      "measure": "functions_with_violations",
+      "reason": "same clean-cache rebuild as the violations entry above.",
+      "to": 2002
+    },
+    {
+      "attributable_delta": 15,
+      "delta": 15,
+      "from": 4457,
+      "key": "rustc:O2",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "exception fix 965f8585 widens functions to their FDE-proven end, so bytes previously owned by NO function are now emitted. Named: gimli::read::abbrev::Abbreviation::new (+2, var0/var1, newly violating), alloc btree insert_recursing (+2, stack_4/stack_6), gimli::read::abbrev::Attributes::push (+1, var63) -- three functions, each replicated across fixtures 167/169/170. Proven by reverting ONLY cfg.rs+repair.rs, rebuilding, and re-censusing: 1156/4457, the committed numbers exactly. Recovering previously-dropped code necessarily raises a raw violation count.",
+      "to": 4472
+    },
+    {
+      "attributable_delta": 3,
+      "delta": 3,
+      "from": 1156,
+      "key": "rustc:O2",
+      "kind": "lane_total",
+      "measure": "functions_with_violations",
+      "reason": "the three Abbreviation::new copies, same cause as the violations entry above.",
+      "to": 1159
+    }
+  ],
+  "fixture_lane_totals": {
+    "01_conditional_polarity:clang:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "01_conditional_polarity:clang:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "01_conditional_polarity:gcc:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "01_conditional_polarity:gcc:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "02_integer_widths:clang:O0": {
+      "functions_emitted": 36,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "02_integer_widths:clang:O2": {
+      "functions_emitted": 36,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "02_integer_widths:gcc:O0": {
+      "functions_emitted": 36,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "02_integer_widths:gcc:O2": {
+      "functions_emitted": 36,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "03_loop_shapes:clang:O0": {
+      "functions_emitted": 27,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "03_loop_shapes:clang:O2": {
+      "functions_emitted": 26,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "03_loop_shapes:gcc:O0": {
+      "functions_emitted": 27,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "03_loop_shapes:gcc:O2": {
+      "functions_emitted": 26,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "04_switch_shapes:clang:O0": {
+      "functions_emitted": 24,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "04_switch_shapes:clang:O2": {
+      "functions_emitted": 26,
+      "functions_with_violations": 2,
+      "violations": 3
+    },
+    "04_switch_shapes:gcc:O0": {
+      "functions_emitted": 24,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "04_switch_shapes:gcc:O2": {
+      "functions_emitted": 24,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "05_cleanup_and_state_machine:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "05_cleanup_and_state_machine:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "05_cleanup_and_state_machine:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "05_cleanup_and_state_machine:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "06_calling_conventions:clang:O0": {
+      "functions_emitted": 33,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "06_calling_conventions:clang:O2": {
+      "functions_emitted": 29,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "06_calling_conventions:gcc:O0": {
+      "functions_emitted": 27,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "06_calling_conventions:gcc:O2": {
+      "functions_emitted": 27,
+      "functions_with_violations": 1,
+      "violations": 4
+    },
+    "07_packet_parser:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "07_packet_parser:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "07_packet_parser:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "07_packet_parser:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "08_indirect_dispatch:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "08_indirect_dispatch:clang:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "08_indirect_dispatch:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "08_indirect_dispatch:gcc:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "09_memory_effects:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "09_memory_effects:clang:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "09_memory_effects:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "09_memory_effects:gcc:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "100_struct_layout:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "100_struct_layout:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "100_struct_layout:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "100_struct_layout:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "101_static_locals:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "101_static_locals:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "101_static_locals:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "101_static_locals:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "102_duffs_device:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "102_duffs_device:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "102_duffs_device:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "102_duffs_device:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "103_computed_goto:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 4,
+      "violations": 4
+    },
+    "103_computed_goto:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "103_computed_goto:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 4,
+      "violations": 4
+    },
+    "103_computed_goto:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "104_statement_expression:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "104_statement_expression:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "104_statement_expression:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "104_statement_expression:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "105_goto_ladder:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "105_goto_ladder:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "105_goto_ladder:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "105_goto_ladder:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "106_switch_shapes_dense_sparse:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "106_switch_shapes_dense_sparse:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "106_switch_shapes_dense_sparse:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "106_switch_shapes_dense_sparse:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "107_short_circuit:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "107_short_circuit:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "107_short_circuit:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "107_short_circuit:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "108_multidimensional_arrays:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "108_multidimensional_arrays:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "108_multidimensional_arrays:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "108_multidimensional_arrays:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "109_subscript_commutativity:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "109_subscript_commutativity:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "109_subscript_commutativity:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "109_subscript_commutativity:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "10_cpp_runtime_shapes:clang:O0": {
+      "functions_emitted": 57,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "10_cpp_runtime_shapes:clang:O2": {
+      "functions_emitted": 25,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "10_cpp_runtime_shapes:gcc:O0": {
+      "functions_emitted": 45,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "10_cpp_runtime_shapes:gcc:O2": {
+      "functions_emitted": 27,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "110_pointer_arithmetic:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "110_pointer_arithmetic:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "110_pointer_arithmetic:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "110_pointer_arithmetic:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "111_self_referential_struct:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "111_self_referential_struct:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "111_self_referential_struct:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "111_self_referential_struct:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "112_recursion_shapes:clang:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "112_recursion_shapes:clang:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "112_recursion_shapes:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "112_recursion_shapes:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "113_varargs:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 2,
+      "violations": 76
+    },
+    "113_varargs:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 2,
+      "violations": 76
+    },
+    "113_varargs:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 2,
+      "violations": 76
+    },
+    "113_varargs:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 2,
+      "violations": 8
+    },
+    "114_volatile_access:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "114_volatile_access:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "114_volatile_access:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "114_volatile_access:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "115_enum_semantics:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "115_enum_semantics:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "115_enum_semantics:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "115_enum_semantics:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "116_string_literals:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "116_string_literals:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "116_string_literals:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "116_string_literals:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "117_modular_arithmetic:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "117_modular_arithmetic:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "117_modular_arithmetic:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "117_modular_arithmetic:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "118_bit_tricks:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "118_bit_tricks:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "118_bit_tricks:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "118_bit_tricks:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "119_branch_hints:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "119_branch_hints:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "119_branch_hints:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "119_branch_hints:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "11_call_shapes:clang:O0": {
+      "functions_emitted": 29,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "11_call_shapes:clang:O2": {
+      "functions_emitted": 21,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "11_call_shapes:gcc:O0": {
+      "functions_emitted": 25,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "11_call_shapes:gcc:O2": {
+      "functions_emitted": 25,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "120_const_and_literals:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "120_const_and_literals:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "120_const_and_literals:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "120_const_and_literals:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "121_dense_expression:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "121_dense_expression:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "121_dense_expression:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "121_dense_expression:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "122_compound_assignment:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "122_compound_assignment:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "122_compound_assignment:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "122_compound_assignment:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "123_sizeof_semantics:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "123_sizeof_semantics:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "123_sizeof_semantics:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "123_sizeof_semantics:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "124_loop_break_continue:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "124_loop_break_continue:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "124_loop_break_continue:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "124_loop_break_continue:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "125_loop_shapes:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "125_loop_shapes:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "125_loop_shapes:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "125_loop_shapes:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "126_x_macros:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "126_x_macros:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "126_x_macros:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "126_x_macros:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "127_inline_linkage:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "127_inline_linkage:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "127_inline_linkage:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "127_inline_linkage:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "128_qualifier_combinations:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "128_qualifier_combinations:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "128_qualifier_combinations:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "128_qualifier_combinations:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "129_struct_by_value:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "129_struct_by_value:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "129_struct_by_value:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "129_struct_by_value:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "12_loop_rotation:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "12_loop_rotation:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "12_loop_rotation:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "12_loop_rotation:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "130_bitpacked_codec:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "130_bitpacked_codec:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "130_bitpacked_codec:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "130_bitpacked_codec:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "131_obfuscated_composite:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "131_obfuscated_composite:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 6
+    },
+    "131_obfuscated_composite:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "131_obfuscated_composite:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "132_cpp_vtable_layout:clang:O0": {
+      "functions_emitted": 34,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "132_cpp_vtable_layout:clang:O2": {
+      "functions_emitted": 25,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "132_cpp_vtable_layout:gcc:O0": {
+      "functions_emitted": 21,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "132_cpp_vtable_layout:gcc:O2": {
+      "functions_emitted": 19,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "133_cpp_multiple_inheritance:clang:O0": {
+      "functions_emitted": 32,
+      "functions_with_violations": 4,
+      "violations": 6
+    },
+    "133_cpp_multiple_inheritance:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "133_cpp_multiple_inheritance:gcc:O0": {
+      "functions_emitted": 27,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "133_cpp_multiple_inheritance:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "134_cpp_virtual_inheritance:clang:O0": {
+      "functions_emitted": 46,
+      "functions_with_violations": 12,
+      "violations": 12
+    },
+    "134_cpp_virtual_inheritance:clang:O2": {
+      "functions_emitted": 34,
+      "functions_with_violations": 4,
+      "violations": 4
+    },
+    "134_cpp_virtual_inheritance:gcc:O0": {
+      "functions_emitted": 35,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "134_cpp_virtual_inheritance:gcc:O2": {
+      "functions_emitted": 29,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "135_cpp_rtti:clang:O0": {
+      "functions_emitted": 40,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "135_cpp_rtti:clang:O2": {
+      "functions_emitted": 26,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "135_cpp_rtti:gcc:O0": {
+      "functions_emitted": 25,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "135_cpp_rtti:gcc:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "136_cpp_exception_unwinding:clang:O0": {
+      "functions_emitted": 23,
+      "functions_with_violations": 2,
+      "violations": 3
+    },
+    "136_cpp_exception_unwinding:clang:O2": {
+      "functions_emitted": 21,
+      "functions_with_violations": 3,
+      "violations": 4
+    },
+    "136_cpp_exception_unwinding:gcc:O0": {
+      "functions_emitted": 21,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "136_cpp_exception_unwinding:gcc:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "137_cpp_templates:clang:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "137_cpp_templates:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "137_cpp_templates:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "137_cpp_templates:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "138_cpp_operators:clang:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "138_cpp_operators:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "138_cpp_operators:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "138_cpp_operators:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "139_cpp_object_lifetime:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 3,
+      "violations": 3
+    },
+    "139_cpp_object_lifetime:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "139_cpp_object_lifetime:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "139_cpp_object_lifetime:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "13_loop_early_exit:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "13_loop_early_exit:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "13_loop_early_exit:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "13_loop_early_exit:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "140_thread_local_storage:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "140_thread_local_storage:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "140_thread_local_storage:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "140_thread_local_storage:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "141_atomics:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "141_atomics:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "141_atomics:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "141_atomics:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "142_nonlocal_control:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "142_nonlocal_control:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 2,
+      "violations": 2
+    },
+    "142_nonlocal_control:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "142_nonlocal_control:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "143_dynamic_frames:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "143_dynamic_frames:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "143_dynamic_frames:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "143_dynamic_frames:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "144_inline_asm:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "144_inline_asm:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "144_inline_asm:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "144_inline_asm:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "145_control_flow_flattening:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "145_control_flow_flattening:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 2,
+      "violations": 3
+    },
+    "145_control_flow_flattening:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "145_control_flow_flattening:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "146_opaque_predicates:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "146_opaque_predicates:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "146_opaque_predicates:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "146_opaque_predicates:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "147_instruction_substitution:clang:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "147_instruction_substitution:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "147_instruction_substitution:gcc:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "147_instruction_substitution:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "148_dispatch_obfuscation:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "148_dispatch_obfuscation:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "148_dispatch_obfuscation:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "148_dispatch_obfuscation:gcc:O2": {
+      "functions_emitted": 24,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "149_mba_expressions:clang:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "149_mba_expressions:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "149_mba_expressions:gcc:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "149_mba_expressions:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "14_flag_effects:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "14_flag_effects:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "14_flag_effects:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "14_flag_effects:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "150_obfuscation_composite:clang:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "150_obfuscation_composite:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "150_obfuscation_composite:gcc:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "150_obfuscation_composite:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "151_wide_branch_ladder:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "151_wide_branch_ladder:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "151_wide_branch_ladder:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "151_wide_branch_ladder:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "152_deep_nesting:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "152_deep_nesting:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 2,
+      "violations": 3
+    },
+    "152_deep_nesting:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "152_deep_nesting:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "153_many_live_locals:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "153_many_live_locals:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "153_many_live_locals:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "153_many_live_locals:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 2,
+      "violations": 9
+    },
+    "154_wide_switch:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "154_wide_switch:clang:O2": {
+      "functions_emitted": 74,
+      "functions_with_violations": 4,
+      "violations": 4
+    },
+    "154_wide_switch:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "154_wide_switch:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "155_long_dependency_chain:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "155_long_dependency_chain:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "155_long_dependency_chain:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "155_long_dependency_chain:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "156_plt_and_got_calls:clang:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "156_plt_and_got_calls:clang:O2": {
+      "functions_emitted": 21,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "156_plt_and_got_calls:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "156_plt_and_got_calls:gcc:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "157_symbol_visibility:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "157_symbol_visibility:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "157_symbol_visibility:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "157_symbol_visibility:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "158_weak_symbols:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "158_weak_symbols:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 2,
+      "violations": 5
+    },
+    "158_weak_symbols:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "158_weak_symbols:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 1,
+      "violations": 3
+    },
+    "159_ifunc_resolver:clang:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "159_ifunc_resolver:clang:O2": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "159_ifunc_resolver:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "159_ifunc_resolver:gcc:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "15_binary_search_tree:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "15_binary_search_tree:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "15_binary_search_tree:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "15_binary_search_tree:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "160_init_and_fini:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "160_init_and_fini:clang:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "160_init_and_fini:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "160_init_and_fini:gcc:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "161_packed_struct_layout:clang:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "161_packed_struct_layout:clang:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "161_packed_struct_layout:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "161_packed_struct_layout:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "162_unaligned_memcpy_access:clang:O0": {
+      "functions_emitted": 27,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "162_unaligned_memcpy_access:clang:O2": {
+      "functions_emitted": 23,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "162_unaligned_memcpy_access:gcc:O0": {
+      "functions_emitted": 22,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "162_unaligned_memcpy_access:gcc:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "163_wire_header_parser:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "163_wire_header_parser:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "163_wire_header_parser:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "163_wire_header_parser:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "164_nested_tlv_walker:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "164_nested_tlv_walker:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 3,
+      "violations": 7
+    },
+    "164_nested_tlv_walker:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "164_nested_tlv_walker:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "165_bitstream_reader:clang:O0": {
+      "functions_emitted": 24,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "165_bitstream_reader:clang:O2": {
+      "functions_emitted": 19,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "165_bitstream_reader:gcc:O0": {
+      "functions_emitted": 22,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "165_bitstream_reader:gcc:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 2,
+      "violations": 6
+    },
+    "166_rust_generics:rustc:O0": {
+      "functions_emitted": 592,
+      "functions_with_violations": 396,
+      "violations": 1503
+    },
+    "166_rust_generics:rustc:O2": {
+      "functions_emitted": 22,
+      "functions_with_violations": 5,
+      "violations": 5
+    },
+    "167_rust_trait_objects:rustc:O0": {
+      "functions_emitted": 593,
+      "functions_with_violations": 393,
+      "violations": 1495
+    },
+    "167_rust_trait_objects:rustc:O2": {
+      "functions_emitted": 573,
+      "functions_with_violations": 382,
+      "violations": 1487
+    },
+    "168_rust_enum_niche:rustc:O0": {
+      "functions_emitted": 38,
+      "functions_with_violations": 11,
+      "violations": 13
+    },
+    "168_rust_enum_niche:rustc:O2": {
+      "functions_emitted": 25,
+      "functions_with_violations": 5,
+      "violations": 6
+    },
+    "169_rust_slices_bounds:rustc:O0": {
+      "functions_emitted": 623,
+      "functions_with_violations": 418,
+      "violations": 1551
+    },
+    "169_rust_slices_bounds:rustc:O2": {
+      "functions_emitted": 565,
+      "functions_with_violations": 379,
+      "violations": 1479
+    },
+    "16_red_black_tree:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "16_red_black_tree:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "16_red_black_tree:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "16_red_black_tree:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "170_rust_panic_unwind:rustc:O0": {
+      "functions_emitted": 596,
+      "functions_with_violations": 396,
+      "violations": 1505
+    },
+    "170_rust_panic_unwind:rustc:O2": {
+      "functions_emitted": 573,
+      "functions_with_violations": 388,
+      "violations": 1495
+    },
+    "171_rust_overflow:rustc:O0": {
+      "functions_emitted": 590,
+      "functions_with_violations": 388,
+      "violations": 1493
+    },
+    "171_rust_overflow:rustc:O2": {
+      "functions_emitted": 29,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "172_float_double_widths:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "172_float_double_widths:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "172_float_double_widths:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "172_float_double_widths:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "173_float_int_conversions:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "173_float_int_conversions:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "173_float_int_conversions:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "173_float_int_conversions:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "174_float_compare_classify:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "174_float_compare_classify:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 5,
+      "violations": 7
+    },
+    "174_float_compare_classify:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "174_float_compare_classify:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 2,
+      "violations": 2
+    },
+    "175_float_matrix_kernel:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "175_float_matrix_kernel:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "175_float_matrix_kernel:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "175_float_matrix_kernel:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "17_hash_table:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "17_hash_table:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "17_hash_table:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "17_hash_table:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "181_compensated_summation:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "181_compensated_summation:clang:O2": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "181_compensated_summation:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "181_compensated_summation:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "182_cold_and_part_splits:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "182_cold_and_part_splits:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "182_cold_and_part_splits:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "182_cold_and_part_splits:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "183_sentinel_list_search:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "183_sentinel_list_search:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "183_sentinel_list_search:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "183_sentinel_list_search:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "184_rep_stos_widths:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "184_rep_stos_widths:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 2,
+      "violations": 4
+    },
+    "184_rep_stos_widths:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "184_rep_stos_widths:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "185_subword_signed_division:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "185_subword_signed_division:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "185_subword_signed_division:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "185_subword_signed_division:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "186_defaultless_guarded_switch:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "186_defaultless_guarded_switch:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "186_defaultless_guarded_switch:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "186_defaultless_guarded_switch:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "187_constant_bias_index:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "187_constant_bias_index:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "187_constant_bias_index:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "187_constant_bias_index:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "188_vector_transport:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "188_vector_transport:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 3,
+      "violations": 3
+    },
+    "188_vector_transport:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "188_vector_transport:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "189_effectful_select:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "189_effectful_select:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "189_effectful_select:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "189_effectful_select:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 3,
+      "violations": 3
+    },
+    "18_binary_heap:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "18_binary_heap:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "18_binary_heap:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "18_binary_heap:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "190_dual_role_products:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "190_dual_role_products:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "190_dual_role_products:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "190_dual_role_products:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "191_indirect_table_args:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "191_indirect_table_args:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 3,
+      "violations": 7
+    },
+    "191_indirect_table_args:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "191_indirect_table_args:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 3,
+      "violations": 6
+    },
+    "192_pointer_chased_list:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "192_pointer_chased_list:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "192_pointer_chased_list:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "192_pointer_chased_list:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "193_mapped_constant_roles:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "193_mapped_constant_roles:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "193_mapped_constant_roles:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "193_mapped_constant_roles:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "194_narrow_return_widths:clang:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "194_narrow_return_widths:clang:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "194_narrow_return_widths:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "194_narrow_return_widths:gcc:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "195_by_value_aggregates:clang:O0": {
+      "functions_emitted": 28,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "195_by_value_aggregates:clang:O2": {
+      "functions_emitted": 28,
+      "functions_with_violations": 2,
+      "violations": 5
+    },
+    "195_by_value_aggregates:gcc:O0": {
+      "functions_emitted": 24,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "195_by_value_aggregates:gcc:O2": {
+      "functions_emitted": 24,
+      "functions_with_violations": 4,
+      "violations": 4
+    },
+    "196_disjoint_frame_slots:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "196_disjoint_frame_slots:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "196_disjoint_frame_slots:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "196_disjoint_frame_slots:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "197_homogeneous_float_aggregates:clang:O0": {
+      "functions_emitted": 31,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "197_homogeneous_float_aggregates:clang:O2": {
+      "functions_emitted": 31,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "197_homogeneous_float_aggregates:gcc:O0": {
+      "functions_emitted": 25,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "197_homogeneous_float_aggregates:gcc:O2": {
+      "functions_emitted": 25,
+      "functions_with_violations": 2,
+      "violations": 2
+    },
+    "198_aggregate_return_edges:clang:O0": {
+      "functions_emitted": 37,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "198_aggregate_return_edges:clang:O2": {
+      "functions_emitted": 37,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "198_aggregate_return_edges:gcc:O0": {
+      "functions_emitted": 31,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "198_aggregate_return_edges:gcc:O2": {
+      "functions_emitted": 31,
+      "functions_with_violations": 5,
+      "violations": 5
+    },
+    "199_pointer_return_kinds:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "199_pointer_return_kinds:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "199_pointer_return_kinds:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "199_pointer_return_kinds:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "19_disjoint_set:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "19_disjoint_set:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "19_disjoint_set:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "19_disjoint_set:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "201_float_bit_stores:clang:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "201_float_bit_stores:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "201_float_bit_stores:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "201_float_bit_stores:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "20_graph_bfs:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "20_graph_bfs:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "20_graph_bfs:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "20_graph_bfs:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "21_graph_dfs:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "21_graph_dfs:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "21_graph_dfs:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "21_graph_dfs:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "22_dijkstra:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "22_dijkstra:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "22_dijkstra:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "22_dijkstra:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "23_topological_sort:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "23_topological_sort:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "23_topological_sort:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "23_topological_sort:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "24_merge_sort:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "24_merge_sort:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "24_merge_sort:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "24_merge_sort:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "25_kmp_search:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "25_kmp_search:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "25_kmp_search:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "25_kmp_search:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "26_sparse_matrix:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "26_sparse_matrix:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "26_sparse_matrix:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "26_sparse_matrix:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 3
+    },
+    "27_newton_raphson:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "27_newton_raphson:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "27_newton_raphson:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "27_newton_raphson:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "28_euler_ode:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "28_euler_ode:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "28_euler_ode:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "28_euler_ode:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "29_polynomial:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "29_polynomial:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "29_polynomial:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "29_polynomial:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "30_finite_difference:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "30_finite_difference:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "30_finite_difference:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "30_finite_difference:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "31_edit_distance:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "31_edit_distance:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "31_edit_distance:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "31_edit_distance:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "32_longest_common_subsequence:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "32_longest_common_subsequence:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "32_longest_common_subsequence:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "32_longest_common_subsequence:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "33_knapsack:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "33_knapsack:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "33_knapsack:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "33_knapsack:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "34_coin_change:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "34_coin_change:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "34_coin_change:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "34_coin_change:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "35_matrix_chain:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "35_matrix_chain:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "35_matrix_chain:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "35_matrix_chain:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "36_quicksort:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "36_quicksort:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "36_quicksort:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "36_quicksort:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "37_heapsort:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "37_heapsort:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "37_heapsort:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "37_heapsort:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "38_insertion_shell_sort:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "38_insertion_shell_sort:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "38_insertion_shell_sort:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "38_insertion_shell_sort:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "39_counting_radix_sort:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "39_counting_radix_sort:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "39_counting_radix_sort:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "39_counting_radix_sort:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "40_quickselect:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "40_quickselect:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "40_quickselect:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "40_quickselect:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "41_tokenizer:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "41_tokenizer:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "41_tokenizer:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "41_tokenizer:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "42_rpn_evaluator:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "42_rpn_evaluator:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 2,
+      "violations": 3
+    },
+    "42_rpn_evaluator:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "42_rpn_evaluator:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "43_base64:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "43_base64:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "43_base64:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "43_base64:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "44_run_length:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "44_run_length:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "44_run_length:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "44_run_length:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "45_string_algorithms:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "45_string_algorithms:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "45_string_algorithms:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "45_string_algorithms:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "46_bitset:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "46_bitset:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "46_bitset:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "46_bitset:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "47_huffman:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "47_huffman:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "47_huffman:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "47_huffman:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "48_gray_code:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "48_gray_code:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 1,
+      "violations": 3
+    },
+    "48_gray_code:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "48_gray_code:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "49_crc32:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "49_crc32:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "49_crc32:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "49_crc32:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "50_varint:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "50_varint:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "50_varint:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "50_varint:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "51_rc4:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "51_rc4:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "51_rc4:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "51_rc4:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "52_hash_functions:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "52_hash_functions:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "52_hash_functions:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "52_hash_functions:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "53_pseudorandom:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "53_pseudorandom:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "53_pseudorandom:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "53_pseudorandom:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "54_sha256_block:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "54_sha256_block:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "54_sha256_block:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "54_sha256_block:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "55_modular_arithmetic:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "55_modular_arithmetic:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "55_modular_arithmetic:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "55_modular_arithmetic:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "56_sieve:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "56_sieve:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "56_sieve:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "56_sieve:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "57_bignum:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "57_bignum:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "57_bignum:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "57_bignum:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "58_rational:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "58_rational:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "58_rational:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "58_rational:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "59_combinatorics:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "59_combinatorics:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "59_combinatorics:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "59_combinatorics:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "60_integer_matrix:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "60_integer_matrix:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "60_integer_matrix:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "60_integer_matrix:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 3
+    },
+    "61_fixed_point:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "61_fixed_point:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "61_fixed_point:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "61_fixed_point:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "62_gaussian_elimination:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "62_gaussian_elimination:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "62_gaussian_elimination:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "62_gaussian_elimination:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "63_numerical_integration:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "63_numerical_integration:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "63_numerical_integration:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "63_numerical_integration:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "64_root_finding:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "64_root_finding:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "64_root_finding:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "64_root_finding:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "65_projectile_motion:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "65_projectile_motion:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "65_projectile_motion:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "65_projectile_motion:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "66_orbital_step:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "66_orbital_step:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "66_orbital_step:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "66_orbital_step:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 3
+    },
+    "67_elastic_collision:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "67_elastic_collision:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "67_elastic_collision:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "67_elastic_collision:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "68_thermodynamics:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "68_thermodynamics:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "68_thermodynamics:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "68_thermodynamics:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "69_molar_mass:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "69_molar_mass:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "69_molar_mass:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "69_molar_mass:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "70_reaction_balance:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "70_reaction_balance:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "70_reaction_balance:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "70_reaction_balance:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 4
+    },
+    "71_compound_interest:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "71_compound_interest:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "71_compound_interest:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "71_compound_interest:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "72_loan_amortization:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "72_loan_amortization:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "72_loan_amortization:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "72_loan_amortization:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "73_present_value:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "73_present_value:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "73_present_value:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "73_present_value:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "74_moving_statistics:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "74_moving_statistics:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "74_moving_statistics:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "74_moving_statistics:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "75_order_book:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "75_order_book:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 5
+    },
+    "75_order_book:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "75_order_book:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "76_portfolio_rebalance:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "76_portfolio_rebalance:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "76_portfolio_rebalance:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "76_portfolio_rebalance:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "77_lru_cache:clang:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "77_lru_cache:clang:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "77_lru_cache:gcc:O0": {
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "77_lru_cache:gcc:O2": {
+      "functions_emitted": 9,
+      "functions_with_violations": 1,
+      "violations": 2
+    },
+    "78_ring_buffer:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "78_ring_buffer:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "78_ring_buffer:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "78_ring_buffer:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "79_segment_tree:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "79_segment_tree:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "79_segment_tree:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "79_segment_tree:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "80_trie:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "80_trie:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "80_trie:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "80_trie:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "81_call_argument_identity:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "81_call_argument_identity:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "81_call_argument_identity:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "81_call_argument_identity:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "82_comma_operator:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "82_comma_operator:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "82_comma_operator:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "82_comma_operator:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "83_ternary_chains:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "83_ternary_chains:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "83_ternary_chains:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "83_ternary_chains:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "84_compound_literals:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "84_compound_literals:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "84_compound_literals:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "84_compound_literals:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "85_designated_initializers:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "85_designated_initializers:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "85_designated_initializers:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "85_designated_initializers:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "86_flexible_array_member:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "86_flexible_array_member:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "86_flexible_array_member:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "86_flexible_array_member:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "87_variable_length_array:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "87_variable_length_array:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 2,
+      "violations": 7
+    },
+    "87_variable_length_array:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "87_variable_length_array:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "88_restrict_pointers:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "88_restrict_pointers:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "88_restrict_pointers:gcc:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "88_restrict_pointers:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "89_bool_semantics:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "89_bool_semantics:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "89_bool_semantics:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "89_bool_semantics:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "90_bitfields:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "90_bitfields:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "90_bitfields:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "90_bitfields:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "91_union_type_punning:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "91_union_type_punning:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "91_union_type_punning:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "91_union_type_punning:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "92_anonymous_members:clang:O0": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "92_anonymous_members:clang:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "92_anonymous_members:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "92_anonymous_members:gcc:O2": {
+      "functions_emitted": 10,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "93_generic_selection:clang:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "93_generic_selection:clang:O2": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "93_generic_selection:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "93_generic_selection:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "94_alignment:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "94_alignment:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "94_alignment:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "94_alignment:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "95_function_pointer_table:clang:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "95_function_pointer_table:clang:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "95_function_pointer_table:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "95_function_pointer_table:gcc:O2": {
+      "functions_emitted": 15,
+      "functions_with_violations": 1,
+      "violations": 3
+    },
+    "96_integer_promotion:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "96_integer_promotion:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "96_integer_promotion:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "96_integer_promotion:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "97_signed_unsigned_pitfalls:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "97_signed_unsigned_pitfalls:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "97_signed_unsigned_pitfalls:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "97_signed_unsigned_pitfalls:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "98_shift_semantics:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "98_shift_semantics:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "98_shift_semantics:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "98_shift_semantics:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "99_char_and_endianness:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "99_char_and_endianness:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "99_char_and_endianness:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "99_char_and_endianness:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    }
+  },
   "lane_totals": {
     "clang:O0": {
-      "functions_emitted": 2659,
+      "functions_emitted": 2675,
       "functions_with_violations": 32,
       "violations": 113
     },
     "clang:O2": {
-      "functions_emitted": 2533,
+      "functions_emitted": 2549,
       "functions_with_violations": 85,
       "violations": 240
     },
     "gcc:O0": {
-      "functions_emitted": 2567,
+      "functions_emitted": 2584,
       "functions_with_violations": 15,
       "violations": 94
     },
     "gcc:O2": {
-      "functions_emitted": 2434,
+      "functions_emitted": 2450,
       "functions_with_violations": 59,
       "violations": 114
     },
     "rustc:O0": {
       "functions_emitted": 3032,
-      "functions_with_violations": 1997,
-      "violations": 7535
+      "functions_with_violations": 2002,
+      "violations": 7560
     },
     "rustc:O2": {
       "functions_emitted": 1787,
-      "functions_with_violations": 1156,
-      "violations": 4457
+      "functions_with_violations": 1159,
+      "violations": 4472
     }
   },
   "problems": [],
@@ -2389,6 +6273,38 @@
     "19_disjoint_set:gcc:O0:dsu_union": [],
     "19_disjoint_set:gcc:O2:dsu_find": [],
     "19_disjoint_set:gcc:O2:dsu_union": [],
+    "201_float_bit_stores:clang:O0:f201_f32_single_bits": [],
+    "201_float_bit_stores:clang:O0:f201_f32_slot_bits": [],
+    "201_float_bit_stores:clang:O0:f201_f32_slot_values": [],
+    "201_float_bit_stores:clang:O0:f201_f64_copy_then_convert": [],
+    "201_float_bit_stores:clang:O0:f201_f64_slot_bits": [],
+    "201_float_bit_stores:clang:O0:f201_scalar_control": [],
+    "201_float_bit_stores:clang:O0:f201_store_through_pointer": [],
+    "201_float_bit_stores:clang:O0:f201_word_to_value": [],
+    "201_float_bit_stores:clang:O2:f201_f32_single_bits": [],
+    "201_float_bit_stores:clang:O2:f201_f32_slot_bits": [],
+    "201_float_bit_stores:clang:O2:f201_f32_slot_values": [],
+    "201_float_bit_stores:clang:O2:f201_f64_copy_then_convert": [],
+    "201_float_bit_stores:clang:O2:f201_f64_slot_bits": [],
+    "201_float_bit_stores:clang:O2:f201_scalar_control": [],
+    "201_float_bit_stores:clang:O2:f201_store_through_pointer": [],
+    "201_float_bit_stores:clang:O2:f201_word_to_value": [],
+    "201_float_bit_stores:gcc:O0:f201_f32_single_bits": [],
+    "201_float_bit_stores:gcc:O0:f201_f32_slot_bits": [],
+    "201_float_bit_stores:gcc:O0:f201_f32_slot_values": [],
+    "201_float_bit_stores:gcc:O0:f201_f64_copy_then_convert": [],
+    "201_float_bit_stores:gcc:O0:f201_f64_slot_bits": [],
+    "201_float_bit_stores:gcc:O0:f201_scalar_control": [],
+    "201_float_bit_stores:gcc:O0:f201_store_through_pointer": [],
+    "201_float_bit_stores:gcc:O0:f201_word_to_value": [],
+    "201_float_bit_stores:gcc:O2:f201_f32_single_bits": [],
+    "201_float_bit_stores:gcc:O2:f201_f32_slot_bits": [],
+    "201_float_bit_stores:gcc:O2:f201_f32_slot_values": [],
+    "201_float_bit_stores:gcc:O2:f201_f64_copy_then_convert": [],
+    "201_float_bit_stores:gcc:O2:f201_f64_slot_bits": [],
+    "201_float_bit_stores:gcc:O2:f201_scalar_control": [],
+    "201_float_bit_stores:gcc:O2:f201_store_through_pointer": [],
+    "201_float_bit_stores:gcc:O2:f201_word_to_value": [],
     "20_graph_bfs:clang:O0:graph_bfs": [],
     "20_graph_bfs:clang:O2:graph_bfs": [],
     "20_graph_bfs:gcc:O0:graph_bfs": [],

@@ -32,14 +32,38 @@
 //!   `_Float16`, ARM's `__fp16`. Their bit patterns are not exactly stateable
 //!   here and a lossy Python `float` would compare equal when it should not;
 //! * an integer that is not 1/2/4/8 bytes;
-//! * a bit-field, a union, or a struct member whose location is not a plain
-//!   constant offset;
-//! * a FLOATING-POINT struct member. The SysV eightbyte classifier puts an
-//!   all-float aggregate in SSE registers rather than INTEGER ones, so
-//!   supporting one would mean guessing an ABI this cannot state;
+//! * a bit-field, or a struct member whose location is not a plain constant
+//!   offset;
+//! * an array with no stateable bound — a flexible array member, `int v[]` —
+//!   because dividing a declared size by an element size would invent an
+//!   extent nobody wrote;
 //! * any pointer to an aggregate other than a link back to the struct being
 //!   described, which is encoded nominally as [`DwarfType::SelfPointer`]
 //!   instead of recursing forever.
+//!
+//! # What a FLOATING-POINT struct member is not
+//!
+//! It used to be on that list, with the reason "the SysV eightbyte classifier
+//! puts an all-float aggregate in SSE registers rather than INTEGER ones, so
+//! supporting one would mean guessing an ABI this cannot state". Nothing here
+//! ever classified an eightbyte: the harness hands the descriptor to `ctypes`,
+//! and libffi applies the platform's own return- and argument-class rules to
+//! the layout. Declining the member did not avoid a guess, it withheld the one
+//! shape whose classification is most worth checking.
+//!
+//! Measured on 2026-08-18, that refusal was silently dropping SIX functions
+//! from `197_homogeneous_float_aggregates` and `195_by_value_aggregates` — the
+//! two fixtures written to exercise exactly these classes — and every one of
+//! their cells reported `structural` with the detail "signature not recoverable
+//! from DWARF" rather than a verdict. The aggregate-return work therefore had
+//! no executable coverage at all outside all-integer shapes.
+//!
+//! The same measurement found two more shapes with the same symptom and the
+//! same non-reason: an ARRAY member and a UNION. Both are now described
+//! ([`DwarfType::Array`], [`DwarfType::Union`]), and both were verified against
+//! the C ABI before the descriptor existed — `libffi` returns
+//! `union {int64_t; double;}` and `struct {int32_t v[2];}` by value correctly
+//! through `ctypes`, so the descriptor is the only thing that was missing.
 
 use std::collections::HashSet;
 
@@ -75,6 +99,29 @@ pub enum DwarfType {
         fields: Vec<DwarfField>,
         name: Option<String>,
     },
+    /// A UNION: every member at offset zero, sharing one storage.
+    ///
+    /// Deliberately its own variant rather than a `Struct` whose members all
+    /// sit at offset zero. The harness builds an exact `ctypes` layout from
+    /// these descriptors, and `_struct_ctype` refuses overlapping members on
+    /// purpose — a union spelled as a struct would either be rejected or, worse,
+    /// silently laid out sequentially at the wrong size.
+    ///
+    /// Members are named for reading the SAME bytes back at each declared type,
+    /// which is the only thing a differential can do with a union: a snapshot
+    /// records every member's view of one storage, and two builds that agree on
+    /// all of them agree on the bytes.
+    Union {
+        byte_size: u64,
+        fields: Vec<DwarfField>,
+        name: Option<String>,
+    },
+    /// A fixed-length array of `count` elements.
+    ///
+    /// `count` is required, not inferred from the byte size: a flexible or
+    /// unbounded array member has no marshallable extent, and dividing a
+    /// declared size by an element size would invent one.
+    Array { element: Box<DwarfType>, count: u64 },
 }
 
 /// One struct member.
@@ -435,9 +482,114 @@ fn describe(
             })
         }
         gimli::DW_TAG_pointer_type => describe_pointer(dwarf, unit, &entry, open_structs, depth),
-        gimli::DW_TAG_structure_type => {
-            describe_struct(dwarf, unit, &entry, offset, open_structs, depth)
+        gimli::DW_TAG_structure_type | gimli::DW_TAG_union_type => {
+            describe_aggregate(dwarf, unit, &entry, offset, open_structs, depth)
         }
+        gimli::DW_TAG_array_type => {
+            describe_array(dwarf, unit, &entry, offset, open_structs, depth)
+        }
+        _ => None,
+    }
+}
+
+/// A fixed-length array, as the element type and the element COUNT.
+///
+/// The count comes from the `DW_TAG_subrange_type` child, never from
+/// `DW_AT_byte_size / sizeof(element)`: an array whose bound the producer
+/// omitted (a flexible member, `int v[]`) has no extent to marshal, and
+/// deriving one from a size would hand the harness an invented length.
+/// Multi-dimensional arrays — several subranges under one `DW_TAG_array_type` —
+/// nest right to left, which is the layout C gives them.
+fn describe_array(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+    offset: gimli::UnitOffset<usize>,
+    open_structs: &mut HashSet<usize>,
+    depth: usize,
+) -> Option<DwarfType> {
+    let element = describe(
+        dwarf,
+        unit,
+        entry.attr_value(gimli::DW_AT_type)?,
+        open_structs,
+        depth + 1,
+    )?;
+    // An array OF pointers or of nothing has no layout this harness can state,
+    // for the same reason the member filter refuses those types directly.
+    if !matches!(
+        element,
+        DwarfType::Int { .. }
+            | DwarfType::Float { .. }
+            | DwarfType::Struct { .. }
+            | DwarfType::Union { .. }
+            | DwarfType::Array { .. }
+    ) {
+        return None;
+    }
+    let counts = subrange_counts(unit, offset)?;
+    let mut result = element;
+    for count in counts.into_iter().rev() {
+        result = DwarfType::Array {
+            element: Box::new(result),
+            count,
+        };
+    }
+    Some(result)
+}
+
+/// Ceiling on an array extent this harness will materialise. A vector is built
+/// per element per call, so an unbounded one is a harness hang rather than a
+/// verdict.
+const MAX_ARRAY_ELEMENTS: u64 = 4096;
+
+/// Every dimension of one `DW_TAG_array_type`, outermost first.
+///
+/// `None` when any dimension has no stateable bound, which is what makes a
+/// flexible array member degrade the whole signature to `structural`.
+fn subrange_counts(unit: &Unit<'_>, offset: gimli::UnitOffset<usize>) -> Option<Vec<u64>> {
+    let mut counts = Vec::new();
+    let mut cursor = unit.entries_at_offset(offset).ok()?;
+    let base = cursor.next_depth();
+    if !matches!(cursor.next_entry(), Ok(true)) {
+        return None;
+    }
+    loop {
+        let level = cursor.next_depth();
+        match cursor.next_entry() {
+            Ok(true) => {}
+            _ => break,
+        }
+        if level <= base {
+            break;
+        }
+        let Some(entry) = cursor.current() else {
+            continue;
+        };
+        if entry.tag() != gimli::DW_TAG_subrange_type {
+            continue;
+        }
+        let count = match entry.attr_value(gimli::DW_AT_count) {
+            Some(value) => constant(&value)?,
+            None => constant(&entry.attr_value(gimli::DW_AT_upper_bound)?)?.checked_add(1)?,
+        };
+        if !(1..=MAX_ARRAY_ELEMENTS).contains(&count) {
+            return None;
+        }
+        counts.push(count);
+    }
+    (!counts.is_empty()).then_some(counts)
+}
+
+/// A DWARF constant-class attribute as a `u64`, or `None` for every other form.
+fn constant(value: &gimli::AttributeValue<Slice<'_>, usize>) -> Option<u64> {
+    match value {
+        gimli::AttributeValue::Udata(value) => Some(*value),
+        gimli::AttributeValue::Data1(value) => Some(u64::from(*value)),
+        gimli::AttributeValue::Data2(value) => Some(u64::from(*value)),
+        gimli::AttributeValue::Data4(value) => Some(u64::from(*value)),
+        gimli::AttributeValue::Data8(value) => Some(*value),
+        gimli::AttributeValue::Sdata(value) => u64::try_from(*value).ok(),
         _ => None,
     }
 }
@@ -512,6 +664,13 @@ fn describe_pointer(
             fields,
             name: aggregate_name(dwarf, unit, target_offset),
         },
+        DwarfType::Union {
+            byte_size, fields, ..
+        } => DwarfType::Union {
+            byte_size,
+            fields,
+            name: aggregate_name(dwarf, unit, target_offset),
+        },
         other => other,
     };
     Some(DwarfType::Pointer {
@@ -520,7 +679,13 @@ fn describe_pointer(
     })
 }
 
-fn describe_struct(
+/// A struct or a union, distinguished by the DIE's own tag.
+///
+/// One reader for both because the member walk is identical — DWARF gives a
+/// union's members `DW_AT_data_member_location` 0, or omits it. Only the
+/// resulting VARIANT differs, and it differs because the harness lays the two
+/// out differently.
+fn describe_aggregate(
     dwarf: &gimli::Dwarf<Slice<'_>>,
     unit: &Unit<'_>,
     entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
@@ -528,6 +693,7 @@ fn describe_struct(
     open_structs: &mut HashSet<usize>,
     depth: usize,
 ) -> Option<DwarfType> {
+    let is_union = entry.tag() == gimli::DW_TAG_union_type;
     let size = byte_size(entry)?;
     if !(1..=MAX_STRUCT_BYTES).contains(&size) {
         return None;
@@ -536,21 +702,32 @@ fn describe_struct(
         return None;
     }
     let result =
-        struct_fields(dwarf, unit, offset, open_structs, depth).map(|fields| DwarfType::Struct {
-            byte_size: size,
-            fields,
-            name: None,
+        aggregate_fields(dwarf, unit, offset, open_structs, depth, is_union).map(|fields| {
+            if is_union {
+                DwarfType::Union {
+                    byte_size: size,
+                    fields,
+                    name: None,
+                }
+            } else {
+                DwarfType::Struct {
+                    byte_size: size,
+                    fields,
+                    name: None,
+                }
+            }
         });
     open_structs.remove(&offset.0);
     result
 }
 
-fn struct_fields(
+fn aggregate_fields(
     dwarf: &gimli::Dwarf<Slice<'_>>,
     unit: &Unit<'_>,
     offset: gimli::UnitOffset<usize>,
     open_structs: &mut HashSet<usize>,
     depth: usize,
+    is_union: bool,
 ) -> Option<Vec<DwarfField>> {
     let mut fields = Vec::new();
     let mut cursor = unit.entries_at_offset(offset).ok()?;
@@ -588,14 +765,17 @@ fn struct_fields(
         if entry.attr_value(gimli::DW_AT_bit_size).is_some() {
             return None;
         }
-        let location = match entry.attr_value(gimli::DW_AT_data_member_location)? {
-            gimli::AttributeValue::Udata(value) => value,
-            gimli::AttributeValue::Data1(value) => u64::from(value),
-            gimli::AttributeValue::Data2(value) => u64::from(value),
-            gimli::AttributeValue::Data4(value) => u64::from(value),
-            gimli::AttributeValue::Data8(value) => value,
-            _ => return None,
+        // A union member's location is zero, and producers are free to omit
+        // the attribute entirely for it. A STRUCT member with no location has
+        // no stateable offset and still refuses the whole shape.
+        let location = match entry.attr_value(gimli::DW_AT_data_member_location) {
+            Some(value) => constant(&value)?,
+            None if is_union => 0,
+            None => return None,
         };
+        if is_union && location != 0 {
+            return None;
+        }
         let ty = describe(
             dwarf,
             unit,
@@ -603,11 +783,20 @@ fn struct_fields(
             open_structs,
             depth + 1,
         )?;
-        // See the module header: a floating-point member would put the
-        // aggregate in the SSE eightbyte class, which this cannot state.
+        // A member this reader can state exactly. `Float` is included: see the
+        // module header — libffi, not this module, classifies the eightbytes,
+        // and refusing the member only removed the shapes worth checking.
+        // `Void` and `Pointer` are still refused: a `void` member is not a
+        // member, and a pointer to another object would make the harness invent
+        // ownership it has no way to state.
         if !matches!(
             ty,
-            DwarfType::Int { .. } | DwarfType::Struct { .. } | DwarfType::SelfPointer { .. }
+            DwarfType::Int { .. }
+                | DwarfType::Float { .. }
+                | DwarfType::Struct { .. }
+                | DwarfType::Union { .. }
+                | DwarfType::Array { .. }
+                | DwarfType::SelfPointer { .. }
         ) {
             return None;
         }
@@ -625,6 +814,10 @@ fn struct_fields(
     if fields.is_empty() {
         return None;
     }
+    // Stable, so a union's members — all at offset zero — keep DECLARATION
+    // order. The harness compares member snapshots positionally against the
+    // other build's, and two orders of the same union would compare a member's
+    // view of the storage against a different member's.
     fields.sort_by_key(|field| field.offset);
     Some(fields)
 }
@@ -667,12 +860,5 @@ fn aggregate_name(
 }
 
 fn byte_size(entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>) -> Option<u64> {
-    match entry.attr_value(gimli::DW_AT_byte_size)? {
-        gimli::AttributeValue::Udata(value) => Some(value),
-        gimli::AttributeValue::Data1(value) => Some(u64::from(value)),
-        gimli::AttributeValue::Data2(value) => Some(u64::from(value)),
-        gimli::AttributeValue::Data4(value) => Some(u64::from(value)),
-        gimli::AttributeValue::Data8(value) => Some(value),
-        _ => None,
-    }
+    constant(&entry.attr_value(gimli::DW_AT_byte_size)?)
 }

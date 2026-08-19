@@ -9286,6 +9286,316 @@ function f @ 0x1000 {
         assert!(!rendered.contains("*(int *)(arg1)"));
     }
 
+    /// One `float`-declared and one `double`-declared parameter, for the
+    /// float-through-an-integer-lvalue tests below.
+    fn float_arg_types() -> TypeMap {
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Float { width: 4 });
+        types.upsert_public(VReg::phys("arg1"), TypeHint::Float { width: 8 });
+        types
+    }
+
+    /// A four-byte store of a `float`-typed value keeps the IEEE bits.
+    ///
+    /// `movss %xmm0, -0x8(%rbp)` at `-O0` rendered as
+    /// `*(int *)(&local_8[0]) = (float)(...)`, and C's assignment converts a
+    /// floating VALUE to `int` (C23 6.3.1.4, truncation toward zero) — so
+    /// `3.0f` was written as `0x00000003` where the machine wrote `0x40400000`.
+    /// Every byte of the destination is wrong before anything reads it.
+    /// `197:*:O0:hfa197_make_tagged` and `198:*:O0:agr198_make_bits`.
+    #[test]
+    fn a_four_byte_store_of_a_float_keeps_its_bits() {
+        let function = Function {
+            name: "store_float".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg2")),
+                src: Expr::NumericConvert {
+                    from: ScalarType::SignedInt(4),
+                    to: ScalarType::Float(4),
+                    expr: Box::new(Expr::Reg(VReg::phys("arg3"))),
+                },
+                size: 4,
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            rendered.contains("*(float *)(arg2) = (float)("),
+            "a `movss` store numerically converted the value it wrote:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("*(int *)(arg2) = (float)("),
+            "the integer pointee survived:\n{rendered}"
+        );
+    }
+
+    /// ...and the eight-byte form, which is a separate width and a separate
+    /// pointee spelling (`long`, not `int`). `198:*:O0:agr198_make_bits`.
+    #[test]
+    fn an_eight_byte_store_of_a_double_keeps_its_bits() {
+        let function = Function {
+            name: "store_double".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg2")),
+                src: Expr::NumericConvert {
+                    from: ScalarType::SignedInt(4),
+                    to: ScalarType::Float(8),
+                    expr: Box::new(Expr::Reg(VReg::phys("arg3"))),
+                },
+                size: 8,
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            rendered.contains("*(double *)(arg2) = (double)("),
+            "a `movsd` store numerically converted the value it wrote:\n{rendered}"
+        );
+    }
+
+    /// The width has to MATCH. A four-byte store of a `double`-typed value is
+    /// not a copy of that value's bits, so it must not claim to be one.
+    #[test]
+    fn a_narrow_store_of_a_wide_float_is_not_a_bit_copy() {
+        let function = Function {
+            name: "store_half".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg2")),
+                src: Expr::NumericConvert {
+                    from: ScalarType::SignedInt(4),
+                    to: ScalarType::Float(8),
+                    expr: Box::new(Expr::Reg(VReg::phys("arg3"))),
+                },
+                size: 4,
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            !rendered.contains("*(float *)(arg2)") && !rendered.contains("*(double *)(arg2)"),
+            "an eight-byte value was stored through a four-byte float pointee:\n{rendered}"
+        );
+    }
+
+    /// Floating ARITHMETIC stored through the same width-only destination.
+    ///
+    /// The pointee and the value have to be decided together. Naming a `float`
+    /// pointee and then printing the value through the integer renderer spells
+    /// the divisor `2.0f` as the integer `0x40000000`, which C converts to
+    /// 1073741824.0f — `201:gcc:O0:f201_f32_slot_values`, where the LOAD of
+    /// the very same object already read `*(float *)` and truncated it with
+    /// `(int)`. Both ends of one object must agree about what it holds.
+    #[test]
+    fn a_store_of_float_arithmetic_renders_both_ends_as_floats() {
+        let function = Function {
+            name: "store_quotient".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg2")),
+                src: Expr::Bin {
+                    op: BinOp::Div,
+                    lhs: Box::new(Expr::NumericConvert {
+                        from: ScalarType::SignedInt(4),
+                        to: ScalarType::Float(4),
+                        expr: Box::new(Expr::Reg(VReg::phys("arg3"))),
+                    }),
+                    rhs: Box::new(Expr::Const(0x4000_0000)),
+                },
+                size: 4,
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            rendered.contains("*(float *)(arg2) = "),
+            "a float divide was stored through an integer pointee:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("{ .bits = (unsigned int)(0x40000000) }).value"),
+            "the divisor stayed an integer beside a float dividend:\n{rendered}"
+        );
+    }
+
+    /// ...and the guard. A bitwise operator has no floating operand in C at
+    /// all (C23 6.5.11-13 require an integer type), so an `&`/`|`/`^`/shift
+    /// beside a float must NOT be swept into the floating renderer by the
+    /// arithmetic rule above.
+    #[test]
+    fn a_bitwise_expression_is_not_floating_arithmetic() {
+        let function = Function {
+            name: "store_masked".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg2")),
+                src: Expr::Bin {
+                    op: BinOp::And,
+                    lhs: Box::new(Expr::NumericConvert {
+                        from: ScalarType::SignedInt(4),
+                        to: ScalarType::Float(4),
+                        expr: Box::new(Expr::Reg(VReg::phys("arg3"))),
+                    }),
+                    rhs: Box::new(Expr::Const(0x7fff_ffff)),
+                },
+                size: 4,
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            !rendered.contains("*(float *)(arg2)"),
+            "a bitwise expression was rendered as floating arithmetic:\n{rendered}"
+        );
+    }
+
+    /// The register-assignment mirror, where the lvalue's C type is fixed by a
+    /// declaration and cannot be respelled. `memcpy(&bits, &value, 4)` compiles
+    /// to `movss %xmm0, -0x14(%rbp)` then `mov -0x14(%rbp), %eax`;
+    /// `174:*:O0:fp174_float_bits` is that and nothing else, and every failing
+    /// function in that fixture calls it.
+    #[test]
+    fn an_integer_declared_destination_copies_a_floats_bits() {
+        let mut types = float_arg_types();
+        types.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let function = Function {
+            name: "float_bits".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::Reg(VReg::phys("arg0")),
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains(
+                "var0 = ((union { unsigned int bits; float value; }){ .value = arg0 }).bits;"
+            ),
+            "a four-byte copy out of float storage numerically converted it:\n{rendered}"
+        );
+    }
+
+    /// The same at `double` width, which uses the other member pair.
+    /// `172:gcc:O0:double_precision_horner` renders `ret = arg0;` with `ret`
+    /// declared `long`.
+    #[test]
+    fn a_wide_integer_destination_copies_a_doubles_bits() {
+        let mut types = float_arg_types();
+        types.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
+        );
+        let function = Function {
+            name: "double_bits".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::Reg(VReg::phys("arg1")),
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains(
+                "var0 = ((union { unsigned long long bits; double value; })\
+                 { .value = arg1 }).bits;"
+            ),
+            "an eight-byte copy out of double storage numerically converted it:\n{rendered}"
+        );
+    }
+
+    /// THE NEGATIVE CONTROL, and the reason the guard is structural rather
+    /// than a heuristic. `cvttss2si` IS an arithmetic conversion, and the
+    /// lifter states it as `NumericConvert { to: SignedInt }` — which
+    /// `write_expr_dec` prints as `(int)(...)`, an integer-typed spelling. A
+    /// rule that punned "anything floating reaching an integer destination"
+    /// would take the bits of a value the machine had just truncated, and
+    /// `(int)2.5` would become 1073741824 instead of 2.
+    #[test]
+    fn a_genuine_float_to_integer_conversion_is_still_a_conversion() {
+        let mut types = float_arg_types();
+        types.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let function = Function {
+            name: "truncate".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::NumericConvert {
+                    from: ScalarType::Float(4),
+                    to: ScalarType::SignedInt(4),
+                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                },
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains("var0 = (int)(arg0);"),
+            "a truncating conversion was reinterpreted as a bit copy:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(".value = "),
+            "the pun escaped onto a genuine conversion:\n{rendered}"
+        );
+    }
+
+    /// The second negative control, on the STORE path: `cvttsd2si` followed by
+    /// a four-byte store is `*(int *)(p) = (int)(x)`, and the pointee must stay
+    /// integral. Without this the fix could pass every positive above by
+    /// simply never converting.
+    #[test]
+    fn a_store_of_a_truncated_float_keeps_an_integer_pointee() {
+        let function = Function {
+            name: "store_truncated".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg2")),
+                src: Expr::NumericConvert {
+                    from: ScalarType::Float(8),
+                    to: ScalarType::SignedInt(4),
+                    expr: Box::new(Expr::Reg(VReg::phys("arg3"))),
+                },
+                size: 4,
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            rendered.contains("*(int *)(arg2) = (int)("),
+            "a truncating conversion's store acquired a float pointee:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("*(float *)(arg2)") && !rendered.contains("*(double *)(arg2)"),
+            "a truncating conversion's store acquired a float pointee:\n{rendered}"
+        );
+    }
+
     #[test]
     fn recovered_float_call_context_preserves_core_loaded_ieee_bits() {
         // Exact semantic boundary from DecBench lighthouse: a project-local

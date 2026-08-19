@@ -2600,3 +2600,104 @@ def test_both_writers_actually_call_the_shared_precondition():
             f"{tool} no longer calls the shared fixture-declaration precondition; "
             f"an undeclared fixture would land in one baseline and not the other"
         )
+
+
+def test_float_array_and_union_members_are_describable_contracts() -> None:
+    """The three aggregate shapes the DWARF reader used to drop on the floor.
+
+    Until 2026-08-18 `extract_dwarf_signatures` refused any aggregate containing
+    a floating-point member, any array member, and every union outright. That is
+    not a small omission: those three shapes are the entire subject of
+    `195_by_value_aggregates`, `197_homogeneous_float_aggregates` and
+    `198_aggregate_return_edges`, and dropping the signature reports the cell as
+    `structural` with the detail "signature not recoverable from DWARF" -- a
+    status that reads as a deliberate limitation and is really a blind spot.
+    Measured before the fix: 30 cells across x86-64 and AArch64 could not reach
+    a verdict at all.
+
+    The refusal's stated reason was that the SysV eightbyte classifier "cannot
+    state" an SSE aggregate. Nothing here ever classified an eightbyte -- libffi
+    does, from the layout this descriptor carries -- so the reason described a
+    step that does not exist.
+    """
+    binary = _compile_so(
+        "struct pair2d { double x; double y; };\n"
+        "struct tagged { float value; int tag; };\n"
+        "struct arr2 { int v[2]; };\n"
+        "union bits { long i; double d; };\n"
+        "__attribute__((noinline)) struct pair2d make_pair2d(int s)"
+        " { struct pair2d p; p.x = s; p.y = s * 2; return p; }\n"
+        "__attribute__((noinline)) struct tagged make_tagged(int s)"
+        " { struct tagged t; t.value = s; t.tag = s * 2; return t; }\n"
+        "__attribute__((noinline)) struct arr2 make_arr2(int s)"
+        " { struct arr2 a; a.v[0] = s; a.v[1] = s * 2; return a; }\n"
+        "__attribute__((noinline)) union bits make_bits(int s)"
+        " { union bits u; u.d = s; return u; }",
+        "aggregate_member_kinds",
+    )
+
+    recovered = {signature["name"]: signature for signature in D.signatures(binary)}
+
+    assert recovered["make_pair2d"]["ret"] == {
+        "k": "struct",
+        "w": 16,
+        "fields": [
+            {"name": "x", "off": 0, "t": {"k": "float", "w": 8}},
+            {"name": "y", "off": 8, "t": {"k": "float", "w": 8}},
+        ],
+    }
+    assert recovered["make_tagged"]["ret"] == {
+        "k": "struct",
+        "w": 8,
+        "fields": [
+            {"name": "value", "off": 0, "t": {"k": "float", "w": 4}},
+            {"name": "tag", "off": 4, "t": {"k": "int", "w": 4, "s": True}},
+        ],
+    }
+    assert recovered["make_arr2"]["ret"] == {
+        "k": "struct",
+        "w": 8,
+        "fields": [
+            {
+                "name": "v",
+                "off": 0,
+                "t": {"k": "array", "n": 2, "e": {"k": "int", "w": 4, "s": True}},
+            }
+        ],
+    }
+    # A union is its OWN kind, not a struct whose members happen to share an
+    # offset: `_struct_ctype` refuses overlapping members on purpose, so
+    # spelling it as a struct would either be rejected or laid out sequentially
+    # at the wrong size.
+    assert recovered["make_bits"]["ret"] == {
+        "k": "union",
+        "w": 8,
+        "fields": [
+            {"name": "i", "off": 0, "t": {"k": "int", "w": 8, "s": True}},
+            {"name": "d", "off": 0, "t": {"k": "float", "w": 8}},
+        ],
+    }
+    # Every one of them is now an EXECUTABLE contract, not merely a described
+    # one: that is the whole point of recovering the signature.
+    for name in ("make_pair2d", "make_tagged", "make_arr2", "make_bits"):
+        assert D.exec_class(recovered[name], "unit-test")[0] == "exec", name
+
+
+def test_a_flexible_array_member_still_refuses_the_signature() -> None:
+    """An array with no bound has no extent, and inventing one is the failure.
+
+    `byte_size / sizeof(element)` would produce a plausible number for a
+    flexible array member and marshal a buffer nobody declared. The reader takes
+    the count from `DW_TAG_subrange_type` or refuses the whole signature, which
+    degrades the function to `structural` -- the fail-closed answer.
+    """
+    binary = _compile_so(
+        "struct flex { int n; int v[]; };\n"
+        "__attribute__((noinline)) int flex_sum(struct flex *f)"
+        " { int t = 0; for (int i = 0; i < f->n; i++) t += f->v[i]; return t; }",
+        "flexible_array_member",
+    )
+
+    recovered = {signature["name"]: signature for signature in D.signatures(binary)}
+
+    assert "flex_sum" not in recovered

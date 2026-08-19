@@ -39,9 +39,10 @@ use super::super::{
 };
 use super::{
     call_prototype_for_render, dec_is_stack_object, dec_is_wide_local,
-    expression_has_pointer_representation, renderable_field_access, try_array_index,
-    write_array_access_dec, write_call_dec, write_expr_dec, write_field_access_dec,
-    write_reg_lvalue_dec, write_representation_value_dec,
+    expression_has_pointer_representation, float_rendered_width, renderable_field_access,
+    try_array_index, write_array_access_dec, write_call_dec, write_expr_dec,
+    write_field_access_dec, write_float_expr_dec, write_reg_lvalue_dec,
+    write_representation_value_dec,
 };
 
 fn write_call_result_conversion_dec(
@@ -112,17 +113,24 @@ fn write_store_value_dec(src: &Expr, size: u8, out: &mut String) {
 /// that storage class. Store nodes retain byte width but not source-level type;
 /// using the exact producer declaration avoids turning an AAPCS-VFP return into
 /// an integer conversion while leaving untyped four-byte stores unchanged.
+///
+/// The pointee is the whole fix on this path, and it is a *reinterpretation*:
+/// `*(float *)(p) = (float)(x)` and `*(int *)(p) = (float)(x)` write the same
+/// four bytes only if the second does not exist, because C converts the value
+/// at that assignment (C23 6.3.1.4) and `movss` did not. Respelling the pointee
+/// is the cheapest spelling that preserves the bits — a same-bank pointer cast,
+/// with no union and no builtin — and it is available here precisely because
+/// the destination type on this path is ours to choose (it comes from the
+/// access WIDTH, not from a declaration). `197:*:O0:hfa197_make_tagged` wrote
+/// `0x00000003` where the machine wrote `0x40400000`.
+///
+/// The width must MATCH the value's. Four bytes of a `double` are not that
+/// `double`'s representation, so a narrow store of a wide float declines here
+/// and keeps its integer pointee.
 fn float_store_pointee_ctype(src: &Expr, size: u8) -> Option<&'static str> {
-    match src {
-        Expr::Reg(register @ VReg::Phys(_)) => {
-            match (declared_reg_ctype(register).as_str(), size) {
-                ("float", 4) => Some("float"),
-                ("double", 8) => Some("double"),
-                _ => None,
-            }
-        }
-        Expr::FloatConst { width: 4, .. } if size == 4 => Some("float"),
-        Expr::FloatConst { width: 8, .. } if size == 8 => Some("double"),
+    match (float_rendered_width(src), size) {
+        (Some(4), 4) => Some("float"),
+        (Some(8), 8) => Some("double"),
         _ => None,
     }
 }
@@ -227,12 +235,23 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             }
             // Use the access width so a 4-byte store emits `*(int *)`, not a
             // blanket `*(long *)` that would clobber the adjacent element.
-            let pointee_type =
-                float_store_pointee_ctype(src, *size).unwrap_or_else(|| store_pointee_ctype(*size));
+            let float_pointee = float_store_pointee_ctype(src, *size);
+            let pointee_type = float_pointee.unwrap_or_else(|| store_pointee_ctype(*size));
             let _ = write!(out, "*({pointee_type} *)(");
             write_expr_dec(addr, out);
             out.push_str(") = ");
-            write_store_value_dec(src, *size, out);
+            match float_pointee {
+                // The pointee and the value have to be decided together. Naming
+                // a `float` pointee and then printing the value through the
+                // integer renderer spells a floating divisor as the INTEGER
+                // 0x40000000 (`201:gcc:O0:f201_f32_slot_values`), and C would
+                // then convert that integer to 1073741824.0f rather than read
+                // it as 2.0f. `write_float_expr_dec` is the same renderer the
+                // LOAD side of this fixture already used, which is why the two
+                // ends of one object disagreed about it.
+                Some(_) => write_float_expr_dec(src, *size, out),
+                None => write_store_value_dec(src, *size, out),
+            }
             out.push_str(";\n");
         }
         Stmt::Call {

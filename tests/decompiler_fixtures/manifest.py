@@ -2091,6 +2091,35 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     # A2 loop-form acceptance: after reload folding, the source head test must
     # become the loop condition rather than an explicit break inside while (1).
     ("12_loop_rotation", "factorial_while"): {"head_tested_while": True},
+    # A 2D-ARRAY PARAMETER CANNOT BE SYNTHESISED BY THE HARNESS, so both of these
+    # are `structural` in every lane and nothing executes behind them. They carried
+    # no assertion at all until the DWARF extractor learned to describe array
+    # members, at which point `gen_structural_baseline.py` correctly refused to
+    # write a baseline that named them as gaps.
+    # THE PAIR IS THE ASSERTION. Same fixture, same `const int32_t grid[R][C]`
+    # parameter, same `int32_t` return, same bounds-check prologue -- and one has
+    # both loop forms while the other has neither. A recovery that hallucinates a
+    # loop over the row decay, or that flattens the nested loop away, breaks
+    # exactly one side of the contrast.
+    # `memory_store` is False on both deliberately: both functions only READ the
+    # grid, so a recovery that turns an indexed load into a store is caught here
+    # rather than surfacing later as an unexplained execution failure.
+    # NOT asserted: `indirect_call`. It measures True for both despite neither
+    # containing a call of any kind -- its first regex matches any `))(`, which
+    # ordinary nested casts produce, and it fires on 31% of sampled corpus
+    # functions. Asserting it here would record a tautology.
+    ("108_multidimensional_arrays", "sum_true_2d"): {
+        "for_loop": True,
+        "head_tested_while": True,
+        "memory_store": False,
+        "nonempty": True,
+    },
+    ("108_multidimensional_arrays", "row_decay_span"): {
+        "for_loop": False,
+        "head_tested_while": False,
+        "memory_store": False,
+        "nonempty": True,
+    },
     ("08_indirect_dispatch", "dispatch"): {"indirect_call": True},
     ("08_indirect_dispatch", "apply"): {"indirect_call": True},
     ("08_indirect_dispatch", "tail_dispatch"): {"indirect_call": True},
@@ -3169,6 +3198,37 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "ptr199_find_index",
         "ptr199_find_void",
         "ptr199_offset",
+    ],
+    # A FLOATING VALUE STORED THROUGH INTEGER-TYPED STORAGE. The destination
+    # type on a store comes from the ACCESS WIDTH, so a four-byte `movss` was
+    # recovered as `*(int *)(p) = (float)(...)` — C's arithmetic conversion,
+    # which wrote 1 for 1.5f where the machine wrote 0x3FC00000.
+    # A census of the whole corpus found 33 such statements in 12 functions
+    # (`195`, `197`, `198`, plus `172`, `174`, `175`, `181`), and NOT ONE of
+    # them was directly executed: the aggregate-returning ones are recorded
+    # `structural` because `exec_class` refuses their return, `174`'s
+    # `fp174_float_bits` is a local symbol with no baseline row, and the rest
+    # were already `fail` for unrelated reasons. So the defect had no lane that
+    # could report it. Every function here is scalar-argument and
+    # `int32_t`-returning, so every one of them is executed.
+    # THE NEGATIVE CONTROLS ARE THE POINT, because `movss` and `cvttss2si` are
+    # one instruction apart and only one of them is a reinterpretation.
+    # f201_f32_slot_values and f201_f64_copy_then_convert do the same arithmetic
+    # on the same values and TRUNCATE, so a recovery that satisfies the
+    # positives by simply never converting fails exactly there; the second also
+    # puts a bit copy and a conversion in ONE function, so deciding per-object
+    # rather than per-access is wrong whichever way it decides.
+    # f201_scalar_control has no floating point at all, separating a recovery
+    # that damaged ordinary integer stores from one that did not.
+    "201_float_bit_stores": [
+        "f201_f32_single_bits",
+        "f201_f32_slot_bits",
+        "f201_f32_slot_values",
+        "f201_f64_copy_then_convert",
+        "f201_f64_slot_bits",
+        "f201_scalar_control",
+        "f201_store_through_pointer",
+        "f201_word_to_value",
     ],
     # A pending load held across a store to a DISJOINT slot of the same frame
     # object. `dfs196_spill_web` is the positive; the three controls are stores
