@@ -153,6 +153,18 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   in pytest: `pytest.ini` deselects `-m decbench` by default, so no ordinary test
   run reaches the fork. `docs/design/decompiler-roadmap.md` Appendix A holds the
   metric/evaluation plan and is explicitly not a work queue.
+- **The def-use census is NOT in the fast suite, so a signature change ships
+  without it.** `test_decompiler_defuse_census.py` needs `-m ""` to run at all,
+  which means the gate list people actually type (`dectest @o0 @o2` plus the
+  fixture/structural/arch tests) never touches it. Any change that alters a
+  RECOVERED SIGNATURE -- argument arity, parameter type, return type -- changes
+  the emitted body and therefore the undefined-read count, and it will not show
+  up until someone runs the census by hand. On 2026-08-19 an arity fix
+  (`11d55613`) moved `rustc:O0` +20 and `rustc:O2` +12 and shipped with the
+  baseline unrefreshed; it took three A/B experiments to attribute, because two
+  later changes were suspected first and each took a full build to exonerate.
+  Run `uv run pytest python/tests/test_decompiler_defuse_census.py -q -m ""`
+  alongside the other gates whenever prototypes can move.
 - **Run `tools/build_guard.py` before EVERY baseline regeneration.** A baseline
   written against a stale `.so` records the old behaviour under the new commit,
   and nothing downstream can tell. On 2026-08-19 a measurement sequence that

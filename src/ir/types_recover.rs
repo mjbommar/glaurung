@@ -34,7 +34,7 @@ mod valued;
 use float_bank::float_argument_bank_slot;
 use float_bank::{
     float_live_in_slots, has_float_argument_bank, mixed_entry_spill_order,
-    scalar_float_intrinsic_width, scalar_vfp_register,
+    scalar_float_intrinsic_width, scalar_vfp_register, x86_binary64_live_in_slots,
 };
 use result_hint::{
     call_result_has_only_guard_uses, join_result_hints, non_return_live_values,
@@ -1631,10 +1631,20 @@ pub fn recover_prototype_with_arm_vfp_args(
         // and by the arithmetic that consumes it otherwise. AArch64 is the one
         // case that does not have to guess: the register spelling states the
         // width, `d0` being binary64 exactly as `s0` is binary32.
+        //
+        // `x86_binary64_live_in_slots` is "the arithmetic that consumes it" on
+        // the one convention whose register spelling cannot answer. It raises
+        // the floor and only the floor: a slot it does not name keeps the four
+        // bytes it had.
+        let binary64_slots = x86_binary64_live_in_slots(lf, cc);
         let vfp_parameters: Vec<RecoveredParameter> = float_live_in_slots(lf, cc)
             .into_iter()
             .map(|(slot, observed)| {
-                let width = if observed.starts_with('d') { 8 } else { 4 };
+                let width = if observed.starts_with('d') || binary64_slots.contains(&slot) {
+                    8
+                } else {
+                    4
+                };
                 RecoveredParameter {
                     slot,
                     value: SsaValue {
@@ -1939,6 +1949,76 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    /// An `xmm` argument register is the same eight bytes for a `float` and for
+    /// a `double`, so only the arithmetic can say which. `mulsd` reads binary64.
+    #[test]
+    fn x86_sse_parameter_consumed_by_a_binary64_op_recovers_as_a_double() {
+        let function = mk_block(vec![
+            Op::Intrinsic {
+                name: "mulsd".into(),
+                ins: vec![
+                    Value::Reg(VReg::phys("xmm0")),
+                    Value::Reg(VReg::phys("xmm1")),
+                ],
+                outs: vec![(VReg::phys("xmm0"), crate::ir::types::Width::W64)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            prototype
+                .parameters()
+                .iter()
+                .map(|parameter| parameter.hint)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(TypeHint::Float { width: 8 }),
+                Some(TypeHint::Float { width: 8 })
+            ],
+            "both operands of a scalar-double multiply enter as binary64: {function:#?}"
+        );
+    }
+
+    /// The four-byte floor stands where the arithmetic is binary32, and a
+    /// conversion is read by its SOURCE width: `cvtss2sd` produces a `double`
+    /// from a `float`, so its operand is still a `float`.
+    #[test]
+    fn x86_sse_parameter_widened_by_a_conversion_keeps_the_binary32_floor() {
+        let function = mk_block(vec![
+            Op::Intrinsic {
+                name: "cvtss2sd".into(),
+                ins: vec![Value::Reg(VReg::phys("xmm0"))],
+                outs: vec![(VReg::phys("xmm1"), crate::ir::types::Width::W64)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            prototype
+                .parameters()
+                .first()
+                .and_then(|parameter| parameter.hint),
+            Some(TypeHint::Float { width: 4 }),
+            "{function:#?}"
+        );
     }
 
     #[test]

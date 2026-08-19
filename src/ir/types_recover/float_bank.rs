@@ -157,6 +157,104 @@ fn is_scalarised_vector_lane(cc: crate::ir::call_args::CallConv, name: &str) -> 
         .is_some_and(|view| !view.is_parent())
 }
 
+/// The byte width of the FLOAT operands a scalar x86 SSE mnemonic *reads*.
+///
+/// The mirror image of [`scalar_float_intrinsic_name_width`], which answers what
+/// the destination HOLDS. The two disagree on every conversion and that is the
+/// whole point: `cvtss2sd` produces binary64 from a binary32 source, `cvtsd2ss`
+/// the reverse, and `cvttsd2si` produces an integer from a binary64 source.
+/// Asking the destination question about an INPUT — which is what an incoming
+/// parameter is — gets `cvtss2sd` exactly backwards and types a `float`
+/// parameter `double`.
+///
+/// `cvtsi2ss`/`cvtsi2sd` are absent: their source is an integer register, so
+/// they say nothing about the width of any float. So is every packed operation;
+/// this is about scalars.
+fn scalar_float_source_width(name: &str) -> Option<u8> {
+    match name {
+        "addss" | "subss" | "mulss" | "divss" | "sqrtss" | "comiss" | "cvtss2sd" | "cvttss2si"
+        | "cvtss2si" => Some(4),
+        "addsd" | "subsd" | "mulsd" | "divsd" | "sqrtsd" | "comisd" | "cvtsd2ss" | "cvttsd2si"
+        | "cvtsd2si" => Some(8),
+        _ => None,
+    }
+}
+
+/// SSE argument bank slots proven to hold a binary64 value on entry.
+///
+/// [`float_live_in_slots`] can say WHICH bank slots are live in but not how wide
+/// the value in one is: on x86-64 `xmm0` is the same register for a `float` and
+/// for a `double`, unlike AAPCS64 where the spelling states it (`s0` is binary32
+/// exactly as `d0` is binary64). The recovered width was therefore pinned at
+/// four — "a floor, not a claim", with the claim deferred to "the arithmetic
+/// that consumes it". This is that arithmetic; measured on the stripped lane on
+/// 2026-08-19, the deferral had no implementation, so EVERY `double` parameter
+/// of EVERY x86-64 function recovered without DWARF was declared `float`, and
+/// the body then wrapped each use in a `(double)` cast that reads the low half
+/// of a binary64 value as a binary32 one.
+///
+/// Evidence, never inference, and unanimous evidence at that. A slot is claimed
+/// only when at least one scalar-float instruction consumes its incoming value
+/// and EVERY such instruction reads eight bytes; a single binary32 consumer, or
+/// no consumer at all, leaves the four-byte floor exactly where it was. Reads
+/// after the slot has been defined are ignored — they are about the function's
+/// own value, not its parameter — which is the same rule
+/// [`float_live_in_slots`] applies to the spelling.
+pub(super) fn x86_binary64_live_in_slots(
+    lf: &LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+) -> HashSet<usize> {
+    use crate::ir::call_args::CallConv;
+    if !matches!(cc, CallConv::SysVAmd64 | CallConv::Win64) {
+        return HashSet::new();
+    }
+    // slot -> the source widths every scalar-float consumer of its live-in read.
+    let mut evidence: HashMap<usize, HashSet<u8>> = HashMap::new();
+    let mut defined: HashSet<usize> = HashSet::new();
+    // Entry block first, for the reason `float_live_in_slots` states: the block
+    // vector is a CFG collection and a join block can precede the entry.
+    let blocks = lf
+        .blocks
+        .iter()
+        .filter(|block| block.start_va == lf.entry_va)
+        .chain(
+            lf.blocks
+                .iter()
+                .filter(|block| block.start_va != lf.entry_va),
+        );
+    for block in blocks {
+        for instruction in &block.instrs {
+            let (definition, uses) = def_uses(&instruction.op);
+            if let Op::Intrinsic { name, .. } = &instruction.op {
+                if let Some(width) = scalar_float_source_width(name) {
+                    for (use_index, used) in uses.iter().enumerate() {
+                        if !use_is_proven_input(&instruction.op, use_index) {
+                            continue;
+                        }
+                        let Some(slot) = float_argument_bank_slot(cc, used) else {
+                            continue;
+                        };
+                        if defined.contains(&slot) {
+                            continue;
+                        }
+                        evidence.entry(slot).or_default().insert(width);
+                    }
+                }
+            }
+            if let Some(definition) = definition {
+                if let Some(slot) = float_argument_bank_slot(cc, &definition) {
+                    defined.insert(slot);
+                }
+            }
+        }
+    }
+    evidence
+        .into_iter()
+        .filter(|(_, widths)| widths.len() == 1 && widths.contains(&8))
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
 /// Whether `cc` passes floating-point arguments in a register bank of its own.
 pub(super) fn has_float_argument_bank(cc: crate::ir::call_args::CallConv) -> bool {
     use crate::ir::call_args::CallConv;

@@ -4854,7 +4854,7 @@
   },
   "146_opaque_predicates:armv7:O0": {
     "opaque_always_true": "pass",
-    "opaque_guarded_store": "fail",
+    "opaque_guarded_store": "pass",
     "opaque_loop_filter": "pass",
     "opaque_square_residue": "pass",
     "opaque_two_way_join": "pass",
@@ -4870,7 +4870,7 @@
   },
   "146_opaque_predicates:armv7_a32:O0": {
     "opaque_always_true": "pass",
-    "opaque_guarded_store": "fail",
+    "opaque_guarded_store": "pass",
     "opaque_loop_filter": "pass",
     "opaque_square_residue": "pass",
     "opaque_two_way_join": "pass",
@@ -6503,7 +6503,7 @@
   },
   "165_bitstream_reader:armv7:O2": {
     "bit165_cross_check": "fail",
-    "bit165_read_bits": "fail",
+    "bit165_read_bits": "pass",
     "bit165_read_sequence": "fail",
     "bit165_roundtrip": "fail",
     "bit165_write_frame": "pass"

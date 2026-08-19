@@ -122,8 +122,10 @@ fn integer_ctype_width(ctype: &str) -> Option<u8> {
 
 /// The function's C return type, derived from the value *actually returned*
 /// rather than from a register literally named `ret`. Walks to the first
-/// `return <expr>` and types that expression; falls back to `ctype_for("ret")`
-/// (finally `long`) when the returned value has no recovered type.
+/// `return <expr>` and types that expression — after one narrower pass that
+/// steps over `return 0;` in search of a pointer, see [`SkipNullReturns`];
+/// falls back to `ctype_for("ret")` (finally `long`) when the returned value
+/// has no recovered type.
 ///
 /// This is the value-keyed replacement for the bare-`ret` string lookup, which
 /// silently defaulted to `long` whenever value renaming moved the return value
@@ -133,7 +135,34 @@ pub(crate) fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'stati
     if let Some(types) = tm.filter(|types| types.is_locked(&ret)) {
         return types.get(&ret).map(hint_to_ctype).unwrap_or("long");
     }
-    first_return_value_ctype(body, tm).unwrap_or_else(|| ctype_for("ret", tm))
+    first_return_value_ctype(body, tm, SkipNullReturns::Yes)
+        .filter(|candidate| candidate.ends_with('*'))
+        .or_else(|| first_return_value_ctype(body, tm, SkipNullReturns::No))
+        .unwrap_or_else(|| ctype_for("ret", tm))
+}
+
+/// Whether `return 0;` may decide the function's return type.
+///
+/// `0` is the one integer literal that is also C's NULL POINTER CONSTANT, so a
+/// `return 0;` genuinely cannot distinguish `int` from `T *` — and nearly every
+/// pointer-returning function opens with a guard clause that has one. Taking
+/// the first return unconditionally is how `int32_t *ptr199_edge_element` came
+/// out declared `int`, returning a pointer truncated to its low half. Measured
+/// on the stripped lane on 2026-08-19: three cells in `199_pointer_return_kinds`
+/// whose ONLY prototype defect was that.
+///
+/// So a first pass steps over `return 0;` — and its answer is used ONLY when
+/// what it found is a pointer. Everything else falls through to the original
+/// pass unchanged. The narrowness is deliberate and was measured: a version
+/// that let any later return site outrank the literal widened five OTHER
+/// prototypes from `int` to `unsigned long`, on the strength of a `ret` hint
+/// that defaults to the machine word, and moved no verdict in either direction
+/// to say so. `0` is ambiguous between an integer and a pointer; it is not
+/// ambiguous between two integer widths.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SkipNullReturns {
+    Yes,
+    No,
 }
 
 /// The byte width of the return type this render will declare.
@@ -214,10 +243,17 @@ fn fold_return_abi_extensions_body(body: &mut [Stmt], return_width: u8) {
     }
 }
 
-fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'static str> {
+fn first_return_value_ctype(
+    body: &[Stmt],
+    tm: Option<&TypeMap>,
+    skip_nulls: SkipNullReturns,
+) -> Option<&'static str> {
     for s in body {
         match s {
             Stmt::Return { value: Some(e) } => {
+                if skip_nulls == SkipNullReturns::Yes && matches!(e, Expr::Const(0)) {
+                    continue;
+                }
                 if let Some(t) = expr_ctype(e, tm) {
                     return Some(t);
                 }
@@ -237,33 +273,33 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
                 else_body,
                 ..
             } => {
-                if let Some(t) = first_return_value_ctype(then_body, tm) {
+                if let Some(t) = first_return_value_ctype(then_body, tm, skip_nulls) {
                     return Some(t);
                 }
                 if let Some(eb) = else_body {
-                    if let Some(t) = first_return_value_ctype(eb, tm) {
+                    if let Some(t) = first_return_value_ctype(eb, tm, skip_nulls) {
                         return Some(t);
                     }
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                if let Some(t) = first_return_value_ctype(body, tm) {
+                if let Some(t) = first_return_value_ctype(body, tm, skip_nulls) {
                     return Some(t);
                 }
             }
             Stmt::For { body, .. } => {
-                if let Some(t) = first_return_value_ctype(body, tm) {
+                if let Some(t) = first_return_value_ctype(body, tm, skip_nulls) {
                     return Some(t);
                 }
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
-                    if let Some(t) = first_return_value_ctype(b, tm) {
+                    if let Some(t) = first_return_value_ctype(b, tm, skip_nulls) {
                         return Some(t);
                     }
                 }
                 if let Some(b) = default {
-                    if let Some(t) = first_return_value_ctype(b, tm) {
+                    if let Some(t) = first_return_value_ctype(b, tm, skip_nulls) {
                         return Some(t);
                     }
                 }
@@ -272,4 +308,66 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn type_map(entries: &[(&str, TypeHint)]) -> TypeMap {
+        let mut tm = TypeMap::default();
+        for (name, hint) in entries {
+            tm.upsert_public(VReg::phys(*name), *hint);
+        }
+        tm
+    }
+
+    fn guarded(early: Expr, late: Expr) -> Vec<Stmt> {
+        vec![
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: crate::ir::types::CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+                then_body: vec![Stmt::Return { value: Some(early) }],
+                else_body: None,
+            },
+            Stmt::Return { value: Some(late) },
+        ]
+    }
+
+    /// `if (!buf) return 0;` is a null POINTER constant as readily as it is an
+    /// `int`, so it must not declare a pointer-returning function `int` — which
+    /// truncates the returned address to its low half.
+    #[test]
+    fn a_null_guard_does_not_decide_the_return_type_of_a_pointer_returning_function() {
+        let tm = type_map(&[("arg0", TypeHint::Pointer { pointee_width: 4 })]);
+        let body = guarded(Expr::Const(0), Expr::Reg(VReg::phys("arg0")));
+        assert_eq!(infer_return_ctype(&body, Some(&tm)), "int *");
+    }
+
+    /// The narrowness of that rule, stated as a test: `0` is ambiguous between
+    /// an integer and a pointer, NOT between two integer widths. A second
+    /// return site that is merely wider does not outrank the guard.
+    #[test]
+    fn a_null_guard_still_decides_against_a_merely_wider_integer_return() {
+        let tm = type_map(&[(
+            "ret",
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        )]);
+        let body = guarded(Expr::Const(0), Expr::Reg(VReg::phys("ret")));
+        assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
+    }
+
+    /// And a nonzero literal is not a null pointer constant at all.
+    #[test]
+    fn a_nonzero_literal_guard_still_decides_the_return_type() {
+        let tm = type_map(&[("arg0", TypeHint::Pointer { pointee_width: 4 })]);
+        let body = guarded(Expr::Const(-1), Expr::Reg(VReg::phys("arg0")));
+        assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
+    }
 }

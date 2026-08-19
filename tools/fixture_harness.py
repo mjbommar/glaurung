@@ -325,6 +325,42 @@ def _c_argv(
     ]
 
 
+def _canonical_source(src: Path) -> Path:
+    """`src` as a ROOT-RELATIVE path, whatever spelling the caller used.
+
+    Canonicalising matters because `_normalized_argv` rewrites the literal ROOT
+    prefix, which a relative path does not carry -- so the same build
+    fingerprinted two ways depending on whether the caller passed
+    `tests/.../x.c` or the absolute path, and every lane read as stale on the
+    next check.
+
+    It canonicalises DOWNWARD, to the relative form, and that direction is not a
+    style choice. `rustc`'s `--remap-path-prefix` rewrites only what matches the
+    prefix, so an absolute source becomes `./tests/...` while a relative one
+    stays `tests/...` -- a one-character difference that rustc embeds, changing
+    the object bytes and therefore the decompiler's output. Measured on
+    `166_rust_generics.rs`:
+
+        relative  sha=966f5ab828ca98f0   embeds `tests/decompiler_fixtures/...`
+        absolute  sha=8214c0a6f3727f0d   embeds `./tests/decompiler_fixtures/...`
+
+    Canonicalising upward silently rebuilt every Rust object and moved the
+    def-use census by 20 violations in `rustc:O0` and 12 in `rustc:O2`, which
+    the ratchet then reported as a regression in whatever change happened to be
+    in flight. Relative is also the form the committed baselines were measured
+    with. `compile_fixture` runs with `cwd=ROOT`, so the compiler resolves it
+    identically either way.
+    """
+    if not src.is_absolute():
+        return src
+    try:
+        return src.resolve().relative_to(ROOT)
+    except ValueError:
+        # Outside the checkout: nothing to make relative to, and the remap flag
+        # will not touch it either. Leave it exactly as given.
+        return src
+
+
 def compile_plan(
     src: Path, cc: str, opt: str, strict: bool = False
 ) -> tuple[str, Path, list[str]]:
@@ -344,7 +380,7 @@ def compile_plan(
     # the same object recorded `.../src/x.c` one way and `$ROOT/.../src/x.c` the
     # other and every lane read as stale on the next check. Resolving here makes
     # the key a function of the build rather than of the caller's spelling.
-    src = src if src.is_absolute() else (ROOT / src).resolve()
+    src = _canonical_source(src)
     if src.suffix == ".rs":
         out = BUILD / f"{src.stem}-rustc-{opt}.so"
         return "rustc", out, _rust_argv(src, opt, out, strict)

@@ -58,6 +58,26 @@
       "measure": "undefined_reads",
       "reason": "NOT a new violation -- a RENUMBERING. Count is 1 before and 1 after (the guard itself prints +0). Same single undefined read at the same position, 'var56 = var81;' in the else arm, with 'long var81;' declared and never assigned; it was 'var79' before. The byte-view 'not' fix changes how many temporaries the function emits, which shifts every subsequent temporary number. The per-cell census keys on the variable NAME, so a pure renumbering registers as one resolved plus one new.",
       "to": 1
+    },
+    {
+      "attributable_delta": 20,
+      "delta": 20,
+      "from": 7547,
+      "key": "rustc:O0",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "the ARITY FIX in 11d55613 (live_in_arg_slots_llir: a read is live-in evidence only at version zero), NOT the prototype-recovery change in this commit. That commit shipped without regenerating the def-use baseline, because the census is not in the fast suite. Proven by reverting ONLY src/ir/value_number.rs to 11d55613^, rebuilding, and re-censusing: 7547/4466 -- the recorded ceilings exactly. Three other hypotheses were eliminated the same way first, each giving byte-identical output: the prototype-recovery patch, the DWARF/float-store work, and the source-path canonicalisation. Removing a spurious argument slot changes the recovered signature and therefore the body, so a raw violation count moves; the change itself can only ever REMOVE a slot, never add one.",
+      "to": 7567
+    },
+    {
+      "attributable_delta": 12,
+      "delta": 12,
+      "from": 4466,
+      "key": "rustc:O2",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "same arity fix (11d55613); reverting src/ir/value_number.rs alone reproduces the recorded 4466 exactly.",
+      "to": 4478
     }
   ],
   "fixture_lane_totals": {
@@ -1684,7 +1704,7 @@
     "166_rust_generics:rustc:O0": {
       "functions_emitted": 592,
       "functions_with_violations": 396,
-      "violations": 1501
+      "violations": 1505
     },
     "166_rust_generics:rustc:O2": {
       "functions_emitted": 22,
@@ -1694,12 +1714,12 @@
     "167_rust_trait_objects:rustc:O0": {
       "functions_emitted": 593,
       "functions_with_violations": 393,
-      "violations": 1493
+      "violations": 1497
     },
     "167_rust_trait_objects:rustc:O2": {
       "functions_emitted": 573,
       "functions_with_violations": 382,
-      "violations": 1485
+      "violations": 1489
     },
     "168_rust_enum_niche:rustc:O0": {
       "functions_emitted": 38,
@@ -1714,12 +1734,12 @@
     "169_rust_slices_bounds:rustc:O0": {
       "functions_emitted": 623,
       "functions_with_violations": 418,
-      "violations": 1548
+      "violations": 1552
     },
     "169_rust_slices_bounds:rustc:O2": {
       "functions_emitted": 565,
       "functions_with_violations": 379,
-      "violations": 1477
+      "violations": 1481
     },
     "16_red_black_tree:clang:O0": {
       "functions_emitted": 11,
@@ -1744,17 +1764,17 @@
     "170_rust_panic_unwind:rustc:O0": {
       "functions_emitted": 596,
       "functions_with_violations": 396,
-      "violations": 1501
+      "violations": 1505
     },
     "170_rust_panic_unwind:rustc:O2": {
       "functions_emitted": 573,
       "functions_with_violations": 388,
-      "violations": 1493
+      "violations": 1497
     },
     "171_rust_overflow:rustc:O0": {
       "functions_emitted": 590,
       "functions_with_violations": 388,
-      "violations": 1491
+      "violations": 1495
     },
     "171_rust_overflow:rustc:O2": {
       "functions_emitted": 29,
@@ -3986,12 +4006,12 @@
     "rustc:O0": {
       "functions_emitted": 3032,
       "functions_with_violations": 2002,
-      "violations": 7547
+      "violations": 7567
     },
     "rustc:O2": {
       "functions_emitted": 1787,
       "functions_with_violations": 1159,
-      "violations": 4466
+      "violations": 4478
     }
   },
   "problems": [],

@@ -159,11 +159,6 @@
     "kind": "regression",
     "stripped": "fail"
   },
-  "172_float_double_widths:clang:O2strip:double_precision_horner": {
-    "debug": "pass",
-    "kind": "regression",
-    "stripped": "fail"
-  },
   "172_float_double_widths:gcc:O2strip:double_precision_horner": {
     "debug": "pass",
     "kind": "regression",
@@ -220,21 +215,6 @@
     "stripped": "fail"
   },
   "181_compensated_summation:clang:O2strip:compensation_of_step": {
-    "debug": "pass",
-    "kind": "regression",
-    "stripped": "fail"
-  },
-  "181_compensated_summation:clang:O2strip:difference_of_products": {
-    "debug": "pass",
-    "kind": "regression",
-    "stripped": "fail"
-  },
-  "181_compensated_summation:gcc:O2strip:compensation_of_step": {
-    "debug": "pass",
-    "kind": "regression",
-    "stripped": "fail"
-  },
-  "181_compensated_summation:gcc:O2strip:difference_of_products": {
     "debug": "pass",
     "kind": "regression",
     "stripped": "fail"
@@ -370,11 +350,6 @@
     "stripped": "fail"
   },
   "199_pointer_return_kinds:clang:O2strip:ptr199_find_const": {
-    "debug": "pass",
-    "kind": "regression",
-    "stripped": "fail"
-  },
-  "199_pointer_return_kinds:gcc:O2strip:ptr199_edge_element": {
     "debug": "pass",
     "kind": "regression",
     "stripped": "fail"
