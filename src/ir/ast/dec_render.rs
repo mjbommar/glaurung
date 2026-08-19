@@ -132,6 +132,46 @@ fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
     target_int_ctype(false, 8)
 }
 
+/// The `(wide)((narrow)x)` spellings a LEFT shift's operand needs when the
+/// count is at least as wide as the operand's DECLARED type, or `None`.
+///
+/// `x << k` where `x` is declared `int32_t` and `k` is 33 is undefined in C
+/// (C23 6.5.7p3) and in practice shifts by `k % 32`, which is not what the
+/// machine did: `shl %rdi, $33` shifted the whole 64-bit register. The count
+/// alone proves the operand was wider than its declaration says, so this is a
+/// rule about a contradiction rather than a guess about intent —
+/// `197:clang:O2:hfa197_make_tagged` composes `tag` into the high eightbyte
+/// exactly this way.
+///
+/// The narrow cast is applied FIRST and is unsigned, which is the same
+/// wraparound spelling `write_expr_dec` uses everywhere else: the caller
+/// materialised the parameter with a 32-bit move, so the register's high half
+/// is the ZERO extension of the declared value, not its sign extension.
+///
+/// Only a register with a declared integer type qualifies. Nothing else states
+/// a width this can contradict, and a shift whose count already fits the
+/// operand is left exactly as it was.
+fn wide_left_shift_operand_ctypes(lhs: &Expr, rhs: &Expr) -> Option<(&'static str, &'static str)> {
+    let Expr::Const(count) = rhs else {
+        return None;
+    };
+    let Expr::Reg(register) = lhs else {
+        return None;
+    };
+    let count = u64::try_from(*count).ok()?;
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let width = crate::ir::call_contracts::integer_c_type_width(
+        &declared_reg_ctype(register),
+        pointer_width,
+    )?;
+    (count >= u64::from(width) * 8 && count < u64::from(pointer_width) * 8).then(|| {
+        (
+            target_int_ctype(false, pointer_width),
+            target_int_ctype(false, width),
+        )
+    })
+}
+
 /// Recognise the array-index idiom `base + index*sizeof(T)` for a `T`-sized
 /// access, where `base` is a pointer declared with pointee width == `size`.
 /// Returns `(base name, index expr)` so the deref renders as `base[index]`,
@@ -769,6 +809,15 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 out.push_str(" >> ");
                 write_expr_dec(rhs, out);
                 out.push(')');
+            } else if let Some((wide, narrow)) = matches!(op, BinOp::Shl)
+                .then(|| wide_left_shift_operand_ctypes(lhs, rhs))
+                .flatten()
+            {
+                let _ = write!(out, "(({wide})(({narrow})(");
+                write_expr_dec(lhs, out);
+                out.push_str(")) << ");
+                write_expr_dec(rhs, out);
+                out.push(')');
             } else if matches!(op, BinOp::Sar) {
                 // Preserve both signedness and machine width at the point of
                 // the shift. The explicit AST cast may otherwise be elided as
@@ -827,7 +876,25 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     int_ctype(*signed, *width)
                 };
                 let _ = write!(out, "({c_type})(");
-                write_expr_dec(expr, out);
+                // `Expr::Cast` is an INTEGER cast by construction — a width
+                // and a signedness, nothing else — so an operand that RENDERS
+                // as a `float` is a bit view of one, never a value to convert.
+                // The machine agrees: `movd %xmm0, %eax` copies bits. Printing
+                // the operand plainly made C perform its own float-to-integer
+                // conversion instead, so a `float` member composed into an
+                // INTEGER-class result handed back the NUMBER where the callee
+                // had put the BIT PATTERN (`197:*:O2:hfa197_make_tagged`).
+                //
+                // The statement-level path (`write_representation_value_dec`)
+                // has done this since the `fp174_float_bits` family was fixed;
+                // this is the same rule in expression position, which is where
+                // an optimised body puts it once the assignment is folded away.
+                // A genuine conversion is `Expr::NumericConvert` and is
+                // rendered by the arm below, untouched.
+                match float_rendered_width(expr) {
+                    Some(float_width) => write_float_bits_expr_dec(expr, float_width, out),
+                    None => write_expr_dec(expr, out),
+                }
                 out.push(')');
             }
         }

@@ -717,10 +717,35 @@ fn recover_decbench_prototype(
         arm_vfp_args,
     );
     if let Some(declared) = declared {
-        let parameter_hints = declared
-            .parameter_types
-            .iter()
-            .flat_map(|parameter| {
+        // A MEMORY-class result is not in a register at all: the CALLER
+        // allocates the object and passes its address in the first INTEGER
+        // argument register, so every declared parameter arrives one register
+        // further right than its source position says. Without the shift the
+        // declaration's first formal is locked onto the hidden pointer's
+        // register and the real first argument is left with no storage at all
+        // — measured on 2026-08-18, `struct agr198_five agr198_make_five(int32_t
+        // seed)` recovered as `f(int)` with `seed` reading an undefined value
+        // and callers narrowing a 64-bit stack address through `(int)`.
+        //
+        // The pointer is spelled as a parameter rather than modelled as a
+        // separate output because on System V it IS an ordinary argument slot.
+        // AAPCS64's equivalent uses `x8`, which is not in the argument bank and
+        // therefore cannot be reached this way; that convention has
+        // `ReturnClass::IndirectBuffer` and `aapcs64_indirect_result` instead,
+        // and `declared_return_class` never answers `Memory` for it.
+        let hidden_return_pointer = matches!(
+            &declared.return_type,
+            DwarfReturnType::Type(c_type)
+                if crate::ir::return_class::declared_return_class(c_type, cc, type_env)
+                    == Some(crate::ir::abi::ReturnClass::Memory)
+        );
+        let hidden_return_hint =
+            hidden_return_pointer.then_some(Some(crate::ir::types_recover::TypeHint::Pointer {
+                pointee_width: 1,
+            }));
+        let parameter_hints = hidden_return_hint
+            .into_iter()
+            .chain(declared.parameter_types.iter().flat_map(|parameter| {
                 let DwarfParameterType::Type(c_type) = parameter else {
                     return vec![None];
                 };
@@ -744,8 +769,34 @@ fn recover_decbench_prototype(
                         Some(crate::ir::types_recover::TypeHint::Float { width: high_bytes }),
                     ];
                 }
+                // The same argument one bank over. A by-value aggregate of two
+                // INTEGER eightbytes is ONE source parameter in TWO general
+                // registers, and `f(struct {uint32_t q[4];})` has the register
+                // contract of `f(unsigned long, unsigned long)` exactly. Unlike
+                // the SSE case this one had no model at all: a sixteen-byte
+                // aggregate has no scalar type hint, so the storage projection
+                // declined and the declaration collapsed to a single `long`
+                // parameter with the second eightbyte read from nothing. The
+                // second hint carries the OCCUPANCY, so a twelve-byte
+                // `{int32_t a,b,c;}` declares four bytes and not eight.
+                if let Some(high_bytes) =
+                    crate::ir::return_class::declared_integer_pair_parameter_high_bytes(
+                        c_type, cc, type_env,
+                    )
+                {
+                    return vec![
+                        Some(crate::ir::types_recover::TypeHint::Int {
+                            signed: false,
+                            width: 8,
+                        }),
+                        Some(crate::ir::types_recover::TypeHint::Int {
+                            signed: false,
+                            width: high_bytes,
+                        }),
+                    ];
+                }
                 vec![dwarf_return_hint_with_env(c_type, cc, type_env)]
-            })
+            }))
             .collect::<Vec<_>>();
         prototype.apply_locked_parameters(cc, &parameter_hints);
     }

@@ -218,12 +218,14 @@ fn homogeneous_float_members(c_type: &str, type_env: &DwarfTypeEnv<'_>) -> Optio
 /// bytes of the second register the object actually occupies, which is a fact
 /// about the OBJECT and not about the register.
 ///
-/// ONLY the all-SSE pair is reused, deliberately. The other classes do not
-/// transfer: `Memory` means "hidden pointer, and every declared argument shifts
-/// one slot right" for a result and "on the stack" for an argument, and the
-/// INTEGER classes already have a working positional model in
-/// `types_recover::locked_sysv_amd64_parameter_storage`. Everything not proven
-/// to be this one class answers `None` and keeps the behaviour it had.
+/// ONLY the all-SSE pair is answered here, deliberately. `Memory` does not
+/// transfer at all — it means "hidden pointer, and every declared argument
+/// shifts one slot right" for a result and "on the stack" for an argument — and
+/// the ONE-eightbyte INTEGER class already has a working positional model in
+/// `types_recover::locked_sysv_amd64_parameter_storage`. The two-eightbyte
+/// INTEGER class is [`declared_integer_pair_parameter_high_bytes`] below.
+/// Everything not proven to be this one class answers `None` and keeps the
+/// behaviour it had.
 pub(crate) fn declared_sse_pair_parameter_high_bytes(
     c_type: &str,
     cc: CallConv,
@@ -238,6 +240,58 @@ pub(crate) fn declared_sse_pair_parameter_high_bytes(
         | ReturnClass::HomogeneousFloat { .. }
         | ReturnClass::IndirectBuffer { .. } => None,
     }
+}
+
+/// How much of the SECOND eightbyte a declared type occupies when it is passed
+/// BY VALUE in the INTEGER argument PAIR, or `None` for every other shape.
+///
+/// The sibling of [`declared_sse_pair_parameter_high_bytes`] one bank over, and
+/// it exists because the claim that this class "already has a working
+/// positional model" was wrong. `locked_sysv_amd64_parameter_storage` places a
+/// parameter from its TYPE HINT, and a sixteen-byte aggregate has no scalar
+/// hint at all: the projection sees `None`, declines wholesale, and the
+/// declaration collapses to ONE parameter. Measured on 2026-08-18 —
+/// `uint32_t mv203_consume_narrow(struct mv203_narrow v)` (16 bytes, four
+/// `uint32_t`) recovered as `f(long)` with its second eightbyte read from a
+/// variable nothing defines, and every caller passed half the object.
+///
+/// `high_bytes` means what it means for the SSE pair: how many bytes of the
+/// second register the OBJECT occupies. A twelve-byte `{int32_t a,b,c;}` leaves
+/// four bytes of the high register undefined, and declaring the high half eight
+/// bytes wide would make a caller read four bytes past the object.
+///
+/// AAPCS64 reaches this the same way and means the same thing: a composite that
+/// is not an HFA and not larger than sixteen bytes is `x0:x1`, "copied as if
+/// stored to memory and reloaded", so a size that is not a multiple of eight
+/// leaves the tail of the second register unspecified. `declared_return_class`
+/// already applies that rule; this reads its answer rather than restating it.
+pub(crate) fn declared_integer_pair_parameter_high_bytes(
+    c_type: &str,
+    cc: CallConv,
+    type_env: Option<&DwarfTypeEnv<'_>>,
+) -> Option<u8> {
+    match declared_return_class(c_type, cc, type_env)? {
+        ReturnClass::IntegerPair => {}
+        ReturnClass::Single
+        | ReturnClass::SsePair { .. }
+        | ReturnClass::SplitBanks { .. }
+        | ReturnClass::Memory
+        | ReturnClass::HomogeneousFloat { .. }
+        | ReturnClass::IndirectBuffer { .. } => return None,
+    }
+    // The class proves 9..=16 bytes; the SIZE is what says how much of the
+    // second register is live, and it is read from the layout rather than
+    // assumed to be a whole register.
+    //
+    // Only the widths a C scalar can name are admitted. An eleven-byte object
+    // leaves three bytes of the second register live, and there is no three-byte
+    // parameter type: rounding up would make a caller read a byte it never
+    // stored, and rounding down would drop one the callee reads. Fail closed —
+    // the shape keeps the behaviour it has, exactly as `sse_pair_return_tag`
+    // declines every occupancy but four and eight.
+    let size = type_env?.aggregate_layout(c_type)?.byte_size;
+    let high_bytes = u8::try_from(size.checked_sub(8)?).ok()?;
+    matches!(high_bytes, 1 | 2 | 4 | 8).then_some(high_bytes)
 }
 
 /// Merge every field of `c_type` into the eightbyte classes it overlaps.
@@ -269,13 +323,19 @@ fn classify_fields(
         let spelling = type_env.representation_spelling(&field.c_type);
         let class = match scalar_eightbyte_class(&spelling, field.size) {
             Some(class) => class,
-            None => {
-                // Not a scalar this reader can place. A nested struct still can
-                // be, by recursion; anything else (array, union, bitfield,
-                // unresolved alias) fails the whole classification.
-                classify_fields(&field.c_type, offset, type_env, eightbytes, depth + 1)?;
-                continue;
-            }
+            // An ARRAY of a scalar, which is a shape the field record states
+            // and this walk used to refuse. See
+            // [`array_member_eightbyte_class`].
+            None => match array_member_eightbyte_class(&spelling, type_env) {
+                Some(class) => class,
+                None => {
+                    // Not a scalar this reader can place. A nested struct still
+                    // can be, by recursion; anything else (union, bitfield,
+                    // unresolved alias) fails the whole classification.
+                    classify_fields(&field.c_type, offset, type_env, eightbytes, depth + 1)?;
+                    continue;
+                }
+            },
         };
         let first = usize::try_from(offset / 8).ok()?;
         let last = usize::try_from(offset.checked_add(field.size)?.saturating_sub(1) / 8).ok()?;
@@ -292,6 +352,86 @@ fn classify_fields(
         }
     }
     Some(())
+}
+
+/// The C spelling of a declared BY-VALUE aggregate returned WHOLLY in the
+/// integer result register, or `None` for every other shape.
+///
+/// A one-eightbyte aggregate result needed no rewrite — one register, one value
+/// — so it was left to the ordinary path, and the ordinary path infers the
+/// return type from the RETURNED EXPRESSION rather than from the class. That is
+/// how `struct hfa197_tagged { float value; int32_t tag; }` came to be declared
+/// `float`: its low four bytes hold a `float`, the reaching expression is
+/// float-shaped, and the declaration that follows returns in `xmm0`. System V
+/// says the opposite — SSE merged with INTEGER in one eightbyte yields INTEGER
+/// — so the eight bytes the callee computed correctly were handed back in the
+/// wrong bank. `agr198_make_bits` is declared `double` by the same route.
+///
+/// The spelling is UNSIGNED and sized from the object: the bytes are storage,
+/// not a signed quantity, and a wider declaration would return bytes past the
+/// object while a narrower one would drop bytes the caller reads. Sizes with no
+/// exact C spelling round UP to the next one, which is safe in this direction
+/// only: the ABI leaves the rest of the register unspecified, so a three-byte
+/// object declared `unsigned int` hands back one byte nobody may read.
+pub(crate) fn single_class_aggregate_return_c_type(
+    c_type: &str,
+    cc: CallConv,
+    type_env: Option<&DwarfTypeEnv<'_>>,
+) -> Option<&'static str> {
+    match declared_return_class(c_type, cc, type_env)? {
+        ReturnClass::Single => {}
+        ReturnClass::IntegerPair
+        | ReturnClass::SsePair { .. }
+        | ReturnClass::SplitBanks { .. }
+        | ReturnClass::Memory
+        | ReturnClass::HomogeneousFloat { .. }
+        | ReturnClass::IndirectBuffer { .. } => return None,
+    }
+    // `declared_return_class` answers only for AGGREGATES — it needs a recorded
+    // layout — so reaching here proves the declared type is one, and no scalar
+    // return can be redeclared by this path.
+    match type_env?.aggregate_layout(c_type)?.byte_size {
+        1 => Some("unsigned char"),
+        2 => Some("unsigned short"),
+        3 | 4 => Some("unsigned int"),
+        5..=8 => Some("unsigned long"),
+        _ => None,
+    }
+}
+
+/// The eightbyte class every element of an ARRAY member contributes, when the
+/// element spelling proves one.
+///
+/// System V classifies an array member by classifying each of its elements, and
+/// every element of an array has the SAME class — so the class covers the
+/// array's whole byte extent and the element COUNT never has to be recovered.
+/// That matters here: `DwarfField` carries the array's total size and the
+/// element spelling with an empty bound (`uint32_t[]`), never the bound itself.
+///
+/// Without this arm the whole classification declined, because an array member
+/// is neither a scalar nor a nested struct to recurse into. Measured on
+/// 2026-08-18: `struct mv203_narrow { uint32_t q[4]; }` — sixteen bytes, plainly
+/// `rdi:rsi` — had no class at all, so a by-value parameter of that type
+/// collapsed to a single `long` and its second eightbyte was read from a
+/// variable nothing defined.
+///
+/// A nested aggregate element (`struct S v[2]`) is refused rather than
+/// recursed into: the elements after the first sit at offsets this function
+/// does not compute, and a class claimed for the wrong bytes is the failure
+/// this module exists to avoid.
+fn array_member_eightbyte_class(spelling: &str, type_env: &DwarfTypeEnv<'_>) -> Option<Eightbyte> {
+    let element = type_env.representation_spelling(spelling.strip_suffix("[]")?);
+    match element.as_str() {
+        // `long double` is class X87 and is absent for the same reason it is
+        // absent from `scalar_eightbyte_class`: this model has no register for
+        // it. It is not a `builtin_scalar_type` either, so it declines twice.
+        "float" | "double" => Some(Eightbyte::Sse),
+        _ if element.ends_with('*') && !element[..element.len() - 1].contains('*') => {
+            Some(Eightbyte::Integer)
+        }
+        _ if crate::ir::dwarf_type_env::builtin_scalar_type(&element) => Some(Eightbyte::Integer),
+        _ => None,
+    }
 }
 
 /// The eightbyte class of one scalar field, when its spelling proves one.
@@ -838,5 +978,131 @@ mod tests {
                 integer_first: true
             })
         );
+    }
+
+    /// An ARRAY member is placed by its element class over its whole extent.
+    ///
+    /// Before `array_member_eightbyte_class` this walk had no arm for an array
+    /// at all: the member is neither a scalar it can place nor a struct it can
+    /// recurse into, so the whole aggregate answered `None`. Both shapes below
+    /// are ordinary System V classes with nothing exotic about them —
+    /// `203_string_move_copies`'s sixteen-byte `{uint32_t q[4];}` is `rax:rdx`
+    /// as a result and `rdi:rsi` as an argument, and `198`'s eight-byte
+    /// `{int32_t v[2];}` is one register.
+    #[test]
+    fn an_array_member_is_classified_by_its_element() {
+        let types = vec![
+            structure("mv203_narrow", 16, vec![field(0, "q", "uint32_t[]", 16)]),
+            structure("agr198_arr2", 8, vec![field(0, "v", "int32_t[]", 8)]),
+            structure("float_pair", 16, vec![field(0, "v", "double[]", 16)]),
+            // A nested-aggregate element has offsets this walk does not
+            // compute, so it is refused rather than guessed at.
+            structure("inner_arr", 8, vec![field(0, "a", "int32_t", 4)]),
+            structure(
+                "of_structs",
+                16,
+                vec![field(0, "v", "struct inner_arr[]", 16)],
+            ),
+        ];
+        let env = DwarfTypeEnv::new(&types);
+        let class = |name: &str| declared_return_class(name, CallConv::SysVAmd64, Some(&env));
+
+        assert_eq!(class("struct mv203_narrow"), Some(ReturnClass::IntegerPair));
+        assert_eq!(class("struct agr198_arr2"), Some(ReturnClass::Single));
+        assert_eq!(
+            class("struct float_pair"),
+            Some(ReturnClass::SsePair { high_bytes: 8 })
+        );
+        assert_eq!(class("struct of_structs"), None);
+    }
+
+    /// A two-eightbyte INTEGER aggregate passed BY VALUE occupies two argument
+    /// registers, and the second one's OCCUPANCY is the object's, not the
+    /// register's.
+    #[test]
+    fn an_integer_pair_parameter_reports_its_second_eightbyte() {
+        let types = corpus();
+        let env = DwarfTypeEnv::new(&types);
+        let high = |name: &str| {
+            declared_integer_pair_parameter_high_bytes(name, CallConv::SysVAmd64, Some(&env))
+        };
+
+        assert_eq!(high("struct bv195_quad"), Some(8));
+        // One eightbyte, all-SSE, memory and split-bank shapes are not this
+        // class and must keep the behaviour they had.
+        assert_eq!(high("struct bv195_pair"), None);
+        assert_eq!(high("struct two_doubles"), None);
+        assert_eq!(high("struct bv195_mixed"), None);
+        assert_eq!(high("struct bv195_big"), None);
+
+        // Twelve bytes: four of the second register are live. The float twin of
+        // this shape is `hfa197_trio3f`, which is an SSE pair and not this.
+        let trio = vec![structure(
+            "agr198_trio",
+            12,
+            vec![
+                field(0, "a", "int32_t", 4),
+                field(4, "b", "int32_t", 4),
+                field(8, "c", "int32_t", 4),
+            ],
+        )];
+        let trio_env = DwarfTypeEnv::new(&trio);
+        assert_eq!(
+            declared_integer_pair_parameter_high_bytes(
+                "struct agr198_trio",
+                CallConv::SysVAmd64,
+                Some(&trio_env)
+            ),
+            Some(4)
+        );
+    }
+
+    /// A one-eightbyte aggregate result is spelled from its CLASS, so the
+    /// declaration names the bank the ABI actually uses.
+    ///
+    /// `hfa197_tagged` is the shape that proves it matters: its low four bytes
+    /// hold a `float`, so a declaration inferred from the returned expression
+    /// said `float` and returned in `xmm0` where System V says `rax`.
+    #[test]
+    fn a_single_class_aggregate_is_spelled_from_its_size() {
+        let types = corpus();
+        let env = DwarfTypeEnv::new(&types);
+        let spelling = |name: &str| {
+            single_class_aggregate_return_c_type(name, CallConv::SysVAmd64, Some(&env))
+        };
+
+        assert_eq!(spelling("struct hfa197_tagged"), Some("unsigned long"));
+        assert_eq!(spelling("struct bv195_pair"), Some("unsigned long"));
+        assert_eq!(spelling("struct two_floats"), Some("unsigned long"));
+        // Every multi-register and memory class keeps its own contract.
+        assert_eq!(spelling("struct bv195_quad"), None);
+        assert_eq!(spelling("struct two_doubles"), None);
+        assert_eq!(spelling("struct bv195_mixed"), None);
+        assert_eq!(spelling("struct bv195_big"), None);
+        // A scalar has no aggregate layout and therefore no class to spell:
+        // this path can never redeclare an ordinary return.
+        assert_eq!(spelling("double"), None);
+        assert_eq!(spelling("int32_t"), None);
+
+        let narrow = vec![
+            structure("one", 4, vec![field(0, "a", "int32_t", 4)]),
+            structure(
+                "bytes3",
+                3,
+                vec![
+                    field(0, "a", "uint8_t", 1),
+                    field(1, "b", "uint8_t", 1),
+                    field(2, "c", "uint8_t", 1),
+                ],
+            ),
+        ];
+        let narrow_env = DwarfTypeEnv::new(&narrow);
+        let narrow_spelling = |name: &str| {
+            single_class_aggregate_return_c_type(name, CallConv::SysVAmd64, Some(&narrow_env))
+        };
+        assert_eq!(narrow_spelling("struct one"), Some("unsigned int"));
+        // Three bytes round UP: the ABI leaves the rest of the register
+        // unspecified, so the extra byte is one nobody may read.
+        assert_eq!(narrow_spelling("struct bytes3"), Some("unsigned int"));
     }
 }

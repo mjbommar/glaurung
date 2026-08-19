@@ -3336,9 +3336,7 @@
     "202_bit_scan_and_count:bsc202_toggle_bit": [],
     "203_string_move_copies:mv203_by_value_narrow": [],
     "203_string_move_copies:mv203_by_value_wide": [],
-    "203_string_move_copies:mv203_consume_narrow": [
-      "var2 is read but never defined"
-    ],
+    "203_string_move_copies:mv203_consume_narrow": [],
     "203_string_move_copies:mv203_consume_wide": [
       "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
       "stack_1 is read but never defined"

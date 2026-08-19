@@ -459,7 +459,36 @@ fn decbench_text_with_installed_environment(
             prototype.return_type = return_type.to_string();
             prototype
         });
-    let render_prototype = pair_render_prototype.as_ref().or(render_prototype);
+    // The one-eightbyte sibling of the case above, and the reason it needs
+    // saying at all: an aggregate small enough to fit ONE result register was
+    // left to the ordinary path, and the ordinary path takes the return type
+    // from the returned EXPRESSION. `struct hfa197_tagged { float; int32_t; }`
+    // is eight bytes whose low half holds a `float`, so the inferred type was
+    // `float` and the declaration returned it in `xmm0` — where System V's
+    // class merge puts the whole object in `rax`. The class is what decides the
+    // bank, so the class is what declares it.
+    //
+    // Read from the DECLARED type, never from machine evidence: only DWARF can
+    // say that a result register holds an aggregate rather than a scalar, which
+    // is the same rule `declared_return_class` states for every other class.
+    let single_render_prototype = (output_kind
+        == crate::ir::types_recover::RecoveredOutputKind::Direct)
+        .then(|| crate::ir::dwarf_type_env::DwarfTypeEnv::new(dwarf_types))
+        .and_then(|type_env| {
+            let declared = declared_prototype?;
+            let return_type = crate::ir::return_class::single_class_aggregate_return_c_type(
+                &declared.return_type,
+                cc,
+                Some(&type_env),
+            )?;
+            let mut prototype = declared.clone();
+            prototype.return_type = return_type.to_string();
+            Some(prototype)
+        });
+    let render_prototype = pair_render_prototype
+        .as_ref()
+        .or(single_render_prototype.as_ref())
+        .or(render_prototype);
     let body = profiler.measure("render_decbench", || {
         crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
             &prepared,

@@ -1092,7 +1092,73 @@ fn _resolved_type_byte_size(
         | gimli::DW_TAG_restrict_type => entry.attr_value(gimli::DW_AT_type).map_or(0, |target| {
             _resolved_type_byte_size(dwarf, unit, target, depth + 1)
         }),
+        // An array's extent is element size times every dimension. Neither gcc
+        // nor clang emits `DW_AT_byte_size` on `DW_TAG_array_type`, so the size
+        // recorded for a member spelled `uint32_t[]` was ZERO, and every
+        // consumer that reads a member's extent read a member with none.
+        // `return_class::classify_fields` treats a zero-size member as
+        // unplaceable and declines the whole aggregate, which is why a
+        // sixteen-byte `struct mv203_narrow { uint32_t q[4]; }` had no System V
+        // return or parameter class at all.
+        gimli::DW_TAG_array_type => {
+            let element = entry.attr_value(gimli::DW_AT_type).map_or(0, |target| {
+                _resolved_type_byte_size(dwarf, unit, target, depth + 1)
+            });
+            _array_element_count(unit, offset)
+                .and_then(|count| element.checked_mul(count))
+                .unwrap_or(0)
+        }
         _ => 0,
+    }
+}
+
+/// The total element count of one `DW_TAG_array_type`, multiplied over every
+/// dimension, or `None` when any dimension has no stateable bound.
+///
+/// A flexible array member (`int v[]`) genuinely has no extent, and inventing
+/// one from a size would be worse than reporting none: the zero it keeps is
+/// what makes every downstream reader decline the shape rather than place it
+/// wrongly. Multi-dimensional arrays are several `DW_TAG_subrange_type`
+/// children of ONE array entry, so the dimensions multiply.
+fn _array_element_count(unit: &Unit<'_>, offset: gimli::UnitOffset<usize>) -> Option<u64> {
+    let mut total: Option<u64> = None;
+    let mut cursor = unit.entries_at_offset(offset).ok()?;
+    let base = cursor.next_depth();
+    if !matches!(cursor.next_entry(), Ok(true)) {
+        return None;
+    }
+    loop {
+        let level = cursor.next_depth();
+        if !matches!(cursor.next_entry(), Ok(true)) || level <= base {
+            break;
+        }
+        let Some(entry) = cursor.current() else {
+            continue;
+        };
+        if entry.tag() != gimli::DW_TAG_subrange_type {
+            continue;
+        }
+        let count = match entry.attr_value(gimli::DW_AT_count) {
+            Some(value) => _constant_attribute(&value)?,
+            None => {
+                _constant_attribute(&entry.attr_value(gimli::DW_AT_upper_bound)?)?.checked_add(1)?
+            }
+        };
+        total = Some(total.unwrap_or(1).checked_mul(count)?);
+    }
+    total
+}
+
+/// A DWARF constant-class attribute as a `u64`, or `None` for every other form.
+fn _constant_attribute(value: &gimli::AttributeValue<Slice<'_>, usize>) -> Option<u64> {
+    match value {
+        gimli::AttributeValue::Udata(value) => Some(*value),
+        gimli::AttributeValue::Data1(value) => Some(u64::from(*value)),
+        gimli::AttributeValue::Data2(value) => Some(u64::from(*value)),
+        gimli::AttributeValue::Data4(value) => Some(u64::from(*value)),
+        gimli::AttributeValue::Data8(value) => Some(*value),
+        gimli::AttributeValue::Sdata(value) => u64::try_from(*value).ok(),
+        _ => None,
     }
 }
 
@@ -1405,6 +1471,38 @@ mod tests {
             "expected at least one struct with fields; got 0 of {} types",
             types.len()
         );
+    }
+
+    /// An ARRAY member reports the extent of the whole array.
+    ///
+    /// Neither gcc nor clang emits `DW_AT_byte_size` on `DW_TAG_array_type`, so
+    /// `_resolved_type_byte_size` used to answer ZERO for a member spelled
+    /// `uint32_t[]` and every consumer that asks how many bytes a member covers
+    /// got a member covering none. `return_class::classify_fields` treats a
+    /// zero-size member as unplaceable, which is why `struct mv203_narrow`
+    /// — sixteen plain bytes — had no System V class at all.
+    ///
+    /// Read from a decompiler fixture because that is where a struct with an
+    /// array member exists; the objects are generated, so a missing one is a
+    /// skip rather than a failure, matching the sample-binary tests above.
+    #[test]
+    fn an_array_member_reports_the_whole_arrays_extent() {
+        let path = "tests/decompiler_fixtures/build/203_string_move_copies-gcc-O0.so";
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        let types = extract_dwarf_types(&bytes);
+        let narrow = types
+            .iter()
+            .find(|layout| layout.name == "mv203_narrow")
+            .expect("fixture 203 declares struct mv203_narrow");
+        let [member] = narrow.fields.as_slice() else {
+            panic!("expected exactly one member, got {:?}", narrow.fields);
+        };
+        assert_eq!(member.c_type, "uint32_t[]");
+        assert_eq!(member.size, 16, "four uint32_t elements is sixteen bytes");
+        assert_eq!(narrow.byte_size, 16);
     }
 
     /// End-to-end against a real ELF with DWARF: we expect to recover

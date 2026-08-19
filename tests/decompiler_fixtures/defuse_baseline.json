@@ -1684,7 +1684,7 @@
     "166_rust_generics:rustc:O0": {
       "functions_emitted": 592,
       "functions_with_violations": 396,
-      "violations": 1503
+      "violations": 1501
     },
     "166_rust_generics:rustc:O2": {
       "functions_emitted": 22,
@@ -1694,12 +1694,12 @@
     "167_rust_trait_objects:rustc:O0": {
       "functions_emitted": 593,
       "functions_with_violations": 393,
-      "violations": 1495
+      "violations": 1493
     },
     "167_rust_trait_objects:rustc:O2": {
       "functions_emitted": 573,
       "functions_with_violations": 382,
-      "violations": 1487
+      "violations": 1485
     },
     "168_rust_enum_niche:rustc:O0": {
       "functions_emitted": 38,
@@ -1714,12 +1714,12 @@
     "169_rust_slices_bounds:rustc:O0": {
       "functions_emitted": 623,
       "functions_with_violations": 418,
-      "violations": 1551
+      "violations": 1548
     },
     "169_rust_slices_bounds:rustc:O2": {
       "functions_emitted": 565,
       "functions_with_violations": 379,
-      "violations": 1479
+      "violations": 1477
     },
     "16_red_black_tree:clang:O0": {
       "functions_emitted": 11,
@@ -1744,17 +1744,17 @@
     "170_rust_panic_unwind:rustc:O0": {
       "functions_emitted": 596,
       "functions_with_violations": 396,
-      "violations": 1505
+      "violations": 1501
     },
     "170_rust_panic_unwind:rustc:O2": {
       "functions_emitted": 573,
       "functions_with_violations": 388,
-      "violations": 1495
+      "violations": 1493
     },
     "171_rust_overflow:rustc:O0": {
       "functions_emitted": 590,
       "functions_with_violations": 388,
-      "violations": 1493
+      "violations": 1491
     },
     "171_rust_overflow:rustc:O2": {
       "functions_emitted": 29,
@@ -2163,23 +2163,23 @@
     },
     "195_by_value_aggregates:clang:O0": {
       "functions_emitted": 28,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "195_by_value_aggregates:clang:O2": {
       "functions_emitted": 28,
-      "functions_with_violations": 2,
-      "violations": 5
+      "functions_with_violations": 1,
+      "violations": 4
     },
     "195_by_value_aggregates:gcc:O0": {
       "functions_emitted": 24,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "195_by_value_aggregates:gcc:O2": {
       "functions_emitted": 24,
-      "functions_with_violations": 4,
-      "violations": 4
+      "functions_with_violations": 3,
+      "violations": 3
     },
     "196_disjoint_frame_slots:clang:O0": {
       "functions_emitted": 12,
@@ -2223,23 +2223,23 @@
     },
     "198_aggregate_return_edges:clang:O0": {
       "functions_emitted": 37,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "198_aggregate_return_edges:clang:O2": {
       "functions_emitted": 37,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "198_aggregate_return_edges:gcc:O0": {
       "functions_emitted": 31,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "198_aggregate_return_edges:gcc:O2": {
       "functions_emitted": 31,
-      "functions_with_violations": 5,
-      "violations": 5
+      "functions_with_violations": 4,
+      "violations": 4
     },
     "199_pointer_return_kinds:clang:O0": {
       "functions_emitted": 14,
@@ -2323,23 +2323,23 @@
     },
     "203_string_move_copies:clang:O0": {
       "functions_emitted": 27,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "203_string_move_copies:clang:O2": {
       "functions_emitted": 25,
-      "functions_with_violations": 4,
-      "violations": 5
+      "functions_with_violations": 3,
+      "violations": 4
     },
     "203_string_move_copies:gcc:O0": {
       "functions_emitted": 22,
-      "functions_with_violations": 2,
-      "violations": 3
+      "functions_with_violations": 1,
+      "violations": 2
     },
     "203_string_move_copies:gcc:O2": {
       "functions_emitted": 22,
-      "functions_with_violations": 3,
-      "violations": 4
+      "functions_with_violations": 2,
+      "violations": 3
     },
     "204_adjacent_dispatch_tables:clang:O0": {
       "functions_emitted": 19,
@@ -3965,33 +3965,33 @@
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2741,
-      "functions_with_violations": 33,
-      "violations": 114
+      "functions_with_violations": 30,
+      "violations": 111
     },
     "clang:O2": {
       "functions_emitted": 2614,
-      "functions_with_violations": 89,
-      "violations": 245
+      "functions_with_violations": 86,
+      "violations": 242
     },
     "gcc:O0": {
       "functions_emitted": 2642,
-      "functions_with_violations": 17,
-      "violations": 97
+      "functions_with_violations": 14,
+      "violations": 94
     },
     "gcc:O2": {
       "functions_emitted": 2505,
-      "functions_with_violations": 65,
-      "violations": 121
+      "functions_with_violations": 62,
+      "violations": 118
     },
     "rustc:O0": {
       "functions_emitted": 3032,
       "functions_with_violations": 2002,
-      "violations": 7560
+      "violations": 7547
     },
     "rustc:O2": {
       "functions_emitted": 1787,
       "functions_with_violations": 1159,
-      "violations": 4472
+      "violations": 4466
     }
   },
   "problems": [],
@@ -6425,9 +6425,7 @@
     "202_bit_scan_and_count:gcc:O2:bsc202_toggle_bit": [],
     "203_string_move_copies:clang:O0:mv203_by_value_narrow": [],
     "203_string_move_copies:clang:O0:mv203_by_value_wide": [],
-    "203_string_move_copies:clang:O0:mv203_consume_narrow": [
-      "var0 is read but never defined"
-    ],
+    "203_string_move_copies:clang:O0:mv203_consume_narrow": [],
     "203_string_move_copies:clang:O0:mv203_consume_wide": [],
     "203_string_move_copies:clang:O0:mv203_fill_narrow": [],
     "203_string_move_copies:clang:O0:mv203_fill_wide": [],
@@ -6441,9 +6439,7 @@
     "203_string_move_copies:clang:O2:mv203_by_value_wide": [
       "var0 is read but never defined"
     ],
-    "203_string_move_copies:clang:O2:mv203_consume_narrow": [
-      "var0 is read but never defined"
-    ],
+    "203_string_move_copies:clang:O2:mv203_consume_narrow": [],
     "203_string_move_copies:clang:O2:mv203_consume_wide": [
       "stack_0 is read but never defined"
     ],
@@ -6454,9 +6450,7 @@
     "203_string_move_copies:clang:O2:mv203_scalar_control": [],
     "203_string_move_copies:gcc:O0:mv203_by_value_narrow": [],
     "203_string_move_copies:gcc:O0:mv203_by_value_wide": [],
-    "203_string_move_copies:gcc:O0:mv203_consume_narrow": [
-      "var2 is read but never defined"
-    ],
+    "203_string_move_copies:gcc:O0:mv203_consume_narrow": [],
     "203_string_move_copies:gcc:O0:mv203_consume_wide": [
       "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
       "stack_1 is read but never defined"
@@ -6471,9 +6465,7 @@
       "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
       "stack_1 is read but never defined"
     ],
-    "203_string_move_copies:gcc:O2:mv203_consume_narrow": [
-      "var3 is read but never defined"
-    ],
+    "203_string_move_copies:gcc:O2:mv203_consume_narrow": [],
     "203_string_move_copies:gcc:O2:mv203_consume_wide": [
       "stack_0 is read but never defined"
     ],
