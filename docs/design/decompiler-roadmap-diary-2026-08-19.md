@@ -708,3 +708,137 @@ dangling `goto`s in the emitted C — was invisible to all 198 fixtures for exac
 this reason. It is the configuration real targets ship in, and it is where the
 decompiler has to work hardest, because extents, signatures and types all come
 from analysis rather than being handed over.
+
+## Entry 94 — a guard that proved nothing, and the fix that would have deleted forty arms
+
+A switch guarded in the source and guarded in the machine code lost all seven of
+its arms:
+
+```c
+if (key <= 6) { /* unrecovered indirect jump through ... */ }
+return -value;
+```
+
+The guard is a `cmp` against an **indexed memory operand**, and
+`DispatchTracker::observe` accepts only `cmp reg,imm` and `cmp [rbp/rsp+disp],imm`
+with `index.is_none()`. So `pending_bound()` stayed `None`, the fully guarded
+switch took the guard-free speculative path, over-read 28 entries across four
+abutting `.rodata` tables, failed the bound proof, and was discarded whole.
+
+The instruction immediately after reads the same effective address into the
+index. So the bound and the index are provably the same value — **provided "the
+same" is enforced rather than assumed**, which is the entire risk. The condition
+is now a six-field `MemKey` with base and index canonicalised, plus: no write to
+any component (every register definition and `kill_register` calls
+`forget_through`, and `eax`/`rax` canonicalise together); no possible memory
+write (an *allowlist* of mnemonics that provably do not write, so anything
+unmodelled clears all facts); the value must be the location's value (only
+zero-extending or exact-width moves, sign-extending loads refused); and a `cmp`
+in the dispatch's own block binds nothing.
+
+That care is not decoration. Earlier the same day, the *obvious* fix in adjacent
+code — refusing an index bound on multi-predecessor blocks, which reads as
+plainly more sound — was measured before being proposed:
+
+```
+/usr/bin/3cpio 0x2f4cf   resolved 40 arms  ->  0, dispatch invalidated
+```
+
+**Forty real switch arms deleted by the safer-looking change.** The unsound
+shortcut was the only fact there was, because `export_stable_bounds` strips the
+last-`cmp` bound and the `jbe` predecessors export nothing. The sound direction
+is to model the taken edge so every predecessor proves its own bound — the
+opposite of removing the shortcut.
+
+And my hypothesis about the second failing cell was wrong. I said clang reaches
+its dispatch on the taken edge of a `jb`. `objdump` says it is the **fall-through
+of a `jae`**, already modelled; the blocker is that the block holds only the
+branch and has no `cmp` of its own to export. Forwarding the inherited bound
+would give eight entries where the table has seven — one bogus arm, accepted
+silently. Left alone, with the reason written down.
+
+## Entry 95 — a green cell that is green by accident
+
+The aggregate backlog resolved into six causes, and the most useful thing in it
+was not a fix.
+
+`agr198_make_bits` is declared `double` and returns a union whose SysV eightbyte
+class is INTEGER — so it should return in `rax`, and the declaration puts it in
+`xmm0`. **The cell passes on all four lanes.** Probed with naked asm:
+ctypes/libffi reads `rax`, which is correct. It passes because gcc's rebuild of
+the recovered body happens to emit `movq %xmm0,%rax; movq %rax,%xmm0` in the
+epilogue. The same body compiled without the harness prelude returns garbage.
+
+**A codegen-dependent false pass over a wrong declaration.** A green cell that is
+not evidence of anything — and there is no way to find one except by asking why
+a specific cell passes, which nobody does for green cells.
+
+Two of my three claims about that cluster also inverted. The all-SSE 16-byte
+by-value parameter I said had no model **is** modelled; the all-INTEGER one was
+not. And the cause was not in the parameter-storage code at all: `DwarfField.size`
+was **0** for every array member, because neither compiler emits
+`DW_AT_byte_size` on `DW_TAG_array_type`, so the struct was refused before any
+storage question was asked.
+
+52 cells moved `fail -> pass`, and 14 of the 23 host improvements came from a
+change with nothing to do with aggregates — an integer cast over a
+float-rendered operand now emits a bit pun rather than C's value conversion,
+which fixed fixtures 174, 175 and 201.
+
+## Entry 96 — the corpus could not see stripped binaries, and now it can
+
+Entry 93 established that `strip` leaves `.dynsym` intact, so the execution
+differential runs on a stripped object unmodified. The lane exists now:
+`O2strip`, the whole corpus, **~2 minutes**, because only one side executes.
+
+It has **no baseline of its own**. It reads `baseline.json`'s `-O2` verdict as
+its control — the identical compile of the identical source — and ratchets on
+*divergence*. The invariant is the real one: **for a correct decompiler, debug
+info should improve naming, never structure.**
+
+**84 divergences on arrival.** Recovered C that does not compile: one function
+defined with five parameters and called with three, in the same translation
+unit. Recovered C that faults: six cells, one cause — `long rsp;` declared,
+never initialised, `rsp = (rsp - 56)`, dereferenced.
+
+**62% of it is one root: prototype recovery.** Without DWARF, arity, storage
+class, width and pointer-ness all come from ABI liveness, and the failures are
+enumerable — 12 narrow returns, 13 pointer-parameter errors, 6 arity, 5 storage
+class, 4 float width. The remaining third is three independent structural gaps:
+stack-frame promotion, global address resolution, jump tables.
+
+The arity one is fixed, and its mechanism is the lesson.
+`live_in_arg_slots_llir` documents itself as "first touch **in program order**"
+and walks the block list in **address order**. In `sift_down` the entry block
+jumps forward to a loop header that computes `r8`, while the body that reads
+`r8` sits at a *lower* address — so the scan saw a read before its write and
+called it an argument. Value numbering had already answered it: version zero is
+spelled bare, every later definition carries `#version`. One predicate, and it
+can only ever remove a slot.
+
+**Two hypotheses about the eight "improvements" died.** `apply_dwarf_overrides`
+is not injecting bad data — every DWARF type checked is the true source type, and
+the eight differ from their stripped twins in exactly one dimension, declared
+types. The follow-up guess, that a narrowed local truncates a 64-bit value, was
+measured wrong too: `int total` and `long total` give the same correct answer.
+
+What replaced them is not a result but a warning. For one cell the `-g` text
+compiled and called directly gives the **correct** answer while the harness
+records it failing, and the stripped text gives the **wrong** answer while the
+harness records it passing — inverted for both. My reproduction is not identical
+to the harness, so this is not a claim that the harness is wrong. It is a reason
+not to audit the DWARF path on the strength of those eight cells until the
+disagreement is settled.
+
+### And one interaction I caused
+
+The fingerprint cache landed an hour before this lane. `compile_fixture` wrote
+the sidecar **before** stripping, with a comment arguing the fingerprint
+describes the compile and `strip` touches none of it. True of the compile fields
+— but the sidecar also records `object_sha256`, and `strip` rewrites exactly
+those bytes. Every stripped object read back as *"does not hash to its recorded
+fingerprint (replaced or truncated)"*, 390 of them, which is the one verdict
+that is supposed to mean tampering.
+
+Two changes that are individually correct, and wrong together. The comment
+explaining why the order was safe is what made it hard to see.
