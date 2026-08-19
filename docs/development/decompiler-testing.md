@@ -597,3 +597,66 @@ report, if trusted, would have written a bad baseline. The flags make the object
 byte-identical across roots (proved by `cmp` over gcc, clang, g++ and rustc at
 two path depths 60 characters apart), so a worktree and the main checkout now
 measure the same corpus.
+
+### ...and `build/` is a cache, so its key has to cover the bytes
+
+`tests/decompiler_fixtures/build/` keeps every compiled fixture object under
+`{fixture}-{cc}-{opt}.so`. That name was the entire cache key until 2026-08-18,
+which meant the directory could not tell a current object from one built by a
+different flag list, a different compiler, or the host toolchain instead of the
+pinned one.
+
+The remap flags above are the worked example. When they were added, every object
+already on disk kept its old bytes — including the absolute checkout path the
+flags exist to erase — and every consumer that READS an object without compiling
+it went on measuring the old ones. Measured on the main checkout, 2026-08-19: 17
+objects six days older than the flag change survived it, and
+`132_cpp_vtable_layout-rustc-O0.so` — a name no lane has produced since
+`lanes_for` stopped cross-producting C++ sources with Rust lanes — still
+contained the checkout path four times. Two wrong findings came out of that in
+one day.
+
+Every compile now writes a sidecar, `<object>.so.build.json`, recording what
+produced it:
+
+```json
+{
+  "argv": ["gcc", "-shared", "-fPIC", "-g", "-O0", "-w",
+           "-ffile-prefix-map=$ROOT=.", "-o", "$ROOT/.../13_loop_early_exit-gcc-O0.so",
+           "$ROOT/tests/decompiler_fixtures/src/13_loop_early_exit.c"],
+  "compiler": "gcc",
+  "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "target": "x86_64-linux-gnu",
+  "toolchain_mode": "docker",
+  "toolchain_image": "sha256:c6845868...",
+  "source_sha256": "fa3479d8...",
+  "object_sha256": "bff81b43...",
+  "schema": 1
+}
+```
+
+`$ROOT` rather than the literal path, because the remap flags make the object
+byte-identical across checkouts — keying on the absolute path would rebuild the
+whole corpus in every worktree to prove nothing — while still moving the moment
+a flag is added, removed or retargeted. `toolchain_image` is the image CONTENT
+digest, not its tag, because `ensure_image` only checks that the tag exists.
+
+`fixture_harness.ensure_fixture(src, cc, opt)` is the entry point for anything
+that reads an object it did not compile (`dectest --show`, the determinism and
+loop-hoist tests). It reuses the object only when the fingerprint matches and
+recompiles otherwise. `compile_fixture` still rebuilds unconditionally: a full
+cold build is **33.6s wall for all 768 objects** at `default_jobs()==8` under the
+pinned toolchain on a 24-core host, so the gate buys almost nothing by skipping
+compiles and would be taking on the risk that the key is missing a field. A warm
+sweep over all 768 lanes is 0.2-3.1s.
+
+```bash
+python tools/fixture_harness.py --check-cache   # what in build/ cannot be trusted
+python tools/fixture_harness.py --prune-cache   # delete it
+```
+
+`--check-cache` reports two kinds: STALE (fingerprint disagrees) and ORPHAN (a
+name no current lane produces, so nothing will ever overwrite it). Either the
+strict compile lane's object (`-Wall -Wextra -Werror`) or the execution lane's
+(`-w`) counts as current, since both write that path and whichever ran last is
+what is there.

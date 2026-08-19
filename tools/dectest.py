@@ -703,13 +703,22 @@ def _unjudged_function_names(fixture: str, judged: list[str]) -> list[str]:
     Returns `[]` when no object has been built yet -- a guess from the source
     text would be worse than saying nothing, since the note's whole value is
     that its count is trustworthy.
+
+    ORPHAN objects are skipped. `build/` accumulates names no current lane
+    produces (`fixture_harness.cache_problems`), and taking the first one
+    alphabetically would let a `132_cpp_vtable_layout-rustc-O0.so` — left behind
+    when `lanes_for` stopped cross-producting C++ sources with Rust lanes — decide
+    which functions this run claims not to have judged.
     """
     try:
         sys.path.insert(0, str(ROOT / "tools"))
         import diff_decompile as DD
     except Exception:
         return []
+    declared = {n for n in H.expected_objects() if n.startswith(f"{fixture}-")}
     for so in sorted(H.BUILD.glob(f"{fixture}-*.so")):
+        if so.name not in declared:
+            continue
         try:
             present = set(DD.exported_functions(str(so)))
         except Exception:
@@ -726,8 +735,10 @@ def show_function(lane: Lane, func: str) -> None:
     import roundtrip_review as RR
 
     src = FIXTURES / "src"
-    candidates = list(src.glob(f"{lane.fixture}.c")) + list(
-        src.glob(f"{lane.fixture}.cpp")
+    candidates = (
+        list(src.glob(f"{lane.fixture}.c"))
+        + list(src.glob(f"{lane.fixture}.cpp"))
+        + list(src.glob(f"{lane.fixture}.rs"))
     )
     if not candidates:
         return
@@ -754,8 +765,14 @@ def show_function(lane: Lane, func: str) -> None:
                 print(f"----- {lane.key}:{func} — our C -----")
                 print(DD.decompiled_c(str(so), vas[func]) or "(no output)")
         return
-    so = H.BUILD / f"{lane.fixture}-{lane.cc}-{lane.opt}.so"
-    if not so.exists():
+    # `ensure_fixture`, not a bare path read: the object at that path may have
+    # been built by an older flag list, an older compiler, or the host toolchain
+    # instead of the pinned one, and NOTHING in `build/` used to say so. Reading
+    # the recovered C is the check the metrics cannot do, and it is worthless if
+    # the C came out of a binary the current gate would never produce.
+    so, err = H.ensure_fixture(candidates[0], lane.cc, lane.opt)
+    if so is None:
+        print(f"(build failed: {err.strip()[-160:]})")
         return
     vas = DD.exported_functions(str(so))
     if func in vas:

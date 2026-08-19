@@ -128,6 +128,61 @@ def test_pinned_toolchain_is_the_default():
     )
 
 
+#: Compiler the matrix invokes -> apt package in the toolchain image that
+#: provides it. Small and explicit: a lookup that guessed would be another thing
+#: to be wrong about, and there are five entries.
+_PACKAGE_FOR = {
+    "gcc": "gcc",
+    "g++": "g++",
+    "clang": "clang",
+    "clang++": "clang",
+    "rustc": "rustc",
+}
+
+
+def test_the_dockerfile_provisions_every_compiler_the_matrix_names():
+    """A lane whose compiler is not in the image is not a lane.
+
+    THE CASE THIS EXISTS FOR. Until 2026-08-18 the committed Dockerfile
+    installed `gcc g++ clang libstdc++-11-dev libc6-dev` and no rustc, while the
+    12 `rustc:{O0,O2}` lanes had per-function verdicts in baseline.json. The
+    machines that recorded them had an image with a rustc layer no Dockerfile
+    ever contained, and `ensure_image` never rebuilds a tag that already exists,
+    so the gap could not surface locally — proven by building the committed file
+    under a second tag: `exec: "rustc": executable file not found in $PATH`.
+
+    `__toolchain__` cannot catch this: it probes gcc/g++/clang/clang++/ld/libc,
+    so the image with rustc and the image without it fingerprint IDENTICALLY.
+    Reading the Dockerfile is the only check that closes it without regenerating
+    every committed baseline.
+    """
+    dockerfile = (TC.DOCKERFILE_DIR / "Dockerfile").read_text()
+    installed = " ".join(
+        line for line in dockerfile.splitlines() if not line.lstrip().startswith("#")
+    ).split()
+
+    needed = set()
+    for src in H._fixture_sources():
+        for cc, _opt in H.lanes_for(src, None):
+            compiler = (
+                "rustc"
+                if src.suffix == ".rs"
+                else (H._cpp_compiler(cc) if src.suffix == ".cpp" else cc)
+            )
+            needed.add(compiler)
+
+    missing = sorted(c for c in needed if _PACKAGE_FOR.get(c, c) not in installed)
+    assert not missing, (
+        f"the fixture matrix invokes {missing} but "
+        f"{TC.DOCKERFILE_DIR / 'Dockerfile'} does not install "
+        f"{[_PACKAGE_FOR.get(c, c) for c in missing]} — a fresh checkout would "
+        f"lose those lanes to `executable file not found`"
+    )
+    assert needed <= set(_PACKAGE_FOR), (
+        f"no package mapping for {sorted(needed - set(_PACKAGE_FOR))}"
+    )
+
+
 def test_this_environment_matches_the_committed_baseline_toolchain():
     """The real guard: whatever host or runner this is, the pinned toolchain must
     be the one the committed baseline was recorded with — otherwise every verdict

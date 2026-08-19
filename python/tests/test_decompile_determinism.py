@@ -166,19 +166,27 @@ def test_decompile_all_concurrent_processes_match_serial_baseline(
 # `decompile_at` on one such function reproduces it in seconds, so that is what
 # this test does.
 
-FIXTURE_BUILD = (
-    Path(__file__).resolve().parents[2] / "tests" / "decompiler_fixtures" / "build"
-)
-
-#: (object, symbol) pairs whose decbench return type was observed to flip.
+#: (fixture, cc, opt, symbol) whose decbench return type was observed to flip.
+#:
+#: A LANE rather than an object filename. `tests/decompiler_fixtures/build/` is a
+#: cache that used to be keyed by filename alone, so naming the file meant this
+#: test read whatever bytes happened to sit there — an object from an older flag
+#: list, an older compiler, or `GLAURUNG_FIXTURE_TOOLCHAIN=host` — and, when the
+#: corpus had never been built here, skipped silently. Both are worse than a
+#: two-second compile: this is a determinism test, and it is only meaningful
+#: against the binary the pinned gate actually produces.
 DECBENCH_FLIPPERS = [
     pytest.param(
-        "169_rust_slices_bounds-rustc-O2.so",
+        "169_rust_slices_bounds",
+        "rustc",
+        "O2",
         "rust_slice_get_range",
         id="rust_slice_get_range",
     ),
     pytest.param(
-        "169_rust_slices_bounds-rustc-O2.so",
+        "169_rust_slices_bounds",
+        "rustc",
+        "O2",
         "_ZN6memchr4arch6x86_646memchr10memchr_raw6detect17h23e80f1dec614340E",
         id="memchr_raw-detect",
     ),
@@ -204,16 +212,21 @@ def _defined_symbol_va(so: Path, name: str) -> int | None:
     return None
 
 
-@pytest.mark.parametrize("obj,symbol", DECBENCH_FLIPPERS)
-def test_decbench_render_repeats_identically_in_one_process(obj: str, symbol: str):
+@pytest.mark.parametrize("fixture,cc,opt,symbol", DECBENCH_FLIPPERS)
+def test_decbench_render_repeats_identically_in_one_process(
+    fixture: str, cc: str, opt: str, symbol: str
+):
     """Roadmap design rule 12 at the decbench profile, inside one process.
 
     16 repeats: the observed split is near 50/50, so a run that flips has
     under a 1-in-30000 chance of showing one distinct answer here.
     """
-    so = FIXTURE_BUILD / obj
-    if not so.exists():
-        pytest.skip(f"fixture object missing (run the fixture build): {so}")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+    import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
+
+    so, err = H.ensure_fixture(H.SRC / f"{fixture}.rs", cc, opt)
+    assert so is not None, f"{fixture}:{cc}:{opt} did not build: {err}"
+    obj = so.name
     va = _defined_symbol_va(so, symbol)
     if va is None:
         pytest.skip(f"symbol not defined in {obj}: {symbol}")

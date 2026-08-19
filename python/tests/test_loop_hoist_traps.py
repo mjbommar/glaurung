@@ -31,12 +31,15 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
+sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
+import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
 
 #: (fixture, compiler, opt, function) — the exact cells that regress under always-hoist.
 TRAPS = [
@@ -137,9 +140,14 @@ def test_loop_keeps_its_loop_carried_condition(fixture, cc, opt, func):
     source-level condition can directly name a value assigned by that body, or
     labelled fallback can retain the header through an explicit back-edge.
     """
-    so = BUILD / f"{fixture}-{cc}-{opt}.so"
-    if not so.is_file():
-        pytest.skip(f"fixture not built: {so.name} (run the fixture gate first)")
+    # Build it rather than reading whatever is at that path. `build/` is a cache
+    # whose key used to be the filename alone, so an object left there by an
+    # older flag list (or by `GLAURUNG_FIXTURE_TOOLCHAIN=host`) would be read as
+    # if the pinned gate had just produced it. The skip this replaces hid the
+    # other half: on a checkout that had never built the corpus all six cells
+    # skipped, and the file reported green having checked none of the traps.
+    so, err = H.ensure_fixture(H.SRC / f"{fixture}.c", cc, opt)
+    assert so is not None, f"{fixture}:{cc}:{opt} did not build: {err}"
     va = _symbol_va(so, func)
     assert va is not None, f"{func} not exported from {so.name}"
 

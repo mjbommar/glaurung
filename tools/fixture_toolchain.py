@@ -126,6 +126,43 @@ def ensure_image() -> str:
     return IMAGE
 
 
+@functools.lru_cache(maxsize=1)
+def image_id() -> str:
+    """The exact image the pinned toolchain will run — not merely its tag.
+
+    WHY THIS IS NOT THE SAME AS `IMAGE`. `ensure_image` builds only when
+    `docker image inspect <tag>` fails, so once `glaurung-fixture-toolchain:1`
+    exists on a machine it is reused forever: editing the Dockerfile does NOT
+    rebuild it, and neither does checking out a commit that changed it. The tag
+    is a cache key that does not cover its own input.
+
+    That is not hypothetical. Measured on this host, 2026-08-18: the committed
+    Dockerfile installs `gcc g++ clang libstdc++-11-dev libc6-dev` and nothing
+    else, but `docker history glaurung-fixture-toolchain:1` shows a FOURTH layer,
+    `apt-get install ... rustc`, that no committed Dockerfile ever contained. The
+    local image is silently ahead of the repository, which is why the 12 `rustc`
+    lanes compile here and would fail on a fresh checkout.
+
+    Returning the content digest lets a per-object build fingerprint notice that
+    the image changed underneath it, even when every recorded compiler VERSION
+    string stayed the same. `host` mode has no image, and says so.
+    """
+    if mode() == "host":
+        return "host"
+    img = ensure_image()
+    r = subprocess.run(
+        [_docker(), "image", "inspect", img, "--format", "{{.Id}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        raise ToolchainError(
+            f"could not read the image id of {img}: {r.stderr.strip()[-400:]}"
+        )
+    return r.stdout.strip()
+
+
 #: Flags whose value is a prefix REWRITE RULE (`from=to`), not an input path.
 #: Splitting one at its first `=` like an ordinary `-I/path` yields the
 #: nonexistent path `<root>=.`, whose *parent* would then be mounted — a

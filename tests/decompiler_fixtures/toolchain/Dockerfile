@@ -31,10 +31,36 @@ FROM ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce51
 # gcc/g++ 11 and clang/clang++ 14 (the 22.04 defaults). libstdc++-11-dev gives
 # clang++ a working C++ runtime -- without it the C++ fixture's clang lanes are
 # unbuildable and drop out of the gate entirely.
+#
+# rustc (1.75.0 from jammy-updates) builds the six `.rs` fixtures, whose 12
+# `rustc:{O0,O2}` lanes have per-function verdicts in baseline.json. It was
+# MISSING here until 2026-08-18 while those lanes worked on the machines that
+# recorded them, because `fixture_toolchain.ensure_image` builds only when the
+# TAG is absent: the image on those machines carried a fourth layer
+# (`docker history glaurung-fixture-toolchain:1` -> `apt-get install ... rustc`)
+# that no committed Dockerfile ever contained. Proven by building this file
+# under a second tag: `exec: "rustc": executable file not found in $PATH` on all
+# 12 lanes, and every C/C++ lane fine.
+#
+# `__toolchain__` cannot see the difference. It probes gcc/g++/clang/clang++/ld/
+# libc and no rustc, so the image WITH rustc and the image WITHOUT it produce a
+# byte-identical fingerprint. Closing that needs one entry in
+# `fixture_toolchain._VERSION_PROBES` plus a regeneration of all four committed
+# baselines, since every recorded `__toolchain__` would then be missing a key.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      gcc g++ clang libstdc++-11-dev libc6-dev \
+      gcc g++ clang libstdc++-11-dev libc6-dev rustc \
  && rm -rf /var/lib/apt/lists/*
+
+# NOT provisioned: `golang-go`. Five Go fixtures sit in
+# `tests/decompiler_fixtures/src/` (176-180, 1,131 lines, 36 `//export`ed
+# entry points) that NOTHING builds and no gate declares -- `manifest.
+# assert_fixtures_declared` and `fixture_harness._fixture_sources` both glob
+# `.c`, `.cpp` and `.rs` only, so the sources are structurally invisible. Adding
+# the package alone would provision a compiler with no lane; the fixtures need
+# `manifest.REQUIRED_FUNCTIONS` entries and all four baselines regenerated
+# first. Measured 2026-08-18: with `golang-go` (Go 1.18.1) added to this image,
+# all five build `-buildmode=c-shared` clean, so the toolchain half is one line.
 
 # Compilation is hermetic: no network, deterministic locale/timezone.
 ENV LC_ALL=C.UTF-8 TZ=UTC

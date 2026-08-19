@@ -21,6 +21,8 @@ compared against another's.
 from __future__ import annotations
 
 import argparse
+import functools
+import hashlib
 import json
 import os
 import subprocess
@@ -117,16 +119,28 @@ def lanes_for(src, matrix) -> list[tuple[str, str]]:
 def rust_lanes_enabled() -> bool:
     """Whether Rust fixtures participate in the matrix.
 
-    ON: the pinned toolchain image now provisions rustc (see
-    `toolchain/Dockerfile`) and `_VERSION_PROBES` records its version, so a Rust
-    verdict is attributable to a fingerprinted toolchain exactly as a gcc or
-    clang verdict is. That is the guarantee this gate exists to make, and it is
-    why the lanes were held back until rustc was in the image rather than run
-    against whatever happened to be on the host.
+    ON — but read the next paragraph before trusting it.
 
-    Set GLAURUNG_FIXTURE_RUST=0 to drop the Rust lanes — useful on a host whose
-    image predates them, where every Rust lane would otherwise report
-    `compile-failed: rustc: executable file not found`.
+    This docstring used to say "the pinned toolchain image now provisions rustc
+    (see `toolchain/Dockerfile`) and `_VERSION_PROBES` records its version".
+    Neither half is true, measured 2026-08-18:
+
+      * `tests/decompiler_fixtures/toolchain/Dockerfile` installs
+        `gcc g++ clang libstdc++-11-dev libc6-dev` and nothing else. The image
+        that exists on the machines where the Rust lanes work has a FOURTH layer
+        (`docker history glaurung-fixture-toolchain:1` shows
+        `apt-get install ... rustc`) that no committed Dockerfile ever contained,
+        and `ensure_image` never rebuilds a tag that already exists. A fresh
+        checkout therefore builds an image with no rustc and loses all 12 Rust
+        lanes to `compile-failed: rustc: executable file not found`.
+      * `fixture_toolchain._VERSION_PROBES` probes gcc, g++, clang, clang++, ld
+        and libc. There is no rustc in `__toolchain__`, in baseline.json or in
+        defuse_baseline.json — even though the Rust lanes are ~95% of the def-use
+        census. `object_fingerprint` pins it per object; the recorded baselines
+        still do not.
+
+    Set GLAURUNG_FIXTURE_RUST=0 to drop the Rust lanes — which is what a fresh
+    checkout needs until the Dockerfile grows the missing line.
     """
     return os.environ.get("GLAURUNG_FIXTURE_RUST", "1") != "0"
 
@@ -197,10 +211,8 @@ def detect_allowed_missing() -> set[tuple[str, str, str]]:
     return missing
 
 
-def _compile_rust_fixture(
-    src: Path, cc: str, opt: str, strict: bool = False
-) -> tuple[Path | None, str]:
-    """Build a Rust fixture as a cdylib.
+def _rust_argv(src: Path, opt: str, out: Path, strict: bool) -> list[str]:
+    """The command line that builds a Rust fixture as a cdylib.
 
     rustc is its own front end and back end, so the `{gcc, clang}` axis has no
     meaning here — a Rust fixture has exactly one compiler and the lane is named
@@ -212,16 +224,13 @@ def _compile_rust_fixture(
     recovers signatures from; a cdylib exports exactly its `#[no_mangle]`
     symbols and does not re-export std.
     """
-    BUILD.mkdir(parents=True, exist_ok=True)
-    out = BUILD / f"{src.stem}-rustc-{opt}.so"
-    level = "0" if opt == "O0" else "2"
-    cmd = [
+    return [
         "rustc",
         "--edition",
         "2021",
         "-g",
         "-C",
-        f"opt-level={level}",
+        f"opt-level={'0' if opt == 'O0' else '2'}",
         "--crate-type",
         "cdylib",
         *path_remap_flags("rustc"),
@@ -230,25 +239,16 @@ def _compile_rust_fixture(
         str(out),
         str(src),
     ]
-    completed = TC.run(cmd, cwd=ROOT)
-    if completed.returncode != 0:
-        return None, completed.stderr
-    return out, ""
 
 
-def compile_fixture(
-    src: Path, cc: str, opt: str, strict: bool = False
-) -> tuple[Path | None, str]:
-    if src.suffix == ".rs":
-        return _compile_rust_fixture(src, cc, opt, strict)
-    is_cpp = src.suffix == ".cpp"
-    compiler = _cpp_compiler(cc) if is_cpp else cc
-    BUILD.mkdir(parents=True, exist_ok=True)
-    out = BUILD / f"{src.stem}-{cc}-{opt}.so"
+def _c_argv(
+    compiler: str, cc: str, src: Path, opt: str, out: Path, strict: bool
+) -> list[str]:
+    """The command line that builds a C or C++ fixture as a shared object."""
     # Fixtures are warning-clean C; the strict lane proves it (-Werror + explicit
     # fallthrough annotations). Execution builds stay lenient only re: -g/-fPIC.
     warn = ["-Wall", "-Wextra", "-Werror"] if strict else ["-w"]
-    cmd = [
+    return [
         compiler,
         "-shared",
         "-fPIC",
@@ -260,10 +260,378 @@ def compile_fixture(
         str(out),
         str(src),
     ]
-    r = TC.run(cmd, cwd=ROOT)
+
+
+def compile_plan(
+    src: Path, cc: str, opt: str, strict: bool = False
+) -> tuple[str, Path, list[str]]:
+    """`(compiler, output path, argv)` for one fixture lane, without running it.
+
+    Split out of `compile_fixture` so the cache key is computed from THE SAME
+    argv that is executed. The alternative — a fingerprint built from a second,
+    hand-maintained list of "the flags we use" — reproduces the defect this whole
+    mechanism exists for one level up: the day the two lists disagree, the key
+    silently stops covering a flag that moves the bytes, and nothing says so.
+    """
+    # Canonicalise the source BEFORE the argv is built. `compile_fixture` runs
+    # with `cwd=ROOT`, so a caller may legitimately pass either
+    # `tests/decompiler_fixtures/src/x.c` or the absolute path, and both compile
+    # to the same bytes. They did NOT fingerprint the same: `_normalized_argv`
+    # rewrites the literal ROOT prefix, which a relative path does not carry, so
+    # the same object recorded `.../src/x.c` one way and `$ROOT/.../src/x.c` the
+    # other and every lane read as stale on the next check. Resolving here makes
+    # the key a function of the build rather than of the caller's spelling.
+    src = src if src.is_absolute() else (ROOT / src).resolve()
+    if src.suffix == ".rs":
+        out = BUILD / f"{src.stem}-rustc-{opt}.so"
+        return "rustc", out, _rust_argv(src, opt, out, strict)
+    compiler = _cpp_compiler(cc) if src.suffix == ".cpp" else cc
+    out = BUILD / f"{src.stem}-{cc}-{opt}.so"
+    return compiler, out, _c_argv(compiler, cc, src, opt, out, strict)
+
+
+# ---------------------------------------------------------------------------
+# per-object build fingerprints  (tests/decompiler_fixtures/build/ is a CACHE)
+# ---------------------------------------------------------------------------
+
+#: Suffix of the sidecar recording what produced one object.
+#:
+#: A sidecar rather than an encoding in the object's filename: the filename is
+#: the lane identity that ~20 call sites already construct by hand
+#: (`f"{fixture}-{cc}-{opt}.so"`), and every one of them would have to learn to
+#: hash. A sidecar also stays readable — `cat build/foo-gcc-O0.so.build.json`
+#: says why a rebuild happened, where a hash in a filename says only that two
+#: names differ.
+SIDECAR_SUFFIX = ".build.json"
+
+#: Schema version of the sidecar. BUMP THIS when a field is added, so every
+#: object written by an older harness is treated as stale rather than trusted:
+#: an old sidecar cannot record a key it did not know about, and comparing only
+#: the keys it does have would re-open the hole this whole mechanism closes.
+CACHE_SCHEMA = 1
+
+
+def sidecar_for(out: Path) -> Path:
+    """The fingerprint file that belongs to one built object."""
+    return out.with_name(out.name + SIDECAR_SUFFIX)
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _normalized_argv(argv: list[str]) -> list[str]:
+    """`argv` with this checkout's absolute path replaced by `$ROOT`.
+
+    The remap flags are PROVEN to make the produced object byte-identical across
+    checkouts at different paths (see `path_remap_flags`), so keying on the
+    literal `-ffile-prefix-map=/home/.../glaurung=.` would force a full rebuild
+    in every worktree for objects that are known to be identical. Normalising
+    keeps the key stable across checkouts while still changing the moment the
+    flag is added, removed, renamed, or given a different target — which is the
+    change that actually moved the bytes.
+    """
+    root = str(ROOT)
+    return [tok.replace(root, "$ROOT") for tok in argv]
+
+
+@functools.lru_cache(maxsize=None)
+def compiler_identity(compiler: str) -> dict[str, str]:
+    """`{version, target}` of one compiler, probed THROUGH the pinned toolchain.
+
+    Probed through `TC.run` and not `subprocess.run`: under the default docker
+    mode the compiler that builds the fixtures is the image's (gcc 11.4,
+    rustc 1.75 here), and the host's (gcc 15.2, rustc 1.97 here) is a different
+    program that would produce a different object. A key recording the host's
+    version would call an image-built object stale on a machine whose host
+    compiler moved, and — far worse — call a host-built object fresh under
+    docker mode.
+
+    The target triple is recorded separately from the version because it can
+    move without the version moving: the same gcc build invoked as a multilib or
+    cross driver emits for a different target, and nothing in `--version` says
+    so.
+    """
+    if compiler == "rustc":
+        r = TC.run(["rustc", "-vV"], cwd=ROOT)
+        if r.returncode != 0:
+            raise TC.ToolchainError(f"cannot probe rustc: {r.stderr.strip()[-400:]}")
+        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        host = next(
+            (ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("host:")), ""
+        )
+        return {"version": lines[0] if lines else "", "target": host}
+    ver = TC.run([compiler, "--version"], cwd=ROOT)
+    tgt = TC.run([compiler, "-dumpmachine"], cwd=ROOT)
+    if ver.returncode != 0 or tgt.returncode != 0:
+        raise TC.ToolchainError(
+            f"cannot probe {compiler}: {(ver.stderr + tgt.stderr).strip()[-400:]}"
+        )
+    first = (ver.stdout.strip().splitlines() or [""])[0].strip()
+    return {"version": first, "target": tgt.stdout.strip()}
+
+
+def object_fingerprint(src: Path, compiler: str, argv: list[str]) -> dict:
+    """Everything that can change the bytes of one built fixture object.
+
+    THE DEFECT THIS EXISTS FOR. `tests/decompiler_fixtures/build/` is a cache
+    keyed by `{fixture}-{cc}-{opt}.so` and nothing else. When
+    `-ffile-prefix-map=$ROOT=.` / `--remap-path-prefix` was added, every object
+    already on disk kept its old bytes — including the absolute checkout path
+    the flag exists to erase — and every consumer that READS an object without
+    rebuilding it (`tools/dectest.py --show`,
+    `python/tests/test_decompile_determinism.py`,
+    `python/tests/test_loop_hoist_traps.py`) went on measuring the old ones.
+    Measured on the main checkout, 2026-08-19: 17 objects six days older than
+    the flag change survived it, and `132_cpp_vtable_layout-rustc-O0.so` — a
+    label no lane has produced since `lanes_for` stopped cross-producting C++
+    sources with Rust lanes — still contained the checkout path four times.
+
+    Two wrong findings came out of that in one day: two def-use censuses of the
+    same commit disagreeing, and four `144_inline_asm` cross-arch cells credited
+    to a commit that does not produce them on a cold cache.
+
+    The fields, and what each one catches:
+
+    ``argv``               every flag, including whatever `path_remap_flags`
+                           returns and the `-Wall -Wextra -Werror` / `-w` split
+                           between the strict lane and the execution lane, which
+                           share an output path.
+    ``compiler_version``   a compiler upgrade under a stable image tag.
+    ``target``             the same driver retargeted (multilib, cross).
+    ``toolchain_mode``     `docker` vs `host`. These write to the SAME paths with
+                           different compilers (gcc 11.4 vs 15.2 here); one
+                           `GLAURUNG_FIXTURE_TOOLCHAIN=host` run used to leave
+                           host objects that a later pinned run read as pinned.
+    ``toolchain_image``    the image CONTENT digest, because `ensure_image` only
+                           checks that the tag exists — see `TC.image_id`.
+    ``source_sha256``      an edited fixture.
+
+    Not covered, deliberately and with the reason: the system headers and libc
+    the compile pulls in. They live inside the pinned image, so `toolchain_image`
+    moves whenever they do; under `GLAURUNG_FIXTURE_TOOLCHAIN=host` they are
+    unpinned, which is already what that mode means.
+    """
+    ident = compiler_identity(compiler)
+    return {
+        "schema": CACHE_SCHEMA,
+        "argv": _normalized_argv(argv),
+        "compiler": compiler,
+        "compiler_version": ident["version"],
+        "target": ident["target"],
+        "toolchain_mode": TC.mode(),
+        "toolchain_image": TC.image_id(),
+        "source_sha256": _sha256(src),
+    }
+
+
+def read_sidecar(out: Path) -> dict | None:
+    """The recorded fingerprint of one object, or `None` if there is not a
+    readable one."""
+    side = sidecar_for(out)
+    try:
+        recorded = json.loads(side.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return recorded if isinstance(recorded, dict) else None
+
+
+def write_sidecar(out: Path, fingerprint: dict) -> None:
+    """Record what produced `out`, atomically.
+
+    Atomic because lanes compile concurrently and a half-written sidecar is
+    indistinguishable from a fingerprint that genuinely disagrees — it would
+    force a rebuild rather than allow a stale reuse, so it fails safe, but it
+    would also make the cache look permanently broken.
+    """
+    side = sidecar_for(out)
+    payload = dict(fingerprint, object_sha256=_sha256(out))
+    tmp = side.with_name(side.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, side)
+
+
+def stale_reason(out: Path, expected: dict) -> str | None:
+    """Why `out` cannot be reused, or `None` if it is exactly what `expected`
+    describes.
+
+    Returns a REASON rather than a bool because "the cache missed" is the
+    question a person debugging a surprise rebuild actually has, and a bool
+    makes them re-derive the answer by hand.
+    """
+    if not out.is_file():
+        return "not built"
+    recorded = read_sidecar(out)
+    if recorded is None:
+        return (
+            "no build fingerprint — produced by a harness that predates "
+            "the fingerprint, or written by hand"
+        )
+    if recorded.get("schema") != CACHE_SCHEMA:
+        return f"fingerprint schema {recorded.get('schema')!r} != {CACHE_SCHEMA}"
+    if recorded.get("object_sha256") != _sha256(out):
+        return (
+            "object does not hash to its recorded fingerprint (replaced or truncated)"
+        )
+    for key, want in sorted(expected.items()):
+        got = recorded.get(key)
+        if got != want:
+            return f"{key}: recorded {got!r} != current {want!r}"
+    return None
+
+
+def ensure_fixture(
+    src: Path, cc: str, opt: str, strict: bool = False
+) -> tuple[Path | None, str]:
+    """`compile_fixture`, but reuse the object on disk when it is PROVABLY the
+    one these flags, this compiler and this source produce.
+
+    This is the entry point for every consumer that READS a built object without
+    having compiled it itself. `compile_fixture` deliberately keeps rebuilding
+    unconditionally, and the measurement says that is the right call: a full cold
+    build of the corpus is 29-34s wall for all 768 objects at
+    `default_jobs()==8` (26.4s before this change added the fingerprints;
+    2026-08-18, docker mode, 24-core host) against a ~50 minute gate. Skipping
+    compiles would buy ~1% and would stake the gate's correctness on this key
+    being complete. The readers, which today do no compile at all, buy
+    correctness for nothing.
+    """
+    compiler, out, argv = compile_plan(src, cc, opt, strict)
+    try:
+        expected = object_fingerprint(src, compiler, argv)
+    except (TC.ToolchainError, OSError) as exc:
+        return None, f"cannot fingerprint the build: {exc}"
+    if stale_reason(out, expected) is None:
+        return out, ""
+    return compile_fixture(src, cc, opt, strict)
+
+
+def compile_fixture(
+    src: Path, cc: str, opt: str, strict: bool = False
+) -> tuple[Path | None, str]:
+    """Build one fixture lane, unconditionally, and record what produced it.
+
+    Always recompiles: see `ensure_fixture` for why the gate is not made
+    cache-aware. What changed is that success now leaves a fingerprint sidecar,
+    and failure REMOVES any sidecar left over from a previous success — an
+    object whose rebuild failed must never look fresh, and the old object is
+    still sitting at that path (the compiler drivers write `-o` only on success).
+
+    NOT fixed here, and worth knowing: `build/` is shared by every process, and
+    two of them running at once (a `pytest -m slow` beside a `dectest`, or two
+    `dectest` invocations) write the SAME path for the same lane. The sidecar
+    lets `ensure_fixture` reject an object whose write FINISHED with the wrong
+    flags, but nothing serialises the write itself, so a reader can still be
+    handed a half-written object by a concurrent builder. Fixing that needs a
+    per-object lock or a per-process build directory, neither of which this
+    change makes.
+    """
+    compiler, out, argv = compile_plan(src, cc, opt, strict)
+    BUILD.mkdir(parents=True, exist_ok=True)
+    r = TC.run(argv, cwd=ROOT)
     if r.returncode != 0:
-        return None, (r.stderr.strip().splitlines() or ["?"])[-1]
+        sidecar_for(out).unlink(missing_ok=True)
+        stderr = r.stderr.strip()
+        if src.suffix == ".rs":
+            return None, r.stderr
+        return None, (stderr.splitlines() or ["?"])[-1]
+    try:
+        write_sidecar(out, object_fingerprint(src, compiler, argv))
+    except (TC.ToolchainError, OSError):
+        # A compile that succeeded but could not be fingerprinted must not be
+        # left looking fresh; the object is still usable for THIS run.
+        sidecar_for(out).unlink(missing_ok=True)
     return out, ""
+
+
+def expected_objects() -> dict[str, tuple[Path, str, str]]:
+    """`{object name: (source, cc, opt)}` for every lane the corpus declares.
+
+    Deliberately NOT `_fixture_sources()`: that one drops the Rust sources under
+    `GLAURUNG_FIXTURE_RUST=0`, and the question here is which names a lane COULD
+    produce, not which this run will. Using the narrower set would make every
+    `*-rustc-*.so` an orphan the moment someone set that variable, and
+    `prune_cache` would then delete objects that are perfectly fresh.
+    """
+    srcs = sorted(
+        list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")) + list(SRC.glob("*.rs"))
+    )
+    out: dict[str, tuple[Path, str, str]] = {}
+    for src in srcs:
+        for cc, opt in lanes_for(src, None):
+            _compiler, path, _argv = compile_plan(src, cc, opt)
+            out[path.name] = (src, cc, opt)
+    return out
+
+
+def cache_problems() -> list[str]:
+    """Everything in `build/` that a consumer must not trust.
+
+    Two kinds, and the second is the one that produced a wrong finding:
+
+    * STALE — the object exists but its fingerprint disagrees with what this
+      source, compiler and flag list would produce now.
+    * ORPHAN — the object's name is not a lane any current source declares, so
+      NOTHING will ever overwrite it. `132_cpp_vtable_layout-rustc-O0.so` is the
+      worked example: a C++ fixture recorded under a Rust lane by the old
+      cross-product in `lanes_for`, left behind when that was fixed, and still
+      carrying pre-remap bytes six days later.
+
+    EITHER of the two current builds counts as fresh. The strict lane
+    (`-Wall -Wextra -Werror`, `strict_compile_problems`) and the execution lane
+    (`-w`, `run_matrix`) write to the SAME path, and whichever ran last is what
+    is on disk. Both are products of the current source, flags and toolchain, so
+    neither is stale — calling the strict one stale would make an ordinary
+    `pytest python/tests/` run report 768 problems it just legitimately created.
+    What is NOT accepted is a third argv nobody produces any more, which is the
+    actual defect.
+
+    An empty `build/` reports nothing — a fresh checkout has no cache to be
+    wrong about.
+    """
+    if not BUILD.is_dir():
+        return []
+    expected = expected_objects()
+    problems = []
+    for obj in sorted(BUILD.glob("*.so")):
+        lane = expected.get(obj.name)
+        if lane is None:
+            problems.append(
+                f"{obj.name}: orphan — no current fixture lane produces this "
+                f"name, so nothing will ever rebuild it"
+            )
+            continue
+        src, cc, opt = lane
+        reasons = []
+        for strict in (False, True):
+            compiler, path, argv = compile_plan(src, cc, opt, strict)
+            reason = stale_reason(path, object_fingerprint(src, compiler, argv))
+            if reason is None:
+                break
+            reasons.append(reason)
+        else:
+            problems.append(f"{obj.name}: stale — {reasons[0]}")
+    return problems
+
+
+def prune_cache() -> list[str]:
+    """Delete every stale or orphan object (and its sidecar). Returns what went.
+
+    Deleting rather than rebuilding: an orphan has no lane to rebuild it from,
+    and a stale object is rebuilt by the next run that needs it anyway.
+    """
+    removed = []
+    for problem in cache_problems():
+        name = problem.split(":", 1)[0]
+        obj = BUILD / name
+        obj.unlink(missing_ok=True)
+        sidecar_for(obj).unlink(missing_ok=True)
+        removed.append(problem)
+    return removed
 
 
 def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
@@ -599,12 +967,36 @@ def main() -> int:
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--gcc-o0-only", action="store_true", help="fast local subset")
     ap.add_argument(
+        "--check-cache",
+        action="store_true",
+        help="report stale/orphan objects in build/ and exit (compiles nothing)",
+    )
+    ap.add_argument(
+        "--prune-cache",
+        action="store_true",
+        help="delete stale/orphan objects in build/ and exit",
+    )
+    ap.add_argument(
         "--jobs",
         type=int,
         default=None,
         help="lanes to run concurrently (default: GLAURUNG_FIXTURE_JOBS or cores-1, max 8)",
     )
     args = ap.parse_args()
+
+    if args.prune_cache:
+        removed = prune_cache()
+        for r in removed:
+            print(f"pruned {r}")
+        print(f"pruned {len(removed)} object(s) from {BUILD}")
+        return 0
+    if args.check_cache:
+        problems = cache_problems()
+        for p in problems:
+            print(p)
+        n = len(list(BUILD.glob("*.so"))) if BUILD.is_dir() else 0
+        print(f"{len(problems)} problem(s) over {n} object(s) in {BUILD}")
+        return 1 if problems else 0
 
     matrix = [("gcc", "O0")] if args.gcc_o0_only else REQUIRED_MATRIX
     result = run_matrix(matrix, args.fuzz, jobs=args.jobs)
