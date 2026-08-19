@@ -26,9 +26,11 @@ cost barely more than 4.
 | did I break this lane | `tools/dectest.py FIX:cc:opt` | 13 s |
 | did I break this shape family | `tools/dectest.py @switch` / `@loops` | 48 s / 54 s |
 | what does this function do on i386 / armv7 / aarch64 | `tools/dectest.py FIX:arch:opt:func --show` | **1.0 s** |
+| what does this function look like with no symbols at all | `tools/dectest.py FIX:cc:O2strip:func --show` | **3 s** |
 | did I break this shape family on ONE architecture | `tools/dectest.py @loops --arch armv7_a32` | **8.1 s** |
 | did I break anything, behaviourally | `pytest -m slow python/tests/test_decompiler_fixture_matrix.py` | ~2 min |
 | did I break a NON-x86-64 lifter | `tools/arch_roundtrip.py --check` | **4.4 min** |
+| does the decompiler still work with NO debug info | `tools/stripped_differential.py` | **2.5 min** |
 | does recovered C still build for a 32-bit target | `pytest -m slow python/tests/test_decompiler_wide_arithmetic_width.py` | ~25 s |
 | is it safe to push | `scripts/decbench-local-gate.sh` | ~50 min |
 | did I move a PUBLISHED metric (ask first) | `tools/decbench_matrix.py --check --only statemachine` | ~3 min |
@@ -411,6 +413,110 @@ architectures are built by host compilers; each version string is recorded
 per-arch in `__toolchain__`, tagged `pinned:`/`host:`, alongside the ASLR
 setting, and all of it is asserted by `--check`. Drift fails loudly with a
 refresh instruction instead of producing phantom regressions.
+
+## `tools/stripped_differential.py` — the lane with no debug info
+
+```bash
+tools/stripped_differential.py                          # whole corpus
+tools/stripped_differential.py --fixture 08_indirect_dispatch --explain
+tools/dectest.py 08_indirect_dispatch:gcc:O2strip:dispatch --show
+tools/dectest.py @exceptions --stripped
+```
+
+`fixture_harness.compile_fixture` compiles **every** lane with `-g`,
+unconditionally. So the whole corpus was blind to any defect that only appears
+without debug info — which is the configuration real targets ship in, and the
+configuration where the decompiler has to work hardest, because function extents,
+prototypes and types come from analysis instead of being handed over. The
+landing-pad ownership defect fixed in `965f8585` rejected 74% of the LSDA sites in
+libstdc++ and emitted C containing dangling `goto`s, and not one lane could see
+it: `-O0` masks it, and `-O2 -g` masks it because `apply_dwarf_overrides` hands
+the function a wide DWARF range.
+
+The lane costs almost nothing to build because of one fact about `strip`: it
+removes `.symtab` and every `.debug_*` section and leaves `.dynsym` alone, so a
+shared object's exported functions survive at their original addresses and the
+object is still `dlopen`able. Measured on `201_float_bit_stores` at gcc `-O2`:
+8 exported `T` symbols before and after, identical addresses, 8 `.debug_*`
+sections and a 27-entry `.symtab` before and none after, and
+`ctypes.CDLL(stripped).f201_f32_slot_bits(1.5)` still returns `0x1d69`. **The
+existing execution differential therefore runs unmodified on the stripped
+object** — same compile, `strip` the output, `dlopen` and call exactly as before.
+
+### It is a differential, not a second corpus
+
+For a correct decompiler, debug info should improve **naming** and never
+**structure**. So the useful quantity is not "does the stripped cell pass" — most
+of the corpus's known failures fail with `-g` too, and a standalone stripped
+baseline would record them a second time and call it coverage. The useful
+quantity is the difference against the `-g` build of the *same compile*: same
+source, same compiler, same flags, same addresses, one variable removed.
+
+| `-g` | stripped | meaning |
+|---|---|---|
+| `pass` | not `pass` | **regression** — a defect with its own control attached |
+| not `pass` | not `pass` | pre-existing; this lane did not find it and does not claim it |
+| not `pass` | `pass` | **improvement** — usually a DWARF override injecting something wrong |
+
+The `-g` control is read from the committed `baseline.json` rather than re-run.
+That halves the cost and is not a shortcut: `fixture:cc:O2` is the identical
+compile of the identical source and is already gated by
+`test_decompiler_fixture_matrix.py`.
+
+### Where the lane lives in the key
+
+`O2strip` is an **optimisation-slot** value, so a lane key stays the three-part
+`fixture:cc:opt` that all four baselines, `dectest`'s selector grammar and the
+manifest's `skip_exec_lanes` are built around. The alternatives were both worse:
+
+* a **third axis** cannot be spelled. `dectest` already spends the fourth colon
+  component on the FUNCTION (`13_loop_early_exit:gcc:O0:bisect`), so a four-part
+  lane key could not be told from a function selector.
+* a **compiler-slot** value multiplies instead of composing. That slot already
+  carries the six architecture names from `arch_roundtrip.py`, and putting the
+  strip variant there would mean `gcc-strip`, `clang-strip`, `rustc-strip` and
+  one per architecture.
+
+The optimisation slot is in practice the build-recipe slot — it already names the
+flags handed to the compiler. `-O2` then `strip` is one more recipe, it composes
+with every compiler for free, and the control lane is a mechanical string
+operation on the key (`O2strip` -> `O2`), which is exactly what the differential
+needs.
+
+`-O2` only, and that is a scope decision. At `-O0` a function begins at a
+`push rbp` after a `ret`, every local is a frame-pointer offset, and nothing is
+inlined or outlined — removing the debug info costs the analysis almost nothing.
+`-O2` is where extents, prototypes and types genuinely have to be inferred.
+Covering `-O0` as well would double the lane count to buy the cheap half of the
+problem.
+
+A stripped lane is only ever selected **deliberately**, like an architecture: `*`
+in the optimisation slot still expands over `O0`/`O2` only, so `@o0` and `@o2`
+are exactly the lanes they always were, and a stripped lane must be named
+outright or asked for with `--stripped`.
+
+### The ratchet
+
+`tests/decompiler_fixtures/stripped_divergences.json` records the divergences
+already known — deliberately not named `*baseline*`, because it is not a record
+of what the lane produced but the much smaller list of cells where the two sides
+disagree. `python/tests/test_decompiler_stripped_lane.py` fails on a divergence
+that is not in it **and** on a recorded one that has stopped diverging: a stale
+entry silently pre-approves the next occurrence of the same cell. Refresh with
+`tools/stripped_differential.py --write-divergences`, which refuses to write over
+any infrastructure problem.
+
+### One harness artifact it forced out
+
+A recovery that calls a `static` helper is normally completed from the original
+`.symtab` (`diff_decompile.include_referenced_local_callees`). A stripped object
+has no `.symtab` at all, so every such recovery died at load time with
+`undefined symbol: sub_7100` — a harness artifact indistinguishable from a
+decompiler bug, and the same one that accounted for 44 of the first ARM run's
+"failures". The fix is exact rather than a guess: Glaurung spells an unnamed
+function `sub_{va:x}` (one spelling, four sites), so the identifier *is* the
+address, and reading it back supplies precisely the fact the symbol table would
+have. It removed 4 of the first run's 11 Rust/C++ "regressions".
 
 ## Metrics, scoped
 

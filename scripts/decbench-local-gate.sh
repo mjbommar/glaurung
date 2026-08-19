@@ -175,11 +175,16 @@ fi
 # see. `structural.py` builds each fixture once with gcc -O0, which held 7 of the
 # 304 violations in REQUIRED functions when the census was first taken; the other
 # 297 are in the clang, -O2 and rustc lanes.
-step "2/$lanes  decompiler fixture matrix + structural + def-before-use ratchets (x86-64)"
+step "2/$lanes  decompiler fixture matrix + structural + def-before-use + stripped lanes (x86-64)"
 note "exec tmpdir: $GLAURUNG_FIXTURE_TMPDIR"
+# The stripped lane joins here for the same reason the def-before-use lane does:
+# it is the same corpus, the same compile and the same execution differential,
+# and its `-g` control is the very baseline this step already compares against.
+# It costs ~2.5 min because only one side of the differential has to be run.
 if python -m pytest -p no:cacheprovider -m slow -q \
      python/tests/test_decompiler_fixture_matrix.py \
      python/tests/test_decompiler_defuse_census.py \
+     python/tests/test_decompiler_stripped_lane.py \
      python/tests/test_decompiler_fixture_structural.py 2>&1 | tail -6; then
   note "ok"
 else

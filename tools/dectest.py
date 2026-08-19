@@ -16,6 +16,26 @@ the same baseline comparison — over a selection.
     tools/dectest.py @loops                              # a named set
     tools/dectest.py @smoke --show                       # + source vs our C
 
+STRIPPED
+--------
+The optimisation slot also accepts a STRIPPED build, where the object handed to
+the decompiler has had `strip` run over it — no `.symtab`, no DWARF:
+
+    tools/dectest.py 10_cpp_runtime_shapes:gcc:O2strip:cpp_exception --show
+    tools/dectest.py @exceptions --stripped
+
+That is the configuration real targets ship in, and the one the corpus was blind
+to: `tools/fixture_harness.py` compiled every lane `-g`, unconditionally. A
+stripped lane is judged against the `-g` build of the SAME compile — same source,
+same compiler, same flags, same addresses — so a `pass -> fail` here means the
+debug info was doing structural work, which for a correct decompiler it never
+should. `tools/stripped_differential.py` is the gated form of this lane and holds
+the ratchet of divergences already known; `dectest` reports all of them, known or
+not, because it is the loop rather than the gate.
+
+Like an architecture, a stripped lane is only ever selected deliberately: `*` in
+the optimisation slot still means `O0`/`O2`, so `@o0` and `@o2` are unchanged.
+
 ARCHITECTURES
 -------------
 The compiler slot also accepts an architecture from `tools/arch_roundtrip.py`
@@ -100,6 +120,23 @@ import manifest as M  # ty: ignore[unresolved-import]
 
 COMPILERS = ("gcc", "clang", "rustc")
 OPTS = ("O0", "O2")
+
+#: The optimisation slot also accepts a STRIPPED build (`O2strip` — see
+#: `fixture_harness.STRIP_SUFFIX`), where the object handed to the decompiler has
+#: had `strip` run over it and carries no `.symtab` and no DWARF at all.
+#:
+#: Like an architecture, it is only ever selected DELIBERATELY: `*` in the
+#: optimisation slot expands over `OPTS` and nothing else, so `@o0` and `@o2` are
+#: exactly the debug-info lanes they have always been, and a stripped lane must be
+#: named outright or asked for with `--stripped`. Anything else would silently
+#: double every existing set.
+#:
+#: A stripped lane is judged against the `-g` build of the SAME compile
+#: (`Lane.control_key`), not against a stripped record of its own. That is the
+#: whole design — see `tools/stripped_differential.py`, which is this lane's gate
+#: and carries the ratchet of divergences already known. `dectest` is the
+#: iteration loop, so it reports every divergence including the known ones.
+STRIPPED_OPTS = tuple(H.stripped_opt(opt) for opt in H.STRIPPED_BASE_OPTS)
 
 #: The architectures selectable in the compiler slot. Read from
 #: `arch_roundtrip.TARGETS` rather than restated, so a target added there is
@@ -190,6 +227,13 @@ def lane_function_universe() -> dict[tuple[str, str, str], list[str]]:
             if key not in universe:
                 continue
             universe[key].update(name for name in fns if not name.startswith("__"))
+    for (fixture, cc, opt), funcs in list(universe.items()):
+        # A stripped lane selects exactly the functions its `-g` control has.
+        # They are the same exports at the same addresses — `strip` removes only
+        # non-SHF_ALLOC sections — so anything else would be a second, drifting
+        # answer to a question the control already answers.
+        if opt in H.STRIPPED_BASE_OPTS:
+            universe[(fixture, cc, H.stripped_opt(opt))] = set(funcs)
     return {key: sorted(funcs) for key, funcs in universe.items()}
 
 
@@ -291,6 +335,10 @@ class Selector:
     def is_arch(self) -> bool:
         return self.cc in ARCHES
 
+    @property
+    def is_stripped(self) -> bool:
+        return self.opt in STRIPPED_OPTS
+
 
 @dataclass(frozen=True)
 class Lane:
@@ -312,6 +360,22 @@ class Lane:
         shape serves both gates without ambiguity.
         """
         return self.cc in ARCHES
+
+    @property
+    def is_stripped(self) -> bool:
+        return self.opt in STRIPPED_OPTS
+
+    @property
+    def control_key(self) -> str:
+        """The baseline row this lane's verdicts are compared against.
+
+        Itself for every ordinary lane. For a stripped lane, the `-g` build of
+        the same compile: same source, same compiler, same flags, same addresses,
+        and the only variable removed is the debug info — which is what makes a
+        divergence attributable rather than merely observed.
+        """
+        base_opt, stripped = H.split_opt(self.opt)
+        return f"{self.fixture}:{self.cc}:{base_opt}" if stripped else self.key
 
 
 def parse_selector(raw: str) -> Selector:
@@ -364,7 +428,33 @@ def retarget(sel: Selector, arches: list[str]) -> list[Selector]:
     return [Selector(sel.fixture, arch, sel.opt, sel.func) for arch in arches]
 
 
-def resolve(raws: list[str], arches: list[str] | None = None) -> list[Lane]:
+def strip_retarget(sel: Selector) -> Selector:
+    """`--stripped` applied to one selector: the optimisation slot gains `strip`.
+
+    Retargeting rather than a separate set list, for the same reason `--arch`
+    retargets: every set names fixtures, so `@exceptions --stripped` reuses a set
+    unchanged. A selector whose optimisation slot is a glob keeps that glob and
+    resolves through `STRIPPED_BASE_OPTS`, which is `-O2` only, so `@o0
+    --stripped` selects nothing and says so rather than inventing an `O0strip`
+    lane that `stripped_lanes_for` does not build.
+    """
+    if sel.is_stripped:
+        return sel
+    if sel.opt == "*":
+        bases = list(H.STRIPPED_BASE_OPTS)
+    else:
+        bases = fnmatch.filter(list(H.STRIPPED_BASE_OPTS), sel.opt)
+    if not bases:
+        raise NoMatch(
+            f"--stripped has no lane for optimisation {sel.opt!r}; "
+            f"stripped lanes exist at {', '.join(H.STRIPPED_BASE_OPTS)} only"
+        )
+    return Selector(sel.fixture, sel.cc, H.stripped_opt(bases[0]), sel.func)
+
+
+def resolve(
+    raws: list[str], arches: list[str] | None = None, stripped: bool = False
+) -> list[Lane]:
     """Selectors -> the lanes to run, each with the functions to report on.
 
     Every stage is fail-closed independently, so the error names the component
@@ -377,6 +467,8 @@ def resolve(raws: list[str], arches: list[str] | None = None) -> list[Lane]:
     selectors = [parse_selector(r) for raw in raws for r in _expand(raw)]
     if arches:
         selectors = [out for sel in selectors for out in retarget(sel, arches)]
+    if stripped:
+        selectors = [strip_retarget(sel) for sel in selectors]
     by_lane: dict[tuple[str, str, str], set[str]] = {}
     for sel in selectors:
         fixtures = fnmatch.filter(sorted(universe), sel.fixture)
@@ -391,12 +483,18 @@ def resolve(raws: list[str], arches: list[str] | None = None) -> list[Lane]:
         # emulator, and is opted into by name or by `--arch`.
         lanes_of = arch_universe if sel.is_arch else lane_universe
         ccs = [sel.cc] if sel.is_arch else fnmatch.filter(list(COMPILERS), sel.cc)
-        opts = fnmatch.filter(list(OPTS), sel.opt)
+        # A stripped optimisation level is never glob-reached (see STRIPPED_OPTS).
+        opts = (
+            [sel.opt]
+            if sel.opt in STRIPPED_OPTS
+            else fnmatch.filter(list(OPTS), sel.opt)
+        )
         if not ccs or not opts:
             raise NoMatch(
                 f"no lane matches {sel.cc}:{sel.opt} "
                 f"(compilers: {', '.join(COMPILERS)}; "
-                f"architectures: {', '.join(ARCHES)}; opts: {', '.join(OPTS)})"
+                f"architectures: {', '.join(ARCHES)}; "
+                f"opts: {', '.join(OPTS + STRIPPED_OPTS)})"
             )
         # A function pattern is matched per fixture, but only has to match
         # SOMEWHERE in the selector. `*:gcc:O0:ternary*` means "the ternary
@@ -545,7 +643,9 @@ def compare(
     regressions, improvements, infra, unbaselined = [], [], [], []
     for lane in lanes:
         cur = observed.get(lane.key, {})
-        base = (arch_baseline or {} if lane.is_arch else baseline).get(lane.key, {})
+        base = (arch_baseline or {} if lane.is_arch else baseline).get(
+            lane.control_key, {}
+        )
         if "__lane__" in cur:
             if cur["__lane__"] != "env-missing" and not str(cur["__lane__"]).startswith(
                 AR.UNSUPPORTED_PREFIX
@@ -715,6 +815,11 @@ def _unjudged_function_names(fixture: str, judged: list[str]) -> list[str]:
         import diff_decompile as DD
     except Exception:
         return []
+    # A stripped lane leaves TWO objects behind (`fixture_harness.dwarf_sibling`),
+    # and the `.dwarf.so` oracle is not a lane of its own — `expected_objects`
+    # does not name it. Its exports are identical to its stripped sibling's, so
+    # reading it would give the same answer today, but it is not a lane and this
+    # glob is the kind that quietly starts describing the wrong file.
     declared = {n for n in H.expected_objects() if n.startswith(f"{fixture}-")}
     for so in sorted(H.BUILD.glob(f"{fixture}-*.so")):
         if so.name not in declared:
@@ -797,6 +902,13 @@ def build_parser() -> argparse.ArgumentParser:
         "arch_baseline.json.",
     )
     ap.add_argument(
+        "--stripped",
+        action="store_true",
+        help="retarget every selector to the STRIPPED lane (`-O2 -g` then "
+        "`strip`), judged against the `-g` build of the same compile. "
+        "`tools/stripped_differential.py` is the gated form.",
+    )
+    ap.add_argument(
         "--list",
         action="store_true",
         help="resolve the selection and print it; run nothing",
@@ -844,7 +956,7 @@ def main(argv=None) -> int:
         return 0
 
     try:
-        lanes = resolve(args.selectors, arches=args.arch)
+        lanes = resolve(args.selectors, arches=args.arch, stripped=args.stripped)
     except (NoMatch, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

@@ -1,0 +1,457 @@
+{
+  "08_indirect_dispatch:clang:O2strip:dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "08_indirect_dispatch:clang:O2strip:tail_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "08_indirect_dispatch:gcc:O2strip:dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "08_indirect_dispatch:gcc:O2strip:dispatch_switch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "08_indirect_dispatch:gcc:O2strip:tail_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "101_static_locals:clang:O2strip:counter_reset": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "101_static_locals:gcc:O2strip:counter_reset": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "10_cpp_runtime_shapes:clang:O2strip:cpp_raii_guard": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "10_cpp_runtime_shapes:gcc:O2strip:cpp_exception": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "10_cpp_runtime_shapes:gcc:O2strip:cpp_raii_guard": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "111_self_referential_struct:gcc:O2strip:link_and_sum": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "112_recursion_shapes:gcc:O2strip:mutual_parity": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "131_obfuscated_composite:clang:O2strip:obfuscated_pipeline": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "131_obfuscated_composite:gcc:O2strip:obfuscated_pipeline": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "139_cpp_object_lifetime:gcc:O2strip:cpp_live_object_count": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "145_control_flow_flattening:gcc:O2strip:flattened_gcd": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "148_dispatch_obfuscation:clang:O2strip:computed_index_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "148_dispatch_obfuscation:clang:O2strip:obfuscated_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "148_dispatch_obfuscation:gcc:O2strip:computed_index_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "148_dispatch_obfuscation:gcc:O2strip:obfuscated_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "148_dispatch_obfuscation:gcc:O2strip:permuted_switch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "150_obfuscation_composite:clang:O2strip:obfuscated_digest": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "150_obfuscation_composite:clang:O2strip:obfuscated_predicate_chain": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "150_obfuscation_composite:clang:O2strip:obfuscated_transform": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "150_obfuscation_composite:gcc:O2strip:obfuscated_predicate_chain": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "164_nested_tlv_walker:clang:O2strip:tlv164_leaf_sum": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "164_nested_tlv_walker:gcc:O2strip:tlv164_leaf_sum": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "164_nested_tlv_walker:gcc:O2strip:tlv164_node_count": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "166_rust_generics:rustc:O2strip:rust_generic_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "170_rust_panic_unwind:rustc:O2strip:rust_panic_bounds": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "172_float_double_widths:clang:O2strip:accumulate_narrow": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "172_float_double_widths:clang:O2strip:accumulate_wide": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "172_float_double_widths:clang:O2strip:double_precision_horner": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "172_float_double_widths:gcc:O2strip:double_precision_horner": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "172_float_double_widths:gcc:O2strip:single_precision_horner": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "173_float_int_conversions:clang:O2strip:int32_round_trip_delta": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "173_float_int_conversions:clang:O2strip:widen_int_to_float": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "173_float_int_conversions:clang:O2strip:widen_long_to_double": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "173_float_int_conversions:gcc:O2strip:widen_int_to_float": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "173_float_int_conversions:gcc:O2strip:widen_long_to_double": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "174_float_compare_classify:gcc:O2strip:absolute_binary32": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "175_float_matrix_kernel:clang:O2strip:matrix2_determinant": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "175_float_matrix_kernel:gcc:O2strip:matrix2_determinant": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "175_float_matrix_kernel:gcc:O2strip:scale_series_f32": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "181_compensated_summation:clang:O2strip:compensation_of_step": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "181_compensated_summation:clang:O2strip:difference_of_products": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "181_compensated_summation:gcc:O2strip:compensation_of_step": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "181_compensated_summation:gcc:O2strip:difference_of_products": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "181_compensated_summation:gcc:O2strip:summation_disagrees": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "189_effectful_select:clang:O2strip:se189_select_one_arm": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "189_effectful_select:gcc:O2strip:se189_select_call": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "191_indirect_table_args:clang:O2strip:t191_computed_args": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "191_indirect_table_args:clang:O2strip:t191_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "191_indirect_table_args:clang:O2strip:t191_fold": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "191_indirect_table_args:gcc:O2strip:t191_computed_args": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "191_indirect_table_args:gcc:O2strip:t191_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "195_by_value_aggregates:clang:O2strip:bv195_make_quad": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "195_by_value_aggregates:clang:O2strip:bv195_mixed_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "195_by_value_aggregates:clang:O2strip:bv195_quad_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "195_by_value_aggregates:gcc:O2strip:bv195_make_quad": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "195_by_value_aggregates:gcc:O2strip:bv195_mixed_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "195_by_value_aggregates:gcc:O2strip:bv195_quad_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "196_disjoint_frame_slots:gcc:O2strip:dfs196_alias_control": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:clang:O2strip:hfa197_make_tagged": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:clang:O2strip:hfa197_scalar_control": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:clang:O2strip:hfa197_trio3f_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:gcc:O2strip:hfa197_make_tagged": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:gcc:O2strip:hfa197_quad4f_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:gcc:O2strip:hfa197_scalar_control": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "197_homogeneous_float_aggregates:gcc:O2strip:hfa197_trio3f_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "198_aggregate_return_edges:clang:O2strip:agr198_make_trio": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "198_aggregate_return_edges:clang:O2strip:agr198_trio_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "198_aggregate_return_edges:gcc:O2strip:agr198_make_trio": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "198_aggregate_return_edges:gcc:O2strip:agr198_trio_roundtrip": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "199_pointer_return_kinds:clang:O2strip:ptr199_find_const": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "199_pointer_return_kinds:gcc:O2strip:ptr199_edge_element": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "199_pointer_return_kinds:gcc:O2strip:ptr199_offset": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "201_float_bit_stores:clang:O2strip:f201_store_through_pointer": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "201_float_bit_stores:gcc:O2strip:f201_store_through_pointer": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "203_string_move_copies:gcc:O2strip:mv203_by_value_narrow": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "203_string_move_copies:gcc:O2strip:mv203_local_narrow_copy": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "63_numerical_integration:gcc:O2strip:simpson_integrate": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "63_numerical_integration:gcc:O2strip:trapezoid_integrate": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "65_projectile_motion:gcc:O2strip:projectile_step": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "67_elastic_collision:clang:O2strip:elastic_velocity_a": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "82_comma_operator:clang:O2strip:comma_in_for": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "85_designated_initializers:gcc:O2strip:designated_sum": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "87_variable_length_array:gcc:O2strip:vla_two_dimensional": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "95_function_pointer_table:clang:O2strip:dispatch_operation": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "95_function_pointer_table:clang:O2strip:fold_operations": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "95_function_pointer_table:gcc:O2strip:dispatch_operation": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  }
+}

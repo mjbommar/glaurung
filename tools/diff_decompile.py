@@ -909,6 +909,10 @@ def _rebind_function_definition(code: str, target: str) -> str | None:
 
 #: Upper bound on helper bodies pulled into one differential translation unit.
 _MAX_HELPERS = 32
+#: Glaurung's spelling for a function with no symbol: `sub_{va:x}`. The address
+#: is IN the identifier, which is the only name->address map a stripped object
+#: leaves behind.
+_ADDRESS_ENCODED_NAME = re.compile(r"sub_(?P<va>[0-9a-f]+)")
 
 #: Above this many local symbols, decompiling all of them up front would cost
 #: more than the CLI spawns it saves, so the walk falls back to fetching bodies
@@ -973,9 +977,21 @@ def include_referenced_local_callees(
     the batch of exported roots without weakening comparator isolation.
 
     Resolution is exact and bounded: only direct call identifiers whose name is
-    present uniquely in the original ``.symtab`` are considered, and at most 32
-    helpers are included. Missing/stripped/ambiguous cases remain unresolved and
-    fail as before rather than substituting guessed behavior.
+    present uniquely in the original ``.symtab``, or which ENCODE their own
+    address in the product's ``sub_<hex>`` spelling, are considered, and at most
+    32 helpers are included. Ambiguous cases remain unresolved and fail as before
+    rather than substituting guessed behavior.
+
+    The address-encoded form is what makes this work on a stripped object, where
+    ``.symtab`` is gone entirely and the map this function is built around is
+    empty. Glaurung names an unnamed function ``sub_{va:x}`` (``name_resolve.rs``,
+    ``cfg/function_build.rs``, ``python_bindings/ir.rs`` — one spelling, four
+    sites), so the identifier IS the address: reading it back is exact, not a
+    guess, and it is the same fact the symbol table would have supplied. Without
+    it every stripped recovery that calls a `static` helper dies at load time
+    with ``undefined symbol: sub_7100`` — a harness artifact indistinguishable
+    from a decompiler bug, and the same one that accounted for 44 of the first
+    ARM run's "failures".
     """
     if not Path(binary).is_file():
         return root_c
@@ -996,8 +1012,21 @@ def include_referenced_local_callees(
         for alias, candidates in alias_candidates.items()
         if len(set(candidates)) == 1
     }
-    if not local:
-        return root_c
+
+    export_vas = set(exports.values())
+
+    def address_encoded(name: str) -> tuple[str, int] | None:
+        """`("sub_7100", 0x7100)` for the product's unnamed-function spelling."""
+        match = _ADDRESS_ENCODED_NAME.fullmatch(name)
+        if match is None:
+            return None
+        va = int(match.group("va"), 16)
+        # An exported address already links through the reference object; taking
+        # it here would inline a body the differential means to call for real.
+        return None if va in export_vas else (name, va)
+
+    def resolve(name: str) -> tuple[str, int] | None:
+        return local.get(name) or address_encoded(name)
 
     snippets: dict[str, str] = {}
     visiting: set[str] = set()
@@ -1010,7 +1039,7 @@ def include_referenced_local_callees(
             dict.fromkeys(
                 match.group("name")
                 for match in _FUNCTION_CALL.finditer(code)
-                if match.group("name") in local
+                if resolve(match.group("name")) is not None
             )
         )
 
@@ -1041,7 +1070,11 @@ def include_referenced_local_callees(
         ):
             return
         visiting.add(name)
-        _symbol, va = local[name]
+        resolved = resolve(name)
+        if resolved is None:
+            visiting.remove(name)
+            return
+        _symbol, va = resolved
         helper = helper_body(va)
         if helper is None and may_fall_back:
             # A body the warming pass could not reach (it stops at the cap).
@@ -2580,6 +2613,7 @@ def run(
     lane: str | None = None,
     native_cc: list[str] | None = None,
     native_runner: list[str] | None = None,
+    dwarf_so: str | None = None,
 ) -> dict:
     """`only` restricts which functions are executed and reported.
 
@@ -2592,6 +2626,19 @@ def run(
     `reference_so` (see `run_function`) is the host-loadable object the recovery
     is executed and linked against; it defaults to `binary`. `lane` overrides the
     lane label otherwise inferred from the binary's filename.
+
+    `dwarf_so` is where the ORACLE's signatures come from, and it defaults to
+    `binary`. It differs only for the stripped lane (`tools/fixture_harness.py`),
+    where `binary` carries no `.debug_info` at all: the decompiler is handed the
+    stripped object and must recover extents, prototypes and types from analysis,
+    while this harness still needs a true prototype to marshal the call through.
+    Reading that prototype from the SAME COMPILE built with `-g` keeps the
+    oracle honest without handing the decompiler anything.
+
+    Separating them is only sound while both objects describe the same code at
+    the same addresses, so that is asserted rather than assumed: `strip` deletes
+    non-SHF_ALLOC sections and moves nothing, and a mismatch in the exported
+    name->address map is an error, never a verdict.
 
     Only DYNAMICALLY EXPORTED functions are executed, at every architecture. A
     file-local `static` helper has no dynamic symbol, so the reference side
@@ -2612,22 +2659,45 @@ def run(
     # .debug_info section directly.) O2 *fragmentation* — .debug_info present but
     # ranges/abstract-origin — is different: unrecoverable functions fall to
     # `structural` below.
-    with open(binary, "rb") as fh:
+    oracle = str(dwarf_so) if dwarf_so is not None else str(binary)
+    with open(oracle, "rb") as fh:
         di = ELFFile(fh).get_section_by_name(".debug_info")
         if di is None or di["sh_size"] == 0:
-            return {"__error__": f"no DWARF debug info in {binary}"}
+            return {"__error__": f"no DWARF debug info in {oracle}"}
     # The dynamic symbol table is the authoritative function list (reliable at
     # O2, where DWARF fragments). DWARF supplies types where recoverable.
     exported = exported_functions(binary)
     if not exported:
         return {"__error__": f"no exported functions in {binary}"}
-    sig_by_name = {s["name"]: s for s in signatures(binary)}
+    if oracle != str(binary):
+        # A signature read from a DIFFERENT file is only attributable to this
+        # binary's code while the two agree on every exported name AND address.
+        # Fail closed: a silent disagreement would marshal one function's call
+        # through another function's prototype and report the result as a
+        # decompiler verdict.
+        oracle_exports = exported_functions(oracle)
+        if oracle_exports != exported:
+            only_here = sorted(set(exported) - set(oracle_exports))
+            only_there = sorted(set(oracle_exports) - set(exported))
+            moved = sorted(
+                name
+                for name, va in exported.items()
+                if name in oracle_exports and oracle_exports[name] != va
+            )
+            return {
+                "__error__": (
+                    f"{oracle} does not describe {binary}: "
+                    f"only in binary {only_here}, only in oracle {only_there}, "
+                    f"different address {moved}"
+                )
+            }
+    sig_by_name = {s["name"]: s for s in signatures(oracle)}
     # Zero recoverable signatures would make EVERY function `structural` — a
     # green, entirely un-executed lane. That is the exact failure mode this gate
     # exists to prevent, so it is an error, not a result. (A single unrecoverable
     # signature still degrades to `structural`; only a wholesale loss is infra.)
     if not sig_by_name:
-        return {"__error__": f"no DWARF signatures recoverable from {binary}"}
+        return {"__error__": f"no DWARF signatures recoverable from {oracle}"}
     # The host reference's own prototypes. Only meaningful when it is a DIFFERENT
     # build from the object being decompiled, which is exactly the cross-
     # architecture case `abi_incomparable` exists for.
@@ -2720,6 +2790,13 @@ def main() -> int:
         "(default: the binary itself; differs only for cross-architecture lanes)",
     )
     ap.add_argument(
+        "--dwarf-so",
+        default=None,
+        help="object to read the ORACLE's DWARF signatures from (default: the "
+        "binary itself; differs only for the stripped lane, where the binary "
+        "under decompilation has no debug info at all)",
+    )
+    ap.add_argument(
         "--lane",
         default=None,
         help="lane label for manifest per-lane skips (default: inferred from the "
@@ -2756,6 +2833,7 @@ def main() -> int:
         only=set(args.function) if args.function else None,
         reference_so=args.reference_so,
         lane=args.lane,
+        dwarf_so=args.dwarf_so,
         native_cc=json.loads(args.native_cc) if args.native_cc else None,
         native_runner=json.loads(args.native_runner) if args.native_runner else None,
     )

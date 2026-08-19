@@ -554,14 +554,26 @@ def test_the_real_tree_records_every_oversized_file_not_just_the_top_15(fr):
 
 
 def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
-    """Not a synthetic case: the tree as committed. If this file is later split
-    or its growth is deliberately accepted into a regenerated baseline, this
-    assertion is the thing that must be updated, which is the point."""
+    """Not a synthetic case: the tree as committed. If one of these files is
+    later split, or its growth is deliberately accepted into a regenerated
+    baseline, this assertion is the thing that must be updated, which is the
+    point.
+
+    `ir/value_number.rs` joined the list when `live_in_arg_slots_llir` stopped
+    treating a versioned read as live-in evidence. The growth is the rule's
+    justification -- the worked `37_heapsort` case that makes a one-token
+    predicate legible -- and it is listed here rather than trimmed to fit the
+    counter, because a comment deleted to keep a number flat is exactly the
+    drift this measure exists to surface.
+    """
     baseline = fr.load_baseline(BASELINE)
     current = fr.build_report(SRC)
     assert fr.check_ratchet(current, baseline) == []
     grown = fr.check_owner_trend(current, baseline)
-    assert [row.split(":")[0] for row in grown] == ["ir/ast/dec_render.rs"]
+    assert [row.split(":")[0] for row in grown] == [
+        "ir/ast/dec_render.rs",
+        "ir/value_number.rs",
+    ]
 
 
 def test_owner_growth_is_never_fatal(fr):

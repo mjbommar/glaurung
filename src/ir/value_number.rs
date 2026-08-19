@@ -128,9 +128,21 @@ fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
 /// must NOT inflate the recovered arity.
 ///
 /// Works on the value-numbered LLIR: register names may carry a `#version` tag,
-/// which is stripped for slot matching, and it sees parameters whose only later
-/// uses were dropped by structuring/DCE (the LLIR predates those passes). Mirrors
-/// `naming::live_in_arg_slots` but authoritative for the signature arity + typing.
+/// and it sees parameters whose only later uses were dropped by structuring/DCE
+/// (the LLIR predates those passes). Mirrors `naming::live_in_arg_slots` but
+/// authoritative for the signature arity + typing.
+///
+/// A READ is evidence only when it reads the **version-zero (bare)** name. The
+/// loop below walks `lf.blocks` in LIST order, which is address order and not
+/// program order, so first-touch-wins can see a read the entry can never reach:
+/// in `37_heapsort`'s `sift_down` at gcc `-O2` the entry `jmp`s to the loop
+/// header, the header computes `r8`, the body reading `r8` sits at a LOWER
+/// address, and the scan reported a fifth parameter for a three-parameter
+/// function. Value numbering had already settled it — that read is `r8#1`, the
+/// header's own definition. Using its answer is strictly conservative: it can
+/// only REMOVE a slot the old rule admitted, never add one. The ordering itself
+/// is unfixed, so a bare read after a write in list order is still suppressed;
+/// closing that needs real liveness over the CFG rather than a scan.
 pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collections::HashSet<usize> {
     let mut slot_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, names) in arg_slot_names(cc).iter().enumerate() {
@@ -147,6 +159,16 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
     // slot -> is_param (true = first touch was a read). First touch wins.
     let mut decided: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
+    // The slot a READ is evidence for. `None` for a versioned name: `tag_phys`
+    // spells version zero bare and every later definition `name#version`, so a
+    // versioned read consumes a value this function produced. Two names escape
+    // that rule at a non-zero version — `VnCtx::structural` (frame/stack
+    // registers, in no argument slot on any supported convention) and
+    // `VnCtx::keep` (a return-register definition still reaching an unresolved
+    // return, which on System V can be `rdx`, the third integer argument).
+    // Those reads are admitted exactly as before, so nothing regresses; the
+    // cost is that this rule cannot help there.
+    let read_slot = |name: &str| (!name.contains('#')).then(|| base_slot(name)).flatten();
     for (block_idx, block) in lf.blocks.iter().enumerate() {
         for (instr_idx, ins) in block.instrs.iter().enumerate() {
             // `xor reg, reg` and `sub reg, reg` are architectural zero idioms:
@@ -197,7 +219,11 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             // definition of the register at all.
             if let Some((dst, src)) = phi_copy_operands(&ins.op) {
                 if really_read.contains(dst) {
-                    if let Some(slot) = base_slot(src) {
+                    // `read_slot`, not `base_slot`: the copy in the ENTRY
+                    // predecessor of a loop-header phi reads the bare live-in
+                    // name and is real evidence; the one in the latch reads the
+                    // loop's own definition and is not.
+                    if let Some(slot) = read_slot(src) {
                         decided.entry(slot).or_insert(true);
                     }
                 }
@@ -219,7 +245,7 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
                     continue;
                 }
                 if let VReg::Phys(n) = u {
-                    if let Some(slot) = base_slot(n) {
+                    if let Some(slot) = read_slot(n) {
                         decided.entry(slot).or_insert(true);
                     }
                 }
@@ -4377,6 +4403,67 @@ mod tests {
         assert!(
             params.contains(&3),
             "the phi destination is added to, so x3 really is live-in: {params:?}"
+        );
+    }
+
+    #[test]
+    fn a_versioned_read_of_a_later_definition_is_not_a_parameter() {
+        use crate::ir::types::{BinOp, MemOp};
+        // `37_heapsort`'s `sift_down` at gcc -O2, stripped, reduced to its two
+        // relevant blocks. The entry block jumps PAST the loop body to the
+        // header, which computes `r8`; the body then reads it. In the block
+        // LIST the reading block comes first (it sits at the lower address), so
+        // a first-touch-wins scan over that list sees a read of `r8` before any
+        // write and reports a fifth parameter that does not exist.
+        //
+        // Value numbering already settled the question: the read is `r8#1`, the
+        // header's definition, not the version-zero name a live-in would carry.
+        let mut lf = mk(vec![Op::Jump { target: 0x2000 }]);
+        lf.blocks[0].succs = vec![0x2000];
+        lf.blocks.push(LlirBlock {
+            start_va: 0x1100,
+            end_va: 0x1200,
+            instrs: vec![LlirInstr {
+                va: 0x1100,
+                op: Op::Load {
+                    dst: VReg::phys("r10#1"),
+                    addr: MemOp {
+                        base: Some(VReg::phys("r8#1")),
+                        index: None,
+                        scale: 0,
+                        disp: 0,
+                        size: 4,
+                        segment: None,
+                        endian: crate::ir::types::Endian::Little,
+                    },
+                },
+            }],
+            succs: vec![],
+        });
+        lf.blocks.push(LlirBlock {
+            start_va: 0x2000,
+            end_va: 0x2100,
+            instrs: vec![LlirInstr {
+                va: 0x2000,
+                op: Op::Bin {
+                    dst: VReg::phys("r8#1"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsi")),
+                    rhs: Value::Const(1),
+                },
+            }],
+            succs: vec![0x1100],
+        });
+
+        let params = live_in_arg_slots_llir(&lf, CallConv::SysVAmd64);
+        assert!(
+            params.contains(&1),
+            "rsi is read at version zero and is a parameter: {params:?}"
+        );
+        assert!(
+            !params.contains(&4),
+            "r8 is only ever read as `r8#1`, the header's own definition: \
+             {params:?}"
         );
     }
 

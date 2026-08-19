@@ -162,7 +162,7 @@ def test_the_dockerfile_provisions_every_compiler_the_matrix_names():
     ).split()
 
     needed = set()
-    for src in H._fixture_sources():
+    for src in H.fixture_sources():
         for cc, _opt in H.lanes_for(src, None):
             compiler = (
                 "rustc"

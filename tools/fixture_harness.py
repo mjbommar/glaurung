@@ -25,6 +25,7 @@ import functools
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -46,6 +47,68 @@ REQUIRED_MATRIX = [("gcc", "O0"), ("gcc", "O2"), ("clang", "O0"), ("clang", "O2"
 #: Rust has exactly one compiler, so its lanes are named `rustc` rather than
 #: cross-producted with a C compiler that never builds it.
 RUST_MATRIX = [("rustc", "O0"), ("rustc", "O2")]
+
+#: Suffix marking an optimisation level whose object is STRIPPED before it is
+#: decompiled: `O2strip` is `-O2 -g`, then `strip`.
+#:
+#: Why the optimisation slot and not a new axis. A lane is identified everywhere
+#: in this corpus by the three-part key `fixture:cc:opt` -- in all four committed
+#: baselines, in `tools/dectest.py`'s selector grammar, and in the manifest's
+#: `skip_exec_lanes`. A fourth colon component is not available: `dectest` already
+#: spends it on the FUNCTION (`13_loop_early_exit:gcc:O0:bisect`), so a lane key
+#: with four parts could not be told from a function selector. The compiler slot
+#: is the other candidate and it is already overloaded --
+#: `tools/arch_roundtrip.py` puts `i386`, `aarch64`, `armv7` and `x86_64_gcc15`
+#: there -- and putting the strip variant in it would multiply rather than
+#: compose. The optimisation slot is in practice the BUILD-RECIPE slot: it
+#: already names the flags handed to the compiler. `-O2` then `strip` is one more
+#: recipe, it composes with every compiler for free, and its control lane is a
+#: mechanical string operation on the key (`O2strip` -> `O2`).
+STRIP_SUFFIX = "strip"
+
+
+def split_opt(opt: str) -> tuple[str, bool]:
+    """`("O2", True)` for `"O2strip"`, `("O2", False)` for `"O2"`."""
+    if opt.endswith(STRIP_SUFFIX) and len(opt) > len(STRIP_SUFFIX):
+        return opt[: -len(STRIP_SUFFIX)], True
+    return opt, False
+
+
+def stripped_opt(opt: str) -> str:
+    """The stripped counterpart of a base optimisation level."""
+    base, already = split_opt(opt)
+    return opt if already else base + STRIP_SUFFIX
+
+
+#: Base optimisation levels that get a stripped counterpart.
+#:
+#: `-O2` only, and that is a scope decision made against a measurement rather
+#: than taste -- see `docs/development/decompiler-testing.md`. At `-O0` a function
+#: begins at a `push rbp` after a `ret`, every local is a frame-pointer offset and
+#: nothing is inlined or outlined, so removing the debug info costs the analysis
+#: almost nothing; `-O2` is where extents, prototypes and types genuinely have to
+#: be inferred, and it is the configuration real targets ship in.
+STRIPPED_BASE_OPTS = ("O2",)
+
+
+def stripped_lanes_for(src) -> list[tuple[str, str]]:
+    """The stripped lanes for one fixture source.
+
+    Derived from `matrix_for` rather than restated, so a Rust fixture gets
+    `rustc:O2strip` and never `gcc:O2strip` -- the same per-language rule
+    `lanes_for` exists to enforce, and the same trap
+    (`10_cpp_runtime_shapes:rustc:O0`) it was written to close.
+
+    Deliberately NOT folded into `REQUIRED_MATRIX`: this lane is a DIFFERENTIAL
+    against the `-g` build of the same source, not a standalone pass/fail, so its
+    control is the `fixture:cc:O2` cell already committed in `baseline.json` and
+    it has no baseline of its own. See `tools/stripped_differential.py`.
+    """
+    return [
+        (cc, stripped_opt(opt))
+        for cc, opt in matrix_for(src)
+        if opt in STRIPPED_BASE_OPTS
+    ]
 
 
 def path_remap_flags(compiler: str) -> list[str]:
@@ -145,7 +208,7 @@ def rust_lanes_enabled() -> bool:
     return os.environ.get("GLAURUNG_FIXTURE_RUST", "1") != "0"
 
 
-def _fixture_sources() -> list:
+def fixture_sources() -> list:
     """Every fixture source the matrix should cover."""
     srcs = list(SRC.glob("*.c")) + list(SRC.glob("*.cpp"))
     if rust_lanes_enabled():
@@ -206,7 +269,7 @@ def detect_allowed_missing() -> set[tuple[str, str, str]]:
     cpp_stems = [p.stem for p in SRC.glob("*.cpp")]
     if cpp_stems and not _cxx_runtime_ok("clang"):
         for stem in cpp_stems:
-            for opt in ("O0", "O2"):
+            for opt in ("O0", "O2", "O0" + STRIP_SUFFIX, "O2" + STRIP_SUFFIX):
                 missing.add(("clang", opt, stem))
     return missing
 
@@ -230,7 +293,7 @@ def _rust_argv(src: Path, opt: str, out: Path, strict: bool) -> list[str]:
         "2021",
         "-g",
         "-C",
-        f"opt-level={'0' if opt == 'O0' else '2'}",
+        f"opt-level={'0' if split_opt(opt)[0] == 'O0' else '2'}",
         "--crate-type",
         "cdylib",
         *path_remap_flags("rustc"),
@@ -253,7 +316,7 @@ def _c_argv(
         "-shared",
         "-fPIC",
         "-g",
-        f"-{opt}",
+        f"-{split_opt(opt)[0]}",
         *warn,
         *path_remap_flags(cc),
         "-o",
@@ -505,9 +568,54 @@ def ensure_fixture(
         expected = object_fingerprint(src, compiler, argv)
     except (TC.ToolchainError, OSError) as exc:
         return None, f"cannot fingerprint the build: {exc}"
-    if stale_reason(out, expected) is None:
+    # A stripped lane is TWO files. A fresh sidecar proves the compile is
+    # current; it says nothing about the `-g` oracle beside it, which a
+    # `prune_cache` or a hand `rm` can remove on its own. Rebuild when the pair
+    # is incomplete rather than hand a differential a missing control.
+    pair_ok = not split_opt(opt)[1] or dwarf_sibling(out).exists()
+    if pair_ok and stale_reason(out, expected) is None:
         return out, ""
     return compile_fixture(src, cc, opt, strict)
+
+
+def dwarf_sibling(so: Path) -> Path:
+    """The `-g` object a stripped lane's oracle signatures are read from.
+
+    Kept beside the stripped object under its own name rather than shared with
+    the `fixture:cc:O2` lane's file: the two lanes run CONCURRENTLY out of one
+    build directory (`run_matrix` submits them to a single thread pool), and a
+    shared path would let one lane's `strip` land on the other lane's object
+    mid-run. A separate name costs a second compile and buys a lane that cannot
+    corrupt its own control.
+    """
+    return so.with_name(so.name[: -len(".so")] + ".dwarf.so")
+
+
+def _strip_if_requested(out: Path, opt: str) -> tuple[Path | None, str]:
+    """Turn a freshly built `-g` object into a stripped lane's pair of objects.
+
+    Returns the object to DECOMPILE. For a base lane that is the `-g` build
+    unchanged. For a stripped lane the `-g` build is preserved as
+    `dwarf_sibling(out)` -- the oracle -- and `out` becomes a `strip`ped copy of
+    it, which is what the decompiler is handed.
+
+    `strip` removes `.symtab` and every `.debug_*` section and leaves `.dynsym`
+    alone, so a shared object's exported functions survive and the result is
+    still `dlopen`able and callable through ctypes. That is what makes this lane
+    cheap: the existing execution differential runs unmodified on the stripped
+    object. Measured on this corpus -- `201_float_bit_stores` at gcc -O2 keeps all
+    8 exported `T` symbols at all 8 unchanged addresses across the strip while
+    losing all 8 `.debug_*` sections and its entire 27-entry `.symtab`.
+    """
+    _base, stripped = split_opt(opt)
+    if not stripped:
+        return out, ""
+    oracle = dwarf_sibling(out)
+    shutil.copy2(out, oracle)
+    r = TC.run(["strip", str(out)])
+    if r.returncode != 0:
+        return None, f"strip failed: {(r.stderr.strip().splitlines() or ['?'])[-1]}"
+    return out, ""
 
 
 def compile_fixture(
@@ -539,19 +647,30 @@ def compile_fixture(
         if src.suffix == ".rs":
             return None, r.stderr
         return None, (stderr.splitlines() or ["?"])[-1]
+    # Strip BEFORE the sidecar. The fingerprint describes the compile -- source,
+    # compiler, argv -- none of which `strip` touches, so the ordering looks
+    # free. It is not: `write_sidecar` also records `object_sha256`, and `strip`
+    # rewrites exactly those bytes. Fingerprinting first made every stripped
+    # object read back as "does not hash to its recorded fingerprint (replaced
+    # or truncated)" -- 390 of them -- which is the one verdict that must mean
+    # someone tampered with the file.
+    stripped_out, strip_err = _strip_if_requested(out, opt)
+    if stripped_out is None:
+        sidecar_for(out).unlink(missing_ok=True)
+        return None, strip_err
     try:
         write_sidecar(out, object_fingerprint(src, compiler, argv))
     except (TC.ToolchainError, OSError):
         # A compile that succeeded but could not be fingerprinted must not be
         # left looking fresh; the object is still usable for THIS run.
         sidecar_for(out).unlink(missing_ok=True)
-    return out, ""
+    return stripped_out, strip_err
 
 
 def expected_objects() -> dict[str, tuple[Path, str, str]]:
     """`{object name: (source, cc, opt)}` for every lane the corpus declares.
 
-    Deliberately NOT `_fixture_sources()`: that one drops the Rust sources under
+    Deliberately NOT `fixture_sources()`: that one drops the Rust sources under
     `GLAURUNG_FIXTURE_RUST=0`, and the question here is which names a lane COULD
     produce, not which this run will. Using the narrower set would make every
     `*-rustc-*.so` an orphan the moment someone set that variable, and
@@ -562,7 +681,12 @@ def expected_objects() -> dict[str, tuple[Path, str, str]]:
     )
     out: dict[str, tuple[Path, str, str]] = {}
     for src in srcs:
-        for cc, opt in lanes_for(src, None):
+        # `stripped_lanes_for` is included even though it is not in
+        # `REQUIRED_MATRIX`: this map answers "which names could a lane produce",
+        # and `prune_cache` deletes everything it does not answer for. Leaving
+        # the stripped objects out would make an opt-in `--stripped` run's
+        # products orphans that the next ordinary `pytest` run deletes.
+        for cc, opt in lanes_for(src, None) + stripped_lanes_for(src):
             _compiler, path, _argv = compile_plan(src, cc, opt)
             out[path.name] = (src, cc, opt)
     return out
@@ -598,6 +722,13 @@ def cache_problems() -> list[str]:
     expected = expected_objects()
     problems = []
     for obj in sorted(BUILD.glob("*.so")):
+        # The `-g` oracle beside a stripped object is a byte copy of that
+        # object's own pre-strip build (`_strip_if_requested`), not a lane
+        # product: it has no sidecar of its own and its freshness IS the stripped
+        # lane's freshness, which is checked on the next line. `ensure_fixture`
+        # rebuilds the pair when the oracle is missing.
+        if obj.name.endswith(".dwarf.so"):
+            continue
         lane = expected.get(obj.name)
         if lane is None:
             problems.append(
@@ -644,7 +775,7 @@ def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
     if allowed_missing is None:
         allowed_missing = detect_allowed_missing()
     problems = []
-    srcs = _fixture_sources()
+    srcs = fixture_sources()
     # Shared with gen_structural_baseline.py — see M.assert_fixtures_declared for why
     # this must not live in only one of the two writers.
     M.assert_fixtures_declared()
@@ -704,6 +835,11 @@ def _run_lane(
         str(fuzz),
         "--json",
     ]
+    if split_opt(opt)[1]:
+        # The decompiler is handed the stripped object; the ORACLE's prototypes
+        # come from the `-g` build of the same compile. See `_strip_if_requested`
+        # and `diff_decompile.run`'s `dwarf_so`.
+        cmd += ["--dwarf-so", str(dwarf_sibling(so))]
     for f in funcs or ():
         cmd += ["--function", f]
     r = subprocess.run(
@@ -748,7 +884,7 @@ def run_matrix(
     if jobs is None:
         jobs = default_jobs()
     result: dict = {TOOLCHAIN_KEY: TC.fingerprint()}
-    srcs = _fixture_sources()
+    srcs = fixture_sources()
     lanes_to_run = [
         (f"{src.stem}:{cc}:{opt}", src, cc, opt, (cc, opt, src.stem) in allowed_missing)
         for src in srcs
@@ -926,7 +1062,7 @@ def schema_problems(result: dict, matrix) -> list[str]:
     the sources on disk against `REQUIRED_FUNCTIONS` catches both a vanished
     fixture and one added without being declared."""
     problems = []
-    stems = sorted(p.stem for p in _fixture_sources())
+    stems = sorted(p.stem for p in fixture_sources())
     declared = set(M.REQUIRED_FUNCTIONS)
     if set(stems) != declared:
         problems.append(
@@ -939,7 +1075,7 @@ def schema_problems(result: dict, matrix) -> list[str]:
             f"no {TOOLCHAIN_KEY} fingerprint — the verdicts are not attributable to "
             f"a toolchain; regenerate with `--write-baseline`"
         )
-    sources = {src.stem: src for src in _fixture_sources()}
+    sources = {src.stem: src for src in fixture_sources()}
     for stem in stems:
         # Per-language lanes: a Rust fixture has rustc:O0/rustc:O2 and no gcc or
         # clang lane at all, so cross-producting every stem with the global
