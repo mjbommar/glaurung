@@ -1031,3 +1031,103 @@ created no locality there.
 The renewed entry also adds an expiry condition the old one lacked: a candidate
 must be **acyclic AND reach 33% co-change**, because the only candidate ever to
 clear the co-change bar was the one whose module edge ran both ways.
+
+## Entry 101 — a blocker that dissolved, and a cell no decompiler can pass
+
+`SsePair`, `SplitBanks` and `HomogeneousFloat` had no callee-side return, and the
+recorded reason was representational: `Stmt::Return` carries one `Expr`, `Expr`
+has no aggregate-literal variant, so `return (TAG){lo, hi};` needs a new variant
+matched in 56 files.
+
+The caller side had already solved it and nobody looked. It emits
+`struct __glaurung_sse_pair { double __sse0; double __sse1; };` inside the
+function body and assigns through a cast — so the mirror,
+`return *(TAG *)(&obj[0]);`, is a plain 16-byte load through a cast. One existing
+`Expr`. **Six cells, no new variant.**
+
+```c
+struct __glaurung_sse_pair hfa197_make_pair2d(int32_t arg0) {
+    unsigned char local_20[16];
+    *(double *)(&local_20[0])       = (double)(... arg0 + 1 ...);
+    *(double *)((&local_20[0] + 8)) = (double)(... arg0 + arg0 ...);
+    return *(struct __glaurung_sse_pair *)(&local_20[0]);
+}
+```
+
+The load-bearing worry — that dead-store elimination would delete the high half
+before it could be printed, which is why the naive spelling was thought to need
+both operands visible — **did not apply**. At `-O0` the members are already
+stores into a promoted frame object and `prune_unobserved_promoted_object_stores`
+keeps every one of them today, before any of this runs. Placing the pass after
+pruning and before verification means pruning decides on the pre-rewrite body and
+the rewrite only widens what is read.
+
+### The cell that cannot be passed
+
+Of the ten remaining, two are `bv195_make_mixed` at `-O0`, and they now emit
+**provably correct C and still fail**. `struct {int32_t; double;}` has a 4-byte
+interior padding hole, and `diff_decompile.py:2263` compares
+`bytes(memoryview(ro))` — padding included. Those bytes are unspecified in C and
+are stale frame content in *both* binaries.
+
+**No decompiler can pass that cell.** It is a defect in the comparison, not in
+the recovery, and it would have sat there indefinitely being read as a
+decompiler failure. The fix is for the harness to mask padding by DWARF field
+offsets; the gate is unchanged for now.
+
+Six more genuinely need the `Expr` variant, because at `-O2` the value never
+lands in memory at all. That is 6 cells for a 56-file change — a decision, not a
+task, and recorded as one.
+
+Two exposures written down rather than discovered later: the tag definition sits
+**above** the signature, so DecBench's per-function slicing would discard it and
+a sliced fragment of these three functions would stop compiling; and GCC accepts
+the caller's block-scope tag beside the callee's file-scope one where **clang
+rejects it**, which our gcc-only recompilation has been hiding.
+
+## Entry 102 — the fix that was right and still should not land
+
+The other half of the stripped lane's crash classes produced a working, verified
+fix that is **not** in the tree, and the reasoning is worth keeping.
+
+The defect is real and precisely located: `lower_op` tests
+`base.is_none() && index.is_none() && segment.is_none() && disp >= 0` on the LOAD
+path (`lower_ops.rs:497`) and emits `Expr::Addr`, while the STORE path
+(`:684`, `:702`) builds `Expr::Lea` unconditionally. `direct_global_address`
+matches only `Addr | Named`, so one `mov`/`mov` pair around one static local
+lowered to two node types and rendered as two objects — the same statement
+resolving its load to `glaurung_global_4028` and leaving its store as
+`*(int *)(0x4028)`.
+
+Factoring the predicate fixes it, and heals a cell. It also breaches the def-use
+ceiling: `rustc:O0` +25, `rustc:O2` +15, A/B'd with a rebuild in both directions
+so it is the patch and not a stale baseline. **The entire +40 is one function** —
+`std::backtrace_rs::symbolize::gimli::resolve`, +5 in each of 8 lanes — and the
+mechanism is a hypothesis, not a measurement: possibly `object_origin` now
+marking absolute store targets, letting aliasing prove non-interference and
+letting `copy_prop` forward loads it previously dropped. Which is exactly what
+`196_disjoint_frame_slots` exists to guard.
+
+So the better shape is **render-only**: teach `direct_global_address` to accept a
+base-less `Expr::Lea` and add the global test to `write_addr_arith_dec`, the
+single renderer for that node. No IR changes, so no downstream pass can see it
+and the census cannot move. Strictly safer, strictly less principled — it treats
+the symptom and leaves the asymmetry. That is the right trade here, and the
+agent that built the principled version is the one who said so.
+
+### And my cell list was wrong twice
+
+Enumerated properly — by decompiling all 79 regression cells rather than reading
+my own notes — the undefined-`rsp` class is **7 cells, not 6**, has **no clang
+cell at all**, and two of the seven were not on my list.
+
+It also splits into two problems that want different treatment. Five are the
+frame base itself failing to promote in an escape position — and the extent is
+**already known** in at least one case (`local_38[12]` is declared and read by
+name while the pointer handed to a callee is still `(int *)(rsp)`), so "we cannot
+know the extent without DWARF" is not the obstacle. Two are a cursor walking a
+region across several separately-promoted slots, where the obvious remedy —
+giving `rsp` a frame-array base — fixes the *fault* and leaves the *value* wrong.
+
+**A crash replaced by a silently wrong number is not progress.** That distinction
+is why the second half stays a decision rather than a patch.
