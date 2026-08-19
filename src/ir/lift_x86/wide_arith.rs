@@ -50,16 +50,27 @@ use super::{
 /// discipline that lets `add`/`adc` claim a provable carry.
 ///
 /// Deliberately narrow:
-/// * only the immediate-count form. `shrd dst, src, cl` shifts by a value this
-///   lifter would have to mask and branch on at lift time, and a count of zero
-///   is architecturally a *no-op that leaves the flags alone* — not something a
-///   single shift expression can say.
 /// * only a register destination; the memory form would need a load/store pair
 ///   with the same masking and does not occur in the corpus.
 /// * the flags are declared undefined rather than guessed, exactly as
 ///   `adc_sbb_ops` does. x86 defines CF as the last bit shifted out and leaves
 ///   OF/AF undefined for counts above 1; a later `jb` reading a fabricated CF
 ///   would render a branch the CPU never evaluated.
+///
+/// The `cl` count form is handled too, and it is NOT the same expression. A
+/// literal `src << (bits - n)` is undefined C at `n == 0`, and `n == 0` is
+/// precisely the architectural no-op the immediate path returns `Op::Nop` for —
+/// so a variable count cannot use that spelling and cannot branch on the count
+/// at lift time either. Splitting the join into two shifts,
+/// `(src << 1) << (bits - 1 - n)`, is exact for EVERY `n` in `0..bits`: both
+/// amounts stay below the operand width, and at `n == 0` the first shift moves
+/// the only bit that could survive the second one out of range, so the join
+/// contributes zero and the destination is left exactly as it was. The one
+/// thing that path cannot reproduce is the flag behaviour: at `n == 0` x86
+/// preserves every flag, and this poisons them. That is the same direction of
+/// error the immediate path already takes for `n != 0` (where x86 defines ZF,
+/// SF and PF and this poisons them anyway), and an undefined flag is a read the
+/// analysis can see rather than a stale value it cannot.
 pub(super) fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Vec<Op> {
     let mnemonic = if right { "shrd" } else { "shld" };
     let unsupported = || {
@@ -67,10 +78,13 @@ pub(super) fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Ve
             mnemonic: mnemonic.into(),
         }]
     };
+    let variable_count = instr.op_count() == 3
+        && instr.op_kind(2) == OpKind::Register
+        && instr.op_register(2) == iced_x86::Register::CL;
     if instr.op_count() != 3
         || instr.op_kind(0) != OpKind::Register
         || instr.op_kind(1) != OpKind::Register
-        || !matches!(instr.op_kind(2), OpKind::Immediate8)
+        || !(variable_count || matches!(instr.op_kind(2), OpKind::Immediate8))
     {
         return unsupported();
     }
@@ -84,16 +98,40 @@ pub(super) fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Ve
     }
     let bits = u32::from(width.bits());
     // The architectural count mask: 5 bits for 32-bit operands, 6 for 64-bit.
-    let count = u32::from(instr.immediate8()) & (bits - 1);
-    if count == 0 {
-        // Architecturally a complete no-op, flags included.
-        return vec![Op::Nop];
-    }
+    let count = if variable_count {
+        None
+    } else {
+        let count = u32::from(instr.immediate8()) & (bits - 1);
+        if count == 0 {
+            // Architecturally a complete no-op, flags included.
+            return vec![Op::Nop];
+        }
+        Some(count)
+    };
     let dst = VReg::phys(dst_name);
     let src = VReg::phys(src_name);
     let kept = VReg::Temp(0);
     let joined = VReg::Temp(1);
+    let masked_count = VReg::Temp(2);
+    let complement_count = VReg::Temp(3);
     let mut ops = Vec::new();
+
+    // The CL encoding reads the value written through ECX, exactly as the
+    // ordinary variable shifts in `lift_one_inner` do: naming a separate `cl`
+    // register would invent an undefined live-in. Only the low five or six bits
+    // survive the mask, and those are the same in `ecx` and `rcx`.
+    if variable_count {
+        ops.push(Op::Bin {
+            dst: masked_count.clone(),
+            op: BinOp::And,
+            lhs: Value::Reg(VReg::phys("ecx")),
+            rhs: Value::Const(i64::from(bits - 1)),
+        });
+    }
+    let count_value = |count: Option<u32>| match count {
+        Some(count) => Value::Const(i64::from(count)),
+        None => Value::Reg(masked_count.clone()),
+    };
 
     // The destination's own contribution, at its real width.
     ops.push(Op::ZExt {
@@ -106,7 +144,7 @@ pub(super) fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Ve
         dst: kept.clone(),
         op: if right { BinOp::Shr } else { BinOp::Shl },
         lhs: Value::Reg(kept.clone()),
-        rhs: Value::Const(i64::from(count)),
+        rhs: count_value(count),
     });
     // The bits shifted in from the other half of the pair.
     ops.push(Op::ZExt {
@@ -115,12 +153,38 @@ pub(super) fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Ve
         from: width,
         to: Width::W64,
     });
-    ops.push(Op::Bin {
-        dst: joined.clone(),
-        op: if right { BinOp::Shl } else { BinOp::Shr },
-        lhs: Value::Reg(joined.clone()),
-        rhs: Value::Const(i64::from(bits - count)),
-    });
+    let opposite = if right { BinOp::Shl } else { BinOp::Shr };
+    match count {
+        Some(count) => ops.push(Op::Bin {
+            dst: joined.clone(),
+            op: opposite,
+            lhs: Value::Reg(joined.clone()),
+            rhs: Value::Const(i64::from(bits - count)),
+        }),
+        None => {
+            // `(src <op> 1) <op> (bits - 1 - n)`. See the doc comment: this is
+            // the whole reason the variable form is not the immediate form with
+            // a register in the shift amount.
+            ops.push(Op::Bin {
+                dst: joined.clone(),
+                op: opposite,
+                lhs: Value::Reg(joined.clone()),
+                rhs: Value::Const(1),
+            });
+            ops.push(Op::Bin {
+                dst: complement_count.clone(),
+                op: BinOp::Sub,
+                lhs: Value::Const(i64::from(bits - 1)),
+                rhs: Value::Reg(masked_count.clone()),
+            });
+            ops.push(Op::Bin {
+                dst: joined.clone(),
+                op: opposite,
+                lhs: Value::Reg(joined.clone()),
+                rhs: Value::Reg(complement_count),
+            });
+        }
+    }
     ops.push(Op::Bin {
         dst: dst.clone(),
         op: BinOp::Or,
@@ -177,11 +241,26 @@ pub(super) fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Ve
 ///   this renders to.
 ///
 /// Deliberately narrow:
-/// * only 32- and 64-bit operands. The 16-bit form exists, but the `clz`
-///   renderer spells a sub-64-bit count as `__builtin_clz((unsigned int)(x))` —
-///   a count over 32 bits — so `x86.clz.16` would answer 16 too high. That is
-///   the renderer's contract to widen, not this lifter's to guess around, and
-///   `ast.rs` is not this change's file.
+/// * only 32- and 64-bit operands. The 16-bit form exists and is not lifted —
+///   but NOT for the reason this comment used to give. It claimed the renderer
+///   made the identity impossible: `x86.clz.16` spells its count as
+///   `__builtin_clz((unsigned int)(x))`, which for a zero-extended 16-bit
+///   operand answers `16 + clz16(x)`, i.e. sixteen too high. True, and
+///   irrelevant — the offset constant absorbs it exactly.
+///   `bsr16(x) = 31 - clz32(zext16(x))` is an identity, so the 16-bit arm is
+///   the 32/64-bit arm with `31` in place of `bits - 1`. Nothing about the
+///   renderer blocks it.
+///
+///   The real blocker is the register model. `bsr si,cx` — the only form the
+///   committed corpus contains, four occurrences, all 16-bit — reads a
+///   bit-preserving partial view of `rcx` and writes a bit-preserving partial
+///   view of `rsi`. `VReg::phys("si")` is a name of its own, not the low half
+///   of `rsi`, so lifting it that way would invent an undefined live-in for the
+///   source and drop the upper 48 bits of the destination. It needs
+///   [`super::read_view_ops`] for the source and [`super::partial_write_ops`]
+///   for the destination, which is a different and larger change than the width
+///   check above. Four occurrences of legacy 16-bit code did not justify
+///   reworking a function whose exactness is what three fixtures depend on.
 /// * only a register destination, which is the only form the ISA encodes.
 /// * every flag other than ZF is architecturally undefined and is poisoned
 ///   rather than left stale.

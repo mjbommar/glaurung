@@ -362,14 +362,17 @@ def test_the_committed_opt_sets_are_unchanged_by_the_arch_dimension():
     one `gcc` and one `clang` lane to each opt. 370 -> 376 on 2026-08-17: the
     return-type census fixtures `194_narrow_return_widths`,
     `198_aggregate_return_edges` and `199_pointer_return_kinds` add one `gcc` and
-    one `clang` lane each. 376 -> 380 on 2026-08-19:
-    `201_float_bit_stores` and `202_bit_scan_and_count` add one `gcc` and one
-    `clang` lane each to each opt -- two fixtures, four lanes per opt.
+    one `clang` lane each. 376 -> 384 on 2026-08-19, FOUR fixtures in one day:
+    `201_float_bit_stores`, `202_bit_scan_and_count`, `203_string_move_copies`
+    and `204_adjacent_dispatch_tables` each add one `gcc` and one `clang` lane
+    to each opt. A jump of two per fixture is the invariant; a contiguous
+    fixture number is not -- 202, 203 and 204 were built in parallel trees and
+    numbered to avoid colliding with each other, not to be consecutive.
     Update this WITH the fixture, and say which fixture moved it.
     """
     for name in ("o0", "o2"):
         lanes = D.resolve([f"@{name}"])
-        assert len(lanes) == 380, f"@{name} is now {len(lanes)} lanes"
+        assert len(lanes) == 384, f"@{name} is now {len(lanes)} lanes"
         assert not any(lane.is_arch for lane in lanes)
 
 

@@ -16,7 +16,7 @@
       "key": "rustc:O0",
       "kind": "lane_total",
       "measure": "violations",
-      "reason": "NOT a code change -- this is the first census over a CLEAN fixture build cache since the path remap landed in 5ceebc6d. 17 objects in tests/decompiler_fixtures/build/ dated 2026-08-12 predated that flag and still embedded the checkout path; the cache key does not include compiler flags, so they were never rebuilt. Same source and same extension measured 7535 over the mixed cache and 7560 after rm -rf build/. The exception fix is NOT the cause here: it moved rustc:O2 and left rustc:O0 unchanged.",
+      "reason": "NOT ATTRIBUTED, and the earlier reason recorded here was WRONG. It claimed a stale fixture build cache. That is impossible: both compile paths in fixture_harness.py (compile_fixture and _compile_rust_fixture) recompile unconditionally -- neither has an exists() short-circuit -- and defuse.jobs() enumerates DECLARED LANES, not files in build/, so no cached object can enter this census. The 17 six-day-old objects observed in build/ were real but cannot be the cause. Compounding it, the 7535 I compared against was never measured on a fresh build: I read it off a run whose .so had been reverted and not rebuilt. RULED OUT BY MEASUREMENT: the DWARF-signature and float-store work (9276b542) contributes zero -- stashing those patches out gives byte-identical per-function output, 1159/4472 both ways. REMAINING CANDIDATES: 965f8585 (exception/nested-split fix, which provably moved rustc:O2 by +15) and 72339ae5 (byte-view `not`, which changes SSA naming). A clean A/B could not be run because reverting cfg.rs to 965f8585^ no longer compiles against the current entry_shape.rs signature. Attribute this properly before trusting it.",
       "to": 7560
     },
     {
@@ -26,7 +26,7 @@
       "key": "rustc:O0",
       "kind": "lane_total",
       "measure": "functions_with_violations",
-      "reason": "same clean-cache rebuild as the violations entry above.",
+      "reason": "NOT ATTRIBUTED -- same correction as the violations entry for this lane; the earlier stale-cache reason was wrong and is retracted there.",
       "to": 2002
     },
     {
@@ -2321,6 +2321,46 @@
       "functions_with_violations": 0,
       "violations": 0
     },
+    "203_string_move_copies:clang:O0": {
+      "functions_emitted": 27,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "203_string_move_copies:clang:O2": {
+      "functions_emitted": 25,
+      "functions_with_violations": 4,
+      "violations": 5
+    },
+    "203_string_move_copies:gcc:O0": {
+      "functions_emitted": 22,
+      "functions_with_violations": 2,
+      "violations": 3
+    },
+    "203_string_move_copies:gcc:O2": {
+      "functions_emitted": 22,
+      "functions_with_violations": 3,
+      "violations": 4
+    },
+    "204_adjacent_dispatch_tables:clang:O0": {
+      "functions_emitted": 19,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "204_adjacent_dispatch_tables:clang:O2": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "204_adjacent_dispatch_tables:gcc:O0": {
+      "functions_emitted": 16,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "204_adjacent_dispatch_tables:gcc:O2": {
+      "functions_emitted": 32,
+      "functions_with_violations": 4,
+      "violations": 4
+    },
     "20_graph_bfs:clang:O0": {
       "functions_emitted": 11,
       "functions_with_violations": 0,
@@ -3924,24 +3964,24 @@
   },
   "lane_totals": {
     "clang:O0": {
-      "functions_emitted": 2695,
-      "functions_with_violations": 32,
-      "violations": 113
+      "functions_emitted": 2741,
+      "functions_with_violations": 33,
+      "violations": 114
     },
     "clang:O2": {
-      "functions_emitted": 2569,
-      "functions_with_violations": 85,
-      "violations": 240
+      "functions_emitted": 2614,
+      "functions_with_violations": 89,
+      "violations": 245
     },
     "gcc:O0": {
-      "functions_emitted": 2604,
-      "functions_with_violations": 15,
-      "violations": 94
+      "functions_emitted": 2642,
+      "functions_with_violations": 17,
+      "violations": 97
     },
     "gcc:O2": {
-      "functions_emitted": 2470,
-      "functions_with_violations": 59,
-      "violations": 114
+      "functions_emitted": 2524,
+      "functions_with_violations": 66,
+      "violations": 122
     },
     "rustc:O0": {
       "functions_emitted": 3032,
@@ -6383,6 +6423,85 @@
     "202_bit_scan_and_count:gcc:O2:bsc202_scatter_bits": [],
     "202_bit_scan_and_count:gcc:O2:bsc202_set_bit": [],
     "202_bit_scan_and_count:gcc:O2:bsc202_toggle_bit": [],
+    "203_string_move_copies:clang:O0:mv203_by_value_narrow": [],
+    "203_string_move_copies:clang:O0:mv203_by_value_wide": [],
+    "203_string_move_copies:clang:O0:mv203_consume_narrow": [
+      "var0 is read but never defined"
+    ],
+    "203_string_move_copies:clang:O0:mv203_consume_wide": [],
+    "203_string_move_copies:clang:O0:mv203_fill_narrow": [],
+    "203_string_move_copies:clang:O0:mv203_fill_wide": [],
+    "203_string_move_copies:clang:O0:mv203_local_narrow_copy": [],
+    "203_string_move_copies:clang:O0:mv203_local_wide_copy": [],
+    "203_string_move_copies:clang:O0:mv203_scalar_control": [],
+    "203_string_move_copies:clang:O2:mv203_by_value_narrow": [
+      "stack_0 is read but never defined",
+      "stack_1 is read but never defined"
+    ],
+    "203_string_move_copies:clang:O2:mv203_by_value_wide": [
+      "var0 is read but never defined"
+    ],
+    "203_string_move_copies:clang:O2:mv203_consume_narrow": [
+      "var0 is read but never defined"
+    ],
+    "203_string_move_copies:clang:O2:mv203_consume_wide": [
+      "stack_0 is read but never defined"
+    ],
+    "203_string_move_copies:clang:O2:mv203_fill_narrow": [],
+    "203_string_move_copies:clang:O2:mv203_fill_wide": [],
+    "203_string_move_copies:clang:O2:mv203_local_narrow_copy": [],
+    "203_string_move_copies:clang:O2:mv203_local_wide_copy": [],
+    "203_string_move_copies:clang:O2:mv203_scalar_control": [],
+    "203_string_move_copies:gcc:O0:mv203_by_value_narrow": [],
+    "203_string_move_copies:gcc:O0:mv203_by_value_wide": [],
+    "203_string_move_copies:gcc:O0:mv203_consume_narrow": [
+      "var2 is read but never defined"
+    ],
+    "203_string_move_copies:gcc:O0:mv203_consume_wide": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
+      "stack_1 is read but never defined"
+    ],
+    "203_string_move_copies:gcc:O0:mv203_fill_narrow": [],
+    "203_string_move_copies:gcc:O0:mv203_fill_wide": [],
+    "203_string_move_copies:gcc:O0:mv203_local_narrow_copy": [],
+    "203_string_move_copies:gcc:O0:mv203_local_wide_copy": [],
+    "203_string_move_copies:gcc:O0:mv203_scalar_control": [],
+    "203_string_move_copies:gcc:O2:mv203_by_value_narrow": [],
+    "203_string_move_copies:gcc:O2:mv203_by_value_wide": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
+      "stack_1 is read but never defined"
+    ],
+    "203_string_move_copies:gcc:O2:mv203_consume_narrow": [
+      "var3 is read but never defined"
+    ],
+    "203_string_move_copies:gcc:O2:mv203_consume_wide": [
+      "stack_0 is read but never defined"
+    ],
+    "203_string_move_copies:gcc:O2:mv203_fill_narrow": [],
+    "203_string_move_copies:gcc:O2:mv203_fill_wide": [],
+    "203_string_move_copies:gcc:O2:mv203_local_narrow_copy": [],
+    "203_string_move_copies:gcc:O2:mv203_local_wide_copy": [],
+    "203_string_move_copies:gcc:O2:mv203_scalar_control": [],
+    "204_adjacent_dispatch_tables:clang:O0:adt204_chained": [],
+    "204_adjacent_dispatch_tables:clang:O0:adt204_guarded_control": [],
+    "204_adjacent_dispatch_tables:clang:O0:adt204_switch_a": [],
+    "204_adjacent_dispatch_tables:clang:O0:adt204_switch_b": [],
+    "204_adjacent_dispatch_tables:clang:O0:adt204_switch_c": [],
+    "204_adjacent_dispatch_tables:clang:O2:adt204_chained": [],
+    "204_adjacent_dispatch_tables:clang:O2:adt204_guarded_control": [],
+    "204_adjacent_dispatch_tables:clang:O2:adt204_switch_a": [],
+    "204_adjacent_dispatch_tables:clang:O2:adt204_switch_b": [],
+    "204_adjacent_dispatch_tables:clang:O2:adt204_switch_c": [],
+    "204_adjacent_dispatch_tables:gcc:O0:adt204_chained": [],
+    "204_adjacent_dispatch_tables:gcc:O0:adt204_guarded_control": [],
+    "204_adjacent_dispatch_tables:gcc:O0:adt204_switch_a": [],
+    "204_adjacent_dispatch_tables:gcc:O0:adt204_switch_b": [],
+    "204_adjacent_dispatch_tables:gcc:O0:adt204_switch_c": [],
+    "204_adjacent_dispatch_tables:gcc:O2:adt204_chained": [],
+    "204_adjacent_dispatch_tables:gcc:O2:adt204_guarded_control": [],
+    "204_adjacent_dispatch_tables:gcc:O2:adt204_switch_a": [],
+    "204_adjacent_dispatch_tables:gcc:O2:adt204_switch_b": [],
+    "204_adjacent_dispatch_tables:gcc:O2:adt204_switch_c": [],
     "20_graph_bfs:clang:O0:graph_bfs": [],
     "20_graph_bfs:clang:O2:graph_bfs": [],
     "20_graph_bfs:gcc:O0:graph_bfs": [],

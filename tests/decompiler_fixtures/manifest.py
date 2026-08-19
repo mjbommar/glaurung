@@ -1368,6 +1368,26 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "len_args": [1],
         "arg_values": {2: [0, 1, 2, 3, 4]},
     },
+    # Pin the selector so every arm of the abutting tables is executed on every
+    # run rather than probabilistically. `adt204_guarded_control` additionally
+    # sees -1 and 8 so its source-level range check is taken as well as not
+    # taken; the other three mask the selector themselves and cannot go out of
+    # range by construction.
+    ("204_adjacent_dispatch_tables", "adt204_switch_a"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7]},
+    },
+    ("204_adjacent_dispatch_tables", "adt204_switch_b"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7]},
+    },
+    ("204_adjacent_dispatch_tables", "adt204_switch_c"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7]},
+    },
+    ("204_adjacent_dispatch_tables", "adt204_chained"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7]},
+    },
+    ("204_adjacent_dispatch_tables", "adt204_guarded_control"): {
+        "arg_values": {0: [-1, 0, 1, 3, 6, 7, 8]},
+    },
     # --- systems and ABI: TLS, atomics, non-local control, inline asm ---
     ("140_thread_local_storage", "tls_indexed"): {
         "arg_values": {0: [-1, 0, 1, 3, 4]},
@@ -1975,6 +1995,21 @@ OVERRIDES: dict[tuple[str, str], dict] = {
             [[9, 3, 5, 3, 7, 5, 1, 0], 8, 42],
         ],
     },
+    # The string-move fixture's two fillers are the only functions in it that
+    # take a pointer, and the WIDE one writes 384 bytes. The default 16-element
+    # (64-byte) buffer would be a harness-process heap overrun, not a decompiler
+    # verdict: 128 int elements is 512 bytes, comfortably past the struct.
+    # Nothing else in 203 takes a pointer at all -- every entry point is
+    # `uint32_t f(int32_t seed)` -- which is deliberate, because a fixture about
+    # a 384-byte copy should not also be a fixture about buffer sizing.
+    ("203_string_move_copies", "mv203_fill_wide"): {
+        "ptr_len": 128,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4, 2147483647]},
+    },
+    ("203_string_move_copies", "mv203_fill_narrow"): {
+        "ptr_len": 128,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4, 2147483647]},
+    },
     # The frame-slot controls. `dfs196_indexed_control` masks its seed down to
     # an index, so the vectors have to include values that select the slot the
     # pending load reads (k == 5) as well as ones that do not.
@@ -2199,6 +2234,30 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     # A2 loop-form acceptance: after reload folding, the source head test must
     # become the loop condition rather than an explicit break inside while (1).
     ("12_loop_rotation", "factorial_while"): {"head_tested_while": True},
+    # A 16-BYTE AGGREGATE PASSED BY VALUE, which `exec_class` refuses, so this
+    # is `structural` in every lane and nothing executes behind it. It had no
+    # assertion until `gen_structural_baseline.py` refused to write a baseline
+    # naming it as a gap -- the second time that guard has earned itself.
+    # What is asserted is the SHAPE the recovery must keep: a counted `for` over
+    # the members, and a real store, because the by-value struct is spilled to
+    # the frame before it is read back. `head_tested_while` is False because the
+    # loop is bounded and must not degrade into a head-tested rewrite.
+    # NOT asserted: `indirect_call`, which measures True here despite the
+    # function containing no call at all -- its regex matches any `))(`, which
+    # nested casts produce, and it fires on 31% of sampled corpus functions.
+    #
+    # WORTH KNOWING while reading this: the recovered body contains
+    # `*(long *)(&local_20[0] + 8) = var2;` where `var2` is NEVER DEFINED. Only
+    # the first of the two registers carrying the by-value struct is recovered;
+    # the second half is read from nothing. That is fixture 195's territory (a
+    # by-value aggregate passed as a single `long`), not this fixture's, and it
+    # is why the cell is `structural` rather than merely unexecuted.
+    ("203_string_move_copies", "mv203_consume_narrow"): {
+        "for_loop": True,
+        "head_tested_while": False,
+        "memory_store": True,
+        "nonempty": True,
+    },
     # A 2D-ARRAY PARAMETER CANNOT BE SYNTHESISED BY THE HARNESS, so both of these
     # are `structural` in every lane and nothing executes behind them. They carried
     # no assertion at all until the DWARF extractor learned to describe array
@@ -3328,6 +3387,28 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     # rather than per-access is wrong whichever way it decides.
     # f201_scalar_control has no floating point at all, separating a recovery
     # that damaged ordinary integer stores from one that did not.
+    # Four jump tables abutting in `.rodata`, which is the only input that makes
+    # `discover_jump_tables` over-read one table into the next and therefore the
+    # only route to `cfg::trim_unproven_dispatch_edges`. Measured on this corpus
+    # at gcc/clang x O0/O1/O2 before this fixture existed: 8 bound-proof
+    # dispatches, ZERO trims — the trim path had no lane at any optimisation
+    # level, so an `-O1` axis would not have bought it one either.
+    # `adt204_guarded_control` has the same case bodies behind a source-level
+    # range check. At gcc it is the negative control (the guard is a `ja` whose
+    # fall-through is the dispatch, the one polarity the CFG models, and it
+    # passes); at clang it is a second positive, because clang reaches the
+    # dispatch on the TAKEN edge of a `jb` and the taken edge of a below branch
+    # proves nothing today. Measured cells at the commit that added this file:
+    # gcc:O0 5 pass, clang:O0 5 pass, gcc:O2 switch_a/b/c fail and
+    # chained/guarded_control pass, clang:O2 guarded_control fail and the rest
+    # pass.
+    "204_adjacent_dispatch_tables": [
+        "adt204_chained",
+        "adt204_guarded_control",
+        "adt204_switch_a",
+        "adt204_switch_b",
+        "adt204_switch_c",
+    ],
     "201_float_bit_stores": [
         "f201_f32_single_bits",
         "f201_f32_slot_bits",
@@ -3368,6 +3449,38 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "bsc202_scatter_bits",
         "bsc202_set_bit",
         "bsc202_toggle_bit",
+    ],
+    # THE x86 STRING MOVE. `rep movsq` had no lane anywhere in this corpus: all
+    # ~200 sources were compiled at -O0 and -O2 under gcc and clang and the
+    # disassembly grepped, and `movsb`/`movsw`/`movsl`/`movsq` appeared zero
+    # times -- while over the committed amd64 samples `movsb` (242) and `movsq`
+    # (134) were the two largest entries in the lifter's silent-register-write
+    # census after `syscall`. An unlifted string move declares no register
+    # write, so RDI and RSI read as never touched and every `rep movsq` memcpy
+    # recovers with both pointers frozen.
+    #
+    # `mv203_by_value_wide` carries the instruction in all four x86-64 lanes
+    # (verified by disassembly at a 384-byte aggregate) and
+    # `mv203_local_wide_copy` in the two gcc lanes; on i386 both become
+    # `rep movsl`, which exercises the dword string move's repeat semantics --
+    # the one member that DID have an arm, and it lifted a single element while
+    # leaving ECX alone. On armv7 and aarch64 the same C is a `memcpy` call, so
+    # the fixture is portable by construction rather than by an `#if`.
+    #
+    # The three narrow/scalar controls are the same shapes below the threshold:
+    # no string move in any lane. A change that breaks the wide pair and leaves
+    # them passing is a string-move fault; one that breaks all five is general,
+    # and this fixture is then not the evidence.
+    "203_string_move_copies": [
+        "mv203_by_value_narrow",
+        "mv203_by_value_wide",
+        "mv203_consume_narrow",
+        "mv203_consume_wide",
+        "mv203_fill_narrow",
+        "mv203_fill_wide",
+        "mv203_local_narrow_copy",
+        "mv203_local_wide_copy",
+        "mv203_scalar_control",
     ],
     # A pending load held across a store to a DISJOINT slot of the same frame
     # object. `dfs196_spill_web` is the positive; the three controls are stores

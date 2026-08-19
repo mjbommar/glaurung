@@ -3306,6 +3306,78 @@
     "bsc202_set_bit": "pass",
     "bsc202_toggle_bit": "pass"
   },
+  "203_string_move_copies:clang:O0": {
+    "mv203_by_value_narrow": "fail",
+    "mv203_by_value_wide": "fail",
+    "mv203_consume_narrow": "structural",
+    "mv203_consume_wide": "structural",
+    "mv203_fill_narrow": "pass",
+    "mv203_fill_wide": "structural",
+    "mv203_local_narrow_copy": "pass",
+    "mv203_local_wide_copy": "pass",
+    "mv203_scalar_control": "pass"
+  },
+  "203_string_move_copies:clang:O2": {
+    "mv203_by_value_narrow": "fail",
+    "mv203_by_value_wide": "fail",
+    "mv203_consume_narrow": "structural",
+    "mv203_consume_wide": "structural",
+    "mv203_fill_narrow": "pass",
+    "mv203_fill_wide": "structural",
+    "mv203_local_narrow_copy": "pass",
+    "mv203_local_wide_copy": "pass",
+    "mv203_scalar_control": "pass"
+  },
+  "203_string_move_copies:gcc:O0": {
+    "mv203_by_value_narrow": "fail",
+    "mv203_by_value_wide": "fail",
+    "mv203_consume_narrow": "structural",
+    "mv203_consume_wide": "structural",
+    "mv203_fill_narrow": "pass",
+    "mv203_fill_wide": "structural",
+    "mv203_local_narrow_copy": "pass",
+    "mv203_local_wide_copy": "pass",
+    "mv203_scalar_control": "pass"
+  },
+  "203_string_move_copies:gcc:O2": {
+    "mv203_by_value_narrow": "fail",
+    "mv203_by_value_wide": "fail",
+    "mv203_consume_narrow": "structural",
+    "mv203_consume_wide": "structural",
+    "mv203_fill_narrow": "pass",
+    "mv203_fill_wide": "structural",
+    "mv203_local_narrow_copy": "pass",
+    "mv203_local_wide_copy": "fail",
+    "mv203_scalar_control": "pass"
+  },
+  "204_adjacent_dispatch_tables:clang:O0": {
+    "adt204_chained": "pass",
+    "adt204_guarded_control": "pass",
+    "adt204_switch_a": "pass",
+    "adt204_switch_b": "pass",
+    "adt204_switch_c": "pass"
+  },
+  "204_adjacent_dispatch_tables:clang:O2": {
+    "adt204_chained": "pass",
+    "adt204_guarded_control": "fail",
+    "adt204_switch_a": "pass",
+    "adt204_switch_b": "pass",
+    "adt204_switch_c": "pass"
+  },
+  "204_adjacent_dispatch_tables:gcc:O0": {
+    "adt204_chained": "pass",
+    "adt204_guarded_control": "pass",
+    "adt204_switch_a": "pass",
+    "adt204_switch_b": "pass",
+    "adt204_switch_c": "pass"
+  },
+  "204_adjacent_dispatch_tables:gcc:O2": {
+    "adt204_chained": "pass",
+    "adt204_guarded_control": "pass",
+    "adt204_switch_a": "fail",
+    "adt204_switch_b": "fail",
+    "adt204_switch_c": "fail"
+  },
   "20_graph_bfs:clang:O0": {
     "graph_bfs": "pass"
   },

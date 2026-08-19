@@ -26,7 +26,7 @@
 //!
 //! Anything outside this set becomes [`Op::Unknown`] with the source mnemonic.
 
-use iced_x86::{Code, Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
 
 use crate::ir::regview;
 use crate::ir::types::*;
@@ -65,9 +65,9 @@ use packed::{
 };
 use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
-    packed_byte_compare_ops, packed_byte_shuffle_ops, packed_byte_sign_mask_ops,
-    packed_byte_unpack_low_ops, packed_double_shuffle_ops, packed_dword_compare_greater_ops,
-    packed_dword_saturating_pack_ops, packed_insert_ops,
+    declare_xmm_register_effect_ops, packed_byte_compare_ops, packed_byte_shuffle_ops,
+    packed_byte_sign_mask_ops, packed_byte_unpack_low_ops, packed_double_shuffle_ops,
+    packed_dword_compare_greater_ops, packed_dword_saturating_pack_ops, packed_insert_ops,
     packed_qword_immediate_logical_shift_right_ops, packed_qword_unpack_high_ops,
     packed_unsigned_dword_multiply_ops, packed_word_shuffle_ops, packed_word_unpack_low_ops,
 };
@@ -75,7 +75,7 @@ use scalar_float::{
     scalar_convert_ops, scalar_convert_source_bytes, scalar_float_binary_ops,
     scalar_float_compare_ops, scalar_move_ops,
 };
-use string_ops::{pop_ops, push_ops, stos_ops, string_movs_ops};
+use string_ops::{movs_ops, movs_width, pop_ops, push_ops, stos_ops};
 use wide_arith::{bit_scan_ops, cmpxchg_ops, double_shift_ops, wide_div_ops, wide_mul_ops};
 use xmm_views::{split_xmm_scalar_view, synchronise_xmm_views};
 // `x87`'s `fcomi`/`fucomi` share the SSE four-outcome flag model verbatim; the
@@ -1303,13 +1303,10 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // Bitwise packed-float moves have the same four 32-bit lane transport
         // as MOVDQA/MOVDQU; later SHUFPS/ANDPS/MOVMSKPS consume those lanes.
         Mnemonic::Movaps | Mnemonic::Movups => packed_dword_move_ops(instr),
-        Mnemonic::Movsd => {
-            if instr.code() == Code::Movsd_m32_m32 {
-                string_movs_ops(4, bits)
-            } else {
-                scalar_move_ops(instr, 8, "movsd")
-            }
-        }
+        Mnemonic::Movsd => match movs_width(instr, mnem) {
+            Some(width) => movs_ops(instr, width, bits),
+            None => scalar_move_ops(instr, 8, "movsd"),
+        },
         // The binary32 sibling of the MOVSD form above, and — at 307 of the
         // float corpus's instructions — the single most common instruction the
         // lifter did not model. Every `float` spill, reload and argument setup
@@ -1807,11 +1804,30 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Andps => packed_dword_binary_ops(instr, BinOp::And),
         Mnemonic::Shufps => packed_float_shuffle_ops(instr),
         Mnemonic::Movmskps => packed_float_sign_mask_ops(instr),
+        // The AES round instructions. Their value is NOT modelled — see
+        // `declare_xmm_register_effect_ops` for why declaring the register
+        // effect is the whole point and modelling the round function is not.
+        // Only `aesenc` is present in the committed corpus (222 of the silent
+        // register writes); the other three are the identical
+        // `dst = f(dst, src)` shape and are covered so a corpus that does
+        // contain them is not a fresh census entry.
+        Mnemonic::Aesenc | Mnemonic::Aesenclast | Mnemonic::Aesdec | Mnemonic::Aesdeclast => {
+            declare_xmm_register_effect_ops(instr)
+        }
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
         Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd | Mnemonic::Stosq => {
             stos_ops(instr, mnem, bits)
         }
+        // The byte/word/quadword string moves. `Movsd` is dispatched with the
+        // SSE scalar move above because the two share a mnemonic; the other
+        // three do not, so they arrive here.
+        Mnemonic::Movsb | Mnemonic::Movsw | Mnemonic::Movsq => match movs_width(instr, mnem) {
+            Some(width) => movs_ops(instr, width, bits),
+            None => vec![Op::Unknown {
+                mnemonic: format!("{mnem:?}").to_ascii_lowercase(),
+            }],
+        },
         Mnemonic::Cld => vec![Op::Assign {
             dst: VReg::Flag(Flag::D),
             src: Value::Const(0),
@@ -4130,6 +4146,227 @@ mod tests {
         ));
     }
 
+    /// `rep movsq` — the largest single shape behind `movsq`'s 134 census
+    /// entries, and the whole reason the string moves needed an arm.
+    ///
+    /// The contract is deliberately the OPPOSITE of `rep stos`' on one point.
+    /// `stos` writes memory and its `memory.fill` intrinsic carries empty
+    /// `outs` because it has no register result of its own; `movs` writes
+    /// memory AND steps two pointers, so the empty-`outs` intrinsic here is the
+    /// memory effect only and the RDI/RSI/RCX updates beside it are what makes
+    /// the lift honest. Inheriting `stos`' empty `outs` without them is exactly
+    /// the bug this closes.
+    #[test]
+    fn rep_movsq_declares_both_pointers_and_drains_the_count() {
+        // rep movsq  (f3 48 a5).
+        let ops = lift64(&[0xf3, 0x48, 0xa5]);
+        assert_eq!(ops.len(), 10, "got: {ops:#?}");
+
+        // Private cursors, snapshotted before anything architectural moves.
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign { dst: VReg::Temp(0), src: Value::Reg(src) } if *src == VReg::phys("rdi")
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Assign { dst: VReg::Temp(1), src: Value::Reg(src) } if *src == VReg::phys("rsi")
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Assign { dst: VReg::Temp(2), src: Value::Reg(src) } if *src == VReg::phys("rcx")
+        ));
+        assert!(
+            matches!(
+                &ops[3].op,
+                Op::Intrinsic {
+                    name,
+                    ins,
+                    outs,
+                    reads_mem: true,
+                    writes_mem: true,
+                } if name == "memory.copy.8.word8"
+                    && ins == &[
+                        Value::Reg(VReg::Temp(0)),
+                        Value::Reg(VReg::Temp(1)),
+                        Value::Reg(VReg::Temp(2)),
+                        Value::Reg(VReg::Flag(Flag::D)),
+                    ]
+                    && outs.is_empty()
+            ),
+            "got: {ops:#?}"
+        );
+
+        // Both pointers advance by the SAME signed byte count -- x86 has one
+        // direction flag, not one per pointer -- and the count is drained.
+        let defined: Vec<Option<VReg>> = ops
+            .iter()
+            .map(|instruction| crate::ir::use_def::def_uses(&instruction.op).0)
+            .collect();
+        for register in ["rdi", "rsi", "rcx"] {
+            assert!(
+                defined.contains(&Some(VReg::phys(register))),
+                "rep movsq did not declare its write to {register}: {ops:#?}"
+            );
+        }
+        assert!(matches!(
+            &ops[9].op,
+            Op::Assign { dst, src: Value::Const(0) } if *dst == VReg::phys("rcx")
+        ));
+        let step = match &ops[8].op {
+            Op::Bin {
+                dst,
+                op: BinOp::Add,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Reg(step),
+            } if *dst == VReg::phys("rsi") && *lhs == VReg::phys("rsi") => step.clone(),
+            other => panic!("rsi was not stepped: {other:#?} in {ops:#?}"),
+        };
+        assert!(
+            matches!(
+                &ops[7].op,
+                Op::Bin {
+                    dst,
+                    op: BinOp::Add,
+                    lhs: Value::Reg(lhs),
+                    rhs: Value::Reg(other),
+                } if *dst == VReg::phys("rdi") && *lhs == VReg::phys("rdi") && *other == step
+            ),
+            "rdi and rsi must share one directional step: {ops:#?}"
+        );
+        // That step is the direction flag's, not a hardcoded sign.
+        assert!(matches!(
+            &ops[6].op,
+            Op::Ite { dst, cond: VReg::Flag(Flag::D), .. } if *dst == step
+        ));
+
+        // REPNE repeats identically: MOVS writes no flags, so there is no ZF
+        // for F2 to terminate on.
+        assert!(matches!(
+            &lift64(&[0xf2, 0x48, 0xa5])[3].op,
+            Op::Intrinsic { name, .. } if name == "memory.copy.8.word8"
+        ));
+    }
+
+    /// The single-step string move is a different instruction in effect: RCX is
+    /// neither read nor written, and exactly one element moves.
+    #[test]
+    fn a_single_step_movs_moves_one_element_and_touches_no_count() {
+        for (bytes, width) in [
+            (&[0xa4][..], 1u8),     // movsb
+            (&[0x66, 0xa5][..], 2), // movsw
+            (&[0xa5][..], 4),       // movsd (the STRING one)
+            (&[0x48, 0xa5][..], 8), // movsq
+        ] {
+            let ops = lift64(bytes);
+            assert_eq!(ops.len(), 5, "{bytes:02x?}: {ops:#?}");
+            assert!(
+                matches!(
+                    &ops[0].op,
+                    Op::Load { dst: VReg::Temp(0), addr }
+                        if addr.base == Some(VReg::phys("rsi")) && addr.size == width
+                ),
+                "{bytes:02x?}: {ops:#?}"
+            );
+            assert!(
+                matches!(
+                    &ops[1].op,
+                    Op::Store { addr, src: Value::Reg(VReg::Temp(0)) }
+                        if addr.base == Some(VReg::phys("rdi")) && addr.size == width
+                ),
+                "{bytes:02x?}: {ops:#?}"
+            );
+            assert!(
+                matches!(
+                    &ops[2].op,
+                    Op::Ite {
+                        dst: VReg::Temp(1),
+                        cond: VReg::Flag(Flag::D),
+                        t: Value::Const(back),
+                        e: Value::Const(forward),
+                        ..
+                    } if *back == -i64::from(width) && *forward == i64::from(width)
+                ),
+                "{bytes:02x?}: {ops:#?}"
+            );
+            let touches_count = ops.iter().any(|instruction| {
+                let (defined, used) = crate::ir::use_def::def_uses(&instruction.op);
+                defined == Some(VReg::phys("rcx")) || used.contains(&VReg::phys("rcx"))
+            });
+            assert!(
+                !touches_count,
+                "an unrepeated string move must not read or write RCX: {ops:#?}"
+            );
+        }
+    }
+
+    /// `movsd` names two unrelated instructions. Only the `Code` separates the
+    /// dword string move from the SSE scalar double move, and dispatching on
+    /// the mnemonic alone would give one of them the other's semantics.
+    #[test]
+    fn the_dword_string_move_and_the_sse_scalar_move_stay_apart() {
+        // a5 -- MOVSD m32, m32: a string move, so RSI/RDI step.
+        let string_form = lift64(&[0xa5]);
+        assert!(
+            string_form.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin { dst, .. } if *dst == VReg::phys("rsi")
+            )),
+            "got: {string_form:#?}"
+        );
+        // f2 0f 10 c1 -- MOVSD xmm0, xmm1: a scalar float move, which must not
+        // have acquired a pointer step.
+        let scalar_form = lift64(&[0xf2, 0x0f, 0x10, 0xc1]);
+        assert!(
+            !scalar_form.iter().any(|instruction| {
+                let (defined, _) = crate::ir::use_def::def_uses(&instruction.op);
+                defined == Some(VReg::phys("rsi")) || defined == Some(VReg::phys("rdi"))
+            }),
+            "the SSE scalar move took the string arm: {scalar_form:#?}"
+        );
+    }
+
+    /// `aesenc` — 222 occurrences, the largest single entry the census had.
+    ///
+    /// The judgement here is that the AES round function is not worth modelling
+    /// and that saying nothing is not the alternative. Four single-output
+    /// intrinsics declare which XMM lanes are written and which are read; the
+    /// destination is snapshotted first because the round reads its own old
+    /// value.
+    #[test]
+    fn aesenc_declares_the_lanes_it_writes_without_modelling_the_round() {
+        // aesenc xmm0, xmm1  (66 0f 38 dc c1).
+        let ops = lift64_lanes(&[0x66, 0x0f, 0x38, 0xdc, 0xc1]);
+        let mut written: Vec<String> = Vec::new();
+        for instruction in &ops {
+            if let Op::Intrinsic {
+                name, ins, outs, ..
+            } = &instruction.op
+            {
+                assert_eq!(outs.len(), 1, "multi-output intrinsic: {ops:#?}");
+                assert!(name.starts_with("x86.aesenc.lane"), "got: {name}");
+                // Both operands' four lanes: the round is a function of all of
+                // them, and claiming otherwise would be a narrower lie than the
+                // one this replaces.
+                assert_eq!(ins.len(), 8, "{ops:#?}");
+                written.push(match &outs[0].0 {
+                    VReg::Phys(name) => name.clone(),
+                    other => panic!("non-physical destination {other:?}"),
+                });
+            }
+        }
+        assert_eq!(
+            written,
+            vec!["xmm0_d0", "xmm0_d1", "xmm0_d2", "xmm0_d3"],
+            "got: {ops:#?}"
+        );
+        // Nothing left over claiming to know nothing.
+        assert!(
+            !ops.iter()
+                .any(|instruction| matches!(&instruction.op, Op::Unknown { .. })),
+            "got: {ops:#?}"
+        );
+    }
+
     #[test]
     fn cmpxchg_reg_reg_lifts_to_compare_and_conditional_updates() {
         // cmpxchg rbx, rcx  (48 0f b1 cb)
@@ -4831,21 +5068,128 @@ mod tests {
         assert_eq!(ops, vec![Op::Nop], "got: {ops:#?}");
     }
 
-    /// The `cl`-count form shifts by a value that is only known at run time and
-    /// whose zero case must leave the flags alone. That is not one expression,
-    /// so it stays unlifted rather than becoming a wrong one.
-    #[test]
-    fn a_variable_count_double_shift_is_not_guessed() {
-        // 0f ad d0 -> shrd eax, edx, cl
-        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xad, 0xd0], 0x1000, 32)
-            .into_iter()
-            .map(|i| i.op)
+    /// Interpret the small, closed subset of LLIR the double shift emits.
+    ///
+    /// This exists so the `cl`-count lowering can be checked as ARITHMETIC
+    /// rather than as a shape. The zero-count case is the one that matters and
+    /// the one an op-list assertion cannot see: it is the difference between
+    /// "the destination is unchanged" and undefined behaviour in the C this
+    /// renders to. Flag definitions are skipped -- they are poison, and this is
+    /// about the value.
+    fn evaluate_integer_ops(
+        ops: &[Op],
+        seed: &[(&str, u64)],
+    ) -> std::collections::HashMap<VReg, u64> {
+        let mut state: std::collections::HashMap<VReg, u64> = seed
+            .iter()
+            .map(|(name, value)| (VReg::phys(*name), *value))
             .collect();
-        assert!(
-            ops.iter()
-                .all(|op| matches!(op, Op::Unknown { mnemonic } if mnemonic == "shrd")),
-            "got: {ops:#?}"
-        );
+        fn read(state: &std::collections::HashMap<VReg, u64>, value: &Value) -> u64 {
+            match value {
+                Value::Const(constant) => *constant as u64,
+                Value::Reg(register) => *state
+                    .get(register)
+                    .unwrap_or_else(|| panic!("read of undefined {register:?}")),
+                other => panic!("unsupported operand {other:?}"),
+            }
+        }
+        for op in ops {
+            match op {
+                Op::Bin { dst, op, lhs, rhs } => {
+                    if matches!(dst, VReg::Flag(_)) {
+                        continue;
+                    }
+                    let (lhs, rhs) = (read(&state, lhs), read(&state, rhs));
+                    let value = match op {
+                        BinOp::And => lhs & rhs,
+                        BinOp::Or => lhs | rhs,
+                        BinOp::Sub => lhs.wrapping_sub(rhs),
+                        BinOp::Shl => lhs.checked_shl(rhs as u32).unwrap_or(0),
+                        BinOp::Shr => lhs.checked_shr(rhs as u32).unwrap_or(0),
+                        other => panic!("unsupported {other:?}"),
+                    };
+                    state.insert(dst.clone(), value);
+                }
+                Op::ZExt { dst, src, from, .. } => {
+                    let value = read(&state, src);
+                    let mask = match from.bits() {
+                        64 => u64::MAX,
+                        bits => (1u64 << bits) - 1,
+                    };
+                    state.insert(dst.clone(), value & mask);
+                }
+                Op::Assign { dst, src } if !matches!(dst, VReg::Flag(_)) => {
+                    let value = read(&state, src);
+                    state.insert(dst.clone(), value);
+                }
+                Op::Assign { .. } | Op::Nop => {}
+                // The poisoned flags. This is about the value.
+                Op::Undef { dst, .. } if matches!(dst, VReg::Flag(_)) => {}
+                other => panic!("unsupported op in a double shift: {other:#?}"),
+            }
+        }
+        state
+    }
+
+    /// The `cl`-count double shift, checked against the architecture for EVERY
+    /// count rather than for a representative one.
+    ///
+    /// The zero count is the whole difficulty. `src << (bits - n)` is undefined
+    /// C at `n == 0`, and `n == 0` is exactly the architectural no-op the
+    /// immediate path answers with `Op::Nop`; a variable count can do neither.
+    /// The lowering splits the join into `(src << 1) << (bits - 1 - n)`, which
+    /// keeps both amounts inside the operand width and makes the join
+    /// contribute zero at `n == 0`. This asserts that claim numerically.
+    #[test]
+    fn a_variable_count_double_shift_is_exact_at_every_count() {
+        // 0f ad d0    -> shrd eax, edx, cl
+        // 4c 0f ad da -> shrd rdx, r11, cl   (the form the corpus contains)
+        // 0f a5 d0    -> shld eax, edx, cl
+        for (bytes, bits, right, dst_name, src_name) in [
+            (&[0x0f, 0xad, 0xd0][..], 32u32, true, "eax", "edx"),
+            (&[0x4c, 0x0f, 0xad, 0xda][..], 64, true, "rdx", "r11"),
+            (&[0x0f, 0xa5, 0xd0][..], 32, false, "eax", "edx"),
+        ] {
+            let mode = if bits == 64 { 64 } else { 32 };
+            let ops: Vec<Op> = lift_bytes(bytes, 0x1000, mode)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                !ops.iter()
+                    .any(|op| matches!(op, Op::Unknown { .. } | Op::Intrinsic { .. })),
+                "{bytes:02x?} did not lift: {ops:#?}"
+            );
+            let mask = match bits {
+                64 => u64::MAX,
+                bits => (1u64 << bits) - 1,
+            };
+            let destination = 0xdead_beef_cafe_f00du64 & mask;
+            let source = 0x0123_4567_89ab_cdefu64 & mask;
+            for count in 0..bits {
+                let state = evaluate_integer_ops(
+                    &ops,
+                    &[
+                        (dst_name, destination),
+                        (src_name, source),
+                        // The count arrives through the canonical ECX view.
+                        ("ecx", u64::from(count)),
+                    ],
+                );
+                let got = state[&VReg::phys(dst_name)];
+                let expected = if count == 0 {
+                    destination
+                } else if right {
+                    ((destination >> count) | (source << (bits - count))) & mask
+                } else {
+                    ((destination << count) | (source >> (bits - count))) & mask
+                };
+                assert_eq!(
+                    got, expected,
+                    "{bytes:02x?} count={count}: got {got:#018x}, want {expected:#018x}"
+                );
+            }
+        }
     }
 
     /// `bsr` is exactly `(BITS - 1) - clz(x)` for a nonzero operand, and gcc
@@ -6245,50 +6589,55 @@ mod tests {
         }
     }
 
+    /// The string move's pointer step is the direction flag's sign, not `+width`.
+    ///
+    /// This test used to assert `rhs: Value::Const(4)` on both pointer updates,
+    /// which is what the dword string move — the only string move that had an
+    /// arm — actually emitted. It is right for every `movs` a compiler emits
+    /// and wrong for `std; rep movsq`, which is how a correct overlapping
+    /// backward `memmove` is written. `stos_ops` had honoured DF since it was
+    /// written; the string move did not, and the asymmetry was not deliberate.
+    ///
+    /// Honouring it costs nothing where DF is clear: `lift_function` seeds
+    /// `DF = 0` at the entry of any function that reads the flag, so the select
+    /// const-folds back to `+width` in exactly the programs the old constant
+    /// was right for.
     #[test]
-    fn movsd_string_lifts_to_copy_and_pointer_advance() {
+    fn the_string_move_steps_by_the_direction_flag_not_a_fixed_sign() {
         let ops = lift64(&[0xa5]);
-        assert_eq!(ops.len(), 4, "got: {ops:#?}");
-        assert!(matches!(
-            &ops[0].op,
-            Op::Load {
-                dst: VReg::Temp(0),
-                addr: MemOp {
-                    base: Some(src),
-                    size: 4,
-                    ..
-                },
-            } if *src == VReg::phys("rsi")
-        ));
-        assert!(matches!(
-            &ops[1].op,
-            Op::Store {
-                addr: MemOp {
-                    base: Some(dst),
-                    size: 4,
-                    ..
-                },
-                src: Value::Reg(VReg::Temp(0)),
-            } if *dst == VReg::phys("rdi")
-        ));
-        assert!(matches!(
-            &ops[2].op,
-            Op::Bin {
+        let step = match &ops[2].op {
+            Op::Ite {
                 dst,
-                op: BinOp::Add,
-                rhs: Value::Const(4),
-                ..
-            } if *dst == VReg::phys("rsi")
-        ));
-        assert!(matches!(
-            &ops[3].op,
-            Op::Bin {
-                dst,
-                op: BinOp::Add,
-                rhs: Value::Const(4),
-                ..
-            } if *dst == VReg::phys("rdi")
-        ));
+                cond: VReg::Flag(Flag::D),
+                t: Value::Const(-4),
+                e: Value::Const(4),
+                width: Width::W64,
+            } => dst.clone(),
+            other => panic!("no directional step: {other:#?} in {ops:#?}"),
+        };
+        for (index, pointer) in [(3usize, "rsi"), (4, "rdi")] {
+            assert!(
+                matches!(
+                    &ops[index].op,
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Add,
+                        lhs: Value::Reg(lhs),
+                        rhs: Value::Reg(rhs),
+                    } if *dst == VReg::phys(pointer)
+                        && *lhs == VReg::phys(pointer)
+                        && *rhs == step
+                ),
+                "{pointer}: {ops:#?}"
+            );
+        }
+        // And the flag really is READ, which is what makes `lift_function`
+        // materialise the ABI's DF-clear guarantee for this function.
+        assert!(ops
+            .iter()
+            .any(|instruction| crate::ir::use_def::def_uses(&instruction.op)
+                .1
+                .contains(&VReg::Flag(Flag::D))));
     }
 
     #[test]
@@ -7310,9 +7659,20 @@ mod tests {
     ///
     /// [`the_census_predicate_reads_op_opaque_as_the_lie_it_is`] pins that for
     /// one hand-written encoding. This pins the POPULATION: over the same bytes
-    /// the census sweeps, the naive predicate fires on exactly two mnemonics
-    /// the qualified one correctly ignores, and both are the string-store
-    /// family. If a third ever appears this fails and names it — which is the
+    /// the census sweeps, the naive predicate fires on exactly the string
+    /// MOVE and string STORE families, which the qualified one correctly
+    /// ignores. Both lower to a `memory.*` effect whose intrinsic carries no
+    /// `outs` because the write is to MEMORY; for the moves, `rdi`, `rsi` and
+    /// `rcx` are declared by ordinary LLIR assignments emitted beside the
+    /// intrinsic, not by the intrinsic itself. `movsd` appears here in its
+    /// STRING form (`Movsd_m32_m32`), which is a different instruction from
+    /// the SSE scalar-double `movsd` despite sharing a mnemonic.
+    ///
+    /// This list grew from {stosd, stosq} to include the moves when `rep movs`
+    /// was lifted, and the growth is the test working: it forced the reason
+    /// above to be written down rather than absorbed. If a mnemonic appears
+    /// here that is NOT a `memory.*` effect, that is the sloppy-predicate case
+    /// and the assertion names it — which is the
     /// only way to tell "the predicate found something new" apart from "the
     /// predicate got sloppier", and the census itself cannot tell them apart
     /// because a loosened predicate makes its list GROW, which reads exactly
@@ -7355,10 +7715,13 @@ mod tests {
         let observed: Vec<&str> = false_positives.keys().map(String::as_str).collect();
         assert_eq!(
             observed,
-            vec!["stosd", "stosq"],
+            vec!["movsb", "movsd", "movsq", "stosd", "stosq"],
             "these are the lifts a naive `empty outs` predicate would report as \
              hidden register writes and the qualified predicate correctly does \
-             not. Occurrences: {false_positives:?}"
+             not: the string move and string store families, whose intrinsics \
+             carry a MEMORY effect rather than a register write. Anything else \
+             appearing here means the predicate got sloppier, not that the \
+             corpus grew. Occurrences: {false_positives:?}"
         );
     }
 
@@ -7380,9 +7743,9 @@ mod tests {
     /// `Op::Unknown` alone would leave a documented bypass: rewrite the arm
     /// as `Op::opaque(mnemonic)` and the mnemonic leaves this list while its
     /// destination stays exactly as invisible as before. No arm of `lift_one`
-    /// has taken that route, so the list is the same thirty-five mnemonics it
-    /// was, and the point of covering the shape is that taking it now fails the
-    /// test instead of shrinking it.
+    /// has taken that route — every entry that has left the list left it by
+    /// being lifted or by declaring its destination — and the point of covering
+    /// the shape is that taking it now fails the test instead of shrinking it.
     ///
     /// One place already has: [`lift_bytes_with_x87`] emits
     /// `Op::opaque("x87.<mnemonic>")` for every x87 instruction whose stack
@@ -7415,10 +7778,40 @@ mod tests {
         /// not have and does not admit to not having.
         ///
         /// The shape of the list is itself the argument. It is not exotica: the
-        /// bit-scan and population-count family (`bsr`, `bts`, `tzcnt`,
-        /// `popcnt`), `syscall`, the x87 arithmetic this build has no depth
-        /// solution for, the VEX encodings of instructions whose SSE spellings
-        /// ARE lifted, and the byte/quadword string moves.
+        /// 16-bit `bsr`, `syscall`, the x87 arithmetic this build has no depth
+        /// solution for, and the VEX encodings of instructions whose SSE
+        /// spellings ARE lifted.
+        ///
+        /// It was twenty-eight mnemonics and 1,130 occurrences after the
+        /// bit-manipulation family left it. Three more arms took 602 of those
+        /// off, and the three are worth distinguishing because they are three
+        /// different answers to the same question:
+        ///
+        /// * `movsb` (242) and `movsq` (134) are LIFTED — see
+        ///   [`string_ops::movs_ops`]. The string moves step RDI and RSI by the
+        ///   element width and, under `rep`, drain RCX; none of that is
+        ///   optional or unknowable, and leaving it undeclared meant every
+        ///   `rep movsq` memcpy recovered with both pointers frozen at their
+        ///   pre-loop values.
+        /// * `aesenc` (222) is DECLARED, not modelled — see
+        ///   [`packed_string::declare_xmm_register_effect_ops`]. Four
+        ///   single-output intrinsics state which XMM lanes it writes and which
+        ///   it reads; nothing pretends to know the round function.
+        /// * `shrd` (4) was lifted for immediate counts only and fell through
+        ///   for `shrd rdx,r11,cl`. [`wide_arith::double_shift_ops`] now covers
+        ///   the CL form as well.
+        ///
+        /// The corpus this measures and the FIXTURE corpus agree on almost
+        /// nothing, which is the more useful half of the finding. Every one of
+        /// the ~200 fixture sources was compiled at `-O0` and `-O2` under both
+        /// gcc and clang and the disassembly grepped: it contains no `movs`
+        /// string move of any width, no `aesenc` and no `syscall` at all, and
+        /// its 105 `shrd` and 104 `shld` sites are all immediate-count forms
+        /// the existing arm already handled. These samples are glibc- and
+        /// OpenSSL-shaped; the fixtures are compiled C. A mnemonic can be the
+        /// largest entry here and have no `dectest` lane whatever, so a census
+        /// count is not a priority and the two corpora have to be read
+        /// together.
         ///
         /// The SSE string primitives glibc's `strlen`/`strcmp`/`memcmp` are
         /// built from used to be the largest cluster on this list -- `pcmpeqb`
@@ -7455,10 +7848,11 @@ mod tests {
         /// and checking the list does not move. Rewriting `bit_scan_ops`'
         /// `unsupported()` fallback from `Op::Unknown` to `Op::opaque(mnemonic)`
         /// — one line, no change whatever to what the LLIR says about a
-        /// register — drops `bsr` and `shrd` from the pre-2026-08-18 predicate,
-        /// which reads as two mnemonics fixed and invites whoever is holding
-        /// the constant to delete them. The predicate here keeps all thirty-five
-        /// and passes unchanged.
+        /// register — drops `bsr` from the pre-2026-08-18 predicate, which reads
+        /// as a mnemonic fixed and invites whoever is holding the constant to
+        /// delete it. (`shrd` used to be dropped here too; its variable-count
+        /// form is lifted now, so it has left the list for real.) The predicate
+        /// here keeps every remaining entry and passes unchanged.
         /// Why a mnemonic on the list below is STILL on it.
         ///
         /// A bare list of names is a census nobody reads; the same list with a
@@ -7534,7 +7928,6 @@ mod tests {
         /// `tzcnt` was 130 here and 139 there across 27 fixture functions,
         /// while `syscall` is 310 here and 0 there.
         const SILENT_REGISTER_WRITERS: &[(&str, Silence)] = &[
-            ("aesenc", Silence::NoArm),
             // `Bsr_r16_rm16` only, all four of them: the 16-bit form is the one
             // `bit_scan_ops` declines. Its stated reason (that a 16-bit count
             // would need an `x86.clz.16` answering 16 too high) does not hold --
@@ -7552,17 +7945,10 @@ mod tests {
             ("fsub", Silence::X87Stack),
             ("fsubp", Silence::X87Stack),
             ("fxch", Silence::X87Stack),
-            // `Movsb_m8_m8` / `Movsq_m64_m64`, both writing RDI and RSI.
-            ("movsb", Silence::NoArm),
-            ("movsq", Silence::NoArm),
             ("popfq", Silence::NoArm),
             ("pushfq", Silence::NoArm),
             ("rdtsc", Silence::NoArm),
             ("rdtscp", Silence::NoArm),
-            // `Shrd_rm64_r64_CL` only: the variable-count form, which
-            // `double_shift_ops` declines because a count of zero is a no-op
-            // that must also leave the flags alone.
-            ("shrd", Silence::FormRefused),
             // Writes RCX and R11 (the return address and RFLAGS). RAX is the
             // kernel's doing, not the instruction's, and iced does not claim it.
             ("syscall", Silence::NoArm),

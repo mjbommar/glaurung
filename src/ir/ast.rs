@@ -1699,6 +1699,10 @@ mod ilp32_wide_tests;
 mod memory_fill_tests;
 
 #[cfg(test)]
+#[path = "ast_tests/memory_copy.rs"]
+mod memory_copy_tests;
+
+#[cfg(test)]
 #[path = "ast_tests/deep_regions.rs"]
 mod deep_regions_tests;
 

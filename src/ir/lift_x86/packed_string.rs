@@ -881,6 +881,38 @@ pub(super) fn packed_dword_compare_greater_ops(instr: &iced_x86::Instruction) ->
 /// module did not anticipate, and [`Op::Unknown`] keeps it visible to the
 /// census in `lift_x86`'s tests rather than papering over it with a
 /// conservative marker.
+/// Declare the XMM register effect of an instruction this lifter deliberately
+/// does NOT model the value of.
+///
+/// The AES round instructions are the case this exists for. `aesenc` was the
+/// single largest entry in `lift_x86`'s silent-register-write census — 222
+/// occurrences over the committed amd64 corpus, all of it OpenSSL and libcrypto
+/// — and modelling an AES round is not a decompiler's job. But the choice is
+/// not "model it or leave it": `Op::Unknown` says the destination XMM was never
+/// written, so whatever it held before propagates past the round into every
+/// later reader. Four single-output intrinsics say "these four lanes are a
+/// function of these eight lanes" without claiming to know which function, and
+/// that is both honest and enough to stop the stale-value propagation. It is
+/// the identical shape `x86.pcmpeqb.lane*` and `x86.pshufb.lane*` already use.
+///
+/// The operand shape is checked rather than assumed. Everything routed here
+/// must have an XMM destination and an XMM-or-memory source; anything else
+/// stays an `Op::Unknown` so the census keeps seeing it.
+pub(super) fn declare_xmm_register_effect_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return unknown(instr);
+    }
+    match instr.op_kind(1) {
+        OpKind::Register if is_xmm_register(instr.op_register(1)) => {}
+        OpKind::Memory => {}
+        _ => return unknown(instr),
+    }
+    declare_xmm_effect_ops(instr)
+}
+
 fn declare_xmm_effect_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     let dst = instr.op_register(0);
     let mnemonic = mnemonic_of(instr);

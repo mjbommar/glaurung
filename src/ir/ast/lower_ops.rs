@@ -6,7 +6,8 @@
 //! point the rest of the pipeline uses; [`super::lower_conds::lower_block`]
 //! calls it once per instruction.
 //!
-//! The intrinsic recognisers (`memory_fill_intrinsic`, `byte_swap_intrinsic`,
+//! The intrinsic recognisers (`memory_fill_intrinsic`, `memory_copy_intrinsic`,
+//! `byte_swap_intrinsic`,
 //! `packed_byte_table_intrinsic`, `packed_signed_shift_intrinsic`,
 //! `wide_integer_intrinsic`) each answer "is this named intrinsic the shape I
 //! model?" and return `None` otherwise, so an unrecognised name falls through
@@ -127,6 +128,78 @@ fn memory_fill_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> O
                     }),
                 },
             },
+            Stmt::Assign {
+                dst: remaining.clone(),
+                src: Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::Reg(remaining.clone())),
+                    rhs: Box::new(Expr::Const(1)),
+                },
+            },
+        ],
+    })
+}
+
+/// Lower an architecture-neutral repeated scalar memory copy into an exact AST
+/// loop — the `rep movs` sibling of [`memory_fill_intrinsic`].
+///
+/// The lifter supplies THREE private scratch values (destination cursor, source
+/// cursor, remaining count), so mutating them here cannot overwrite the
+/// architectural RDI/RSI/RCX whose post-operation values are stated by the
+/// ordinary LLIR the lifter emits beside this intrinsic.
+///
+/// Both cursors step by the same signed amount. That is not a simplification:
+/// x86 uses ONE direction flag for both pointers, so a `std`-guarded backward
+/// copy walks source and destination down together.
+fn memory_copy_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Option<Stmt> {
+    if !outs.is_empty() {
+        return None;
+    }
+    let suffix = name.strip_prefix("memory.copy.")?;
+    let (element_width, word_width) = suffix.split_once(".word")?;
+    let element_width: u8 = element_width.parse().ok()?;
+    let word_width: u8 = word_width.parse().ok()?;
+    if !matches!(element_width, 1 | 2 | 4 | 8) || !matches!(word_width, 4 | 8) {
+        return None;
+    }
+    let [Value::Reg(destination), Value::Reg(source), Value::Reg(remaining), direction] = ins
+    else {
+        return None;
+    };
+    let step = |cursor: &VReg| Stmt::Assign {
+        dst: cursor.clone(),
+        src: Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(cursor.clone())),
+            rhs: Box::new(Expr::Select {
+                cond: Box::new(Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(lower_value(direction)),
+                    rhs: Box::new(Expr::Const(0)),
+                }),
+                if_true: Box::new(Expr::Const(-i64::from(element_width))),
+                if_false: Box::new(Expr::Const(i64::from(element_width))),
+                width: word_width,
+            }),
+        },
+    };
+    Some(Stmt::While {
+        cond: Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Reg(remaining.clone())),
+            rhs: Box::new(Expr::Const(0)),
+        },
+        body: vec![
+            Stmt::Store {
+                addr: Expr::Reg(destination.clone()),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Reg(source.clone())),
+                    size: element_width,
+                },
+                size: element_width,
+            },
+            step(destination),
+            step(source),
             Stmt::Assign {
                 dst: remaining.clone(),
                 src: Expr::Bin {
@@ -800,6 +873,9 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             name, ins, outs, ..
         } => {
             if let Some(statement) = memory_fill_intrinsic(name, ins, outs) {
+                return vec![statement];
+            }
+            if let Some(statement) = memory_copy_intrinsic(name, ins, outs) {
                 return vec![statement];
             }
             if let (Some(src), Some((dst, _))) =
