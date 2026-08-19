@@ -185,7 +185,16 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     }
     let declared_prototype = declared_prototype.filter(|prototype| {
         prototype.parameter_types.len() == arg_count
-            && dwarf_prototype_type_is_renderable(&prototype.return_type, true, &dwarf_type_env)
+            && (dwarf_prototype_type_is_renderable(&prototype.return_type, true, &dwarf_type_env)
+                // A synthesised aggregate return tag is not a DWARF type and
+                // never will be: `dwarf_render_types` rejects every by-value
+                // struct because the renderer cannot reconstruct a source
+                // layout it did not prove. These tags are the exception by
+                // construction — this renderer DEFINES them, immediately above
+                // the signature that names them, and their members are the ABI
+                // eightbyte classes rather than recovered source fields. See
+                // `crate::ir::abi::synthesised_return_definition`.
+                || crate::ir::abi::synthesised_return_definition(&prototype.return_type).is_some())
             && ((output_kind == crate::ir::types_recover::RecoveredOutputKind::Void
                 && prototype.return_type == "void")
                 || (output_kind != crate::ir::types_recover::RecoveredOutputKind::Void
@@ -463,6 +472,33 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // The macro was unnecessary anyway — all four holdout toolchains accept the
     // attribute directly (probed: gcc 15.2, arm-none-eabi-gcc 14.2,
     // i686/x86_64-w64-mingw32-gcc 13).
+    // THIS function's own result is a synthesised aggregate tag, so unlike the
+    // callee declarations below, its definition cannot go inside the body: it
+    // has to be in scope at the SIGNATURE line, which is above it.
+    //
+    // Guarded for the same reason the DWARF layouts above are: two sibling
+    // functions returning the same ABI class name the same tag, and a whole-unit
+    // consumer that concatenates both renders would otherwise get two file-scope
+    // definitions of one tag and fail to compile the unit outright.
+    //
+    // The cost, stated plainly: DecBench's per-function split starts each
+    // snippet at the signature line, so a sliced fragment of one of these
+    // functions loses the definition and does not compile — where today it
+    // compiles and returns one bank's worth of a two-bank result.
+    // `tools/diff_decompile.py` builds the WHOLE emitted unit, so the execution
+    // differential is unaffected. That trade is deliberate; a snippet that
+    // compiles to the wrong bytes is not the better half of it.
+    let own_return_definition = crate::ir::abi::synthesised_return_definition(&return_type);
+    if let Some(definition) = &own_return_definition {
+        let guard = format!(
+            "GLAURUNG_ABI_TAG_{}_DEFINED",
+            sanitize_c_ident(&return_type).to_uppercase()
+        );
+        let _ = writeln!(out, "#ifndef {guard}");
+        let _ = writeln!(out, "#define {guard}");
+        let _ = writeln!(out, "{definition}");
+        out.push_str("#endif\n");
+    }
     if !ids.stack_objects.is_empty() && !ids.calls_stack_check {
         out.push_str("__attribute__((no_stack_protector)) ");
     }
@@ -516,11 +552,17 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // `SymbolRecord::required_structs` is emitted here: a sliced one-function
     // fragment must declare everything it names, and nothing above the
     // signature line survives that slice.
+    //
+    // Never the tag this function's OWN result already defined at file scope:
+    // a block-scope tag is a NEW, distinct type (C11 6.2.1p4), so redefining it
+    // here would make the body's `return *(struct T *)(...)` a different `struct
+    // T` from the one the signature declares.
     for definition in named_call_declarations
         .values()
         .filter_map(|prototype| {
             crate::ir::abi::synthesised_return_definition(&prototype.return_type)
         })
+        .filter(|definition| own_return_definition.as_ref() != Some(definition))
         .collect::<std::collections::BTreeSet<_>>()
     {
         let _ = writeln!(out, "    {definition}");

@@ -320,19 +320,28 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     candidate cut improved. Only then was the size blessed. That ORDER is the
     whole discipline; reversing it is how a ratchet becomes a record of the last
     time someone ran the generator.
+
+    Regenerated a second time the same day, after `src/ir/callee_return_bank.rs`
+    (646 lines) landed for the callee side of multi-bank aggregate returns. A NEW
+    FILE ABOVE THE MEAN RAISES THE MEAN -- 433.4398 -> 433.6397 -- and
+    `product_median_loc` ticked 313 -> 313.5 for the same reason every cut in the
+    decomposition programme worsened it: adding any file above the median shifts
+    the median. Neither is the tree getting worse; both are the measure seeing a
+    file count rather than a size. Recorded as accepted with drift, exactly as
+    the 2026-08-16 and 2026-08-17 entries above recorded the mirror-image case.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 15,
-        "ir_median_loc": pytest.approx(440.0),
+        "ir_median_loc": 438,
         "product_files_above_1000": 26,
         "product_files_above_2000": 4,
         "product_loc_above_1000": 39739,
         "product_max_loc": 2482,
-        "product_mean_loc": pytest.approx(433.4398034398034),
-        "product_median_loc": 313,
-        "product_pct_loc_above_1000": pytest.approx(22.52650076526274),
+        "product_mean_loc": pytest.approx(433.6397058823529),
+        "product_median_loc": pytest.approx(313.5),
+        "product_pct_loc_above_1000": pytest.approx(22.46092977250247),
     }
 
 

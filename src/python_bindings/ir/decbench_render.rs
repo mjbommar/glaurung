@@ -383,6 +383,21 @@ fn decbench_text_with_installed_environment(
         "prune_unobserved_promoted_object_stores",
         crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared)
     );
+    // A result the ABI splits across two register BANKS becomes the whole-object
+    // load its declared class requires. Deliberately the LAST semantic pass:
+    // the object's members must survive store pruning above (they are what the
+    // second bank's bytes are), and the rewrite reads a body nothing further
+    // will rewrite. See `crate::ir::callee_return_bank`.
+    if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
+        pass!(
+            "compose_bank_returns",
+            crate::ir::callee_return_bank::compose_bank_returns(
+                &mut prepared,
+                cc,
+                recovered_prototype
+            )
+        );
+    }
     crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
     // THE pre-render verification boundary. Every semantic transform is behind us
     // and the renderer below is formatting-only, so this AST is exactly what is
@@ -485,8 +500,41 @@ fn decbench_text_with_installed_environment(
             prototype.return_type = return_type.to_string();
             Some(prototype)
         });
+    // The three classes one bank further out than `pair_render_prototype`'s.
+    // `xmm0:xmm1`, `rax`+`xmm0` and an AAPCS64 HFA have no builtin C spelling,
+    // so the declaration is a synthesised tag — the SAME tag
+    // `recovered_call_prototype` already gives every caller of this function,
+    // which is what makes the two sides of the boundary agree.
+    //
+    // Gated on the PREPARED body for the same reason the pair is: the rewrite
+    // is all or nothing and declines whenever the result does not demonstrably
+    // live in one frame object, and a signature that outran it would declare a
+    // sixteen-byte result over a body handing back eight.
+    let bank_render_prototype = (output_kind
+        == crate::ir::types_recover::RecoveredOutputKind::Direct)
+        .then(|| {
+            crate::ir::callee_return_bank::bank_return_c_type(
+                &prepared.body,
+                cc,
+                recovered_prototype,
+            )
+        })
+        .flatten()
+        .map(|return_type| {
+            let mut prototype = render_prototype.cloned().unwrap_or_else(|| {
+                crate::ir::call_contracts::CallPrototype {
+                    return_type: String::new(),
+                    parameter_types: Vec::new(),
+                    variadic: false,
+                    authority: crate::ir::call_contracts::CallPrototypeAuthority::Recovered,
+                }
+            });
+            prototype.return_type = return_type.to_string();
+            prototype
+        });
     let render_prototype = pair_render_prototype
         .as_ref()
+        .or(bank_render_prototype.as_ref())
         .or(single_render_prototype.as_ref())
         .or(render_prototype);
     let body = profiler.measure("render_decbench", || {

@@ -300,7 +300,26 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
                 Some(e) => {
                     out.push_str("return ");
                     let return_type = dec_plan(|plan| plan.return_ctype().to_string());
-                    write_representation_value_dec(&return_type, e, out);
+                    // A result the ABI splits across two register BANKS is
+                    // declared at a synthesised tag, and the value is the frame
+                    // object it lives in — the exact mirror of the call site's
+                    // `*(struct __glaurung_sse_pair *)(&var1[0]) = callee(...)`.
+                    // The pointee TYPE has to come from the declaration: the
+                    // scalar renderer would spell this load at one bank's width
+                    // and hand back half the result. See
+                    // `crate::ir::callee_return_bank`, which is what proves the
+                    // whole object is the result before this spelling is used.
+                    match (
+                        crate::ir::abi::synthesised_return_definition(&return_type),
+                        e,
+                    ) {
+                        (Some(_), Expr::Deref { addr, .. }) => {
+                            let _ = write!(out, "*({return_type} *)(");
+                            write_expr_dec(addr, out);
+                            out.push(')');
+                        }
+                        _ => write_representation_value_dec(&return_type, e, out),
+                    }
                     out.push_str(";\n");
                 }
                 None => {
