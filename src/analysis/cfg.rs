@@ -751,6 +751,13 @@ fn join_dispatch_bounds<'a>(
             *bound = (*bound).max(*next_bound);
             true
         });
+        joined.mems.retain(|location, bound| {
+            let Some(next_bound) = next.mems.get(location) else {
+                return false;
+            };
+            *bound = (*bound).max(*next_bound);
+            true
+        });
     }
     joined
 }
@@ -773,6 +780,12 @@ fn combine_dispatch_bounds(
     for (slot, bound) in &right.slots {
         left.slots
             .entry(slot.clone())
+            .and_modify(|old| *old = (*old).min(*bound))
+            .or_insert(*bound);
+    }
+    for (location, bound) in &right.mems {
+        left.mems
+            .entry(location.clone())
             .and_modify(|old| *old = (*old).min(*bound))
             .or_insert(*bound);
     }

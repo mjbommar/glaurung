@@ -51,6 +51,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::core::instruction::{Access, Instruction};
 
+mod memory_guard;
+pub use memory_guard::MemKey;
+use memory_guard::MemoryBounds;
+
 /// What a register holds, as far as dispatch resolution is concerned.
 ///
 /// A lattice with no join: this runs over a single block, straight-line, so a
@@ -152,12 +156,17 @@ impl Unresolved {
 
 /// What a guard established, carried across its in-range edge.
 ///
-/// Both halves are needed: clang -O2 keeps the checked value in a register, and
-/// clang -O0 spills it to a frame slot before the check and reloads it after.
+/// All three halves are needed: clang -O2 keeps the checked value in a register,
+/// clang -O0 spills it to a frame slot before the check and reloads it after,
+/// and gcc -O2 compares the table-driven selector *in memory* and never lands
+/// it in a register until after the branch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Bounds {
     pub regs: HashMap<String, u64>,
     pub slots: HashMap<(String, i64), u64>,
+    /// Memory locations proved to hold a value in `[0, max]`; see
+    /// [`memory_guard`].
+    pub mems: HashMap<MemKey, u64>,
 }
 
 /// A Thumb-2 `tbb`/`tbh` table branch, and the extent its guard proves.
@@ -268,6 +277,10 @@ pub struct DispatchTracker {
     /// slot (`cmp [rbp-4], N`).  Keep that proof distinct from register facts so
     /// the fallthrough block can inherit it and bind a later reload.
     last_slot_cmp: Option<((String, i64), u64)>,
+    /// Range checks made against a memory location rather than a register: the
+    /// gcc -O2 shape where the compared value never reaches one. See
+    /// [`memory_guard`].
+    memory: MemoryBounds,
 }
 
 impl DispatchTracker {
@@ -283,6 +296,7 @@ impl DispatchTracker {
         self.slot_values.clear();
         self.last_cmp = None;
         self.last_slot_cmp = None;
+        self.memory.clear();
     }
 
     /// The inclusive maximum index this block's guard admits, if its predecessor
@@ -307,6 +321,7 @@ impl DispatchTracker {
         if let Some(b) = bound {
             self.bounded.extend(b.regs);
             self.bounded_slots.extend(b.slots);
+            self.memory.inherit(b.mems);
         }
     }
 
@@ -349,6 +364,7 @@ impl DispatchTracker {
             .as_ref()
             .map(|(_, limit)| *limit)
             .or_else(|| self.last_slot_cmp.as_ref().map(|(_, limit)| *limit))
+            .or_else(|| self.memory.pending_limit())
     }
 
     fn get(&self, reg: &str) -> Option<Val> {
@@ -505,6 +521,7 @@ impl DispatchTracker {
         Bounds {
             regs: self.bounded.clone(),
             slots: self.bounded_slots.clone(),
+            mems: self.memory.export(),
         }
     }
 
@@ -519,6 +536,9 @@ impl DispatchTracker {
     /// guard onto its taken edge.
     pub fn export_stable_bounds(&self) -> Bounds {
         let mut stable = self.export_bounds();
+        // The comparison's own assumption never leaves on an unguarded edge:
+        // keep exactly what was inherited and survived this block.
+        stable.mems = self.memory.proved();
         if let Some((register, _)) = &self.last_cmp {
             if let Some(value) = self.reg_values.get(register) {
                 stable
@@ -547,7 +567,29 @@ impl DispatchTracker {
     }
 
     /// Update the tracked state with one decoded instruction.
+    ///
+    /// [`memory_guard`] brackets the body because it needs state the body
+    /// destroys: a store invalidates memory facts BEFORE the instruction is
+    /// interpreted, a load's bound is read from the pre-write state (its
+    /// destination is routinely the address's own base), and the register it
+    /// defines invalidates every fact whose address mentions it.
     pub fn observe(&mut self, ins: &Instruction) {
+        self.memory.forget_stores(ins);
+        let loaded = self.memory.load_bound(ins);
+        let defined = Self::dest_reg(ins).map(canon);
+        self.observe_instruction(ins);
+        if let (Some(destination), Some(bound)) = (Self::dest_reg(ins), loaded) {
+            // Never loosen a bound the body already proved: the tightest
+            // surviving proof decides the table's extent.
+            let known = self.bounded.get(&canon(destination)).copied();
+            self.bound_value(destination, known.map_or(bound, |old| old.min(bound)));
+        }
+        if let Some(defined) = defined {
+            self.memory.forget_through(&defined);
+        }
+    }
+
+    fn observe_instruction(&mut self, ins: &Instruction) {
         let m = ins.mnemonic.to_ascii_lowercase();
 
         // Snapshot the whole effective-address expression before the
@@ -569,6 +611,15 @@ impl DispatchTracker {
             "cmp" | "sub" => {
                 self.last_cmp = None;
                 self.last_slot_cmp = None;
+                // `cmp <memory>, imm` bounds the LOCATION, not a register:
+                // gcc -O2 compares a switch selector in place and materialises
+                // it only after the branch, so the effective address is the
+                // only thing the guard and the load share.
+                if m == "cmp" {
+                    self.memory.record_comparison(ins, imm1);
+                } else {
+                    self.memory.clear_comparison();
+                }
                 if let (Some(r), Some(n)) = (reg0, imm1) {
                     if n >= 0 {
                         self.last_cmp = Some((canon(r), n as u64));
@@ -818,6 +869,7 @@ impl DispatchTracker {
     pub fn kill_register(&mut self, register: &str) {
         self.define_fresh_value(register);
         self.regs.remove(&canon(register));
+        self.memory.forget_through(&canon(register));
     }
 
     /// Recognise a Thumb-2 `tbb`/`tbh` and report its inline table.
@@ -1046,6 +1098,7 @@ mod tests {
         tracker.inherit_bound(Some(Bounds {
             regs: HashMap::from([("rax".to_string(), 3)]),
             slots: HashMap::new(),
+            mems: HashMap::new(),
         }));
         tracker.observe(&ins("mov", vec![reg_op("rax"), reg_read("rax")]));
         tracker.observe(&ins(
@@ -1143,6 +1196,7 @@ mod tests {
         tracker.inherit_bound(Some(Bounds {
             regs: HashMap::from([("rax".to_string(), 3)]),
             slots: HashMap::new(),
+            mems: HashMap::new(),
         }));
         let mut offset = 0usize;
         let mut jump = None;
@@ -1165,6 +1219,239 @@ mod tests {
             Some(Resolution::Table { targets, .. }) => assert_eq!(targets.len(), 4),
             other => panic!("the decoded GCC -O0 shape must resolve, got {other:?}"),
         }
+    }
+
+    /// A memory operand at a chosen access width, so a test can say "the byte
+    /// at `[base + index*scale + disp]`" the way the encoding does.
+    fn mem_op_sized(
+        base: Option<&str>,
+        disp: i64,
+        index: Option<&str>,
+        scale: u8,
+        size: u8,
+    ) -> Operand {
+        let mut operand = mem_op_scale(base, disp, index, scale);
+        operand.size = size;
+        operand
+    }
+
+    fn reg_write_sized(name: &str, size: u8) -> Operand {
+        let mut operand = reg_op_access(name, Access::Write);
+        operand.size = size;
+        operand
+    }
+
+    fn imm_sized(value: i64, size: u8) -> Operand {
+        let mut operand = imm_op(value);
+        operand.size = size;
+        operand
+    }
+
+    /// The real GCC 14 -O2 `adt204_switch_a`, verbatim from
+    /// `tests/decompiler_fixtures/src/204_adjacent_dispatch_tables.c`:
+    ///
+    /// ```text
+    /// lea    0xf15(%rip),%rax        ; the permutation table
+    /// and    $0x7,%edi
+    /// cmpb   $0x6,(%rax,%rdi,1)      ; the guard — on an INDEXED MEMORY operand
+    /// ja     default                 ; ---- block boundary ----
+    /// movzbl (%rax,%rdi,1),%eax      ; the SAME effective address
+    /// lea    0xe81(%rip),%rdx ; movslq (%rdx,%rax,4),%rax ; add %rdx,%rax ; jmp *%rax
+    /// ```
+    ///
+    /// There is no register holding the compared value on either side of the
+    /// branch, so a rule keyed on a register name proves nothing here. The
+    /// bound has to be carried on the effective-address expression, which the
+    /// `movzbl` reads component-for-component unchanged.
+    #[test]
+    fn the_real_gcc_o2_indexed_memory_guard_resolves_across_the_edge() {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::binary::Endianness;
+        use crate::core::disassembler::{Architecture, Disassembler};
+        use crate::disasm::registry;
+
+        let guard_bytes = [
+            0x48, 0x8d, 0x05, 0x15, 0x0f, 0x00, 0x00, // lea 0xf15(%rip),%rax
+            0x83, 0xe7, 0x07, // and $0x7,%edi
+            0x80, 0x3c, 0x38, 0x06, // cmpb $0x6,(%rax,%rdi,1)
+        ];
+        let dispatch_bytes = [
+            0x0f, 0xb6, 0x04, 0x38, // movzbl (%rax,%rdi,1),%eax
+            0x48, 0x8d, 0x15, 0x81, 0x0e, 0x00, 0x00, // lea 0xe81(%rip),%rdx
+            0x48, 0x63, 0x04, 0x82, // movslq (%rdx,%rax,4),%rax
+            0x48, 0x01, 0xd0, // add %rdx,%rax
+            0x3e, 0xff, 0xe0, // notrack jmp *%rax
+        ];
+        let decoder =
+            registry::for_arch(Architecture::X86_64, Endianness::Little).expect("x86-64 decoder");
+        let mut replay = |tracker: &mut DispatchTracker, base: u64, bytes: &[u8]| {
+            let mut offset = 0usize;
+            let mut last = None;
+            while offset < bytes.len() {
+                let address =
+                    Address::new(AddressKind::VA, base + offset as u64, 64, None, None).unwrap();
+                let instruction = decoder
+                    .disassemble_instruction(&address, &bytes[offset..])
+                    .expect("decode real GCC -O2 dispatch instruction");
+                offset += instruction.length as usize;
+                tracker.observe(&instruction);
+                last = Some(instruction);
+            }
+            last.expect("at least one instruction")
+        };
+
+        let mut guard_block = DispatchTracker::new();
+        replay(&mut guard_block, 0x1164, &guard_bytes);
+        assert_eq!(
+            guard_block.pending_bound(),
+            Some(6),
+            "`cmpb $0x6,(%rax,%rdi,1)` is the range check; without a pending \
+             bound the walker never records anything on the in-range edge"
+        );
+        let carried = guard_block.export_bounds();
+        assert!(
+            !carried.mems.is_empty(),
+            "the proof lives on the address expression, not on a register"
+        );
+        assert!(
+            guard_block.export_stable_bounds().mems.is_empty(),
+            "the comparison's assumption holds only on the guard's in-range \
+             edge, so it must not leave on an unguarded one"
+        );
+
+        // The dispatch is a DIFFERENT block. Nothing survives except what the
+        // in-range edge carries.
+        let mut dispatch_block = DispatchTracker::new();
+        dispatch_block.inherit_bound(Some(carried));
+        // `lea 0xf15(%rip),%rax` is in the guard block, so the table base
+        // reaches this block the same way the real walker delivers it.
+        dispatch_block.inherit_addresses(Some(&HashMap::from([("rax".to_string(), 0x2080u64)])));
+        let jump = replay(&mut dispatch_block, 0x1174, &dispatch_bytes);
+        assert_eq!(jump.mnemonic, "jmp");
+
+        let decoded = BTreeMap::from([(
+            0x2000,
+            vec![
+                0x11a0, 0x11a8, 0x11b0, 0x11c0, 0x11c8, 0x1190, 0x1198, 0x11cc,
+            ],
+        )]);
+        match dispatch_block.resolve(&jump, &decoded) {
+            Some(Resolution::Table { targets, .. }) => assert_eq!(
+                targets.len(),
+                7,
+                "`<= 6` is seven entries, and the eighth belongs to the next \
+                 table in `.rodata`"
+            ),
+            other => panic!("the real GCC -O2 indexed-memory guard must resolve, got {other:?}"),
+        }
+    }
+
+    /// The bound is attributed to an effective address, so every component of
+    /// that address is part of the identity. Change any one of them and the
+    /// load is reading somewhere else.
+    #[test]
+    fn a_load_from_a_different_effective_address_inherits_nothing() {
+        let bounded = |cmp: Operand| {
+            let mut guard = DispatchTracker::new();
+            guard.observe(&ins("cmp", vec![cmp, imm_sized(6, 8)]));
+            guard.export_bounds()
+        };
+        let guarded = mem_op_sized(Some("rax"), 0, Some("rdi"), 1, 8);
+        let cases: Vec<(&str, Operand)> = vec![
+            (
+                "a different base",
+                mem_op_sized(Some("rcx"), 0, Some("rdi"), 1, 8),
+            ),
+            (
+                "a different index",
+                mem_op_sized(Some("rax"), 0, Some("rcx"), 1, 8),
+            ),
+            (
+                "a different scale",
+                mem_op_sized(Some("rax"), 0, Some("rdi"), 4, 8),
+            ),
+            (
+                "a different displacement",
+                mem_op_sized(Some("rax"), 1, Some("rdi"), 1, 8),
+            ),
+            (
+                "a different access width",
+                mem_op_sized(Some("rax"), 0, Some("rdi"), 1, 32),
+            ),
+            ("no index at all", mem_op_sized(Some("rax"), 0, None, 1, 8)),
+        ];
+        for (what, load_from) in cases {
+            let mut dispatch = DispatchTracker::new();
+            dispatch.inherit_bound(Some(bounded(guarded.clone())));
+            dispatch.observe(&ins("movzx", vec![reg_write_sized("ecx", 32), load_from]));
+            assert_eq!(
+                dispatch.export_bounds().regs.get("rcx"),
+                None,
+                "{what} is a different location; a bound proved about \
+                 (%rax,%rdi,1) must not reach it"
+            );
+        }
+    }
+
+    /// The same address expression names a different location once anything
+    /// could have written a component of it, or the memory behind it.
+    #[test]
+    fn an_intervening_write_refuses_the_memory_bound() {
+        let guarded = mem_op_sized(Some("rax"), 0, Some("rdi"), 1, 8);
+        let interventions: Vec<(&str, Instruction)> = vec![
+            (
+                "the base is redefined",
+                ins("mov", vec![reg_op("rax"), reg_read("rsi")]),
+            ),
+            (
+                "the index is redefined",
+                ins("add", vec![reg_op("rdi"), imm_op(1)]),
+            ),
+            (
+                "a store could have aliased the location",
+                ins("mov", vec![mem_op(Some("rsp"), 8, None), reg_read("rsi")]),
+            ),
+            (
+                "an unmodelled instruction could have written anything",
+                ins("call", vec![reg_read("rsi")]),
+            ),
+            (
+                "a push writes memory the allowlist does not model",
+                ins("push", vec![reg_read("rsi")]),
+            ),
+        ];
+        for (what, intervening) in interventions {
+            let mut guard = DispatchTracker::new();
+            guard.observe(&ins("cmp", vec![guarded.clone(), imm_sized(6, 8)]));
+            let mut dispatch = DispatchTracker::new();
+            dispatch.inherit_bound(Some(guard.export_bounds()));
+            dispatch.observe(&intervening);
+            dispatch.observe(&ins(
+                "movzx",
+                vec![reg_write_sized("ecx", 32), guarded.clone()],
+            ));
+            assert_eq!(
+                dispatch.export_bounds().regs.get("rcx"),
+                None,
+                "{what}, so the guard proved nothing about what the load reads"
+            );
+        }
+    }
+
+    /// A comparison in the dispatch's OWN block has proved nothing: the branch
+    /// that acts on its flags has not been taken. Only an inherited fact — one
+    /// that crossed a guard's in-range edge — may bind a load.
+    #[test]
+    fn a_memory_comparison_binds_no_load_in_its_own_block() {
+        let guarded = mem_op_sized(Some("rax"), 0, Some("rdi"), 1, 8);
+        let mut block = DispatchTracker::new();
+        block.observe(&ins("cmp", vec![guarded.clone(), imm_sized(6, 8)]));
+        block.observe(&ins("movzx", vec![reg_write_sized("ecx", 32), guarded]));
+        assert_eq!(
+            block.export_bounds().regs.get("rcx"),
+            None,
+            "without the branch there is no in-range edge and no proof"
+        );
     }
 
     /// The real clang -O0 switch, verbatim from `switch_jt.clang.O0@0x1100`:

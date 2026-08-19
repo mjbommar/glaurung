@@ -1742,7 +1742,7 @@
     "chained_table_walk": "fail",
     "computed_index_dispatch": "pass",
     "obfuscated_dispatch": "pass",
-    "permuted_switch": "fail"
+    "permuted_switch": "pass"
   },
   "149_mba_expressions:clang:O0": {
     "mba_add_identities": "pass",
@@ -3374,9 +3374,9 @@
   "204_adjacent_dispatch_tables:gcc:O2": {
     "adt204_chained": "pass",
     "adt204_guarded_control": "pass",
-    "adt204_switch_a": "fail",
-    "adt204_switch_b": "fail",
-    "adt204_switch_c": "fail"
+    "adt204_switch_a": "pass",
+    "adt204_switch_b": "pass",
+    "adt204_switch_c": "pass"
   },
   "20_graph_bfs:clang:O0": {
     "graph_bfs": "pass"

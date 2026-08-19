@@ -1297,7 +1297,7 @@
       "violations": 0
     },
     "148_dispatch_obfuscation:gcc:O2": {
-      "functions_emitted": 24,
+      "functions_emitted": 16,
       "functions_with_violations": 0,
       "violations": 0
     },
@@ -2357,9 +2357,9 @@
       "violations": 0
     },
     "204_adjacent_dispatch_tables:gcc:O2": {
-      "functions_emitted": 32,
-      "functions_with_violations": 4,
-      "violations": 4
+      "functions_emitted": 21,
+      "functions_with_violations": 3,
+      "violations": 3
     },
     "20_graph_bfs:clang:O0": {
       "functions_emitted": 11,
@@ -3979,9 +3979,9 @@
       "violations": 97
     },
     "gcc:O2": {
-      "functions_emitted": 2524,
-      "functions_with_violations": 66,
-      "violations": 122
+      "functions_emitted": 2505,
+      "functions_with_violations": 65,
+      "violations": 121
     },
     "rustc:O0": {
       "functions_emitted": 3032,
