@@ -504,16 +504,6 @@ pub(crate) fn negate_cmp_expr(expr: Expr) -> Expr {
     }
 }
 
-/// Given a block that ends a conditional, return the "cond" expression for
-/// the generated If/While. We extract the final LLIR op — which the lifter
-/// emits as a CondJump — and use its flag register as the boolean value.
-/// Also strips that CondJump from the lowered-body stmts so we don't emit
-/// both the structured `if` and a trailing goto.
-///
-/// When the flag was immediately preceded by `Stmt::Assign { dst: flag,
-/// src: Expr::Cmp { .. } }`, we hoist that comparison into the condition
-/// and drop the now-dead flag assignment so the printer outputs
-/// `if (rax == 0)` rather than `if (%zf)`.
 /// Drop the back-edge `goto` from the tail of a loop body.
 ///
 /// A jump to the loop header at the END of the body is the back-edge, which the
@@ -559,6 +549,16 @@ pub(super) fn exit_is_taken_branch(lf: &LlirFunction, header: usize, exit: Optio
     )
 }
 
+/// Given a block that ends a conditional, return the "cond" expression for
+/// the generated If/While. We extract the final LLIR op — which the lifter
+/// emits as a CondJump — and use its flag register as the boolean value.
+/// Also strips that CondJump from the lowered-body stmts so we don't emit
+/// both the structured `if` and a trailing goto.
+///
+/// When the flag was immediately preceded by `Stmt::Assign { dst: flag,
+/// src: Expr::Cmp { .. } }`, we hoist that comparison into the condition
+/// and drop the now-dead flag assignment so the printer outputs
+/// `if (rax == 0)` rather than `if (%zf)`.
 pub(super) fn extract_cond_and_strip<'a>(
     block: &LlirBlock,
     mut stmts: Vec<Stmt>,

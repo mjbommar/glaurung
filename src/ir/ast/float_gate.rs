@@ -199,15 +199,6 @@ fn x86_scalar_float_intrinsic(name: &str, out_width: u8) -> Option<(ScalarFloatO
     })
 }
 
-/// Whether every VFP value used by the scalar arithmetic subset has a modeled
-/// producer in this function.
-///
-/// Register-only hard-float leaves (arguments, exact immediates, arithmetic,
-/// and an `s0`/`d0` result) are closed and can be rendered as C. Once an opaque
-/// VFP instruction or a call participates, lowering only the arithmetic nodes
-/// would be actively misleading: an unmodeled `vldr` followed by
-/// `vadd.f32 s0, s15, s15` becomes `var = var + var` with an invented live-in.
-/// Keep the entire scalar-float subset opaque until those producers are modeled.
 /// Whether this mnemonic is an x86 floating-point instruction the lifter has
 /// NOT given semantics to.
 ///
@@ -421,6 +412,15 @@ fn any_physical_register(lf: &LlirFunction, predicate: impl Fn(&str) -> bool) ->
         })
 }
 
+/// Whether every VFP value used by the scalar arithmetic subset has a modeled
+/// producer in this function.
+///
+/// Register-only hard-float leaves (arguments, exact immediates, arithmetic,
+/// and an `s0`/`d0` result) are closed and can be rendered as C. Once an opaque
+/// VFP instruction or a call participates, lowering only the arithmetic nodes
+/// would be actively misleading: an unmodeled `vldr` followed by
+/// `vadd.f32 s0, s15, s15` becomes `var = var + var` with an invented live-in.
+/// Keep the entire scalar-float subset opaque until those producers are modeled.
 pub(super) fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
     let closed = scalar_float_semantics_proof(lf);
     trace_scalar_float_gate(lf, closed, float_registers_are_all_caller_saved(lf));

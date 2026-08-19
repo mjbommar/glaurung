@@ -39,7 +39,8 @@
 //!   could reach an unknown depth,
 //! * a **call reached at non-zero depth**, which the ABI forbids and which is
 //!   the proof that no x87 value is ever live across a call (see
-//!   [`ast::scalar_float_semantics_are_closed`]),
+//!   `ast::float_gate::scalar_float_semantics_are_closed` — not a link, because
+//!   that function is private to a child of `ast`, so no path names it here),
 //! * any x87 mnemonic outside the supported set,
 //! * any control-word traffic that is not the exact GCC truncation idiom.
 //!

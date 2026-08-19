@@ -15,7 +15,7 @@
 //! because every new class needs both; they are two reasons to change.
 
 /// The synthesised C tag for a result the callee writes into the caller's
-/// buffer through [`indirect_result_register`].
+/// buffer through [`super::indirect_result_register`].
 ///
 /// A declaration is the ONLY way to make a C compiler emit the `x8` setup: the
 /// register is not an argument slot, so no argument list can name it, and
@@ -92,7 +92,7 @@ pub fn hfa_return_members(return_type: &str) -> Option<(u8, u8)> {
 /// The synthesised C tag for a System V AMD64 result split across the integer
 /// and SSE result banks.
 ///
-/// [`ReturnClass::IntegerPair`] had a builtin spelling: the double-word integer
+/// [`super::ReturnClass::IntegerPair`] had a builtin spelling: the double-word integer
 /// is INTEGER, INTEGER by construction, so `unsigned __int128` IS that ABI
 /// contract and needs no aggregate reconstruction. `rax + xmm0` has no builtin
 /// equivalent, and a declaration naming either bank alone silently discards the
@@ -126,7 +126,7 @@ pub fn split_bank_return_definition(integer_first: bool) -> &'static str {
 }
 
 /// The bank order a return-type spelling denotes, or `None` for every other
-/// type. `Some(true)` is `integer_first`, matching [`ReturnClass::SplitBanks`].
+/// type. `Some(true)` is `integer_first`, matching [`super::ReturnClass::SplitBanks`].
 pub fn split_bank_return_order(return_type: &str) -> Option<bool> {
     [true, false]
         .into_iter()
@@ -147,7 +147,7 @@ pub fn split_bank_return_order(return_type: &str) -> Option<bool> {
 /// `{double; float;}` moves four. Using the full spelling for a twelve-byte
 /// result would read four bytes that were never stored.
 ///
-/// `None` for any other occupancy: see [`ReturnClass::SsePair`].
+/// `None` for any other occupancy: see [`super::ReturnClass::SsePair`].
 pub fn sse_pair_return_tag(high_bytes: u8) -> Option<&'static str> {
     match high_bytes {
         8 => Some("struct __glaurung_sse_pair"),
@@ -168,7 +168,7 @@ pub fn sse_pair_return_definition(high_bytes: u8) -> Option<&'static str> {
 }
 
 /// The second-eightbyte occupancy a return-type spelling denotes, or `None` for
-/// every other type. Matches [`ReturnClass::SsePair`]'s `high_bytes`.
+/// every other type. Matches [`super::ReturnClass::SsePair`]'s `high_bytes`.
 pub fn sse_pair_return_high_bytes(return_type: &str) -> Option<u8> {
     [8, 4]
         .into_iter()

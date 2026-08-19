@@ -167,10 +167,6 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
     }
 }
 
-/// Helper: build a unified address map for a binary from ELF PLT, PE IAT,
-/// Mach-O stubs, ELF GOT, and the defined-symbol address map. Later sources
-/// overwrite earlier ones so — for example — a PLT entry hides a less
-/// specific GOT name at the same address.
 /// True when a symbol name is a compiler-internal alias or clone rather than the
 /// name a reader (or a C compiler) would use.
 ///
@@ -214,6 +210,10 @@ fn symbol_rank(name: &str, is_global: bool) -> u8 {
     }
 }
 
+/// Helper: build a unified address map for a binary from ELF PLT, PE IAT,
+/// Mach-O stubs, ELF GOT, and the defined-symbol address map. Later sources
+/// overwrite earlier ones so — for example — a PLT entry hides a less
+/// specific GOT name at the same address.
 pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     let mut out = HashMap::new();
     // Defined symbols (functions + exported vars). Several symbols routinely share

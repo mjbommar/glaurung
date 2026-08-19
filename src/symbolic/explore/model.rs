@@ -31,10 +31,6 @@ pub enum Severity {
     Constrained,
 }
 
-/// Which attacker-input fields a value is derived from, so a sink can be
-/// labelled with provenance (e.g. an address built from `SystemBuffer`).
-/// Symbols not present here are engine-internal (not attacker-controlled), so a
-/// sink whose address touches no marked symbol is *not* a controlled primitive.
 #[derive(Debug, Clone)]
 struct TaintedMemoryRegion {
     base: u64,
@@ -42,6 +38,11 @@ struct TaintedMemoryRegion {
     label: String,
 }
 
+/// Which attacker-input fields a value is derived from, so a sink can be
+/// labelled with provenance (e.g. an address built from `SystemBuffer`).
+///
+/// Symbols not present here are engine-internal (not attacker-controlled), so a
+/// sink whose address touches no marked symbol is *not* a controlled primitive.
 #[derive(Debug, Clone, Default)]
 pub struct TaintSpec {
     pub(super) labels: BTreeMap<u32, BTreeSet<String>>,

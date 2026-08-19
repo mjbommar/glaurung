@@ -315,6 +315,7 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
     Ok(d.into())
 }
 
+/// Dispatch lifting to the appropriate per-arch backend.
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
     let a = arch.to_ascii_lowercase();
     let mut instructions = match a.as_str() {

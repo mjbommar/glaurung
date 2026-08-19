@@ -9,7 +9,6 @@ use super::callee_contracts::DirectCalleeFacts;
 use super::dwarf_contracts::{dwarf_source_register_lifetimes, DwarfPrototypeContract};
 use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype};
 
-/// Dispatch lifting to the appropriate per-arch backend.
 /// Replace calls to the compiler's division runtime helpers with the arithmetic
 /// they perform (see [`crate::ir::soft_helpers`]).
 ///
@@ -42,22 +41,6 @@ pub(super) fn annotate_calls_in(
     crate::ir::call_contracts::apply_known_llir_call_contracts(function, cc, address_names);
 }
 
-/// THE AST pass pipeline. Every public decompile entry point runs exactly this.
-///
-/// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
-/// `decompile_all`, `decompile_many` — with tests keeping the copies aligned by
-/// convention and nothing enforcing it. That is not hypothetical drift: a loop-hoist
-/// retry added during this work landed in one copy and silently did nothing in the other
-/// three, which is exactly how a "fix" gets measured as ineffective.
-///
-/// Returns the recovered stack-slot sizes, which callers thread into type recovery.
-///
-/// (The sibling of this rule for the LLIR stage is `inline_soft_helper_calls_in`,
-/// just above.)
-///
-/// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
-/// point gets identical diagnostics rather than only the one that happened to carry the
-/// macro. Debugging `--all` used to produce no dump at all.
 /// Constant-data facts for one image, with relocation-fixed storage interpreted
 /// rather than read.
 ///
@@ -81,6 +64,22 @@ pub(super) fn readonly_data_for(
     readonly_data
 }
 
+/// THE AST pass pipeline. Every public decompile entry point runs exactly this.
+///
+/// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
+/// `decompile_all`, `decompile_many` — with tests keeping the copies aligned by
+/// convention and nothing enforcing it. That is not hypothetical drift: a loop-hoist
+/// retry added during this work landed in one copy and silently did nothing in the other
+/// three, which is exactly how a "fix" gets measured as ineffective.
+///
+/// Returns the recovered stack-slot sizes, which callers thread into type recovery.
+///
+/// (The sibling of this rule for the LLIR stage is `inline_soft_helper_calls_in`,
+/// just above.)
+///
+/// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
+/// point gets identical diagnostics rather than only the one that happened to carry the
+/// macro. Debugging `--all` used to produce no dump at all.
 pub(super) fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     profiler: &mut crate::decompile::profile::FunctionProfiler,

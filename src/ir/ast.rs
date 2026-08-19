@@ -32,6 +32,9 @@ use crate::ir::structure::Region;
 #[cfg(test)]
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, Value};
 
+/// Whether `name` is a stack slot the promotion pass named — i.e. a real local
+/// variable, so a store *to* it is a plain assignment rather than a pointer
+/// write.
 fn is_promoted_local(name: &str) -> bool {
     DEC_SOURCE_LOCALS.with(|locals| is_promoted_local_in(name, &locals.borrow()))
 }
@@ -129,10 +132,6 @@ pub struct PdbFieldHint {
     pub renderable: bool,
 }
 
-/// A C-level expression. v1 is deliberately shallow: we carry raw VReg
-/// references and constants without reconstructing use-def chains. The
-/// expression-reconstruction pass can later replace `Reg` with compound
-/// subexpressions.
 /// Exact callable target carried by a relocation-proven function-pointer table.
 ///
 /// The address remains available for cross-reference while the symbol name lets
@@ -197,6 +196,10 @@ impl WideArithmetic {
     }
 }
 
+/// A C-level expression. v1 is deliberately shallow: we carry raw VReg
+/// references and constants without reconstructing use-def chains. The
+/// expression-reconstruction pass can later replace `Reg` with compound
+/// subexpressions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Reg(VReg),
@@ -620,9 +623,6 @@ pub struct Function {
     pub body: Vec<Stmt>,
 }
 
-/// Whether `name` is a stack slot the promotion pass named — i.e. a real local
-/// variable, so a store *to* it is a plain assignment rather than a pointer
-/// write.
 /// The C scalar type of a given memory-access byte width, for load/store casts.
 fn width_ctype(size: u8) -> &'static str {
     match size {
@@ -1585,11 +1585,13 @@ fn is_width_preserving_arith(op: BinOp) -> bool {
 ///
 /// GCC i386 commonly spells `a[i - 1]` as `add $0x3fffffff, %eax; lea
 /// (,%eax,4)`. The quotient `0x3fffffff` is only `-1` after multiplication by
-/// four wraps modulo 2^32. Once [`try_array_index`] removes that scale and the
-/// generated C is rebuilt for LP64, leaving the quotient unchanged creates a
-/// four-gigabyte access. Recover the signed byte displacement first and divide
-/// it back by the exact element size. If the wrapped displacement is not
-/// divisible by that size, there is no exact C array index and we refuse.
+/// four wraps modulo 2^32. Once `dec_render::try_array_index` removes that
+/// scale and the generated C is rebuilt for LP64, leaving the quotient
+/// unchanged creates a four-gigabyte access. Recover the signed byte
+/// displacement first and divide it back by the exact element size. If the
+/// wrapped displacement is not divisible by that size, there is no exact C
+/// array index and we refuse. (Not a link: that function is private to the
+/// `dec_render` child module, so no path names it from here.)
 fn normalize_wrapped_scaled_index_constant(
     index_constant: i64,
     element_size: u8,

@@ -849,7 +849,6 @@ fn promote_address_taken_stack_object(
     *expr = Expr::StackAddr { object, size };
 }
 
-/// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.
 /// The parameter a just-promoted store address names, when the store writes an
 /// incoming argument's HOME SLOT.
 ///
@@ -878,6 +877,7 @@ fn argument_slot_assignment(addr: &Expr, size: u8, ctx: StackContext) -> Option<
     (i64::from(size) == stride).then(|| register.clone())
 }
 
+/// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.
 fn try_promote_lea_to_local(
     addr: &mut Expr,
     size: u8,
