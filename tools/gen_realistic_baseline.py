@@ -59,7 +59,7 @@ def measure() -> dict:
 
     manifest = realistic_corpus.build()
     return {
-        "schema": 1,
+        "schema": 2,
         "toolchain": manifest["toolchain"],
         "ground_truth_count": len(manifest["ground_truth"]),
         "variants": discovery.report(),
