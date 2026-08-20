@@ -328,7 +328,20 @@ def structural_fingerprint(
     n_returns = 0
     edges: List[Tuple[int, int]] = []
 
-    fast_path = data is not None and va_table is not None and disassembler is not None
+    # Truthiness, not `is not None`. `build_va_table` is PE-only and returns an
+    # EMPTY LIST for every other format, intending the caller to take the slow
+    # path — but `[] is not None`, so the fast path engaged on every ELF with a
+    # table that could translate no address at all. `va_to_offset` then returned
+    # None for every VA, `buf` was empty, and each block hashed the empty string
+    # (`e3b0c44298fc1c14`). It never raised: it returned a stable, confident,
+    # meaningless answer.
+    #
+    # Measured on a 110-function corpus before this line changed: 29 distinct
+    # fingerprints and 391 empty block hashes on the fast path, against 97 and 0
+    # on the slow one. 62 functions of 26 different sizes shared a single
+    # fingerprint. `glaurung diff` is the only consumer and passes exactly these
+    # arguments, so its structural similarity was computed over nothing.
+    fast_path = bool(data) and bool(va_table) and disassembler is not None
 
     # Disassembly cache: VA -> [insns]. On the fast path we issue ONE
     # disassemble_bytes call per function (covering all blocks in the
