@@ -34,25 +34,46 @@ from pathlib import Path
 DEFAULT_SCRATCH = Path.home() / ".cache" / "glaurung" / "tmp"
 
 
-def ensure_tmpdir(scratch: Path | None = None) -> Path:
+def ensure_tmpdir(scratch: Path | None = None) -> Path | None:
     """Point `TMPDIR` somewhere with room, unless it is already set.
 
     An explicitly-set `TMPDIR` is always honoured — a caller who has chosen a
     location knows something this module does not.
 
+    **Degrades instead of raising.** Keeping `/tmp` clean is an optimisation;
+    running is a requirement, and this module must never be the reason a process
+    dies. The execution worker is the case that proves it:
+    `build_guard.worker_env()` deliberately sets `HOME=/`, because the
+    environment block sits at the top of the initial stack and its *size* shifts
+    every frame beneath it — a recovered function reading an uninitialised local
+    returns different garbage depending on how many variables the invoking shell
+    exported, and `09_memory_effects:armv7:O2:read_counter` really did pass under
+    an interactive shell and fail under `env -i` from one identical build.
+
+    Under that fixed environment `Path.home()` is `/`, so the default scratch
+    becomes `/.cache/glaurung/tmp` and creating it raises `PermissionError`. An
+    earlier version of this function propagated that, which killed the worker and
+    turned 27 fixture tests into `worker crashed (exit 1)`. If the directory
+    cannot be created we leave `tempfile` on the system default and carry on.
+
     Args:
         scratch: Override the default location.
 
     Returns:
-        The directory temporary files will now be created in.
+        The directory temporary files will be created in, or `None` when the
+        preferred location was unusable and the system default still applies.
     """
     existing = os.environ.get("TMPDIR")
-    if existing:
-        target = Path(existing)
-    else:
-        target = scratch or DEFAULT_SCRATCH
+    target = Path(existing) if existing else (scratch or DEFAULT_SCRATCH)
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Unwritable — a fixed worker environment, a read-only home, a
+        # container. Say nothing and leave the caller on the system default.
+        os.environ.pop("TMPDIR", None) if not existing else None
+        return None
+    if not existing:
         os.environ["TMPDIR"] = str(target)
-    target.mkdir(parents=True, exist_ok=True)
     # `tempfile` caches its directory on first use, so setting the environment
     # variable alone is not enough inside an already-running interpreter.
     tempfile.tempdir = str(target)

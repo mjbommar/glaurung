@@ -103,3 +103,40 @@ def test_the_default_scratch_is_not_on_the_tmpfs():
         f"the default scratch {scratch.DEFAULT_SCRATCH} is on the very tmpfs "
         "this module exists to avoid"
     )
+
+
+def test_the_redirect_degrades_under_the_fixed_worker_environment():
+    """It must never be the reason a process dies.
+
+    `build_guard.worker_env()` deliberately sets `HOME=/`, because the
+    environment block sits at the top of the initial stack and its *size*
+    shifts every frame beneath it — a recovered function reading an
+    uninitialised local returns different garbage depending on how many
+    variables the invoking shell exported.
+
+    Under that environment the default scratch resolves to `/.cache/...`, which
+    cannot be created. The first version of `scratch.py` let the resulting
+    `PermissionError` escape, which killed the execution worker and turned 27
+    fixture tests into `worker crashed (exit 1)`. Keeping `/tmp` clean is an
+    optimisation; running is a requirement.
+    """
+    code = (
+        "import sys, tempfile; sys.path.insert(0, %r); import scratch; "
+        "print(scratch.ensure_tmpdir()); print(tempfile.gettempdir()); "
+        "import tempfile as t, shutil; d = t.mkdtemp(); shutil.rmtree(d); "
+        "print('MKDTEMP_OK')" % str(TOOLS)
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/", "LC_ALL": "C"},
+        cwd=str(ROOT),
+    )
+    assert result.returncode == 0, (
+        "importing scratch under the fixed worker environment failed:\n"
+        f"{result.stderr[-1200:]}"
+    )
+    assert "MKDTEMP_OK" in result.stdout, (
+        f"tempfile is unusable under the worker environment:\n{result.stdout}"
+    )

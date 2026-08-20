@@ -113,6 +113,7 @@ different packer is not comparable to one measured under this packer.
 
 from __future__ import annotations
 
+import scratch  # noqa: F401  -- points TMPDIR off the shared /tmp tmpfs on import
 import argparse
 import hashlib
 import json
