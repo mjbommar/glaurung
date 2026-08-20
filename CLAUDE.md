@@ -196,14 +196,32 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   because its lane is `slow`-marked, so a scoped `dectest` run and the three
   ordinary baseline gates all stay green while the full suite fails — that is
   exactly how fixtures 195 and 196 reached `master` with a red census.
-- **Never `mktemp -d -t glaurung-...` in `/tmp`.** Use the session scratchpad
-  directory. Ad-hoc `/tmp` scratch is never cleaned up: on 2026-08-13 there were
-  663 abandoned `glaurung-<topic>.XXXXXX` directories totalling 13 GB from past
-  sessions. A full `/tmp` does not fail as "disk full" — it surfaced as a
-  plausible assertion failure in a DecBench test, then as `OSError: [Errno 122]
-  Disk quota exceeded` mid-baseline, and it took the Bash tool down entirely for
-  an hour. Infrastructure exhaustion wearing a product defect's clothes costs far
-  more to diagnose than to prevent.
+- **Nothing this project does may write to `/tmp`. Export `TMPDIR` first:**
+
+  ```bash
+  export TMPDIR="$HOME/.cache/glaurung/tmp"   # on /, ~466 GB; /tmp is a 62 GB quota'd tmpfs
+  mkdir -p "$TMPDIR"
+  ```
+
+  This is not only about `mktemp`. **`maturin develop` writes its wheel to
+  `/tmp`** on every rebuild — a dozen a session — and `cargo`, `pytest` and the
+  fixture harness all default there too. Verified 2026-08-20: with `TMPDIR` set,
+  the wheel lands in the cache directory and `/tmp` gains *zero* entries.
+
+  `/tmp` here is a **shared, per-user-quota'd tmpfs**, so it exhausts long before
+  `df` shows full and it is not ours alone. When it fills, it never says "disk
+  full". It has surfaced as a plausible assertion failure in a DecBench test; as
+  eight fake `pass->fail` "SEMANTIC REGRESSIONS" in the fixture matrix at 13 GB
+  free; as a pytest `INTERNALERROR` from `OSError: [Errno 122]` inside
+  `terminal.py` `flush()` that **reported exit code 0 with no test results**; and
+  twice as the Bash tool dying completely, every command returning nonzero with
+  no output including `echo`. A successful `Write` is the liveness probe that
+  tells that apart from a bad command.
+
+  Sweeping is triage, not the fix — and sweep only what is *ours*. On 2026-08-20
+  the 33 GB under `/tmp/claude-1000` was overwhelmingly other projects' session
+  data while this session's own directory was 6.5 MB. Do not delete another
+  tenant's work to make a test run; say so and ask.
 
 ## LLM model policy (project-critical — keep in sync with `python/glaurung/llm/config.py`)
 

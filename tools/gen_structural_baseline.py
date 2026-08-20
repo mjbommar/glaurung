@@ -9,6 +9,7 @@ real — never to make a red gate green.
 
 from __future__ import annotations
 
+import scratch  # noqa: F401  -- points TMPDIR off the shared /tmp tmpfs on import
 import json
 import sys
 import tempfile

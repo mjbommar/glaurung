@@ -20,6 +20,7 @@ compared against another's.
 
 from __future__ import annotations
 
+import scratch  # noqa: F401  -- points TMPDIR off the shared /tmp tmpfs on import
 import argparse
 import functools
 import hashlib
