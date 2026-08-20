@@ -84,15 +84,48 @@ def test_the_control_recovers_every_function_we_linked_in(measured, baseline):
     )
 
 
-@pytest.mark.parametrize("variant", ["strip", "sstrip", "upx", "upxg"])
-def test_hostile_variant_discovery_holds_its_baseline(variant, measured, baseline):
-    """Discovery must not silently fall further on an already-hostile shape."""
+@pytest.mark.parametrize("variant", ["strip", "sstrip"])
+def test_stripped_variant_discovery_holds_its_baseline(variant, measured, baseline):
+    """Discovery must not silently fall further on an already-hostile shape.
+
+    Only the *stripped* lanes are ratcheted on a count. The packed ones are
+    not, and cannot be — see below.
+    """
     want = baseline["variants"][variant]["discovered"]
     got = measured[variant]["discovered"]
     assert got >= want - TOLERANCE, (
         f"{variant}: discovered {got} functions, baseline {want} "
         f"(tolerance {TOLERANCE}). Fewer functions found on a shape that was "
         f"already stripped or packed. Full measurement: {measured[variant]}"
+    )
+
+
+@pytest.mark.parametrize("variant", ["upx", "upxg"])
+def test_a_packed_image_does_not_pretend_to_have_found_the_program(variant, measured):
+    """On a packed image we must not report the stub as if it were the program.
+
+    **This lane is deliberately not ratcheted on a count.** The count is not
+    stable across links: five builds of the same corpus differing only by
+    comment padding in the generated driver produced 90, 90, 90, 8, 90
+    findings, and the 90 contains only ten real functions. The committed
+    baseline captured one side of that coin flip, and a `>= want - TOLERANCE`
+    band cannot see an 82-function swing *upward* into almost-entirely-wrong
+    answers — it only guards the count going down. Two independent measurements
+    disagreed by exactly that margin, which is how the instability surfaced.
+
+    What *is* stable, and what actually matters, is that we recover essentially
+    none of the real program: the payload is compressed and the only real code
+    in the file is the decompressor. Asserting that keeps the honest failure
+    honest. If this ever starts failing because recall went UP, that is a
+    genuine unpacking capability and this test should be rewritten to demand it.
+    """
+    truth = realistic_corpus.build()["ground_truth"]
+    hit = measured[variant]["truth_hit"]
+    recall = hit / len(truth)
+    assert recall < 0.25, (
+        f"{variant}: recall {recall:.1%} ({hit}/{len(truth)}). If we can now "
+        "genuinely recover a packed payload, replace this test with one that "
+        "pins the capability instead of the limitation."
     )
 
 
