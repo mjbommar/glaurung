@@ -7,6 +7,12 @@ real-world input cannot pass unnoticed.
 
 Scoping is deliberate: **one test per variant**, so a failure names the shape
 that broke rather than reporting one aggregate that has to be bisected by hand.
+
+The baseline is a ratchet. Move it only with
+``uv run python tools/gen_realistic_baseline.py`` (``--check`` to test for
+staleness), never by hand: a ratchet that can be reset by an ad-hoc snippet is
+not a ratchet, and a baseline written from a stale ``.so`` records the previous
+build's behaviour under this commit with nothing downstream able to tell.
 The control (`dwarf`) is asserted exactly — it has full symbols, so anything
 less than complete recall there is a defect in a lane that should be easy. The
 hostile variants are asserted with a tolerance band, because seeding heuristics
@@ -96,7 +102,11 @@ def test_stripped_variant_discovery_holds_its_baseline(variant, measured, baseli
     assert got >= want - TOLERANCE, (
         f"{variant}: discovered {got} functions, baseline {want} "
         f"(tolerance {TOLERANCE}). Fewer functions found on a shape that was "
-        f"already stripped or packed. Full measurement: {measured[variant]}"
+        f"already stripped or packed. Full measurement: {measured[variant]}\n"
+        "If this is a deliberate improvement, ratchet with "
+        "`uv run python tools/gen_realistic_baseline.py` — that is the only "
+        "supported way to move this file, and it refuses to measure against a "
+        "stale extension."
     )
 
 
