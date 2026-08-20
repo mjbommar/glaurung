@@ -133,3 +133,4 @@ tests/decompiler_fixtures/build/
 
 # execution-differential scratch (GLAURUNG_FIXTURE_TMPDIR)
 .exectmp/
+tests/realistic_corpus/build/

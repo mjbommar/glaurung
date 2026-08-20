@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "toolchain": {
+    "gcc": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+    "strip": "GNU strip (GNU Binutils for Ubuntu) 2.46",
+    "sstrip": "sstrip, version 2.1",
+    "upx": "upx 4.2.4"
+  },
+  "ground_truth_count": 83,
+  "variants": {
+    "dwarf": {
+      "discovered": 110,
+      "named": 99,
+      "truth_hit": 83
+    },
+    "strip": {
+      "discovered": 105,
+      "named": 0,
+      "truth_hit": 0
+    },
+    "sstrip": {
+      "discovered": 43,
+      "named": 0,
+      "truth_hit": 0
+    },
+    "upx": {
+      "discovered": 5,
+      "named": 0,
+      "truth_hit": 0
+    },
+    "upxg": {
+      "discovered": 5,
+      "named": 0,
+      "truth_hit": 0
+    }
+  }
+}
