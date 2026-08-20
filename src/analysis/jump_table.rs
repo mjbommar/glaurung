@@ -234,11 +234,13 @@ where
     let object = crate::decompile::profile::parse_object(data)
         .map_err(|_| TableDecline::ObjectParseFailed)?;
     let little_endian = object.is_little_endian();
-    for section in object.sections() {
-        let Ok(bytes) = section.data() else {
-            continue;
-        };
-        let Some(entries) = section_entries(section.address(), bytes, table_va, byte_count) else {
+    // Sections when the image has them, loadable segments when it does not.
+    // This reader only ever asks a span for "the bytes you hold at this
+    // address" — it never matches a name — so a segment serves it exactly as a
+    // section does, and a section-header-less image stops declining every table
+    // with `no_section_covers` for data that is plainly mapped.
+    for span in crate::program::spans::addressable_spans(&object) {
+        let Some(entries) = section_entries(span.address, span.bytes, table_va, byte_count) else {
             continue;
         };
         match decode_relative_entries(
@@ -363,11 +365,13 @@ where
     let object = crate::decompile::profile::parse_object(data)
         .map_err(|_| TableDecline::ObjectParseFailed)?;
     let little_endian = object.is_little_endian();
-    for section in object.sections() {
-        let Ok(bytes) = section.data() else {
-            continue;
-        };
-        let Some(entries) = section_entries(section.address(), bytes, table_va, byte_count) else {
+    // Sections when the image has them, loadable segments when it does not.
+    // This reader only ever asks a span for "the bytes you hold at this
+    // address" — it never matches a name — so a segment serves it exactly as a
+    // section does, and a section-header-less image stops declining every table
+    // with `no_section_covers` for data that is plainly mapped.
+    for span in crate::program::spans::addressable_spans(&object) {
+        let Some(entries) = section_entries(span.address, span.bytes, table_va, byte_count) else {
             continue;
         };
         let targets = decode_thumb_table_entries(
