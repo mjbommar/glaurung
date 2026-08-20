@@ -185,6 +185,39 @@ def _attach_bodies(
         function["body"] = {"language": "c", "text": text}
 
 
+def _binary_identity(
+    kb: PersistentKnowledgeBase, binary_path: Optional[str]
+) -> dict[str, Any]:
+    """What file this bundle describes.
+
+    Read from the `binaries` row rather than recomputed, so the bundle names the
+    exact image the annotations were made against — recomputing from
+    `binary_path` would silently describe a *different* file if the caller
+    passed the wrong one.
+    """
+    cur = kb._conn.cursor()
+    try:
+        cur.execute(
+            "SELECT sha256, format, arch, bits, size_bytes FROM binaries "
+            "WHERE binary_id = ?",
+            (kb.binary_id,),
+        )
+        row = cur.fetchone()
+    except Exception:
+        row = None
+    if row is None:
+        return {"sha256": None, "path": binary_path}
+    sha256, fmt, arch, bits, size_bytes = row
+    return {
+        "sha256": sha256,
+        "format": fmt,
+        "arch": arch,
+        "bits": bits,
+        "size_bytes": size_bytes,
+        "path": binary_path,
+    }
+
+
 def build(
     kb: PersistentKnowledgeBase,
     *,
@@ -220,10 +253,7 @@ def build(
     annotations = _export.export_kb(kb)
     return {
         "schema": SCHEMA,
-        "binary": {
-            "sha256": getattr(kb, "binary_sha256", None),
-            "path": binary_path,
-        },
+        "binary": _binary_identity(kb, binary_path),
         "functions": functions,
         "types": annotations.get("types", []),
         "data_labels": annotations.get("data_labels", []),

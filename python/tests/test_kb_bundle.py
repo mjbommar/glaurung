@@ -135,3 +135,24 @@ def test_the_bundle_is_json_serialisable(populated):
     kb, binary = populated
     text = json.dumps(bundle.build(kb, binary_path=binary))
     assert json.loads(text)["schema"] == bundle.SCHEMA
+
+
+def test_the_bundle_names_the_exact_image_it_describes(populated):
+    """Binary identity is the anchor; a bundle without it is undeliverable.
+
+    Read from the `binaries` row rather than recomputed from `binary_path`,
+    because recomputing would silently describe a *different* file if the caller
+    passed the wrong one — and a bundle that misidentifies its subject is worse
+    than one that omits the field.
+    """
+    import hashlib
+
+    kb, binary = populated
+    rich = bundle.build(kb, binary_path=binary)
+    identity = rich["binary"]
+    assert identity["sha256"], f"bundle carries no binary identity: {identity}"
+    on_disk = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
+    assert identity["sha256"] == on_disk, (
+        f"bundle names {identity['sha256'][:16]} but the image on disk hashes "
+        f"{on_disk[:16]} — the artifact is describing the wrong file"
+    )

@@ -20,12 +20,22 @@ class ExportCommand(BaseCommand):
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument(
             "--output-format",
-            choices=("json", "markdown", "header", "ida", "binja", "ghidra"),
+            choices=("json", "markdown", "header", "ida", "binja", "ghidra", "bundle"),
             default="markdown",
             help="Export shape (default: markdown). `json` is "
             "round-trippable; `header` emits the type DB as .h; "
             "`ida` / `binja` / `ghidra` emit scripts that apply "
-            "the KB inside the respective tool.",
+            "the KB inside the respective tool; `bundle` is the whole-binary "
+            "artifact — functions with their boundaries, prototypes, stack "
+            "variables, xrefs and content-derived identity, and with "
+            "--bodies their decompiled C.",
+        )
+        parser.add_argument(
+            "--bodies",
+            action="store_true",
+            help="bundle only: decompile every function. Costs orders of "
+            "magnitude more than the rest of the bundle combined, so it is "
+            "off by default; requires --binary.",
         )
         parser.add_argument(
             "--binary",
@@ -61,7 +71,22 @@ class ExportCommand(BaseCommand):
             return 3
 
         try:
-            if args.output_format == "json":
+            if args.output_format == "bundle":
+                import json as _json
+
+                from glaurung.llm.kb import bundle as _bundle
+
+                formatter.output_plain(
+                    _json.dumps(
+                        _bundle.build(
+                            kb,
+                            binary_path=str(args.binary) if args.binary else None,
+                            include_bodies=bool(args.bodies),
+                        ),
+                        indent=2,
+                    )
+                )
+            elif args.output_format == "json":
                 formatter.output_plain(export_to_json(kb))
             elif args.output_format == "header":
                 formatter.output_plain(export_to_c_header(kb))
