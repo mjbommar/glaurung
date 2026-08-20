@@ -123,6 +123,35 @@ The content SHA-256 identifies binary rows. Session names are scoped to one
 binary. Core KB nodes/edges are session-specific, while many analysis tables are
 binary-wide and carry their own provenance or precedence fields.
 
+### Function identity across builds
+
+Every annotation table is keyed on `(binary_id, absolute VA)`, and a recompile
+moves both halves at once: the file hashes differently, so a fresh `binaries`
+row is inserted, and the stored VAs now name different code. Queries return zero
+rows rather than an error, and the annotations sit orphaned under the previous
+`binary_id`.
+
+`function_identity` is the one table not anchored that way. It stores
+`(binary_id, entry_va, scheme, identity)` where `identity` is derived from what
+the function *is*, indexed on `(scheme, identity)` so a lookup can cross
+`binary_id` on purpose. `glaurung.llm.kb.function_identity` computes and stores
+it (`index_function_identities`), resolves it (`find_by_identity`,
+`resolve_entry_va`), and carries annotations from an older build onto a newer one
+(`port_annotations`).
+
+`scheme` names the algorithm rather than fixing one: `glaurung-structural-v1`
+today, with room for a WARP function GUID (see
+`docs/design/whole-binary-serialization-2026-08-20.md`) as another `scheme` value
+in the same TEXT column — no schema change, no migration, and a function may
+carry several identities at once.
+
+Two limits are deliberate. Identity is *structural*, so functions that compile to
+the same shape share it (identical PLT thunks are routine); `port_annotations`
+refuses to carry anything across an ambiguous match and reports the count.
+And it addresses the recompile case, not the rebase case — a binary whose bytes
+are unchanged but whose load address moved keeps its `binary_id`, so its stale
+identity rows collide with the fresh ones on the primary key.
+
 ## Durability and safety boundaries
 
 - Keep the target binary available at its recorded path for commands that need
