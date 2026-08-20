@@ -568,6 +568,13 @@ fn function_discovery_stats_to_py(
         resolved_dispatches.append(item)?;
     }
     dict.set_item("resolved_dispatches", resolved_dispatches)?;
+    // Whether these functions are the program's at all. `packer` set with
+    // `unpacked` false is the case a consumer must not read past: the listed
+    // functions belong to the decompressor stub, not to the binary's author.
+    dict.set_item("packer", stats.packer.clone())?;
+    dict.set_item("unpacked", stats.unpacked)?;
+    dict.set_item("unpack_error", stats.unpack_error.clone())?;
+    dict.set_item("original_entry", stats.original_entry)?;
     dict.set_item("thunk_functions", stats.thunk_functions)?;
     dict.set_item("import_thunk_functions", stats.import_thunk_functions)?;
     dict.set_item("tail_thunk_functions", stats.tail_thunk_functions)?;

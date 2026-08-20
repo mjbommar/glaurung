@@ -24,14 +24,14 @@
       "truth_hit": 0
     },
     "upx": {
-      "discovered": 8,
+      "discovered": 105,
       "named": 0,
       "truth_hit": 0
     },
     "upxg": {
-      "discovered": 8,
-      "named": 0,
-      "truth_hit": 0
+      "discovered": 110,
+      "named": 99,
+      "truth_hit": 83
     }
   }
 }

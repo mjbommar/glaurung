@@ -367,3 +367,37 @@ fn image_memory_classification_keeps_readonly_writable_and_bss_distinct() {
     );
     assert_eq!(image.memory_kind_at(u64::MAX), None);
 }
+
+/// A packed file must index into the program, not into the decompressor stub.
+///
+/// `analyze_functions_path` unpacks, so it hands back the ORIGINAL program's
+/// addresses. Anything built on a `ProgramImage` of the same file — the
+/// decompiler, the symbol store, the call graph — has to be looking at the same
+/// bytes, or a function discovered one moment cannot be decompiled the next.
+#[test]
+fn indexing_a_packed_file_from_a_path_indexes_the_program_it_hides() {
+    let build = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/realistic_corpus/build");
+    let (Ok(packed_bytes), Ok(original_bytes)) = (
+        std::fs::read(build.join("corpus.upx")),
+        std::fs::read(build.join("corpus.strip")),
+    ) else {
+        return; // corpus not built in this checkout
+    };
+
+    let packed = ProgramImage::from_path(&build.join("corpus.upx")).expect("index packed image");
+    let original =
+        ProgramImage::from_path(&build.join("corpus.strip")).expect("index original image");
+
+    assert_ne!(
+        packed.bytes(),
+        packed_bytes.as_slice(),
+        "the packed file's own bytes were indexed, so every query below answers \
+         about the UPX stub"
+    );
+    assert_eq!(packed.bytes(), original_bytes.as_slice());
+    assert_eq!(packed.entry_va(), original.entry_va());
+    assert_eq!(
+        packed.executable_ranges().collect::<Vec<_>>(),
+        original.executable_ranges().collect::<Vec<_>>()
+    );
+}
