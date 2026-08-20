@@ -1067,10 +1067,22 @@ def set_function_name(
     _ensure_schema(kb._conn)
     import json
 
+    cur = kb._conn.cursor()
+    # Manual outranks every automatic source. Without this an analyst names a
+    # function, a later pass re-runs, and the name is gone with no error and no
+    # undo entry naming the culprit. Matches `set_data_label`,
+    # `set_function_prototype` and `set_stack_var`, which have always had it.
+    cur.execute(
+        "SELECT set_by FROM function_names WHERE binary_id = ? AND entry_va = ?",
+        (kb.binary_id, entry_va),
+    )
+    row = cur.fetchone()
+    if row is not None and row[0] == "manual" and set_by != "manual":
+        return
+
     key = {"entry_va": entry_va}
     old = _snapshot_row(kb, "function_names", key) if set_by == "manual" else None
 
-    cur = kb._conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO function_names "
         "(binary_id, entry_va, canonical, aliases_json, set_by, set_at) "
@@ -1210,10 +1222,19 @@ def set_comment(
     set_by: str = "manual",
 ) -> None:
     _ensure_schema(kb._conn)
+    cur = kb._conn.cursor()
+    # Manual outranks every automatic source; see `set_function_name`.
+    cur.execute(
+        "SELECT set_by FROM comments WHERE binary_id = ? AND va = ?",
+        (kb.binary_id, va),
+    )
+    row = cur.fetchone()
+    if row is not None and row[0] == "manual" and set_by != "manual":
+        return
+
     key = {"va": va}
     old = _snapshot_row(kb, "comments", key) if set_by == "manual" else None
 
-    cur = kb._conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO comments "
         "(binary_id, va, body, set_by, set_at) VALUES (?, ?, ?, ?, ?)",

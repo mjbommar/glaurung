@@ -153,7 +153,13 @@ All three canonical chat-UI demo conversations from the phased plan are now repr
 
 ## Where Glaurung *over-performs* the incumbents
 
-1. **Persistent KB schema with explicit provenance**. Every named entity carries a `set_by` field (`manual` / `dwarf` / `stdlib` / `flirt` / `propagated` / `auto` / `borrowed` / `analyzer` / `gopclntab` / `cil`) with a precedence rule (manual always wins). Neither IDA nor Ghidra surface this cleanly.
+1. **Persistent KB schema with explicit provenance**. Every named entity carries a `set_by` field (`manual` / `dwarf` / `stdlib` / `flirt` / `propagated` / `auto` / `borrowed` / `analyzer` / `gopclntab` / `cil`) with a precedence rule (manual always wins).
+
+   **This entry previously claimed "neither IDA nor Ghidra surface this cleanly", and that was wrong in both halves.** The incumbents model provenance *more* finely than we do: IDA distinguishes four name states — dummy, auto-but-meaningful, user, none — where our `set_by` has one bucket for the middle two, and separates decompiler-guessed types from disassembler-guessed ones, a distinction we should be making since we recover types *through* a decompiler. Ghidra's `SourceType` lattice now includes `AI` at analysis-level trust. Binary Ninja carries numeric confidence that composes multiplicatively rather than a flat enum.
+
+   And our own enforcement did not match the claim: until 2026-08-20, `set_function_name` and `set_comment` had **no** precedence guard at all, so an automatic pass silently overwrote analyst edits — proven by experiment, fixed, and pinned by `python/tests/test_kb_manual_precedence.py`. Three sibling setters had always been correct, which is exactly why nobody noticed.
+
+   What survives as a real differentiator is narrower: provenance is attached to *every* fact in one uniform store that the LLM agent and the analyst both write through, and it is queryable. See `docs/design/whole-binary-serialization-2026-08-20.md`.
 2. **Modern type system with bundle composition**. Stdlib types ship as committed JSON bundles, layered with DWARF imports and analyst overrides — versioned, diffable, scriptable.
 3. **Bench harness with per-commit regression metrics**. `python -m glaurung.bench` produces a deterministic JSON scorecard tracking 12+ dimensions across the sample matrix. Every commit can be diffed against the previous baseline; regressions surface immediately. The `--packed-matrix` tier specifically guards packer-detection regressions.
 4. **First-class LLM integration**. 50+ deterministic memory tools registered with the `pydantic-ai` agent. The agent operates on the same persistent KB as the analyst; everything it learns persists across sessions.
