@@ -144,9 +144,27 @@ pub struct ProgramImage {
 }
 
 impl ProgramImage {
-    /// Read and index one image from disk.
+    /// Read and index one image from disk, unpacking it first if it is packed.
+    ///
+    /// A packed file on disk indexes perfectly well — into the decompressor
+    /// stub. Everything built on the index then describes the stub: its
+    /// symbols, its call graph, its decompiled bodies. So the substitution
+    /// happens here, at the one place a *path* becomes an image.
+    ///
+    /// This also keeps the two entry points composable. `analyze_functions_path`
+    /// unpacks, so the addresses it hands back are the original program's; an
+    /// image that had not unpacked would not contain them, and decompiling a
+    /// function discovered a moment earlier would fail to find it.
+    ///
+    /// `from_bytes` deliberately does not do this: a caller who supplies bytes
+    /// has chosen them, and analysing different ones would break the
+    /// correspondence they are relying on.
     pub fn from_path(path: &Path) -> Result<Self, ProgramImageError> {
-        Self::from_bytes(std::fs::read(path)?)
+        let raw = std::fs::read(path)?;
+        match crate::unpack::recover(&raw) {
+            Ok(Some(recovered)) => Self::from_bytes(recovered.bytes),
+            _ => Self::from_bytes(raw),
+        }
     }
 
     /// Own and index one object image without copying the supplied vector.

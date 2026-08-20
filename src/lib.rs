@@ -66,9 +66,13 @@ pub mod exec;
 pub mod symbolic;
 
 pub mod program;
+
 /// Python bindings module
 #[cfg(feature = "python-ext")]
 pub mod python_bindings;
+/// Undoing what a packer did: static recovery of the original image, so that
+/// analysis reports the program's functions rather than the unpacker's.
+pub mod unpack;
 
 #[cfg(feature = "python-ext")]
 use pyo3::{prelude::*, wrap_pyfunction};

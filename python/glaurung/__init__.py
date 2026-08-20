@@ -117,6 +117,11 @@ _sys.modules[__name__ + ".debug"] = debug
 winmd = _native.winmd
 _sys.modules[__name__ + ".winmd"] = winmd
 
+# Static unpacking of packed images (UPX), so analysis can reach the program
+# rather than the decompressor stub.
+unpack = _native.unpack
+_sys.modules[__name__ + ".unpack"] = unpack
+
 # Native execution engine (concrete emulator) submodule, when built in.
 if hasattr(_native, "engine"):
     engine = _native.engine

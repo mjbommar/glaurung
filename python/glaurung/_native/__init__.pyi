@@ -21,6 +21,7 @@ from . import similarity as similarity
 from . import strings as strings
 from . import symbols as symbols
 from . import triage as triage
+from . import unpack as unpack
 from . import winmd as winmd
 
 class Access:

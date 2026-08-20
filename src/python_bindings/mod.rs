@@ -14,6 +14,7 @@ pub mod similarity;
 pub mod strings;
 pub mod symbols;
 pub mod triage;
+pub mod unpack;
 pub mod winmd;
 
 use pyo3::prelude::*;
@@ -35,6 +36,7 @@ pub fn register_python_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
     similarity::register_similarity_bindings(py, m)?;
     ir::register_ir_bindings(py, m)?;
     debug::register_debug_bindings(py, m)?;
+    unpack::register_unpack_bindings(py, m)?;
     winmd::register_winmd_bindings(py, m)?;
     #[cfg(feature = "exec")]
     exec::register_exec_bindings(py, m)?;
