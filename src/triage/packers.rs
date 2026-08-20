@@ -162,7 +162,46 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
         }
     }
 
+    demote_generic_below_named(&mut out);
     out
+}
+
+/// Name of the generic entropy verdict, as opposed to a named packer.
+const GENERIC: &str = "Packed";
+
+/// Keep the entropy heuristic ranked below any positive identification.
+///
+/// `"Packed"` means "these bytes look compressed"; `"UPX"` means "this binary
+/// says it is UPX". They are not the same class of claim, and they were
+/// competing on one confidence scale with the weaker one winning.
+///
+/// Measured over 60 of our own unpacked samples and the ten UPX-packed builds
+/// in `samples/packed/`: the entropy signal fired on **14 of the 60 unpacked**
+/// — every Go binary and several MinGW PEs, which are high-entropy by
+/// construction — at 0.50, while a correct UPX signature match scored 0.24-0.36.
+/// On `hello-go-static.upx9` both fired and the wrong one ranked higher. Anyone
+/// sorting candidates by confidence, analyst or agent, saw clean binaries above
+/// genuinely packed ones.
+///
+/// This fixes the ordering rather than the absolute calibration. The thresholds
+/// are a separate question needing its own validation; the invariant that a
+/// signature outranks a guess holds regardless of where they are set, so it is
+/// worth enforcing on its own.
+fn demote_generic_below_named(out: &mut [PackerMatch]) {
+    let strongest_named = out
+        .iter()
+        .filter(|m| !m.name.eq_ignore_ascii_case(GENERIC))
+        .map(|m| m.confidence)
+        .fold(f32::NEG_INFINITY, f32::max);
+    if !strongest_named.is_finite() {
+        return; // nothing named matched; the heuristic stands alone
+    }
+    for m in out.iter_mut() {
+        if m.name.eq_ignore_ascii_case(GENERIC) && m.confidence >= strongest_named {
+            // Strictly below, and never negative for a very weak named match.
+            m.confidence = (strongest_named - 0.01).max(0.0);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -204,5 +243,78 @@ mod tests {
             .find(|m| m.name.eq_ignore_ascii_case("Packed"))
             .unwrap();
         assert!(p.confidence >= 0.5);
+    }
+}
+
+#[cfg(test)]
+mod ranking_tests {
+    use super::*;
+
+    fn packed(name: &str, confidence: f32) -> PackerMatch {
+        PackerMatch::new(name.to_string(), confidence)
+    }
+
+    fn confidence_of(matches: &[PackerMatch], name: &str) -> Option<f32> {
+        matches
+            .iter()
+            .find(|m| m.name.eq_ignore_ascii_case(name))
+            .map(|m| m.confidence)
+    }
+
+    /// The inversion this exists to prevent, in the shape it was measured in.
+    ///
+    /// `hello-go-static.upx9` produced exactly this pair — a correct UPX
+    /// identification at 0.24 ranked below an entropy guess at 0.50.
+    #[test]
+    fn an_entropy_guess_never_outranks_a_named_packer() {
+        let mut matches = vec![packed("UPX", 0.24), packed("Packed", 0.50)];
+        demote_generic_below_named(&mut matches);
+        let upx = confidence_of(&matches, "UPX").unwrap();
+        let generic = confidence_of(&matches, "Packed").unwrap();
+        assert!(
+            generic < upx,
+            "the generic signal ({generic}) still outranks the UPX \
+             identification ({upx}); sorting by confidence puts a guess above \
+             positive identification"
+        );
+    }
+
+    /// The heuristic is not deleted, only ranked — it is the only signal we
+    /// have for a packer we do not recognise.
+    #[test]
+    fn the_entropy_signal_survives_when_nothing_named_matched() {
+        let mut matches = vec![packed("Packed", 0.50)];
+        demote_generic_below_named(&mut matches);
+        assert_eq!(confidence_of(&matches, "Packed"), Some(0.50));
+    }
+
+    /// A named match that already ranks above the guess must not be disturbed.
+    #[test]
+    fn a_confident_named_match_is_left_alone() {
+        let mut matches = vec![packed("VMProtect", 0.75), packed("Packed", 0.50)];
+        demote_generic_below_named(&mut matches);
+        assert_eq!(confidence_of(&matches, "VMProtect"), Some(0.75));
+        assert_eq!(confidence_of(&matches, "Packed"), Some(0.50));
+    }
+
+    /// Ordering is enforced against the STRONGEST named match, not the first.
+    #[test]
+    fn the_strongest_named_match_sets_the_ceiling() {
+        let mut matches = vec![
+            packed("UPX", 0.30),
+            packed("ASPack", 0.70),
+            packed("Packed", 0.90),
+        ];
+        demote_generic_below_named(&mut matches);
+        let generic = confidence_of(&matches, "Packed").unwrap();
+        assert!(generic < 0.70 && generic > 0.60, "got {generic}");
+    }
+
+    /// Confidence is a probability-like scale; demotion must not leave it negative.
+    #[test]
+    fn demotion_cannot_produce_a_negative_confidence() {
+        let mut matches = vec![packed("UPX", 0.0), packed("Packed", 0.5)];
+        demote_generic_below_named(&mut matches);
+        assert_eq!(confidence_of(&matches, "Packed"), Some(0.0));
     }
 }
