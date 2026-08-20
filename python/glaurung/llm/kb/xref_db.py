@@ -65,6 +65,38 @@ CREATE TABLE IF NOT EXISTS function_names (
     PRIMARY KEY (binary_id, entry_va)
 );
 
+-- Content-derived function identity. The one key in this schema that
+-- is NOT anchored to `(binary_id, absolute VA)` and therefore the only
+-- one that can survive a recompile or a rebase.
+--
+-- `scheme` names the algorithm and `identity` is its opaque output, so
+-- a single function can carry several identities at once and a new
+-- scheme can be added without a schema change or a migration. Today the
+-- only writer is `function_identity.STRUCTURAL_V1`; a WARP function
+-- GUID (UUIDv5 over relocation-masked basic blocks --
+-- docs/design/whole-binary-serialization-2026-08-20.md) is a `scheme`
+-- value, not a second table. Deliberately TEXT and not, say, a BLOB
+-- digest: a UUID string and a 16-hex digest have to fit the same column.
+--
+-- `n_blocks` is a cheap pre-filter/diagnostic, mirroring
+-- `FunctionStructure.stats[0]`; never part of the key.
+CREATE TABLE IF NOT EXISTS function_identity (
+    binary_id INTEGER NOT NULL,
+    entry_va INTEGER NOT NULL,
+    scheme TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    n_blocks INTEGER,
+    set_at INTEGER,
+    PRIMARY KEY (binary_id, entry_va, scheme)
+);
+-- The lookup the VA key cannot do: "where does this function live in
+-- some OTHER build?". Not unique -- two functions can genuinely share an
+-- identity (identical PLT stubs), and callers must resolve ambiguity.
+CREATE INDEX IF NOT EXISTS idx_function_identity_lookup
+    ON function_identity(scheme, identity);
+CREATE INDEX IF NOT EXISTS idx_function_identity_binary
+    ON function_identity(binary_id, scheme);
+
 CREATE TABLE IF NOT EXISTS comments (
     binary_id INTEGER NOT NULL,
     va INTEGER NOT NULL,
@@ -107,6 +139,18 @@ CREATE INDEX IF NOT EXISTS idx_data_labels_binary
 -- prototype loaded from a bundle can match every binary's `printf`
 -- regardless of mangling. Demangled-form lookup runs through the
 -- canonical column too (e.g. `Foo::bar` matches a manual entry).
+--
+-- KNOWN DEFECT, not fixed here: this is the only annotation table keyed
+-- by NAME while every other one is keyed by `entry_va`, and there is no
+-- rename cascade. `set_function_name(va, "parse_header")` over a
+-- function previously called `sub_1000` leaves the `sub_1000` prototype
+-- row behind, reachable by nothing, forever -- and a later function that
+-- happens to be named `sub_1000` inherits it. Fixing it means either a
+-- rename cascade in `set_function_name` or re-keying on `entry_va` with
+-- a separate name-keyed table for the stdlib bundles (which are
+-- genuinely name-scoped and must stay that way).
+-- `function_identity.port_annotations` works around it by porting the
+-- name first and re-keying the prototype under the new name as it goes.
 CREATE TABLE IF NOT EXISTS function_prototypes (
     binary_id INTEGER NOT NULL,
     function_name TEXT NOT NULL,

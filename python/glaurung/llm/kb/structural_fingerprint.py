@@ -52,6 +52,14 @@ What we mask (the noise we want to ignore):
     function before hashing the block sequence, so block reorder by
     the linker doesn't change the fingerprint.
 
+  * Alignment padding. ``nop`` / ``nopw`` / ``nopl`` are dropped from
+    the token stream and from the counts. The assembler picks a NOP
+    *encoding* from how far it has to pad, so a function that merely
+    moved to a differently aligned address gets a different-length NOP
+    ahead of a loop head with not one byte of its own having changed.
+    See :func:`_is_padding` for the measurement that forced this.
+    (WARP's basic-block GUID excludes NOPs for exactly this reason.)
+
 What we keep (the signal we DON'T want to lose):
 
   * Instruction mnemonic (op).
@@ -111,6 +119,29 @@ def _bucket_imm(value: Optional[int]) -> str:
     if v < 0x10000:
         return "m"  # medium
     return "L"  # large (likely a pointer / sentinel)
+
+
+def _is_padding(insn) -> bool:
+    """True when the instruction exists only to occupy space.
+
+    The assembler chooses a NOP *encoding* from the number of bytes it
+    has to pad, so the same source function padded to two different
+    alignments carries two different NOPs. Measured on a gcc -O1
+    recompile pair where the only edit was two new functions added ahead
+    of the target: ``checksum`` moved 0x1180 -> 0x11a7, its own bytes
+    unchanged, and the single token that differed between the two builds
+    was ``nop M[reg+I]`` (``nopw [rax+rax]``, 8-byte pad) against
+    ``nop M[reg]`` (``nopl [rax]``, 3-byte pad). That one token moved the
+    whole function fingerprint, which is fatal for using it as a durable
+    identity.
+
+    This implements WARP's basic-block rule 2 ("exclude all NOP
+    instructions"). Rule 3 ("exclude instructions that set a register to
+    itself if they are effectively NOPs", e.g. ``mov edi, edi``) is NOT
+    implemented -- the operand API here masks register identity before we
+    could compare the two operands, and no case in our corpus needs it.
+    """
+    return insn.mnemonic.lower().startswith("nop")
 
 
 def _instr_token(
@@ -412,6 +443,11 @@ def structural_fingerprint(
 
         tokens: List[str] = []
         for insn in insns:
+            if _is_padding(insn):
+                # Dropped from the tokens AND the counts: alignment
+                # padding is a property of where the function landed,
+                # not of what it does.
+                continue
             tokens.append(_instr_token(insn, iat_by_va=iat_by_va))
             if insn.is_call():
                 n_calls += 1
