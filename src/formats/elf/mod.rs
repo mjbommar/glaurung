@@ -3,6 +3,7 @@
 //! A zero-copy ELF parser with comprehensive format support.
 
 pub mod dynamic;
+pub mod dynamic_segment;
 pub mod headers;
 pub mod notes;
 pub mod packed_relocations;
