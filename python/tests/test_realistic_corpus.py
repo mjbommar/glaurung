@@ -100,32 +100,62 @@ def test_stripped_variant_discovery_holds_its_baseline(variant, measured, baseli
     )
 
 
-@pytest.mark.parametrize("variant", ["upx", "upxg"])
-def test_a_packed_image_does_not_pretend_to_have_found_the_program(variant, measured):
-    """On a packed image we must not report the stub as if it were the program.
+#: Packed variant -> the unpacked build it was made from. Recovering the payload
+#: means recovering *that file*, so its recall is the standard to meet.
+PACKED_ORIGIN = {"upx": "strip", "upxg": "dwarf"}
 
-    **This lane is deliberately not ratcheted on a count.** The count is not
+
+@pytest.mark.parametrize("variant", sorted(PACKED_ORIGIN))
+def test_a_packed_image_gives_up_the_program_it_was_hiding(variant, measured):
+    """Unpacking must recover the payload as well as the file it was made from.
+
+    This test was written the other way round a few hours earlier, asserting
+    that recall stayed near zero, with a note that if it ever failed because
+    recall went *up* it should be rewritten to demand the capability instead of
+    tolerating its absence. It failed at 100%. This is that rewrite.
+
+    Asserted against the origin build rather than an absolute number, because
+    the recovered image *is* that file — byte for byte — so anything the origin
+    lane finds we must find too. An absolute threshold would drift with the
+    corpus; this cannot.
+
+    Deliberately still **not** a count ratchet. The raw discovered count is not
     stable across links: five builds of the same corpus differing only by
-    comment padding in the generated driver produced 90, 90, 90, 8, 90
-    findings, and the 90 contains only ten real functions. The committed
-    baseline captured one side of that coin flip, and a `>= want - TOLERANCE`
-    band cannot see an 82-function swing *upward* into almost-entirely-wrong
-    answers — it only guards the count going down. Two independent measurements
-    disagreed by exactly that margin, which is how the instability surfaced.
-
-    What *is* stable, and what actually matters, is that we recover essentially
-    none of the real program: the payload is compressed and the only real code
-    in the file is the decompressor. Asserting that keeps the honest failure
-    honest. If this ever starts failing because recall went UP, that is a
-    genuine unpacking capability and this test should be rewritten to demand it.
+    comment padding gave 90, 90, 90, 8, 90 findings on `upxg`, and the 90
+    contained ten real functions. Recall against our own constructed ground
+    truth has no such freedom.
     """
     truth = realistic_corpus.build()["ground_truth"]
-    hit = measured[variant]["truth_hit"]
-    recall = hit / len(truth)
-    assert recall < 0.25, (
-        f"{variant}: recall {recall:.1%} ({hit}/{len(truth)}). If we can now "
-        "genuinely recover a packed payload, replace this test with one that "
-        "pins the capability instead of the limitation."
+    origin = PACKED_ORIGIN[variant]
+    got = measured[variant]["truth_hit"] / len(truth)
+    want = measured[origin]["truth_hit"] / len(truth)
+    assert got >= want, (
+        f"{variant}: recall {got:.1%} against {origin}'s {want:.1%}. The "
+        "recovered image is supposed to be that file byte for byte, so it "
+        "cannot yield fewer of our own functions."
+    )
+
+
+def test_an_image_we_cannot_unpack_is_not_silently_mislabelled():
+    """The honest half: refusing must stay louder than guessing.
+
+    Unpacking will not always work — LZMA and filtered images are refused by
+    name, and PE-packed UPX is not handled. What must never happen is the
+    original failure this whole lane exists for: reporting a decompressor
+    stub's functions as though they were the program's.
+    """
+    import glaurung
+
+    path = str(realistic_corpus.variant_path("upx"))
+    _functions, _cg, stats = glaurung.analysis.analyze_functions_path_with_stats(path)
+    assert stats.get("packer"), (
+        "a UPX-packed image was analysed without the result saying it was "
+        f"packed. stats keys: {sorted(stats)}"
+    )
+    assert stats.get("unpacked") or stats.get("unpack_error"), (
+        "the analysis reported a packer but said neither that it recovered the "
+        "payload nor why it could not — that is the ambiguity this lane exists "
+        f"to remove. stats keys: {sorted(stats)}"
     )
 
 
