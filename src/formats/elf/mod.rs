@@ -4,6 +4,7 @@
 
 pub mod dynamic;
 pub mod dynamic_segment;
+pub mod eh_frame_segment;
 pub mod headers;
 pub mod notes;
 pub mod packed_relocations;

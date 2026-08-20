@@ -271,16 +271,39 @@ pub struct EhFrameFunction {
 /// discovery these boundaries for free.
 pub fn eh_frame_functions(data: &[u8]) -> Vec<EhFrameFunction> {
     let Ok(object) = crate::decompile::profile::parse_object(data) else {
+        // Not an object we can parse at all. The ELF program headers might
+        // still be readable, but nothing downstream could use the answer.
         return Vec::new();
     };
-    eh_frame_functions_in(&object)
+    eh_frame_functions_in(&object, data)
 }
 
 /// [`eh_frame_functions`] over an object the caller has already parsed.
 ///
 /// `ProgramImage` builds this index during its own single parse; reopening the
-/// file to read the same section table is pure duplicate work.
-pub(crate) fn eh_frame_functions_in(object: &object::read::File<'_>) -> Vec<EhFrameFunction> {
+/// file to read the same section table is pure duplicate work. `data` is the
+/// image bytes `object` was parsed from, needed for the program-header fallback
+/// below — `object`'s own segment view exposes only `PT_LOAD`.
+pub(crate) fn eh_frame_functions_in(
+    object: &object::read::File<'_>,
+    data: &[u8],
+) -> Vec<EhFrameFunction> {
+    let from_sections = eh_frame_functions_from_sections(object);
+    if !from_sections.is_empty() {
+        return from_sections;
+    }
+    // No section header table, or one with no usable `.eh_frame` in it. The
+    // unwinder does not need either, so neither do we: `PT_GNU_EH_FRAME` is a
+    // program header and survives `sstrip` and most packers.
+    eh_frame_functions_from_program_headers(data)
+}
+
+/// The ordinary path: `.eh_frame` located by section name.
+///
+/// Preferred whenever it yields anything, because the section header gives the
+/// table an exact end, and `.text`/`.got` bases for the pointer encodings that
+/// need them.
+fn eh_frame_functions_from_sections(object: &object::read::File<'_>) -> Vec<EhFrameFunction> {
     let Some(eh_section) = object.section_by_name(".eh_frame") else {
         return Vec::new();
     };
@@ -319,6 +342,105 @@ pub(crate) fn eh_frame_functions_in(object: &object::read::File<'_>) -> Vec<EhFr
         let start = fde.initial_address();
         let len = fde.len();
         // A zero-length FDE describes no code; a terminator run produces one.
+        if len == 0 {
+            continue;
+        }
+        let Some(end) = start.checked_add(len) else {
+            continue;
+        };
+        out.push(EhFrameFunction { start, end });
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The fallback path: `.eh_frame` reached through `PT_GNU_EH_FRAME`.
+///
+/// This is what `_Unwind_Find_FDE` does. The segment *is* `.eh_frame_hdr`, and
+/// its `eh_frame_ptr` field gives the address of `.eh_frame`; both are readable
+/// with no section header table at all.
+///
+/// Driven by the header's binary-search table rather than by a linear walk of
+/// `.eh_frame`. That matters for soundness, not just for speed. Without a
+/// section header there is no exact end for `.eh_frame`, so a linear walk has
+/// to be bounded by the enclosing segment, and it would then depend on the
+/// four-byte zero terminator to stop before the `.note` data that follows —
+/// a terminator that a linker is under no obligation to emit and that a packer
+/// may well have dropped. The table, by contrast, states how many FDEs there
+/// are and where each one is, so every read here is bounded by a count the
+/// image itself declares and checked against the segment before it happens.
+///
+/// Returns nothing at all — never a partial or approximate answer — for any
+/// image whose header does not parse, whose `eh_frame_ptr` does not land in a
+/// loadable segment, or which has been truncated below what the headers claim.
+/// Individual malformed FDEs are skipped; discovery treats what comes back
+/// here as *proven*, so a guess would be worse than a gap.
+fn eh_frame_functions_from_program_headers(data: &[u8]) -> Vec<EhFrameFunction> {
+    use crate::formats::elf::eh_frame_segment::ProgramHeaderView;
+
+    let Some(view) = ProgramHeaderView::parse(data) else {
+        return Vec::new();
+    };
+    let Some(hdr_span) = view.eh_frame_hdr() else {
+        return Vec::new();
+    };
+    let endian = if view.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    };
+
+    // `.eh_frame_hdr`'s own pointers are encoded relative to itself, so its
+    // base has to be set before anything in it can be decoded.
+    let bases = BaseAddresses::default().set_eh_frame_hdr(hdr_span.address);
+    let Ok(hdr) = gimli::EhFrameHdr::new(hdr_span.bytes, endian).parse(&bases, view.address_size())
+    else {
+        return Vec::new();
+    };
+    let Some(eh_frame_va) = direct_pointer(hdr.eh_frame_ptr()) else {
+        // An indirect `eh_frame_ptr` points through relocated process memory,
+        // which a file-only analysis cannot dereference.
+        return Vec::new();
+    };
+    let Some(frame_span) = view.mapped_from(eh_frame_va) else {
+        return Vec::new();
+    };
+    // An empty table is not a table; `gimli` reports that as `None`.
+    let Some(table) = hdr.table() else {
+        return Vec::new();
+    };
+
+    let bases = bases.set_eh_frame(eh_frame_va);
+    let eh_frame = EhFrame::new(frame_span.bytes, endian);
+    let mut out = Vec::new();
+    let mut entries = table.iter(&bases);
+    while let Ok(Some((_initial_location, fde_pointer))) = entries.next() {
+        let Some(fde_va) = direct_pointer(fde_pointer) else {
+            continue;
+        };
+        // Offset arithmetic done here rather than through
+        // `EhHdrTable::pointer_to_offset`, which subtracts without checking and
+        // would panic in a debug build on a table entry pointing below
+        // `.eh_frame`.
+        let Some(offset) = fde_va.checked_sub(eh_frame_va) else {
+            continue;
+        };
+        let Ok(offset) = usize::try_from(offset) else {
+            continue;
+        };
+        if offset >= frame_span.bytes.len() {
+            continue;
+        }
+        let Ok(fde) = eh_frame.fde_from_offset(
+            &bases,
+            gimli::EhFrameOffset(offset),
+            EhFrame::cie_from_offset,
+        ) else {
+            continue;
+        };
+        let start = fde.initial_address();
+        let len = fde.len();
         if len == 0 {
             continue;
         }
@@ -1099,5 +1221,95 @@ mod tests {
             funcs.iter().any(|f| f.start <= entry && entry < f.end),
             "entry point {entry:#x} is not covered by any FDE"
         );
+    }
+}
+
+#[cfg(test)]
+mod section_header_independence_tests {
+    use super::{eh_frame_functions, EhFrameFunction};
+
+    /// One variant of the corpus built by `tools/realistic_corpus.py`.
+    fn corpus(variant: &str) -> Option<Vec<u8>> {
+        let path = format!(
+            "{}/tests/realistic_corpus/build/corpus.{variant}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read(path).ok()
+    }
+
+    /// The whole point: the same FDE intervals with and without section headers.
+    ///
+    /// `sstrip` removes only the section header table. The program headers, the
+    /// loadable segments and the executable bytes are byte-identical, and
+    /// `PT_GNU_EH_FRAME` — which is what the unwinder itself follows — is still
+    /// there. Any difference between these two answers is this module reading
+    /// metadata that no loader reads.
+    ///
+    /// Asserted as equality, not as "non-empty on both": a test that only
+    /// pinned stability would pass on the broken code, because today the
+    /// section-less answer is empty and empty is perfectly stable.
+    #[test]
+    fn the_same_functions_are_found_with_and_without_a_section_header_table() {
+        let (Some(sectioned), Some(sectionless)) = (corpus("strip"), corpus("sstrip")) else {
+            eprintln!("corpus not built; run tools/realistic_corpus.py");
+            return;
+        };
+        let with: Vec<EhFrameFunction> = eh_frame_functions(&sectioned);
+        let without: Vec<EhFrameFunction> = eh_frame_functions(&sectionless);
+        assert!(
+            !with.is_empty(),
+            "found no FDEs at all on an ordinary stripped binary — this test \
+             discriminates nothing if the sectioned path is broken too"
+        );
+        assert_eq!(
+            with,
+            without,
+            "{} FDE intervals with section headers, {} without",
+            with.len(),
+            without.len()
+        );
+    }
+
+    /// Absence of a readable table must stay absence, not become a guess.
+    ///
+    /// A program-header fallback reads `PT_GNU_EH_FRAME` and follows a pointer
+    /// out of it into the mapped image. Every step of that is attacker-supplied
+    /// on hostile input, so a header that does not parse has to produce nothing.
+    #[test]
+    fn malformed_input_yields_nothing_rather_than_a_guess() {
+        assert!(eh_frame_functions(&[]).is_empty());
+        assert!(eh_frame_functions(b"not an elf at all").is_empty());
+        assert!(eh_frame_functions(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0]).is_empty());
+    }
+
+    /// A truncated image must not report FDEs its bytes do not contain.
+    ///
+    /// Truncation is the realistic corruption: a carved sample, a partial
+    /// download, a packer that lied about its sizes. The program headers still
+    /// describe an `.eh_frame_hdr` that is no longer there, and the fallback
+    /// must notice rather than read whatever happens to sit at that offset.
+    #[test]
+    fn a_truncated_image_yields_no_fdes_it_cannot_prove() {
+        let Some(full) = corpus("sstrip") else {
+            eprintln!("corpus not built; run tools/realistic_corpus.py");
+            return;
+        };
+        // `PT_GNU_EH_FRAME` on this corpus covers 0x3138..0x344c and the
+        // `.eh_frame` it points at starts at 0x3450, so these cuts walk the
+        // failure forward: no headers, no `.eh_frame_hdr` at all, a header cut
+        // in half, and — the interesting one — a *complete* header whose
+        // `eh_frame_ptr` lands in a segment the file no longer holds.
+        for keep in [0x100usize, 0x1000, 0x3000, 0x3140, 0x3460, 0x3800] {
+            let truncated = &full[..keep.min(full.len())];
+            let found = eh_frame_functions(truncated);
+            assert!(
+                found.is_empty(),
+                "truncated to {keep:#x} bytes and still reported {} FDEs \
+                 (first {:?}) — a fallback that reads past the end of the file \
+                 is worse than no fallback",
+                found.len(),
+                found.first()
+            );
+        }
     }
 }

@@ -279,7 +279,7 @@ impl ProgramImage {
                     .or_insert(address);
             }
         }
-        let eh_frame_functions = crate::analysis::exception::eh_frame_functions_in(&object);
+        let eh_frame_functions = crate::analysis::exception::eh_frame_functions_in(&object, &bytes);
         drop(object);
 
         Ok(Self {

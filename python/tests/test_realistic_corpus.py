@@ -97,10 +97,12 @@ def test_hostile_variant_discovery_holds_its_baseline(variant, measured, baselin
 
 
 #: How far `sstrip` may fall behind `strip` before the section-header
-#: dependency is back. Not zero: the section path has real information the
-#: segment path does not (`.gcc_except_table` boundaries, section kinds), so a
-#: handful of seeds are legitimately harder to reach without it.
-SECTIONLESS_ALLOWANCE = 8
+#: dependency is back. Held at the ordinary heuristic-noise band rather than at
+#: a wider "some seeds are legitimately harder" allowance: as of the
+#: `PT_GNU_EH_FRAME` fallback the sectionless lane is not behind at all, it is
+#: one function *ahead*, so any slack beyond noise is slack that would hide a
+#: real fall.
+SECTIONLESS_ALLOWANCE = TOLERANCE
 
 
 def test_removing_section_headers_does_not_cost_us_discovery(measured):
@@ -113,8 +115,8 @@ def test_removing_section_headers_does_not_cost_us_discovery(measured):
     This test was originally written the other way round — asserting the gap
     *existed*, at 43 against 105 — and inverted once the fallback landed. The
     gap closed by reading what the loader reads: loadable segments instead of
-    sections, and PT_DYNAMIC instead of `.dynamic` to tell the GOT from a real
-    pointer table.
+    sections, `PT_DYNAMIC` instead of `.dynamic` to tell the GOT from a real
+    pointer table, and `PT_GNU_EH_FRAME` instead of `.eh_frame`.
     """
     stripped = measured["strip"]["discovered"]
     sectionless = measured["sstrip"]["discovered"]
@@ -123,4 +125,46 @@ def test_removing_section_headers_does_not_cost_us_discovery(measured):
         f"{stripped} with them, a gap of {stripped - sectionless} beyond the "
         f"{SECTIONLESS_ALLOWANCE} allowed. The executable bytes are identical "
         "in both files, so this is metadata dependence, not a harder binary."
+    )
+
+
+@pytest.fixture(scope="module")
+def seed_kinds() -> dict[str, dict[str, int]]:
+    """`seed_kind_counts` for the two variants that differ only in metadata."""
+    import glaurung
+
+    out: dict[str, dict[str, int]] = {}
+    for variant in ("strip", "sstrip"):
+        path = realistic_corpus.variant_path(variant)
+        _functions, _cg, stats = glaurung.analysis.analyze_functions_path_with_stats(
+            str(path)
+        )
+        out[variant] = dict(stats.get("seed_kind_counts", {}))
+    return out
+
+
+def test_eh_frame_seeds_survive_the_loss_of_the_section_headers(seed_kinds):
+    """`.eh_frame` FDE starts are found through `PT_GNU_EH_FRAME` too.
+
+    Asserted on the seed census rather than on the function total, and on this
+    one seed kind rather than on all of them, because the total is not
+    discriminating: the weaker `prologue` scan picks up several of the same
+    entries, so losing every trusted FDE start moved the function count by
+    only three. A count that barely moves is exactly how a whole evidence
+    class goes missing unnoticed.
+
+    Equality, not "non-zero": these two files have byte-identical executable
+    segments, so the unwinder finds the same FDEs in both and so must we.
+    """
+    with_sections = seed_kinds["strip"].get("trusted_eh_frame", 0)
+    without = seed_kinds["sstrip"].get("trusted_eh_frame", 0)
+    assert with_sections > 0, (
+        "the stripped lane found no .eh_frame seeds at all, so this test "
+        f"discriminates nothing. seed kinds: {seed_kinds['strip']}"
+    )
+    assert without == with_sections, (
+        f"{with_sections} trusted_eh_frame seeds with section headers, "
+        f"{without} without. PT_GNU_EH_FRAME is a program header and survives "
+        f"sstrip, so the FDE starts are still there to be read. "
+        f"sectionless seed kinds: {seed_kinds['sstrip']}"
     )
