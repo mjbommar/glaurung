@@ -329,6 +329,16 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     the median. Neither is the tree getting worse; both are the measure seeing a
     file count rather than a size. Recorded as accepted with drift, exactly as
     the 2026-08-16 and 2026-08-17 entries above recorded the mirror-image case.
+
+    2026-08-20: static UPX unpacking added a documented four-field outcome to
+    `FunctionDiscoveryStats` and its entry point to `analysis/cfg.rs`, taking the
+    largest owner 2,482 -> 2,575. The entry point came straight back out into
+    `analysis/cfg/packed.rs` (76 lines, and a self-contained question: *which
+    image do we analyse*), which recovered 69 of them. The residual +24 is the
+    stats fields and their doc comments, which belong on the struct they
+    describe; cutting them would be deleting documentation to satisfy a number.
+    `product_mean_loc` and both medians IMPROVED in the same change, because the
+    split added a small file. Accepted as a deliberate ratchet.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
@@ -337,11 +347,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": 438,
         "product_files_above_1000": 26,
         "product_files_above_2000": 4,
-        "product_loc_above_1000": 39739,
-        "product_max_loc": 2482,
-        "product_mean_loc": pytest.approx(433.6397058823529),
-        "product_median_loc": pytest.approx(313.5),
-        "product_pct_loc_above_1000": pytest.approx(22.46092977250247),
+        "product_loc_above_1000": 39770,
+        "product_max_loc": 2506,
+        "product_mean_loc": pytest.approx(430.04086538461536),
+        "product_median_loc": pytest.approx(311.0),
+        "product_pct_loc_above_1000": pytest.approx(22.230669044198617),
     }
 
 
