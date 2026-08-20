@@ -7,6 +7,7 @@ mod format_environment;
 pub mod image;
 pub mod references;
 pub mod session;
+pub mod spans;
 pub mod symbols;
 pub mod types;
 
