@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use object::{Object, ObjectSection, SectionKind};
+use object::{Object, ObjectSection, ObjectSegment, SectionKind};
 
 /// One detected code-pointer (typically a virtual method address).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,6 +73,53 @@ where
     let mut entries: Vec<VtableEntry> = Vec::new();
     let mut seen_targets: BTreeSet<u64> = BTreeSet::new();
 
+    // With no section header table there is nothing to iterate below, and this
+    // scan is the largest single source of function seeds — 91 of 120 on a
+    // corpus built from our own fixtures, all of them lost the moment `sstrip`
+    // removes metadata that no loader reads. The loadable segments still
+    // describe the same bytes, so fall back to them.
+    //
+    // The GOT has to be excluded by hand here, because the exclusion below is
+    // by section name and there are no names. `relocated_slots` recovers it
+    // through PT_DYNAMIC the way the dynamic linker does; see that module for
+    // why relocation *type* rather than relocation presence is the
+    // discriminator.
+    if obj.sections().next().is_none() {
+        let slots = crate::formats::elf::dynamic_segment::relocated_slots(data);
+        let got_like = slots.got_like;
+        // Positive evidence, not just an exclusion. Scanning every byte of the
+        // read-only segments recovers the seeds but over-reports badly —
+        // measured at 143 findings for 103 real ones, because the segment has
+        // no `.gcc_except_table` or `.eh_frame` boundaries to skip the way the
+        // section path does. The relocation table says exactly which slots hold
+        // a relocated pointer, so require that instead of guessing from bytes.
+        //
+        // Empty on a non-PIE image, where the tables are absolute and
+        // unrelocated; the scan then falls back to byte evidence alone.
+        let require_relative = &slots.relative;
+        for segment in obj.segments() {
+            // A vtable is data. Skipping executable segments keeps this from
+            // reading code as a pointer array, which the section path got for
+            // free from `SectionKind`.
+            if segment_is_executable(segment.flags()) {
+                continue;
+            }
+            let Ok(bytes) = segment.data() else {
+                continue;
+            };
+            scan_span_for_vtables(
+                segment.address(),
+                bytes,
+                &is_executable_va,
+                &got_like,
+                require_relative,
+                &mut entries,
+                &mut seen_targets,
+            );
+        }
+        return entries;
+    }
+
     for sec in obj.sections() {
         let kind = sec.kind();
         let sec_name = sec.name().unwrap_or("");
@@ -99,45 +146,101 @@ where
             Ok(b) => b,
             Err(_) => continue,
         };
-        let vbase = sec.address();
-        if bytes.len() < 8 * 3 {
-            continue; // too small to hold a vtable
-        }
-
-        // Slide an 8-byte u64 cursor at 8-byte alignment. Treat each
-        // run of >= 3 valid code-pointers as a vtable.
-        let mut i = 0usize;
-        while i + 24 <= bytes.len() {
-            let mut run: Vec<VtableEntry> = Vec::new();
-            let mut j = i;
-            while j + 8 <= bytes.len() {
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(&bytes[j..j + 8]);
-                let target = u64::from_le_bytes(buf);
-                if target != 0 && is_executable_va(target) {
-                    run.push(VtableEntry {
-                        source_va: vbase + j as u64,
-                        target_va: target,
-                    });
-                    j += 8;
-                } else {
-                    break;
-                }
-            }
-            if run.len() >= 3 {
-                for e in &run {
-                    if seen_targets.insert(e.target_va) {
-                        entries.push(*e);
-                    }
-                }
-                i = j;
-            } else {
-                i += 8;
-            }
-        }
+        // The GOT is already excluded by name above, so this path needs no
+        // relocation-derived exclusion set.
+        scan_span_for_vtables(
+            sec.address(),
+            bytes,
+            &is_executable_va,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &mut entries,
+            &mut seen_targets,
+        );
     }
 
     entries
+}
+
+/// Whether a segment maps executable.
+///
+/// Fails closed as executable for an unrecognised container: skipping a span we
+/// cannot classify costs findings, whereas scanning code as a pointer array
+/// invents them.
+fn segment_is_executable(flags: object::SegmentFlags) -> bool {
+    match flags {
+        object::SegmentFlags::Elf { p_flags, .. } => p_flags & crate::formats::elf::PF_X != 0,
+        object::SegmentFlags::MachO { initprot, .. } => initprot & 0x4 != 0,
+        object::SegmentFlags::Coff {
+            characteristics, ..
+        } => characteristics & 0x2000_0000 != 0,
+        _ => true,
+    }
+}
+
+/// Slide an 8-byte cursor over one span, recording runs of >= 3 code pointers.
+///
+/// Shared by the section path and the segment fallback so that the two cannot
+/// drift into finding different vtables in the same bytes.
+///
+/// `got_like` is empty on the section path, where the GOT is excluded by
+/// section name before we ever get here. On the fallback path it holds the
+/// slots PT_DYNAMIC says the dynamic linker fills, and a hit breaks the run
+/// rather than being skipped over: a GOT slot sitting inside what looks like a
+/// pointer array means the array is the GOT, not a vtable that happens to
+/// contain one.
+fn scan_span_for_vtables<F>(
+    vbase: u64,
+    bytes: &[u8],
+    is_executable_va: &F,
+    got_like: &BTreeSet<u64>,
+    require_relative: &BTreeSet<u64>,
+    entries: &mut Vec<VtableEntry>,
+    seen_targets: &mut BTreeSet<u64>,
+) where
+    F: Fn(u64) -> bool,
+{
+    if bytes.len() < 8 * 3 {
+        return; // too small to hold a vtable
+    }
+    let mut i = 0usize;
+    while i + 24 <= bytes.len() {
+        let mut run: Vec<VtableEntry> = Vec::new();
+        let mut j = i;
+        while j + 8 <= bytes.len() {
+            let source_va = vbase + j as u64;
+            if got_like.contains(&source_va) {
+                break;
+            }
+            // When the relocation table is available, a slot it does not name
+            // is not a relocated pointer, whatever its bytes look like.
+            if !require_relative.is_empty() && !require_relative.contains(&source_va) {
+                break;
+            }
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&bytes[j..j + 8]);
+            let target = u64::from_le_bytes(buf);
+            if target != 0 && is_executable_va(target) {
+                run.push(VtableEntry {
+                    source_va,
+                    target_va: target,
+                });
+                j += 8;
+            } else {
+                break;
+            }
+        }
+        if run.len() >= 3 {
+            for entry in &run {
+                if seen_targets.insert(entry.target_va) {
+                    entries.push(*entry);
+                }
+            }
+            i = j;
+        } else {
+            i += 8;
+        }
+    }
 }
 
 #[cfg(test)]

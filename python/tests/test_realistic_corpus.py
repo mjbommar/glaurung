@@ -96,22 +96,31 @@ def test_hostile_variant_discovery_holds_its_baseline(variant, measured, baselin
     )
 
 
-def test_removing_section_headers_costs_us_more_than_half_of_discovery(measured):
-    """The section-header cliff, pinned as the defect it is.
+#: How far `sstrip` may fall behind `strip` before the section-header
+#: dependency is back. Not zero: the section path has real information the
+#: segment path does not (`.gcc_except_table` boundaries, section kinds), so a
+#: handful of seeds are legitimately harder to reach without it.
+SECTIONLESS_ALLOWANCE = 8
+
+
+def test_removing_section_headers_does_not_cost_us_discovery(measured):
+    """Parity across the section-header cliff.
 
     `sstrip` removes only the section header table: the PT_LOAD segments are
     identical and the executable bytes hash the same, so a loader cannot tell
-    the two files apart. Any gap here is us reading section headers where we
-    could be reading program headers.
+    the two files apart. Discovery should not either.
 
-    This asserts the gap **exists** rather than that it is acceptable — it is
-    the regression test for task #103, and it should be inverted to assert
-    parity once discovery stops depending on section headers.
+    This test was originally written the other way round — asserting the gap
+    *existed*, at 43 against 105 — and inverted once the fallback landed. The
+    gap closed by reading what the loader reads: loadable segments instead of
+    sections, and PT_DYNAMIC instead of `.dynamic` to tell the GOT from a real
+    pointer table.
     """
     stripped = measured["strip"]["discovered"]
     sectionless = measured["sstrip"]["discovered"]
-    assert sectionless < stripped, (
-        "sstrip now discovers as much as strip — the section-header dependency "
-        f"looks fixed ({sectionless} vs {stripped}). Invert this test to assert "
-        "parity and close task #103."
+    assert sectionless >= stripped - SECTIONLESS_ALLOWANCE, (
+        f"discovery fell to {sectionless} without section headers against "
+        f"{stripped} with them, a gap of {stripped - sectionless} beyond the "
+        f"{SECTIONLESS_ALLOWANCE} allowed. The executable bytes are identical "
+        "in both files, so this is metadata dependence, not a harder binary."
     )
