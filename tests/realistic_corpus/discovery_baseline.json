@@ -1,37 +1,124 @@
 {
-  "schema": 1,
+  "schema": 2,
   "toolchain": {
     "gcc": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
     "strip": "GNU strip (GNU Binutils for Ubuntu) 2.46",
     "sstrip": "sstrip, version 2.1",
-    "upx": "upx 4.2.4"
+    "upx": "upx 4.2.4",
+    "objcopy": "GNU objcopy (GNU Binutils for Ubuntu) 2.46",
+    "patchelf": "patchelf 0.18.0"
   },
   "ground_truth_count": 83,
   "variants": {
     "dwarf": {
       "discovered": 110,
       "named": 99,
-      "truth_hit": 83
+      "truth_hit": 83,
+      "truth_addr_hit": 83,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 100.0,
+      "control_recall_pct": 100.0,
+      "control_precision_pct": 100.0
     },
     "strip": {
       "discovered": 105,
       "named": 0,
-      "truth_hit": 0
+      "truth_hit": 0,
+      "truth_addr_hit": 83,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 100.0,
+      "control_recall_pct": 94.5,
+      "control_precision_pct": 99.0
     },
     "sstrip": {
       "discovered": 102,
       "named": 0,
-      "truth_hit": 0
+      "truth_hit": 0,
+      "truth_addr_hit": 82,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 98.8,
+      "control_recall_pct": 91.8,
+      "control_precision_pct": 99.0
     },
     "upx": {
       "discovered": 8,
       "named": 0,
-      "truth_hit": 0
+      "truth_hit": 0,
+      "truth_addr_hit": 0,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 0.0,
+      "control_recall_pct": 0.9,
+      "control_precision_pct": 12.5
     },
     "upxg": {
-      "discovered": 8,
+      "discovered": 90,
       "named": 0,
-      "truth_hit": 0
+      "truth_hit": 0,
+      "truth_addr_hit": 4,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 4.8,
+      "control_recall_pct": 9.1,
+      "control_precision_pct": 11.1
+    },
+    "rename": {
+      "discovered": 107,
+      "named": 0,
+      "truth_hit": 0,
+      "truth_addr_hit": 83,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 100.0,
+      "control_recall_pct": 94.5,
+      "control_precision_pct": 97.2
+    },
+    "patchelf": {
+      "discovered": 105,
+      "named": 0,
+      "truth_hit": 0,
+      "truth_addr_hit": 83,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 100.0,
+      "control_recall_pct": 94.5,
+      "control_precision_pct": 99.0
+    },
+    "overlap": {
+      "discovered": 109,
+      "named": 0,
+      "truth_hit": 0,
+      "truth_addr_hit": 85,
+      "truth_addr_total": 85,
+      "truth_recall_pct": 100.0,
+      "control_recall_pct": 94.7,
+      "control_precision_pct": 99.1
+    },
+    "encfn": {
+      "discovered": 116,
+      "named": 0,
+      "truth_hit": 0,
+      "truth_addr_hit": 79,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 95.2,
+      "control_recall_pct": 89.7,
+      "control_precision_pct": 90.5
+    },
+    "bare": {
+      "discovered": 64,
+      "named": 0,
+      "truth_hit": 0,
+      "truth_addr_hit": 32,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 38.6,
+      "control_recall_pct": 47.3,
+      "control_precision_pct": 81.2
+    },
+    "encfn_bare": {
+      "discovered": 33,
+      "named": 0,
+      "truth_hit": 0,
+      "truth_addr_hit": 0,
+      "truth_addr_total": 83,
+      "truth_recall_pct": 0.0,
+      "control_recall_pct": 16.2,
+      "control_precision_pct": 57.6
     }
   }
 }
