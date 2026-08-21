@@ -71,8 +71,19 @@ GOTO_RE = re.compile(r"\bgoto\b")
 LABEL_RE = re.compile(r"^\s*[A-Za-z_]\w*:\s*;?\s*$", re.MULTILINE)
 STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+# `<type> <name>;` on its own line. The leading alternation is the *type*
+# position, and C keywords are excluded from it explicitly: without that,
+# `goto L_36afd;` and `return ret;` both match, because each is two identifiers
+# and a semicolon.
+#
+# That was not a small over-count. On the extbench Tier B corpus the reported
+# 46.34 declarations per function is 14.73 gotos and 0.72 returns on top of
+# 31.11 real declarations — **32% of the figure was this pattern's own blind
+# spot**, and it scales with goto density, so it inflated the tool with the most
+# gotos hardest. Every published declaration number before 2026-08-21 carries it.
+_NOT_A_TYPE = r"(?!goto\b|return\b|break\b|continue\b|case\b|default\b|else\b|do\b)"
 DECL_RE = re.compile(
-    r"^\s{1,8}(?:const\s+|unsigned\s+|signed\s+|struct\s+|static\s+)*"
+    r"^\s{1,8}" + _NOT_A_TYPE + r"(?:const\s+|unsigned\s+|signed\s+|struct\s+|static\s+)*"
     r"[A-Za-z_]\w*(?:\s*\*)*\s+\**[A-Za-z_]\w*(?:\s*\[[^\]]*\])?\s*;\s*$",
     re.MULTILINE,
 )

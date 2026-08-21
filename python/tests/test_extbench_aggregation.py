@@ -127,3 +127,55 @@ def test_call_probe_resolves_versioned_got_imports() -> None:
         )
         == "__libc_start_main"
     )
+
+
+# --- the declaration count must count declarations ---------------------------
+
+
+def test_a_goto_is_not_a_declaration():
+    """`DECL_RE` had no keyword exclusion in the type position.
+
+    `goto L_36afd;` is two identifiers and a semicolon, which is exactly the
+    shape of `long var4;`, so every `goto` was counted as a declaration — and
+    so was every `return ret;`.
+
+    That is not a rounding error. On the extbench Tier B corpus the reported
+    46.34 declarations per function is 14.73 gotos and 0.72 returns on top of
+    31.11 real ones: **32% of the published figure**. Worse, it scales with
+    goto density, so it inflated whichever tool emits the most gotos hardest —
+    which is ours, at 8.63 per 100 lines against Ghidra's 3.18. Every
+    declaration comparison made before 2026-08-21 is affected.
+    """
+    analyze = _load_analyze_module()
+    body = "\n".join(
+        [
+            "    long var4;",
+            "    unsigned int var9;",
+            "    char *name;",
+            "    int table[8];",
+            "    goto L_36afd;",
+            "    return ret;",
+            "    break;",
+            "    continue;",
+            "    foo(bar);",
+        ]
+    )
+    found = analyze.DECL_RE.findall(body)
+    assert len(found) == 4, (
+        f"expected the four real declarations, got {len(found)}: {found}"
+    )
+
+
+def test_the_keyword_exclusion_did_not_break_real_declarations():
+    """The guard sits in the type position, so a *variable* named `gotor` or a
+    type whose name merely starts with a keyword must still count."""
+    analyze = _load_analyze_module()
+    for line in (
+        "    long gotor;",
+        "    int returns;",
+        "    breakpoint_t bp;",
+        "    default_handler_t handler;",
+    ):
+        assert len(analyze.DECL_RE.findall(line)) == 1, (
+            f"the keyword exclusion swallowed a real declaration: {line!r}"
+        )
