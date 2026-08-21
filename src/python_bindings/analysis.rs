@@ -195,7 +195,7 @@ fn detect_entry_bytes_py(data: &[u8]) -> Option<(String, String, String, u64, Op
 /// Detect entry point from file path.
 #[pyfunction]
 #[pyo3(name = "detect_entry_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn detect_entry_path_py(
     path: String,
     max_read_bytes: u64,
@@ -298,7 +298,7 @@ fn analyze_functions_bytes_py(
 /// Analyze functions from file path.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
 fn analyze_functions_path_py(
     py: Python<'_>,
     path: String,
@@ -362,7 +362,7 @@ fn analyze_functions_bytes_with_stats_py(
 /// Analyze functions from file path and return budget telemetry.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_path_with_stats")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
 fn analyze_functions_path_with_stats_py(
     py: Python<'_>,
     path: String,
@@ -680,7 +680,7 @@ fn data_xrefs_path_py(
 /// Map VA to file offset for a given file.
 #[pyfunction]
 #[pyo3(name = "va_to_file_offset_path")]
-#[pyo3(signature = (path, va, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, va, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn va_to_file_offset_path_py(
     path: String,
     va: u64,
@@ -696,7 +696,7 @@ fn va_to_file_offset_path_py(
 /// Get ELF PLT map for a file.
 #[pyfunction]
 #[pyo3(name = "elf_plt_map_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn elf_plt_map_path_py(
     path: String,
     max_read_bytes: u64,
@@ -711,7 +711,7 @@ fn elf_plt_map_path_py(
 /// Get ELF GOT map for a file.
 #[pyfunction]
 #[pyo3(name = "elf_got_map_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn elf_got_map_path_py(
     path: String,
     max_read_bytes: u64,
@@ -726,7 +726,7 @@ fn elf_got_map_path_py(
 /// Get PE IAT map for a file.
 #[pyfunction]
 #[pyo3(name = "pe_iat_map_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn pe_iat_map_path_py(
     path: String,
     max_read_bytes: u64,
@@ -1153,7 +1153,7 @@ fn resources_by_type(
 /// Get Mach-O stubs/lazy-pointer/non-lazy-pointer map for a file.
 #[pyfunction]
 #[pyo3(name = "macho_stubs_map_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn macho_stubs_map_path_py(
     path: String,
     max_read_bytes: u64,
@@ -1170,7 +1170,7 @@ fn macho_stubs_map_path_py(
 /// present), and engine kind. Returns None for non-Lua files.
 #[pyfunction]
 #[pyo3(name = "parse_lua_bytecode_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn parse_lua_bytecode_path_py(
     py: Python<'_>,
     path: String,
@@ -1211,7 +1211,7 @@ fn parse_lua_bytecode_path_py(
 /// Returns None for files that don't have the 0xCAFEBABE magic.
 #[pyfunction]
 #[pyo3(name = "parse_java_class_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+#[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64))]
 fn parse_java_class_path_py(
     py: Python<'_>,
     path: String,
