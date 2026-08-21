@@ -21,34 +21,34 @@
       "control_precision_pct": 100.0
     },
     "strip": {
-      "discovered": 105,
+      "discovered": 109,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 83,
       "truth_addr_total": 83,
       "truth_recall_pct": 100.0,
-      "control_recall_pct": 94.5,
-      "control_precision_pct": 99.0
+      "control_recall_pct": 98.2,
+      "control_precision_pct": 99.1
     },
     "sstrip": {
-      "discovered": 106,
+      "discovered": 107,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 83,
       "truth_addr_total": 83,
       "truth_recall_pct": 100.0,
-      "control_recall_pct": 94.5,
+      "control_recall_pct": 95.5,
       "control_precision_pct": 98.1
     },
     "upx": {
-      "discovered": 105,
+      "discovered": 109,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 83,
       "truth_addr_total": 83,
       "truth_recall_pct": 100.0,
-      "control_recall_pct": 94.5,
-      "control_precision_pct": 99.0
+      "control_recall_pct": 98.2,
+      "control_precision_pct": 99.1
     },
     "upxg": {
       "discovered": 110,
@@ -61,64 +61,64 @@
       "control_precision_pct": 100.0
     },
     "rename": {
-      "discovered": 107,
+      "discovered": 111,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 83,
       "truth_addr_total": 83,
       "truth_recall_pct": 100.0,
-      "control_recall_pct": 94.5,
-      "control_precision_pct": 97.2
+      "control_recall_pct": 98.2,
+      "control_precision_pct": 97.3
     },
     "patchelf": {
-      "discovered": 105,
+      "discovered": 109,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 83,
       "truth_addr_total": 83,
       "truth_recall_pct": 100.0,
-      "control_recall_pct": 94.5,
-      "control_precision_pct": 99.0
+      "control_recall_pct": 98.2,
+      "control_precision_pct": 99.1
     },
     "overlap": {
-      "discovered": 109,
+      "discovered": 114,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 85,
       "truth_addr_total": 85,
       "truth_recall_pct": 100.0,
-      "control_recall_pct": 94.7,
+      "control_recall_pct": 99.1,
       "control_precision_pct": 99.1
     },
     "encfn": {
-      "discovered": 116,
+      "discovered": 122,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 79,
       "truth_addr_total": 83,
       "truth_recall_pct": 95.2,
-      "control_recall_pct": 89.7,
-      "control_precision_pct": 90.5
+      "control_recall_pct": 94.9,
+      "control_precision_pct": 91.0
     },
     "bare": {
-      "discovered": 64,
+      "discovered": 118,
       "named": 0,
       "truth_hit": 0,
-      "truth_addr_hit": 32,
+      "truth_addr_hit": 83,
       "truth_addr_total": 83,
-      "truth_recall_pct": 38.6,
-      "control_recall_pct": 47.3,
-      "control_precision_pct": 81.2
+      "truth_recall_pct": 100.0,
+      "control_recall_pct": 96.4,
+      "control_precision_pct": 89.8
     },
     "encfn_bare": {
-      "discovered": 33,
+      "discovered": 42,
       "named": 0,
       "truth_hit": 0,
       "truth_addr_hit": 0,
       "truth_addr_total": 83,
       "truth_recall_pct": 0.0,
-      "control_recall_pct": 16.2,
-      "control_precision_pct": 57.6
+      "control_recall_pct": 24.8,
+      "control_precision_pct": 69.0
     }
   }
 }

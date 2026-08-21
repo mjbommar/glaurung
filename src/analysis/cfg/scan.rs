@@ -202,10 +202,24 @@ pub(super) fn scan_elf_prologue_function_starts(
                 let mut va = align_up_u64(region.start, 16);
                 while va < region.end {
                     if let Some(off) = indexed_code_offset(image, data, va) {
-                        if off < data.len()
-                            && has_function_boundary_marker(data, off)
-                            && elf_x86_prologue_head(&data[off..])
-                        {
+                        // The head pattern alone, deliberately. This used to
+                        // also require `has_function_boundary_marker`, which is
+                        // an MSVC heuristic — its own doc calls INT3 padding
+                        // "the dominant case on Win64" — and on ELF it is pure
+                        // loss. Measured over the 94 functions of a stripped
+                        // -O2 build with neither symbols nor unwind tables:
+                        //
+                        //   marker AND head   34 hits,  4 false,  89.5% precision
+                        //   head alone        93 hits, 10 false,  90.3% precision
+                        //
+                        // Fifty-nine real functions carry a recognised prologue
+                        // and no marker, because GCC packs functions without
+                        // padding at -O2. Not one function was accepted by the
+                        // marker that the head did not also accept, so the
+                        // conjunction bought no precision at all — it read
+                        // slightly *worse*. `looks_like_fn_start`, the helper
+                        // this borrowed from, has always used OR.
+                        if off < data.len() && elf_x86_prologue_head(&data[off..]) {
                             starts.push(va);
                         }
                     }
@@ -1290,6 +1304,78 @@ mod elf_prologue_scan_tests {
         assert!(
             scan_elf_prologue_function_starts(None, b"MZ\x90\x00", &regions, BArch::X86_64)
                 .is_empty()
+        );
+    }
+
+    /// The MSVC boundary marker earns nothing on ELF, and costs most of the scan.
+    ///
+    /// `has_function_boundary_marker` is a Win64 heuristic — its own documentation
+    /// calls INT3 padding "the dominant case on Win64". Requiring it *in addition
+    /// to* a recognised prologue, as this scan used to, rejects every function GCC
+    /// packed without padding, which at -O2 is most of them.
+    ///
+    /// Measured here rather than argued: over a stripped -O2 build with neither a
+    /// symbol table nor unwind tables, the conjunction found 34 of 94 functions
+    /// and the head predicate alone found 93 — at slightly BETTER precision,
+    /// because the marker never accepted anything the head did not also accept.
+    /// A predicate that adds no true positives and removes 59 is not a filter.
+    #[test]
+    fn the_boundary_marker_adds_nothing_the_prologue_head_does_not_already_find() {
+        use object::{Object, ObjectSegment, ObjectSymbol};
+        let root = env!("CARGO_MANIFEST_DIR");
+        let bare = format!("{root}/tests/realistic_corpus/build/corpus.bare");
+        let ctrl = format!("{root}/tests/realistic_corpus/build/corpus.bare_control");
+        let (Ok(data), Ok(cdata)) = (std::fs::read(&bare), std::fs::read(&ctrl)) else {
+            eprintln!("realistic corpus not built; run tools/realistic_corpus.py");
+            return;
+        };
+        let truth: Vec<u64> = object::File::parse(&*cdata)
+            .expect("control parses")
+            .symbols()
+            .filter(|s| s.kind() == object::SymbolKind::Text && s.size() > 0)
+            .map(|s| s.address())
+            .collect();
+        let obj = object::File::parse(&*data).expect("stripped build parses");
+        let (mut conjunction, mut head_only, mut marker_uniquely) = (0usize, 0usize, 0usize);
+        for &va in &truth {
+            let mut off = None;
+            for seg in obj.segments() {
+                if va >= seg.address() && va < seg.address() + seg.size() {
+                    off = Some((seg.file_range().0 + (va - seg.address())) as usize);
+                    break;
+                }
+            }
+            let Some(off) = off else { continue };
+            if off >= data.len() {
+                continue;
+            }
+            let marker = has_function_boundary_marker(&data, off);
+            let head = elf_x86_prologue_head(&data[off..]);
+            if marker && head {
+                conjunction += 1;
+            }
+            if head {
+                head_only += 1;
+            }
+            if marker && !head {
+                marker_uniquely += 1;
+            }
+        }
+        assert!(
+            !truth.is_empty(),
+            "no ground-truth functions; the control build has no symbols"
+        );
+        assert_eq!(
+            marker_uniquely, 0,
+            "the boundary marker accepted {marker_uniquely} function(s) the prologue \
+             head rejected. If that is now a real signal on ELF, this test — and the \
+             decision to drop the conjunction — need revisiting."
+        );
+        assert!(
+            head_only > conjunction,
+            "head alone found {head_only} of {} functions and the conjunction found \
+             {conjunction}; the conjunction is supposed to be strictly weaker",
+            truth.len()
         );
     }
 }
