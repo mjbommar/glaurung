@@ -698,3 +698,51 @@ def test_the_new_function_note_is_silent_on_the_committed_corpus():
     or the note has become noise (fix the note)."""
     lanes = D.resolve(["@smoke"])
     assert D.unbaselined_fixture_notes(lanes) == []
+
+
+# --- `--arch` retargets; it does not select --------------------------------
+
+
+def test_a_bare_arch_flag_is_refused_rather_than_defaulted(capsys):
+    """`--arch` with no selectors would silently retarget `@smoke`.
+
+    That is not a hypothetical. On 2026-08-20 the cross-arch gate exactly as
+    CLAUDE.md spelled it — `dectest --arch i386 --arch armv7 --arch aarch64
+    --arch x86_64_gcc15` — printed
+
+        SCOPED: 16 lanes of 3078 (1%) - no regressions in scope
+
+    and was very nearly taken as the arch gate passing. It is a green line in
+    the precise shape of the real one, covering one half of one percent of the
+    matrix, on a commit that changed CFG discovery for every architecture.
+
+    Fail-closed here means refusing, not guessing a broader default: `@o0 @o2`
+    would be a forty-minute run nobody asked for, and any narrower guess is the
+    same trap with a different number in it.
+    """
+    assert D.main(["--arch", "i386"]) == 2
+    message = capsys.readouterr().err
+    assert "retargets the selectors" in message
+    assert "@o0 @o2 --arch i386" in message, (
+        f"the refusal must show the working command, got: {message!r}"
+    )
+
+
+def test_a_bare_stripped_flag_is_refused_for_the_same_reason(capsys):
+    """`--stripped` is the other retargeting flag and has the identical hazard."""
+    assert D.main(["--stripped"]) == 2
+    assert "retargets the selectors" in capsys.readouterr().err
+
+
+def test_selectors_with_arch_are_still_accepted():
+    """The guard must not break the command it is teaching people to type."""
+    lanes = D.resolve(["03_loop_shapes"], arches=["i386"])
+    assert lanes, "naming a selector alongside --arch selected nothing"
+    assert all(lane.cc == "i386" for lane in lanes), (
+        f"--arch failed to retarget: {sorted({lane.cc for lane in lanes})}"
+    )
+
+
+def test_no_flags_still_defaults_to_smoke():
+    """Without a retargeting flag the default is unambiguous and stays."""
+    assert D.resolve(["@smoke"]) == D.resolve(None or ["@smoke"])

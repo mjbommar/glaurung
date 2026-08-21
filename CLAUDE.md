@@ -186,9 +186,14 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   by running `--arch` on a pristine build of that same commit. This is NOT the
   new-fixture case the bullet below covers — no fixture was added, and the
   three host baselines were correctly refreshed. Any change to a lifter, the
-  renderer or ABI code needs `dectest --arch i386 --arch armv7 --arch aarch64
-  --arch x86_64_gcc15` before it is called measured, and `arch_baseline.json`
-  refreshed with the other three.
+  renderer or ABI code needs `dectest @o0 @o2 --arch i386 --arch armv7 --arch
+  aarch64 --arch x86_64_gcc15` before it is called measured, and
+  `arch_baseline.json` refreshed with the other three. **The selectors are not
+  optional.** `--arch` *retargets whatever selectors you gave*; with none, it
+  retargets the default `@smoke`. On 2026-08-20 the command as this bullet used
+  to spell it reported `SCOPED: 16 lanes of 3078 (1%) — no regressions in scope`
+  — a green result over one half of one percent of the matrix, in a form that
+  reads exactly like the real gate.
 - **Extend `tests/decompiler_fixtures/` when a shape has no lane.** A new numbered
   fixture plus a `manifest.py` contract is cheap and permanent; adding one requires
   refreshing **four** baselines: `baseline.json`, `structural_baseline.json`,

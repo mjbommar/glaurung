@@ -893,7 +893,12 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Selectors: fixture[:cc[:opt[:func]]], globs allowed; @name for a set. "
         "The cc slot also takes an architecture (" + ", ".join(ARCHES) + ").",
     )
-    ap.add_argument("selectors", nargs="*", default=["@smoke"], help="default: @smoke")
+    ap.add_argument(
+        "selectors",
+        nargs="*",
+        default=None,
+        help="default: @smoke (but see --arch: it retargets these, it does not replace them)",
+    )
     ap.add_argument(
         "--arch",
         action="append",
@@ -956,8 +961,22 @@ def main(argv=None) -> int:
             print(f"@{name:<{width}} {len(lanes):>2} lanes  {spec['description']}")
         return 0
 
+    # `--arch` RETARGETS the selectors; it is not itself a selector. Defaulting
+    # silently to `@smoke` under `--arch` is how the cross-arch gate in CLAUDE.md
+    # ran as `SCOPED: 16 lanes of 3078 (1%) - no regressions in scope` on
+    # 2026-08-20: a green line, in the exact shape of the real gate, over one
+    # half of one percent of the matrix. Refuse rather than guess.
+    if not args.selectors and (args.arch or args.stripped):
+        retarget = " ".join(f"--arch {a}" for a in args.arch or []) or "--stripped"
+        print(
+            f"error: {retarget} retargets the selectors you give it, and you gave "
+            "none, so this would silently have run @smoke. Name what to retarget, "
+            f"e.g. `dectest.py @o0 @o2 {retarget}`.",
+            file=sys.stderr,
+        )
+        return 2
     try:
-        lanes = resolve(args.selectors, arches=args.arch, stripped=args.stripped)
+        lanes = resolve(args.selectors or ["@smoke"], arches=args.arch, stripped=args.stripped)
     except (NoMatch, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

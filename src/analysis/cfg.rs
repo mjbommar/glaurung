@@ -30,10 +30,12 @@ use object::{ObjectSection, ObjectSymbol};
 
 mod ctrl_flow;
 mod entry_shape;
+mod extents;
 mod function_build;
 mod must_dataflow;
 mod packed;
 mod pe_tables;
+mod plt;
 mod repair;
 mod scan;
 mod seeds;
@@ -221,6 +223,10 @@ pub struct FunctionDiscoveryStats {
     pub pdata_chained_unwind_parse_failed: usize,
     pub pdata_chained_parent_starts: usize,
     pub pdata_nonexec_rejected: usize,
+    /// Function ranges `.eh_frame` declares. Zero means the declared-extent
+    /// gate cannot fire on this binary — the stripped and no-unwind-table
+    /// cases, where the prologue scan is the only thing finding anything.
+    pub declared_extents: usize,
     pub prologue_scan_candidates: usize,
     pub prologue_scan_seeds_inserted: usize,
     pub thunk_scan_candidates: usize,
@@ -642,76 +648,6 @@ fn indirect_memory_target(
 ) -> Option<u64> {
     let slot_va = memory_operand_va(ins)?;
     read_pointer_at_va(image, data, slot_va, bits)
-}
-
-/// The ELF PLT stub extents this walk may treat as tail-call targets.
-///
-/// A PLT entry is linker-generated import glue. No compiler places one inside a
-/// function body, so an unconditional branch to one always leaves the function
-/// for good. GCC lowers `return f(x);` for an imported `f` to exactly
-/// `b.w f@plt`, while x86-64 may use a compact `.plt.got` stub for an
-/// address-taken import. Neither target can be an intra-function block.
-///
-/// This is deliberately a section-membership proof rather than a byte-pattern
-/// guess. The object architecture must also agree with the active decoder so a
-/// mismatched caller cannot classify unrelated bytes as a tail target.
-///
-/// Resolved ONCE per discovery run. The membership question used to be answered
-/// per branch instruction by reopening the object, so one whole-binary
-/// discovery paid an object parse per discovered function and address-scoped
-/// discovery paid one per call. The proof is unchanged; the section table now
-/// comes from the session's image, or at worst from one parse on the byte-only
-/// compatibility path.
-fn elf_plt_stub_ranges(
-    image: Option<&crate::program::image::ProgramImage>,
-    data: &[u8],
-    arch: BArch,
-) -> Vec<std::ops::Range<u64>> {
-    use object::{Object, ObjectSection};
-    if !matches!(
-        arch,
-        BArch::ARM | BArch::AArch64 | BArch::X86 | BArch::X86_64
-    ) {
-        return Vec::new();
-    }
-    if let Some(image) = image {
-        // The image's architecture came from the same parse that produced its
-        // section index, so an image whose architecture disagrees with the
-        // active decoder is the mismatched-caller case the byte path rejects.
-        if image.arch() != arch {
-            return Vec::new();
-        }
-        return image.plt_stub_ranges().to_vec();
-    }
-    if !data.starts_with(b"\x7fELF") {
-        return Vec::new();
-    }
-    let Ok(object) = crate::decompile::profile::parse_object(data) else {
-        return Vec::new();
-    };
-    let architecture_matches = matches!(
-        (arch, object.architecture()),
-        (BArch::ARM, object::Architecture::Arm)
-            | (BArch::AArch64, object::Architecture::Aarch64)
-            | (BArch::X86, object::Architecture::I386)
-            | (BArch::X86_64, object::Architecture::X86_64)
-    );
-    if !architecture_matches {
-        return Vec::new();
-    }
-    object
-        .sections()
-        .filter(|section| {
-            matches!(
-                section.name(),
-                Ok(".plt" | ".plt.sec" | ".plt.got" | ".iplt")
-            ) && section.size() != 0
-        })
-        .filter_map(|section| {
-            let address = section.address();
-            address.checked_add(section.size()).map(|end| address..end)
-        })
-        .collect()
 }
 
 /// Merge one predecessor's concrete address facts into a block input.
@@ -2065,7 +2001,7 @@ pub(crate) fn discover_function_image_at(
     let entry = Address::new(AddressKind::VA, entry_va, bits, None, None).ok()?;
     let tables = std::collections::BTreeMap::new();
     let noreturn_targets = image.noreturn_import_targets();
-    let plt_stub_ranges = elf_plt_stub_ranges(Some(image), data, arch);
+    let plt_stub_ranges = plt::elf_plt_stub_ranges(Some(image), data, arch);
     let facts = DiscoveryFacts {
         image: Some(image),
         tables: &tables,
@@ -2166,7 +2102,7 @@ fn analyze_functions_unpacked(
         },
         crate::program::image::ProgramImage::noreturn_import_targets,
     );
-    let plt_stub_ranges = elf_plt_stub_ranges(image, data, arch);
+    let plt_stub_ranges = plt::elf_plt_stub_ranges(image, data, arch);
 
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     // Every seed source, in the order that decides both budget priority and
@@ -2209,6 +2145,14 @@ fn analyze_functions_unpacked(
         owned_leaders: None,
         proven_end: None,
     };
+    // What some authority has *declared* to be a function's extent, as opposed
+    // to what a walk has reached. The two differ exactly where a landing pad
+    // sits: unreachable in the CFG, and squarely inside its parent's FDE.
+    let declared_extents = extents::DeclaredExtents::from_eh_frame(
+        &eh_frame_extent,
+        &plt::stub_ranges_including_unsectioned(image, data, arch),
+    );
+    stats.declared_extents = declared_extents.len();
     let mut calls_all: Vec<(u64, FunctionXref)> = Vec::new(); // (caller_entry_va, xref)
     let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
         seeds.into_iter().collect();
@@ -2244,6 +2188,24 @@ fn analyze_functions_unpacked(
                 None,
                 format!("body_overlap:{}", seed_kind.label()),
                 "candidate lies inside an already discovered function body",
+            );
+            continue;
+        } else if let Some(owner) = seed_kind
+            .is_body_overlap_gated()
+            .then(|| declared_extents.containing_start(seed.value))
+            .flatten()
+        {
+            // Reachability is the wrong question for a landing pad: the
+            // unwinder arrives by indirect jump, so no walk of the parent
+            // covers it and the gate above sees nothing. Its FDE does. See
+            // `extents` for the worked example and for why this costs no
+            // recall on binaries without unwind tables.
+            record_scan_rejection(
+                &mut stats,
+                seed.value,
+                Some(owner),
+                format!("declared_extent:{}", seed_kind.label()),
+                "candidate lies strictly inside another function's declared extent",
             );
             continue;
         }
@@ -2603,10 +2565,10 @@ mod arm_tail_call_tests {
     /// image path is what production takes, and a range list that disagreed
     /// with the object it was built from would silently reclassify tail calls.
     fn target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool {
-        let from_bytes = elf_plt_stub_ranges(None, data, arch);
+        let from_bytes = plt::elf_plt_stub_ranges(None, data, arch);
         let image = crate::program::image::ProgramImage::from_bytes(data.to_vec())
             .expect("index the checked-in sample");
-        let from_image = elf_plt_stub_ranges(Some(&image), data, arch);
+        let from_image = plt::elf_plt_stub_ranges(Some(&image), data, arch);
         assert_eq!(
             from_bytes, from_image,
             "byte and image PLT indices diverged"

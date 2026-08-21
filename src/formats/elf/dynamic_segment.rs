@@ -61,6 +61,11 @@ const R_X86_64_GLOB_DAT: u32 = 6;
 const R_X86_64_JUMP_SLOT: u32 = 7;
 const R_X86_64_RELATIVE: u32 = 8;
 
+/// `e_machine` values. Hoisted to module scope because the PLT stub decoder
+/// gates on the machine too, and its instruction encodings are x86-64's alone.
+const EM_X86_64: u16 = 62;
+const EM_AARCH64: u16 = 183;
+
 // AArch64.
 const R_AARCH64_GLOB_DAT: u32 = 1025;
 const R_AARCH64_JUMP_SLOT: u32 = 1026;
@@ -96,8 +101,6 @@ impl RelocatedSlots {
 /// misclassified GOT slot resurrects the phantom-function defect while an
 /// unclassified table merely goes unread.
 fn classify(machine: u16, r_type: u32) -> Option<SlotClass> {
-    const EM_X86_64: u16 = 62;
-    const EM_AARCH64: u16 = 183;
     let (glob_dat, jump_slot, relative) = match machine {
         EM_X86_64 => (R_X86_64_GLOB_DAT, R_X86_64_JUMP_SLOT, R_X86_64_RELATIVE),
         EM_AARCH64 => (R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_RELATIVE),
@@ -203,9 +206,242 @@ pub fn relocated_slots(data: &[u8]) -> RelocatedSlots {
     out
 }
 
+/// Size of one x86-64 PLT stub. Fixed by the linker for every table variant.
+const X86_64_PLT_STUB: u64 = 16;
+
+/// `endbr64`, the CET landing pad every stub in a current build opens with.
+const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];
+
+/// Executable ranges holding PLT import stubs, located without section headers.
+///
+/// Every other PLT lookup in the tree finds the table by section NAME —
+/// `.plt`, `.plt.sec`, `.plt.got`, `.iplt` — and so finds nothing at all on an
+/// `sstrip`ped or UPX-packed image. That is usually a silent loss of naming.
+/// It became a loss of *functions* when the declared-extent gate in
+/// `analysis::cfg::extents` started trusting `.eh_frame`: the linker emits one
+/// FDE for the whole `.plt`, so a caller that cannot see where the PLT is reads
+/// that FDE as a single 128-byte function and rejects the seven real import
+/// stubs inside it. Measured on the `sstrip` corpus lane: five real functions
+/// lost, against zero on `strip` where the section names survive.
+///
+/// A stub is identified by what it *does*, which no strip can remove. There are
+/// two shapes, and both are needed — recognising only the first left three of
+/// the corpus lane's stubs still lost:
+///
+/// * **Jumps through a relocated GOT slot** (`.plt.sec`, `.plt.got`, and `.plt`
+///   under `-z now`). Requiring the `JUMP_SLOT`/`GLOB_DAT` relocation is what
+///   makes this exact rather than a byte-pattern guess: an ordinary
+///   `jmp *disp(%rip)` through unrelocated data is not matched.
+/// * **Lazy `.plt` entries**, which touch no GOT at all. On a CET build with a
+///   `.plt.sec`, the GOT jump moves there and `.plt` holds only
+///   `endbr64; push $index; jmp PLT0`. These are recognised by their jump
+///   landing on a **PLT0 header** — the one slot that pushes and jumps through
+///   the two reserved `.got.plt` slots — which is itself a shape nothing else
+///   in an image has.
+///
+/// x86-64 only; other machines return empty, leaving callers exactly as they
+/// were. Returns whole 16-byte stub slots, so a caller can test overlap.
+pub fn plt_stub_ranges(data: &[u8]) -> Vec<std::ops::Range<u64>> {
+    let slots = relocated_slots(data);
+    if slots.got_like.is_empty() {
+        return Vec::new();
+    }
+    let Ok(header) = parse_header(data) else {
+        return Vec::new();
+    };
+    // `relocated_slots` already refused anything but 64-bit little-endian; the
+    // stub decoder below is x86-64 encoding and must not be applied elsewhere.
+    if header.e_machine != EM_X86_64 {
+        return Vec::new();
+    }
+    let Ok(segments) = SegmentTable::parse(data, &header) else {
+        return Vec::new();
+    };
+
+    // Every 16-byte-aligned slot in an executable segment, as (va, bytes).
+    // Stubs are 16-byte aligned within the table and the table itself is 16-byte
+    // aligned, so stepping the slot size cannot miss one.
+    let mut slots_to_scan: Vec<(u64, &[u8])> = Vec::new();
+    for segment in segments.load_segments() {
+        if !segment.is_executable() {
+            continue;
+        }
+        let base_va = segment.header.p_vaddr;
+        let file_start = segment.header.p_offset as usize;
+        let file_len = segment.header.p_filesz as usize;
+        let Some(file_end) = file_start.checked_add(file_len) else {
+            continue;
+        };
+        if file_end > data.len() {
+            continue;
+        }
+        let mut offset = 0u64;
+        while offset + X86_64_PLT_STUB <= file_len as u64 {
+            let at = file_start + offset as usize;
+            let va = base_va.wrapping_add(offset);
+            if va % X86_64_PLT_STUB == 0 {
+                slots_to_scan.push((va, &data[at..file_end]));
+            }
+            offset += X86_64_PLT_STUB;
+        }
+    }
+
+    let mut ranges = Vec::new();
+    let mut plt0_headers = BTreeSet::new();
+    for (va, bytes) in &slots_to_scan {
+        let jumps_through_got = x86_64_got_jump_target(bytes, *va)
+            .is_some_and(|target| slots.got_like.contains(&target));
+        if jumps_through_got {
+            ranges.push(*va..va + X86_64_PLT_STUB);
+        } else if is_x86_64_plt0_header(bytes) {
+            // PLT0 is not itself an import stub, but it occupies a slot of the
+            // same table and its FDE is the one being disqualified.
+            plt0_headers.insert(*va);
+            ranges.push(*va..va + X86_64_PLT_STUB);
+        }
+    }
+    // Second pass, because a lazy entry is defined by the header it jumps to.
+    for (va, bytes) in &slots_to_scan {
+        if x86_64_lazy_stub_target(bytes, *va).is_some_and(|t| plt0_headers.contains(&t)) {
+            ranges.push(*va..va + X86_64_PLT_STUB);
+        }
+    }
+    ranges.sort_unstable_by_key(|range| range.start);
+    ranges.dedup();
+    ranges
+}
+
+/// Whether a slot is the PLT header: `push GOT+8; jmp *GOT+16`.
+///
+/// The two reserved `.got.plt` slots it uses carry no relocation — the dynamic
+/// linker writes them at load time — so this shape cannot be recognised by the
+/// GOT test above, and it is the anchor every lazy entry jumps to.
+fn is_x86_64_plt0_header(slot: &[u8]) -> bool {
+    let rest = slot.strip_prefix(&ENDBR64).unwrap_or(slot);
+    // push m32 (ff /6), then jmp *m32 (ff /4), both RIP-relative.
+    matches!(rest.get(..2), Some([0xff, 0x35])) && matches!(rest.get(6..8), Some([0xff, 0x25]))
+}
+
+/// Decode a lazy `.plt` entry and return the address it jumps to.
+///
+/// ```text
+///   f3 0f 1e fa  68 imm32  e9 rel32        endbr64; push $i; jmp PLT0
+///                68 imm32  e9 rel32        pre-CET form
+/// ```
+///
+/// A `bnd` prefix (`f2`) may precede the `jmp`. The push carries the relocation
+/// index and is deliberately not interpreted; only the jump target matters.
+fn x86_64_lazy_stub_target(slot: &[u8], va: u64) -> Option<u64> {
+    let had_endbr = slot.starts_with(&ENDBR64);
+    let rest = if had_endbr { slot.get(4..)? } else { slot };
+    let consumed = if had_endbr { 4u64 } else { 0 };
+    // push imm32
+    if !matches!(rest.first(), Some(0x68)) {
+        return None;
+    }
+    let after_push = rest.get(5..)?;
+    let (jump_len, rel_at) = match after_push {
+        [0xf2, 0xe9, ..] => (6u64, 2usize),
+        [0xe9, ..] => (5u64, 1usize),
+        _ => return None,
+    };
+    let bytes = after_push.get(rel_at..rel_at + 4)?;
+    let displacement = i32::from_le_bytes(bytes.try_into().ok()?);
+    let next_insn = va
+        .checked_add(consumed)?
+        .checked_add(5)?
+        .checked_add(jump_len)?;
+    Some(next_insn.wrapping_add(displacement as i64 as u64))
+}
+
+/// Decode a PLT stub's indirect jump and return the GOT address it reads.
+///
+/// The three encodings the GNU linker emits, in the order a current toolchain
+/// produces them:
+///
+/// ```text
+///   f3 0f 1e fa  f2 ff 25 rel32   endbr64; bnd jmp *rel32(%rip)   -- .plt.sec
+///   f3 0f 1e fa  ff 25 rel32      endbr64; jmp  *rel32(%rip)      -- CET, no MPX
+///   ff 25 rel32                   jmp  *rel32(%rip)               -- classic
+/// ```
+///
+/// `rel32` is relative to the address of the *next* instruction, so the GOT
+/// address is `va + displacement_end + rel32`.
+fn x86_64_got_jump_target(stub: &[u8], va: u64) -> Option<u64> {
+    let after_endbr = stub.starts_with(&ENDBR64);
+    let rest = if after_endbr { &stub[4..] } else { stub };
+    let consumed = if after_endbr { 4u64 } else { 0 };
+
+    let (opcode_len, rel_at) = match rest {
+        // bnd prefix, then the indirect jump.
+        [0xf2, 0xff, 0x25, ..] => (7u64, 3usize),
+        [0xff, 0x25, ..] => (6u64, 2usize),
+        _ => return None,
+    };
+    let bytes = rest.get(rel_at..rel_at + 4)?;
+    let displacement = i32::from_le_bytes(bytes.try_into().ok()?);
+    let next_insn = va.checked_add(consumed)?.checked_add(opcode_len)?;
+    Some(next_insn.wrapping_add(displacement as i64 as u64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PLT stubs must be found identically with and without section headers.
+    ///
+    /// This is the property the declared-extent gate depends on. `strip` keeps
+    /// the section table and `sstrip` deletes it; if the two disagree, the gate
+    /// deletes real import stubs on exactly the images it was built for.
+    #[test]
+    fn plt_stubs_are_found_with_and_without_section_headers() {
+        let (Some(stripped), Some(sstripped)) = (corpus("strip"), corpus("sstrip")) else {
+            return; // corpus not built; tools/realistic_corpus.py --build
+        };
+        let with_sections = plt_stub_ranges(&stripped);
+        let without = plt_stub_ranges(&sstripped);
+        assert!(
+            !with_sections.is_empty(),
+            "no PLT stubs found in the stripped corpus at all"
+        );
+        assert_eq!(
+            with_sections, without,
+            "section headers changed the answer: {with_sections:?} vs {without:?}"
+        );
+        for range in &with_sections {
+            assert_eq!(range.end - range.start, X86_64_PLT_STUB);
+            assert_eq!(range.start % X86_64_PLT_STUB, 0);
+        }
+    }
+
+    /// An indirect jump through *unrelocated* memory is not an import stub.
+    ///
+    /// Requiring the relocation is what separates this from a byte-pattern
+    /// guess, and dropping that requirement would let any `jmp *disp(%rip)`
+    /// mask a whole 16-byte slot from the extents gate.
+    #[test]
+    fn an_indirect_jump_through_unrelocated_memory_is_not_a_stub() {
+        // endbr64; bnd jmp *0x2f56(%rip) at VA 0x1030 -> next insn 0x103b.
+        let stub = [
+            0xf3, 0x0f, 0x1e, 0xfa, 0xf2, 0xff, 0x25, 0x56, 0x2f, 0x00, 0x00,
+        ];
+        assert_eq!(x86_64_got_jump_target(&stub, 0x1030), Some(0x103b + 0x2f56));
+        // Classic form, no endbr64: jmp *0x2f56(%rip) at 0x1030 -> next 0x1036.
+        let classic = [0xff, 0x25, 0x56, 0x2f, 0x00, 0x00];
+        assert_eq!(
+            x86_64_got_jump_target(&classic, 0x1030),
+            Some(0x1036 + 0x2f56)
+        );
+        // Anything else decodes to nothing rather than to a wrong address.
+        assert_eq!(
+            x86_64_got_jump_target(&[0x55, 0x48, 0x89, 0xe5], 0x1030),
+            None
+        );
+        assert_eq!(
+            x86_64_got_jump_target(&[0xf3, 0x0f, 0x1e, 0xfa], 0x1030),
+            None
+        );
+    }
 
     /// The corpus this was measured on, if it has been built.
     fn corpus(variant: &str) -> Option<Vec<u8>> {

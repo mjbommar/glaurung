@@ -322,24 +322,24 @@
       "violations": 0
     },
     "103_computed_goto:clang:O0": {
-      "functions_emitted": 13,
-      "functions_with_violations": 4,
-      "violations": 4
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "103_computed_goto:clang:O2": {
-      "functions_emitted": 13,
-      "functions_with_violations": 1,
-      "violations": 2
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "103_computed_goto:gcc:O0": {
-      "functions_emitted": 13,
-      "functions_with_violations": 4,
-      "violations": 4
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "103_computed_goto:gcc:O2": {
-      "functions_emitted": 13,
-      "functions_with_violations": 1,
-      "violations": 1
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "104_statement_expression:clang:O0": {
       "functions_emitted": 10,
@@ -1447,9 +1447,9 @@
       "violations": 0
     },
     "154_wide_switch:clang:O2": {
-      "functions_emitted": 74,
-      "functions_with_violations": 4,
-      "violations": 4
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "154_wide_switch:gcc:O0": {
       "functions_emitted": 11,
@@ -1702,9 +1702,9 @@
       "violations": 6
     },
     "166_rust_generics:rustc:O0": {
-      "functions_emitted": 592,
-      "functions_with_violations": 396,
-      "violations": 1505
+      "functions_emitted": 538,
+      "functions_with_violations": 353,
+      "violations": 1245
     },
     "166_rust_generics:rustc:O2": {
       "functions_emitted": 22,
@@ -1712,34 +1712,34 @@
       "violations": 5
     },
     "167_rust_trait_objects:rustc:O0": {
-      "functions_emitted": 593,
-      "functions_with_violations": 393,
-      "violations": 1497
+      "functions_emitted": 540,
+      "functions_with_violations": 351,
+      "violations": 1241
     },
     "167_rust_trait_objects:rustc:O2": {
-      "functions_emitted": 573,
-      "functions_with_violations": 382,
-      "violations": 1489
+      "functions_emitted": 520,
+      "functions_with_violations": 340,
+      "violations": 1233
     },
     "168_rust_enum_niche:rustc:O0": {
-      "functions_emitted": 38,
-      "functions_with_violations": 11,
-      "violations": 13
+      "functions_emitted": 34,
+      "functions_with_violations": 8,
+      "violations": 9
     },
     "168_rust_enum_niche:rustc:O2": {
-      "functions_emitted": 25,
-      "functions_with_violations": 5,
-      "violations": 6
+      "functions_emitted": 22,
+      "functions_with_violations": 3,
+      "violations": 3
     },
     "169_rust_slices_bounds:rustc:O0": {
-      "functions_emitted": 623,
-      "functions_with_violations": 418,
-      "violations": 1552
+      "functions_emitted": 570,
+      "functions_with_violations": 376,
+      "violations": 1296
     },
     "169_rust_slices_bounds:rustc:O2": {
-      "functions_emitted": 565,
-      "functions_with_violations": 379,
-      "violations": 1481
+      "functions_emitted": 512,
+      "functions_with_violations": 337,
+      "violations": 1225
     },
     "16_red_black_tree:clang:O0": {
       "functions_emitted": 11,
@@ -1762,19 +1762,19 @@
       "violations": 1
     },
     "170_rust_panic_unwind:rustc:O0": {
-      "functions_emitted": 596,
-      "functions_with_violations": 396,
-      "violations": 1505
+      "functions_emitted": 543,
+      "functions_with_violations": 354,
+      "violations": 1249
     },
     "170_rust_panic_unwind:rustc:O2": {
-      "functions_emitted": 573,
-      "functions_with_violations": 388,
-      "violations": 1497
+      "functions_emitted": 520,
+      "functions_with_violations": 346,
+      "violations": 1241
     },
     "171_rust_overflow:rustc:O0": {
-      "functions_emitted": 590,
-      "functions_with_violations": 388,
-      "violations": 1495
+      "functions_emitted": 537,
+      "functions_with_violations": 346,
+      "violations": 1239
     },
     "171_rust_overflow:rustc:O2": {
       "functions_emitted": 29,
@@ -2377,9 +2377,9 @@
       "violations": 0
     },
     "204_adjacent_dispatch_tables:gcc:O2": {
-      "functions_emitted": 21,
-      "functions_with_violations": 3,
-      "violations": 3
+      "functions_emitted": 17,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "20_graph_bfs:clang:O0": {
       "functions_emitted": 11,
@@ -2827,9 +2827,9 @@
       "violations": 0
     },
     "42_rpn_evaluator:clang:O2": {
-      "functions_emitted": 13,
-      "functions_with_violations": 2,
-      "violations": 3
+      "functions_emitted": 9,
+      "functions_with_violations": 0,
+      "violations": 0
     },
     "42_rpn_evaluator:gcc:O0": {
       "functions_emitted": 10,
@@ -3984,34 +3984,34 @@
   },
   "lane_totals": {
     "clang:O0": {
-      "functions_emitted": 2741,
-      "functions_with_violations": 30,
-      "violations": 111
+      "functions_emitted": 2737,
+      "functions_with_violations": 26,
+      "violations": 107
     },
     "clang:O2": {
-      "functions_emitted": 2614,
-      "functions_with_violations": 86,
-      "violations": 242
+      "functions_emitted": 2545,
+      "functions_with_violations": 79,
+      "violations": 233
     },
     "gcc:O0": {
-      "functions_emitted": 2642,
-      "functions_with_violations": 14,
-      "violations": 94
+      "functions_emitted": 2638,
+      "functions_with_violations": 10,
+      "violations": 90
     },
     "gcc:O2": {
-      "functions_emitted": 2505,
-      "functions_with_violations": 62,
-      "violations": 118
+      "functions_emitted": 2497,
+      "functions_with_violations": 58,
+      "violations": 114
     },
     "rustc:O0": {
-      "functions_emitted": 3032,
-      "functions_with_violations": 2002,
-      "violations": 7567
+      "functions_emitted": 2762,
+      "functions_with_violations": 1788,
+      "violations": 6279
     },
     "rustc:O2": {
-      "functions_emitted": 1787,
-      "functions_with_violations": 1159,
-      "violations": 4478
+      "functions_emitted": 1625,
+      "functions_with_violations": 1031,
+      "violations": 3707
     }
   },
   "problems": [],
