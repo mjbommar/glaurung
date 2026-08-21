@@ -344,14 +344,14 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 15,
-        "ir_median_loc": 438,
+        "ir_median_loc": pytest.approx(434.0),
         "product_files_above_1000": 26,
         "product_files_above_2000": 4,
-        "product_loc_above_1000": 39770,
-        "product_max_loc": 2506,
-        "product_mean_loc": pytest.approx(430.04086538461536),
-        "product_median_loc": pytest.approx(311.0),
-        "product_pct_loc_above_1000": pytest.approx(22.230669044198617),
+        "product_loc_above_1000": 39740,
+        "product_max_loc": 2468,
+        "product_mean_loc": pytest.approx(428.31503579952266),
+        "product_median_loc": 311,
+        "product_pct_loc_above_1000": pytest.approx(22.143716845718362),
     }
 
 
@@ -605,6 +605,18 @@ def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
     predicate legible -- and it is listed here rather than trimmed to fit the
     counter, because a comment deleted to keep a number flat is exactly the
     drift this measure exists to surface.
+
+    2026-08-21: `ir/types_recover.rs` grew 1,898 -> 1,906 (+8) and the baseline
+    was regenerated. The measure did its job twice on the way. It first fired at
+    +110, which was the whole `copied_live_in_pointer_hint` walk sitting in the
+    driver; that became `types_recover/copies.rs`, beside the two spill-shaped
+    producers it is the `-O2` counterpart to. It fired again at +17, which was a
+    twelve-line comment explaining why the new evidence is MERGED into the hint
+    chain rather than chained onto it -- so that moved to
+    `copies::combine_pointer_evidence`, the function whose contract it states,
+    and the call site kept a pointer to it. The residual +8 is the call site
+    itself plus `mod copies;` and its `use`: irreducible without deleting the
+    reasoning, which is the thing this measure protects.
     """
     baseline = fr.load_baseline(BASELINE)
     current = fr.build_report(SRC)

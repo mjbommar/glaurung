@@ -25,11 +25,13 @@ use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
 
+mod copies;
 mod float_bank;
 mod result_hint;
 mod tagging;
 mod valued;
 
+use copies::{combine_pointer_evidence, copied_live_in_pointer_hint};
 #[cfg(test)]
 use float_bank::float_argument_bank_slot;
 use float_bank::{
@@ -1577,13 +1579,19 @@ pub fn recover_prototype_with_arm_vfp_args(
             // The AAPCS register container is only four bytes. Apply the same
             // ABI boundary used for result values before this fact crosses
             // into the source-level prototype.
-            let hint = valued
+            let established = valued
                 .parameter_refinement(&value)
                 .or_else(|| arm_live_in_address_hint(&valued, &value, cc))
                 .or_else(|| live_in_parameter_view_hint(lf, ssa, &value, &raw, cc))
-                .or(raw_hint)
-                .map(|hint| normalize_value_hint_for_abi(hint, cc))
-                .map(|hint| observable_parameter_widths.refine(&value, hint));
+                .or(raw_hint);
+            // MERGED, not chained -- a fallback arm here is dead code. See
+            // `copies::combine_pointer_evidence` for why, and for what it costs.
+            let hint = match copied_live_in_pointer_hint(lf, ssa, &value) {
+                Some(dereferenced) => Some(combine_pointer_evidence(established, dereferenced)),
+                None => established,
+            }
+            .map(|hint| normalize_value_hint_for_abi(hint, cc))
+            .map(|hint| observable_parameter_widths.refine(&value, hint));
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
@@ -4714,6 +4722,145 @@ int never_returns(void) { for (;;) {} }
     }
 
     #[test]
+    /// The `-O2` shape: the parameter is never spilled, only copied.
+    ///
+    /// Both existing producers of pointer evidence want a frame slot, so this
+    /// function used to recover `arg0` as a machine word. Measured over 402
+    /// DWARF pointer parameters in the `-O2strip` corpus, that was 34.1% of
+    /// pointer-to-byte parameters losing their pointerness entirely.
+    #[test]
+    fn a_pointer_kept_in_a_register_and_dereferenced_through_a_copy_is_a_pointer() {
+        // mov rbx, rdi ; movzbl (rbx), eax   -- no spill anywhere.
+        let lf = mk_block(vec![
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp::plain(Some(VReg::phys("rbx")), None, 1, 0, 1),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 1 }),
+        );
+    }
+
+    /// A chain of copies is still the same value.
+    #[test]
+    fn the_copy_chain_may_be_longer_than_one_hop() {
+        let lf = mk_block(vec![
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("r12"),
+                src: Value::Reg(VReg::phys("rbx")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp::plain(Some(VReg::phys("r12")), None, 1, 8, 4),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 4 }),
+        );
+    }
+
+    /// A conversion produces a DIFFERENT value, and must break the chain.
+    ///
+    /// This is the hazard `copy_origin` documents: an integer parameter that is
+    /// zero-extended and then used to derive an address is not a pointer, and
+    /// calling it `char *` is how a `uint32_t` MMIO offset becomes one. Only
+    /// identity copies carry the definition-site contract.
+    #[test]
+    fn a_zero_extended_value_is_not_the_parameter_it_came_from() {
+        let lf = mk_block(vec![
+            Op::ZExt {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("edi")),
+                from: crate::ir::types::Width::W32,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp::plain(Some(VReg::phys("rbx")), None, 1, 0, 1),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+        assert!(
+            !matches!(
+                prototype.parameter(0).and_then(|parameter| parameter.hint),
+                Some(TypeHint::Pointer { .. })
+            ),
+            "a zext'd integer was promoted to a pointer: {:?}",
+            prototype.parameter(0).and_then(|parameter| parameter.hint)
+        );
+    }
+
+    /// Disagreeing widths through copies mean `void *`, not the wider one.
+    ///
+    /// The same rule as
+    /// `arm_live_in_with_conflicting_access_widths_is_a_void_pointer`, reached
+    /// through the copy walk instead of directly. Using `merge_type_hint` here
+    /// — which resolves two pointers by taking the wider pointee — broke that
+    /// test, and would have invented `int *` for byte buffers.
+    #[test]
+    fn conflicting_widths_through_a_copy_are_a_void_pointer() {
+        let lf = mk_block(vec![
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbx")), None, 1, 0, 1),
+                src: Value::Const(0),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbx")), None, 1, 4, 4),
+                src: Value::Const(0),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 0 }),
+        );
+    }
+
     fn arm_live_in_with_conflicting_access_widths_is_a_void_pointer() {
         // Optimized byte-buffer routines such as memset access one caller
         // pointer through byte and word stores. Choosing the widest access

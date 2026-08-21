@@ -93,7 +93,11 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     ),
     "ir/types_recover.rs": (
         "scheduled split: constraints, collection, solving, prototypes, and "
-        "language spelling."
+        "language spelling. One cut taken 2026-08-21: types_recover/copies.rs "
+        "(140) took the pointer-evidence walk that follows identity register "
+        "copies, and the pointer/pointer meet rule that goes with it -- the "
+        "-O2 counterpart to the spill-shaped producers already in tagging.rs "
+        "and valued.rs, so it sits beside them rather than in the driver."
     ),
     "ir/structure.rs": (
         "scheduled split: graph algorithms, regions, selection, verification, and HIR."
