@@ -368,11 +368,17 @@ def test_the_committed_opt_sets_are_unchanged_by_the_arch_dimension():
     to each opt. A jump of two per fixture is the invariant; a contiguous
     fixture number is not -- 202, 203 and 204 were built in parallel trees and
     numbered to avoid colliding with each other, not to be consecutive.
+    384 -> 386 on 2026-08-27: `205_x87_long_double`, the first `long double` in
+    the corpus. 386 -> 412 on 2026-08-27: THIRTEEN fixtures, `206`..`218`, the
+    defect-directed batch (dispatch forms, the unmodelled-effect model, the
+    goto-soup structuring class, and the census gaps `_Complex`, packed bitfield
+    unions and C++ closures). `219_rust_iterator_chains` is NOT counted here:
+    a `.rs` fixture builds in the `rustc` lanes, which `@o0`/`@o2` do not select.
     Update this WITH the fixture, and say which fixture moved it.
     """
     for name in ("o0", "o2"):
         lanes = D.resolve([f"@{name}"])
-        assert len(lanes) == 384, f"@{name} is now {len(lanes)} lanes"
+        assert len(lanes) == 412, f"@{name} is now {len(lanes)} lanes"
         assert not any(lane.is_arch for lane in lanes)
 
 

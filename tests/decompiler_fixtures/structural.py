@@ -108,7 +108,7 @@ _DEREF_CALLEE_APPLIED = re.compile(r"\(\s*\*\s*[A-Za-z_][\w\[\]\.\s\+\-\>]*\)\s*
 def has_indirect_call(block: str) -> bool:
     """A call through a computed/loaded pointer — operations-table dispatch.
 
-    The previous predicate was `\)\s*\)\s*\(` — ANY `))(` — which ordinary
+    The previous predicate was a bare ))( match — which ordinary
     nested casts produce constantly. Measured over 139 REQUIRED functions from
     45 fixtures at `gcc:O0`, it fired on **45 of them (32%)**, including
     `108_multidimensional_arrays:sum_true_2d`, which contains no call of any
@@ -199,8 +199,51 @@ def has_void_signature(block: str) -> bool:
     return bool(re.search(r"(?m)^\s*void\s+[A-Za-z_]\w*\s*\(", body))
 
 
+def has_switch(block: str) -> bool:
+    """A ``switch`` statement survived into the rendered C.
+
+    THE GAP THIS CLOSES. Until this predicate existed the corpus could assert
+    that a function *executes* correctly and nothing more, and a dispatch
+    recovered as a labelled goto chain executes correctly: the arms are all
+    present, the control flow is faithful, and the C is simply not a switch.
+    Measured over the 250 scored DecBench sample-set functions, 28.8% render as
+    goto soup (40.5% on x86-64) -- the single largest defect class -- and every
+    one of them passes an execution differential.
+
+    Deliberately textual and deliberately weak: it asks whether the renderer
+    emitted the construct, not whether the arms are right. `04_switch_shapes`
+    and the manifest's `arg_values` already drive the exact case constants, so
+    correctness of the arms is covered where it belongs. Anchored at the start
+    of a statement so a `switch` inside a string literal or a comment cannot
+    satisfy it.
+    """
+    body = _strip_comments(block)
+    return bool(re.search(r"(?m)^\s*switch\s*\(", body))
+
+
+def goto_free(block: str) -> bool:
+    """No ``goto`` survived into the rendered C.
+
+    The companion to [`has_switch`], and phrased as an ABSENCE on purpose: the
+    structural map records booleans, and `{"goto_free": True}` reads as the
+    property being asserted rather than as a count being tolerated. A count
+    would also be the wrong shape -- it would have to be refreshed every time a
+    lane's rendering shifted by one label, which is exactly the churn the
+    closure/verify sections already carry.
+
+    A `goto` is not itself a defect: `102_duffs_device`, `103_computed_goto` and
+    `105_goto_ladder` are ABOUT goto, and irreducible control flow legitimately
+    needs one. This predicate exists so that a fixture whose source has no goto
+    can say so, and notice when the structurer starts emitting them.
+    """
+    body = _strip_comments(block)
+    return not re.search(r"(?m)^\s*goto\s+\w+\s*;", body)
+
+
 PREDICATES = {
     "indirect_call": has_indirect_call,
+    "switch": has_switch,
+    "goto_free": goto_free,
     "memory_store": has_memory_store,
     "nonempty": is_nonempty,
     "head_tested_while": has_head_tested_while,

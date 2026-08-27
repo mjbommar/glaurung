@@ -1829,6 +1829,121 @@ mod tests {
         );
     }
 
+    /// Characterises the largest measured structuring gap: a chain of
+    /// `if (c) { handler; }` guards whose handlers are emitted OUT OF LINE.
+    ///
+    /// Transcribed edge-for-edge from `bin_090.elf` `sub_7370` in the frozen
+    /// DecBench sample-set — 15 blocks, of which the renderer labels 12. Over
+    /// the 250 scored sample-set functions, 28.8% render as goto soup (40.5% on
+    /// x86-64), and only 2.6% of those are whole-function bailouts, so the loss
+    /// is `detect_if_shape` declining shape by shape and taking the rest of the
+    /// walk with it. This is the smallest instance.
+    ///
+    /// **This test pins the CURRENT, WRONG behaviour.** If it fails because the
+    /// numbers went DOWN, the gap is closing: read the new region, confirm it,
+    /// and update the expectation.
+    ///
+    /// # A local fix was tried here and reverted, on measurement
+    ///
+    /// `shared_return_chain` refuses any chain whose entry has one predecessor,
+    /// so an EXCLUSIVELY OWNED multi-block chain to a return has no owner: a
+    /// single terminal block is the early-exit shape, a shared chain is the
+    /// clone shape, and this falls between them. Admitting it (as
+    /// `linear_return_chain`, guarded so the two arms must genuinely diverge)
+    /// takes this reproduction from nine unstructured blocks to one and keeps
+    /// all 91 structure tests green.
+    ///
+    /// It was still reverted, because that is not the whole measurement:
+    ///
+    /// * it does **not** move the corpus — `sub_7370` itself stays at 12 labels
+    ///   and the 250-function census is flat on x86-64 (65 structured / 64 goto
+    ///   soup, before and after), because the LLIR CFG these functions are
+    ///   structured from is not the analysis CFG this test transcribes
+    ///   (`lift_function` clips blocks to owned ranges and prunes edges); and
+    /// * it **costs correctness**: `tools/gen_defuse_baseline.py` reports
+    ///   `rustc:O0` +15 and `rustc:O2` +11 undefined reads, in fixture lanes
+    ///   that were already tracked. Each is a wrong-code bug — the recovered
+    ///   function reads a value the machine never produced.
+    ///
+    /// That is the third local fix to this function to be reverted after
+    /// measurement, and the third for the same reason: widening one predicate
+    /// trades one shape for another. The answer is the region analysis
+    /// `docs/design/decbench-defect-reproductions-2026-08-27.md` §7 P3
+    /// specifies — a loop forest computed once, a region context replacing
+    /// `stop_at`, and a loop-relative join oracle — not a fourth predicate.
+    #[test]
+    fn out_of_line_guard_handlers_are_still_lost_to_goto() {
+        let cond = || {
+            vec![Op::CondJump {
+                cond: VReg::Flag(crate::ir::types::Flag::Z),
+                target: 0,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            // (block, ops, [handler, fallthrough]) — handler first, exactly as
+            // the real function reports it.
+            (0x1000, cond(), vec![0x2000, 0x1100]), // A, handler H1 rejoins B
+            (0x1100, cond(), vec![0x2100, 0x1200]), // B, handler H2 rejoins C
+            (0x1200, cond(), vec![0x3000, 0x1300]), // C, early exit to X
+            (0x1300, cond(), vec![0x2200, 0x1400]), // D, handler H3 EXITS via X
+            (0x1400, cond(), vec![0x2300, 0x1500]), // E, handler H4 rejoins F
+            (0x1500, cond(), vec![0x2400, 0x1600]), // F, handler H5 rejoins G
+            (0x1600, cond(), vec![0x2500, 0x1700]), // G, handler H6 rejoins R
+            (0x1700, vec![Op::Return], vec![]),     // R
+            (0x2000, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x2100, vec![Op::Jump { target: 0x1200 }], vec![0x1200]),
+            (0x2200, vec![Op::Jump { target: 0x3000 }], vec![0x3000]),
+            (0x2300, vec![Op::Jump { target: 0x1500 }], vec![0x1500]),
+            (0x2400, vec![Op::Jump { target: 0x1600 }], vec![0x1600]),
+            (0x2500, vec![Op::Jump { target: 0x1700 }], vec![0x1700]),
+            (0x3000, vec![Op::Return], vec![]), // X, the shared epilogue
+        ]);
+
+        let region = recover_for(&lf);
+
+        fn tally(region: &Region, ifs: &mut usize, gotos: &mut usize, loose: &mut usize) {
+            match region {
+                Region::IfThen { then_r, .. } => {
+                    *ifs += 1;
+                    tally(then_r, ifs, gotos, loose);
+                }
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    *ifs += 1;
+                    tally(then_r, ifs, gotos, loose);
+                    tally(else_r, ifs, gotos, loose);
+                }
+                Region::Seq(parts) => {
+                    for part in parts {
+                        tally(part, ifs, gotos, loose);
+                    }
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => {
+                    tally(body, ifs, gotos, loose)
+                }
+                Region::Switch { arms, .. } => {
+                    for arm in arms {
+                        tally(arm, ifs, gotos, loose);
+                    }
+                }
+                Region::Goto(_) => *gotos += 1,
+                Region::Unstructured(blocks) => *loose += blocks.len(),
+                Region::Block(_) | Region::RawLoop { .. } => {}
+            }
+        }
+        let (mut ifs, mut gotos, mut loose) = (0usize, 0usize, 0usize);
+        tally(&region, &mut ifs, &mut gotos, &mut loose);
+
+        assert_eq!(
+            (ifs, loose),
+            (3, 9),
+            "seven conditionals, of which three structure and the rest are lost \
+             from the fourth onward. A LOWER `loose` means the gap is closing — \
+             read the region, confirm it, and update this expectation: {region:#?}"
+        );
+        assert_eq!(gotos, 0, "the loss is Unstructured, not Goto: {region:#?}");
+    }
+
     #[test]
     fn a_guard_default_reused_by_table_holes_is_a_formal_switch_default() {
         let lf = mk_cfg(vec![

@@ -239,3 +239,15 @@ description = "Bit scans, bit counts and the bit-modify family (202), plus the t
 # because an instruction family had no lane -- so it gets its own selector
 # rather than making a counted set silently wrong.
 selectors = ["202_*", "144_inline_asm", "165_bitstream_reader"]
+
+[structuring]
+description = "the goto-soup class: out-of-line guards, epilogue chains, irreducible loops, and a dispatch whose arm returns"
+selectors = ["209_*", "210_*", "211_*", "212_*"]
+
+[dispatch-forms]
+description = "every jump-table encoding: dense/sparse, wide selector, scaled index, and adjacent tables"
+selectors = ["206_*", "207_*", "215_*", "204_*"]
+
+[effect-model]
+description = "instructions whose register effects the lifter does not model, and the codegen forms around them"
+selectors = ["208_*", "205_*", "213_*", "214_*"]

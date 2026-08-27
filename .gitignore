@@ -134,3 +134,7 @@ tests/decompiler_fixtures/build/
 # execution-differential scratch (GLAURUNG_FIXTURE_TMPDIR)
 .exectmp/
 tests/realistic_corpus/build/
+
+# defect-reproduction scratch: disposable by construction — every source is
+# embedded in docs/design/decbench-defect-reproductions-2026-08-27.md
+.scratch/

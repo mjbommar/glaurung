@@ -2381,6 +2381,106 @@
       "functions_with_violations": 0,
       "violations": 0
     },
+    "205_x87_long_double:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 5,
+      "violations": 14
+    },
+    "205_x87_long_double:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 2,
+      "violations": 4
+    },
+    "205_x87_long_double:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 5,
+      "violations": 15
+    },
+    "205_x87_long_double:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 4,
+      "violations": 5
+    },
+    "206_aarch64_wide_dispatch:clang:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "206_aarch64_wide_dispatch:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "206_aarch64_wide_dispatch:gcc:O0": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "206_aarch64_wide_dispatch:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "207_scaled_index_addressing:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "207_scaled_index_addressing:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "207_scaled_index_addressing:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "207_scaled_index_addressing:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "208_flag_register_roundtrip:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "208_flag_register_roundtrip:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "208_flag_register_roundtrip:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "208_flag_register_roundtrip:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "209_out_of_line_guard_handlers:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "209_out_of_line_guard_handlers:clang:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "209_out_of_line_guard_handlers:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "209_out_of_line_guard_handlers:gcc:O2": {
+      "functions_emitted": 11,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
     "20_graph_bfs:clang:O0": {
       "functions_emitted": 11,
       "functions_with_violations": 0,
@@ -2400,6 +2500,196 @@
       "functions_emitted": 10,
       "functions_with_violations": 1,
       "violations": 1
+    },
+    "210_shared_return_epilogues:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "210_shared_return_epilogues:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "210_shared_return_epilogues:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "210_shared_return_epilogues:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "211_irreducible_loops:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "211_irreducible_loops:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "211_irreducible_loops:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "211_irreducible_loops:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "212_loop_with_returning_arm:clang:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "212_loop_with_returning_arm:clang:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "212_loop_with_returning_arm:gcc:O0": {
+      "functions_emitted": 12,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "212_loop_with_returning_arm:gcc:O2": {
+      "functions_emitted": 12,
+      "functions_with_violations": 1,
+      "violations": 1
+    },
+    "213_arm_predicated_execution:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "213_arm_predicated_execution:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "213_arm_predicated_execution:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "213_arm_predicated_execution:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "214_arm_literal_pools:clang:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "214_arm_literal_pools:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "214_arm_literal_pools:gcc:O0": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "214_arm_literal_pools:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "215_switch_on_wide_selector:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "215_switch_on_wide_selector:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "215_switch_on_wide_selector:gcc:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "215_switch_on_wide_selector:gcc:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "216_packed_union_wire_record:clang:O0": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "216_packed_union_wire_record:clang:O2": {
+      "functions_emitted": 13,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "216_packed_union_wire_record:gcc:O0": {
+      "functions_emitted": 15,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "216_packed_union_wire_record:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "217_complex_arithmetic:clang:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 4,
+      "violations": 18
+    },
+    "217_complex_arithmetic:clang:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 4,
+      "violations": 18
+    },
+    "217_complex_arithmetic:gcc:O0": {
+      "functions_emitted": 17,
+      "functions_with_violations": 4,
+      "violations": 18
+    },
+    "217_complex_arithmetic:gcc:O2": {
+      "functions_emitted": 16,
+      "functions_with_violations": 2,
+      "violations": 16
+    },
+    "218_cpp_lambdas_and_callables:clang:O0": {
+      "functions_emitted": 20,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "218_cpp_lambdas_and_callables:clang:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "218_cpp_lambdas_and_callables:gcc:O0": {
+      "functions_emitted": 18,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "218_cpp_lambdas_and_callables:gcc:O2": {
+      "functions_emitted": 14,
+      "functions_with_violations": 0,
+      "violations": 0
+    },
+    "219_rust_iterator_chains:rustc:O0": {
+      "functions_emitted": 653,
+      "functions_with_violations": 430,
+      "violations": 1379
+    },
+    "219_rust_iterator_chains:rustc:O2": {
+      "functions_emitted": 508,
+      "functions_with_violations": 336,
+      "violations": 1226
     },
     "21_graph_dfs:clang:O0": {
       "functions_emitted": 11,
@@ -3984,34 +4274,34 @@
   },
   "lane_totals": {
     "clang:O0": {
-      "functions_emitted": 2737,
-      "functions_with_violations": 26,
-      "violations": 107
+      "functions_emitted": 2929,
+      "functions_with_violations": 36,
+      "violations": 140
     },
     "clang:O2": {
-      "functions_emitted": 2545,
-      "functions_with_violations": 79,
-      "violations": 233
+      "functions_emitted": 2727,
+      "functions_with_violations": 86,
+      "violations": 256
     },
     "gcc:O0": {
-      "functions_emitted": 2638,
-      "functions_with_violations": 10,
-      "violations": 90
+      "functions_emitted": 2830,
+      "functions_with_violations": 20,
+      "violations": 124
     },
     "gcc:O2": {
-      "functions_emitted": 2497,
-      "functions_with_violations": 58,
-      "violations": 114
+      "functions_emitted": 2680,
+      "functions_with_violations": 65,
+      "violations": 136
     },
     "rustc:O0": {
-      "functions_emitted": 2762,
-      "functions_with_violations": 1788,
-      "violations": 6279
+      "functions_emitted": 3415,
+      "functions_with_violations": 2218,
+      "violations": 7658
     },
     "rustc:O2": {
-      "functions_emitted": 1625,
-      "functions_with_violations": 1031,
-      "violations": 3707
+      "functions_emitted": 2133,
+      "functions_with_violations": 1367,
+      "violations": 4933
     }
   },
   "problems": [],
@@ -6514,12 +6804,372 @@
     "204_adjacent_dispatch_tables:gcc:O2:adt204_switch_a": [],
     "204_adjacent_dispatch_tables:gcc:O2:adt204_switch_b": [],
     "204_adjacent_dispatch_tables:gcc:O2:adt204_switch_c": [],
+    "205_x87_long_double:clang:O0:x87_accumulate": [
+      "local_30 is read but never defined",
+      "local_36 is read but never defined"
+    ],
+    "205_x87_long_double:clang:O0:x87_compare_classify": [
+      "cf_0 is read but never defined",
+      "pf_0 is read but never defined",
+      "pf_1 reads an explicitly undefined value",
+      "pf_3 reads an explicitly undefined value",
+      "pf_5 reads an explicitly undefined value",
+      "zf_0 is read but never defined"
+    ],
+    "205_x87_long_double:clang:O0:x87_many_live_values": [
+      "local_98 is read but never defined",
+      "local_9e is read but never defined"
+    ],
+    "205_x87_long_double:clang:O0:x87_mixed_widths": [
+      "local_48 is read but never defined",
+      "local_4a is read but never defined"
+    ],
+    "205_x87_long_double:clang:O0:x87_product_chain": [
+      "local_30 is read but never defined",
+      "local_32 is read but never defined"
+    ],
+    "205_x87_long_double:clang:O2:x87_accumulate": [
+      "local_1c is read but never defined",
+      "local_8 is read but never defined"
+    ],
+    "205_x87_long_double:clang:O2:x87_compare_classify": [],
+    "205_x87_long_double:clang:O2:x87_many_live_values": [
+      "local_10 is read but never defined",
+      "local_8 is read but never defined"
+    ],
+    "205_x87_long_double:clang:O2:x87_mixed_widths": [],
+    "205_x87_long_double:clang:O2:x87_product_chain": [],
+    "205_x87_long_double:gcc:O0:x87_accumulate": [
+      "local_26 is read but never defined",
+      "local_30 is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O0:x87_compare_classify": [
+      "cf_0 is read but never defined",
+      "local_58 is read but never defined",
+      "local_60 is read but never defined",
+      "pf_0 is read but never defined",
+      "pf_1 reads an explicitly undefined value",
+      "pf_3 reads an explicitly undefined value",
+      "pf_5 reads an explicitly undefined value",
+      "zf_0 is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O0:x87_many_live_values": [
+      "local_86 is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O0:x87_mixed_widths": [
+      "local_36 is read but never defined",
+      "local_40 is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O0:x87_product_chain": [
+      "local_26 is read but never defined",
+      "local_30 is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O2:x87_accumulate": [
+      "local_a is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O2:x87_compare_classify": [],
+    "205_x87_long_double:gcc:O2:x87_many_live_values": [
+      "local_a is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O2:x87_mixed_widths": [
+      "local_a is read but never defined"
+    ],
+    "205_x87_long_double:gcc:O2:x87_product_chain": [
+      "local_18 is read but never defined",
+      "local_a is read but never defined"
+    ],
+    "206_aarch64_wide_dispatch:clang:O0:dense_dispatch": [],
+    "206_aarch64_wide_dispatch:clang:O0:dispatch_in_loop": [],
+    "206_aarch64_wide_dispatch:clang:O0:sparse_dispatch": [],
+    "206_aarch64_wide_dispatch:clang:O2:dense_dispatch": [],
+    "206_aarch64_wide_dispatch:clang:O2:dispatch_in_loop": [
+      "var10 is read but never defined"
+    ],
+    "206_aarch64_wide_dispatch:clang:O2:sparse_dispatch": [],
+    "206_aarch64_wide_dispatch:gcc:O0:dense_dispatch": [],
+    "206_aarch64_wide_dispatch:gcc:O0:dispatch_in_loop": [],
+    "206_aarch64_wide_dispatch:gcc:O0:sparse_dispatch": [],
+    "206_aarch64_wide_dispatch:gcc:O2:dense_dispatch": [],
+    "206_aarch64_wide_dispatch:gcc:O2:dispatch_in_loop": [],
+    "206_aarch64_wide_dispatch:gcc:O2:sparse_dispatch": [],
+    "207_scaled_index_addressing:clang:O0:byte_stride_unscaled": [],
+    "207_scaled_index_addressing:clang:O0:quad_stride_sum": [],
+    "207_scaled_index_addressing:clang:O0:shift_as_value": [],
+    "207_scaled_index_addressing:clang:O0:word_at_index": [],
+    "207_scaled_index_addressing:clang:O0:word_store_at_index": [],
+    "207_scaled_index_addressing:clang:O0:word_stride_sum": [],
+    "207_scaled_index_addressing:clang:O2:byte_stride_unscaled": [],
+    "207_scaled_index_addressing:clang:O2:quad_stride_sum": [],
+    "207_scaled_index_addressing:clang:O2:shift_as_value": [],
+    "207_scaled_index_addressing:clang:O2:word_at_index": [],
+    "207_scaled_index_addressing:clang:O2:word_store_at_index": [],
+    "207_scaled_index_addressing:clang:O2:word_stride_sum": [],
+    "207_scaled_index_addressing:gcc:O0:byte_stride_unscaled": [],
+    "207_scaled_index_addressing:gcc:O0:quad_stride_sum": [],
+    "207_scaled_index_addressing:gcc:O0:shift_as_value": [],
+    "207_scaled_index_addressing:gcc:O0:word_at_index": [],
+    "207_scaled_index_addressing:gcc:O0:word_store_at_index": [],
+    "207_scaled_index_addressing:gcc:O0:word_stride_sum": [],
+    "207_scaled_index_addressing:gcc:O2:byte_stride_unscaled": [],
+    "207_scaled_index_addressing:gcc:O2:quad_stride_sum": [],
+    "207_scaled_index_addressing:gcc:O2:shift_as_value": [],
+    "207_scaled_index_addressing:gcc:O2:word_at_index": [],
+    "207_scaled_index_addressing:gcc:O2:word_store_at_index": [],
+    "207_scaled_index_addressing:gcc:O2:word_stride_sum": [],
+    "208_flag_register_roundtrip:clang:O0:accumulate_across_barrier": [],
+    "208_flag_register_roundtrip:clang:O0:control_without_barrier": [],
+    "208_flag_register_roundtrip:clang:O0:flags_do_not_leak": [],
+    "208_flag_register_roundtrip:clang:O0:single_argument_survives": [],
+    "208_flag_register_roundtrip:clang:O2:accumulate_across_barrier": [],
+    "208_flag_register_roundtrip:clang:O2:control_without_barrier": [],
+    "208_flag_register_roundtrip:clang:O2:flags_do_not_leak": [],
+    "208_flag_register_roundtrip:clang:O2:single_argument_survives": [],
+    "208_flag_register_roundtrip:gcc:O0:accumulate_across_barrier": [],
+    "208_flag_register_roundtrip:gcc:O0:control_without_barrier": [],
+    "208_flag_register_roundtrip:gcc:O0:flags_do_not_leak": [],
+    "208_flag_register_roundtrip:gcc:O0:single_argument_survives": [],
+    "208_flag_register_roundtrip:gcc:O2:accumulate_across_barrier": [],
+    "208_flag_register_roundtrip:gcc:O2:control_without_barrier": [],
+    "208_flag_register_roundtrip:gcc:O2:flags_do_not_leak": [],
+    "208_flag_register_roundtrip:gcc:O2:single_argument_survives": [],
+    "209_out_of_line_guard_handlers:clang:O0:exclusive_handler_chain": [],
+    "209_out_of_line_guard_handlers:clang:O0:guard_chain_mixed_exits": [],
+    "209_out_of_line_guard_handlers:clang:O0:guard_chain_rejoins": [],
+    "209_out_of_line_guard_handlers:clang:O2:exclusive_handler_chain": [],
+    "209_out_of_line_guard_handlers:clang:O2:guard_chain_mixed_exits": [],
+    "209_out_of_line_guard_handlers:clang:O2:guard_chain_rejoins": [],
+    "209_out_of_line_guard_handlers:gcc:O0:exclusive_handler_chain": [],
+    "209_out_of_line_guard_handlers:gcc:O0:guard_chain_mixed_exits": [],
+    "209_out_of_line_guard_handlers:gcc:O0:guard_chain_rejoins": [],
+    "209_out_of_line_guard_handlers:gcc:O2:exclusive_handler_chain": [],
+    "209_out_of_line_guard_handlers:gcc:O2:guard_chain_mixed_exits": [],
+    "209_out_of_line_guard_handlers:gcc:O2:guard_chain_rejoins": [],
     "20_graph_bfs:clang:O0:graph_bfs": [],
     "20_graph_bfs:clang:O2:graph_bfs": [],
     "20_graph_bfs:gcc:O0:graph_bfs": [],
     "20_graph_bfs:gcc:O2:graph_bfs": [
       "var9 is read but never defined"
     ],
+    "210_shared_return_epilogues:clang:O0:divergent_arms": [],
+    "210_shared_return_epilogues:clang:O0:epilogue_chain_long": [],
+    "210_shared_return_epilogues:clang:O0:epilogue_chain_one": [],
+    "210_shared_return_epilogues:clang:O0:epilogue_chain_three_shared": [],
+    "210_shared_return_epilogues:clang:O0:epilogue_chain_two": [],
+    "210_shared_return_epilogues:clang:O2:divergent_arms": [],
+    "210_shared_return_epilogues:clang:O2:epilogue_chain_long": [],
+    "210_shared_return_epilogues:clang:O2:epilogue_chain_one": [],
+    "210_shared_return_epilogues:clang:O2:epilogue_chain_three_shared": [],
+    "210_shared_return_epilogues:clang:O2:epilogue_chain_two": [],
+    "210_shared_return_epilogues:gcc:O0:divergent_arms": [],
+    "210_shared_return_epilogues:gcc:O0:epilogue_chain_long": [],
+    "210_shared_return_epilogues:gcc:O0:epilogue_chain_one": [],
+    "210_shared_return_epilogues:gcc:O0:epilogue_chain_three_shared": [],
+    "210_shared_return_epilogues:gcc:O0:epilogue_chain_two": [],
+    "210_shared_return_epilogues:gcc:O2:divergent_arms": [],
+    "210_shared_return_epilogues:gcc:O2:epilogue_chain_long": [],
+    "210_shared_return_epilogues:gcc:O2:epilogue_chain_one": [],
+    "210_shared_return_epilogues:gcc:O2:epilogue_chain_three_shared": [],
+    "210_shared_return_epilogues:gcc:O2:epilogue_chain_two": [],
+    "211_irreducible_loops:clang:O0:irreducible_inside_reducible": [],
+    "211_irreducible_loops:clang:O0:reducible_control": [],
+    "211_irreducible_loops:clang:O0:shared_body_loops": [],
+    "211_irreducible_loops:clang:O0:two_entry_loop": [],
+    "211_irreducible_loops:clang:O2:irreducible_inside_reducible": [],
+    "211_irreducible_loops:clang:O2:reducible_control": [],
+    "211_irreducible_loops:clang:O2:shared_body_loops": [],
+    "211_irreducible_loops:clang:O2:two_entry_loop": [],
+    "211_irreducible_loops:gcc:O0:irreducible_inside_reducible": [],
+    "211_irreducible_loops:gcc:O0:reducible_control": [],
+    "211_irreducible_loops:gcc:O0:shared_body_loops": [],
+    "211_irreducible_loops:gcc:O0:two_entry_loop": [],
+    "211_irreducible_loops:gcc:O2:irreducible_inside_reducible": [],
+    "211_irreducible_loops:gcc:O2:reducible_control": [],
+    "211_irreducible_loops:gcc:O2:shared_body_loops": [],
+    "211_irreducible_loops:gcc:O2:two_entry_loop": [],
+    "212_loop_with_returning_arm:clang:O0:all_arms_break": [],
+    "212_loop_with_returning_arm:clang:O0:fsm_returns_from_arm": [],
+    "212_loop_with_returning_arm:clang:O0:nested_loop_returning_arm": [],
+    "212_loop_with_returning_arm:clang:O0:two_returning_arms": [],
+    "212_loop_with_returning_arm:clang:O2:all_arms_break": [],
+    "212_loop_with_returning_arm:clang:O2:fsm_returns_from_arm": [],
+    "212_loop_with_returning_arm:clang:O2:nested_loop_returning_arm": [],
+    "212_loop_with_returning_arm:clang:O2:two_returning_arms": [],
+    "212_loop_with_returning_arm:gcc:O0:all_arms_break": [],
+    "212_loop_with_returning_arm:gcc:O0:fsm_returns_from_arm": [],
+    "212_loop_with_returning_arm:gcc:O0:nested_loop_returning_arm": [],
+    "212_loop_with_returning_arm:gcc:O0:two_returning_arms": [],
+    "212_loop_with_returning_arm:gcc:O2:all_arms_break": [],
+    "212_loop_with_returning_arm:gcc:O2:fsm_returns_from_arm": [],
+    "212_loop_with_returning_arm:gcc:O2:nested_loop_returning_arm": [
+      "var5 is read but never defined"
+    ],
+    "212_loop_with_returning_arm:gcc:O2:two_returning_arms": [],
+    "213_arm_predicated_execution:clang:O0:branched_control": [],
+    "213_arm_predicated_execution:clang:O0:branchless_classify": [],
+    "213_arm_predicated_execution:clang:O0:chained_selects": [],
+    "213_arm_predicated_execution:clang:O0:conditional_accumulate": [],
+    "213_arm_predicated_execution:clang:O0:early_out_branchless": [],
+    "213_arm_predicated_execution:clang:O0:select_max": [],
+    "213_arm_predicated_execution:clang:O2:branched_control": [],
+    "213_arm_predicated_execution:clang:O2:branchless_classify": [],
+    "213_arm_predicated_execution:clang:O2:chained_selects": [],
+    "213_arm_predicated_execution:clang:O2:conditional_accumulate": [],
+    "213_arm_predicated_execution:clang:O2:early_out_branchless": [],
+    "213_arm_predicated_execution:clang:O2:select_max": [],
+    "213_arm_predicated_execution:gcc:O0:branched_control": [],
+    "213_arm_predicated_execution:gcc:O0:branchless_classify": [],
+    "213_arm_predicated_execution:gcc:O0:chained_selects": [],
+    "213_arm_predicated_execution:gcc:O0:conditional_accumulate": [],
+    "213_arm_predicated_execution:gcc:O0:early_out_branchless": [],
+    "213_arm_predicated_execution:gcc:O0:select_max": [],
+    "213_arm_predicated_execution:gcc:O2:branched_control": [],
+    "213_arm_predicated_execution:gcc:O2:branchless_classify": [],
+    "213_arm_predicated_execution:gcc:O2:chained_selects": [],
+    "213_arm_predicated_execution:gcc:O2:conditional_accumulate": [],
+    "213_arm_predicated_execution:gcc:O2:early_out_branchless": [],
+    "213_arm_predicated_execution:gcc:O2:select_max": [],
+    "214_arm_literal_pools:clang:O0:compare_against_pool": [],
+    "214_arm_literal_pools:clang:O0:encodable_constants": [],
+    "214_arm_literal_pools:clang:O0:many_wide_constants": [],
+    "214_arm_literal_pools:clang:O0:pool_inside_function": [],
+    "214_arm_literal_pools:clang:O0:wide_64bit_constants": [],
+    "214_arm_literal_pools:clang:O0:wide_constant_mix": [],
+    "214_arm_literal_pools:clang:O2:compare_against_pool": [],
+    "214_arm_literal_pools:clang:O2:encodable_constants": [],
+    "214_arm_literal_pools:clang:O2:many_wide_constants": [],
+    "214_arm_literal_pools:clang:O2:pool_inside_function": [],
+    "214_arm_literal_pools:clang:O2:wide_64bit_constants": [],
+    "214_arm_literal_pools:clang:O2:wide_constant_mix": [],
+    "214_arm_literal_pools:gcc:O0:compare_against_pool": [],
+    "214_arm_literal_pools:gcc:O0:encodable_constants": [],
+    "214_arm_literal_pools:gcc:O0:many_wide_constants": [],
+    "214_arm_literal_pools:gcc:O0:pool_inside_function": [],
+    "214_arm_literal_pools:gcc:O0:wide_64bit_constants": [],
+    "214_arm_literal_pools:gcc:O0:wide_constant_mix": [],
+    "214_arm_literal_pools:gcc:O2:compare_against_pool": [],
+    "214_arm_literal_pools:gcc:O2:encodable_constants": [],
+    "214_arm_literal_pools:gcc:O2:many_wide_constants": [],
+    "214_arm_literal_pools:gcc:O2:pool_inside_function": [],
+    "214_arm_literal_pools:gcc:O2:wide_64bit_constants": [],
+    "214_arm_literal_pools:gcc:O2:wide_constant_mix": [],
+    "215_switch_on_wide_selector:clang:O0:narrow_selector_control": [],
+    "215_switch_on_wide_selector:clang:O0:signed_wide_selector": [],
+    "215_switch_on_wide_selector:clang:O0:wide_selector_dense": [],
+    "215_switch_on_wide_selector:clang:O0:wide_selector_high_labels": [],
+    "215_switch_on_wide_selector:clang:O0:wide_selector_mixed": [],
+    "215_switch_on_wide_selector:clang:O2:narrow_selector_control": [],
+    "215_switch_on_wide_selector:clang:O2:signed_wide_selector": [],
+    "215_switch_on_wide_selector:clang:O2:wide_selector_dense": [],
+    "215_switch_on_wide_selector:clang:O2:wide_selector_high_labels": [],
+    "215_switch_on_wide_selector:clang:O2:wide_selector_mixed": [],
+    "215_switch_on_wide_selector:gcc:O0:narrow_selector_control": [],
+    "215_switch_on_wide_selector:gcc:O0:signed_wide_selector": [],
+    "215_switch_on_wide_selector:gcc:O0:wide_selector_dense": [],
+    "215_switch_on_wide_selector:gcc:O0:wide_selector_high_labels": [],
+    "215_switch_on_wide_selector:gcc:O0:wide_selector_mixed": [],
+    "215_switch_on_wide_selector:gcc:O2:narrow_selector_control": [],
+    "215_switch_on_wide_selector:gcc:O2:signed_wide_selector": [],
+    "215_switch_on_wide_selector:gcc:O2:wide_selector_dense": [],
+    "215_switch_on_wide_selector:gcc:O2:wide_selector_high_labels": [],
+    "215_switch_on_wide_selector:gcc:O2:wide_selector_mixed": [],
+    "216_packed_union_wire_record:clang:O0:bitfield_roundtrip": [],
+    "216_packed_union_wire_record:clang:O0:bitfield_seen_as_byte": [],
+    "216_packed_union_wire_record:clang:O0:byte_seen_as_bitfields": [],
+    "216_packed_union_wire_record:clang:O0:plain_struct_control": [],
+    "216_packed_union_wire_record:clang:O0:walk_packed_records": [],
+    "216_packed_union_wire_record:clang:O2:bitfield_roundtrip": [],
+    "216_packed_union_wire_record:clang:O2:bitfield_seen_as_byte": [],
+    "216_packed_union_wire_record:clang:O2:byte_seen_as_bitfields": [],
+    "216_packed_union_wire_record:clang:O2:plain_struct_control": [],
+    "216_packed_union_wire_record:clang:O2:walk_packed_records": [],
+    "216_packed_union_wire_record:gcc:O0:bitfield_roundtrip": [],
+    "216_packed_union_wire_record:gcc:O0:bitfield_seen_as_byte": [],
+    "216_packed_union_wire_record:gcc:O0:byte_seen_as_bitfields": [],
+    "216_packed_union_wire_record:gcc:O0:plain_struct_control": [],
+    "216_packed_union_wire_record:gcc:O0:walk_packed_records": [],
+    "216_packed_union_wire_record:gcc:O2:bitfield_roundtrip": [],
+    "216_packed_union_wire_record:gcc:O2:bitfield_seen_as_byte": [],
+    "216_packed_union_wire_record:gcc:O2:byte_seen_as_bitfields": [],
+    "216_packed_union_wire_record:gcc:O2:plain_struct_control": [],
+    "216_packed_union_wire_record:gcc:O2:walk_packed_records": [],
+    "217_complex_arithmetic:clang:O0:complex_add_conj": [],
+    "217_complex_arithmetic:clang:O0:complex_array_sum": [],
+    "217_complex_arithmetic:clang:O0:complex_float_multiply": [],
+    "217_complex_arithmetic:clang:O0:complex_multiply": [],
+    "217_complex_arithmetic:clang:O0:complex_through_call": [
+      "var61 is read but never defined"
+    ],
+    "217_complex_arithmetic:clang:O0:struct_pair_control": [],
+    "217_complex_arithmetic:clang:O2:complex_add_conj": [],
+    "217_complex_arithmetic:clang:O2:complex_array_sum": [],
+    "217_complex_arithmetic:clang:O2:complex_float_multiply": [
+      "ret is read before it is defined"
+    ],
+    "217_complex_arithmetic:clang:O2:complex_multiply": [
+      "ret is read before it is defined"
+    ],
+    "217_complex_arithmetic:clang:O2:complex_through_call": [],
+    "217_complex_arithmetic:clang:O2:struct_pair_control": [],
+    "217_complex_arithmetic:gcc:O0:complex_add_conj": [],
+    "217_complex_arithmetic:gcc:O0:complex_array_sum": [],
+    "217_complex_arithmetic:gcc:O0:complex_float_multiply": [],
+    "217_complex_arithmetic:gcc:O0:complex_multiply": [],
+    "217_complex_arithmetic:gcc:O0:complex_through_call": [
+      "var47 is read but never defined"
+    ],
+    "217_complex_arithmetic:gcc:O0:struct_pair_control": [],
+    "217_complex_arithmetic:gcc:O2:complex_add_conj": [],
+    "217_complex_arithmetic:gcc:O2:complex_array_sum": [],
+    "217_complex_arithmetic:gcc:O2:complex_float_multiply": [],
+    "217_complex_arithmetic:gcc:O2:complex_multiply": [],
+    "217_complex_arithmetic:gcc:O2:complex_through_call": [],
+    "217_complex_arithmetic:gcc:O2:struct_pair_control": [],
+    "218_cpp_lambdas_and_callables:clang:O0:capture_by_reference": [],
+    "218_cpp_lambdas_and_callables:clang:O0:capture_by_value": [],
+    "218_cpp_lambdas_and_callables:clang:O0:capture_then_mutate": [],
+    "218_cpp_lambdas_and_callables:clang:O0:erased_callable": [],
+    "218_cpp_lambdas_and_callables:clang:O0:mixed_capture": [],
+    "218_cpp_lambdas_and_callables:clang:O0:plain_call_control": [],
+    "218_cpp_lambdas_and_callables:clang:O2:capture_by_reference": [],
+    "218_cpp_lambdas_and_callables:clang:O2:capture_by_value": [],
+    "218_cpp_lambdas_and_callables:clang:O2:capture_then_mutate": [],
+    "218_cpp_lambdas_and_callables:clang:O2:erased_callable": [],
+    "218_cpp_lambdas_and_callables:clang:O2:mixed_capture": [],
+    "218_cpp_lambdas_and_callables:clang:O2:plain_call_control": [],
+    "218_cpp_lambdas_and_callables:gcc:O0:capture_by_reference": [],
+    "218_cpp_lambdas_and_callables:gcc:O0:capture_by_value": [],
+    "218_cpp_lambdas_and_callables:gcc:O0:capture_then_mutate": [],
+    "218_cpp_lambdas_and_callables:gcc:O0:erased_callable": [],
+    "218_cpp_lambdas_and_callables:gcc:O0:mixed_capture": [],
+    "218_cpp_lambdas_and_callables:gcc:O0:plain_call_control": [],
+    "218_cpp_lambdas_and_callables:gcc:O2:capture_by_reference": [],
+    "218_cpp_lambdas_and_callables:gcc:O2:capture_by_value": [],
+    "218_cpp_lambdas_and_callables:gcc:O2:capture_then_mutate": [],
+    "218_cpp_lambdas_and_callables:gcc:O2:erased_callable": [],
+    "218_cpp_lambdas_and_callables:gcc:O2:mixed_capture": [],
+    "218_cpp_lambdas_and_callables:gcc:O2:plain_call_control": [],
+    "219_rust_iterator_chains:rustc:O0:explicit_loop_control": [
+      "of_11 reads an explicitly undefined value"
+    ],
+    "219_rust_iterator_chains:rustc:O0:iter_capturing_closure": [],
+    "219_rust_iterator_chains:rustc:O0:iter_enumerate_fold": [],
+    "219_rust_iterator_chains:rustc:O0:iter_filter_map_sum": [
+      "stack_1 is read but never defined"
+    ],
+    "219_rust_iterator_chains:rustc:O0:iter_rev_chain": [],
+    "219_rust_iterator_chains:rustc:O0:iter_take_skip": [],
+    "219_rust_iterator_chains:rustc:O0:iter_zip_dot": [],
+    "219_rust_iterator_chains:rustc:O2:explicit_loop_control": [
+      "ret is read but never defined",
+      "var6 is read but never defined",
+      "var7 is read but never defined"
+    ],
+    "219_rust_iterator_chains:rustc:O2:iter_capturing_closure": [],
+    "219_rust_iterator_chains:rustc:O2:iter_enumerate_fold": [],
+    "219_rust_iterator_chains:rustc:O2:iter_filter_map_sum": [],
+    "219_rust_iterator_chains:rustc:O2:iter_rev_chain": [],
+    "219_rust_iterator_chains:rustc:O2:iter_take_skip": [],
+    "219_rust_iterator_chains:rustc:O2:iter_zip_dot": [],
     "21_graph_dfs:clang:O0:graph_dfs": [],
     "21_graph_dfs:clang:O2:graph_dfs": [],
     "21_graph_dfs:gcc:O0:graph_dfs": [],

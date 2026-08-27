@@ -1417,6 +1417,147 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     ("144_inline_asm", "builtin_bit_intrinsics"): {
         "arg_values": {1: [0, 1, 2, 3]},
     },
+    # Drive every arm of the classifier and keep the loop counts inside the
+    # ranges the sources clamp to, so a wrong branch is a diff and not a
+    # clamped no-op.
+    ("205_x87_long_double", "x87_accumulate"): {
+        "arg_values": {0: [-1, 0, 1, 5, 17, 64, 100]},
+    },
+    ("205_x87_long_double", "x87_product_chain"): {
+        "arg_values": {0: [-1, 0, 1, 3, 10, 20, 21]},
+    },
+    ("205_x87_long_double", "x87_compare_classify"): {
+        "arg_values": {0: [-4, -1, 0, 1, 2, 8], 1: [-8, -2, 0, 2, 4, 16]},
+    },
+    # --- 206-219 execution contracts ----------------------------------------
+    # Every pointer parameter is bounded in-source AND pinned here: the source
+    # guard makes an out-of-domain argument return -1 on both sides, and the
+    # contract keeps the harness from generating one in the first place.
+    ("206_aarch64_wide_dispatch", "dense_dispatch"): {
+        "arg_values": {0: list(range(-1, 17))},
+    },
+    ("206_aarch64_wide_dispatch", "sparse_dispatch"): {
+        "arg_values": {0: [0, 3, 700, 60000, 900000, -1]},
+    },
+    ("206_aarch64_wide_dispatch", "dispatch_in_loop"): {
+        "ptr_elem": "u8",
+        "ptr_len": 64,
+        "len_args": [1],
+    },
+    ("207_scaled_index_addressing", "word_stride_sum"): {"len_args": [1]},
+    ("207_scaled_index_addressing", "quad_stride_sum"): {"len_args": [1]},
+    ("207_scaled_index_addressing", "word_at_index"): {
+        "arg_values": {1: [-1, 0, 1, 7, 15, 16]},
+    },
+    ("207_scaled_index_addressing", "word_store_at_index"): {
+        "arg_values": {1: [-1, 0, 1, 7, 15, 16]},
+    },
+    ("207_scaled_index_addressing", "byte_stride_unscaled"): {
+        "ptr_elem": "u8",
+        "len_args": [1],
+    },
+    ("207_scaled_index_addressing", "shift_as_value"): {
+        "arg_values": {1: [-1, 0, 1, 7, 15, 16]},
+    },
+    ("208_flag_register_roundtrip", "accumulate_across_barrier"): {
+        "arg_values": {0: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("209_out_of_line_guard_handlers", "guard_chain_mixed_exits"): {
+        "ptr_len": 4,
+        "non_length_args": [0, 1, 2],
+    },
+    ("210_shared_return_epilogues", "epilogue_chain_three_shared"): {
+        "ptr_len": 4,
+        "non_length_args": [0, 1],
+    },
+    ("211_irreducible_loops", "two_entry_loop"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("211_irreducible_loops", "shared_body_loops"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("211_irreducible_loops", "irreducible_inside_reducible"): {
+        "arg_values": {0: [-1, 0, 1, 4, 8, 9], 1: [-1, 0, 1, 4, 8, 9]},
+    },
+    ("211_irreducible_loops", "reducible_control"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    # The FSM's alphabet is what drives the state machine, so the byte buffer
+    # must contain 'a'/'b'/'c' rather than arbitrary bytes: a random buffer
+    # never leaves state 0 and the returning arm is never reached.
+    ("212_loop_with_returning_arm", "fsm_returns_from_arm"): {
+        "ptr_elem": "u8",
+        "ptr_len": 32,
+        "len_args": [1],
+        "extra_vectors": [
+            [[97, 98, 99], 3],
+            [[97, 97, 98, 99, 100], 5],
+            [[98, 99, 97], 3],
+            [[97, 98, 99, 97, 98, 99], 6],
+            [[100, 101, 102], 3],
+        ],
+    },
+    ("212_loop_with_returning_arm", "two_returning_arms"): {
+        "ptr_elem": "u8",
+        "ptr_len": 32,
+        "len_args": [1],
+    },
+    ("212_loop_with_returning_arm", "nested_loop_returning_arm"): {
+        "ptr_elem": "u8",
+        "ptr_len": 8,
+        "arg_values": {1: [-1, 0, 1, 4, 8, 9], 2: [-1, 0, 1, 4, 8, 9]},
+    },
+    ("212_loop_with_returning_arm", "all_arms_break"): {
+        "ptr_elem": "u8",
+        "ptr_len": 32,
+        "len_args": [1],
+    },
+    ("213_arm_predicated_execution", "conditional_accumulate"): {
+        "len_args": [1],
+    },
+    ("214_arm_literal_pools", "pool_inside_function"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("215_switch_on_wide_selector", "wide_selector_dense"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7, 8]},
+    },
+    ("215_switch_on_wide_selector", "wide_selector_high_labels"): {
+        "arg_values": {
+            0: [0, 0x100000000, 0x100000001, 0x200000000, 0xFFFFFFFFFFFFFFFF]
+        },
+    },
+    ("215_switch_on_wide_selector", "wide_selector_mixed"): {
+        "arg_values": {0: [0, 1, 5, 6, 0x100000000, 0x8000000000000000]},
+    },
+    ("215_switch_on_wide_selector", "signed_wide_selector"): {
+        "arg_values": {0: [-4, -3, -2, -1, 0, 1, 2, 3]},
+    },
+    ("215_switch_on_wide_selector", "narrow_selector_control"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7, 8]},
+    },
+    ("216_packed_union_wire_record", "walk_packed_records"): {
+        "ptr_elem": "u8",
+        "ptr_len": 64,
+        "arg_values": {1: [-1, 0, 1, 2, 4, 5]},
+    },
+    ("217_complex_arithmetic", "complex_array_sum"): {
+        "arg_values": {1: [-1, 0, 1, 4, 8, 9]},
+    },
+    ("218_cpp_lambdas_and_callables", "capture_by_value"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("218_cpp_lambdas_and_callables", "capture_by_reference"): {
+        "arg_values": {0: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("218_cpp_lambdas_and_callables", "mixed_capture"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("218_cpp_lambdas_and_callables", "erased_callable"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
+    ("218_cpp_lambdas_and_callables", "plain_call_control"): {
+        "arg_values": {1: [-1, 0, 1, 5, 32, 33]},
+    },
     ("144_inline_asm", "builtin_overflow_checked"): {
         "ptr_len": 4,
     },
@@ -2231,6 +2372,98 @@ OVERRIDES: dict[tuple[str, str], dict] = {
 # emitted, not dropped or replaced by a fabricated direct target. `memory_store` —
 # a write to memory must survive (not be dead-store-eliminated away).
 STRUCTURAL: dict[tuple[str, str], dict] = {
+    # --- 206-215 structural assertions, 2026-08-27 ---------------------------
+    # Measured at gcc:O0 and recorded as a RATCHET: a change in either direction
+    # is reported. The `switch` and `goto_free` predicates were added with these
+    # fixtures, because before them the corpus could assert that a recovery
+    # EXECUTES correctly and nothing more -- and goto soup executes correctly. It
+    # is faithful; it is simply not the source's control flow. That class is
+    # 28.8% of the scored DecBench sample-set (40.5% on x86-64) and had no
+    # assertable property anywhere in 205 fixtures.
+    ("206_aarch64_wide_dispatch", "dense_dispatch"): {
+        "switch": True,
+        "goto_free": True,
+        "nonempty": True,
+    },
+    ("206_aarch64_wide_dispatch", "sparse_dispatch"): {
+        "switch": True,
+        "goto_free": True,
+        "nonempty": True,
+    },
+    # A dispatch INSIDE a loop keeps its switch but still emits gotos: the loop
+    # edges are not folded into the switch's region. `goto_free` turning True
+    # here is an improvement to accept, not a regression.
+    ("206_aarch64_wide_dispatch", "dispatch_in_loop"): {
+        "switch": True,
+        "goto_free": False,
+        "nonempty": True,
+    },
+    # The guard ladders recover goto-free at gcc:O0 -- the shape matcher handles
+    # THIS lane. The corpus instance that fails has its handlers further out of
+    # line; see `docs/design/fixture-expansion-2026-08-27.md`.
+    ("209_out_of_line_guard_handlers", "guard_chain_rejoins"): {
+        "goto_free": True,
+        "switch": False,
+        "nonempty": True,
+    },
+    ("209_out_of_line_guard_handlers", "guard_chain_mixed_exits"): {
+        "goto_free": True,
+        "switch": False,
+        "nonempty": True,
+    },
+    ("209_out_of_line_guard_handlers", "exclusive_handler_chain"): {
+        "goto_free": True,
+        "switch": False,
+        "nonempty": True,
+    },
+    # Every epilogue chain length recovers goto-free at O0. This is the axis the
+    # reverted `linear_return_chain` change traded along, so pinning all four
+    # makes a future trade visible as cells moving both ways rather than a wash.
+    ("210_shared_return_epilogues", "epilogue_chain_one"): {
+        "goto_free": True,
+        "nonempty": True,
+    },
+    ("210_shared_return_epilogues", "epilogue_chain_two"): {
+        "goto_free": True,
+        "nonempty": True,
+    },
+    ("210_shared_return_epilogues", "epilogue_chain_three_shared"): {
+        "goto_free": True,
+        "nonempty": True,
+    },
+    ("210_shared_return_epilogues", "divergent_arms"): {
+        "goto_free": True,
+        "nonempty": True,
+    },
+    # THE MEASUREMENT. A loop containing a dispatch whose arm returns -- the
+    # `statemachine` shape. `fsm_returns_from_arm` keeps its switch; the other
+    # two LOSE it and render as goto ladders. `switch: False` is the ratchet:
+    # when the region analysis lands these flip to True and it is reported.
+    ("212_loop_with_returning_arm", "fsm_returns_from_arm"): {
+        "switch": True,
+        "goto_free": False,
+        "nonempty": True,
+    },
+    ("212_loop_with_returning_arm", "two_returning_arms"): {
+        "switch": False,
+        "goto_free": False,
+        "nonempty": True,
+    },
+    ("212_loop_with_returning_arm", "all_arms_break"): {
+        "switch": False,
+        "goto_free": False,
+        "nonempty": True,
+    },
+    ("215_switch_on_wide_selector", "wide_selector_dense"): {
+        "switch": True,
+        "goto_free": True,
+        "nonempty": True,
+    },
+    ("215_switch_on_wide_selector", "narrow_selector_control"): {
+        "switch": True,
+        "goto_free": True,
+        "nonempty": True,
+    },
     # A2 loop-form acceptance: after reload folding, the source head test must
     # become the loop condition rather than an explicit break inside while (1).
     ("12_loop_rotation", "factorial_while"): {"head_tested_while": True},
@@ -2708,6 +2941,122 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "asm_memory_barrier",
         "builtin_bit_intrinsics",
         "builtin_overflow_checked",
+    ],
+    # x87 is 99.997% of the unmodelled-instruction exposure measured over the
+    # frozen DecBench sample-set, and `long double` is the only portable way to
+    # reach it from C. Nothing in this corpus used `long double` before.
+    "205_x87_long_double": [
+        "x87_accumulate",
+        "x87_product_chain",
+        "x87_compare_classify",
+        "x87_mixed_widths",
+        "x87_many_live_values",
+    ],
+    # --- 206-219: defect-directed fixtures, 2026-08-27 -----------------------
+    # Each one exists because a specific measurement had no lane. 206-208 are
+    # the dispatch and effect-model defects reproduced from compiled source;
+    # 209-212 are the structuring class that is 28.8% of the scored DecBench
+    # sample-set (40.5% on x86-64) and that only the new `switch`/`goto_free`
+    # structural predicates can express; 213-215 are codegen forms the ARM and
+    # wide-selector paths never saw; 216-219 close census gaps (packed bitfield
+    # unions, _Complex, C++ closures, Rust iterator chains).
+    "206_aarch64_wide_dispatch": [
+        "dense_dispatch",
+        "dispatch_in_loop",
+        "sparse_dispatch",
+    ],
+    "207_scaled_index_addressing": [
+        "byte_stride_unscaled",
+        "quad_stride_sum",
+        "shift_as_value",
+        "word_at_index",
+        "word_store_at_index",
+        "word_stride_sum",
+    ],
+    "208_flag_register_roundtrip": [
+        "accumulate_across_barrier",
+        "control_without_barrier",
+        "flags_do_not_leak",
+        "single_argument_survives",
+    ],
+    "209_out_of_line_guard_handlers": [
+        "exclusive_handler_chain",
+        "guard_chain_mixed_exits",
+        "guard_chain_rejoins",
+    ],
+    "210_shared_return_epilogues": [
+        "divergent_arms",
+        "epilogue_chain_long",
+        "epilogue_chain_one",
+        "epilogue_chain_three_shared",
+        "epilogue_chain_two",
+    ],
+    "211_irreducible_loops": [
+        "irreducible_inside_reducible",
+        "reducible_control",
+        "shared_body_loops",
+        "two_entry_loop",
+    ],
+    "212_loop_with_returning_arm": [
+        "all_arms_break",
+        "fsm_returns_from_arm",
+        "nested_loop_returning_arm",
+        "two_returning_arms",
+    ],
+    "213_arm_predicated_execution": [
+        "branched_control",
+        "branchless_classify",
+        "chained_selects",
+        "conditional_accumulate",
+        "early_out_branchless",
+        "select_max",
+    ],
+    "214_arm_literal_pools": [
+        "compare_against_pool",
+        "encodable_constants",
+        "many_wide_constants",
+        "pool_inside_function",
+        "wide_64bit_constants",
+        "wide_constant_mix",
+    ],
+    "215_switch_on_wide_selector": [
+        "narrow_selector_control",
+        "signed_wide_selector",
+        "wide_selector_dense",
+        "wide_selector_high_labels",
+        "wide_selector_mixed",
+    ],
+    "216_packed_union_wire_record": [
+        "bitfield_roundtrip",
+        "bitfield_seen_as_byte",
+        "byte_seen_as_bitfields",
+        "plain_struct_control",
+        "walk_packed_records",
+    ],
+    "217_complex_arithmetic": [
+        "complex_add_conj",
+        "complex_array_sum",
+        "complex_float_multiply",
+        "complex_multiply",
+        "complex_through_call",
+        "struct_pair_control",
+    ],
+    "218_cpp_lambdas_and_callables": [
+        "capture_by_reference",
+        "capture_by_value",
+        "capture_then_mutate",
+        "erased_callable",
+        "mixed_capture",
+        "plain_call_control",
+    ],
+    "219_rust_iterator_chains": [
+        "explicit_loop_control",
+        "iter_capturing_closure",
+        "iter_enumerate_fold",
+        "iter_filter_map_sum",
+        "iter_rev_chain",
+        "iter_take_skip",
+        "iter_zip_dot",
     ],
     # --- C++ runtime shapes: vtables, RTTI, unwinding, templates ---
     "132_cpp_vtable_layout": [

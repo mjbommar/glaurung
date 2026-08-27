@@ -3378,6 +3378,130 @@
     "adt204_switch_b": "pass",
     "adt204_switch_c": "pass"
   },
+  "205_x87_long_double:clang:O0": {
+    "x87_accumulate": "fail",
+    "x87_compare_classify": "fail",
+    "x87_many_live_values": "fail",
+    "x87_mixed_widths": "fail",
+    "x87_product_chain": "fail"
+  },
+  "205_x87_long_double:clang:O2": {
+    "x87_accumulate": "fail",
+    "x87_compare_classify": "pass",
+    "x87_many_live_values": "fail",
+    "x87_mixed_widths": "pass",
+    "x87_product_chain": "pass"
+  },
+  "205_x87_long_double:gcc:O0": {
+    "x87_accumulate": "fail",
+    "x87_compare_classify": "fail",
+    "x87_many_live_values": "fail",
+    "x87_mixed_widths": "fail",
+    "x87_product_chain": "fail"
+  },
+  "205_x87_long_double:gcc:O2": {
+    "x87_accumulate": "fail",
+    "x87_compare_classify": "pass",
+    "x87_many_live_values": "fail",
+    "x87_mixed_widths": "fail",
+    "x87_product_chain": "fail"
+  },
+  "206_aarch64_wide_dispatch:clang:O0": {
+    "dense_dispatch": "pass",
+    "dispatch_in_loop": "pass",
+    "sparse_dispatch": "pass"
+  },
+  "206_aarch64_wide_dispatch:clang:O2": {
+    "dense_dispatch": "pass",
+    "dispatch_in_loop": "fail",
+    "sparse_dispatch": "pass"
+  },
+  "206_aarch64_wide_dispatch:gcc:O0": {
+    "dense_dispatch": "pass",
+    "dispatch_in_loop": "pass",
+    "sparse_dispatch": "pass"
+  },
+  "206_aarch64_wide_dispatch:gcc:O2": {
+    "dense_dispatch": "pass",
+    "dispatch_in_loop": "fail",
+    "sparse_dispatch": "pass"
+  },
+  "207_scaled_index_addressing:clang:O0": {
+    "byte_stride_unscaled": "pass",
+    "quad_stride_sum": "pass",
+    "shift_as_value": "pass",
+    "word_at_index": "pass",
+    "word_store_at_index": "pass",
+    "word_stride_sum": "pass"
+  },
+  "207_scaled_index_addressing:clang:O2": {
+    "byte_stride_unscaled": "fail",
+    "quad_stride_sum": "fail",
+    "shift_as_value": "pass",
+    "word_at_index": "pass",
+    "word_store_at_index": "pass",
+    "word_stride_sum": "pass"
+  },
+  "207_scaled_index_addressing:gcc:O0": {
+    "byte_stride_unscaled": "pass",
+    "quad_stride_sum": "pass",
+    "shift_as_value": "pass",
+    "word_at_index": "pass",
+    "word_store_at_index": "pass",
+    "word_stride_sum": "pass"
+  },
+  "207_scaled_index_addressing:gcc:O2": {
+    "byte_stride_unscaled": "pass",
+    "quad_stride_sum": "pass",
+    "shift_as_value": "pass",
+    "word_at_index": "pass",
+    "word_store_at_index": "pass",
+    "word_stride_sum": "pass"
+  },
+  "208_flag_register_roundtrip:clang:O0": {
+    "accumulate_across_barrier": "pass",
+    "control_without_barrier": "pass",
+    "flags_do_not_leak": "pass",
+    "single_argument_survives": "pass"
+  },
+  "208_flag_register_roundtrip:clang:O2": {
+    "accumulate_across_barrier": "pass",
+    "control_without_barrier": "pass",
+    "flags_do_not_leak": "pass",
+    "single_argument_survives": "pass"
+  },
+  "208_flag_register_roundtrip:gcc:O0": {
+    "accumulate_across_barrier": "pass",
+    "control_without_barrier": "pass",
+    "flags_do_not_leak": "pass",
+    "single_argument_survives": "pass"
+  },
+  "208_flag_register_roundtrip:gcc:O2": {
+    "accumulate_across_barrier": "pass",
+    "control_without_barrier": "pass",
+    "flags_do_not_leak": "pass",
+    "single_argument_survives": "pass"
+  },
+  "209_out_of_line_guard_handlers:clang:O0": {
+    "exclusive_handler_chain": "pass",
+    "guard_chain_mixed_exits": "pass",
+    "guard_chain_rejoins": "pass"
+  },
+  "209_out_of_line_guard_handlers:clang:O2": {
+    "exclusive_handler_chain": "pass",
+    "guard_chain_mixed_exits": "pass",
+    "guard_chain_rejoins": "pass"
+  },
+  "209_out_of_line_guard_handlers:gcc:O0": {
+    "exclusive_handler_chain": "pass",
+    "guard_chain_mixed_exits": "pass",
+    "guard_chain_rejoins": "pass"
+  },
+  "209_out_of_line_guard_handlers:gcc:O2": {
+    "exclusive_handler_chain": "pass",
+    "guard_chain_mixed_exits": "pass",
+    "guard_chain_rejoins": "pass"
+  },
   "20_graph_bfs:clang:O0": {
     "graph_bfs": "pass"
   },
@@ -3389,6 +3513,284 @@
   },
   "20_graph_bfs:gcc:O2": {
     "graph_bfs": "pass"
+  },
+  "210_shared_return_epilogues:clang:O0": {
+    "divergent_arms": "pass",
+    "epilogue_chain_long": "pass",
+    "epilogue_chain_one": "pass",
+    "epilogue_chain_three_shared": "pass",
+    "epilogue_chain_two": "pass"
+  },
+  "210_shared_return_epilogues:clang:O2": {
+    "divergent_arms": "pass",
+    "epilogue_chain_long": "pass",
+    "epilogue_chain_one": "pass",
+    "epilogue_chain_three_shared": "pass",
+    "epilogue_chain_two": "pass"
+  },
+  "210_shared_return_epilogues:gcc:O0": {
+    "divergent_arms": "pass",
+    "epilogue_chain_long": "pass",
+    "epilogue_chain_one": "pass",
+    "epilogue_chain_three_shared": "pass",
+    "epilogue_chain_two": "pass"
+  },
+  "210_shared_return_epilogues:gcc:O2": {
+    "divergent_arms": "pass",
+    "epilogue_chain_long": "pass",
+    "epilogue_chain_one": "pass",
+    "epilogue_chain_three_shared": "pass",
+    "epilogue_chain_two": "pass"
+  },
+  "211_irreducible_loops:clang:O0": {
+    "irreducible_inside_reducible": "pass",
+    "reducible_control": "pass",
+    "shared_body_loops": "pass",
+    "two_entry_loop": "pass"
+  },
+  "211_irreducible_loops:clang:O2": {
+    "irreducible_inside_reducible": "pass",
+    "reducible_control": "pass",
+    "shared_body_loops": "pass",
+    "two_entry_loop": "pass"
+  },
+  "211_irreducible_loops:gcc:O0": {
+    "irreducible_inside_reducible": "pass",
+    "reducible_control": "pass",
+    "shared_body_loops": "pass",
+    "two_entry_loop": "pass"
+  },
+  "211_irreducible_loops:gcc:O2": {
+    "irreducible_inside_reducible": "pass",
+    "reducible_control": "pass",
+    "shared_body_loops": "pass",
+    "two_entry_loop": "pass"
+  },
+  "212_loop_with_returning_arm:clang:O0": {
+    "all_arms_break": "pass",
+    "fsm_returns_from_arm": "pass",
+    "nested_loop_returning_arm": "pass",
+    "two_returning_arms": "pass"
+  },
+  "212_loop_with_returning_arm:clang:O2": {
+    "all_arms_break": "pass",
+    "fsm_returns_from_arm": "fail",
+    "nested_loop_returning_arm": "pass",
+    "two_returning_arms": "pass"
+  },
+  "212_loop_with_returning_arm:gcc:O0": {
+    "all_arms_break": "pass",
+    "fsm_returns_from_arm": "pass",
+    "nested_loop_returning_arm": "pass",
+    "two_returning_arms": "pass"
+  },
+  "212_loop_with_returning_arm:gcc:O2": {
+    "all_arms_break": "pass",
+    "fsm_returns_from_arm": "pass",
+    "nested_loop_returning_arm": "pass",
+    "two_returning_arms": "pass"
+  },
+  "213_arm_predicated_execution:clang:O0": {
+    "branched_control": "pass",
+    "branchless_classify": "pass",
+    "chained_selects": "pass",
+    "conditional_accumulate": "pass",
+    "early_out_branchless": "pass",
+    "select_max": "pass"
+  },
+  "213_arm_predicated_execution:clang:O2": {
+    "branched_control": "pass",
+    "branchless_classify": "pass",
+    "chained_selects": "pass",
+    "conditional_accumulate": "pass",
+    "early_out_branchless": "pass",
+    "select_max": "pass"
+  },
+  "213_arm_predicated_execution:gcc:O0": {
+    "branched_control": "pass",
+    "branchless_classify": "pass",
+    "chained_selects": "pass",
+    "conditional_accumulate": "pass",
+    "early_out_branchless": "pass",
+    "select_max": "pass"
+  },
+  "213_arm_predicated_execution:gcc:O2": {
+    "branched_control": "pass",
+    "branchless_classify": "pass",
+    "chained_selects": "pass",
+    "conditional_accumulate": "pass",
+    "early_out_branchless": "pass",
+    "select_max": "pass"
+  },
+  "214_arm_literal_pools:clang:O0": {
+    "compare_against_pool": "pass",
+    "encodable_constants": "pass",
+    "many_wide_constants": "pass",
+    "pool_inside_function": "pass",
+    "wide_64bit_constants": "pass",
+    "wide_constant_mix": "pass"
+  },
+  "214_arm_literal_pools:clang:O2": {
+    "compare_against_pool": "pass",
+    "encodable_constants": "pass",
+    "many_wide_constants": "pass",
+    "pool_inside_function": "pass",
+    "wide_64bit_constants": "pass",
+    "wide_constant_mix": "pass"
+  },
+  "214_arm_literal_pools:gcc:O0": {
+    "compare_against_pool": "pass",
+    "encodable_constants": "pass",
+    "many_wide_constants": "pass",
+    "pool_inside_function": "pass",
+    "wide_64bit_constants": "pass",
+    "wide_constant_mix": "pass"
+  },
+  "214_arm_literal_pools:gcc:O2": {
+    "compare_against_pool": "pass",
+    "encodable_constants": "pass",
+    "many_wide_constants": "pass",
+    "pool_inside_function": "pass",
+    "wide_64bit_constants": "pass",
+    "wide_constant_mix": "pass"
+  },
+  "215_switch_on_wide_selector:clang:O0": {
+    "narrow_selector_control": "pass",
+    "signed_wide_selector": "pass",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
+    "wide_selector_mixed": "pass"
+  },
+  "215_switch_on_wide_selector:clang:O2": {
+    "narrow_selector_control": "pass",
+    "signed_wide_selector": "pass",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "fail",
+    "wide_selector_mixed": "fail"
+  },
+  "215_switch_on_wide_selector:gcc:O0": {
+    "narrow_selector_control": "pass",
+    "signed_wide_selector": "pass",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
+    "wide_selector_mixed": "pass"
+  },
+  "215_switch_on_wide_selector:gcc:O2": {
+    "narrow_selector_control": "pass",
+    "signed_wide_selector": "pass",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
+    "wide_selector_mixed": "fail"
+  },
+  "216_packed_union_wire_record:clang:O0": {
+    "bitfield_roundtrip": "pass",
+    "bitfield_seen_as_byte": "pass",
+    "byte_seen_as_bitfields": "pass",
+    "plain_struct_control": "pass",
+    "walk_packed_records": "pass"
+  },
+  "216_packed_union_wire_record:clang:O2": {
+    "bitfield_roundtrip": "pass",
+    "bitfield_seen_as_byte": "pass",
+    "byte_seen_as_bitfields": "pass",
+    "plain_struct_control": "pass",
+    "walk_packed_records": "pass"
+  },
+  "216_packed_union_wire_record:gcc:O0": {
+    "bitfield_roundtrip": "pass",
+    "bitfield_seen_as_byte": "pass",
+    "byte_seen_as_bitfields": "pass",
+    "plain_struct_control": "pass",
+    "walk_packed_records": "pass"
+  },
+  "216_packed_union_wire_record:gcc:O2": {
+    "bitfield_roundtrip": "pass",
+    "bitfield_seen_as_byte": "pass",
+    "byte_seen_as_bitfields": "pass",
+    "plain_struct_control": "pass",
+    "walk_packed_records": "pass"
+  },
+  "217_complex_arithmetic:clang:O0": {
+    "complex_add_conj": "fail",
+    "complex_array_sum": "pass",
+    "complex_float_multiply": "fail",
+    "complex_multiply": "fail",
+    "complex_through_call": "fail",
+    "struct_pair_control": "fail"
+  },
+  "217_complex_arithmetic:clang:O2": {
+    "complex_add_conj": "pass",
+    "complex_array_sum": "pass",
+    "complex_float_multiply": "fail",
+    "complex_multiply": "fail",
+    "complex_through_call": "pass",
+    "struct_pair_control": "pass"
+  },
+  "217_complex_arithmetic:gcc:O0": {
+    "complex_add_conj": "fail",
+    "complex_array_sum": "pass",
+    "complex_float_multiply": "fail",
+    "complex_multiply": "fail",
+    "complex_through_call": "fail",
+    "struct_pair_control": "fail"
+  },
+  "217_complex_arithmetic:gcc:O2": {
+    "complex_add_conj": "pass",
+    "complex_array_sum": "pass",
+    "complex_float_multiply": "fail",
+    "complex_multiply": "fail",
+    "complex_through_call": "pass",
+    "struct_pair_control": "pass"
+  },
+  "218_cpp_lambdas_and_callables:clang:O0": {
+    "capture_by_reference": "pass",
+    "capture_by_value": "pass",
+    "capture_then_mutate": "pass",
+    "erased_callable": "fail",
+    "mixed_capture": "pass",
+    "plain_call_control": "pass"
+  },
+  "218_cpp_lambdas_and_callables:clang:O2": {
+    "capture_by_reference": "pass",
+    "capture_by_value": "pass",
+    "capture_then_mutate": "pass",
+    "erased_callable": "pass",
+    "mixed_capture": "pass",
+    "plain_call_control": "pass"
+  },
+  "218_cpp_lambdas_and_callables:gcc:O0": {
+    "capture_by_reference": "pass",
+    "capture_by_value": "pass",
+    "capture_then_mutate": "pass",
+    "erased_callable": "fail",
+    "mixed_capture": "pass",
+    "plain_call_control": "pass"
+  },
+  "218_cpp_lambdas_and_callables:gcc:O2": {
+    "capture_by_reference": "pass",
+    "capture_by_value": "pass",
+    "capture_then_mutate": "pass",
+    "erased_callable": "pass",
+    "mixed_capture": "pass",
+    "plain_call_control": "pass"
+  },
+  "219_rust_iterator_chains:rustc:O0": {
+    "explicit_loop_control": "fail",
+    "iter_capturing_closure": "fail",
+    "iter_enumerate_fold": "fail",
+    "iter_filter_map_sum": "fail",
+    "iter_rev_chain": "fail",
+    "iter_take_skip": "fail",
+    "iter_zip_dot": "fail"
+  },
+  "219_rust_iterator_chains:rustc:O2": {
+    "explicit_loop_control": "pass",
+    "iter_capturing_closure": "pass",
+    "iter_enumerate_fold": "pass",
+    "iter_filter_map_sum": "fail",
+    "iter_rev_chain": "pass",
+    "iter_take_skip": "pass",
+    "iter_zip_dot": "pass"
   },
   "21_graph_dfs:clang:O0": {
     "graph_dfs": "pass"
