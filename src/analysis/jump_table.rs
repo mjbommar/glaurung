@@ -389,6 +389,117 @@ where
     })
 }
 
+/// Read an ARM jump table of **absolute** 4-byte code addresses.
+///
+/// This is the table behind `ldr pc, [rBase, rIdx, lsl #2]`, which is how every
+/// one of the 321 ARM table dispatches in the frozen DecBench sample-set is
+/// spelled. It differs from both other decoders in this module: the entries are
+/// whole addresses rather than offsets from anything, and the table is named by
+/// a tracked register rather than by the instruction.
+///
+/// ARM code pointers carry the execution state in bit 0 — every entry in a
+/// Cortex-M table has it set. The bit is masked before validating and before
+/// reporting, because a CFG block address is the even one; the mode is
+/// re-derived per address by `arm32_mode`, so nothing downstream needs the bit
+/// and a successor carrying it would simply never match a block.
+pub fn decode_absolute_word_table<F>(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    table_va: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Result<JumpTable, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    if entry_count == 0 {
+        return Err(TableDecline::ZeroEntries);
+    }
+    if entry_count > MAX_TABLE_ENTRIES {
+        return Err(TableDecline::EntryCountAboveCeiling {
+            requested: entry_count,
+            ceiling: MAX_TABLE_ENTRIES,
+        });
+    }
+    let byte_count = entry_count
+        .checked_mul(4)
+        .ok_or(TableDecline::ExtentOverflow {
+            entry_count,
+            entry_size: 4,
+        })?;
+
+    if let Some(image) = image {
+        let little_endian = image.endianness() == crate::core::binary::Endianness::Little;
+        for section in image.sections() {
+            let Some(entries) =
+                section_entries(section.address(), section.data(), table_va, byte_count)
+            else {
+                continue;
+            };
+            let targets =
+                decode_absolute_word_entries(entries, table_va, little_endian, &is_executable_va)?;
+            return Ok(JumpTable { table_va, targets });
+        }
+        return Err(TableDecline::NoSectionCovers {
+            table_va,
+            byte_count,
+        });
+    }
+
+    let object = crate::decompile::profile::parse_object(data)
+        .map_err(|_| TableDecline::ObjectParseFailed)?;
+    let little_endian = object.is_little_endian();
+    for span in crate::program::spans::addressable_spans(&object) {
+        let Some(entries) = section_entries(span.address, span.bytes, table_va, byte_count) else {
+            continue;
+        };
+        let targets =
+            decode_absolute_word_entries(entries, table_va, little_endian, &is_executable_va)?;
+        return Ok(JumpTable { table_va, targets });
+    }
+    Err(TableDecline::NoSectionCovers {
+        table_va,
+        byte_count,
+    })
+}
+
+/// The entry arithmetic of [`decode_absolute_word_table`], on the exact bytes.
+fn decode_absolute_word_entries<F>(
+    entries: &[u8],
+    table_va: u64,
+    little_endian: bool,
+    is_executable_va: &F,
+) -> Result<Vec<u64>, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    let table_end = table_va
+        .checked_add(entries.len() as u64)
+        .ok_or(TableDecline::TargetArithmeticOverflow { index: 0 })?;
+    let mut targets = Vec::with_capacity(entries.len() / 4);
+    for (index, entry) in entries.chunks_exact(4).enumerate() {
+        let word = match entry {
+            [a, b, c, d] if little_endian => u32::from_le_bytes([*a, *b, *c, *d]),
+            [a, b, c, d] => u32::from_be_bytes([*a, *b, *c, *d]),
+            _ => return Err(TableDecline::UnsupportedEntrySize { entry_size: 4 }),
+        };
+        // Bit 0 is the ARM execution state, not part of the address.
+        let target = u64::from(word) & !1;
+        // A branch into the table's own bytes is never real code. For an
+        // absolute table this is the same over-long-bound signature the Thumb
+        // decoder refuses: past the last entry lie the case bodies, and their
+        // instruction words read as plausible addresses.
+        if target >= table_va && target < table_end {
+            return Err(TableDecline::TargetInsideTable { index, target });
+        }
+        if !is_executable_va(target) {
+            return Err(TableDecline::NonExecutableTarget { index, target });
+        }
+        targets.push(target);
+    }
+    Ok(targets)
+}
+
 /// The entry arithmetic of [`decode_thumb_table_branch`], on the exact bytes.
 ///
 /// Separated for the same reason `decode_relative_entries` is: the encoding is

@@ -47,9 +47,9 @@ pub use scan::scan_pe_code_pointers;
 // `memory_operand_va` through `use super::…`, which resolves against *this*
 // binding, not against `ctrl_flow`.
 use ctrl_flow::{
-    arm_defined_register, arm_pop_writes_pc, classify_ctrl_flow, guard_bound_reaches_fallthrough,
-    immediate_target, is_code_padding_terminator, is_unconditional_branch_mnemonic,
-    memory_operand_va,
+    arm_defined_register, arm_ldr_pc_table_dispatch, arm_pop_writes_pc, classify_ctrl_flow,
+    guard_bound_reaches_fallthrough, immediate_target, is_code_padding_terminator,
+    is_unconditional_branch_mnemonic, memory_operand_va,
 };
 
 // Same rule as above, and the same reason. `has_function_boundary_marker`,
@@ -836,6 +836,16 @@ fn replay_dispatch_block(
     }
     let bits = darch.address_bits();
     let mut tracker = crate::analysis::dispatch::DispatchTracker::new();
+    // The replay must model `pc` exactly as the walker did. Without this the
+    // revalidation cannot materialise an ARM table base, reports the dispatch
+    // unresolved, and DELETES the edges the walker correctly proved — so the
+    // arms are lost after being found. The walker's mode comes from
+    // `arm32_mode`; here the same fact arrives as the `thumb` flag.
+    tracker.set_arm_pc_mode(match (arch, thumb) {
+        (BArch::ARM, Some(true)) => Some(crate::analysis::dispatch::ArmPcMode::Thumb),
+        (BArch::ARM, Some(false)) => Some(crate::analysis::dispatch::ArmPcMode::A32),
+        _ => None,
+    });
     tracker.inherit_bound(bounds);
     tracker.inherit_addresses(addresses);
     let mut cur_va = start_va;
@@ -947,6 +957,38 @@ fn resolve_dispatch(
                 data,
                 branch.table_va,
                 branch.entry_size,
+                entry_count,
+                |target| in_exec_regions(regions, target).is_some(),
+            ) {
+                Ok(table) => crate::analysis::dispatch::Resolution::Table {
+                    table_va: table.table_va,
+                    targets: table.targets,
+                },
+                Err(decline) => crate::analysis::dispatch::Resolution::Unresolved(
+                    crate::analysis::dispatch::Unresolved::NoTableAt {
+                        table: branch.table_va,
+                        decline,
+                    },
+                ),
+            },
+        );
+    }
+    // ARM `ldr pc, [rBase, rIdx, lsl #2]` reads a table of ABSOLUTE addresses
+    // off a base the tracker materialised from `adr`. Like `tbb`/`tbh` nothing
+    // about that shape reaches `resolve_with`, which resolves a register
+    // holding a table-RELATIVE target; it is answered here and reported through
+    // the same `Resolution` so the post-CFG revalidation treats it identically.
+    if let Some(branch) = tracker.arm_word_table_branch(instruction) {
+        let Some(entry_count) = branch.entry_count else {
+            return Some(crate::analysis::dispatch::Resolution::Unresolved(
+                crate::analysis::dispatch::Unresolved::NoBound(branch.table_va),
+            ));
+        };
+        return Some(
+            match crate::analysis::jump_table::decode_absolute_word_table(
+                image,
+                data,
+                branch.table_va,
                 entry_count,
                 |target| in_exec_regions(regions, target).is_some(),
             ) {
@@ -1088,6 +1130,16 @@ fn discover_function(
         // here because a value set up in one block is not guaranteed to reach
         // this one — there may be several predecessors.
         let mut dispatch = crate::analysis::dispatch::DispatchTracker::new();
+        // `add rD, pc, #imm` materialises a jump table's base on ARM, and what
+        // `pc` reads depends on the execution state. Declared, never guessed:
+        // an A32 reading of a Thumb `adr` names a table four bytes off and
+        // decodes whatever is there without complaining.
+        dispatch.set_arm_pc_mode(arm32_mode.map(|mode| match mode {
+            crate::analysis::arm32_mode::Arm32Mode::Thumb => {
+                crate::analysis::dispatch::ArmPcMode::Thumb
+            }
+            _ => crate::analysis::dispatch::ArmPcMode::A32,
+        }));
         // A switch's range check sits in the block BEFORE the dispatch, and it
         // is the only thing that knows how many entries the table has. Carry it
         // across the in-range edge; see `DispatchTracker::inherit_bound`.
@@ -1163,11 +1215,19 @@ fn discover_function(
                 blocks.insert(start_va, (end_va, instrs));
                 break 'block;
             }
-            let (is_branch, is_call, mut is_ret) = classify_ctrl_flow(&ins.mnemonic, arch);
+            let (mut is_branch, is_call, mut is_ret) = classify_ctrl_flow(&ins.mnemonic, arch);
             // ARM `pop {…, pc}` / `ldm …, pc` is a return; the mnemonic alone
             // can't say so, so resolve it on the operands here.
             if matches!(arch, BArch::ARM) && arm_pop_writes_pc(&ins) {
                 is_ret = true;
+            }
+            // `ldr pc, [rBase, rIdx, lsl #2]` is an unconditional indirect
+            // branch, and the mnemonic alone cannot say so either. Without this
+            // the sweep decodes the table it reads as instructions.
+            let arm_table_dispatch =
+                matches!(arch, BArch::ARM) && !is_ret && arm_ldr_pc_table_dispatch(&ins);
+            if arm_table_dispatch {
+                is_branch = true;
             }
             if is_call {
                 // Preserve the exact instruction VA so downstream xref tables
@@ -1195,7 +1255,10 @@ fn discover_function(
                 // continue to fallthrough
             } else if is_branch {
                 // Determine conditional vs unconditional by mnemonic content
-                let unconditional = is_unconditional_branch_mnemonic(&ins.mnemonic, arch);
+                // A table dispatch never falls through: the byte after it is
+                // either padding or the table itself.
+                let unconditional =
+                    is_unconditional_branch_mnemonic(&ins.mnemonic, arch) || arm_table_dispatch;
                 if let Some(tgt) = immediate_target(&ins) {
                     let is_exec_target = in_exec_regions(regions, tgt).is_some();
                     let is_pe_tail_target = unconditional
@@ -2768,6 +2831,130 @@ mod gcc_dispatch_corpus_tests {
             | Region::Goto(_)
             | Region::RawLoop { .. }
             | Region::Unstructured(_) => false,
+        }
+    }
+
+    /// The ARM word-table dispatch, assembled to the exact shape the corpus
+    /// uses, must produce one CFG successor per table entry.
+    ///
+    /// Transcribed from `bin_001.elf` at `0x0800d494` in the frozen DecBench
+    /// sample-set — a Cortex-M firmware image — and assembling to a
+    /// byte-identical sequence:
+    ///
+    /// ```text
+    /// cmp   r0, #4
+    /// bhi   .Ldefault          ; in-range on the fall-through edge
+    /// adr   r3, .Ltable        ; Capstone reports the 16-bit Thumb encoding
+    ///                          ; as `adr r3, #4`, NOT `add r3, pc, #4`
+    /// ldr.w pc, [r3, r0, lsl #2]
+    /// .Ltable: .word arm0+1, arm1+1, ...   ; absolute, Thumb bit set
+    /// ```
+    ///
+    /// Three separate defects had to be fixed for this to resolve, and each one
+    /// alone loses every arm: the `lsl #2` never reached `Operand::scale`
+    /// (Capstone carries the shift on the operand, not on `ArmOpMem`);
+    /// `classify_ctrl_flow` sees only a mnemonic, so `ldr` was not a branch and
+    /// the sweep decoded the table as instructions; and the post-CFG
+    /// revalidation built a tracker with no ARM `pc` mode, so it re-reported the
+    /// dispatch unresolved and DELETED the edges the walker had proved.
+    #[test]
+    fn an_arm_word_table_dispatch_produces_one_successor_per_entry() {
+        const SOURCE: &str = "\t.syntax unified\n\t.cpu cortex-m4\n\t.thumb\n\t.text\n\
+             \t.global dispatch\n\t.thumb_func\n\
+             dispatch:\n\tcmp\tr0, #4\n\tbhi\t.Ldefault\n\
+             \tadr\tr3, .Ltable\n\tldr.w\tpc, [r3, r0, lsl #2]\n\
+             \t.p2align 2\n.Ltable:\n\
+             \t.word\t.Lc0 + 1\n\t.word\t.Lc1 + 1\n\t.word\t.Lc2 + 1\n\
+             \t.word\t.Lc3 + 1\n\t.word\t.Lc4 + 1\n\
+             .Lc0:\tmovs\tr0, #10\n\tbx\tlr\n\
+             .Lc1:\tmovs\tr0, #11\n\tbx\tlr\n\
+             .Lc2:\tmovs\tr0, #12\n\tbx\tlr\n\
+             .Lc3:\tmovs\tr0, #13\n\tbx\tlr\n\
+             .Lc4:\tmovs\tr0, #14\n\tbx\tlr\n\
+             .Ldefault:\n\tmovs\tr0, #0\n\tbx\tlr\n";
+
+        let tmp = tempfile::tempdir().expect("temporary ARM dispatch build directory");
+        let source = tmp.path().join("dispatch.s");
+        let binary = tmp.path().join("dispatch.elf");
+        std::fs::write(&source, SOURCE).expect("write the ARM dispatch source");
+        let build = match Command::new("arm-none-eabi-gcc")
+            .args([
+                "-mcpu=cortex-m4",
+                "-mthumb",
+                "-nostdlib",
+                "-nostartfiles",
+                "-ffreestanding",
+                "-Wl,-Ttext=0x08000000",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            // No ARM cross-assembler here; the x86 lanes still cover the rest.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch arm-none-eabi-gcc: {error}"),
+        };
+        if !build.status.success() {
+            // The linker warns about a missing `_start` and still produces a
+            // usable image; a hard failure is a real toolchain problem.
+            panic!(
+                "assemble the ARM dispatch fixture: {}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+        }
+
+        let data = std::fs::read(&binary).expect("read the assembled ARM image");
+        let (functions, _callgraph, _stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let dispatch = functions
+            .iter()
+            .find(|function| function.entry_point.value == 0x0800_0000)
+            .expect("the dispatch function at the link address");
+
+        let by_id: std::collections::HashMap<_, _> = dispatch
+            .basic_blocks
+            .iter()
+            .map(|block| (block.id.clone(), block.start_address.value))
+            .collect();
+        let arms = dispatch
+            .basic_blocks
+            .iter()
+            .find(|block| {
+                // The dispatch block is the one whose terminator is the table
+                // load: it starts at the `adr` and ends after the 4-byte
+                // `ldr.w`.
+                block.successor_ids.len() > 2
+            })
+            .map(|block| {
+                let mut targets: Vec<u64> = block
+                    .successor_ids
+                    .iter()
+                    .filter_map(|id| by_id.get(id).copied())
+                    .collect();
+                targets.sort_unstable();
+                targets
+            })
+            .unwrap_or_default();
+
+        assert_eq!(
+            arms.len(),
+            5,
+            "`cmp r0, #4` proves five entries, so the dispatch has five arms; \
+             got {arms:x?} across blocks {:x?}",
+            dispatch
+                .basic_blocks
+                .iter()
+                .map(|b| b.start_address.value)
+                .collect::<Vec<_>>()
+        );
+        // Every arm is a real case body, and none of them is the table itself.
+        for arm in &arms {
+            assert!(
+                *arm >= 0x0800_0020,
+                "arm {arm:#x} lands in the table, not in a case body"
+            );
         }
     }
 

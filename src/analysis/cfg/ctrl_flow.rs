@@ -118,6 +118,43 @@ pub(super) fn arm_pop_writes_pc(ins: &Instruction) -> bool {
     false
 }
 
+/// Whether this ARM instruction is a jump-table dispatch that loads `pc` from
+/// an indexed table: `ldr pc, [rBase, rIdx, lsl #2]`.
+///
+/// `classify_ctrl_flow` sees only the mnemonic, and `ldr` is overwhelmingly an
+/// ordinary load, so this shape reached the block walker unclassified: the
+/// linear sweep decoded the table's address words as instructions and walked on
+/// into whatever followed. That is the ARM analogue of the `tbb`/`tbh` gap
+/// recorded above, and it is how every one of the 321 table dispatches in the
+/// frozen DecBench sample-set lost its arms.
+///
+/// The test is deliberately narrow. An **index register is required**, which
+/// excludes both the `ldr pc, [sp], #4` one-register pop (a return, recognised
+/// by [`arm_pop_writes_pc`]) and the `ldr pc, [pc, #imm]` literal-pool veneer.
+/// The mnemonic must be exactly `ldr` after the width suffix, so a predicated
+/// `ldrhi pc, …` — which does fall through — is not swept up.
+pub(super) fn arm_ldr_pc_table_dispatch(ins: &Instruction) -> bool {
+    let lower = ins.mnemonic.to_ascii_lowercase();
+    let m = lower
+        .strip_suffix(".w")
+        .or_else(|| lower.strip_suffix(".n"))
+        .unwrap_or(&lower);
+    if m != "ldr" {
+        return false;
+    }
+    if ins.operands.first().and_then(|o| o.register.as_deref()) != Some("pc") {
+        return false;
+    }
+    ins.operands.iter().any(|operand| {
+        matches!(operand.kind, crate::core::instruction::OperandKind::Memory)
+            && operand.index.is_some()
+            && operand
+                .base
+                .as_deref()
+                .is_some_and(|base| !base.eq_ignore_ascii_case("sp"))
+    })
+}
+
 /// The register an ARM32 instruction defines, for a caller that must model
 /// definitions itself.
 ///

@@ -49,7 +49,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::core::instruction::{Access, Instruction};
+use crate::core::instruction::{Access, Instruction, OperandKind};
 
 mod memory_guard;
 pub use memory_guard::MemKey;
@@ -169,6 +169,60 @@ pub struct Bounds {
     pub mems: HashMap<MemKey, u64>,
 }
 
+/// How `pc` reads as a *source operand* on 32-bit ARM.
+///
+/// ARM's `pc` is not the address of the instruction that names it; it is two
+/// instruction slots ahead, and the two execution states disagree on both the
+/// offset and the alignment. Getting this wrong does not fail loudly — it names
+/// a table four or eight bytes off, decodes whatever is there, and reports a
+/// confident answer, which is why the value is never guessed from the
+/// instruction alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmPcMode {
+    /// A32: `pc` reads as the instruction's address plus 8.
+    A32,
+    /// T32: `pc` reads as the instruction's address plus 4, rounded DOWN to a
+    /// 4-byte boundary — so a 2-byte `add rD, pc, #imm` at an odd halfword and
+    /// one at an even halfword read different values.
+    Thumb,
+}
+
+impl ArmPcMode {
+    /// The value `pc` reads when named as a source by the instruction at `va`.
+    fn pc_value(self, va: u64) -> Option<u64> {
+        match self {
+            ArmPcMode::A32 => va.checked_add(8),
+            ArmPcMode::Thumb => va.checked_add(4).map(|value| value & !3),
+        }
+    }
+}
+
+/// An ARM table dispatch that loads `pc` from an absolute word table.
+///
+/// The corpus form, uniformly, is
+///
+/// ```text
+/// cmp   rIdx, #N            ; the extent
+/// bhi   default             ; in-range on the fall-through edge
+/// add   rBase, pc, #imm     ; = adr rBase, <table>
+/// ldr   pc, [rBase, rIdx, lsl #2]
+/// ```
+///
+/// Unlike `tbb`/`tbh` the table is NOT named by the instruction — the base is a
+/// tracked register — and unlike the x86 relative form the entries are absolute
+/// addresses rather than offsets from the table. It therefore needs both halves:
+/// a value for `rBase` and an extent for `rIdx`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArmWordTableBranch {
+    /// VA of the first table entry — the resolved value of the base register.
+    pub table_va: u64,
+    /// Entries the range check proves, or `None` when the index arrived
+    /// unbounded. Fail-closed for the same reason as [`ThumbTableBranch`]: past
+    /// the last entry lie the case bodies, whose bytes read as plausible
+    /// addresses.
+    pub entry_count: Option<usize>,
+}
+
 /// A Thumb-2 `tbb`/`tbh` table branch, and the extent its guard proves.
 ///
 /// Kept separate from [`Resolution`] because a table branch names its table in
@@ -281,11 +335,25 @@ pub struct DispatchTracker {
     /// gcc -O2 shape where the compared value never reaches one. See
     /// [`memory_guard`].
     memory: MemoryBounds,
+    /// How `pc` reads as a source operand, when this block is 32-bit ARM.
+    ///
+    /// `None` on every other architecture *and* on ARM when the execution state
+    /// could not be established — in which case `add rD, pc, #imm` produces no
+    /// address rather than a guessed one.
+    arm_pc_mode: Option<ArmPcMode>,
 }
 
 impl DispatchTracker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Declare how `pc` reads as a source operand for this block.
+    ///
+    /// Must be set before observing ARM instructions; without it a
+    /// `pc`-relative address materialisation is declined, not approximated.
+    pub fn set_arm_pc_mode(&mut self, mode: Option<ArmPcMode>) {
+        self.arm_pc_mode = mode;
     }
 
     pub fn reset(&mut self) {
@@ -764,6 +832,22 @@ impl DispatchTracker {
             }
         }
 
+        // ARM `add rD, pc, #imm` — the assembler's `adr`, and the only way a
+        // jump table's base reaches a register on 32-bit ARM.
+        //
+        // Handled ahead of the `dest_reg` guard because that guard cannot see
+        // an ARM definition at all: Capstone's ARM detail marks EVERY operand
+        // `Access::Read` (the same limitation `kill_register` exists for), so
+        // `dest_reg` returns `None` for every ARM instruction and every rule
+        // below it is x86-only in practice. The destination is therefore taken
+        // from operand 0 by position, which is what the encoding guarantees.
+        if let Some(address) = self.arm_adr_target(ins) {
+            if let Some(destination) = ins.operands.first().and_then(|o| o.register.as_deref()) {
+                self.set(destination, Val::Addr(address));
+                return;
+            }
+        }
+
         let Some(dest) = Self::dest_reg(ins) else {
             return;
         };
@@ -870,6 +954,102 @@ impl DispatchTracker {
         self.define_fresh_value(register);
         self.regs.remove(&canon(register));
         self.memory.forget_through(&canon(register));
+    }
+
+    /// The address an ARM `add rD, pc, #imm` (the assembler's `adr`)
+    /// materialises, or `None` when this is not that instruction or the
+    /// execution state was never declared.
+    fn arm_adr_target(&self, ins: &Instruction) -> Option<u64> {
+        let mode = self.arm_pc_mode?;
+        let mnemonic = ins.mnemonic.to_ascii_lowercase();
+        let stem = mnemonic
+            .strip_suffix(".w")
+            .or_else(|| mnemonic.strip_suffix(".n"))
+            .unwrap_or(&mnemonic);
+        // Two spellings of one operation, and which one arrives depends on the
+        // encoding, not on the source:
+        //
+        //   `adr rD, #imm`      — 2 operands. What Capstone reports for the
+        //                         16-bit Thumb encoding, which is every one of
+        //                         the ARM table dispatches in the DecBench
+        //                         corpus.
+        //   `add rD, pc, #imm`  — 3 operands, `pc` named explicitly. The A32
+        //                         spelling.
+        //
+        // Matching only the second is why this rule originally recognised a
+        // hand-written A32 reproduction and none of the real firmware.
+        let immediate = match stem {
+            "adr" if ins.operands.len() == 2 => ins.operands.get(1)?.immediate?,
+            "add" if ins.operands.len() == 3 => {
+                // Operand 1 must be `pc` itself. A tracked register that merely
+                // HOLDS a code address is a different fact and must not take
+                // this path.
+                if !ins
+                    .operands
+                    .get(1)
+                    .and_then(|operand| operand.register.as_deref())
+                    .is_some_and(|register| register.eq_ignore_ascii_case("pc"))
+                {
+                    return None;
+                }
+                ins.operands.get(2)?.immediate?
+            }
+            _ => return None,
+        };
+        // A negative `adr` (`sub rD, pc, #imm`) reaches this arm as a different
+        // mnemonic; a negative immediate here is a decode this rule does not
+        // model, and inventing a table start for it would be worse than
+        // declining.
+        let immediate = u64::try_from(immediate).ok()?;
+        mode.pc_value(ins.address.value)?.checked_add(immediate)
+    }
+
+    /// Recognise an ARM `ldr pc, [rBase, rIdx, lsl #2]` and report its table.
+    ///
+    /// `None` when this is not that instruction. `Some` with `entry_count:
+    /// None` when it is, but the index arrived without a proven extent — the
+    /// caller reports that as [`Unresolved::NoBound`] rather than reading an
+    /// unbounded run of words.
+    pub fn arm_word_table_branch(&self, ins: &Instruction) -> Option<ArmWordTableBranch> {
+        if !ins.mnemonic.to_ascii_lowercase().starts_with("ldr") {
+            return None;
+        }
+        // The destination must be `pc` — that is what makes this a branch
+        // rather than an ordinary indexed load.
+        if !ins
+            .operands
+            .first()
+            .and_then(|operand| operand.register.as_deref())
+            .is_some_and(|register| register.eq_ignore_ascii_case("pc"))
+        {
+            return None;
+        }
+        let memory = ins
+            .operands
+            .iter()
+            .find(|operand| matches!(operand.kind, OperandKind::Memory))?;
+        // Word entries only. A different stride is a table this decoder does not
+        // know how to read, and guessing four would fabricate targets.
+        if memory.scale != Some(4) || memory.displacement.unwrap_or(0) != 0 {
+            return None;
+        }
+        let base = memory.base.as_deref()?;
+        let index = memory.index.as_deref()?;
+        // `[pc, rIdx, lsl #2]` names its table by position rather than through a
+        // tracked register. It is a real encoding, but it is not the corpus
+        // shape and it is not what this rule proves, so it declines.
+        let Some(Val::Addr(table_va)) = self.get(base) else {
+            return None;
+        };
+        let entry_count = self
+            .bounded
+            .get(&canon(index))
+            .and_then(|bound| usize::try_from(*bound).ok())
+            .and_then(|bound| bound.checked_add(1));
+        Some(ArmWordTableBranch {
+            table_va,
+            entry_count,
+        })
     }
 
     /// Recognise a Thumb-2 `tbb`/`tbh` and report its inline table.
@@ -1090,6 +1270,196 @@ mod tests {
 
     fn tables() -> BTreeMap<u64, Vec<u64>> {
         BTreeMap::from([(0x2000, vec![0x112e, 0x113a, 0x1146, 0x1152])])
+    }
+
+    /// An `Instruction` at a chosen address and length — ARM `pc` arithmetic
+    /// and table placement both depend on both.
+    fn ins_at(mnemonic: &str, operands: Vec<Operand>, va: u64, length: u16) -> Instruction {
+        let mut instruction = ins(mnemonic, operands);
+        instruction.address = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            va,
+            32,
+            None,
+            None,
+        )
+        .unwrap();
+        instruction.length = length;
+        instruction.arch = "arm".to_string();
+        instruction
+    }
+
+    /// The ARM table dispatch every one of the 321 sites in the frozen
+    /// DecBench sample-set takes.
+    ///
+    /// Transcribed byte-exactly from `bin_001.elf` at `0x0800d48e`, a Cortex-M
+    /// firmware image in the sample-set:
+    ///
+    /// ```text
+    /// 800d490:  cmp   r2, #4
+    /// 800d492:  bhi.n 0x800d500
+    /// 800d494:  add   r3, pc, #4        @ (adr r3, 0x800d49c)   -- 2 bytes
+    /// 800d496:  ldr.w pc, [r3, r2, lsl #2]                      -- 4 bytes
+    /// 800d49c:  <5 absolute word entries, Thumb bit set>
+    /// ```
+    ///
+    /// Thumb `pc` at `0x800d494` reads `(0x800d494 + 4) & !3 == 0x800d498`, so
+    /// `+ 4` names `0x800d49c`. An A32 reading of the same instruction would
+    /// name `0x800d4a0` and decode four bytes of the wrong thing without
+    /// complaining, which is why the execution state is declared rather than
+    /// inferred.
+    #[test]
+    fn the_real_thumb2_absolute_word_table_dispatch_resolves() {
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::Thumb));
+        // The guard sits in the preceding block; the walker carries its proof
+        // across the in-range (fall-through) edge of `bhi`.
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("r2".to_string(), 4)]),
+            slots: HashMap::new(),
+            mems: HashMap::new(),
+        }));
+        // Capstone reports the 16-bit Thumb encoding as `adr r3, #4` — two
+        // operands, `pc` implicit. Transcribed from the real decode, not from
+        // objdump's `add r3, pc, #4` rendering of the same two bytes.
+        tracker.observe(&ins_at(
+            "adr",
+            vec![reg_read("r3"), imm_op(4)],
+            0x0800_d494,
+            2,
+        ));
+
+        let branch = tracker
+            .arm_word_table_branch(&ins_at(
+                "ldr.w",
+                vec![reg_read("pc"), mem_op_scale(Some("r3"), 0, Some("r2"), 4)],
+                0x0800_d496,
+                4,
+            ))
+            .expect("`ldr pc, [rBase, rIdx, lsl #2]` off a materialised base is a table branch");
+
+        assert_eq!(
+            branch.table_va, 0x0800_d49c,
+            "Thumb `add r3, pc, #4` at 0x800d494 names 0x800d49c"
+        );
+        assert_eq!(
+            branch.entry_count,
+            Some(5),
+            "`cmp r2, #4` proves five entries, not four"
+        );
+    }
+
+    /// The A32 spelling of the same operation: `add rD, pc, #imm`, three
+    /// operands with `pc` named. Both encodings must reach the same address.
+    #[test]
+    fn the_a32_add_pc_spelling_materialises_the_same_base() {
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::A32));
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("r0".to_string(), 7)]),
+            slots: HashMap::new(),
+            mems: HashMap::new(),
+        }));
+        // `add r3, pc, #0` at 0x0800000c: A32 `pc` reads 0x08000014.
+        tracker.observe(&ins_at(
+            "add",
+            vec![reg_read("r3"), reg_read("pc"), imm_op(0)],
+            0x0800_000c,
+            4,
+        ));
+        let branch = tracker
+            .arm_word_table_branch(&ins_at(
+                "ldr",
+                vec![reg_read("pc"), mem_op_scale(Some("r3"), 0, Some("r0"), 4)],
+                0x0800_0010,
+                4,
+            ))
+            .expect("the A32 spelling resolves too");
+        assert_eq!(branch.table_va, 0x0800_0014);
+        assert_eq!(branch.entry_count, Some(8));
+    }
+
+    /// Without a declared execution state the base is never materialised, so
+    /// the dispatch declines instead of naming a table four bytes off.
+    #[test]
+    fn an_arm_dispatch_without_a_declared_pc_mode_declines() {
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("r2".to_string(), 4)]),
+            slots: HashMap::new(),
+            mems: HashMap::new(),
+        }));
+        tracker.observe(&ins_at(
+            "adr",
+            vec![reg_read("r3"), imm_op(4)],
+            0x0800_d494,
+            2,
+        ));
+        assert_eq!(
+            tracker.arm_word_table_branch(&ins_at(
+                "ldr.w",
+                vec![reg_read("pc"), mem_op_scale(Some("r3"), 0, Some("r2"), 4)],
+                0x0800_d496,
+                4,
+            )),
+            None
+        );
+    }
+
+    /// A32 and Thumb disagree about `pc`, and the difference is a real table
+    /// address. Pin both.
+    #[test]
+    fn a32_and_thumb_pc_readings_differ_and_both_are_exact() {
+        assert_eq!(ArmPcMode::A32.pc_value(0x0800_d494), Some(0x0800_d49c));
+        assert_eq!(ArmPcMode::Thumb.pc_value(0x0800_d494), Some(0x0800_d498));
+        // Thumb rounds DOWN to a word boundary: an `adr` at an odd halfword
+        // reads the same `pc` as one at the preceding even halfword.
+        assert_eq!(ArmPcMode::Thumb.pc_value(0x0800_d496), Some(0x0800_d498));
+        assert_eq!(ArmPcMode::Thumb.pc_value(0x0800_d498), Some(0x0800_d49c));
+    }
+
+    /// An ordinary indexed load into a general register is not a branch, and a
+    /// non-word stride is a table this decoder cannot read.
+    #[test]
+    fn only_a_word_strided_load_into_pc_is_a_table_branch() {
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::Thumb));
+        tracker.observe(&ins_at(
+            "adr",
+            vec![reg_read("r3"), imm_op(4)],
+            0x0800_d494,
+            2,
+        ));
+        // Destination is r0, not pc.
+        assert_eq!(
+            tracker.arm_word_table_branch(&ins_at(
+                "ldr.w",
+                vec![reg_read("r0"), mem_op_scale(Some("r3"), 0, Some("r2"), 4)],
+                0x0800_d496,
+                4,
+            )),
+            None
+        );
+        // Halfword stride.
+        assert_eq!(
+            tracker.arm_word_table_branch(&ins_at(
+                "ldr.w",
+                vec![reg_read("pc"), mem_op_scale(Some("r3"), 0, Some("r2"), 2)],
+                0x0800_d496,
+                4,
+            )),
+            None
+        );
+        // Base register holds no proven address.
+        assert_eq!(
+            tracker.arm_word_table_branch(&ins_at(
+                "ldr.w",
+                vec![reg_read("pc"), mem_op_scale(Some("r9"), 0, Some("r2"), 4)],
+                0x0800_d496,
+                4,
+            )),
+            None
+        );
     }
 
     #[test]

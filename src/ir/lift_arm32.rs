@@ -1550,6 +1550,35 @@ fn lift_one_decoded(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
                         out.push(Op::Return);
                         return out;
                     }
+                    // `ldr pc, [rBase, rIdx, lsl #2]` — the ARM jump-table
+                    // dispatch. Lifting it as an ordinary load into `pc` leaves
+                    // the structurer with a block that writes a register and
+                    // falls off the end, so the arms the CFG proved render as
+                    // labels and gotos instead of a `switch`.
+                    //
+                    // Same shape as `tbb`/`tbh` below: load the entry, then
+                    // branch through it, carrying the index straight from the
+                    // addressing mode so the recovered `switch` can name it.
+                    // Word stride only — that is what the encoding this
+                    // recognises uses, and `analysis::dispatch` decodes nothing
+                    // else for this form.
+                    if dst == VReg::phys("pc") && addr.scale == 4 {
+                        if let (Some(base), Some(index)) = (addr.base.clone(), addr.index.clone()) {
+                            if base != VReg::phys("sp") {
+                                let target = VReg::Temp(0);
+                                return vec![
+                                    Op::Load {
+                                        dst: target.clone(),
+                                        addr,
+                                    },
+                                    Op::IndirectJump {
+                                        target: Value::Reg(target),
+                                        index: Some(Value::Reg(index)),
+                                    },
+                                ];
+                            }
+                        }
+                    }
                     // A whole-word load from an address `scaled_memop` resolved
                     // out of `[pc, #imm]` is a literal-pool read: the pool is
                     // constant data inside the very window being lifted, so the

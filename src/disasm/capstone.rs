@@ -15,6 +15,43 @@ pub struct CapstoneDisassembler {
     endianness: Endianness,
 }
 
+/// The multiplier an ARM/AArch64 scaled-index memory operand applies to its
+/// index register, or `None` when the index is unshifted.
+///
+/// Capstone carries the shift on the *operand* (`ArmOperand::shift` /
+/// `Arm64Operand::shift`), not inside `ArmOpMem`/`Arm64OpMem`, so a reader that
+/// only inspects the mem struct sees `[base, index]` for `[base, index, lsl #2]`
+/// and computes an effective address four times too small — with no diagnostic
+/// anywhere. Only a left shift denotes a scale; `asr`/`lsr`/`ror`/`rrx` and every
+/// register-amount form are index arithmetic this operand model cannot spell, so
+/// they report `None` rather than a fabricated multiplier.
+///
+/// `Operand::scale` is a `u8`, so shifts wider than 7 (a 256x or larger stride,
+/// which no compiler emits for a table) also decline instead of truncating.
+fn shift_to_scale(shift_amount: Option<u32>) -> Option<u8> {
+    let amount = shift_amount?;
+    if amount == 0 || amount > 7 {
+        return None;
+    }
+    Some(1u8 << amount)
+}
+
+/// The left-shift amount of an ARM32 operand, if it has one.
+fn arm_lsl_amount(shift: capstone::arch::arm::ArmShift) -> Option<u32> {
+    match shift {
+        capstone::arch::arm::ArmShift::Lsl(amount) => Some(amount),
+        _ => None,
+    }
+}
+
+/// The left-shift amount of an AArch64 operand, if it has one.
+fn arm64_lsl_amount(shift: capstone::arch::arm64::Arm64Shift) -> Option<u32> {
+    match shift {
+        capstone::arch::arm64::Arm64Shift::Lsl(amount) => Some(amount),
+        _ => None,
+    }
+}
+
 fn arm64_vector_shape(arrangement: Arm64Vas) -> Option<VectorShape> {
     use Arm64Vas::*;
 
@@ -301,7 +338,7 @@ impl Disassembler for CapstoneDisassembler {
                                     } else {
                                         None
                                     };
-                                    let scale = None;
+                                    let scale = shift_to_scale(arm64_lsl_amount(op.shift));
                                     let disp = m.disp() as i64;
                                     operands.push(Operand::memory(
                                         0,
@@ -370,7 +407,7 @@ impl Disassembler for CapstoneDisassembler {
                                     } else {
                                         None
                                     };
-                                    let scale = None;
+                                    let scale = shift_to_scale(arm_lsl_amount(op.shift));
                                     let disp = if m.disp() != 0 {
                                         Some(m.disp() as i64)
                                     } else {
@@ -442,6 +479,7 @@ impl Disassembler for CapstoneDisassembler {
 mod tests {
     use super::*;
     use crate::core::address::{Address, AddressKind};
+    use crate::core::instruction::OperandKind;
 
     fn va(v: u64) -> Address {
         Address::new(AddressKind::VA, v, 32, None, None).unwrap()
@@ -460,6 +498,77 @@ mod tests {
             ins.mnemonic == "mov" || ins.mnemonic == "nop",
             "got {:?}",
             ins.mnemonic
+        );
+    }
+
+    /// An ARM scaled-index memory operand must carry its shift.
+    ///
+    /// Capstone puts the shift on the *operand* (`ArmOperand::shift`), not on
+    /// `ArmOpMem`, so reading only the mem struct loses it silently. Dropping it
+    /// makes every effective address `base + index` instead of
+    /// `base + index * 2^n` — for `lsl #2`, wrong by a factor of four with no
+    /// diagnostic. `ldr pc, [rB, rI, lsl #2]` is the ARM A32 jump-table
+    /// dispatch (321 occurrences across 34 of the 58 ARM binaries in the frozen
+    /// DecBench sample-set), and it cannot be recognised at all without this.
+    #[test]
+    fn arm_scaled_index_memory_operand_carries_its_shift() {
+        let cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+
+        // `ldr r1, [r2, r3, lsl #2]` — e7921103, little-endian byte order.
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &[0x03, 0x11, 0x92, 0xe7])
+            .expect("decode");
+        let mem = ins
+            .operands
+            .iter()
+            .find(|operand| operand.kind == OperandKind::Memory)
+            .expect("a memory operand");
+        assert_eq!(mem.base.as_deref(), Some("r2"));
+        assert_eq!(mem.index.as_deref(), Some("r3"));
+        assert_eq!(
+            mem.scale,
+            Some(4),
+            "lsl #2 is a scale of 4, got {:?}",
+            mem.scale
+        );
+
+        // `ldrb r1, [r2, r3, lsl #1]` — e7d21083.
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &[0x83, 0x10, 0xd2, 0xe7])
+            .expect("decode");
+        let mem = ins
+            .operands
+            .iter()
+            .find(|operand| operand.kind == OperandKind::Memory)
+            .expect("a memory operand");
+        assert_eq!(
+            mem.scale,
+            Some(2),
+            "lsl #1 is a scale of 2, got {:?}",
+            mem.scale
+        );
+    }
+
+    /// An unshifted ARM index must report no scale, not a fabricated one.
+    #[test]
+    fn arm_unshifted_index_reports_no_scale() {
+        let cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+        // `ldr r1, [r2, r3]` — e7921003.
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &[0x03, 0x10, 0x92, 0xe7])
+            .expect("decode");
+        let mem = ins
+            .operands
+            .iter()
+            .find(|operand| operand.kind == OperandKind::Memory)
+            .expect("a memory operand");
+        assert_eq!(mem.index.as_deref(), Some("r3"));
+        assert!(
+            mem.scale.is_none() || mem.scale == Some(1),
+            "an unshifted index is scale 1, got {:?}",
+            mem.scale
         );
     }
 
