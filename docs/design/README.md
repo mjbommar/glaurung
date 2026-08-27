@@ -59,6 +59,25 @@ Useful ones to know about:
 - `defect-register-2026-08-05.md`, `armv7-real-defects-2026-08-05.md` — defect
   archaeology with root causes.
 - `decbench-*` — evaluation-harness history. Pairs with Appendix A.
+- `fixture-expansion-2026-08-27.md` — the 14 fixtures added for those defects
+  (206-219) and the FIVE NEW defects they found on first run: `_Complex` helper
+  calls losing their whole signature, `double` arithmetic emitted as integer
+  arithmetic, an unsymbolized indirect-call target, a mixed tree-plus-table
+  dispatch folded into a ternary, and 64-bit SIMD lanes modelled as OR'd 32-bit
+  halves. Also records the two structural predicates (`switch`, `goto_free`)
+  the corpus needed before the largest defect class could be asserted at all.
+- `decbench-defect-reproductions-2026-08-27.md` — **read before acting on any
+  jump-table, structuring, or unmodelled-instruction item.** Reproduces all three
+  from compiled source and finds two of the three are described backwards in our
+  own docs: clang's relative jump table works (ARM A32 `ldr pc` does not, 321
+  sites), and gcc -O0 `statemachine` now recovers a correct switch. Carries a
+  corrections table and a four-workstream redesign plan.
+- `decbench-native-provenance-2026-08-27.md` — DecBench's upstream audit of our
+  AST ("we drop `ins.va` at lowering"), verified true against current master, with
+  the cost of each way of answering it and a measured census showing 85% of the
+  value sits in register-derived locals, not stack slots. Also records that the
+  audit lives only on an unmerged draft branch, and that the external eval-kit
+  format cannot carry provenance at all.
 
 ## The habit that keeps this honest
 
