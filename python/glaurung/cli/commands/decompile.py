@@ -20,7 +20,12 @@ from glaurung.windows_config import load_windows_analysis_config
 
 from .base import BaseCommand
 from .. import cache as _cache
-from ..kb_names import load_analyst_names, overlay_digest
+from ..kb_names import (
+    load_analyst_locals,
+    load_analyst_names,
+    locals_digest,
+    overlay_digest,
+)
 from ..formatters.base import BaseFormatter, OutputFormat
 from ..func_ref import (
     FuncResolutionError,
@@ -43,6 +48,7 @@ def _decompile_at_cached(
     pdb_cache: str,
     cache_dir_arg: Optional[str],
     analyst_names: Optional[dict[int, str]] = None,
+    analyst_locals: Optional[dict[int, tuple[str, str]]] = None,
 ) -> str:
     """Run ``g.ir.decompile_at`` with optional persistent caching.
 
@@ -71,8 +77,9 @@ def _decompile_at_cached(
                     # the overlay rather than on its presence means renaming a
                     # function, renaming it back, and re-running all agree.
                     ("analyst_names", overlay_digest(analyst_names)),
+                    ("analyst_locals", locals_digest(analyst_locals)),
                     # Bump when the flag schema grows so old entries invalidate.
-                    ("schema", 3),
+                    ("schema", 4),
                 ]
             )
             paths = _cache.build_paths(
@@ -105,6 +112,7 @@ def _decompile_at_cached(
         style=style,
         pdb_cache=pdb_cache,
         analyst_names=analyst_names,
+        analyst_locals=analyst_locals,
     )
     if paths is not None:
         _cache.write_text(paths, text)
@@ -372,6 +380,9 @@ class DecompileCommand(BaseCommand):
                         cache_dir_arg=args.cache_dir,
                         analyst_names=load_analyst_names(
                             getattr(args, "db", None), str(path)
+                        ),
+                        analyst_locals=load_analyst_locals(
+                            getattr(args, "db", None), str(path), int(func_va)
                         ),
                     )
             except ValueError as e:

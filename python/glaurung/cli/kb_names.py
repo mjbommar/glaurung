@@ -57,6 +57,45 @@ def load_analyst_names(db_path: Optional[str], binary: str) -> dict[int, str]:
     return out
 
 
+def load_analyst_locals(
+    db_path: Optional[str], binary: str, function_va: int
+) -> dict[int, tuple[str, str]]:
+    """``{frame_offset: (name, c_type)}`` for one function, or ``{}``.
+
+    Keyed by frame OFFSET because that is what the project file records and
+    what survives a recompile; the decompiler joins it to its own promoted
+    local names through the frame coordinates it publishes for exactly this.
+
+    A slot with a name but no type, or a type but no name, is normal -- an
+    analyst usually does one and then the other -- so both halves are optional
+    and are carried as empty strings rather than dropped.
+    """
+    if not db_path:
+        return {}
+    kb = None
+    try:
+        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+        kb = PersistentKnowledgeBase.open(db_path, binary_path=binary)
+        from glaurung.llm.kb import xref_db
+
+        rows = xref_db.list_stack_vars(kb, function_va=int(function_va))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("--db %s: could not read stack vars (%s); ignoring", db_path, exc)
+        return {}
+    finally:
+        if kb is not None:
+            try:
+                kb.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return {
+        int(row.offset): (str(row.name or ""), str(row.c_type or ""))
+        for row in rows
+        if row.offset is not None
+    }
+
+
 def overlay_digest(analyst_names: Optional[dict[int, str]]) -> str:
     """Stable digest of an overlay, for a cache key.
 
@@ -68,4 +107,20 @@ def overlay_digest(analyst_names: Optional[dict[int, str]]) -> str:
     if not analyst_names:
         return ""
     payload = "\n".join(f"{va:x}={name}" for va, name in sorted(analyst_names.items()))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def locals_digest(analyst_locals: Optional[dict[int, tuple[str, str]]]) -> str:
+    """Digest of a stack-variable overlay, for the same cache key.
+
+    Separate from `overlay_digest` because the two overlays are loaded
+    independently -- one is per binary, one is per function -- and a rename of a
+    LOCAL must invalidate a cached decompile just as surely as a rename of a
+    function does.
+    """
+    if not analyst_locals:
+        return ""
+    payload = "\n".join(
+        f"{off}={name}:{ctype}" for off, (name, ctype) in sorted(analyst_locals.items())
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

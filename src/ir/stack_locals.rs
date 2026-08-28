@@ -171,6 +171,103 @@ pub struct StackLocalFacts {
     pub frame_coordinates: HashMap<String, (String, i64)>,
 }
 
+/// Overlay analyst-chosen stack-variable names and types onto the recovered
+/// facts, keyed by frame offset.
+///
+/// # Why this rides the DWARF path
+///
+/// `StackLocalFacts::source_names` already exists and already means "an
+/// authoritative name for this promoted local", populated from debug info and
+/// applied by `naming::apply_authoritative_local_names` at the presentation
+/// boundary -- after every semantic pass, so a rename cannot turn a scalar
+/// assignment into a pointer store. An analyst rename wants exactly that
+/// treatment. Building a second mechanism beside it would mean two things that
+/// rename a local, disagreeing at the edges.
+///
+/// # The join
+///
+/// The project file records a stack variable by FRAME OFFSET; the AST knows it
+/// by its promoted NAME, and the name cannot be parsed back into an offset --
+/// `local_{disp:x}` keeps only `disp.unsigned_abs()`, losing the base and the
+/// sign, and the mint falls back to an appearance-order `stack_N` when that hex
+/// spelling is taken. `frame_coordinates` is the only thing that knows the
+/// answer, which is why it is published.
+///
+/// A coordinate `stack_locals` WITHHELD as ambiguous stays withheld: an offset
+/// reachable from two different bases is not a variable we can name without
+/// guessing which one the analyst meant, and attaching their name to the wrong
+/// slot is worse than leaving it as `local_18`.
+///
+/// Names are validated by the same rule debug names are
+/// (`naming::valid_authoritative_local_name`), so an analyst who names a
+/// variable `int` or `arg0` gets their name rejected rather than emitted into
+/// C that will not compile or that collides with an ABI role.
+/// # A rename needs a type, and that is not a formality
+///
+/// A name is applied only when the slot will also have a source type -- either
+/// one the analyst supplied or one already recovered. The renderer's own
+/// pairing filter enforces the same rule at the other end, and it is there for
+/// correctness, not tidiness. Measured 2026-08-28 on a stripped `-O0` build,
+/// renaming the surviving local at `rbp-0xc` with no type attached turned
+///
+/// ```text
+/// int local_c;   local_c = 0;   ... return (unsigned int)(local_c);
+/// ```
+///
+/// into
+///
+/// ```text
+/// long running_total;   *(int *)(running_total) = 0;
+/// ```
+///
+/// -- a pointer store synthesised from a scalar assignment, because the local
+/// lost its recovered width along with its `local_` identity. Applying the name
+/// here and letting the renderer drop it would be worse than declining: the
+/// analyst would see no rename and no reason.
+///
+/// Returns the promoted names it actually renamed, so a caller can tell the
+/// analyst which of their renames did not take.
+pub fn apply_analyst_locals(
+    facts: &mut StackLocalFacts,
+    by_offset: &HashMap<i64, (String, String)>,
+) -> std::collections::HashSet<String> {
+    let mut applied = std::collections::HashSet::new();
+    if by_offset.is_empty() {
+        return applied;
+    }
+    // Built from the coordinates rather than iterated per override, so an
+    // offset that maps to several promoted names is detected rather than
+    // resolved to whichever was visited last.
+    let mut names_at: HashMap<i64, Vec<&String>> = HashMap::new();
+    for (name, (_base, disp)) in facts.frame_coordinates.iter() {
+        names_at.entry(*disp).or_default().push(name);
+    }
+    for (offset, (name, ctype)) in by_offset {
+        let Some(candidates) = names_at.get(offset) else {
+            continue;
+        };
+        if candidates.len() != 1 {
+            continue;
+        }
+        let promoted = candidates[0].clone();
+        let ctype = ctype.trim();
+        if !ctype.is_empty() {
+            facts.source_types.insert(promoted.clone(), ctype.to_string());
+        }
+        let name = name.trim();
+        // The pair, never one half of it -- see the note above.
+        let will_have_a_type = facts.source_types.contains_key(&promoted);
+        if !name.is_empty()
+            && will_have_a_type
+            && crate::ir::naming::valid_authoritative_local_name(name)
+        {
+            facts.source_names.insert(promoted.clone(), name.to_string());
+            applied.insert(promoted);
+        }
+    }
+    applied
+}
+
 fn merge_source_type(current: &mut Option<String>, incoming: Option<&str>) {
     let Some(incoming) = incoming else {
         return;
@@ -4657,5 +4754,149 @@ mod tests {
             matches!(src, Expr::Reg(_)),
             "an incompletely tiled access must keep its single-slot form: {src:#?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod analyst_locals_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn facts_with(coords: &[(&str, &str, i64)]) -> StackLocalFacts {
+        let mut facts = StackLocalFacts::default();
+        for (name, base, disp) in coords {
+            facts
+                .frame_coordinates
+                .insert(name.to_string(), (base.to_string(), *disp));
+            facts.sizes.insert(name.to_string(), 4);
+        }
+        facts
+    }
+
+    fn overrides(items: &[(i64, &str, &str)]) -> HashMap<i64, (String, String)> {
+        items
+            .iter()
+            .map(|(off, name, ty)| (*off, (name.to_string(), ty.to_string())))
+            .collect()
+    }
+
+    /// The ordinary case: the analyst named the slot at -0x18, and the AST
+    /// knows that slot only as `local_18`.
+    #[test]
+    fn an_offset_is_joined_to_its_promoted_name() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        let applied = apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "struct packet *")]));
+        assert_eq!(applied, HashSet::from(["local_18".to_string()]));
+        assert_eq!(facts.source_names.get("local_18").map(String::as_str), Some("hdr"));
+        assert_eq!(
+            facts.source_types.get("local_18").map(String::as_str),
+            Some("struct packet *")
+        );
+    }
+
+    /// An offset reachable from two different bases is not one variable. Naming
+    /// it would attach the analyst's name to whichever slot was iterated last.
+    #[test]
+    fn an_ambiguous_offset_is_left_alone() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24), ("stack_0", "entry_rsp", -24)]);
+        assert!(apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "int")])).is_empty());
+        assert!(facts.source_names.is_empty());
+        assert!(facts.source_types.is_empty(), "the type must not land either");
+    }
+
+    /// A coordinate `stack_locals` already withheld stays withheld.
+    #[test]
+    fn a_slot_with_no_coordinate_is_not_named() {
+        let mut facts = StackLocalFacts::default();
+        facts.sizes.insert("local_18".to_string(), 4);
+        assert!(apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "int")])).is_empty());
+        assert!(facts.source_names.is_empty());
+    }
+
+    /// The analyst gets the same validation debug names get: a name that is a C
+    /// keyword or an ABI role would produce C that does not compile, or would
+    /// collide with a role the renderer owns.
+    #[test]
+    fn an_unusable_name_is_rejected_but_the_type_still_applies() {
+        for bad in ["int", "return", "1var", "has space", ""] {
+            let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+            assert!(
+                apply_analyst_locals(&mut facts, &overrides(&[(-24, bad, "short")])).is_empty(),
+                "accepted {bad:?}"
+            );
+            assert!(facts.source_names.is_empty(), "accepted {bad:?}");
+            assert_eq!(
+                facts.source_types.get("local_18").map(String::as_str),
+                Some("short"),
+                "a bad name must not also discard a good type"
+            );
+        }
+    }
+
+    /// A retype alone is ordinary. A rename alone is REFUSED, because a name
+    /// without a type renders as a pointer store -- see the function's note.
+    #[test]
+    fn a_retype_alone_applies_but_a_rename_alone_does_not() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        assert!(
+            apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "")])).is_empty(),
+            "a name with no type must not be applied"
+        );
+        assert!(facts.source_names.is_empty());
+
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        apply_analyst_locals(&mut facts, &overrides(&[(-24, "", "unsigned long")]));
+        assert!(facts.source_names.is_empty());
+        assert_eq!(
+            facts.source_types.get("local_18").map(String::as_str),
+            Some("unsigned long")
+        );
+    }
+
+    /// A rename alone DOES apply when the slot already has a recovered type,
+    /// which is the DWARF case -- the rule is about the pair existing, not
+    /// about the analyst having supplied both halves.
+    #[test]
+    fn a_rename_alone_applies_when_a_type_was_already_recovered() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        facts.source_types.insert("local_18".to_string(), "int".to_string());
+        assert_eq!(
+            apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "")])),
+            HashSet::from(["local_18".to_string()])
+        );
+        assert_eq!(facts.source_names.get("local_18").map(String::as_str), Some("hdr"));
+        assert_eq!(facts.source_types.get("local_18").map(String::as_str), Some("int"));
+    }
+
+    /// An override for an offset this function does not have is a no-op, which
+    /// is the common case -- a project holds slots for every function.
+    #[test]
+    fn an_offset_this_function_does_not_have_is_ignored() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        assert!(apply_analyst_locals(&mut facts, &overrides(&[(-999, "x", "int")])).is_empty());
+        assert!(facts.source_names.is_empty());
+    }
+
+    /// The analyst outranks DWARF here, which is the same rule the project file
+    /// enforces on every writable fact.
+    #[test]
+    fn an_analyst_name_replaces_a_debug_name() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        facts.source_names.insert("local_18".to_string(), "from_dwarf".to_string());
+        facts.source_types.insert("local_18".to_string(), "int".to_string());
+        apply_analyst_locals(&mut facts, &overrides(&[(-24, "from_analyst", "long")]));
+        assert_eq!(
+            facts.source_names.get("local_18").map(String::as_str),
+            Some("from_analyst")
+        );
+        assert_eq!(facts.source_types.get("local_18").map(String::as_str), Some("long"));
+    }
+
+    #[test]
+    fn an_empty_overlay_changes_nothing() {
+        let mut facts = facts_with(&[("local_18", "rbp", -24)]);
+        let before = facts.clone();
+        assert!(apply_analyst_locals(&mut facts, &HashMap::new()).is_empty());
+        assert_eq!(facts, before);
     }
 }

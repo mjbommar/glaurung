@@ -142,6 +142,19 @@ class FrameCommand(BaseCommand):
                     set_by="manual",
                 )
                 formatter.output_plain(f"  fn@{fn_va:#x} {off:+#06x} -> {args.rest[1]}")
+                # A renamed local reaches `decompile --db` only alongside a
+                # type: without one the renderer would emit a pointer store
+                # where the un-renamed body had a scalar assignment, so the
+                # rename is declined rather than applied wrongly. Saying so
+                # here is the difference between "set a type too" and "the
+                # rename silently did nothing".
+                stored = xref_db.get_stack_var(kb, fn_va, off)
+                if stored is not None and not stored.c_type:
+                    formatter.output_plain(
+                        f"  note: {off:+#06x} has no type, so this name will not "
+                        f"appear in `decompile --db` yet. Set one with:\n"
+                        f"        glaurung frame <db> {fn_va:#x} retype {off} <c-type>"
+                    )
                 return 0
 
             if args.action == "retype":

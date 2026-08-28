@@ -106,7 +106,7 @@ pub(super) fn load_program_session(
 /// prefixes and type annotations).
 #[pyfunction]
 #[pyo3(name = "decompile_at")]
-#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize, analyst_names=None))]
+#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize, analyst_names=None, analyst_locals=None))]
 fn decompile_at_py(
     py: Python<'_>,
     path: String,
@@ -119,6 +119,7 @@ fn decompile_at_py(
     pdb_cache: &str,
     max_functions: usize,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
+    analyst_locals: Option<std::collections::HashMap<i64, (String, String)>>,
 ) -> PyResult<String> {
     let session = load_program_session(&path)?;
     decompile_at_session(
@@ -134,6 +135,7 @@ fn decompile_at_py(
         pdb_cache,
         max_functions,
         analyst_names.as_ref(),
+        analyst_locals.as_ref(),
     )
 }
 
@@ -151,6 +153,7 @@ pub(super) fn decompile_at_session(
     pdb_cache: &str,
     max_functions: usize,
     analyst_names: Option<&std::collections::HashMap<u64, String>>,
+    analyst_locals: Option<&std::collections::HashMap<i64, (String, String)>>,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
     use crate::analysis::cfg::Budgets;
@@ -360,6 +363,16 @@ pub(super) fn decompile_at_session(
         &stack_object_hints,
         &got_targets,
     );
+    // The analyst's own names and types for frame slots, joined by frame
+    // offset and applied through the SAME mechanism debug names use --
+    // `source_names` / `source_types`, consumed by
+    // `naming::apply_authoritative_local_names` at the presentation boundary.
+    // Riding that path rather than building a second one means a rename cannot
+    // turn a scalar assignment into a pointer store, and an analyst who names a
+    // variable `int` gets the same rejection a bad DWARF name gets.
+    if let Some(locals) = analyst_locals {
+        crate::ir::stack_locals::apply_analyst_locals(&mut stack_facts, locals);
+    }
     merge_dwarf_register_local_facts(
         &mut stack_facts,
         dwarf_outputs

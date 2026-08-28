@@ -56,6 +56,23 @@ pub(super) fn select_renderable_dwarf_local_facts(
         })
         .map(|(name, c_type)| (name.clone(), c_type.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    // A NAME WITHOUT A RENDERABLE TYPE IS NOT SAFE TO APPLY, and this pairing is
+    // the guard. It reads like tidiness and is not. Measured 2026-08-28 on a
+    // stripped `-O0` build, renaming the surviving local at `rbp-0xc` with no
+    // type attached turned
+    //
+    //     int local_c;   local_c = 0;   ... return (unsigned int)(local_c);
+    //
+    // into
+    //
+    //     long running_total;   *(int *)(running_total) = 0;
+    //
+    // -- a pointer store synthesised from a scalar assignment, because the
+    // local lost its recovered width along with its `local_` identity. With a
+    // type supplied the same rename renders correctly. So an analyst rename of
+    // a local is applied only alongside a type, which is a real constraint on
+    // the feature rather than a bug in this filter; `apply_analyst_locals`
+    // enforces the same rule at the other end so the pair never separates.
     let selected_names = local_names
         .iter()
         .filter(|(internal_name, _source_name)| selected_types.contains_key(*internal_name))

@@ -189,6 +189,7 @@ impl PyDecompilerSession {
             // name after a rename. This path stays KB-blind until the cache key
             // includes the overlay; `decompile_at_py` is the wired entry point.
             None,
+            None,
         )?;
         if cacheable {
             return Ok(self.rendered.install(key, artifact));
