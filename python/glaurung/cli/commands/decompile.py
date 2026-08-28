@@ -334,8 +334,24 @@ class DecompileCommand(BaseCommand):
                 try:
                     func_va = resolve_func_to_va(args.func, discovered)
                 except FuncResolutionError as e:
-                    formatter.output_plain(f"Error: {e}")
-                    return 2
+                    # The name the analyst just chose is the name they will
+                    # type. Resolving `--func` against the binary alone means
+                    # renaming a function makes it unreachable by its new name
+                    # -- `decompile --func parse_packet_hdr --db p.glaurung`
+                    # answered "no function named 'parse_packet_hdr' in this
+                    # binary", which is true and useless. The project is
+                    # consulted second, so a binary symbol still wins on a
+                    # collision and this cannot change the no-`--db` behaviour.
+                    func_va = None
+                    for va, name in load_analyst_names(
+                        getattr(args, "db", None), str(path)
+                    ).items():
+                        if name == args.func:
+                            func_va = va
+                            break
+                    if func_va is None:
+                        formatter.output_plain(f"Error: {e}")
+                        return 2
             else:
                 got = g.analysis.detect_entry_path(str(path))
                 if got is None:

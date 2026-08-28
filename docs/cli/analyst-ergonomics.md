@@ -45,9 +45,22 @@ uv run glaurung disasm driver.sys --db driver.glaurung \
   --function 0x140013f24 --json
 ```
 
-Annotations: direct `call`/`jmp` targets -> `function_names`; `call [rip+slot]`
--> IAT import name; RIP-relative data -> `data_labels`. Intra-function jumps are
+Annotations: direct `call`/`jmp` targets -> `function_names`, then the binary's
+own discovered names, then ELF PLT stubs (`printf@plt`); `call [rip+slot]` ->
+IAT import name; RIP-relative data -> `data_labels`. Intra-function jumps are
 not treated as unresolved. The footer reports resolved/unresolved counts.
+
+**The project is an overlay on the binary, not a replacement for it** (fixed
+2026-08-28). This read names, entry points and bounds from the project alone,
+so a project holding one analyst rename knew exactly one function:
+`--function main` failed with `function not found in DB` on a binary that
+plainly exports it; `call 0x1020` stayed a bare address because a PLT stub is
+not a KB row; and the end-of-function was "the next entry in the KB", which for
+the last function in a section is nothing at all -- a 44-byte function
+disassembled 2,011 instructions across 24 KB. Bounds now come from the
+discovered function's proven extent, and an analyst rename follows into the
+`@plt` stub the call site actually targets. See
+`python/tests/test_kb_disasm_symbols.py`.
 
 ## Lock / synchronization-state (`locks`)
 

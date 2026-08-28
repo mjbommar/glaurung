@@ -327,3 +327,75 @@ def test_a_cli_rename_reaches_the_decompiler(tmp_path):
     assert "validate" not in result.stdout, (
         "the caller still shows the pre-rename name:\n" + result.stdout
     )
+
+
+def test_a_renamed_function_is_reachable_by_its_new_name(tmp_path):
+    """`--func` resolved names against the binary alone.
+
+    So renaming a function made it unreachable by the name the analyst had
+    just chosen: `decompile --func parse_packet_hdr --db p.glaurung` answered
+    "no function named 'parse_packet_hdr' in this binary", which is true and
+    useless. Found by walking the documented workflow end to end rather than
+    by testing a unit.
+    """
+    import sys
+
+    root = Path(__file__).resolve().parent.parent.parent
+    sys.path.insert(0, str(root / "tools"))
+    import fixture_toolchain as TC
+
+    source = root / "tests" / "fixtures" / "analyst_rename" / "analyst_rename.c"
+    binary = tmp_path / "byname-gcc-O1.so"
+    compiled = TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O1", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    nm = subprocess.run(
+        ["nm", "-D", "--defined-only", str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    va = next(
+        int(p[0], 16)
+        for p in (line.split() for line in nm.stdout.splitlines())
+        if len(p) == 3 and p[2] == "validate"
+    )
+
+    db = tmp_path / "p.glaurung"
+    PersistentKnowledgeBase.open(str(db), binary_path=str(binary)).close()
+    assert run("rename", str(db), hex(va), "parse_packet_hdr").returncode == 0
+
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            str(binary),
+            "--func",
+            "parse_packet_hdr",
+            "--style",
+            "decbench",
+            "--cache-dir",
+            "",
+            "--db",
+            str(db),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "parse_packet_hdr" in result.stdout
+
+    # Without the project the new name must still be unknown -- the project is
+    # consulted second, so this cannot change no-`--db` behaviour.
+    missing = subprocess.run(
+        ["glaurung", "decompile", str(binary), "--func", "parse_packet_hdr"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert missing.returncode != 0

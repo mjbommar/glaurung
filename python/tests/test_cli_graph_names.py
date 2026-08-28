@@ -187,3 +187,28 @@ def test_an_unreadable_project_does_not_kill_the_graph(shared_object, tmp_path):
     junk.write_bytes(b"this is not a sqlite database")
     dot = graph(shared_object, "--db", str(junk))
     assert '"validate"' in dot, "a bad project should degrade to no overlay"
+
+
+def test_a_kickoff_placeholder_does_not_erase_a_plt_name(shared_object, tmp_path):
+    """`kickoff` imports the whole discovered function set into `function_names`,
+    unnamed addresses included, so an ordinary project holds a `sub_<hex>` row
+    for every PLT stub.
+
+    Treating those as analyst decisions made the overlay ERASE information: an
+    edge that read `validate@plt` without `--db` printed `sub_1050` with it.
+    A placeholder is not a name and must not outrank a real one.
+    """
+    from glaurung.llm.kb import xref_db
+
+    db = tmp_path / "p.glaurung"
+    kb = PersistentKnowledgeBase.open(str(db), binary_path=str(shared_object))
+    # Exactly what kickoff records for an address discovery found no name for.
+    for stub_va in range(0x1020, 0x1060, 0x10):
+        xref_db.set_function_name(kb, stub_va, f"sub_{stub_va:x}", set_by="auto")
+    kb.close()
+
+    with_db = graph(shared_object, "--db", str(db))
+    assert "validate@plt" in with_db, with_db
+    assert '"sub_1050"' not in with_db, with_db
+    # And it must not have made things worse than no project at all.
+    assert "validate@plt" in graph(shared_object)

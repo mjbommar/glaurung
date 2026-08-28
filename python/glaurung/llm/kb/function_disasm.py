@@ -63,6 +63,10 @@ class FunctionDisasm:
         return "\n".join(out)
 
 
+#: The spelling discovery mints for an address it found no name for.
+_PLACEHOLDER_NAME = re.compile(r"^sub_[0-9a-fA-F]+$")
+
+
 def _binary_symbols(
     binary_path: str,
 ) -> Tuple[Dict[int, str], List[int], Dict[int, int]]:
@@ -201,7 +205,14 @@ def disasm_function(
     # this module knew only the KB.
     binary_names, binary_entries, binary_sizes = _binary_symbols(binary_path)
     for binary_va, binary_name in binary_names.items():
-        va_name.setdefault(binary_va, binary_name)
+        # A KB row spelling `sub_<hex>` is a placeholder, not a name: `kickoff`
+        # imports the whole discovered function set into `function_names`,
+        # unnamed addresses included, so an ordinary project holds one for
+        # every PLT stub. Letting it block the binary's own name made the
+        # overlay ERASE information -- `-> validate@plt` printed `-> sub_1050`.
+        existing = va_name.get(binary_va)
+        if existing is None or _PLACEHOLDER_NAME.match(existing):
+            va_name[binary_va] = binary_name
         name_va.setdefault(binary_name, binary_va)
     entries = sorted(set(entries) | set(binary_entries))
     # A call inside a shared object targets the callee's PLT stub, not the

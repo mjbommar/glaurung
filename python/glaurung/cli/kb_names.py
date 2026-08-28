@@ -15,9 +15,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+#: The spelling discovery mints for an address it found no name for.
+_PLACEHOLDER_NAME = re.compile(r"^sub_[0-9a-fA-F]+$")
 
 
 def load_analyst_names(db_path: Optional[str], binary: str) -> dict[int, str]:
@@ -53,7 +57,18 @@ def load_analyst_names(db_path: Optional[str], binary: str) -> dict[int, str]:
     for row in rows:
         if row.entry_va is None or not row.canonical:
             continue
-        out[int(row.entry_va)] = str(row.canonical)
+        # A synthesised `sub_<hex>` is a placeholder, not a name, and it must
+        # not outrank a real one. `kickoff` imports the whole discovered
+        # function set into `function_names`, placeholders included, so a
+        # project created the ordinary way holds a `sub_1050` row for every
+        # unnamed address -- including PLT stubs. Treating those as analyst
+        # decisions made the overlay *erase* information: a callgraph edge that
+        # would have read `validate@plt` printed `sub_1050`, because the
+        # placeholder won. Dropping them here fixes every consumer at once.
+        canonical = str(row.canonical)
+        if _PLACEHOLDER_NAME.match(canonical):
+            continue
+        out[int(row.entry_va)] = canonical
     return out
 
 
