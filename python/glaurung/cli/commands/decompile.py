@@ -262,14 +262,11 @@ class DecompileCommand(BaseCommand):
                     max_functions=_requested_function_budget(vas),
                 )
                 if as_json:
-                    payload = [
-                        {"name": name, "entry_va": int(va), "pseudocode": text}
-                        for name, va, text in results
-                    ]
+                    payload = [_function_record(rec) for rec in results]
                     print(json.dumps(payload, indent=2))
                 else:
-                    for name, va, text in results:
-                        formatter.output_plain(text)
+                    for rec in results:
+                        formatter.output_plain(rec[2])
                 _report_unverified_functions()
                 return _report_unresolved_vas(vas, results)
 
@@ -282,14 +279,11 @@ class DecompileCommand(BaseCommand):
                     style=style,
                 )
                 if as_json:
-                    payload = [
-                        {"name": name, "entry_va": int(va), "pseudocode": text}
-                        for name, va, text in results
-                    ]
+                    payload = [_function_record(rec) for rec in results]
                     print(json.dumps(payload, indent=2))
                 else:
-                    for name, va, text in results:
-                        formatter.output_plain(text)
+                    for rec in results:
+                        formatter.output_plain(rec[2])
                 _report_unverified_functions()
                 return 0
 
@@ -369,7 +363,18 @@ class DecompileCommand(BaseCommand):
                 name = args.func if isinstance(args.func, str) else ""
                 print(
                     json.dumps(
-                        {"name": name, "entry_va": int(func_va), "pseudocode": text},
+                        {
+                            "name": name,
+                            "entry_va": int(func_va),
+                            "pseudocode": text,
+                            # Single-function mode goes through `decompile_at`,
+                            # which does not return the structured inventory.
+                            # Absent rather than empty: an empty list would claim
+                            # "this function has no variables", which is a
+                            # different and usually false statement.
+                            "size": None,
+                            "variables": [],
+                        },
                         indent=2,
                     )
                 )
@@ -460,6 +465,31 @@ def _requested_function_budget(vas: list[int]) -> int:
     return max(len(set(vas)), 1)
 
 
+def _function_record(record: tuple) -> dict:
+    """One per-function JSON object from a `decompile_many`/`decompile_all` row.
+
+    The row is `(name, entry_va, pseudocode, size, variables)`. `size` and
+    `variables` are additive: every previously-emitted key keeps its name and
+    meaning, so a consumer reading only the original three is unaffected.
+
+    `variables` is the structured inventory from `ir::recovered_variables` --
+    name, C type, storage kind, ABI argument index and frame offset for each
+    local the render actually emitted. It deliberately carries no addresses and
+    no line numbers; see that module for why a guessed address is worse than
+    none.
+    """
+    name, entry_va, text = record[0], record[1], record[2]
+    size = record[3] if len(record) > 3 else None
+    variables = record[4] if len(record) > 4 else []
+    return {
+        "name": name,
+        "entry_va": int(entry_va),
+        "pseudocode": text,
+        "size": int(size) if size is not None else None,
+        "variables": variables,
+    }
+
+
 def _report_unresolved_vas(requested: list[int], results: list) -> int:
     """Name the ``--vas`` entries that produced no body; return the exit code.
 
@@ -475,7 +505,7 @@ def _report_unresolved_vas(requested: list[int], results: list) -> int:
     """
     import sys
 
-    produced = {int(va) for _name, va, _text in results}
+    produced = {int(record[1]) for record in results}
     # An ARM32 Thumb `.symtab` value carries the Thumb bit and is normalised away
     # before discovery, so the record comes back at the even address the caller
     # asked about with an odd one. See `program::image::normalize_function_entry`.

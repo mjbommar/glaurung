@@ -57,7 +57,7 @@ NETWTW10_BIG_FUNC = 0x1401FD8A0
 def _decompile_many(path: Path, vas: list[int], **kwargs) -> dict[int, str]:
     """Decompile several functions in ONE discovery run, keyed by entry VA."""
     return {
-        va: text for _name, va, text in g.ir.decompile_many(str(path), vas, **kwargs)
+        record[1]: record[2] for record in g.ir.decompile_many(str(path), vas, **kwargs)
     }
 
 

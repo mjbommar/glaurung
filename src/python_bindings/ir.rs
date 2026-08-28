@@ -1095,7 +1095,19 @@ fn decompile_all_py(
         } else {
             profiler.measure("render", || render(&f))
         };
-        list.append((outer_name, func.entry_point.value, text))?;
+        let variables = crate::ir::recovered_variables::recovered_variables(
+            &text,
+            prototype.as_ref(),
+            &stack_facts,
+            calling_convention_pointer_width(cc),
+        );
+        list.append((
+            outer_name,
+            func.entry_point.value,
+            text,
+            func.size,
+            variables_to_py(py, &variables)?,
+        ))?;
     }
     Ok(list.into())
 }
@@ -1412,7 +1424,48 @@ fn decompile_many_py(
             None => text,
         };
         let name = resolve_outer_function_name(&func.name, func_va, &addr_map);
-        list.append((name, func_va, text))?;
+        // The structured inventory a consumer needs to match our locals without
+        // re-parsing the C. Computed from the prototype and the stack-promotion
+        // facts already in scope, and filtered to names the render actually
+        // emitted -- see `ir::recovered_variables`.
+        let variables = crate::ir::recovered_variables::recovered_variables(
+            &text,
+            prototype.as_ref(),
+            &stack_facts,
+            calling_convention_pointer_width(cc),
+        );
+        list.append((
+            name,
+            func_va,
+            text,
+            func.size,
+            variables_to_py(py, &variables)?,
+        ))?;
+    }
+    Ok(list.into())
+}
+
+/// One `RecoveredVariable` per dict, in the shape a consumer reads.
+///
+/// `arg_index` and `stack_offset` are `None` rather than absent when they do not
+/// apply, so a reader never has to distinguish "this key is missing" from "this
+/// variable has no offset" -- the second is a real, load-bearing answer (see the
+/// withheld-coordinate rule in `ir::recovered_variables`).
+fn variables_to_py(
+    py: Python<'_>,
+    variables: &[crate::ir::recovered_variables::RecoveredVariable],
+) -> PyResult<PyObject> {
+    use pyo3::types::{PyDict, PyList};
+    let list = PyList::empty(py);
+    for variable in variables {
+        let item = PyDict::new(py);
+        item.set_item("name", &variable.name)?;
+        item.set_item("type", &variable.ctype)?;
+        item.set_item("kind", variable.kind)?;
+        item.set_item("arg_index", variable.arg_index)?;
+        item.set_item("stack_offset", variable.stack_offset)?;
+        item.set_item("size", variable.size)?;
+        list.append(item)?;
     }
     Ok(list.into())
 }

@@ -636,6 +636,69 @@ variable addresses bypass line maps entirely, Route D adds nothing until B lands
 
 ---
 
+## 7b. Landed: the JSON now answers half their schema
+
+Route C is in. `tools/decbench_redecompile_tree.py`'s consumers and the
+`decompile` CLI now emit two additive fields on every per-function record:
+
+```json
+{
+  "name": "word_at_index", "entry_va": 4549, "pseudocode": "...",
+  "size": 68,
+  "variables": [
+    {"name": "arg0", "type": "int *", "kind": "arg",
+     "arg_index": 0, "stack_offset": null, "size": null},
+    {"name": "i", "type": "int32_t", "kind": "stack",
+     "arg_index": null, "stack_offset": -20, "size": 4}
+  ]
+}
+```
+
+Measured on a real fixture (`205_x87_long_double:gcc:O0:x87_accumulate`): one
+parameter and five promoted locals, each with its frame displacement and access
+width, and one carrying its DWARF name `i` rather than the `local_N` spelling.
+
+**What this buys.** DecBench currently regex-parses our C to invent variables,
+and under PR #48 those *inferred* variables have their evidence stripped
+(`variable_match.py:414-420`) and are dropped outright in address-only mode
+unless they carry an `arg_index` or a `stack_offset`. Supplying the structured
+inventory is what lets our locals reach the `"argument"` and `"stack"` matching
+stages at all — the two anchors that do not depend on spelling.
+
+**The one rule, and why it matters.** `ir::recovered_variables` reports a
+variable only if its name actually appears in the rendered text. That is not the
+text-parsing DecBench objects to; it is the reverse. We never invent a variable
+from the C — we take one we independently know about from `RecoveredPrototype`
+and `StackLocalFacts`, and refuse to report it unless the render agrees it
+survived the ~77 rewrite passes. Dead-store elimination, copy propagation and
+canary recognition all delete locals that `StackLocalFacts` still describes;
+reporting one would name a variable the consumer cannot find, which is a false
+claim about our own output.
+
+**What it deliberately does NOT carry.** No addresses, no line numbers. Those
+need instruction origin to survive lowering and it does not — `lower_block`
+calls `lower_op(&ins.op, ..)` and drops `ins.va`. A *guessed* address would be
+worse than none: a plausible wrong address is a real instruction start inside
+the function, so it passes the consumer's validator and silently mis-attributes
+the evidence. dewolf and Reko take the same position for the same reason.
+
+So their note stays accurate as written. What changed is that the half of the
+schema that never needed `ins.va` is now filled, and the remaining gap is
+exactly the half that does.
+
+**Cost, for calibration against §7.** 46 construction sites seed the inventory;
+the ABI change (a 3-tuple to a 5-tuple across `decompile_many`/`decompile_all`)
+touched 13 call sites in our own tree, every one found by running the tests
+rather than by grepping — four survived two rounds of regex sweeps because they
+unpack an indexed row (`name, va, text = results[0]`) rather than iterating.
+
+**A gate this surfaced.** `tools/stripped_differential.py` — a fifth baseline,
+which compares each fixture's verdict with and without debug info — recorded
+**9 new divergences, 8 of them `_Complex`**, all `-g=pass stripped=fail`. That is
+the class that lane exists to find: correct with DWARF, wrong in the
+configuration real targets ship in. It is independent confirmation of D-A and
+D-B from `fixture-expansion-2026-08-27.md` §2, arriving from the dataflow side.
+
 ## 8. Recommendation
 
 1. **Route C now.** Structured `variables[]` plus `size` in the per-function

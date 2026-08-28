@@ -859,7 +859,7 @@ def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
     except (OSError, RuntimeError, ValueError):
         return {}
     recovered: dict[int, str] = {}
-    for _name, va, code in rows:
+    for _name, va, code, *_extra in rows:
         recovered[int(va)] = "\n".join(
             line for line in code.splitlines() if not line.strip().startswith("//")
         )

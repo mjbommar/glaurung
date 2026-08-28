@@ -76,6 +76,7 @@ pub mod pass_stats;
 pub mod pdb_fields;
 pub(crate) mod prototype_width;
 pub mod readonly_fold;
+pub mod recovered_variables;
 pub mod regview;
 pub mod return_class;
 pub mod select_fold;

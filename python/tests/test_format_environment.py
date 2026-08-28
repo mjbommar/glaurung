@@ -102,7 +102,7 @@ def test_real_stripped_local_vfprintf_sink_types_literal_format_operands(
         style="decbench",
         timeout_ms=8000,
     )
-    rendered = {int(va): text for _, va, text in results}
+    rendered = {int(record[1]): record[2] for record in results}
     literal_text = rendered[targets["literal_caller"]]
     assert "char * arg0" in literal_text.split("{", 1)[0], literal_text
     for name in ("dynamic_caller", "conflicting_caller"):

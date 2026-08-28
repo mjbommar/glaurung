@@ -102,7 +102,7 @@ def test_real_stripped_low_byte_parameter_is_not_widened_by_its_abi_copy(
         style="decbench",
         timeout_ms=8000,
     )
-    rendered = {int(va): text for _, va, text in results}
+    rendered = {int(record[1]): record[2] for record in results}
     byte_code = rendered[targets["byte_only"]]
     full_code = rendered[targets["full_word"]]
     assert re.search(

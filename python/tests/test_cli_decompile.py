@@ -1093,7 +1093,7 @@ def test_real_stripped_sigaction_callback_recovers_external_int_contract(
         style="decbench",
         timeout_ms=8000,
     )
-    rendered = {int(va): text for _, va, text in results}
+    rendered = {int(record[1]): record[2] for record in results}
     quiet_text = rendered[int(quiet.entry_point.value)]
     noarg_text = rendered[int(noarg.entry_point.value)]
     info_text = rendered[int(info.entry_point.value)]
@@ -1201,7 +1201,7 @@ def test_real_stripped_format_wrapper_recovers_forwarded_string_parameter(
         style="decbench",
         timeout_ms=8000,
     )
-    rendered = {int(va): text for _, va, text in results}
+    rendered = {int(record[1]): record[2] for record in results}
     string_text = rendered[targets["string_wrapper"]]
     assert "char * arg1" in string_text.split("{", 1)[0], string_text
     for name in ("null_only_wrapper", "conflicting_wrapper", "unknown_wrapper"):
@@ -1284,7 +1284,7 @@ def test_real_stripped_plt_got_tail_free_recovers_void_contract(tmp_path: Path) 
         timeout_ms=8000,
     )
     assert len(results) == 1, results
-    function_name, _, generated = results[0]
+    function_name, _, generated = results[0][:3]
     header = generated.split("{", 1)[0].strip().splitlines()[-1]
     assert header.startswith(f"void {function_name}("), generated
     assert "free(" in generated, generated
@@ -1528,7 +1528,7 @@ def test_real_stripped_arm64_loop_does_not_invent_trailing_parameters(
         timeout_ms=8000,
     )
     assert len(results) == 1
-    _, _, text = results[0]
+    _, _, text = results[0][:3]
     signature = next(line for line in text.splitlines() if f"sub_{entry_va:x}(" in line)
     parameters = signature.split("(", 1)[1].rsplit(")", 1)[0].split(",")
     assert len(parameters) == 2, signature
@@ -1575,7 +1575,7 @@ def test_decompile_requested_va_seeds_stripped_arm32(
         timeout_ms=8000,
     )
     assert len(results) == 1
-    name, va, text = results[0]
+    name, va, text = results[0][:3]
     assert name == "sub_46c"
     assert va == requested_va
     assert text.startswith("// glaurung: sub_46c @ 0x46c\n")
@@ -1597,7 +1597,7 @@ def test_decompile_arm32_mixed_mode_init_uses_a32() -> None:
         timeout_ms=8000,
     )
     assert len(results) == 1
-    name, va, text = results[0]
+    name, va, text = results[0][:3]
     assert name == "_init"
     assert va == 0x3F4
     assert "call_weak_fn(" in text, text
@@ -1752,7 +1752,7 @@ def test_decbench_output_parses_with_gcc():
     vas = [int(f.entry_point.value) for f in funcs]
     results = g.ir.decompile_many(str(SAMPLE), vas, style="decbench", timeout_ms=8000)
     total = ok = 0
-    for _name, _va, text in results:
+    for _name, _va, text, *_extra in results:
         if not text.strip():
             continue
         total += 1

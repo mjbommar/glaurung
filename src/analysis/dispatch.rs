@@ -51,7 +51,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::core::instruction::{Access, Instruction, OperandKind};
 
+mod arm_tables;
 mod memory_guard;
+
+pub use arm_tables::{ArmPcMode, ArmWordTableBranch};
 pub use memory_guard::MemKey;
 use memory_guard::MemoryBounds;
 
@@ -167,60 +170,6 @@ pub struct Bounds {
     /// Memory locations proved to hold a value in `[0, max]`; see
     /// [`memory_guard`].
     pub mems: HashMap<MemKey, u64>,
-}
-
-/// How `pc` reads as a *source operand* on 32-bit ARM.
-///
-/// ARM's `pc` is not the address of the instruction that names it; it is two
-/// instruction slots ahead, and the two execution states disagree on both the
-/// offset and the alignment. Getting this wrong does not fail loudly — it names
-/// a table four or eight bytes off, decodes whatever is there, and reports a
-/// confident answer, which is why the value is never guessed from the
-/// instruction alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArmPcMode {
-    /// A32: `pc` reads as the instruction's address plus 8.
-    A32,
-    /// T32: `pc` reads as the instruction's address plus 4, rounded DOWN to a
-    /// 4-byte boundary — so a 2-byte `add rD, pc, #imm` at an odd halfword and
-    /// one at an even halfword read different values.
-    Thumb,
-}
-
-impl ArmPcMode {
-    /// The value `pc` reads when named as a source by the instruction at `va`.
-    fn pc_value(self, va: u64) -> Option<u64> {
-        match self {
-            ArmPcMode::A32 => va.checked_add(8),
-            ArmPcMode::Thumb => va.checked_add(4).map(|value| value & !3),
-        }
-    }
-}
-
-/// An ARM table dispatch that loads `pc` from an absolute word table.
-///
-/// The corpus form, uniformly, is
-///
-/// ```text
-/// cmp   rIdx, #N            ; the extent
-/// bhi   default             ; in-range on the fall-through edge
-/// add   rBase, pc, #imm     ; = adr rBase, <table>
-/// ldr   pc, [rBase, rIdx, lsl #2]
-/// ```
-///
-/// Unlike `tbb`/`tbh` the table is NOT named by the instruction — the base is a
-/// tracked register — and unlike the x86 relative form the entries are absolute
-/// addresses rather than offsets from the table. It therefore needs both halves:
-/// a value for `rBase` and an extent for `rIdx`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArmWordTableBranch {
-    /// VA of the first table entry — the resolved value of the base register.
-    pub table_va: u64,
-    /// Entries the range check proves, or `None` when the index arrived
-    /// unbounded. Fail-closed for the same reason as [`ThumbTableBranch`]: past
-    /// the last entry lie the case bodies, whose bytes read as plausible
-    /// addresses.
-    pub entry_count: Option<usize>,
 }
 
 /// A Thumb-2 `tbb`/`tbh` table branch, and the extent its guard proves.

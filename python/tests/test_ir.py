@@ -395,11 +395,28 @@ def test_lift_bytes_rejects_unknown_arch():
 def test_decompile_all_returns_readable_functions():
     results = g.ir.decompile_all(str(SAMPLE), limit=3)
     assert len(results) >= 1
-    for name, va, text in results:
+    for name, va, text, size, variables in results:
         assert isinstance(name, str) and name
         assert isinstance(va, int) and va > 0
         assert text.startswith(f"function {name} @ 0x{va:x} {{")
         assert text.rstrip().endswith("}")
+        # Additive, and both may legitimately be empty for a given function:
+        # `size` is absent when discovery proved no extent, and a function with
+        # no promoted locals and no recovered parameters has no inventory.
+        assert size is None or (isinstance(size, int) and size > 0)
+        assert isinstance(variables, list)
+        for variable in variables:
+            assert set(variable) == {
+                "name",
+                "type",
+                "kind",
+                "arg_index",
+                "stack_offset",
+                "size",
+            }
+            assert variable["kind"] in ("arg", "stack")
+            # Every reported name must be a real identifier the render emitted.
+            assert variable["name"] and variable["name"] in text
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="x86-64 sample missing")
@@ -571,7 +588,7 @@ def test_decompile_pe_pdb_cache_names_kernel_public_calls():
 def test_decompile_all_on_arm64_sample():
     results = g.ir.decompile_all(str(ARM64_SAMPLE), limit=2)
     assert len(results) >= 1
-    assert any("function " in text for _, _, text in results)
+    assert any("function " in record[2] for record in results)
 
 
 @pytest.mark.skipif(not ARM64_SAMPLE.exists(), reason="arm64 sample missing")

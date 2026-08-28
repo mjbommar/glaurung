@@ -29,6 +29,7 @@ use object::{Object, ObjectSegment, SectionKind};
 use object::{ObjectSection, ObjectSymbol};
 
 mod ctrl_flow;
+mod dispatch_resolution;
 mod entry_shape;
 mod extents;
 mod function_build;
@@ -51,6 +52,7 @@ use ctrl_flow::{
     guard_bound_reaches_fallthrough, immediate_target, is_code_padding_terminator,
     is_unconditional_branch_mnemonic, memory_operand_va,
 };
+use dispatch_resolution::resolve_dispatch;
 
 // Same rule as above, and the same reason. `has_function_boundary_marker`,
 // `head_looks_like_fn_start`, `pe_head_looks_like_simd_continuation`,
@@ -929,88 +931,6 @@ impl DiscoveryFacts<'_> {
             })
         })
     }
-}
-
-fn resolve_dispatch(
-    image: Option<&crate::program::image::ProgramImage>,
-    data: &[u8],
-    regions: &[ExecRegion],
-    tracker: &crate::analysis::dispatch::DispatchTracker,
-    instruction: &Instruction,
-    tables: &std::collections::BTreeMap<u64, Vec<u64>>,
-) -> Option<crate::analysis::dispatch::Resolution> {
-    // Thumb-2 `tbb`/`tbh` name their table in the instruction (`pc` is the base)
-    // and store it inline in `.text` as unsigned halfword counts. Nothing about
-    // that shape reaches `resolve_with`, which resolves a REGISTER to a
-    // rodata-relative table, so it is answered here and reported through the
-    // same `Resolution` so every caller — including the post-CFG revalidation —
-    // treats it identically.
-    if let Some(branch) = tracker.thumb_table_branch(instruction) {
-        let Some(entry_count) = branch.entry_count else {
-            return Some(crate::analysis::dispatch::Resolution::Unresolved(
-                crate::analysis::dispatch::Unresolved::NoBound(branch.table_va),
-            ));
-        };
-        return Some(
-            match decode_thumb_table_branch(
-                image,
-                data,
-                branch.table_va,
-                branch.entry_size,
-                entry_count,
-                |target| in_exec_regions(regions, target).is_some(),
-            ) {
-                Ok(table) => crate::analysis::dispatch::Resolution::Table {
-                    table_va: table.table_va,
-                    targets: table.targets,
-                },
-                Err(decline) => crate::analysis::dispatch::Resolution::Unresolved(
-                    crate::analysis::dispatch::Unresolved::NoTableAt {
-                        table: branch.table_va,
-                        decline,
-                    },
-                ),
-            },
-        );
-    }
-    // ARM `ldr pc, [rBase, rIdx, lsl #2]` reads a table of ABSOLUTE addresses
-    // off a base the tracker materialised from `adr`. Like `tbb`/`tbh` nothing
-    // about that shape reaches `resolve_with`, which resolves a register
-    // holding a table-RELATIVE target; it is answered here and reported through
-    // the same `Resolution` so the post-CFG revalidation treats it identically.
-    if let Some(branch) = tracker.arm_word_table_branch(instruction) {
-        let Some(entry_count) = branch.entry_count else {
-            return Some(crate::analysis::dispatch::Resolution::Unresolved(
-                crate::analysis::dispatch::Unresolved::NoBound(branch.table_va),
-            ));
-        };
-        return Some(
-            match crate::analysis::jump_table::decode_absolute_word_table(
-                image,
-                data,
-                branch.table_va,
-                entry_count,
-                |target| in_exec_regions(regions, target).is_some(),
-            ) {
-                Ok(table) => crate::analysis::dispatch::Resolution::Table {
-                    table_va: table.table_va,
-                    targets: table.targets,
-                },
-                Err(decline) => crate::analysis::dispatch::Resolution::Unresolved(
-                    crate::analysis::dispatch::Unresolved::NoTableAt {
-                        table: branch.table_va,
-                        decline,
-                    },
-                ),
-            },
-        );
-    }
-    tracker.resolve_with(instruction, tables, |table_va, entry_count| {
-        decode_bounded_relative_jump_table(image, data, table_va, entry_count, |target| {
-            in_exec_regions(regions, target).is_some()
-        })
-        .map(|table| table.targets)
-    })
 }
 
 /// Run a whole-binary seed scan unless the analysis deadline has already passed.

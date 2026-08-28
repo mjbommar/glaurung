@@ -73,7 +73,7 @@ def test_lazy_call_arm_remains_conditional_and_executes_identically(
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    [(_, _, rendered)] = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    [(_, _, rendered, *_extra)] = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
         str(stripped),
         [int(target.entry_point.value)],
         style="decbench",

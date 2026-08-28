@@ -33,7 +33,7 @@ ACCEPTED_UNKNOWNS = {"unknown(hlt)"}
 
 def _collect_unknowns(path: Path) -> Counter:
     c: Counter = Counter()
-    for _name, _va, text in g.ir.decompile_all(str(path), 64):
+    for _name, _va, text, *_extra in g.ir.decompile_all(str(path), 64):
         for ln in text.splitlines():
             stripped = ln.strip().rstrip(";")
             if stripped.startswith("unknown("):

@@ -100,7 +100,7 @@ class GetStringXrefsTool(MemoryTool[StringXrefsArgs, StringXrefsResult]):
 
         hits: List[StringXrefHit] = []
         half = max(0, args.max_snippet_chars // 2)
-        for name, entry_va, text in triples:
+        for name, entry_va, text, *_extra in triples:
             for ln_idx, line in enumerate(text.splitlines(), start=1):
                 if not matcher(line):
                     continue

@@ -83,8 +83,8 @@ def test_every_style_renders_every_function(fixture: str) -> None:
             str(binary), [exports[f] for f in required], style=style
         )
         assert rendered, f"{fixture} style={style!r} rendered nothing at all"
-        # decompile_many yields (name, va, code) triples.
-        for name, _va, body in rendered:
+        # decompile_many yields (name, va, code, size, variables) rows.
+        for name, _va, body, *_extra in rendered:
             function = name
             assert body and body.strip(), (
                 f"{fixture}:{function} style={style!r} rendered an empty body"

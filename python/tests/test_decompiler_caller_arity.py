@@ -157,7 +157,7 @@ def test_real_stripped_direct_callers_restore_unused_stack_parameter(
         style="decbench",
         timeout_ms=8000,
     )
-    rendered = {int(va): text for _, va, text in results}
+    rendered = {int(record[1]): record[2] for record in results}
     assert _parameter_names(rendered[targets["eight_target"]]) == [
         f"arg{index}" for index in range(8)
     ], rendered[targets["eight_target"]]

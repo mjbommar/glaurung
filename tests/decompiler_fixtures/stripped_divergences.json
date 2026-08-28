@@ -379,6 +379,51 @@
     "kind": "regression",
     "stripped": "fail"
   },
+  "206_aarch64_wide_dispatch:gcc:O2strip:dense_dispatch": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "208_flag_register_roundtrip:gcc:O2strip:accumulate_across_barrier": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "215_switch_on_wide_selector:clang:O2strip:wide_selector_high_labels": {
+    "debug": "fail",
+    "kind": "improvement",
+    "stripped": "pass"
+  },
+  "217_complex_arithmetic:clang:O2strip:complex_through_call": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "217_complex_arithmetic:clang:O2strip:struct_pair_control": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "217_complex_arithmetic:gcc:O2strip:complex_add_conj": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "217_complex_arithmetic:gcc:O2strip:complex_array_sum": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "217_complex_arithmetic:gcc:O2strip:complex_through_call": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
+  "217_complex_arithmetic:gcc:O2strip:struct_pair_control": {
+    "debug": "pass",
+    "kind": "regression",
+    "stripped": "fail"
+  },
   "63_numerical_integration:gcc:O2strip:simpson_integrate": {
     "debug": "fail",
     "kind": "improvement",

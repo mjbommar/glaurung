@@ -94,7 +94,7 @@ def test_killed_canary_value_does_not_make_scalar_result_a_pointer(
         style="decbench",
         timeout_ms=8000,
     )
-    rendered = {int(va): text for _, va, text in results}
+    rendered = {int(record[1]): record[2] for record in results}
     scalar_code = rendered[targets["scalar_after_pointer"]]
     pointer_code = rendered[targets["pointer_after_canary"]]
     assert re.search(r"\bint\s+\w+\(int arg0\)", scalar_code), scalar_code

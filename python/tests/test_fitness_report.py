@@ -339,19 +339,41 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     describe; cutting them would be deleting documentation to satisfy a number.
     `product_mean_loc` and both medians IMPROVED in the same change, because the
     split added a small file. Accepted as a deliberate ratchet.
+
+    2026-08-27: the ARM word-table dispatch recogniser, and the structured
+    variable inventory (`ir::recovered_variables` -- the half of DecBench's
+    requested JSON schema that does not need instruction origin). Raw growth took
+    `analysis/cfg.rs` to 2,531 and put `analysis/dispatch.rs` past 1,000 for the
+    first time. TWO CUTS FIRST, in the order this docstring insists on.
+    `analysis/cfg/dispatch_resolution.rs` (111 lines -- "which targets does this
+    dispatch reach", three encodings deep now, and not something the largest file
+    in the tree also needs to host) recovered 80, taking the largest owner
+    2,531 -> 2,451, BELOW the previous baseline of 2,468.
+    `analysis/dispatch/arm_tables.rs` (61 lines -- `ArmPcMode` and
+    `ArmWordTableBranch`, an ARM concern no x86 rule references) recovered 51.
+    `product_max_loc`, `product_mean_loc` and both medians all IMPROVED as a
+    result.
+
+    The residual is `analysis/dispatch.rs` at 1,128, accepted rather than cut
+    again: what is left are `arm_adr_target` and `arm_word_table_branch`, which
+    read `self.regs`, `self.bounded` and `self.arm_pc_mode`. Moving them out
+    would expose the tracker's internals to a sibling module -- worse design
+    adopted to satisfy a number, which is the failure mode the 2026-08-20 entry
+    above names. `product_files_above_1000` 26 -> 27 and the two totals that
+    follow from it are that one file and nothing else.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 15,
-        "ir_median_loc": pytest.approx(434.0),
-        "product_files_above_1000": 26,
+        "ir_median_loc": pytest.approx(430),
+        "product_files_above_1000": 27,
         "product_files_above_2000": 4,
-        "product_loc_above_1000": 39740,
-        "product_max_loc": 2468,
-        "product_mean_loc": pytest.approx(428.31503579952266),
-        "product_median_loc": 311,
-        "product_pct_loc_above_1000": pytest.approx(22.143716845718362),
+        "product_loc_above_1000": 40933,
+        "product_max_loc": 2451,
+        "product_mean_loc": pytest.approx(427.0473933649289),
+        "product_median_loc": pytest.approx(309.0),
+        "product_pct_loc_above_1000": pytest.approx(22.713551666352227),
     }
 
 
