@@ -106,7 +106,7 @@ pub(super) fn load_program_session(
 /// prefixes and type annotations).
 #[pyfunction]
 #[pyo3(name = "decompile_at")]
-#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize))]
+#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize, analyst_names=None))]
 fn decompile_at_py(
     py: Python<'_>,
     path: String,
@@ -118,6 +118,7 @@ fn decompile_at_py(
     style: &str,
     pdb_cache: &str,
     max_functions: usize,
+    analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<String> {
     let session = load_program_session(&path)?;
     decompile_at_session(
@@ -132,6 +133,7 @@ fn decompile_at_py(
         style,
         pdb_cache,
         max_functions,
+        analyst_names.as_ref(),
     )
 }
 
@@ -148,6 +150,7 @@ pub(super) fn decompile_at_session(
     style: &str,
     pdb_cache: &str,
     max_functions: usize,
+    analyst_names: Option<&std::collections::HashMap<u64, String>>,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
     use crate::analysis::cfg::Budgets;
@@ -204,6 +207,15 @@ pub(super) fn decompile_at_session(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    // The analyst overlay is DELIBERATELY not applied here. Everything between
+    // this point and `recover_direct_callee_layouts` resolves callees BY NAME
+    // against what the binary calls them -- `session.environment`,
+    // `annotate_calls_in`, and the callee layout recovery itself. Renaming
+    // `validate` to `parse_packet_hdr` before those run means they look up a
+    // name no symbol source knows, find nothing, and downgrade a recovered
+    // `int validate(char *, int)` to `long f(void)` at every call site. The
+    // rename is a presentation decision, so it is applied after the analysis
+    // that depends on binary truth -- see below.
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
     // The reason is the analyst-visible one. This used to blame the
@@ -229,7 +241,7 @@ pub(super) fn decompile_at_session(
     // nested callee analysis decline to spend a layer inside a call cycle.
     let callee_call_graph = py.detach(|| session.call_graph_for(&budgets, &[func_va], &funcs));
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let callee_facts = recover_direct_callee_layouts(
+    let mut callee_facts = recover_direct_callee_layouts(
         &image,
         &funcs,
         &lf_raw,
@@ -244,6 +256,18 @@ pub(super) fn decompile_at_session(
         &mut callee_layout_cache,
     );
     apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
+    // The analyst overlay, applied now that every name-keyed analysis above has
+    // run against what the binary calls things. It rewrites the address map --
+    // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
+    // the definition AND every call site, and it rekeys the recovered symbol
+    // environment so the callee keeps the prototype recovered under its old
+    // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
+    if let Some(names) = analyst_names {{
+        let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
+        if !renames.is_empty() {{
+            callee_facts.env.rename_display(&renames);
+        }}
+    }}
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -289,7 +313,7 @@ pub(super) fn decompile_at_session(
     }
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
+    let outer_name = resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
     let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
     let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
@@ -871,7 +895,7 @@ fn locked_parameter_count(
 /// explicitly opts back into a smaller window.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style=""))]
+#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,
@@ -881,6 +905,7 @@ fn decompile_all_py(
     timeout_ms: u64,
     pdb_cache: &str,
     style: &str,
+    analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
     use crate::analysis::cfg::Budgets;
@@ -917,6 +942,15 @@ fn decompile_all_py(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    // The analyst overlay is DELIBERATELY not applied here. Everything between
+    // this point and `recover_direct_callee_layouts` resolves callees BY NAME
+    // against what the binary calls them -- `session.environment`,
+    // `annotate_calls_in`, and the callee layout recovery itself. Renaming
+    // `validate` to `parse_packet_hdr` before those run means they look up a
+    // name no symbol source knows, find nothing, and downgrade a recovered
+    // `int validate(char *, int)` to `long f(void)` at every call site. The
+    // rename is a presentation decision, so it is applied after the analysis
+    // that depends on binary truth -- see below.
     let environment_targets = funcs
         .iter()
         .take(limit)
@@ -957,7 +991,7 @@ fn decompile_all_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         annotate_calls_in(&mut lf_raw, cc, &addr_map);
-        let callee_facts = recover_direct_callee_layouts(
+        let mut callee_facts = recover_direct_callee_layouts(
             &image,
             &funcs,
             &lf_raw,
@@ -972,6 +1006,18 @@ fn decompile_all_py(
             &mut callee_layout_cache,
         );
         apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
+        // The analyst overlay, applied now that every name-keyed analysis above has
+        // run against what the binary calls things. It rewrites the address map --
+        // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
+        // the definition AND every call site, and it rekeys the recovered symbol
+        // environment so the callee keeps the prototype recovered under its old
+        // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
+        if let Some(names) = analyst_names.as_ref() {{
+            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
+            if !renames.is_empty() {{
+                callee_facts.env.rename_display(&renames);
+            }}
+        }}
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -1002,7 +1048,7 @@ fn decompile_all_py(
             let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
             refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
         }
-        let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
+        let outer_name = resolve_outer_function_name_with_analyst(&func.name, func.entry_point.value, &addr_map, analyst_names.as_ref());
         let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(
             &outer_name,
             func.entry_point.value,
@@ -1114,7 +1160,7 @@ fn decompile_all_py(
 
 #[pyfunction]
 #[pyo3(name = "decompile_many")]
-#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=0usize))]
+#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=0usize, analyst_names=None))]
 #[allow(clippy::too_many_arguments)]
 fn decompile_many_py(
     py: Python<'_>,
@@ -1127,6 +1173,7 @@ fn decompile_many_py(
     style: &str,
     pdb_cache: &str,
     max_functions: usize,
+    analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_many");
     // Decompile an arbitrary SUBSET of functions in a SINGLE analysis pass.
@@ -1194,6 +1241,15 @@ fn decompile_many_py(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    // The analyst overlay is DELIBERATELY not applied here. Everything between
+    // this point and `recover_direct_callee_layouts` resolves callees BY NAME
+    // against what the binary calls them -- `session.environment`,
+    // `annotate_calls_in`, and the callee layout recovery itself. Renaming
+    // `validate` to `parse_packet_hdr` before those run means they look up a
+    // name no symbol source knows, find nothing, and downgrade a recovered
+    // `int validate(char *, int)` to `long f(void)` at every call site. The
+    // rename is a presentation decision, so it is applied after the analysis
+    // that depends on binary truth -- see below.
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &func_vas));
     let field_map =
@@ -1257,7 +1313,7 @@ fn decompile_many_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         annotate_calls_in(&mut lf_raw, cc, &addr_map);
-        let callee_facts = recover_direct_callee_layouts(
+        let mut callee_facts = recover_direct_callee_layouts(
             &image,
             &funcs,
             &lf_raw,
@@ -1272,6 +1328,18 @@ fn decompile_many_py(
             &mut callee_layout_cache,
         );
         apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
+        // The analyst overlay, applied now that every name-keyed analysis above has
+        // run against what the binary calls things. It rewrites the address map --
+        // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
+        // the definition AND every call site, and it rekeys the recovered symbol
+        // environment so the callee keeps the prototype recovered under its old
+        // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
+        if let Some(names) = analyst_names.as_ref() {{
+            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
+            if !renames.is_empty() {{
+                callee_facts.env.rename_display(&renames);
+            }}
+        }}
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -1302,7 +1370,7 @@ fn decompile_many_py(
             let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
             refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
         }
-        let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
+        let outer_name = resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names.as_ref());
         let mut profiler =
             crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
         let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
@@ -1423,7 +1491,7 @@ fn decompile_many_py(
             Some(note) => format!("{note}\n{text}"),
             None => text,
         };
-        let name = resolve_outer_function_name(&func.name, func_va, &addr_map);
+        let name = resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names.as_ref());
         // The structured inventory a consumer needs to match our locals without
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually
@@ -1470,7 +1538,7 @@ fn variables_to_py(
     Ok(list.into())
 }
 
-use crate::ir::name_resolve::resolve_outer_function_name;
+use crate::ir::name_resolve::resolve_outer_function_name_with_analyst;
 
 /// Drain and return the definition-before-use verdicts recorded since the last call.
 ///

@@ -141,6 +141,36 @@ impl SymbolEnv {
         }
     }
 
+    /// Rekey records under an analyst's rename, keeping their prototypes.
+    ///
+    /// The map is keyed by the identifier the RENDERER prints, and an analyst
+    /// rename changes that identifier while changing nothing about the callee's
+    /// recovered signature. Rebuilding the environment under the new name would
+    /// re-run callee analysis against a name no symbol source knows, which
+    /// finds nothing and silently downgrades a recovered `int f(char *, int)`
+    /// to `long f(void)`. So the rename is applied as a rekey here instead.
+    ///
+    /// Renames are applied against the ORIGINAL key set, so a pair of renames
+    /// that swap two names (`a`->`b`, `b`->`a`) cannot see each other's output
+    /// and collapse to one record. A rename onto an existing key goes through
+    /// `insert`, so the usual source-rank and tie-break rules still decide.
+    pub fn rename_display(&mut self, renames: &[(String, String)]) -> usize {
+        let mut taken: Vec<(String, SymbolRecord)> = Vec::new();
+        for (old, new) in renames {
+            if old == new || old.is_empty() || new.is_empty() {
+                continue;
+            }
+            if let Some(record) = self.records.remove(old) {
+                taken.push((new.clone(), record));
+            }
+        }
+        let moved = taken.len();
+        for (name, record) in taken {
+            self.insert(name, record);
+        }
+        moved
+    }
+
     fn tie_break_key(record: &SymbolRecord) -> (&str, &[String], bool) {
         (
             record.prototype.return_type.as_str(),
@@ -294,6 +324,74 @@ mod tests {
             variadic: false,
             authority: CallPrototypeAuthority::Recovered,
         }
+    }
+
+    /// The regression this method exists to prevent: renaming a callee must
+    /// move its RECOVERED prototype with it, not drop it. Losing the record
+    /// downgrades `int validate(char *, int)` to `long f(void)` at every call
+    /// site, so the rename appears to corrupt the decompilation.
+    #[test]
+    fn a_rename_carries_the_recovered_prototype_to_the_new_name() {
+        let mut env = SymbolEnv::new();
+        env.insert(
+            "validate",
+            SymbolRecord::new(
+                prototype("int", &["const char *", "int"]),
+                RecordSource::Dwarf,
+                false,
+            ),
+        );
+        let moved = env.rename_display(&[("validate".to_string(), "parse_packet_hdr".to_string())]);
+        assert_eq!(moved, 1);
+        assert!(env.get("validate").is_none(), "the old key is gone");
+        let record = env.get("parse_packet_hdr").expect("record moved");
+        assert_eq!(record.prototype.return_type, "int");
+        assert_eq!(record.prototype.parameter_types, ["const char *", "int"]);
+        assert_eq!(env.len(), 1, "a rename moves a record, it does not clone it");
+    }
+
+    /// Renames are read against the original key set, so swapping two names
+    /// cannot collapse them into one record.
+    #[test]
+    fn swapping_two_names_keeps_both_records() {
+        let mut env = SymbolEnv::new();
+        env.insert(
+            "a",
+            SymbolRecord::new(prototype("int", &[]), RecordSource::Dwarf, false),
+        );
+        env.insert(
+            "b",
+            SymbolRecord::new(prototype("char", &[]), RecordSource::Dwarf, false),
+        );
+        let moved = env.rename_display(&[
+            ("a".to_string(), "b".to_string()),
+            ("b".to_string(), "a".to_string()),
+        ]);
+        assert_eq!(moved, 2);
+        assert_eq!(env.len(), 2, "both records survive the swap");
+        assert_eq!(env.get("b").unwrap().prototype.return_type, "int");
+        assert_eq!(env.get("a").unwrap().prototype.return_type, "char");
+    }
+
+    /// A rename naming something the environment never had is a no-op, which is
+    /// the common case: most renamed functions are not callees of this one.
+    #[test]
+    fn a_rename_of_an_absent_name_changes_nothing() {
+        let mut env = SymbolEnv::new();
+        env.insert(
+            "f",
+            SymbolRecord::new(prototype("int", &[]), RecordSource::Dwarf, false),
+        );
+        assert_eq!(
+            env.rename_display(&[
+                ("nothere".to_string(), "x".to_string()),
+                ("f".to_string(), "f".to_string()),
+                ("".to_string(), "y".to_string()),
+            ]),
+            0
+        );
+        assert_eq!(env.len(), 1);
+        assert!(env.get("f").is_some());
     }
 
     #[test]

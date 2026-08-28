@@ -10,6 +10,7 @@ runs inside the Rust extension; this command is just the CLI frontend.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -30,6 +31,61 @@ from ..func_ref import (
 log = logging.getLogger(__name__)
 
 
+def _overlay_digest(analyst_names: Optional[dict[int, str]]) -> str:
+    """Stable digest of an analyst name overlay, for the decompile cache key.
+
+    The empty overlay and ``None`` must produce the same digest so that adding
+    ``--db`` to a project with no manual names does not needlessly miss the
+    cache built without it.
+    """
+    if not analyst_names:
+        return ""
+    payload = "\n".join(f"{va:x}={name}" for va, name in sorted(analyst_names.items()))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def load_analyst_names(db_path: Optional[str], binary: str) -> dict[int, str]:
+    """Read manual/analyst function names out of a ``.glaurung`` project.
+
+    Returns ``{entry_va: name}``. Every name in ``function_names`` is returned,
+    not only the ``set_by='manual'`` ones: a DWARF or FLIRT name recorded in the
+    project is still a name the analyst expects to see, and the KB's own
+    precedence rule has already decided which one survives per VA.
+
+    A missing or unreadable project is not fatal -- it logs and returns ``{}``,
+    so ``--db`` on a fresh project behaves exactly like omitting it.
+    """
+    if not db_path:
+        return {}
+    try:
+        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+        kb = PersistentKnowledgeBase.open(db_path, binary_path=binary)
+    except Exception as exc:  # noqa: BLE001 - a bad project must not kill the decompile
+        log.warning("--db %s: could not open project (%s); ignoring", db_path, exc)
+        return {}
+    try:
+        from glaurung.llm.kb import xref_db
+
+        rows = xref_db.list_function_names(kb)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "--db %s: could not read function names (%s); ignoring", db_path, exc
+        )
+        return {}
+    finally:
+        try:
+            kb.close()
+        except Exception:  # noqa: BLE001
+            pass
+    out: dict[int, str] = {}
+    for row in rows:
+        if row.entry_va is None or not row.canonical:
+            continue
+        out[int(row.entry_va)] = str(row.canonical)
+    return out
+
+
 def _decompile_at_cached(
     *,
     path: str,
@@ -41,6 +97,7 @@ def _decompile_at_cached(
     max_instructions: int,
     pdb_cache: str,
     cache_dir_arg: Optional[str],
+    analyst_names: Optional[dict[int, str]] = None,
 ) -> str:
     """Run ``g.ir.decompile_at`` with optional persistent caching.
 
@@ -64,8 +121,13 @@ def _decompile_at_cached(
                     # not enter the key, but its *presence* changes name
                     # resolution and therefore the output.
                     ("pdb_cache_present", bool(pdb_cache)),
+                    # The analyst name overlay changes the rendered text, so a
+                    # rename MUST invalidate the entry. Keying on a digest of
+                    # the overlay rather than on its presence means renaming a
+                    # function, renaming it back, and re-running all agree.
+                    ("analyst_names", _overlay_digest(analyst_names)),
                     # Bump when the flag schema grows so old entries invalidate.
-                    ("schema", 2),
+                    ("schema", 3),
                 ]
             )
             paths = _cache.build_paths(
@@ -97,6 +159,7 @@ def _decompile_at_cached(
         types=types,
         style=style,
         pdb_cache=pdb_cache,
+        analyst_names=analyst_names,
     )
     if paths is not None:
         _cache.write_text(paths, text)
@@ -217,6 +280,15 @@ class DecompileCommand(BaseCommand):
             "sha256(binary), VA, decompile flags). Falls back to "
             "$GLAURUNG_CACHE_DIR when unset. Append-only — clear the "
             "directory manually if disk fills up.",
+        )
+        parser.add_argument(
+            "--db",
+            default=None,
+            help="Optional .glaurung project file. Function names recorded in "
+            "the project (an analyst rename, a DWARF or FLIRT name) are "
+            "applied to the decompiled output -- at the definition AND at "
+            "every call site. Without it this command is blind to the "
+            "project, so a renamed function still prints as sub_<hex>.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -353,6 +425,9 @@ class DecompileCommand(BaseCommand):
                         max_instructions=max_instructions,
                         pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                         cache_dir_arg=args.cache_dir,
+                        analyst_names=load_analyst_names(
+                            getattr(args, "db", None), str(path)
+                        ),
                     )
             except ValueError as e:
                 formatter.output_plain(f"Error: {e}")

@@ -316,6 +316,86 @@ pub fn add_discovered_function_names(
     added
 }
 
+/// Overlay names an ANALYST chose, overriding every automatic source.
+///
+/// This is the one direction of the loop that made the KB write-only. Every
+/// other populator of this map answers "what does the binary say this is
+/// called" -- symbol tables, imports, exports, FLIRT, DWARF, PDB, discovery --
+/// and every one of them yields to an existing entry, because they are ranked
+/// against each other. An analyst's rename is not another such source. It is a
+/// decision ABOUT those sources, so it is the only one that overwrites.
+///
+/// That is the `manual` end of the project file's `set_by` ladder
+/// (manual/dwarf/stdlib/flirt/propagated/auto/borrowed), and applying it here
+/// rather than at the print boundary is what makes it reach BOTH the function's
+/// own name and every call site that targets it: `resolve_names` rewrites
+/// `Expr::Addr` into `Expr::Named` from this same map, so one overlay renames
+/// the definition and its callers together. Renaming only the definition is the
+/// failure this exists to avoid -- a callgraph where `main` calls `sub_1140`
+/// while `sub_1140` is displayed as `parse_packet` is harder to read than one
+/// with no names at all.
+///
+/// An empty name is ignored rather than applied: a project row with a blank
+/// canonical name is a bug in whatever wrote it, and honouring it would erase a
+/// good automatic name.
+///
+/// # Aliases follow the rename
+///
+/// A call to a function in the same ELF shared object does not target the
+/// function -- it targets that function's PLT stub, at a different address, and
+/// the map names the stub `validate@plt`. Overriding only the definition's
+/// address therefore renames the header and leaves every call site reading the
+/// old name, which is precisely the split-brain output described above.
+///
+/// So an override also rewrites the ALIAS SPELLINGS of the name it replaced:
+/// any other address whose current name is the old name plus an `@`-qualifier
+/// (`@plt`, `@got`) becomes the new name with the same qualifier. The qualifier
+/// is kept because it is not decoration -- it tells the analyst the call goes
+/// through a stub rather than to the function body.
+///
+/// The comparison is against the old name at the overridden address, not
+/// against the new one, and only `@`-qualified spellings are followed. A
+/// different function that merely shares a name (two `static` helpers in
+/// separate translation units) has no `@` qualifier and is left alone.
+pub fn apply_analyst_names(
+    out: &mut HashMap<u64, String>,
+    overrides: &HashMap<u64, String>,
+) -> Vec<(String, String)> {
+    let mut applied: Vec<(String, String)> = Vec::new();
+    // Collected before any write, so one override cannot see another's effect
+    // and rename an alias twice.
+    let mut alias_rewrites: Vec<(u64, String)> = Vec::new();
+    for (va, name) in overrides {
+        if *va == 0 || name.trim().is_empty() {
+            continue;
+        }
+        if let Some(previous) = out.get(va) {
+            let previous = previous.clone();
+            if !previous.is_empty() && previous != *name {
+                for (alias_va, alias_name) in out.iter() {
+                    if *alias_va == *va {
+                        continue;
+                    }
+                    let Some((base, qualifier)) = alias_name.split_once('@') else {
+                        continue;
+                    };
+                    if base == previous {
+                        alias_rewrites.push((*alias_va, format!("{}@{}", name.trim(), qualifier)));
+                    }
+                }
+                applied.push((previous, name.trim().to_string()));
+            }
+        }
+        out.insert(*va, name.trim().to_string());
+    }
+    for (va, name) in alias_rewrites {
+        out.insert(va, name);
+    }
+    applied.sort();
+    applied.dedup();
+    applied
+}
+
 /// Add anonymous names for exact call targets referenced by discovered functions.
 ///
 /// A bounded address-scoped analysis may preserve a tail-call boundary without
@@ -402,6 +482,61 @@ pub fn collect_pdb_public_symbol_map(path: &str, cache_dir: &Path) -> HashMap<u6
 
 #[cfg(test)]
 mod tests {
+    /// The analyst's rename must beat every automatic source, because it is a
+    /// decision about them rather than another one of them.
+    #[test]
+    fn an_analyst_name_overrides_an_automatic_one() {
+        let mut map = HashMap::from([
+            (0x1140u64, "validate".to_string()),   // from the symbol table
+            (0x1200u64, "sub_1200".to_string()),   // from discovery
+        ]);
+        let applied = apply_analyst_names(
+            &mut map,
+            &HashMap::from([(0x1140u64, "parse_packet_hdr".to_string())]),
+        );
+        assert_eq!(
+            applied,
+            vec![("validate".to_string(), "parse_packet_hdr".to_string())],
+            "the old->new pair is reported so name-keyed structures can be rekeyed"
+        );
+        assert_eq!(map.get(&0x1140).map(String::as_str), Some("parse_packet_hdr"));
+        assert_eq!(
+            map.get(&0x1200).map(String::as_str),
+            Some("sub_1200"),
+            "an address the analyst did not name keeps its automatic name"
+        );
+    }
+
+    /// A blank row is a bug in whatever wrote it; honouring it would erase a
+    /// good automatic name and leave the function anonymous.
+    #[test]
+    fn a_blank_analyst_name_does_not_erase_an_automatic_one() {
+        let mut map = HashMap::from([(0x1140u64, "validate".to_string())]);
+        let applied = apply_analyst_names(
+            &mut map,
+            &HashMap::from([
+                (0x1140u64, "   ".to_string()),
+                (0u64, "null_entry".to_string()),
+            ]),
+        );
+        assert!(applied.is_empty());
+        assert_eq!(map.get(&0x1140).map(String::as_str), Some("validate"));
+        assert!(!map.contains_key(&0), "address zero is never a function entry");
+    }
+
+    /// An analyst name for an address no automatic source knew about is still
+    /// applied -- discovery may have missed the function entirely.
+    #[test]
+    fn an_analyst_name_for_an_unknown_address_is_added() {
+        let mut map: HashMap<u64, String> = HashMap::new();
+        assert_eq!(
+            apply_analyst_names(&mut map, &HashMap::from([(0x2000u64, "handler".to_string())])),
+            Vec::new(),
+            "an address with no previous name has no old spelling to rekey"
+        );
+        assert_eq!(map.get(&0x2000).map(String::as_str), Some("handler"));
+    }
+
     use super::*;
     use crate::ir::ast::{lower, render};
     use crate::ir::ssa::compute_ssa;
@@ -764,6 +899,96 @@ pub(crate) fn resolve_outer_function_name(
             name.clone()
         }
         _ => discovered_name.to_string(),
+    }
+}
+
+/// `resolve_outer_function_name`, with an analyst rename able to outrank a name
+/// the binary itself supplies.
+///
+/// `resolve_outer_function_name` answers "what does this binary call this
+/// function", and correctly stops at the first *wanted* answer: a real
+/// `.symtab` name beats anything in the address map, so the map is not even
+/// consulted. An analyst rename is not another answer to that question -- it is
+/// a decision that overrides it, the same `manual`-wins rule the project file
+/// enforces on every writable fact. Handling it inside the rank logic would
+/// mean teaching the ranker that one of its inputs is not a symbol source, so
+/// it is a separate, explicit step instead.
+///
+/// The overlay is checked before the rank walk and after nothing, because a
+/// rename with a lower-ranked spelling (`f` over `fib.localalias`) is still the
+/// name the analyst asked for.
+pub(crate) fn resolve_outer_function_name_with_analyst(
+    discovered_name: &str,
+    func_va: u64,
+    addr_map: &std::collections::HashMap<u64, String>,
+    analyst: Option<&std::collections::HashMap<u64, String>>,
+) -> String {
+    if let Some(names) = analyst {
+        if let Some(name) = names.get(&func_va) {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    resolve_outer_function_name(discovered_name, func_va, addr_map)
+}
+
+#[cfg(test)]
+mod analyst_outer_name_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// The case the whole change exists for: a function the binary names via
+    /// `.symtab`, which `resolve_outer_function_name` returns without ever
+    /// consulting the map. An analyst rename must still win.
+    #[test]
+    fn an_analyst_rename_outranks_a_real_symtab_name() {
+        let addr_map = HashMap::new();
+        let analyst = HashMap::from([(0x1030u64, "parse_packet_hdr".to_string())]);
+        assert_eq!(
+            resolve_outer_function_name_with_analyst("validate", 0x1030, &addr_map, Some(&analyst)),
+            "parse_packet_hdr"
+        );
+    }
+
+    /// A rename to a name the ranker would otherwise reject is still honoured:
+    /// the analyst is not asking for a ranking opinion.
+    #[test]
+    fn a_rename_to_a_low_ranked_spelling_is_honoured() {
+        let addr_map = HashMap::from([(0x40u64, "fib".to_string())]);
+        let analyst = HashMap::from([(0x40u64, "sub_step".to_string())]);
+        assert_eq!(
+            resolve_outer_function_name_with_analyst(
+                "fib.localalias",
+                0x40,
+                &addr_map,
+                Some(&analyst)
+            ),
+            "sub_step"
+        );
+    }
+
+    /// No overlay, an empty overlay, a blank name, and a miss must all leave the
+    /// existing ranking exactly as it was -- this is the path every caller that
+    /// passes no project file takes.
+    #[test]
+    fn absent_or_blank_entries_change_nothing() {
+        let addr_map = HashMap::from([(0x40u64, "fib".to_string())]);
+        let blank = HashMap::from([(0x40u64, "   ".to_string())]);
+        let elsewhere = HashMap::from([(0x99u64, "other".to_string())]);
+        for analyst in [None, Some(&HashMap::new()), Some(&blank), Some(&elsewhere)] {
+            assert_eq!(
+                resolve_outer_function_name_with_analyst("sub_40", 0x40, &addr_map, analyst),
+                "fib",
+                "the rank walk must still run"
+            );
+            assert_eq!(
+                resolve_outer_function_name_with_analyst("validate", 0x40, &addr_map, analyst),
+                "validate",
+                "a wanted discovered name must still short-circuit"
+            );
+        }
     }
 }
 

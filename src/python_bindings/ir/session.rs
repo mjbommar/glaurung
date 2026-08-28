@@ -184,6 +184,11 @@ impl PyDecompilerSession {
             style,
             pdb_cache,
             max_functions,
+            // The session render cache is keyed on `key`, which carries no KB
+            // state, so serving an overlaid render from it would return a stale
+            // name after a rename. This path stays KB-blind until the cache key
+            // includes the overlay; `decompile_at_py` is the wired entry point.
+            None,
         )?;
         if cacheable {
             return Ok(self.rendered.install(key, artifact));
