@@ -332,6 +332,46 @@ backend**, 86,660/86,671 with 11 zero-filled misses, ahead of Kuna (9 misses but
 86,662 measured), angr (2,520), IDA (4,090), Ghidra (6,666) and Binary Ninja
 (10,376). We decompile essentially everything they ask for.
 
+### 4a-bis. Scored, 2026-08-27: the mean-distance axis moved
+
+Everything in §4 is read from the published board, whose `glaurung` column is
+pinned at `git-fb4ee6b`. That is not the only thing available: the materialized
+sample-set tree carries 221 pre-extracted source CFGs, so DecBench's own metric
+code can score a fresh decompilation with **no Joern**. Procedure in
+`docs/development/decompiler-testing.md`, "A real DecBench score, without Joern";
+tool at `tools/decbench_redecompile_tree.py`.
+
+Re-decompiled with `d8665dd` and scored against the same CFGs by the same metric
+code, alongside the `24b3826` column stored in the tree from 2026-07-29:
+
+| metric | `24b3826` | `d8665dd` | change |
+|---|---|---|---|
+| Union | 48/250 · 19.2% | **65/241 · 27.0%** | **+7.8 pp** |
+| GED perfect | 47/239 · 19.7% | **64/231 · 27.7%** | **+8.0 pp** |
+| **GED mean distance** | **41.55** | **28.98** | **-30%** |
+| **GED median distance** | **14.0** | **10.0** | **-29%** |
+| byte_match perfect | 2/250 · 0.8% | **10/241 · 4.1%** | **5x** |
+| byte_match mean | 0.0423 | **0.2186** | **5.2x** |
+
+**Read the mean, not the perfect count.** §4b below establishes that our
+published profile is best perfect-count of any deterministic backend and *worst
+mean GED distance of any real backend* — the signature of catastrophic rather
+than incremental failure, and the axis no gate in this repository measures. Mean
+fell 30% and median 29%. That is the first direct evidence that the axis is
+movable and is moving.
+
+Three qualifications, none of which touch the mean:
+
+* `type_match` is absent — `evaluate-tree` cannot compute it from stored
+  artifacts, which carry no recovered variables. This is 2 of 3 metrics.
+* The denominator moved 250 -> 241 (nine functions had no resolvable symbol),
+  so the perfect-count percentages are on a smaller base and are slightly
+  flattered. Mean and median are unaffected.
+* This is roughly a month of work, not one day's. Almost none of the ARM
+  dispatch work of 2026-08-27 shows here, because the sample-set contains
+  almost no ARM table dispatch — which is precisely the finding of
+  `decbench-defect-reproductions-2026-08-27.md` §10a.
+
 ### 4b. The margin over the backends we lead — and why one of them is illusory
 
 DecBench's headline uses a **fixed 86,671 denominator with zero-filled misses**,

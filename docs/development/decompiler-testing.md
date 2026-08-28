@@ -35,6 +35,7 @@ cost barely more than 4.
 | is it safe to push | `scripts/decbench-local-gate.sh` | ~50 min |
 | did I move a PUBLISHED metric (ask first) | `tools/decbench_matrix.py --check --only statemachine` | ~3 min |
 | full pre-submission sweep (ask first) | `scripts/decbench-local-gate.sh --decbench` | ~100 min |
+| a real DecBench score, no Joern (ask first) | `tools/decbench_redecompile_tree.py` + `decbench evaluate-tree` | ~20 min |
 
 Read that table top-down and stop as soon as it answers your question. Almost
 every iteration belongs in the first five rows, which cost seconds. The gate is a
@@ -541,6 +542,80 @@ DecBench does not discover out-of-tree Python plugins, so Glaurung owns
 checkout's Python, registers the backend, and then delegates to DecBench's
 normal CLI. Set `DECBENCH_PYTHON` only when that interpreter is not at
 `$DECBENCH_DIR/.venv/bin/python`; do not patch the external checkout.
+
+## A real DecBench score, without Joern
+
+`decbench_matrix.py` above spawns a Joern JVM per cell, which is why it is
+opt-in and costs 37 minutes for 56 cells. There is a second path that scores the
+**whole 250-function sample-set** with DecBench's own metric code and needs no
+Joern at all, because the expensive Joern product — the source CFGs — is already
+extracted and committed in a materialized tree.
+
+`~/projects/personal/decbench-sample-set-glaurung-tree` holds compiled binaries,
+**221 pre-extracted `source_cfgs/*.json`**, prior decompiled artifacts, and the
+scoreboards from previous runs. `decbench evaluate-tree` scores stored artifacts
+against those CFGs. So the loop is: re-decompile into the tree with the current
+build, then score.
+
+```bash
+# 1. re-decompile (~40 s for 215 binaries / 241 functions)
+#    Reads sample_set_manifest.json, resolves each target function's address
+#    from the compiled binary's symbol table, strips a COPY, and decompiles at
+#    those VAs -- DecBench's discipline: stripped bytes, DWARF-derived addresses.
+#    Writes decompiled/glaurung-<sha>_<stem>.{c,toml} beside the existing column.
+python3 tools/decbench_redecompile_tree.py "$(git rev-parse --short=7 HEAD)"
+
+# 2. score. SCOPE IT TO THE NEW COLUMN with -d, or it re-scores every stored
+#    artifact in the tree: 2,007 of them took >50 minutes, 215 took ~20.
+cd ~/projects/personal/decbench-glaurung-integration
+uv run decbench evaluate-tree ~/projects/personal/decbench-sample-set-glaurung-tree \
+    -m ged -m byte_match -d "glaurung-$(git -C ~/projects/personal/glaurung rev-parse --short=7 HEAD)" -j 12
+```
+
+Results land in the tree's `scoreboard.toml` and `function_results.json`.
+**Copy the old `scoreboard.toml` aside first** — a scoped run rewrites it with
+only the columns it scored, so the previous column's numbers are gone unless you
+kept them.
+
+### What it does and does not measure
+
+* **`ged` and `byte_match` only.** `evaluate-tree` says so itself: `type_match`
+  needs recovered variables, and stored `.c` artifacts do not carry them. That
+  is 2 of 3 metrics — but GED is the dominant one, 69 of our 82 published Union
+  points.
+* **The denominator moves.** 250 -> 241 in the run below: nine target functions
+  had no resolvable symbol in their compiled binary. Perfect-count percentages
+  are on the smaller base and are therefore slightly flattered; **mean and median
+  distance are unaffected and are the cleaner signal.**
+* It scores the sample-set, not the complete board. For the full corpus see
+  `decbench-glaurung-fresh-eval-20260808/results/fresh-source-tree-45b233c`,
+  which has all 40 projects at O0/O2/O2-noinline with DWARF — but no source
+  CFGs, so GED there does need Joern.
+
+### The measured result, 2026-08-27
+
+Same tree, same source CFGs, same metric code; only the decompiler revision
+differs. `24b3826` is the column stored in the tree from 2026-07-29.
+
+| metric | `24b3826` | `d8665dd` | change |
+|---|---|---|---|
+| Union | 48/250 · 19.2% | **65/241 · 27.0%** | **+7.8 pp** |
+| GED perfect | 47/239 · 19.7% | **64/231 · 27.7%** | **+8.0 pp** |
+| GED mean distance | 41.55 | **28.98** | **-30%** |
+| GED median distance | 14.0 | **10.0** | **-29%** |
+| byte_match perfect | 2/250 · 0.8% | **10/241 · 4.1%** | **5x** |
+| byte_match mean | 0.0423 | **0.2186** | **5.2x** |
+
+The mean-distance column is the one to watch. Our published profile is *best
+perfect-count of any deterministic backend, worst mean GED distance of any real
+backend* (`docs/design/decbench-native-provenance-2026-08-27.md` §4b) -- the
+signature of catastrophic rather than incremental failure. Mean fell 30% and
+median 29%, so that axis moved, which is what the diagnosis predicted had to.
+
+This is a month of decompiler work, not one day's: little of the 2026-08-27 ARM
+dispatch work shows here, because the sample-set contains almost no ARM table
+dispatch. That was the point of `docs/design/decbench-defect-reproductions-2026-08-27.md`
+§10a -- rank by occurrence in the functions DecBench SCORES, not corpus-wide.
 
 ### The pytest side: the `decbench` marker
 
