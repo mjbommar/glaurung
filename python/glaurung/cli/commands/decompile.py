@@ -10,7 +10,6 @@ runs inside the Rust extension; this command is just the CLI frontend.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -21,6 +20,7 @@ from glaurung.windows_config import load_windows_analysis_config
 
 from .base import BaseCommand
 from .. import cache as _cache
+from ..kb_names import load_analyst_names, overlay_digest
 from ..formatters.base import BaseFormatter, OutputFormat
 from ..func_ref import (
     FuncResolutionError,
@@ -29,61 +29,6 @@ from ..func_ref import (
 )
 
 log = logging.getLogger(__name__)
-
-
-def _overlay_digest(analyst_names: Optional[dict[int, str]]) -> str:
-    """Stable digest of an analyst name overlay, for the decompile cache key.
-
-    The empty overlay and ``None`` must produce the same digest so that adding
-    ``--db`` to a project with no manual names does not needlessly miss the
-    cache built without it.
-    """
-    if not analyst_names:
-        return ""
-    payload = "\n".join(f"{va:x}={name}" for va, name in sorted(analyst_names.items()))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def load_analyst_names(db_path: Optional[str], binary: str) -> dict[int, str]:
-    """Read manual/analyst function names out of a ``.glaurung`` project.
-
-    Returns ``{entry_va: name}``. Every name in ``function_names`` is returned,
-    not only the ``set_by='manual'`` ones: a DWARF or FLIRT name recorded in the
-    project is still a name the analyst expects to see, and the KB's own
-    precedence rule has already decided which one survives per VA.
-
-    A missing or unreadable project is not fatal -- it logs and returns ``{}``,
-    so ``--db`` on a fresh project behaves exactly like omitting it.
-    """
-    if not db_path:
-        return {}
-    try:
-        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
-
-        kb = PersistentKnowledgeBase.open(db_path, binary_path=binary)
-    except Exception as exc:  # noqa: BLE001 - a bad project must not kill the decompile
-        log.warning("--db %s: could not open project (%s); ignoring", db_path, exc)
-        return {}
-    try:
-        from glaurung.llm.kb import xref_db
-
-        rows = xref_db.list_function_names(kb)
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "--db %s: could not read function names (%s); ignoring", db_path, exc
-        )
-        return {}
-    finally:
-        try:
-            kb.close()
-        except Exception:  # noqa: BLE001
-            pass
-    out: dict[int, str] = {}
-    for row in rows:
-        if row.entry_va is None or not row.canonical:
-            continue
-        out[int(row.entry_va)] = str(row.canonical)
-    return out
 
 
 def _decompile_at_cached(
@@ -125,7 +70,7 @@ def _decompile_at_cached(
                     # rename MUST invalidate the entry. Keying on a digest of
                     # the overlay rather than on its presence means renaming a
                     # function, renaming it back, and re-running all agree.
-                    ("analyst_names", _overlay_digest(analyst_names)),
+                    ("analyst_names", overlay_digest(analyst_names)),
                     # Bump when the flag schema grows so old entries invalidate.
                     ("schema", 3),
                 ]

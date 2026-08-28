@@ -60,6 +60,12 @@ _REGISTRY: dict[str, tuple[str, str, str, str]] = {
     "view": ("view", "ViewCommand", "", "TriageFormatter"),
     "find": ("find", "FindCommand", "", "TriageFormatter"),
     "bookmark": ("bookmark", "BookmarkCommand", "", "TriageFormatter"),
+    # The non-interactive analyst write surface. These verbs existed only
+    # inside the REPL, so no annotation workflow could be scripted.
+    "rename": ("annotate", "RenameCommand", "", "TriageFormatter"),
+    "comment": ("annotate", "CommentCommand", "", "TriageFormatter"),
+    "label": ("annotate", "LabelCommand", "", "TriageFormatter"),
+    "proto": ("annotate", "ProtoCommand", "", "TriageFormatter"),
     "journal": ("bookmark", "JournalCommand", "", "TriageFormatter"),
     "classfile": ("classfile", "ClassfileCommand", "", "TriageFormatter"),
     "java": ("java", "JavaCommand", "", "TriageFormatter"),
