@@ -194,6 +194,60 @@ def render_comment_header(
     return "\n".join(lines) + "\n"
 
 
+def load_analyst_prototype(
+    db_path: Optional[str], binary: str, function_name: str
+) -> Optional[tuple[str, list[str], bool]]:
+    """``(return_type, [param types], is_variadic)`` for one function, or ``None``.
+
+    Prototypes are keyed by NAME in the project, not by address, so the caller
+    must pass the name the function is currently known by -- which after a
+    rename is the analyst's name, not the binary's. That name-keying is a known
+    weakness of the schema (renaming a function orphans its prototype row); it
+    is not fixed here, only accommodated.
+
+    A prototype whose return type is blank is skipped: it would render a
+    signature the analyst did not write.
+    """
+    if not db_path or not function_name:
+        return None
+    kb = None
+    try:
+        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+        kb = PersistentKnowledgeBase.open(db_path, binary_path=binary)
+        from glaurung.llm.kb import xref_db
+
+        proto = xref_db.get_function_prototype(kb, function_name)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("--db %s: could not read prototype (%s); ignoring", db_path, exc)
+        return None
+    finally:
+        if kb is not None:
+            try:
+                kb.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return_type = (proto.return_type or "").strip() if proto is not None else ""
+    if proto is None or not return_type:
+        return None
+    params = [(p.c_type or "").strip() for p in (proto.params or [])]
+    if any(not c for c in params):
+        # A parameter with no type would render as an empty slot in the
+        # signature. Half a prototype is worse than none: it would silently
+        # replace a fully recovered signature with a broken one.
+        return None
+    return (return_type, params, bool(proto.is_variadic))
+
+
+def prototype_digest(proto: Optional[tuple[str, list[str], bool]]) -> str:
+    """Digest of a prototype overlay, for the decompile cache key."""
+    if not proto:
+        return ""
+    ret, params, variadic = proto
+    payload = f"{ret}({','.join(params)}){'...' if variadic else ''}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def overlay_digest(analyst_names: Optional[dict[int, str]]) -> str:
     """Stable digest of an overlay, for a cache key.
 

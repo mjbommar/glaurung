@@ -24,8 +24,10 @@ from ..kb_names import (
     load_analyst_comments,
     load_analyst_locals,
     load_analyst_names,
+    load_analyst_prototype,
     locals_digest,
     overlay_digest,
+    prototype_digest,
     render_comment_header,
 )
 from ..formatters.base import BaseFormatter, OutputFormat
@@ -51,6 +53,7 @@ def _decompile_at_cached(
     cache_dir_arg: Optional[str],
     analyst_names: Optional[dict[int, str]] = None,
     analyst_locals: Optional[dict[int, tuple[str, str]]] = None,
+    analyst_prototype: Optional[tuple[str, list[str], bool]] = None,
 ) -> str:
     """Run ``g.ir.decompile_at`` with optional persistent caching.
 
@@ -80,8 +83,9 @@ def _decompile_at_cached(
                     # function, renaming it back, and re-running all agree.
                     ("analyst_names", overlay_digest(analyst_names)),
                     ("analyst_locals", locals_digest(analyst_locals)),
+                    ("analyst_prototype", prototype_digest(analyst_prototype)),
                     # Bump when the flag schema grows so old entries invalidate.
-                    ("schema", 4),
+                    ("schema", 5),
                 ]
             )
             paths = _cache.build_paths(
@@ -115,6 +119,7 @@ def _decompile_at_cached(
         pdb_cache=pdb_cache,
         analyst_names=analyst_names,
         analyst_locals=analyst_locals,
+        analyst_prototype=analyst_prototype,
     )
     if paths is not None:
         _cache.write_text(paths, text)
@@ -401,6 +406,18 @@ class DecompileCommand(BaseCommand):
                         ),
                         analyst_locals=load_analyst_locals(
                             getattr(args, "db", None), str(path), int(func_va)
+                        ),
+                        # Keyed by the name the function is CURRENTLY known by,
+                        # which after a rename is the analyst's name.
+                        analyst_prototype=load_analyst_prototype(
+                            getattr(args, "db", None),
+                            str(path),
+                            (
+                                load_analyst_names(
+                                    getattr(args, "db", None), str(path)
+                                ).get(int(func_va))
+                                or (args.func if isinstance(args.func, str) else "")
+                            ),
                         ),
                     )
             except ValueError as e:

@@ -190,6 +190,7 @@ impl PyDecompilerSession {
             // includes the overlay; `decompile_at_py` is the wired entry point.
             None,
             None,
+            None,
         )?;
         if cacheable {
             return Ok(self.rendered.install(key, artifact));

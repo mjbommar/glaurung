@@ -278,6 +278,13 @@ class ProtoCommand(BaseCommand):
     def get_help(self) -> str:
         return "Set / show a function prototype in a .glaurung project"
 
+    # A declared prototype reaches `decompile --db` only when its parameter
+    # COUNT matches the arity the decompiler recovered. On a mismatch the
+    # renderer drops the whole declaration -- return type included -- and falls
+    # back to the recovered signature. That gate is pre-existing and protects
+    # DWARF the same way; it is why a wrong prototype cannot corrupt output.
+    # It is also silent, which is why `--binary` exists below.
+
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         _add_common(parser)
         parser.add_argument("name", help="Function name (prototypes are keyed by name)")
@@ -291,6 +298,14 @@ class ProtoCommand(BaseCommand):
         )
         parser.add_argument(
             "--variadic", action="store_true", help="Mark the prototype variadic"
+        )
+        parser.add_argument(
+            "--check-arity",
+            action="store_true",
+            help="With --binary, warn if the parameter count does not match the "
+            "arity the decompiler recovered. A prototype whose arity differs is "
+            "silently ignored by `decompile --db`, so this turns a no-op into a "
+            "message.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -337,9 +352,81 @@ class ProtoCommand(BaseCommand):
                 )
                 return 5
             formatter.output_plain(f"  {_render_proto(args.name, stored)}  [{args.by}]")
+            _warn_on_arity_mismatch(args, formatter, len(params))
             return 0
         finally:
             kb.close()
+
+
+def _warn_on_arity_mismatch(
+    args: argparse.Namespace, formatter: BaseFormatter, declared: int
+) -> None:
+    """Say so when this prototype will be ignored by `decompile --db`.
+
+    The renderer applies a declared prototype only on an exact arity match, and
+    drops the whole declaration otherwise. That is the right conservative rule
+    -- a wrong prototype cannot corrupt the output -- but an analyst who types a
+    signature and sees nothing change deserves to know which of the two
+    happened.
+
+    Needs the binary, because only the decompiler knows the recovered arity, so
+    it is opt-in via `--check-arity --binary <path>`.
+    """
+    if not getattr(args, "check_arity", False):
+        return
+    binary = getattr(args, "binary", None)
+    if binary is None:
+        formatter.output_plain(
+            "  note: --check-arity needs --binary to compare against"
+        )
+        return
+    try:
+        import glaurung as g
+
+        functions = g.analysis.analyze_functions_path(str(binary), max_functions=2000)[
+            0
+        ]
+    except Exception as exc:  # noqa: BLE001
+        formatter.output_plain(
+            f"  note: could not analyse {binary} ({exc}); arity unchecked"
+        )
+        return
+    for function in functions:
+        if function.name != args.name:
+            continue
+        recovered = getattr(function, "calling_convention", None)
+        _ = recovered
+        break
+    # The recovered ARITY is not exposed on the discovered function, so the
+    # honest check is against the rendered signature itself.
+    try:
+        text = g.ir.decompile_at(
+            str(binary), _entry_va(functions, args.name), style="decbench"
+        )
+    except Exception:  # noqa: BLE001
+        return
+    import re as _re
+
+    match = _re.search(
+        r"^\w[\w \*]*\b" + _re.escape(args.name) + r"\(([^)]*)\)", text, _re.M
+    )
+    if not match:
+        return
+    inner = match.group(1).strip()
+    recovered_count = 0 if inner in ("", "void") else inner.count(",") + 1
+    if recovered_count != declared:
+        formatter.output_plain(
+            f"  note: {declared} parameter(s) declared but {recovered_count} "
+            f"recovered. `decompile --db` applies a prototype only on an exact "
+            f"arity match, so this one will be ignored."
+        )
+
+
+def _entry_va(functions, name: str) -> int:
+    for function in functions:
+        if function.name == name:
+            return int(function.entry_point.value)
+    raise KeyError(name)
 
 
 def _render_proto(name: str, proto) -> str:

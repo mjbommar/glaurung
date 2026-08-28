@@ -106,7 +106,7 @@ pub(super) fn load_program_session(
 /// prefixes and type annotations).
 #[pyfunction]
 #[pyo3(name = "decompile_at")]
-#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize, analyst_names=None, analyst_locals=None))]
+#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize, analyst_names=None, analyst_locals=None, analyst_prototype=None))]
 fn decompile_at_py(
     py: Python<'_>,
     path: String,
@@ -120,6 +120,7 @@ fn decompile_at_py(
     max_functions: usize,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
     analyst_locals: Option<std::collections::HashMap<i64, (String, String)>>,
+    analyst_prototype: Option<(String, Vec<String>, bool)>,
 ) -> PyResult<String> {
     let session = load_program_session(&path)?;
     decompile_at_session(
@@ -136,6 +137,7 @@ fn decompile_at_py(
         max_functions,
         analyst_names.as_ref(),
         analyst_locals.as_ref(),
+        analyst_prototype.as_ref(),
     )
 }
 
@@ -154,6 +156,7 @@ pub(super) fn decompile_at_session(
     max_functions: usize,
     analyst_names: Option<&std::collections::HashMap<u64, String>>,
     analyst_locals: Option<&std::collections::HashMap<i64, (String, String)>>,
+    analyst_prototype: Option<&(String, Vec<String>, bool)>,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
     use crate::analysis::cfg::Budgets;
@@ -436,10 +439,31 @@ pub(super) fn decompile_at_session(
             Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
             None => (None, None, None),
         };
-        let declared_render = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va))
-            .and_then(dwarf_render_prototype);
+        // The analyst's prototype outranks the compiler's, for the same reason
+        // their rename outranks the symbol table: it is a decision ABOUT the
+        // recovered facts rather than another one of them. It lands in the slot
+        // DWARF already uses -- `declared_prototype` overrides the recovered
+        // prototype for rendering and drives both the return type and the
+        // parameter c_types (`ast::declaration_plan`) -- so there is no second
+        // mechanism and the two cannot disagree.
+        let analyst_render = analyst_prototype.map(|(ret, params, variadic)| {
+            crate::ir::call_contracts::CallPrototype {
+                return_type: ret.clone(),
+                parameter_types: params.clone(),
+                variadic: *variadic,
+                // The level DWARF and the library catalogs use. An analyst
+                // statement is at least as trustworthy as a catalog entry, and
+                // ranking it lower would let a recovered guess beat something a
+                // human typed.
+                authority: crate::ir::call_contracts::CallPrototypeAuthority::Authoritative,
+            }
+        });
+        let declared_render = analyst_render.or_else(|| {
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va))
+                .and_then(dwarf_render_prototype)
+        });
         decbench_text(
             &f,
             &mut profiler,
