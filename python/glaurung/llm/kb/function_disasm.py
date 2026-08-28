@@ -63,6 +63,67 @@ class FunctionDisasm:
         return "\n".join(out)
 
 
+def _binary_symbols(
+    binary_path: str,
+) -> Tuple[Dict[int, str], List[int], Dict[int, int]]:
+    """`(va -> name, sorted entry VAs)` from the BINARY, before any KB overlay.
+
+    The project is an overlay on what the binary says, not a replacement for
+    it, and treating it as a replacement broke three things at once. A project
+    holding one analyst rename knew exactly one function, so:
+
+    * `--function main` failed with "function not found in DB" on any binary
+      whose names had not been imported into the project;
+    * the function's end was computed as "the next entry in the KB", found
+      none, and fell back to `start + max_window` -- a 44-byte function
+      disassembled 2,011 instructions across 24 KB;
+    * `call 0x1020` stayed a bare address, because the PLT stub was not a KB
+      row, despite this module's stated purpose being symbol-annotated output.
+
+    PLT stubs are included, which is where most call targets in a dynamically
+    linked binary actually point. Failure is silent and total: a non-ELF or a
+    parse error yields nothing and the KB-only behaviour is what remains.
+    """
+    va_name: Dict[int, str] = {}
+    entries: List[int] = []
+    sizes: Dict[int, int] = {}
+    try:
+        import glaurung as g
+
+        discovered = g.analysis.analyze_functions_path(binary_path, max_functions=4000)[
+            0
+        ]
+        for fn in discovered:
+            try:
+                va = int(fn.entry_point.value)
+            except Exception:  # noqa: BLE001
+                continue
+            entries.append(va)
+            if fn.name:
+                va_name.setdefault(va, str(fn.name))
+            size = getattr(fn, "size", None)
+            if size:
+                sizes[va] = int(size)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import glaurung as g
+
+        for va, name in g.analysis.elf_plt_map_path(binary_path) or []:
+            va = int(va)
+            entries.append(va)
+            # A PLT name BEATS a synthesised `sub_<hex>`: discovery finds the
+            # stub as an anonymous function, and `strlen@plt` is what the call
+            # site actually reaches. It does not beat a real name, because a
+            # real function can sit at a stub's address (IFUNC resolvers).
+            existing = va_name.get(va)
+            if existing is None or existing.startswith("sub_"):
+                va_name[va] = str(name)
+    except Exception:  # noqa: BLE001
+        pass
+    return va_name, sorted(set(entries)), sizes
+
+
 def _load_symbols(
     db_path: str,
 ) -> Tuple[Dict[int, str], Dict[str, int], Dict[int, str], List[int]]:
@@ -70,9 +131,19 @@ def _load_symbols(
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     va_name: Dict[int, str] = {}
     name_va: Dict[str, int] = {}
-    for va, canon, dem in con.execute(
-        "SELECT entry_va, canonical, demangled FROM function_names"
-    ):
+    # Every annotation table is created lazily, on the first write to it, so a
+    # project that has never had a function named does not have this table at
+    # all. Querying it raised `no such table: function_names` and killed the
+    # command outright -- on a freshly created project, which is exactly when
+    # an analyst is most likely to be looking around. `data_labels` below was
+    # already guarded; this was not.
+    try:
+        rows = list(
+            con.execute("SELECT entry_va, canonical, demangled FROM function_names")
+        )
+    except sqlite3.OperationalError:
+        rows = []
+    for va, canon, dem in rows:
         va_name[int(va)] = canon
         name_va.setdefault(canon, int(va))
         if dem:
@@ -123,6 +194,34 @@ def disasm_function(
             )
 
     va_name, name_va, data_label, entries = _load_symbols(db_path)
+    # Layer the KB over the binary's own names rather than instead of them.
+    # The analyst's rename wins on any address it covers -- that is the whole
+    # point of the project -- but every address it does not cover keeps the
+    # name the binary supplies. See `_binary_symbols` for what went wrong when
+    # this module knew only the KB.
+    binary_names, binary_entries, binary_sizes = _binary_symbols(binary_path)
+    for binary_va, binary_name in binary_names.items():
+        va_name.setdefault(binary_va, binary_name)
+        name_va.setdefault(binary_name, binary_va)
+    entries = sorted(set(entries) | set(binary_entries))
+    # A call inside a shared object targets the callee's PLT stub, not the
+    # callee, so a rename that stops at the function leaves the call site
+    # reading the old name -- `call 0x1020 ; -> validate@plt` next to a
+    # function the project now calls `hdr_parse`. Where the KB and the binary
+    # disagree about an address, the binary's name is the pre-rename spelling,
+    # and any `@`-qualified alias of it follows. Only `@`-qualified spellings
+    # are followed, so two static helpers that merely share a name are left
+    # alone. Mirrors `ir::name_resolve::apply_analyst_names`.
+    renamed_bases = {
+        binary_name: va_name[binary_va]
+        for binary_va, binary_name in binary_names.items()
+        if va_name.get(binary_va, binary_name) != binary_name
+    }
+    if renamed_bases:
+        for alias_va, alias_name in list(va_name.items()):
+            base, sep, qualifier = alias_name.partition("@")
+            if sep and base in renamed_bases:
+                va_name[alias_va] = f"{renamed_bases[base]}@{qualifier}"
 
     # Resolve the start VA.
     start = va
@@ -137,12 +236,23 @@ def disasm_function(
                 raise KeyError(f"function not found in DB: {function}")
     name = va_name.get(start, function if isinstance(function, str) else f"0x{start:x}")
 
-    # End = next discovered entry after start, capped.
+    # End: the function's own recovered extent when discovery proved one,
+    # otherwise the next entry after it, otherwise the window cap.
+    #
+    # "next entry" alone is wrong for the LAST function in a section -- there
+    # is no next entry, so a 44-byte function disassembled 2,011 instructions
+    # across 24 KB of whatever followed it, including padding and the next
+    # section. The exact size is right there in the discovered function and was
+    # simply not being asked for.
     end = start + max_window
-    for e in entries:
-        if e > start:
-            end = min(e, start + max_window)
-            break
+    proven_size = binary_sizes.get(int(start))
+    if proven_size:
+        end = min(start + int(proven_size), start + max_window)
+    else:
+        for e in entries:
+            if e > start:
+                end = min(e, start + max_window)
+                break
 
     # IAT map for call [rip+slot] annotation. Best-effort.
     iat: Dict[int, str] = {}
