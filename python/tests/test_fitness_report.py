@@ -361,19 +361,38 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     adopted to satisfy a number, which is the failure mode the 2026-08-20 entry
     above names. `product_files_above_1000` 26 -> 27 and the two totals that
     follow from it are that one file and nothing else.
+
+    2026-08-28: THAT REASONING WAS WRONG, and the cut was made. `arm_tables` is
+    a CHILD of `dispatch`, not a sibling, and a child module may already read
+    its ancestors' private items -- so moving the three ARM recognisers there
+    exposes nothing new. The only visibility that widened is
+    `arm_adr_target`, from private-to-module to `pub(super)`, which is the same
+    module either way; the crate-facing surface is unchanged. Rust permits an
+    inherent `impl` in any module of the defining crate, so `DispatchTracker`
+    stays one type.
+
+    `analysis/dispatch.rs` is 1,128 -> 997 product lines, back under the
+    threshold, and `test_large_module_review` is green again on it.
+    `product_files_above_1000` 27 -> 26, `product_loc_above_1000` 40,933 ->
+    39,886, `product_pct_loc_above_1000` 22.71 -> 22.09. The single measure that
+    got worse is `product_mean_loc`, 427.05 -> 427.91, from +363 product lines
+    of analyst-annotation plumbing in `ir/stack_locals.rs`,
+    `ir/name_resolve.rs`, `ir/symbol_env.rs` and `python_bindings/ir.rs`.
+    Accepted: the mean rose while the concentration fell, which is the
+    direction this program wants.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 15,
         "ir_median_loc": pytest.approx(430),
-        "product_files_above_1000": 27,
+        "product_files_above_1000": 26,
         "product_files_above_2000": 4,
-        "product_loc_above_1000": 40933,
+        "product_loc_above_1000": 39886,
         "product_max_loc": 2451,
-        "product_mean_loc": pytest.approx(427.0473933649289),
-        "product_median_loc": pytest.approx(309.0),
-        "product_pct_loc_above_1000": pytest.approx(22.713551666352227),
+        "product_mean_loc": pytest.approx(427.9075829383886),
+        "product_median_loc": pytest.approx(310.0),
+        "product_pct_loc_above_1000": pytest.approx(22.08808430752532),
     }
 
 
@@ -627,6 +646,28 @@ def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
     predicate legible -- and it is listed here rather than trimmed to fit the
     counter, because a comment deleted to keep a number flat is exactly the
     drift this measure exists to surface.
+
+    2026-08-28: the baseline was regenerated after the analyst-annotation work.
+    Only ONE measure got worse -- `product_mean_loc` 427.05 -> 427.91 -- and
+    every concentration measure improved: `files_above_1000` 27 -> 26,
+    `loc_in_files_above_1000` 40,933 -> 39,886 (-1,047),
+    `pct_loc_above_1000` 22.71 -> 22.09. The cut came first, as the docstring
+    below requires: `analysis/dispatch.rs` had grown back past 1,000 product
+    lines while adding the ARM word-table recogniser, and its three ARM
+    recognisers (`arm_adr_target`, `arm_word_table_branch`,
+    `thumb_table_branch`, 131 lines) moved into the `dispatch::arm_tables`
+    submodule that already held the ARM *types* they read -- none of them is
+    referenced by the x86 rules, so that is a narrower API and not arbitrary
+    fragmentation. `test_large_module_review` had gone red on that file and is
+    green again.
+
+    The residual `mean_loc` rise is +363 product lines across
+    `ir/stack_locals.rs`, `ir/name_resolve.rs`, `ir/symbol_env.rs` and
+    `python_bindings/ir.rs`: the analyst-name overlay, the analyst-locals join,
+    `SymbolEnv::rename_display`, and the parameters that carry them. It is
+    accepted rather than trimmed because the mean rose while the concentration
+    fell, which is the direction this program wants -- new behaviour landing in
+    the files that own it instead of accreting in the largest ones.
 
     2026-08-21: `ir/types_recover.rs` grew 1,898 -> 1,906 (+8) and the baseline
     was regenerated. The measure did its job twice on the way. It first fired at
