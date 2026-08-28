@@ -21,10 +21,12 @@ from glaurung.windows_config import load_windows_analysis_config
 from .base import BaseCommand
 from .. import cache as _cache
 from ..kb_names import (
+    load_analyst_comments,
     load_analyst_locals,
     load_analyst_names,
     locals_digest,
     overlay_digest,
+    render_comment_header,
 )
 from ..formatters.base import BaseFormatter, OutputFormat
 from ..func_ref import (
@@ -389,6 +391,41 @@ class DecompileCommand(BaseCommand):
                 formatter.output_plain(f"Error: {e}")
                 return 2
 
+            # An analyst's notes belong ON the function they are about. The
+            # entry comment renders above the signature, where it cannot be
+            # orphaned by a change in the generated text; notes at other
+            # addresses are LISTED with their addresses rather than guessed
+            # into the body, because placing them needs an instruction-to-line
+            # map the AST cannot supply yet and a plausible wrong placement
+            # reads as fact.
+            # Applied after `_decompile_at_cached` returns, so the comment
+            # block is NOT part of the cached artifact and needs no cache-key
+            # entry: a comment edit changes this header on every run, cached or
+            # not. Names and locals are different -- they change the decompiled
+            # text itself, so they are keyed.
+            db_arg = getattr(args, "db", None)
+            if db_arg:
+                entry_comment, inside = load_analyst_comments(
+                    db_arg,
+                    str(path),
+                    int(func_va),
+                    _function_size(str(path), int(func_va))
+                    if _has_other_comments(db_arg, str(path), int(func_va))
+                    else None,
+                )
+                header = render_comment_header(entry_comment, inside, int(func_va))
+                if header:
+                    # After the `// glaurung: <name> @ <va>` banner, not before
+                    # it: that line is what consumers anchor on
+                    # (`tools/roundtrip3.py`), and the analyst's note reads
+                    # better as an annotation ON the function than as a preamble
+                    # to the file.
+                    first, sep, rest = text.partition("\n")
+                    if sep and first.startswith("// glaurung:"):
+                        text = f"{first}\n{header}{rest}"
+                    else:
+                        text = header + text
+
             if as_json:
                 # Best-effort name: only resolvable when --func was a name.
                 name = args.func if isinstance(args.func, str) else ""
@@ -416,6 +453,67 @@ class DecompileCommand(BaseCommand):
         except Exception as e:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: {e}")
             return 1
+
+
+def _has_other_comments(db_path: str, binary: str, func_va: int) -> bool:
+    """Whether the project holds any comment at an address other than the entry.
+
+    Checked first because the answer decides whether to run a discovery pass to
+    learn the function's extent. Reading the comment table is a SQLite query;
+    discovery is not, and a user with only an entry comment -- the common case
+    -- should not pay for it.
+    """
+    kb = None
+    try:
+        from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+        kb = PersistentKnowledgeBase.open(db_path, binary_path=binary)
+        from glaurung.llm.kb import xref_db
+
+        return any(
+            int(va) != int(func_va) for va, body in xref_db.list_comments(kb) if body
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        if kb is not None:
+            try:
+                kb.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _function_size(path: str, func_va: int) -> Optional[int]:
+    """Byte extent of the function at ``func_va``, or ``None``.
+
+    Used only to decide which comments belong to this function. `None` means
+    "unknown", and the caller then shows only the entry comment rather than
+    guessing a range and attributing a neighbour's notes to this function.
+    """
+    try:
+        discovered = g.analysis.analyze_functions_path(path, max_functions=2000)[0]
+    except Exception:  # noqa: BLE001
+        return None
+    for fn in discovered:
+        try:
+            if int(fn.entry_point.value) != int(func_va):
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        size = getattr(fn, "size", None)
+        if size:
+            return int(size)
+        blocks = getattr(fn, "basic_blocks", None) or []
+        ends = []
+        for block in blocks:
+            try:
+                ends.append(int(block.end_address.value))
+            except Exception:  # noqa: BLE001
+                continue
+        if ends:
+            return max(ends) - int(func_va)
+        return None
+    return None
 
 
 def _report_unverified_functions() -> None:
