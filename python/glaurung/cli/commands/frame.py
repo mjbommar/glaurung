@@ -129,15 +129,16 @@ class FrameCommand(BaseCommand):
                 except ValueError:
                     formatter.output_plain(f"Error: bad offset: {args.rest[0]!r}")
                     return 2
-                # Preserve existing c_type; only changing the name.
-                existing = xref_db.get_stack_var(kb, fn_va, off)
+                # `c_type` and `use_count` are omitted, not passed as None:
+                # `set_stack_var` keeps what it is not told about. This used to
+                # read the row back and pass the old values through by hand,
+                # which worked here and was forgotten in the REPL -- so the fix
+                # lives in the setter now and both surfaces get it.
                 xref_db.set_stack_var(
                     kb,
                     function_va=fn_va,
                     offset=off,
                     name=args.rest[1],
-                    c_type=existing.c_type if existing else None,
-                    use_count=existing.use_count if existing else 0,
                     set_by="manual",
                 )
                 formatter.output_plain(f"  fn@{fn_va:#x} {off:+#06x} -> {args.rest[1]}")

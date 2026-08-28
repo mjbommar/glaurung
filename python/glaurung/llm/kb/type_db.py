@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional, cast
 
 from .persistent import PersistentKnowledgeBase
+from .provenance import outranks
 
 
 TypeKind = Literal["struct", "union", "enum", "typedef", "function_proto"]
@@ -152,8 +153,8 @@ def add_struct(
         (kb.binary_id, name),
     )
     existing = cur.fetchone()
-    if existing is not None and existing[0] == "manual" and set_by != "manual":
-        # Refuse to overwrite manual entries with automated ones.
+    if existing is not None and not outranks(set_by, existing[0]):
+        # Refuse to overwrite a higher-ranked entry -- see `provenance.outranks`.
         return
     body: dict[str, Any] = {
         "kind": "struct",
@@ -208,7 +209,7 @@ def add_union(
         (kb.binary_id, name),
     )
     existing = cur.fetchone()
-    if existing is not None and existing[0] == "manual" and set_by != "manual":
+    if existing is not None and not outranks(set_by, existing[0]):
         return
     body: dict[str, Any] = {
         "kind": "union",
@@ -334,7 +335,7 @@ def add_function_proto(
         (kb.binary_id, name),
     )
     existing = cur.fetchone()
-    if existing is not None and existing[0] == "manual" and set_by != "manual":
+    if existing is not None and not outranks(set_by, existing[0]):
         return
     body: dict[str, Any] = {
         "kind": "function_proto",
@@ -739,7 +740,9 @@ def _import_pe_pdb_public_names_from_analysis(
             continue
         entry_va = int(va)
         existing = existing_by_va.get(entry_va)
-        if existing is not None and existing["set_by"] == "manual":
+        # The literal below is the `set_by` this path actually writes; keeping
+        # them in step is what makes the guard mean anything.
+        if existing is not None and not outranks("pdb", existing["set_by"]):
             counts["skipped_manual_function_name"] += 1
             continue
 

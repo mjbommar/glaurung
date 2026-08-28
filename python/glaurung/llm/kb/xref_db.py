@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Literal, Optional, Tuple
 
 from .persistent import PersistentKnowledgeBase
+from .provenance import outranks
 
 
 XrefKind = Literal[
@@ -1116,12 +1117,18 @@ def set_function_name(
     # function, a later pass re-runs, and the name is gone with no error and no
     # undo entry naming the culprit. Matches `set_data_label`,
     # `set_function_prototype` and `set_stack_var`, which have always had it.
+    #
+    # The comparison is by RANK, not by string equality against "manual" --
+    # see `provenance.outranks`. The string test protected only the analyst,
+    # so a `dwarf` name read from real debug information was replaced by an
+    # `auto` heuristic and a `flirt` library match by a `borrowed` one, both
+    # silently.
     cur.execute(
         "SELECT set_by FROM function_names WHERE binary_id = ? AND entry_va = ?",
         (kb.binary_id, entry_va),
     )
     row = cur.fetchone()
-    if row is not None and row[0] == "manual" and set_by != "manual":
+    if row is not None and not outranks(set_by, row[0]):
         return
 
     key = {"entry_va": entry_va}
@@ -1273,7 +1280,7 @@ def set_comment(
         (kb.binary_id, va),
     )
     row = cur.fetchone()
-    if row is not None and row[0] == "manual" and set_by != "manual":
+    if row is not None and not outranks(set_by, row[0]):
         return
 
     key = {"va": va}
@@ -1347,7 +1354,7 @@ def set_data_label(
         (kb.binary_id, int(va)),
     )
     row = cur.fetchone()
-    if row is not None and row[0] == "manual" and set_by != "manual":
+    if row is not None and not outranks(set_by, row[0]):
         return
     key = {"va": int(va)}
     old = _snapshot_row(kb, "data_labels", key) if set_by == "manual" else None
@@ -1402,13 +1409,40 @@ def list_data_labels(kb: PersistentKnowledgeBase) -> List[DataLabel]:
     ]
 
 
-def remove_data_label(kb: PersistentKnowledgeBase, va: int) -> None:
+def remove_data_label(
+    kb: PersistentKnowledgeBase, va: int, *, set_by: str = "manual"
+) -> None:
+    """Delete a data label, recording the deletion in the undo log.
+
+    Deleting used to be the one analyst-facing write with no undo entry: every
+    setter snapshots the row it is about to replace, but this bypassed that
+    entirely, so `label remove` destroyed a manual name with `undo` unable to
+    see that anything had happened. A deletion is the edit most in need of an
+    undo, not the one least in need of it.
+
+    ``set_by`` names who is deleting, on the same ladder as every other write,
+    so an automatic pass cannot silently drop an analyst's label.
+    """
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
+    cur.execute(
+        "SELECT set_by FROM data_labels WHERE binary_id = ? AND va = ?",
+        (kb.binary_id, int(va)),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return
+    if not outranks(set_by, row[0]):
+        return
+    key = {"va": int(va)}
+    old = _snapshot_row(kb, "data_labels", key)
     cur.execute(
         "DELETE FROM data_labels WHERE binary_id = ? AND va = ?",
         (kb.binary_id, int(va)),
     )
+    # `new=None` is how `_apply_snapshot` spells "there is no row", so undo of a
+    # deletion restores the row and redo deletes it again.
+    _record_undo(kb, "data_labels", key, old, None, set_by)
     kb._conn.commit()
 
 
@@ -1513,7 +1547,7 @@ def set_function_prototype(
         (kb.binary_id, function_name),
     )
     row = cur.fetchone()
-    if row is not None and row[0] == "manual" and set_by != "manual":
+    if row is not None and not outranks(set_by, row[0]):
         return
     key = {"function_name": function_name}
     old = _snapshot_row(kb, "function_prototypes", key) if set_by == "manual" else None
@@ -3146,18 +3180,38 @@ def set_stack_var(
     use_count: int = 0,
     set_by: str = "manual",
 ) -> None:
-    """Persist a stack-frame variable. Manual entries always win over
-    later automated guesses (consistent with type_db precedence)."""
+    """Persist a stack-frame variable, keeping facts the caller did not supply.
+
+    Precedence is by provenance rank (`provenance.outranks`), so a weaker
+    source cannot replace a stronger one.
+
+    ``c_type=None`` means "I am not saying anything about the type", NOT "this
+    slot has no type": an existing type is kept. This used to be the caller's
+    job and only one of the two callers did it -- `frame.py` read the row back
+    and passed the old `c_type` through, while the REPL's `locals rename` did
+    not, so renaming a slot in the REPL silently destroyed its type and its use
+    count (`INSERT OR REPLACE` writes the whole row). Renaming a variable is
+    the single most common thing an analyst does; losing the type they set a
+    moment earlier, with no message, is the worst possible response to it.
+
+    Pass ``c_type=""`` to deliberately clear a type. ``use_count`` is likewise
+    a floor, never a truncation -- a caller that does not count uses passes 0
+    and keeps whatever was counted before.
+    """
     _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     cur.execute(
-        "SELECT set_by, use_count FROM stack_frame_vars "
+        "SELECT set_by, use_count, c_type FROM stack_frame_vars "
         "WHERE binary_id = ? AND function_va = ? AND offset = ?",
         (kb.binary_id, int(function_va), int(offset)),
     )
     row = cur.fetchone()
-    if row is not None and row[0] == "manual" and set_by != "manual":
-        # Don't clobber analyst-renamed entries with auto-discovery;
+    if row is not None:
+        if c_type is None:
+            c_type = row[2]
+        use_count = max(int(use_count or 0), int(row[1] or 0))
+    if row is not None and not outranks(set_by, row[0]):
+        # Don't clobber a higher-ranked entry with a weaker source;
         # but DO bump use_count if the auto pass saw it referenced.
         new_uses = max(int(row[1] or 0), int(use_count))
         cur.execute(
