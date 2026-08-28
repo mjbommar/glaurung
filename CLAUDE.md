@@ -101,6 +101,14 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   plain `cargo build` reported ~98 never-used functions where the shipped
   configuration had 4, and two files totalling 1,782 lines looked unreachable
   while running on every decompile.
+- **`cargo check` is not `cargo test`, even with the right features.** `cargo
+  check --features python-ext --lib` does not compile `#[cfg(test)]` modules. On
+  2026-08-28 a signature change to `select_renderable_dwarf_local_facts` left a
+  test-only call site in `src/python_bindings/ir.rs` on the old arity: `check`
+  reported 0 errors, `cargo test --features python-ext` failed to compile. Same
+  class as the bullet above, different axis — that one is a feature not being
+  built, this one is test code not being built. Use `check` for the inner loop;
+  the command that says a refactor is done is `cargo test --features python-ext`.
 - **`--features python-ext` does not build `src/symbolic/` either, and that is
   ten times bigger.** `src/lib.rs:65` is `#[cfg(feature = "symbolic")]`, and
   `symbolic` is in neither `default` nor `python-ext`. **21 files, 14,649 product
@@ -134,6 +142,14 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   (`tools/gen_native_stub.py`) took the total to 386.
   `python/tests/test_native_stub_current.py` regenerates and diffs, so the
   replacement cannot go stale silently.
+- **Adding a CLI command invalidates a tutorial fixture.**
+  `docs/tutorial/_fixtures/01-install/help-head.out` records the first three
+  lines of `glaurung --help`, which include the full subcommand list, so any new
+  entry in `cli/main.py`'s registry drifts it and
+  `test_verify_tutorial.py::test_check_mode_does_not_rewrite_install_fixtures`
+  fails. Refresh with
+  `uv run python scripts/verify_tutorial.py --chapter 01-install --capture`, and
+  read the diff — it should be the command list and nothing else.
 - **A split has four side files to refresh, not one.** Beyond the four fixture
   baselines: `python/tests/test_large_module_review.py` (a file that drops under
   1,000 LOC must have its `REVIEWED_LARGE_MODULES` entry DELETED, or
