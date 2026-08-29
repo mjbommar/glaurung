@@ -61,6 +61,28 @@ pub struct CallPrototype {
     pub authority: CallPrototypeAuthority,
 }
 
+impl CallPrototype {
+    /// The prototype an ANALYST declared, as recorded in a `.glaurung` project.
+    ///
+    /// `Authoritative` is the level DWARF and the library catalogs use. A human's
+    /// statement about a signature is at least as trustworthy as a catalog entry,
+    /// and ranking it lower would let a recovered guess beat something someone
+    /// typed -- the inverse of the rule the project file enforces on every other
+    /// writable fact.
+    ///
+    /// Lives here rather than at the binding that reads the project, because a
+    /// constructor for this type belongs with the type: the binding's job is to
+    /// fetch three strings, not to know what authority a human carries.
+    pub fn from_analyst(return_type: &str, parameter_types: &[String], variadic: bool) -> Self {
+        Self {
+            return_type: return_type.to_string(),
+            parameter_types: parameter_types.to_vec(),
+            variadic,
+            authority: CallPrototypeAuthority::Authoritative,
+        }
+    }
+}
+
 /// Prototype facts owned by one concrete call statement.
 ///
 /// `callee_prototype` describes the resolved function symbol and therefore

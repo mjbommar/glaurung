@@ -35,7 +35,10 @@ uv run glaurung rename  target.glaurung validate parse_packet_hdr
 uv run glaurung comment target.glaurung parse_packet_hdr \
     "Bounds-checks before indexing. Returns -1 on a null pointer."
 uv run glaurung label   target.glaurung 0x4000 g_opcode_table --type "int[16]"
-uv run glaurung proto   target.glaurung parse_packet_hdr int "p:const uint8_t *" "n:int"
+# A prototype applies only on an exact arity match -- see "Why a prototype
+# needs the right arity". --check-arity tells you when it will not.
+uv run glaurung proto   target.glaurung parse_packet_hdr int "p:const uint8_t *" "n:int" \
+    --binary ./target.so --check-arity
 
 # 3. Locals: a rename needs a type. See "Why a rename needs a type" below.
 uv run glaurung frame target.glaurung 0x1119 retype -12 "unsigned int"
@@ -56,6 +59,7 @@ uv run glaurung undo target.glaurung
 | Surface | Function names | Locals | Comments | Call targets |
 |---|---|---|---|---|
 | `decompile --db` | definition **and** every call site | name + type in the body | function comment above the signature; interior notes listed by address | via the address map |
+| `decompile --db` (prototype) | the rendered signature: return type **and** parameter types | — | — | — |
 | `disasm --db` | header and `-> name` annotations | — | — | direct, PLT, IAT |
 | `graph callgraph --db` | node labels | — | — | edge labels, including `@plt` |
 | `view`, `repl` | regex post-processor (unchanged) | comment prelude only | — | — |
@@ -104,6 +108,31 @@ A slot whose frame coordinate the promotion pass withheld as ambiguous cannot be
 named at all. An offset reachable from two different bases is not one variable,
 and attaching your name to whichever slot was iterated last is worse than
 leaving it `local_18`.
+
+### Why a prototype needs the right arity
+
+`glaurung proto` sets the rendered signature — return type *and* parameter
+types:
+
+```
+int validate(char * arg0, int arg1)                        # recovered
+unsigned int validate(const unsigned char * arg0, short arg1)   # with --db
+```
+
+It applies **only when the parameter count matches the arity the decompiler
+recovered.** On a mismatch the renderer drops the whole declaration — return
+type included — and falls back to the recovered signature. That gate is
+pre-existing and protects DWARF the same way, which is why a wrong prototype
+cannot corrupt the output. It is also silent, so pass `--check-arity --binary
+<path>` and it will tell you:
+
+```
+  note: 1 parameter(s) declared but 2 recovered. `decompile --db` applies a
+  prototype only on an exact arity match, so this one will be ignored.
+```
+
+A parameter you leave untyped is stored as `void *`, not as "unspecified" — see
+`test_analyst_prototype_reaches_decompile.py` for that sharp edge.
 
 ### Comments are anchored, not placed
 
@@ -159,9 +188,6 @@ it produces confidently-wrong output:
   derive `PartialEq`/`Eq` and have no node identity, so origin cannot simply be
   attached. This is the largest remaining gap and the one the incumbents treat
   as table stakes.
-- **A KB prototype does not change recovery.** `glaurung proto` records a
-  signature; it does not force arity or parameter types into the decompiler, so
-  call sites are not re-rendered against it.
 - **A user-defined `struct` reaches no render path.** Setting a stack var's
   `c_type` to `struct request *` stores a string; nothing resolves it to the
   `types` table, and there is no `base->field` rendering.
@@ -191,5 +217,6 @@ it produces confidently-wrong output:
 | The CLI write surface | `python/tests/test_cli_annotate.py` |
 | Callgraph names and PLT labels | `python/tests/test_cli_graph_names.py` |
 | KB-aware disassembly | `python/tests/test_kb_disasm_symbols.py` |
+| Prototype drives the signature; arity rule | `python/tests/test_analyst_prototype_reaches_decompile.py` |
 | Provenance ranking | `python/tests/test_kb_provenance_rank.py` |
 | Stack-var writes preserve unsupplied facts | `python/tests/test_kb_stack_var_preserves.py` |

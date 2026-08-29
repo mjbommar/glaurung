@@ -35,6 +35,7 @@ overwrite real analyst edits.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -363,7 +364,7 @@ def _warn_on_arity_mismatch(
 ) -> None:
     """Say so when this prototype will be ignored by `decompile --db`.
 
-    The renderer applies a declared prototype only on an exact arity match, and
+    The renderer applies a declared prototype only on an exact arity match and
     drops the whole declaration otherwise. That is the right conservative rule
     -- a wrong prototype cannot corrupt the output -- but an analyst who types a
     signature and sees nothing change deserves to know which of the two
@@ -371,6 +372,11 @@ def _warn_on_arity_mismatch(
 
     Needs the binary, because only the decompiler knows the recovered arity, so
     it is opt-in via `--check-arity --binary <path>`.
+
+    The function is resolved through the PROJECT first. Prototypes are keyed by
+    name, and the name an analyst types is the one they just chose -- which the
+    binary does not know. Resolving against the binary alone made this check
+    fail silently for a renamed function, i.e. exactly when it was wanted.
     """
     if not getattr(args, "check_arity", False):
         return
@@ -380,53 +386,50 @@ def _warn_on_arity_mismatch(
             "  note: --check-arity needs --binary to compare against"
         )
         return
+
+    from ..kb_names import load_analyst_names
+
+    entry_va = None
+    for va, name in load_analyst_names(str(args.db), str(binary)).items():
+        if name == args.name:
+            entry_va = va
+            break
     try:
         import glaurung as g
 
-        functions = g.analysis.analyze_functions_path(str(binary), max_functions=2000)[
-            0
-        ]
+        if entry_va is None:
+            functions = g.analysis.analyze_functions_path(
+                str(binary), max_functions=2000
+            )[0]
+            for function in functions:
+                if function.name == args.name:
+                    entry_va = int(function.entry_point.value)
+                    break
+        if entry_va is None:
+            formatter.output_plain(
+                f"  note: {args.name} is not a function in {binary}; arity unchecked"
+            )
+            return
+        text = g.ir.decompile_at(str(binary), entry_va, style="decbench")
     except Exception as exc:  # noqa: BLE001
         formatter.output_plain(
             f"  note: could not analyse {binary} ({exc}); arity unchecked"
         )
         return
-    for function in functions:
-        if function.name != args.name:
-            continue
-        recovered = getattr(function, "calling_convention", None)
-        _ = recovered
-        break
-    # The recovered ARITY is not exposed on the discovered function, so the
-    # honest check is against the rendered signature itself.
-    try:
-        text = g.ir.decompile_at(
-            str(binary), _entry_va(functions, args.name), style="decbench"
-        )
-    except Exception:  # noqa: BLE001
-        return
-    import re as _re
 
-    match = _re.search(
-        r"^\w[\w \*]*\b" + _re.escape(args.name) + r"\(([^)]*)\)", text, _re.M
-    )
+    # Matched by SHAPE, not by name: the rendered name is whatever the binary
+    # calls the function, which after a rename is not what the analyst typed.
+    match = re.search(r"^[A-Za-z_][\w \*]*\b\w+\(([^)]*)\)\s*\{", text, re.M)
     if not match:
         return
     inner = match.group(1).strip()
-    recovered_count = 0 if inner in ("", "void") else inner.count(",") + 1
-    if recovered_count != declared:
+    recovered = 0 if inner in ("", "void") else inner.count(",") + 1
+    if recovered != declared:
         formatter.output_plain(
-            f"  note: {declared} parameter(s) declared but {recovered_count} "
+            f"  note: {declared} parameter(s) declared but {recovered} "
             f"recovered. `decompile --db` applies a prototype only on an exact "
             f"arity match, so this one will be ignored."
         )
-
-
-def _entry_va(functions, name: str) -> int:
-    for function in functions:
-        if function.name == name:
-            return int(function.entry_point.value)
-    raise KeyError(name)
 
 
 def _render_proto(name: str, proto) -> str:

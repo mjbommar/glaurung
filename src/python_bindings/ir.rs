@@ -446,24 +446,17 @@ pub(super) fn decompile_at_session(
         // prototype for rendering and drives both the return type and the
         // parameter c_types (`ast::declaration_plan`) -- so there is no second
         // mechanism and the two cannot disagree.
-        let analyst_render = analyst_prototype.map(|(ret, params, variadic)| {
-            crate::ir::call_contracts::CallPrototype {
-                return_type: ret.clone(),
-                parameter_types: params.clone(),
-                variadic: *variadic,
-                // The level DWARF and the library catalogs use. An analyst
-                // statement is at least as trustworthy as a catalog entry, and
-                // ranking it lower would let a recovered guess beat something a
-                // human typed.
-                authority: crate::ir::call_contracts::CallPrototypeAuthority::Authoritative,
-            }
-        });
-        let declared_render = analyst_render.or_else(|| {
+        // Analyst first, then DWARF -- see `CallPrototype::from_analyst`.
+        let declared_render = analyst_prototype
+            .map(|(ret, params, variadic)| {
+                crate::ir::call_contracts::CallPrototype::from_analyst(ret, params, *variadic)
+            })
+            .or_else(|| {
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va))
                 .and_then(dwarf_render_prototype)
-        });
+            });
         decbench_text(
             &f,
             &mut profiler,

@@ -362,6 +362,28 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     above names. `product_files_above_1000` 26 -> 27 and the two totals that
     follow from it are that one file and nothing else.
 
+    2026-08-29: the analyst-prototype overlay. +39 product lines, and the
+    measure earned its keep by REJECTING my first cut. The prototype ->
+    `CallPrototype` construction started inline in `python_bindings/ir.rs`
+    (already 1,626 lines); moving it to `CallPrototype::from_analyst` in
+    `ir/call_contracts.rs` made every number WORSE, because that file is itself
+    ~1,039 product lines and the move landed 20 lines on the far side of the
+    same threshold. Both candidate homes are oversized -- which is a fact about
+    `call_contracts.rs`, not about these 39 lines.
+
+    The constructor stayed on the type anyway. A constructor for `CallPrototype`
+    belongs with `CallPrototype`; the binding's job is to fetch three strings,
+    not to know what authority a human carries. Reverting it to satisfy the
+    counter would be the mistake the 2026-08-20 entry above names. What was cut
+    instead was the rationale comment duplicated at the call site, now that the
+    constructor carries it.
+
+    Residual accepted: the `analyst_prototype` parameter threaded through
+    `decompile_at_py` / `decompile_at_session`, the constructor and its
+    reasoning, and the loader. `product_files_above_1000` and `product_max_loc`
+    are unchanged at 26 and 2,451 -- no file crossed the threshold and the
+    largest owner did not grow.
+
     2026-08-28: THAT REASONING WAS WRONG, and the cut was made. `arm_tables` is
     a CHILD of `dispatch`, not a sibling, and a child module may already read
     its ancestors' private items -- so moving the three ARM recognisers there
@@ -388,11 +410,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": pytest.approx(430),
         "product_files_above_1000": 26,
         "product_files_above_2000": 4,
-        "product_loc_above_1000": 39886,
+        "product_loc_above_1000": 39925,
         "product_max_loc": 2451,
-        "product_mean_loc": pytest.approx(427.9075829383886),
+        "product_mean_loc": pytest.approx(428.00236966824644),
         "product_median_loc": pytest.approx(310.0),
-        "product_pct_loc_above_1000": pytest.approx(22.08808430752532),
+        "product_pct_loc_above_1000": pytest.approx(22.104785263845596),
     }
 
 

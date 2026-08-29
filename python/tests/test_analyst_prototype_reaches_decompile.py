@@ -266,3 +266,84 @@ def test_proto_check_arity_is_quiet_when_it_matches(binary, recovered_arity, tmp
     )
     assert result.returncode == 0
     assert "will be ignored" not in result.stdout, result.stdout
+
+
+def test_check_arity_works_on_a_renamed_function(binary, recovered_arity, tmp_path):
+    """The case that silently failed, found by running the documented workflow.
+
+    Prototypes are keyed by NAME, and the name an analyst types is the one they
+    just chose -- which the binary does not know. Resolving the function against
+    the binary alone made `--check-arity` raise, get swallowed, and print
+    nothing: no warning on a mismatch, i.e. exactly when it was wanted. It now
+    resolves through the project first.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db = tmp_path / "p.glaurung"
+    kb = PersistentKnowledgeBase.open(str(db), binary_path=str(binary))
+    nm = subprocess.run(
+        ["nm", "-D", "--defined-only", str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    va = next(
+        int(p[0], 16)
+        for p in (line.split() for line in nm.stdout.splitlines())
+        if len(p) == 3 and p[2] == "validate"
+    )
+    xref_db.set_function_name(kb, va, "parse_packet_hdr", set_by="manual")
+    kb.close()
+
+    def run_proto(count: int):
+        return subprocess.run(
+            [
+                "glaurung",
+                "proto",
+                str(db),
+                "parse_packet_hdr",
+                "int",
+                *[f"p{i}:int" for i in range(count)],
+                "--binary",
+                str(binary),
+                "--check-arity",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+    wrong = run_proto(recovered_arity + 1)
+    assert wrong.returncode == 0, wrong.stdout + wrong.stderr
+    assert "will be ignored" in wrong.stdout, (
+        "no warning for a renamed function -- the check resolved against the "
+        "binary, which does not know the new name:\n" + wrong.stdout
+    )
+
+    right = run_proto(recovered_arity)
+    assert right.returncode == 0
+    assert "will be ignored" not in right.stdout, right.stdout
+
+
+def test_check_arity_reports_an_unknown_function(binary, tmp_path):
+    """Silence would read as "your prototype is fine"."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db = tmp_path / "p.glaurung"
+    PersistentKnowledgeBase.open(str(db), binary_path=str(binary)).close()
+    result = subprocess.run(
+        [
+            "glaurung",
+            "proto",
+            str(db),
+            "no_such_function",
+            "int",
+            "--binary",
+            str(binary),
+            "--check-arity",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "arity unchecked" in result.stdout, result.stdout
