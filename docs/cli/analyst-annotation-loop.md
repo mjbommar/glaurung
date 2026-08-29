@@ -54,6 +54,11 @@ uv run glaurung undo target.glaurung --list
 uv run glaurung undo target.glaurung
 ```
 
+`--func` accepts a name recorded in the **project**, not only one the binary
+exports — so a function you renamed is reachable by the name you just chose.
+The binary's own names are tried first, so a symbol still wins a collision and
+behaviour without `--db` is unchanged.
+
 ## What `--db` changes, per surface
 
 | Surface | Function names | Locals | Comments | Call targets |

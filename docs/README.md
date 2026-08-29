@@ -29,8 +29,10 @@ configuration, and troubleshooting live in the
 | Inspect an unfamiliar binary quickly | [Triage overview](triage/README.md) and [first binary](tutorial/01-getting-started/first-binary.md) |
 | Learn the CLI command surface | [CLI tour](tutorial/01-getting-started/cli-tour.md) and [CLI cheat sheet](tutorial/reference/cli-cheatsheet.md) |
 | Navigate or annotate a project database | [REPL tour](tutorial/01-getting-started/repl-tour.md) and [analyst workflows](cli/analyst-ergonomics.md) |
+| Make an annotation show up in the decompiled output | [The annotation loop](cli/analyst-annotation-loop.md) — `rename`/`comment`/`label`/`proto` and what `--db` changes on each surface |
 | Work with names, types, xrefs, stack frames, or patches | [Daily basics](tutorial/02-daily-basics/) |
 | Understand project data and provenance | [Persistent projects](architecture/PERSISTENT_PROJECT.md), [data model](architecture/data-model/README.md), and [`set_by` precedence](tutorial/reference/set-by-precedence.md) |
+| See where we stand against IDA Pro, Ghidra, and angr | [Decompiler UX competitive ranking](design/decompiler-ux-competitive-ranking.md) — 18 capabilities ranked, with our column measured rather than recalled |
 | Understand analysis architecture | [Analysis index](analysis/README.md), [disassembly](analysis/disassembly/README.md), and [decompiler overview](analysis/decompiler/README.md) |
 | Read or test pseudocode output | [Decompiler overview](analysis/decompiler/README.md) and [decompiler testing](development/decompiler-testing.md) |
 | Analyze PE files or Windows software | [Windows analysis](windows-port/README.md) and [Windows configuration](windows-port/windows-analysis-config.md) |
