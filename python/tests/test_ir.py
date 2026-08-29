@@ -413,10 +413,24 @@ def test_decompile_all_returns_readable_functions():
                 "arg_index",
                 "stack_offset",
                 "size",
+                "addresses",
             }
             assert variable["kind"] in ("arg", "stack")
             # Every reported name must be a real identifier the render emitted.
             assert variable["name"] and variable["name"] in text
+            # Ascending, unique, and machine addresses rather than offsets.
+            # Empty means UNCLAIMED, never "this variable has none" -- see
+            # `ir::variable_addresses` for the two configurations where the
+            # coordinate join is deliberately silent.
+            addresses = variable["addresses"]
+            assert isinstance(addresses, list)
+            assert addresses == sorted(set(addresses))
+            assert all(isinstance(a, int) and a > 0 for a in addresses)
+            if variable["kind"] == "arg":
+                assert addresses == [], (
+                    "a register's live range is not a storage coordinate; "
+                    "arguments carry no addresses by design"
+                )
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="x86-64 sample missing")
