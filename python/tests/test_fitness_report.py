@@ -362,6 +362,13 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     above names. `product_files_above_1000` 26 -> 27 and the two totals that
     follow from it are that one file and nothing else.
 
+    2026-08-29 (third): +14 lines, all of them the module docstring recording
+    what the objdump sweep measured -- where the join is silent, and the two
+    chunked-function addresses that fall outside a contiguous extent.
+    `product_mean_loc` 427.485 -> 427.518; `pct_loc_above_1000` IMPROVED.
+    Documentation deleted to keep a number flat is the drift this measure
+    exists to surface, per the 2026-08-19 entry below, so it stays.
+
     2026-08-29 (second): `ir/variable_addresses.rs`, per-variable machine
     addresses. THREE OF FOUR MEASURES IMPROVED, which is what a new file under
     the threshold is supposed to do: `product_mean_loc` 428.00 -> 427.48,
@@ -427,9 +434,9 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "product_files_above_2000": 4,
         "product_loc_above_1000": 39931,
         "product_max_loc": 2451,
-        "product_mean_loc": pytest.approx(427.48463356973997),
+        "product_mean_loc": pytest.approx(427.5177304964539),
         "product_median_loc": pytest.approx(309),
-        "product_pct_loc_above_1000": pytest.approx(22.08255449990599),
+        "product_pct_loc_above_1000": pytest.approx(22.08084494580845),
     }
 
 

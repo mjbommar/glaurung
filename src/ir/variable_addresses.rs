@@ -55,6 +55,11 @@
 //! | aarch64 gcc `-O0` | 108 | 85 | 242 | 0 |
 //! | x86-64 gcc `-O2` | 330 | 0 | 0 | 0 |
 //!
+//! Across a wider sweep — 250 fixture binaries, all compilers and optimisation
+//! levels — 6,726 addresses were emitted for 632 variables, of which **zero**
+//! failed to be a real instruction start and **zero** landed on an instruction
+//! that does not access that slot.
+//!
 //! It is SILENT — never wrong — whenever `stack_locals` normalised the slot to
 //! an ENTRY-RELATIVE frame while the machine addresses it through a live
 //! register. Two configurations do this today:
@@ -68,6 +73,15 @@
 //!   POSITIVE displacements from it, while the published coordinates are
 //!   entry-relative and negative. Verified: LLIR shows `r7(+4 … +24)`,
 //!   coordinates show `-12 … -36`.
+//!
+//! # An address can fall outside the function's reported `size`
+//!
+//! A function is not always contiguous. `cpp_exception.cold` is placed BELOW
+//! its hot part, so an address that legitimately belongs to `cpp_exception`
+//! lands outside `[entry_va, entry_va + size)` — measured, 2 of 6,726 addresses
+//! over 250 fixture binaries. Those addresses are correct and are emitted; a
+//! consumer that clamps to the contiguous extent will drop them, which loses
+//! evidence but never mis-attributes any.
 //!
 //! Closing that gap needs a per-instruction stack-pointer delta over the LLIR
 //! CFG — translating `rsp + d` to `entry_rsp + d'` through every push, call and

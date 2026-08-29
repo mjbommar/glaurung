@@ -54,20 +54,29 @@ def objdump_oracle(binary: Path, tool: str) -> tuple[set[int], dict[int, str]]:
     return starts, text
 
 
-def access_covers(insn: str, offset: int) -> bool:
-    """Whether this instruction's frame access covers byte `offset`.
+def access_width(insn: str) -> int:
+    """Bytes one instruction's memory access spans.
 
-    One machine instruction can span several slots — `stp`/`ldp` write a pair
-    and a `q` register moves 16 bytes — so the LLIR's per-slot displacement is
-    legitimately inside an access objdump prints with only its base offset.
+    Not cosmetic: a 16-byte access covers two 8-byte slots, so the LLIR's
+    per-slot displacement is legitimately INSIDE an access objdump prints with
+    only its base offset. Getting this wrong made an earlier version of this
+    audit report 158 false failures on aarch64 (`stp`/`ldp`) and 32 more on
+    x86-64 (`movaps` through an `xmm` register).
     """
+    if re.search(r"%[xy]mm|\b(movaps|movups|movdqa|movdqu)\b", insn):
+        return 16
+    if re.search(r"\b[qv]\d", insn):
+        return 16
+    if re.search(r"\b(stp|ldp)\b", insn):
+        return 16
+    return 8
+
+
+def access_covers(insn: str, offset: int) -> bool:
+    """Whether this instruction's frame access covers byte `offset`."""
     if offset == 0 and re.search(r"\[(sp|x29|fp|r7|r11|rbp|rsp)\]", insn):
         return True
-    width = (
-        32
-        if re.search(r"\b[qv]\d", insn)
-        else (16 if re.search(r"\b(stp|ldp)\b", insn) else 8)
-    )
+    width = access_width(insn)
     for m in re.finditer(r"[#](-?\d+)", insn):
         start = int(m.group(1))
         if start <= offset < start + width:
@@ -93,7 +102,7 @@ def compile_fixture(tmp_path: Path, cc: str, opt: str) -> Path | None:
 def audit(binary: Path, objdump: str) -> dict[str, int]:
     starts, text = objdump_oracle(binary, objdump)
     assert starts, f"{objdump} disassembled nothing from {binary}"
-    counts = {"addresses": 0, "range": 0, "start": 0, "ref": 0, "vars": 0}
+    counts = {"addresses": 0, "outside_hot_extent": 0, "start": 0, "ref": 0, "vars": 0}
     for _name, entry_va, _text, size, variables in g.ir.decompile_all(
         str(binary), limit=60, style="decbench"
     ):
@@ -105,7 +114,12 @@ def audit(binary: Path, objdump: str) -> dict[str, int]:
             for addr in variable["addresses"]:
                 counts["addresses"] += 1
                 if size and not (entry_va <= addr < entry_va + size):
-                    counts["range"] += 1
+                    # A function is not always contiguous: `cpp_exception.cold`
+                    # sits BELOW its hot part, so a correct address for that
+                    # function lands outside `[entry_va, entry_va + size)`.
+                    # Counted, not failed -- being a real instruction start that
+                    # accesses the right slot is the property that matters.
+                    counts["outside_hot_extent"] += 1
                 if addr not in starts:
                     counts["start"] += 1
                 elif offset is not None and not access_covers(text[addr], offset):
@@ -120,7 +134,6 @@ def test_every_x86_64_address_survives_the_objdump_audit(cc, tmp_path):
         pytest.skip(f"{cc} unavailable")
     counts = audit(binary, "objdump")
     assert counts["addresses"] > 0, "no addresses emitted at all"
-    assert counts["range"] == 0, counts
     assert counts["start"] == 0, counts
     assert counts["ref"] == 0, counts
 
@@ -139,7 +152,7 @@ def test_aarch64_addresses_survive_the_audit(tmp_path):
         pytest.skip("aarch64 build failed")
     counts = audit(binary, "aarch64-linux-gnu-objdump")
     assert counts["addresses"] > 0, "no addresses emitted on aarch64"
-    assert counts["range"] == 0 and counts["start"] == 0 and counts["ref"] == 0, counts
+    assert counts["start"] == 0 and counts["ref"] == 0, counts
 
 
 def test_a_parameter_carries_no_addresses(tmp_path):
@@ -196,4 +209,4 @@ def test_an_omitted_frame_pointer_build_is_silent_not_wrong(tmp_path):
     if binary is None:
         pytest.skip("gcc unavailable")
     counts = audit(binary, "objdump")
-    assert counts["range"] == 0 and counts["start"] == 0 and counts["ref"] == 0, counts
+    assert counts["start"] == 0 and counts["ref"] == 0, counts

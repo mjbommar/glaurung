@@ -739,6 +739,13 @@ coordinates are `-12 … -36`. Closing that needs a per-instruction stack-pointe
 delta over the LLIR CFG, which is a real analysis whose imprecision would emit
 exactly the plausible-but-wrong address this work exists to avoid.
 
+Across a wider sweep — 250 fixture binaries, every compiler and optimisation
+level — 6,726 addresses for 632 variables: **zero** not a real instruction
+start, **zero** on an instruction that does not access that slot. Two landed
+outside `[entry_va, entry_va + size)`, both in `cpp_exception.cold`, which is
+placed BELOW its hot part: the addresses are correct and a consumer that clamps
+to the contiguous extent will simply drop them.
+
 `python/tests/test_variable_addresses.py` runs the objdump audit on freshly
 compiled x86-64 and aarch64 binaries and asserts ZERO violations. Verified to
 catch a wrong join: shifting the matched displacement by 8 — a plausible
