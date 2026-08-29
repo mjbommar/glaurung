@@ -1171,11 +1171,12 @@ fn decompile_all_py(
         } else {
             profiler.measure("render", || render(&f))
         };
-        let variables = crate::ir::recovered_variables::recovered_variables(
+        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
             &text,
             prototype.as_ref(),
             &stack_facts,
             calling_convention_pointer_width(cc),
+            &lf_raw,
         );
         list.append((
             outer_name,
@@ -1526,11 +1527,12 @@ fn decompile_many_py(
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually
         // emitted -- see `ir::recovered_variables`.
-        let variables = crate::ir::recovered_variables::recovered_variables(
+        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
             &text,
             prototype.as_ref(),
             &stack_facts,
             calling_convention_pointer_width(cc),
+            &lf_raw,
         );
         list.append((
             name,
@@ -1563,6 +1565,10 @@ fn variables_to_py(
         item.set_item("arg_index", variable.arg_index)?;
         item.set_item("stack_offset", variable.stack_offset)?;
         item.set_item("size", variable.size)?;
+        // Always present, empty when unclaimed. A consumer that filters on
+        // truthiness gets the right answer; one that checks for the key does
+        // not have to special-case a producer that never emits it.
+        item.set_item("addresses", variable.addresses.clone())?;
         list.append(item)?;
     }
     Ok(list.into())

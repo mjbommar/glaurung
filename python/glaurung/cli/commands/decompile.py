@@ -635,10 +635,18 @@ def _function_record(record: tuple) -> dict:
     meaning, so a consumer reading only the original three is unaffected.
 
     `variables` is the structured inventory from `ir::recovered_variables` --
-    name, C type, storage kind, ABI argument index and frame offset for each
-    local the render actually emitted. It deliberately carries no addresses and
-    no line numbers; see that module for why a guessed address is worse than
-    none.
+    name, C type, storage kind, ABI argument index, frame offset, and the
+    machine `addresses` the slot is read or written at, for each local the
+    render actually emitted.
+
+    `addresses` is EMPTY when unclaimed, never "there are none". It is populated
+    by joining the slot's frame coordinate against the LLIR, which still carries
+    both the coordinate and the machine VA -- see `ir::variable_addresses` for
+    the fail-closed rules and for the two configurations (an omitted frame
+    pointer, ARM32) where it is deliberately silent.
+
+    There are still no LINE numbers. That needs AST-node-to-instruction lineage,
+    which lowering discards, and is a different problem from this one.
     """
     name, entry_va, text = record[0], record[1], record[2]
     size = record[3] if len(record) > 3 else None

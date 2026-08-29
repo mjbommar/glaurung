@@ -192,7 +192,8 @@ it produces confidently-wrong output:
   are listed rather than placed. `lower_block` drops `ins.va`; `Expr`/`Stmt`
   derive `PartialEq`/`Eq` and have no node identity, so origin cannot simply be
   attached. This is the largest remaining gap and the one the incumbents treat
-  as table stakes.
+  as table stakes. (Per-VARIABLE addresses are a different problem and do
+  exist — see `--format json`'s `variables[].addresses`.)
 - **A user-defined `struct` reaches no render path.** Setting a stack var's
   `c_type` to `struct request *` stores a string; nothing resolves it to the
   `types` table, and there is no `base->field` rendering.

@@ -45,7 +45,7 @@
 //! position for the same reason: direct facts where they are proven, silence
 //! where they are not.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::ir::stack_locals::StackLocalFacts;
 use crate::ir::types_recover::RecoveredPrototype;
@@ -67,6 +67,14 @@ pub struct RecoveredVariable {
     pub stack_offset: Option<i64>,
     /// Access width in bytes, when the promotion pass proved one.
     pub size: Option<u8>,
+    /// Machine addresses this variable is read or written at, ascending.
+    ///
+    /// EMPTY MEANS "NOT CLAIMED", never "there are none". Populated only for a
+    /// promoted stack slot whose frame coordinate survived
+    /// `variable_addresses`' fail-closed rules; a parameter carries none,
+    /// because a register's live range is not a storage coordinate and
+    /// deriving it needs liveness this join deliberately does not do.
+    pub addresses: Vec<u64>,
 }
 
 /// Whether `name` appears in `text` as a whole identifier.
@@ -114,6 +122,40 @@ pub fn recovered_variables(
     facts: &StackLocalFacts,
     pointer_width: u8,
 ) -> Vec<RecoveredVariable> {
+    recovered_variables_with_addresses(text, prototype, facts, pointer_width, &HashMap::new())
+}
+
+/// [`recovered_variables`], sourcing machine addresses from the LLIR.
+///
+/// One call rather than two, because "join the coordinates, then build the
+/// inventory" is an ordering every caller would otherwise have to know and
+/// could get wrong. `lf` should be the function BEFORE canonicalisation: its
+/// `va`s are the machine's own and no pass has synthesised instructions into
+/// it.
+pub fn recovered_variables_from_llir(
+    text: &str,
+    prototype: Option<&RecoveredPrototype>,
+    facts: &StackLocalFacts,
+    pointer_width: u8,
+    lf: &crate::ir::types::LlirFunction,
+) -> Vec<RecoveredVariable> {
+    let addresses =
+        crate::ir::variable_addresses::stack_slot_addresses(lf, &facts.frame_coordinates);
+    recovered_variables_with_addresses(text, prototype, facts, pointer_width, &addresses)
+}
+
+/// [`recovered_variables`], with machine addresses joined in by promoted name.
+///
+/// `addresses` comes from [`crate::ir::variable_addresses::stack_slot_addresses`],
+/// which keys on the same promoted names `StackLocalFacts` uses, so the join
+/// here is a lookup rather than a match.
+pub fn recovered_variables_with_addresses(
+    text: &str,
+    prototype: Option<&RecoveredPrototype>,
+    facts: &StackLocalFacts,
+    pointer_width: u8,
+    addresses: &HashMap<String, Vec<u64>>,
+) -> Vec<RecoveredVariable> {
     let mut out = Vec::new();
 
     // --- parameters -------------------------------------------------------
@@ -146,6 +188,7 @@ pub fn recovered_variables(
                 arg_index: Some(parameter.slot),
                 stack_offset: None,
                 size: None,
+                addresses: Vec::new(),
             });
         }
     }
@@ -192,6 +235,10 @@ pub fn recovered_variables(
                 .get(*name)
                 .map(|(_base, displacement)| *displacement),
             size: facts.sizes.get(*name).copied(),
+            // Keyed by the PROMOTED name, not the rendered one: a DWARF or
+            // analyst name replaces the spelling at the presentation boundary,
+            // long after the coordinate join that produced these.
+            addresses: addresses.get(*name).cloned().unwrap_or_default(),
         });
     }
 

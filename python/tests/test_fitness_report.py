@@ -362,6 +362,21 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     above names. `product_files_above_1000` 26 -> 27 and the two totals that
     follow from it are that one file and nothing else.
 
+    2026-08-29 (second): `ir/variable_addresses.rs`, per-variable machine
+    addresses. THREE OF FOUR MEASURES IMPROVED, which is what a new file under
+    the threshold is supposed to do: `product_mean_loc` 428.00 -> 427.48,
+    `product_pct_loc_above_1000` 22.105 -> 22.083, `product_median_loc`
+    310 -> 309. The new module is 156 product lines and does one thing.
+
+    The one measure that got worse is `product_loc_above_1000`, +6, because the
+    two call sites live in `python_bindings/ir.rs` (already oversized). The cut
+    came first and was worth making on its own terms: the join was initially
+    inlined at BOTH sites, +24, and collapsing it into
+    `recovered_variables_from_llir` took it to +6. That is a better API as well
+    as a smaller number -- "join the coordinates, then build the inventory" is
+    an ordering every caller would otherwise have to know and could get wrong.
+    The residual +6 is the parameter itself.
+
     2026-08-29: the analyst-prototype overlay. +39 product lines, and the
     measure earned its keep by REJECTING my first cut. The prototype ->
     `CallPrototype` construction started inline in `python_bindings/ir.rs`
@@ -407,14 +422,14 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 15,
-        "ir_median_loc": pytest.approx(430),
+        "ir_median_loc": pytest.approx(429.5),
         "product_files_above_1000": 26,
         "product_files_above_2000": 4,
-        "product_loc_above_1000": 39925,
+        "product_loc_above_1000": 39931,
         "product_max_loc": 2451,
-        "product_mean_loc": pytest.approx(428.00236966824644),
-        "product_median_loc": pytest.approx(310.0),
-        "product_pct_loc_above_1000": pytest.approx(22.104785263845596),
+        "product_mean_loc": pytest.approx(427.48463356973997),
+        "product_median_loc": pytest.approx(309),
+        "product_pct_loc_above_1000": pytest.approx(22.08255449990599),
     }
 
 

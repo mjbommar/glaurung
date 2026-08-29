@@ -560,7 +560,15 @@ the one pass that makes origin one-to-many in the output direction).
 
 This is a multi-month rewrite of the pass layer for a tooltip.
 
-### Route B — direct variable addresses, no line map. **Recommended as the real target.**
+### Route B — direct variable addresses, no line map. **LANDED 2026-08-29.**
+
+> Implemented as `src/ir/variable_addresses.rs`. The estimate below — a
+> name-lineage tracker over six passes — turned out to be the wrong design.
+> The join does not need name lineage at all: a promoted slot's frame
+> COORDINATE is published by `stack_locals` and still present on every LLIR
+> `MemOp`, alongside the `va`. That is one join on storage, ~156 product lines,
+> no changes to any pass. See §7c for what shipped and where it is silent.
+
 
 Their own sanitizer supports it (`provenance.py:202-212`), their auditor counts
 it (`functions_with_direct_only_addresses`), and dewolf and Reko ship exactly
@@ -680,11 +688,61 @@ need instruction origin to survive lowering and it does not — `lower_block`
 calls `lower_op(&ins.op, ..)` and drops `ins.va`. A *guessed* address would be
 worse than none: a plausible wrong address is a real instruction start inside
 the function, so it passes the consumer's validator and silently mis-attributes
-the evidence. dewolf and Reko take the same position for the same reason.
+the evidence.
+
+**CORRECTION, 2026-08-29.** The sentence that stood here — "dewolf and Reko take
+the same position for the same reason" — was WRONG, and it contradicted §7
+Route B twelve hundred lines above, which says they "ship exactly this shape:
+direct `VariableInfo.addresses`, no `line_mappings`". Route B is right. They
+decline the LINE MAP, not the addresses. The error was copied verbatim into a
+draft outreach note before anyone caught it, where it would have told the
+DecBench maintainers that two of their own adapters do not do a thing they
+demonstrably do. Two claims that disagree in one document is a defect in the
+document; this one had a reader.
 
 So their note stays accurate as written. What changed is that the half of the
 schema that never needed `ins.va` is now filled, and the remaining gap is
 exactly the half that does.
+
+## 7c. Landed: per-variable machine addresses
+
+`variables[].addresses` now carries the machine VAs each promoted stack slot is
+read or written at, ascending, deduplicated. Empty means UNCLAIMED, never "there
+are none".
+
+The join is on storage, not on identity: `StackLocalFacts::frame_coordinates`
+publishes `(base, disp)` per promoted name, and the LLIR still holds both that
+coordinate (`MemOp { base, disp, .. }`) and the machine address
+(`LlirInstr::va`). No node identity, no rename tracking, no `Expr`/`Stmt`
+change. `lf_raw` is walked rather than the canonicalised form so the VAs are the
+machine's own.
+
+**Validated against `objdump`, not against our own disassembler.** Every emitted
+address is checked to be (a) inside `[entry_va, entry_va + size)`, (b) a real
+instruction start, and (c) on an instruction that actually accesses that
+displacement — the last allowing for `stp`/`ldp` and vector accesses that span
+several slots in one instruction.
+
+| build | slots | addressed | addresses | wrong |
+|---|---|---|---|---|
+| x86-64 gcc `-O0` | 374 | 287 (77%) | 3,551 | 0 |
+| x86-64 clang `-O0` | 576 | 496 (86%) | 5,696 | 0 |
+| aarch64 gcc `-O0` | 108 | 85 | 242 | 0 |
+| x86-64 gcc `-O2` | 330 | 0 | 0 | 0 |
+
+**Where it is silent, and why that is the design.** Whenever `stack_locals`
+normalised a slot to an ENTRY-RELATIVE frame while the machine addresses it
+through a live register, the coordinate spaces differ and nothing matches.
+Measured, not assumed: at `-O2` gcc omits the frame pointer and `entry_rsp`
+never appears as an LLIR base; on ARM32 the LLIR shows `r7(+4 … +24)` while the
+coordinates are `-12 … -36`. Closing that needs a per-instruction stack-pointer
+delta over the LLIR CFG, which is a real analysis whose imprecision would emit
+exactly the plausible-but-wrong address this work exists to avoid.
+
+`python/tests/test_variable_addresses.py` runs the objdump audit on freshly
+compiled x86-64 and aarch64 binaries and asserts ZERO violations. Verified to
+catch a wrong join: shifting the matched displacement by 8 — a plausible
+neighbouring-slot error — fails all three architectures.
 
 **Cost, for calibration against §7.** 46 construction sites seed the inventory;
 the ABI change (a 3-tuple to a 5-tuple across `decompile_many`/`decompile_all`)
