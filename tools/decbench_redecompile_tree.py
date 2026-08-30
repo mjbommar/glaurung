@@ -55,6 +55,8 @@ G = str(pathlib.Path(__file__).resolve().parents[1] / ".venv/bin/glaurung")
 SHA = sys.argv[1]
 ONLY = sys.argv[2] if len(sys.argv) > 2 else None
 NAME = f"glaurung-{SHA}"
+# Set GLAURUNG_REDECOMP_FORCE=1 to re-decompile binaries that already have output.
+FORCE = os.environ.get("GLAURUNG_REDECOMP_FORCE") == "1"
 TMP = pathlib.Path(os.environ["TMPDIR"]) / "redecomp"
 TMP.mkdir(parents=True, exist_ok=True)
 
@@ -91,6 +93,12 @@ if ONLY:
     keys = [k for k in keys if k[1] == ONLY]
 for opt, proj, binstem in keys:
     d = TREE / opt / proj
+    # Resume: a pass over the full corpus takes hours and ours has been killed
+    # by its own `timeout` at 723/803. Re-running from scratch would redo three
+    # hours of work to reach the same tail, so skip binaries already written.
+    if not FORCE and (d / "decompiled" / f"{NAME}_{binstem}.c").exists():
+        stats["skipped"] += 1
+        continue
     src = d / "compiled" / binstem
     if not src.exists():
         cand = list((d / "compiled").glob(binstem + "*"))
