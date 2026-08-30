@@ -39,6 +39,7 @@ pub(super) fn bound_fixed_point(
     entry: &Address,
     blocks: &HashMap<u64, (u64, u32)>,
     edges: &[(u64, u64, ControlFlowEdgeKind)],
+    block_streams: &BlockStreams,
 ) -> HashMap<u64, crate::analysis::dispatch::Bounds> {
     let mut final_bound_inputs: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
     let mut final_bound_outputs: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
@@ -75,6 +76,17 @@ pub(super) fn bound_fixed_point(
             }
             join_dispatch_bounds(reachable.into_iter())
         };
+        // A block whose joined input is the one it was last replayed with
+        // produces the output it produced then, and the convergence check
+        // below would `continue` on it -- so recognising it here skips a
+        // replay instead of repeating one. The queue re-reaches a block 2.1
+        // times on average on `win10-webservices.dll` (106,613 steps over
+        // 49,917 blocks), and the replay is the expensive half of a step.
+        if final_bound_outputs.contains_key(&block_start)
+            && final_bound_inputs.get(&block_start) == Some(&input)
+        {
+            continue;
+        }
         final_bound_inputs.insert(block_start, input.clone());
         let Some((tracker, _)) = replay_dispatch_block(
             facts.image,
@@ -87,6 +99,7 @@ pub(super) fn bound_fixed_point(
             Some(input),
             None,
             None,
+            block_streams.get(&block_start).map(Vec::as_slice),
         ) else {
             continue;
         };
@@ -123,6 +136,7 @@ pub(super) fn address_fixed_point(
     blocks: &HashMap<u64, (u64, u32)>,
     edges: &[(u64, u64, ControlFlowEdgeKind)],
     index_bounds: &HashMap<u64, crate::analysis::dispatch::Bounds>,
+    block_streams: &BlockStreams,
 ) -> HashMap<u64, HashMap<String, u64>> {
     let mut final_address_inputs: HashMap<u64, HashMap<String, u64>> = HashMap::new();
     final_address_inputs.insert(entry.value, HashMap::new());
@@ -157,6 +171,7 @@ pub(super) fn address_fixed_point(
             index_bounds.get(&block_start).cloned(),
             Some(&input),
             None,
+            block_streams.get(&block_start).map(Vec::as_slice),
         ) else {
             continue;
         };

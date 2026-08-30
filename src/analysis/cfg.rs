@@ -28,6 +28,7 @@ use crate::triage::heuristics;
 use object::{Object, ObjectSegment, SectionKind};
 use object::{ObjectSection, ObjectSymbol};
 
+mod body_index;
 mod ctrl_flow;
 mod dispatch_resolution;
 mod entry_shape;
@@ -47,6 +48,8 @@ pub use scan::scan_pe_code_pointers;
 // sibling `scan::prologue_gate_tests` reaches `is_code_padding_terminator` and
 // `memory_operand_va` through `use super::…`, which resolves against *this*
 // binding, not against `ctrl_flow`.
+use body_index::BodyIndex;
+
 use ctrl_flow::{
     arm_defined_register, arm_ldr_pc_table_dispatch, arm_pop_writes_pc, classify_ctrl_flow,
     guard_bound_reaches_fallthrough, immediate_target, is_code_padding_terminator,
@@ -816,6 +819,7 @@ struct TentativeDispatchEdges {
 /// used by a proper must-dataflow fixed point and validates every speculative
 /// resolution. That second check is what makes a late conflicting back-edge
 /// fail closed instead of leaving already-added, unsound successors behind.
+#[allow(clippy::too_many_arguments)]
 fn replay_dispatch_block(
     image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
@@ -827,15 +831,12 @@ fn replay_dispatch_block(
     bounds: Option<crate::analysis::dispatch::Bounds>,
     addresses: Option<&std::collections::HashMap<String, u64>>,
     stop_at: Option<u64>,
+    decoded: Option<&[Instruction]>,
 ) -> Option<(
     crate::analysis::dispatch::DispatchTracker,
     Option<Instruction>,
 )> {
     let darch: crate::core::disassembler::Architecture = arch.into();
-    let mut backend = registry::for_arch(darch, endianness)?;
-    if let Some(thumb) = thumb {
-        let _ = backend.set_thumb_mode(thumb);
-    }
     let bits = darch.address_bits();
     let mut tracker = crate::analysis::dispatch::DispatchTracker::new();
     // The replay must model `pc` exactly as the walker did. Without this the
@@ -850,6 +851,40 @@ fn replay_dispatch_block(
     });
     tracker.inherit_bound(bounds);
     tracker.inherit_addresses(addresses);
+
+    // The walk that built this block already decoded every instruction in it.
+    // Replaying from that stream is the same sequence of `observe` calls
+    // against the same instructions -- see `discover_function`, which records
+    // exactly `[start, block_end)` and only ever shortens a block afterwards,
+    // so the recorded stream is a superset of what this replay reads.
+    if let Some(decoded) = decoded {
+        let mut cur_va = start_va;
+        for instruction in decoded {
+            if cur_va >= end_va {
+                break;
+            }
+            let next_va = cur_va.saturating_add(instruction.length as u64);
+            if matches!(arch, BArch::ARM) {
+                if let Some(defined) = arm_defined_register(instruction) {
+                    tracker.kill_register(defined);
+                }
+            }
+            tracker.observe(instruction);
+            if stop_at == Some(cur_va) {
+                return Some((tracker, Some(instruction.clone())));
+            }
+            if next_va <= cur_va {
+                return None;
+            }
+            cur_va = next_va;
+        }
+        return Some((tracker, None));
+    }
+
+    let mut backend = registry::for_arch(darch, endianness)?;
+    if let Some(thumb) = thumb {
+        let _ = backend.set_thumb_mode(thumb);
+    }
     let mut cur_va = start_va;
     while cur_va < end_va {
         let file_offset = indexed_code_offset(image, data, cur_va)?;
@@ -877,6 +912,17 @@ fn replay_dispatch_block(
     }
     Some((tracker, None))
 }
+
+/// Every block's decoded instruction stream, keyed by block start.
+///
+/// The streaming walk decodes each block once; the two must-dataflow fixed
+/// points and the dispatch revalidation then read the same blocks again, three
+/// more times on average. Decoding is by far the most expensive thing this
+/// module does -- on `win10-webservices.dll` the walk decodes 281k
+/// instructions and the replays 840k -- so the stream is kept rather than
+/// recovered. Bounded by `budgets.max_instructions` per function and dropped
+/// when the function is built.
+type BlockStreams = std::collections::HashMap<u64, Vec<Instruction>>;
 
 struct DiscoveryFacts<'a> {
     // Program-scoped address index. Legacy byte-only analysis leaves this empty;
@@ -983,9 +1029,13 @@ fn discover_function(
     let mut queue: VecDeque<u64> = VecDeque::new();
     let mut seen: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     let mut blocks: HashMap<u64, (u64, u32)> = HashMap::new(); // start_va -> (end_va, instr_count)
-                                                               // block start -> inclusive max switch index its guard admits. Written when a
-                                                               // block ends in a range check, read when its in-range successor is walked.
-                                                               // BFS reaches the guard before the dispatch, so the fact is always available.
+                                                               // start_va -> the instructions the walk decoded for that block, so the
+                                                               // must-dataflow fixed points and the dispatch revalidation below can replay
+                                                               // a block without decoding it again. See `BlockStreams`.
+    let mut block_streams: BlockStreams = HashMap::new();
+    // block start -> inclusive max switch index its guard admits. Written when a
+    // block ends in a range check, read when its in-range successor is walked.
+    // BFS reaches the guard before the dispatch, so the fact is always available.
     let mut index_bounds: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
     // Concrete register addresses that reach a block on every predecessor seen
     // so far. Unlike range bounds, these flow across ordinary branches too: a
@@ -1065,6 +1115,7 @@ fn discover_function(
         // across the in-range edge; see `DispatchTracker::inherit_bound`.
         dispatch.inherit_bound(index_bounds.get(&start_va).cloned());
         dispatch.inherit_addresses(dispatch_addresses.get(&start_va));
+        let mut stream: Vec<Instruction> = Vec::new();
         'block: loop {
             if decoded_instructions >= budgets.max_instructions {
                 stats.hit_instruction_limit = true;
@@ -1115,10 +1166,14 @@ fn discover_function(
             }
             let slice = &data[fo..];
             let addr = Address::new(AddressKind::VA, cur_va, bits, None, None).ok()?;
-            let ins = match backend.disassemble_instruction(&addr, slice) {
-                Ok(i) => i,
+            match backend.disassemble_instruction(&addr, slice) {
+                Ok(i) => stream.push(i),
                 Err(_) => break 'block,
             };
+            // Borrowed from the recorded stream rather than owned: the walk
+            // needs the instruction here and the replays need it later, and
+            // cloning one costs about as much as decoding it.
+            let ins = stream.last().expect("just pushed");
             decoded_instructions += 1;
             instrs = instrs.saturating_add(1);
             // Streaming, so the block is neither buffered nor decoded twice.
@@ -1358,6 +1413,7 @@ fn discover_function(
         }
         // For blocks that didn't terminate with explicit CF change, ensure end recorded
         blocks.entry(start_va).or_insert((cur_va, instrs));
+        block_streams.insert(start_va, stream);
     }
 
     // Split blocks that overlap a later leader. The linear sweep can run past a
@@ -1404,8 +1460,17 @@ fn discover_function(
 
     let thumb =
         arm32_mode.map(|mode| matches!(mode, crate::analysis::arm32_mode::Arm32Mode::Thumb));
-    let final_bound_inputs =
-        bound_fixed_point(facts, data, arch, end, thumb, &entry, &blocks, &edges);
+    let final_bound_inputs = bound_fixed_point(
+        facts,
+        data,
+        arch,
+        end,
+        thumb,
+        &entry,
+        &blocks,
+        &edges,
+        &block_streams,
+    );
     let final_address_inputs = address_fixed_point(
         facts,
         data,
@@ -1416,6 +1481,7 @@ fn discover_function(
         &blocks,
         &edges,
         &index_bounds,
+        &block_streams,
     );
 
     let mut invalid_dispatches: Vec<(u64, u64, Vec<u64>, crate::analysis::dispatch::Unresolved)> =
@@ -1443,6 +1509,9 @@ fn discover_function(
                     Some(inherited_bounds),
                     final_address_inputs.get(&dispatch_edge.block_start),
                     Some(dispatch_edge.site),
+                    block_streams
+                        .get(&dispatch_edge.block_start)
+                        .map(Vec::as_slice),
                 )
                 .and_then(|(tracker, instruction)| {
                     instruction.and_then(|instruction| {
@@ -1639,12 +1708,20 @@ fn va_is_discovered_block_leader(functions: &[Function], va: u64) -> bool {
     })
 }
 
-fn cap_discovered_functions_at_va(functions: &mut [Function], va: u64) -> usize {
+fn cap_discovered_functions_at_va(
+    functions: &mut [Function],
+    va: u64,
+    index: &mut BodyIndex,
+) -> usize {
     let mut capped = 0usize;
     for func in functions.iter_mut() {
         if va <= func.entry_point.value || !va_in_function_body(func, va) {
             continue;
         }
+        // The index counts this function's bytes; it is about to stop owning
+        // some of them. Withdraw the old geometry before the edit and re-add
+        // the new geometry after, so the counters describe what is there now.
+        index.unpaint(func);
         let mut changed = false;
         for block in &mut func.basic_blocks {
             let start = block.start_address.value;
@@ -1695,6 +1772,7 @@ fn cap_discovered_functions_at_va(functions: &mut [Function], va: u64) -> usize 
             }
             capped = capped.saturating_add(1);
         }
+        index.repaint(func);
     }
     capped
 }
@@ -2062,6 +2140,10 @@ fn analyze_functions_unpacked(
     let (regions, arch, end, entry) =
         image.map_or_else(|| parse_exec_regions(data), parse_exec_regions_in);
     let mut functions: Vec<Function> = Vec::new();
+    // Answers the two body-ownership questions the worklist asks per seed
+    // without rescanning `functions`. See `body_index` for the identity it
+    // preserves and for the measurement that motivated it.
+    let mut body_index = BodyIndex::new(&regions);
     let mut cg = CallGraph::new();
     let mut stats = FunctionDiscoveryStats {
         max_functions: budgets.max_functions,
@@ -2156,12 +2238,12 @@ fn analyze_functions_unpacked(
             break;
         }
         stats.seeds_processed = stats.seeds_processed.saturating_add(1);
-        let seed_overlaps_body = va_in_discovered_body(&functions, None, seed.value);
-        let seed_is_owned_block_leader = seed_kind.is_body_overlap_gated()
-            && va_is_discovered_block_leader(&functions, seed.value);
+        let seed_overlaps_body = body_index.contains_body(&functions, seed.value);
+        let seed_is_owned_block_leader =
+            seed_kind.is_body_overlap_gated() && body_index.is_block_leader(&functions, seed.value);
         if seed_kind == DiscoverySeedKind::Pdata && seed_overlaps_body {
             stats.pdata_body_overlap_starts = stats.pdata_body_overlap_starts.saturating_add(1);
-            cap_discovered_functions_at_va(&mut functions, seed.value);
+            cap_discovered_functions_at_va(&mut functions, seed.value, &mut body_index);
         } else if seed_kind.is_body_overlap_gated()
             && (seed_overlaps_body || seed_is_owned_block_leader)
         {
@@ -2238,7 +2320,8 @@ fn analyze_functions_unpacked(
                 // queued becomes a new candidate function entry.
                 if !known.contains(&xref.target_va)
                     && in_exec_regions(&regions, xref.target_va).is_some()
-                    && !va_in_discovered_body(&functions, Some(&f), xref.target_va)
+                    && !va_in_function_body(&f, xref.target_va)
+                    && !body_index.contains_body(&functions, xref.target_va)
                     && (!is_pe_image
                         || pe_xref_seed_looks_like_function_start(data, xref.target_va))
                 {
@@ -2281,6 +2364,7 @@ fn analyze_functions_unpacked(
                 }
             }
             cg.add_node(f.name.clone());
+            body_index.insert(functions.len(), &f);
             functions.push(f);
         }
     }
@@ -2525,7 +2609,10 @@ mod body_overlap_gate_tests {
         );
         let mut functions = vec![prior];
 
-        assert_eq!(cap_discovered_functions_at_va(&mut functions, 0x1080), 1);
+        assert_eq!(
+            cap_discovered_functions_at_va(&mut functions, 0x1080, &mut BodyIndex::disabled()),
+            1
+        );
         assert!(!va_in_function_body(&functions[0], 0x1080));
         assert_eq!(functions[0].basic_blocks[0].end_address.value, 0x1080);
         assert_eq!(functions[0].range.as_ref().unwrap().size, 0x80);
