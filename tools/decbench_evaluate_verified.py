@@ -100,6 +100,11 @@ def main() -> int:
     )
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="score a tree that was only partially decompiled (recorded in the report)",
+    )
+    ap.add_argument(
         "--retries", type=int, default=3, help="serial repair passes over the empty set"
     )
     ap.add_argument(
@@ -113,7 +118,29 @@ def main() -> int:
         return 2
 
     want = binaries(args.tree, args.decompiler)
-    print(f"{len(want)} binaries decompiled by {args.decompiler}")
+    corpus = sorted(
+        (c.parent.parent.parent.name, c.parent.parent.name, c.name)
+        for c in args.tree.glob("*/*/compiled/*")
+    )
+    print(
+        f"{len(want)} binaries decompiled by {args.decompiler}, {len(corpus)} in the corpus"
+    )
+
+    # A gate that only asks "was every DECOMPILED binary scored?" certifies a
+    # partial run as complete -- precisely the coverage artifact this exercise
+    # exists to correct. The decompile pass can end early: ours hit `timeout`
+    # at 723/803 while the wrapper still reported exit 0. So corpus coverage is
+    # checked FIRST, and is fatal unless deliberately waived.
+    undecompiled = len(corpus) - len(want)
+    if undecompiled > 0 and not args.allow_partial:
+        print(
+            f"\nINCOMPLETE CORPUS: {undecompiled} of {len(corpus)} binaries were never "
+            f"decompiled.\nScoring now would report their functions as failures. Finish "
+            f"the decompile pass, or pass\n--allow-partial to score a deliberately "
+            f"partial tree (recorded as partial in the report).",
+            file=sys.stderr,
+        )
+        return 1
 
     print("\n=== pass 1: parallel ===")
     run_evaluate(decbench, args.tree, args.decompiler, args.jobs, None)
@@ -137,6 +164,9 @@ def main() -> int:
     scored = len(want) - len(bad)
     report = {
         "decompiler": args.decompiler,
+        "corpus_binaries": len(corpus),
+        "binaries_decompiled": len(want),
+        "corpus_complete": undecompiled == 0,
         "binaries_total": len(want),
         "binaries_scored": scored,
         "binaries_empty": len(bad),
