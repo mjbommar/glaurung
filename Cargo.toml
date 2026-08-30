@@ -131,6 +131,26 @@ name = "emulator"
 harness = false
 required-features = ["exec"]
 
+[[bench]]
+name = "ir_lift"
+harness = false
+
+[[bench]]
+name = "ir_dataflow"
+harness = false
+
+[[bench]]
+name = "ir_structure"
+harness = false
+
+[[bench]]
+name = "analysis_cfg"
+harness = false
+
+[[bench]]
+name = "decompile_pipeline"
+harness = false
+
 # Examples that drive the symbolic engine only build with its feature enabled,
 # so `cargo build --all-targets` under default features skips them cleanly.
 [[example]]
