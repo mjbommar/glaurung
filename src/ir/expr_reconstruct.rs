@@ -66,71 +66,280 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
     //       without a real alias analysis, and
     //   (d) the RHS is not a pure select, which must stay statement-rooted so
     //       the renderer can preserve its one-armed control-flow form.
+    // A whole-list read census, taken once. `substitute_in_stmt` MOVES the
+    // definition's RHS into its single consumer and the definition statement is
+    // removed in the same step, so no read is ever duplicated and this stays an
+    // upper bound for the rest of the walk with no maintenance. See
+    // `count_temp_reads_in_body` for why an upper bound is the safe direction.
+    let mut temp_reads = std::collections::HashMap::new();
+    count_temp_reads_in_body(stmts, &mut temp_reads);
+
     let mut i = 0;
     while i + 1 < stmts.len() {
-        let (temp, def_expr) = match &stmts[i] {
+        // Conditions (a) and (d) are decided against a BORROW of the RHS. The
+        // previous form cloned `src` — a whole expression tree — for every
+        // temp assignment in the body, including the ones the very next two
+        // lines reject, and including every one whose forward scan then
+        // declined to inline. The clone now happens only on the accepting
+        // path, where `Vec::remove` hands the expression over by value and it
+        // is not a clone at all.
+        let temp = match &stmts[i] {
             Stmt::Assign {
                 dst: dst @ VReg::Temp(_),
                 src,
-            } => (dst.clone(), src.clone()),
+            } => {
+                if contains_reg(src, dst) || matches!(src, Expr::Select { .. }) {
+                    i += 1;
+                    continue;
+                }
+                dst.clone()
+            }
             _ => {
                 i += 1;
                 continue;
             }
         };
 
-        if contains_reg(&def_expr, &temp) {
-            i += 1;
-            continue;
-        }
-        if matches!(def_expr, Expr::Select { .. }) {
+        // Condition (c) requires the sole use to be the IMMEDIATELY following
+        // statement, so a next statement that does not read the temp exactly
+        // once can never satisfy the test below: zero reads there means the
+        // first use is not at `i + 1`, and two or more means the use is not
+        // sole. Deciding that from one statement, before scanning anything
+        // else, is what keeps this loop off the rest of the list.
+        //
+        // The old code scanned forward to the end of the statement list for
+        // EVERY temp definition, including the overwhelming majority whose
+        // successor never mentions the temp — a full-tail walk per statement,
+        // which is quadratic in the length of a block and is why cost here
+        // tracked block LENGTH rather than function size.
+        if count_reg_uses_in_stmt_recursive(&stmts[i + 1], &temp) != 1 {
             i += 1;
             continue;
         }
 
-        // Scan forward from i+1 counting uses of this temp. A subsequent
-        // `%t0 = E` statement redefines the temp; we must count any use in
-        // its RHS (self-referential reads happen before the new write) and
-        // then stop scanning further — downstream reads would see the new
-        // def, not ours.
-        let mut total_uses = 0usize;
-        let mut first_use_idx: Option<usize> = None;
-        for j in (i + 1)..stmts.len() {
-            let n = count_reg_uses_in_stmt_recursive(&stmts[j], &temp);
-            if n > 0 && first_use_idx.is_none() {
-                first_use_idx = Some(j);
-            }
-            total_uses += n;
-            if total_uses > 1 {
-                break;
-            }
-            // Stop scanning at the next def of the same temp (after
-            // counting uses in its RHS, which the helper already does).
-            if matches!(&stmts[j], Stmt::Assign { dst, .. } if dst == &temp) {
-                break;
-            }
-        }
-        if total_uses == 1
-            && first_use_idx == Some(i + 1)
-            // `substitute_in_stmt` deliberately rewrites only expressions
-            // evaluated by this statement itself, never a conditional/loop
-            // body whose evaluation frequency differs from the definition.
-            && count_reg_uses_in_stmt(&stmts[i + 1], &temp) == 1
+        // The sole-use proof is now down to one question: does a SECOND use
+        // appear after `i + 1` before the next definition of the same temp? A
+        // subsequent `%t0 = E` redefines it, so reads past that point see the
+        // new definition, not ours — and any use inside that statement's own
+        // RHS has already been counted by the recursive helper.
+        //
+        // The census answers that outright whenever the whole list holds at
+        // most one read: the read just found at `i + 1` IS that read, and
+        // nothing is left to prove. That is the ordinary shape of a lifter
+        // temporary, and it is what takes the forward scan off the common
+        // path — without it every ACCEPTED inline still walked to the end of
+        // the block looking for a second use the census already rules out.
+        let census_proves_sole_use = temp_reads.get(&temp).copied().unwrap_or(0) <= 1;
+        if !census_proves_sole_use
+            && !matches!(&stmts[i + 1], Stmt::Assign { dst, .. } if dst == &temp)
         {
-            // (e) the use is somewhere `substitute_in_expr` can actually write.
-            // An `Expr::Lea` base/index is a REGISTER slot, not an expression,
-            // so substitution silently declines — and deleting the definition
-            // anyway leaves the address reading a name nothing assigns.
-            if reads_as_address_register(&stmts[i + 1], &temp) {
+            let mut second_use = false;
+            for j in (i + 2)..stmts.len() {
+                if count_reg_uses_in_stmt_recursive(&stmts[j], &temp) > 0 {
+                    second_use = true;
+                    break;
+                }
+                if matches!(&stmts[j], Stmt::Assign { dst, .. } if dst == &temp) {
+                    break;
+                }
+            }
+            if second_use {
                 i += 1;
                 continue;
             }
-            substitute_in_stmt(&mut stmts[i + 1], &temp, &def_expr);
-            stmts.remove(i);
-            // Don't advance — the next iteration may inline a chained temp.
+        }
+
+        // `substitute_in_stmt` deliberately rewrites only expressions
+        // evaluated by this statement itself, never a conditional/loop body
+        // whose evaluation frequency differs from the definition.
+        if count_reg_uses_in_stmt(&stmts[i + 1], &temp) != 1 {
+            i += 1;
             continue;
         }
-        i += 1;
+        // (e) the use is somewhere `substitute_in_expr` can actually write.
+        // An `Expr::Lea` base/index is a REGISTER slot, not an expression,
+        // so substitution silently declines — and deleting the definition
+        // anyway leaves the address reading a name nothing assigns.
+        if reads_as_address_register(&stmts[i + 1], &temp) {
+            i += 1;
+            continue;
+        }
+        // Remove first and take the RHS by value; `stmts[i]` is then the
+        // former `stmts[i + 1]`, so the rewrite and the resulting list are
+        // exactly what substitute-then-remove produced.
+        let Stmt::Assign { src: def_expr, .. } = stmts.remove(i) else {
+            unreachable!("guarded by the `Stmt::Assign` match above")
+        };
+        substitute_in_stmt(&mut stmts[i], &temp, &def_expr);
+        // Don't advance — the next iteration may inline a chained temp.
+    }
+}
+
+/// Total reads of every `VReg::Temp` in `body`, descending into nested bodies.
+///
+/// This exists so the sole-use proof in [`reconstruct_body`] does not have to
+/// walk the rest of the statement list. It is deliberately a CONSERVATIVE
+/// SUPERSET of what [`count_reg_uses_in_stmt_recursive`] counts: it visits
+/// every expression a statement holds and every nested body, and records a temp
+/// in any register slot. Only assignment / call / pop DESTINATIONS and a catch
+/// binding are excluded, because those are writes, not reads.
+///
+/// The asymmetry is the point. The caller uses `== 1` only as a licence to SKIP
+/// the forward scan and falls back to that scan for anything larger, so an
+/// over-count costs time and nothing else. An under-count would license an
+/// unsound inline, which is why both matches below are exhaustive: a new `Expr`
+/// or `Stmt` variant has to fail to compile rather than silently read as zero.
+fn count_temp_reads_in_body(body: &[Stmt], out: &mut std::collections::HashMap<VReg, u32>) {
+    for stmt in body {
+        count_temp_reads_in_stmt(stmt, out);
+    }
+}
+
+/// Record one read of `r` in the census, ignoring anything that is not a temp.
+fn note_temp(r: &VReg, out: &mut std::collections::HashMap<VReg, u32>) {
+    if matches!(r, VReg::Temp(_)) {
+        *out.entry(r.clone()).or_insert(0) += 1;
+    }
+}
+
+fn count_temp_reads_in_expr(e: &Expr, out: &mut std::collections::HashMap<VReg, u32>) {
+    match e {
+        Expr::Reg(r) => note_temp(r, out),
+        Expr::StackAddr { object, .. } => note_temp(object, out),
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => {}
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            if let Some(base) = base {
+                note_temp(base, out);
+            }
+            if let Some(index) = index {
+                note_temp(index, out);
+            }
+        }
+        Expr::Deref { addr, .. } => count_temp_reads_in_expr(addr, out),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            count_temp_reads_in_expr(call_target, out);
+            for argument in args {
+                count_temp_reads_in_expr(argument, out);
+            }
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            count_temp_reads_in_expr(lhs, out);
+            count_temp_reads_in_expr(rhs, out);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            count_temp_reads_in_expr(cond, out);
+            count_temp_reads_in_expr(if_true, out);
+            count_temp_reads_in_expr(if_false, out);
+        }
+        Expr::Un { src, .. } => count_temp_reads_in_expr(src, out),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            count_temp_reads_in_expr(expr, out)
+        }
+        Expr::FunctionTableEntry { index, .. } => count_temp_reads_in_expr(index, out),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                count_temp_reads_in_expr(argument, out);
+            }
+        }
+    }
+}
+
+fn count_temp_reads_in_stmt(s: &Stmt, out: &mut std::collections::HashMap<VReg, u32>) {
+    match s {
+        Stmt::Assign { dst: _, src } => count_temp_reads_in_expr(src, out),
+        Stmt::Store { addr, src, .. } => {
+            count_temp_reads_in_expr(addr, out);
+            count_temp_reads_in_expr(src, out);
+        }
+        Stmt::Call {
+            target,
+            args,
+            dst: _,
+            call_spec: _,
+        } => {
+            count_temp_reads_in_expr(target, out);
+            for argument in args {
+                count_temp_reads_in_expr(argument, out);
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(e) = value {
+                count_temp_reads_in_expr(e, out);
+            }
+        }
+        Stmt::Throw { value } => count_temp_reads_in_expr(value, out),
+        Stmt::TryCatch { try_body, catches } => {
+            count_temp_reads_in_body(try_body, out);
+            for catch in catches {
+                count_temp_reads_in_body(&catch.body, out);
+            }
+        }
+        Stmt::IndirectGoto { target } => count_temp_reads_in_expr(target, out),
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            count_temp_reads_in_expr(cond, out);
+            count_temp_reads_in_body(then_body, out);
+            if let Some(body) = else_body {
+                count_temp_reads_in_body(body, out);
+            }
+        }
+        Stmt::While { cond, body } => {
+            count_temp_reads_in_expr(cond, out);
+            count_temp_reads_in_body(body, out);
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            count_temp_reads_in_stmt(init, out);
+            count_temp_reads_in_expr(cond, out);
+            count_temp_reads_in_stmt(step, out);
+            count_temp_reads_in_body(body, out);
+        }
+        Stmt::DoWhile { body, cond } => {
+            count_temp_reads_in_body(body, out);
+            count_temp_reads_in_expr(cond, out);
+        }
+        Stmt::Push { value } => count_temp_reads_in_expr(value, out),
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            count_temp_reads_in_expr(discriminant, out);
+            for (_, body) in cases {
+                count_temp_reads_in_body(body, out);
+            }
+            if let Some(body) = default {
+                count_temp_reads_in_body(body, out);
+            }
+        }
+        Stmt::Label(_)
+        | Stmt::Goto { .. }
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_)
+        | Stmt::Pop { .. } => {}
     }
 }
 
@@ -1053,6 +1262,86 @@ mod tests {
                 );
             }
         }
+    }
+
+
+    /// The census may over-count; it must never under-count.
+    ///
+    /// `reconstruct_body` uses `count_temp_reads_in_body(..) <= 1` as a licence
+    /// to skip the forward sole-use scan, so a census entry BELOW the number of
+    /// reads `count_reg_uses_in_stmt_recursive` can find would inline a
+    /// temporary that has a second consumer and change the recovered C. Checked
+    /// against real lifted bodies rather than a hand-built one, because the
+    /// hazard is a statement or expression shape the census walker forgets.
+    #[test]
+    fn temp_read_census_never_undercounts_the_reference_walker() {
+        use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+        use crate::core::binary::Arch;
+        use crate::ir::lift_function::lift_function_from_bytes;
+        let path = std::path::Path::new(
+            "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+        );
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let (funcs, _) = analyze_functions_bytes(
+            &data,
+            &Budgets {
+                max_functions: 16,
+                max_blocks: 256,
+                max_instructions: 8000,
+                timeout_ms: 2000,
+                total_timeout_ms: 0,
+            },
+        );
+        let mut checked_temps = 0usize;
+        for fn_ in &funcs {
+            let Ok(lf) = lift_function_from_bytes(&data, fn_, Arch::X86_64) else {
+                continue;
+            };
+            let ssa = compute_ssa(&lf);
+            let r = recover(&lf, &ssa);
+            let f = lower(&lf, &r, fn_.name.clone());
+
+            let mut census = std::collections::HashMap::new();
+            count_temp_reads_in_body(&f.body, &mut census);
+            for (temp, counted) in &census {
+                let reference: usize = f
+                    .body
+                    .iter()
+                    .map(|stmt| count_reg_uses_in_stmt_recursive(stmt, temp))
+                    .sum();
+                assert!(
+                    *counted as usize >= reference,
+                    "census under-counted {temp:?} in {}: {counted} < {reference}",
+                    fn_.name
+                );
+                checked_temps += 1;
+            }
+            // A temp the reference walker can see must appear in the census at
+            // all — a missing key reads as zero, which is the same hazard.
+            for stmt in &f.body {
+                if let Stmt::Assign {
+                    dst: dst @ VReg::Temp(_),
+                    ..
+                } = stmt
+                {
+                    let reference: usize = f
+                        .body
+                        .iter()
+                        .map(|s| count_reg_uses_in_stmt_recursive(s, dst))
+                        .sum();
+                    if reference > 0 {
+                        assert!(
+                            census.contains_key(dst),
+                            "census omitted {dst:?}, which the reference walker reads {reference} time(s)"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(checked_temps > 0, "no temporaries reached the comparison");
     }
 
     fn count_stmts(body: &[Stmt]) -> usize {
