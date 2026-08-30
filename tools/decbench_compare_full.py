@@ -2,10 +2,15 @@
 """Score a full-corpus run against DecBench's published numbers.
 
 WHY. Glaurung's published full-corpus row is `82 / 94,267 = 0.09%`, rank 11 of
-13. That is not a measurement of the decompiler: `total_functions_evaluated = 0`
-in the published scoreboard, because the row scores a 250-function SAMPLE-SET
-submission against the full corpus denominator. Every function we never
+13. That is not a measurement of the decompiler: the row scores a 250-function
+SAMPLE-SET submission against the full corpus denominator, and the proof is that
+the numerator is bit-identical in both views -- 82 perfect of 250 attempted on
+the sample set, 82 perfect of 94,267 on the leaderboard. Every function we never
 submitted counts as a miss.
+
+(`total_functions_evaluated` is `0` for our row, but it is `0` for all thirteen
+columns including angr at rank 3, so it is an unpopulated field and not
+evidence of anything.)
 
 This reads the `function_results.json` that `decbench evaluate-tree` writes over
 a full-corpus tree and reports the same statistics the published scoreboard

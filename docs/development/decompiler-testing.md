@@ -552,19 +552,23 @@ the DecBench maintainers.
 ### Why this matters: our published row is a coverage artifact, not a score
 
 The published full-corpus leaderboard has Glaurung **11th of 13 at 0.09%** —
-`82 / 94,267`. That number is not a measurement of the decompiler. The published
-scoreboard says so itself:
+`82 / 94,267`. That number is not a measurement of the decompiler, and the proof
+is that the numerator never changed:
 
-```toml
-[decompiler_scores.glaurung]
-overall_perfect_count = 82
-overall_total_count = 94267
-total_functions_evaluated = 0     # <- nothing was evaluated for this row
+```
+sample-set submission   82 perfect / 250 attempted   = 32.8%
+published full-corpus   82 perfect / 94,267 total    =  0.09%   (rank 11)
+                        ^^ bit-identical
 ```
 
 Glaurung is registered `sample_set_only`. The 82 perfect functions are the entire
 **250-function** sample-set submission, divided by the full corpus denominator.
 Every function we never submitted counts as a miss.
+
+Do **not** try to read this off `total_functions_evaluated`, which is tempting
+because our row shows `0`. That field is `0` for all thirteen columns —
+including angr, which is ranked 3rd with 34,879 perfect functions. It is
+unpopulated, not a signal. The identical numerator is the evidence.
 
 Score each column over the functions it *actually produced output for* — same
 file, same `perfect_values`, their definitions throughout — and the picture
