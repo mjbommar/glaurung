@@ -29,9 +29,41 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp};
 use crate::ir::types_recover::TypeMap;
 
+/// Overwrite `slot` and record that this pass changed the AST.
+///
+/// **Every** write the `fold_constants` traversal makes to the AST goes through
+/// here — `fold_stored_value` and `fold_expr_at` contain no other assignment
+/// through a `&mut Expr`, which is what makes the `bool` those functions
+/// thread out an honest answer rather than an optimistic one. The fixpoint in
+/// [`crate::ir::ast::prepare`] stops when a round reports no change, so a
+/// missed site here would truncate that fixpoint and silently change output.
+/// A missed site cannot be introduced quietly: `fold_expr_at` has no bare
+/// `*e = ` assignment left in it, so a new one stands out.
+///
+/// Reporting a change that did not happen is safe (one extra fixpoint round
+/// over an unchanged body, which changes nothing); reporting no change when one
+/// happened is not. So `rewrite` sets the flag unconditionally, without first
+/// proving `*slot != value`.
+fn rewrite(slot: &mut Expr, value: Expr, changed: &mut bool) {
+    *slot = value;
+    *changed = true;
+}
+
 /// Rewrite `f`'s body in place, folding the patterns above.
-pub fn fold_constants(f: &mut Function) {
-    fold_body(&mut f.body);
+///
+/// Returns whether anything was rewritten — see [`rewrite`].
+pub fn fold_constants(f: &mut Function) -> bool {
+    #[cfg(debug_assertions)]
+    let before = f.clone();
+    let mut changed = false;
+    fold_body(&mut f.body, &mut changed);
+    #[cfg(debug_assertions)]
+    assert!(
+        changed || before == *f,
+        "const_fold::fold_constants reported no change but edited the body; the \
+         prepare.rs fixpoint would stop a round early and emit different C"
+    );
+    changed
 }
 
 /// Remove matching extension pairs from comparisons only when recovered C
@@ -377,25 +409,25 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
     body(&mut f.body, tm);
 }
 
-fn fold_body(body: &mut [Stmt]) {
+fn fold_body(body: &mut [Stmt], changed: &mut bool) {
     for s in body.iter_mut() {
         match s {
-            Stmt::IndirectGoto { target } => fold_expr(target),
-            Stmt::Assign { src, .. } => fold_expr(src),
+            Stmt::IndirectGoto { target } => fold_expr(target, changed),
+            Stmt::Assign { src, .. } => fold_expr(src, changed),
             Stmt::Store { addr, src, size } => {
-                fold_expr(addr);
-                fold_expr(src);
-                fold_stored_value(src, *size);
+                fold_expr(addr, changed);
+                fold_expr(src, changed);
+                fold_stored_value(src, *size, changed);
             }
             Stmt::Call { target, args, .. } => {
-                fold_expr(target);
+                fold_expr(target, changed);
                 for a in args {
-                    fold_expr(a);
+                    fold_expr(a, changed);
                 }
             }
             Stmt::Return { value } => {
                 if let Some(e) = value {
-                    fold_expr(e);
+                    fold_expr(e, changed);
                 }
             }
             Stmt::If {
@@ -403,15 +435,15 @@ fn fold_body(body: &mut [Stmt]) {
                 then_body,
                 else_body,
             } => {
-                fold_expr(cond);
-                fold_body(then_body);
+                fold_expr(cond, changed);
+                fold_body(then_body, changed);
                 if let Some(eb) = else_body {
-                    fold_body(eb);
+                    fold_body(eb, changed);
                 }
             }
             Stmt::While { cond, body } => {
-                fold_expr(cond);
-                fold_body(body);
+                fold_expr(cond, changed);
+                fold_body(body, changed);
             }
             Stmt::For {
                 init,
@@ -419,27 +451,27 @@ fn fold_body(body: &mut [Stmt]) {
                 step,
                 body,
             } => {
-                fold_body(std::slice::from_mut(init.as_mut()));
-                fold_expr(cond);
-                fold_body(body);
-                fold_body(std::slice::from_mut(step.as_mut()));
+                fold_body(std::slice::from_mut(init.as_mut()), changed);
+                fold_expr(cond, changed);
+                fold_body(body, changed);
+                fold_body(std::slice::from_mut(step.as_mut()), changed);
             }
             Stmt::DoWhile { body, cond } => {
-                fold_body(body);
-                fold_expr(cond);
+                fold_body(body, changed);
+                fold_expr(cond, changed);
             }
-            Stmt::Push { value } => fold_expr(value),
+            Stmt::Push { value } => fold_expr(value, changed),
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                fold_expr(discriminant);
+                fold_expr(discriminant, changed);
                 for (_, body) in cases.iter_mut() {
-                    fold_body(body);
+                    fold_body(body, changed);
                 }
                 if let Some(b) = default {
-                    fold_body(b);
+                    fold_body(b, changed);
                 }
             }
             Stmt::Pop { .. }
@@ -455,7 +487,7 @@ fn fold_body(body: &mut [Stmt]) {
     }
 }
 
-fn fold_stored_value(src: &mut Expr, size: u8) {
+fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     if size == 0 {
         return;
     }
@@ -470,7 +502,7 @@ fn fold_stored_value(src: &mut Expr, size: u8) {
         let Some(replacement) = replacement else {
             break;
         };
-        *src = replacement;
+        rewrite(src, replacement, changed);
     }
 
     // Likewise, a mask that keeps every stored low bit is unobservable after
@@ -481,8 +513,8 @@ fn fold_stored_value(src: &mut Expr, size: u8) {
         (1u64 << (u32::from(size) * 8)) - 1
     };
     if let Some(replacement) = fold_observed_mask(src, required as i64) {
-        *src = replacement;
-        fold_expr(src);
+        rewrite(src, replacement, changed);
+        fold_expr(src, changed);
     }
     let replacement = match src {
         Expr::Bin {
@@ -500,12 +532,12 @@ fn fold_stored_value(src: &mut Expr, size: u8) {
         _ => None,
     };
     if let Some(replacement) = replacement {
-        *src = replacement;
+        rewrite(src, replacement, changed);
     }
 }
 
-fn fold_expr(e: &mut Expr) {
-    fold_expr_at(e, false);
+fn fold_expr(e: &mut Expr, changed: &mut bool) {
+    fold_expr_at(e, false, changed);
 }
 
 /// `shift_left_operand` marks the one position where a widening cast over a
@@ -523,17 +555,17 @@ fn fold_expr(e: &mut Expr) {
 /// `value | (1 << (index & 63))` disagreed with the original for EVERY index at
 /// or above 32, and at 63 returned 0xffffffff80000000 where the machine returns
 /// 0x8000000000000000.
-fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
+fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
         Expr::Bin { op, lhs, rhs } => {
             let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
-            fold_expr_at(lhs, shift);
-            fold_expr(rhs);
+            fold_expr_at(lhs, shift, changed);
+            fold_expr(rhs, changed);
         }
         Expr::Cmp { lhs, rhs, .. } => {
-            fold_expr(lhs);
-            fold_expr(rhs);
+            fold_expr(lhs, changed);
+            fold_expr(rhs, changed);
         }
         Expr::Select {
             cond,
@@ -541,13 +573,13 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
             if_false,
             ..
         } => {
-            fold_expr(cond);
-            fold_expr(if_true);
-            fold_expr(if_false);
+            fold_expr(cond, changed);
+            fold_expr(if_true, changed);
+            fold_expr(if_false, changed);
         }
-        Expr::Un { src, .. } => fold_expr(src),
-        Expr::Cast { expr, .. } => fold_expr(expr),
-        Expr::Deref { addr, .. } => fold_expr(addr),
+        Expr::Un { src, .. } => fold_expr(src, changed),
+        Expr::Cast { expr, .. } => fold_expr(expr, changed),
+        Expr::Deref { addr, .. } => fold_expr(addr, changed),
         _ => {}
     }
 
@@ -568,7 +600,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
         _ => None,
     };
     if let Some(replacement) = selected_arm {
-        *e = replacement;
+        rewrite(e, replacement, changed);
         return;
     }
 
@@ -602,9 +634,9 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
         _ => None,
     };
     if let Some(replacement) = subsumed_inner_cast {
-        *e = replacement;
+        rewrite(e, replacement, changed);
         // Re-run: a chain of three or more collapses one layer per visit.
-        fold_expr_at(e, shift_left_operand);
+        fold_expr_at(e, shift_left_operand, changed);
         return;
     }
 
@@ -638,7 +670,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
         _ => None,
     };
     if let Some(replacement) = narrowed_round_trip {
-        *e = replacement;
+        rewrite(e, replacement, changed);
         return;
     }
 
@@ -683,7 +715,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
         _ => None,
     };
     if let Some(replacement) = repeated_view {
-        *e = replacement;
+        rewrite(e, replacement, changed);
         return;
     }
 
@@ -712,7 +744,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
             _ => None,
         };
         if let Some(replacement) = replacement {
-            *e = replacement;
+            rewrite(e, replacement, changed);
             return;
         }
     }
@@ -760,7 +792,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                 _ => None,
             };
             if let Some(replacement) = replacement {
-                *e = replacement;
+                rewrite(e, replacement, changed);
                 return;
             }
         }
@@ -772,7 +804,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
             if let Some(replacement) =
                 merge_equality_and_less(lhs, rhs).or_else(|| merge_equality_and_less(rhs, lhs))
             {
-                *e = replacement;
+                rewrite(e, replacement, changed);
                 return;
             }
         }
@@ -789,10 +821,10 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                 _ => None,
             };
             if let Some(replacement) = masked {
-                *e = replacement;
+                rewrite(e, replacement, changed);
                 // The replacement is strictly shallower (one merge or mask
                 // layer disappeared), so finish any newly adjacent identity.
-                fold_expr(e);
+                fold_expr(e, changed);
                 return;
             }
         }
@@ -801,13 +833,13 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
         if lhs == rhs {
             match op {
                 BinOp::Xor | BinOp::Sub => {
-                    *e = Expr::Const(0);
+                    rewrite(e, Expr::Const(0), changed);
                     return;
                 }
                 BinOp::And | BinOp::Or => {
                     // (X & X) == X; replace with X.
                     let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    *e = x;
+                    rewrite(e, x, changed);
                     return;
                 }
                 _ => {}
@@ -825,16 +857,16 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                 | BinOp::Shr
                 | BinOp::Sar => {
                     let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    *e = x;
+                    rewrite(e, x, changed);
                     return;
                 }
                 BinOp::Mul | BinOp::And => {
-                    *e = Expr::Const(0);
+                    rewrite(e, Expr::Const(0), changed);
                     return;
                 }
                 BinOp::LogicalOr if is_exact_boolean(lhs) => {
                     let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    *e = x;
+                    rewrite(e, x, changed);
                     return;
                 }
                 _ => {}
@@ -843,51 +875,51 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
         if let Expr::Const(0) = **lhs {
             if matches!(op, BinOp::Add | BinOp::Or | BinOp::Xor) {
                 let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
             if matches!(op, BinOp::Mul | BinOp::And) {
-                *e = Expr::Const(0);
+                rewrite(e, Expr::Const(0), changed);
                 return;
             }
             if op == BinOp::LogicalOr && is_exact_boolean(rhs) {
                 let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
         }
         if let Expr::Const(1) = **rhs {
             if matches!(op, BinOp::Mul) {
                 let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
             if op == BinOp::LogicalAnd && is_exact_boolean(lhs) {
                 let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
         }
         if let Expr::Const(1) = **lhs {
             if matches!(op, BinOp::Mul) {
                 let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
             if op == BinOp::LogicalAnd && is_exact_boolean(rhs) {
                 let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
         }
         if let Expr::Const(-1) = **rhs {
             if matches!(op, BinOp::And) {
                 let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                *e = x;
+                rewrite(e, x, changed);
                 return;
             }
             if matches!(op, BinOp::Or) {
-                *e = Expr::Const(-1);
+                rewrite(e, Expr::Const(-1), changed);
                 return;
             }
         }
@@ -939,7 +971,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                 } else {
                     base.wrapping_sub(off as u64)
                 };
-                *e = Expr::Addr(folded);
+                rewrite(e, Expr::Addr(folded), changed);
                 return;
             }
         }
@@ -984,7 +1016,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                     }
                 }
             };
-            *e = Expr::Const(folded);
+            rewrite(e, Expr::Const(folded), changed);
         }
     }
 
@@ -1001,7 +1033,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                 CmpOp::Slt => lhs < rhs,
                 CmpOp::Sle => lhs <= rhs,
             };
-            *e = Expr::Const(i64::from(value));
+            rewrite(e, Expr::Const(i64::from(value)), changed);
             return;
         }
         // Subtraction sets x86's zero flag: `(X - Y) == 0` is exactly
@@ -1038,7 +1070,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
             _ => None,
         };
         if let Some(replacement) = subtraction_relation {
-            *e = replacement;
+            rewrite(e, replacement, changed);
             return;
         }
 
@@ -1057,7 +1089,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
             };
             if let Some((logical, leaves, saw_byte_view)) = candidate {
                 if leaves >= 2 && saw_byte_view {
-                    *e = logical;
+                    rewrite(e, logical, changed);
                     return;
                 }
             }
@@ -1083,7 +1115,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool) {
                 _ => None,
             };
             if let Some(replacement) = replacement {
-                *e = replacement;
+                rewrite(e, replacement, changed);
             }
         }
     }

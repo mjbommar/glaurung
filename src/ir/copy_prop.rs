@@ -16,23 +16,48 @@
 //! analysis. A follow-up dead-copy elimination drops register copies whose
 //! destination is then never read.
 
-use std::collections::{HashMap, HashSet};
-
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{is_promoted_local_reg, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 mod alias;
+mod hash;
 mod reads;
 
 use alias::{
     contains_deref, contains_reg, contains_select, contains_unknown, invalidate_loads,
     invalidate_loads_for_store, is_scratch_reg,
 };
-use reads::{count_reads_body, count_reads_expr, count_reads_stmt, count_reg_uses};
+use hash::{RegMap, RegSet};
+use reads::{
+    count_reads_body, count_reads_stmt, count_reg_uses, visit_expr_reads, visit_stmt_reads,
+};
 
 /// Run copy propagation then dead-copy elimination over `f`'s body.
-pub fn propagate_copies(f: &mut Function) {
+///
+/// Returns whether the body was changed.
+///
+/// # The answer has to be honest
+///
+/// [`crate::ir::ast::prepare`] runs this and `const_fold::fold_constants` to a
+/// bounded fixpoint and stops as soon as a round reports no change. A `false`
+/// here over a body that WAS edited truncates that fixpoint and silently emits
+/// different C. Every step below therefore reports, and each reports from the
+/// mutation itself rather than from a proof that the mutation mattered:
+///
+/// * `propagate_run_counted` / `propagate_run` edit the AST only through
+///   [`subst`] and [`subst_store_addr`], and thread that pair's answer out;
+/// * `eliminate_dead_copies` already returned whether it deleted a statement,
+///   and the loop below only continues when it did;
+/// * [`dead_store_runs`] and [`prune_unobservable_scratch_dataflow`] report
+///   whether their `retain` dropped anything.
+///
+/// Over-reporting is harmless — one more fixpoint round over a body that is
+/// already at its fixed point produces the same body — so none of these tries
+/// to prove that the value it wrote differs from the value it replaced.
+pub fn propagate_copies(f: &mut Function) -> bool {
+    #[cfg(debug_assertions)]
+    let before = f.clone();
     // Global read counts. With SSA value-numbering upstream every scratch value
     // is single-def, so a value read exactly once can have its defining
     // *expression* propagated to that one use without duplicating any work — this
@@ -44,23 +69,50 @@ pub fn propagate_copies(f: &mut Function) {
     // round removes that flag chain; only a fresh count can then see that the
     // useful read is unique and fold the expression. This is the same fixpoint
     // contract as ordinary SSA simplification, bounded here to keep it cheap.
-    let mut reads: HashMap<VReg, usize> = HashMap::new();
+    let mut changed = false;
+    let mut reads: RegMap<usize> = RegMap::default();
     count_reads_body(&f.body, &mut reads);
-    propagate_run_counted(&mut f.body, &reads);
-    propagate_run(&mut f.body);
+    propagate_run_counted(&mut f.body, &reads, &mut changed);
+    propagate_run(&mut f.body, &mut changed);
     for _ in 0..8 {
         if !eliminate_dead_copies(&mut f.body) {
             break;
         }
-        let mut reads: HashMap<VReg, usize> = HashMap::new();
+        changed = true;
+        let mut reads: RegMap<usize> = RegMap::default();
         count_reads_body(&f.body, &mut reads);
-        propagate_run_counted(&mut f.body, &reads);
+        propagate_run_counted(&mut f.body, &reads, &mut changed);
     }
     // Copy propagation exposes local dead stores (`ret = local_c; ret =
     // (local_c >> 1)` — the first write is overwritten before any read once the
     // reload was folded away). Remove those within each straight-line run.
-    dead_store_runs(&mut f.body);
-    prune_unobservable_scratch_dataflow(f);
+    changed |= dead_store_runs(&mut f.body);
+    changed |= prune_unobservable_scratch_dataflow(f);
+    #[cfg(debug_assertions)]
+    audit_change_report("copy_prop::propagate_copies", changed, &before, f);
+    changed
+}
+
+/// Debug-only audit of a pass's "did I change anything?" answer.
+///
+/// The [`crate::ir::ast::prepare::settle_copies_and_constants`] fixpoint stops
+/// on `false`, so an under-reporting pass truncates it and silently emits
+/// different C — a failure no output test would obviously attribute. This
+/// re-derives the answer the expensive way (clone the body, compare it
+/// structurally) and asserts the cheap answer never says "unchanged" over a
+/// body that moved.
+///
+/// It runs in debug builds only, which is where `cargo test` runs: the whole
+/// suite is the audit harness, on every function every test builds. Release
+/// builds — including the maturin extension the pipeline actually uses — pay
+/// nothing, and over-reporting is deliberately not flagged because it is safe.
+#[cfg(debug_assertions)]
+fn audit_change_report(pass: &str, changed: bool, before: &Function, after: &Function) {
+    assert!(
+        changed || before == after,
+        "{pass} reported no change but edited the body; the prepare.rs fixpoint \
+         would stop a round early and emit different C"
+    );
 }
 
 /// Remove closed scratch-value graphs that cannot influence observable output.
@@ -77,30 +129,36 @@ pub fn propagate_copies(f: &mut Function) {
 /// but a lazy select can contain a value-producing call. Such definitions are
 /// observable roots even when their result is unused; ordinary non-volatile
 /// loads remain removable.
-pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
-    fn expr_regs(expr: &Expr) -> HashSet<VReg> {
-        let mut reads = HashMap::new();
-        count_reads_expr(expr, &mut reads);
-        reads.into_keys().collect()
+/// Returns whether any assignment was removed.
+pub fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
+    /// Add every register `expr` reads to `into`.
+    ///
+    /// This used to build a `RegMap<usize>` histogram per expression and
+    /// throw the counts away, so every root and every dependency edge cost one
+    /// map allocation plus a rehash of each name into a second collection.
+    fn add_regs(expr: &Expr, into: &mut RegSet) {
+        visit_expr_reads(expr, &mut |register| {
+            if !into.contains(register) {
+                into.insert(register.clone());
+            }
+            true
+        });
     }
 
-    fn add_roots(expr: &Expr, roots: &mut HashSet<VReg>) {
-        roots.extend(expr_regs(expr));
+    fn add_roots(expr: &Expr, roots: &mut RegSet) {
+        add_regs(expr, roots);
     }
 
     fn collect_body(
         body: &[Stmt],
-        dependencies: &mut HashMap<VReg, HashSet<VReg>>,
-        roots: &mut HashSet<VReg>,
+        dependencies: &mut RegMap<RegSet>,
+        roots: &mut RegSet,
         has_unknown: &mut bool,
     ) {
         for statement in body {
             match statement {
                 Stmt::Assign { dst, src } if is_scratch_reg(dst) => {
-                    dependencies
-                        .entry(dst.clone())
-                        .or_default()
-                        .extend(expr_regs(src));
+                    add_regs(src, dependencies.entry(dst.clone()).or_default());
                     if src.contains_call() {
                         roots.insert(dst.clone());
                     }
@@ -158,10 +216,14 @@ pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
                     // A For owns boxed header statements that this pass cannot
                     // delete without changing its representation. Treat their
                     // complete dataflow as observable and prune only the body.
-                    let mut header_reads = HashMap::new();
-                    count_reads_stmt(init, &mut header_reads);
-                    count_reads_stmt(step, &mut header_reads);
-                    roots.extend(header_reads.into_keys());
+                    let mut add_root = |register: &VReg| {
+                        if !roots.contains(register) {
+                            roots.insert(register.clone());
+                        }
+                        true
+                    };
+                    visit_stmt_reads(init, &mut add_root);
+                    visit_stmt_reads(step, &mut add_root);
                     if let Stmt::Assign { dst, .. } = &**init {
                         roots.insert(dst.clone());
                     }
@@ -198,10 +260,12 @@ pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
         }
     }
 
-    fn prune_body(body: &mut Vec<Stmt>, live: &HashSet<VReg>) {
+    fn prune_body(body: &mut Vec<Stmt>, live: &RegSet) -> bool {
+        let before = body.len();
         body.retain(|statement| {
             !matches!(statement, Stmt::Assign { dst, .. } if is_scratch_reg(dst) && !live.contains(dst))
         });
+        let mut pruned = body.len() != before;
         for statement in body {
             match statement {
                 Stmt::If {
@@ -209,39 +273,40 @@ pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
                     else_body,
                     ..
                 } => {
-                    prune_body(then_body, live);
+                    pruned |= prune_body(then_body, live);
                     if let Some(else_body) = else_body {
-                        prune_body(else_body, live);
+                        pruned |= prune_body(else_body, live);
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                    prune_body(body, live)
+                    pruned |= prune_body(body, live);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case_body) in cases {
-                        prune_body(case_body, live);
+                        pruned |= prune_body(case_body, live);
                     }
                     if let Some(default_body) = default {
-                        prune_body(default_body, live);
+                        pruned |= prune_body(default_body, live);
                     }
                 }
                 Stmt::TryCatch { try_body, catches } => {
-                    prune_body(try_body, live);
+                    pruned |= prune_body(try_body, live);
                     for catch in catches {
-                        prune_body(&mut catch.body, live);
+                        pruned |= prune_body(&mut catch.body, live);
                     }
                 }
                 _ => {}
             }
         }
+        pruned
     }
 
-    let mut dependencies: HashMap<VReg, HashSet<VReg>> = HashMap::new();
-    let mut live = HashSet::new();
+    let mut dependencies: RegMap<RegSet> = RegMap::default();
+    let mut live = RegSet::default();
     let mut has_unknown = false;
     collect_body(&f.body, &mut dependencies, &mut live, &mut has_unknown);
     if has_unknown {
-        return;
+        return false;
     }
 
     let mut frontier: Vec<VReg> = live.iter().cloned().collect();
@@ -255,7 +320,7 @@ pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
             }
         }
     }
-    prune_body(&mut f.body, &live);
+    prune_body(&mut f.body, &live)
 }
 
 /// Carry a straight-line pure alias into a following structured switch.
@@ -324,7 +389,7 @@ pub fn propagate_adjacent_typed_promoted_values(f: &mut Function, types: &TypeMa
 /// loop-form pass gets the source-level guard back.
 pub fn propagate_adjacent_guard_values(f: &mut Function) {
     loop {
-        let mut reads = HashMap::new();
+        let mut reads = RegMap::default();
         count_reads_body(&f.body, &mut reads);
         if !fold_one_adjacent_guard_value(&mut f.body, &reads) {
             break;
@@ -355,7 +420,7 @@ pub fn propagate_adjacent_overwritten_values(function: &mut Function) {
 /// and removing the definition keeps the call count at one.
 pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
     loop {
-        let mut reads = HashMap::new();
+        let mut reads = RegMap::default();
         count_reads_body(&function.body, &mut reads);
         if !move_one_adjacent_effectful_scratch_value(&mut function.body, &reads) {
             break;
@@ -363,10 +428,7 @@ pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
     }
 }
 
-fn move_one_adjacent_effectful_scratch_value(
-    body: &mut Vec<Stmt>,
-    reads: &HashMap<VReg, usize>,
-) -> bool {
+fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
         let Some((destination, source)) = (match &body[index] {
             Stmt::Assign { dst, src }
@@ -525,14 +587,14 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
         if *overwritten != destination || count_reg_uses(consumer, &destination) != 1 {
             continue;
         }
-        subst(consumer, &HashMap::from([(destination.clone(), source)]));
+        subst(consumer, &Copies::single(destination.clone(), source));
         body.remove(index);
         return true;
     }
     false
 }
 
-fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
+fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement {
             Stmt::If {
@@ -595,7 +657,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usi
         if contains_select(cond) || count_reg_uses(cond, &dst) != 1 {
             continue;
         }
-        let mut other_reads = HashMap::new();
+        let mut other_reads = RegMap::default();
         count_reads_body(then_body, &mut other_reads);
         if let Some(else_body) = else_body {
             count_reads_body(else_body, &mut other_reads);
@@ -608,7 +670,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usi
         let Stmt::If { cond, .. } = &mut body[guard_index] else {
             unreachable!()
         };
-        subst(cond, &HashMap::from([(dst, source)]));
+        subst(cond, &Copies::single(dst, source));
         body.remove(index);
         return true;
     }
@@ -656,12 +718,12 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
             continue;
         };
 
-        let mut next_reads = HashMap::new();
+        let mut next_reads = RegMap::default();
         count_reads_stmt(&body[next_index], &mut next_reads);
         if next_reads.get(&dst).copied().unwrap_or(0) != 1 {
             continue;
         }
-        let mut later_reads = HashMap::new();
+        let mut later_reads = RegMap::default();
         count_reads_body(&body[next_index + 1..], &mut later_reads);
         if later_reads.get(&dst).copied().unwrap_or(0) != 0 {
             // Another use in this same structured run still observes the
@@ -672,12 +734,12 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
 
         let substituted = match &mut body[next_index] {
             Stmt::Assign { src, .. } | Stmt::Store { src, .. } => {
-                let copies = HashMap::from([(dst, selected)]);
+                let copies = Copies::single(dst, selected);
                 subst(src, &copies);
                 true
             }
             Stmt::Return { value: Some(value) } | Stmt::Push { value } => {
-                let copies = HashMap::from([(dst, selected)]);
+                let copies = Copies::single(dst, selected);
                 subst(value, &copies);
                 true
             }
@@ -801,7 +863,148 @@ fn is_deferable_promoted_value(e: &Expr) -> bool {
     !contains_deref(e) && !contains_unknown(e)
 }
 
-type Copies = HashMap<VReg, Expr>;
+/// One recorded copy: its source expression plus a summary of the register
+/// names that expression reads.
+#[derive(Clone, Debug)]
+struct Recorded {
+    src: Expr,
+    /// Bloom filter over the source's read set, one bit per [`reg_bit`] class.
+    ///
+    /// `invalidate` asks "does this source read the name just written?" once
+    /// per recorded copy per write, and the answer is almost always no — which
+    /// is the one answer a tree walk cannot reach early, because proving a name
+    /// absent means visiting every node. The summary answers "certainly not"
+    /// with a single `AND`; only a set bit pays for the exact walk.
+    reads: u64,
+}
+
+/// A name's bit in [`Recorded::reads`].
+///
+/// Any deterministic function of the *value* of a `VReg` works: the filter is
+/// allowed false positives (they cost one exact walk) and must have no false
+/// negatives, which holds as long as equal registers map to equal bits. FNV-1a
+/// over the discriminant and payload, folded to one of 64 buckets.
+fn reg_bit(register: &VReg) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    fn mix(hash: u64, byte: u8) -> u64 {
+        (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+    }
+    fn mix_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+        for byte in bytes {
+            hash = mix(hash, *byte);
+        }
+        hash
+    }
+    let hash = match register {
+        VReg::Phys(name) => mix_bytes(mix(OFFSET, 1), name.as_bytes()),
+        VReg::Temp(index) => mix_bytes(mix(OFFSET, 2), &index.to_le_bytes()),
+        VReg::Flag(flag) => mix_bytes(mix(OFFSET, 3), flag.ident().as_bytes()),
+        VReg::FlagValue { flag, version } => mix_bytes(
+            mix_bytes(mix(OFFSET, 4), flag.ident().as_bytes()),
+            &version.to_le_bytes(),
+        ),
+    };
+    1u64 << (hash >> 58)
+}
+
+/// Union of [`reg_bit`] over every register `e` reads.
+fn read_summary(e: &Expr) -> u64 {
+    let mut summary = 0;
+    visit_expr_reads(e, &mut |register| {
+        summary |= reg_bit(register);
+        true
+    });
+    summary
+}
+
+/// The active copy environment: destination name -> recorded source value.
+#[derive(Clone, Debug, Default)]
+struct Copies {
+    map: RegMap<Recorded>,
+}
+
+impl Copies {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// The one-entry environment the narrow adjacent-value folders substitute
+    /// with.
+    fn single(dst: VReg, src: Expr) -> Self {
+        let mut copies = Self::new();
+        copies.insert(dst, src);
+        copies
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+    }
+
+    fn get(&self, register: &VReg) -> Option<&Expr> {
+        self.map.get(register).map(|recorded| &recorded.src)
+    }
+
+    fn insert(&mut self, dst: VReg, src: Expr) {
+        let reads = read_summary(&src);
+        self.map.insert(dst, Recorded { src, reads });
+    }
+
+    /// Drop every recorded copy the predicate rejects, by destination and
+    /// source expression.
+    fn retain(&mut self, mut keep: impl FnMut(&VReg, &Expr) -> bool) {
+        self.map.retain(|dst, recorded| keep(dst, &recorded.src));
+    }
+
+    /// Invalidate every copy whose destination *is* `written`, or whose source
+    /// *reads* `written` (its recorded value is now stale).
+    fn invalidate(&mut self, written: &VReg) {
+        if self.map.is_empty() {
+            return;
+        }
+        // Removing the destination up front is what lets the scan below skip
+        // the per-entry name comparison entirely.
+        self.map.remove(written);
+        let bit = reg_bit(written);
+        self.map.retain(|_, recorded| {
+            recorded.reads & bit == 0 || !contains_reg(&recorded.src, written)
+        });
+    }
+
+    /// [`Copies::invalidate`] for a whole write set at once.
+    ///
+    /// One scan, not one per name: a loop body that assigns 128 locals used to
+    /// re-scan the entire environment 128 times, and every one of those scans
+    /// walked every recorded source expression in full.
+    fn invalidate_all(&mut self, written: &RegSet) {
+        if self.map.is_empty() || written.is_empty() {
+            return;
+        }
+        let bits = written
+            .iter()
+            .fold(0u64, |bits, register| bits | reg_bit(register));
+        self.map.retain(|dst, recorded| {
+            if written.contains(dst) {
+                return false;
+            }
+            if recorded.reads & bits == 0 {
+                return true;
+            }
+            let mut reads_written = false;
+            visit_expr_reads(&recorded.src, &mut |register| {
+                if written.contains(register) {
+                    reads_written = true;
+                }
+                !reads_written
+            });
+            !reads_written
+        });
+    }
+}
 
 /// Whether an `if` arm cannot contribute state to the lexical fallthrough.
 ///
@@ -813,10 +1016,8 @@ fn is_exact_return_guard(then_body: &[Stmt], else_body: &Option<Vec<Stmt>>) -> b
     else_body.is_none() && matches!(then_body, [Stmt::Return { .. }])
 }
 
-/// Invalidate every copy whose destination *is* `written`, or whose source
-/// *reads* `written` (its recorded value is now stale).
 fn invalidate(copies: &mut Copies, written: &VReg) {
-    copies.retain(|dst, src| dst != written && !contains_reg(src, written));
+    copies.invalidate(written);
 }
 
 /// Every register/local a structured statement may redefine.
@@ -825,7 +1026,7 @@ fn invalidate(copies: &mut Copies, written: &VReg) {
 /// destination nor any source register can change in the body.  The condition
 /// is evaluated again after every backedge, so substituting an entry snapshot
 /// for a loop-carried cursor freezes it after the first iteration.
-fn collect_written_regs(body: &[Stmt], written: &mut HashSet<VReg>) {
+fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
     for statement in body {
         match statement {
             Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
@@ -892,20 +1093,18 @@ fn collect_written_regs(body: &[Stmt], written: &mut HashSet<VReg>) {
 
 fn copies_stable_across_loop(copies: &Copies, body: &[Stmt]) -> Copies {
     let mut stable = copies.clone();
-    let mut written = HashSet::new();
+    let mut written = RegSet::default();
     collect_written_regs(body, &mut written);
-    for register in written {
-        invalidate(&mut stable, &register);
-    }
+    stable.invalidate_all(&written);
     stable
 }
 
-fn propagate_run(stmts: &mut [Stmt]) -> Copies {
-    let mut copies: Copies = HashMap::new();
+fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
+    let mut copies = Copies::new();
     for s in stmts.iter_mut() {
         match s {
             Stmt::Assign { dst, src } => {
-                subst(src, &copies);
+                *changed |= subst(src, &copies);
                 invalidate(&mut copies, dst);
                 if (is_pure_copyable(src) || is_repeatable_versioned_flag_expr(dst, src))
                     && !is_self_ref(dst, src)
@@ -914,24 +1113,24 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                subst_store_addr(addr, &copies);
-                subst(src, &copies);
+                *changed |= subst_store_addr(addr, &copies);
+                *changed |= subst(src, &copies);
                 // A store to a bare promoted local writes that variable.
                 if let Expr::Reg(r) = addr {
                     invalidate(&mut copies, r);
                 }
             }
-            Stmt::Push { value } => subst(value, &copies),
+            Stmt::Push { value } => *changed |= subst(value, &copies),
             Stmt::Return { value } => {
                 if let Some(e) = value {
-                    subst(e, &copies);
+                    *changed |= subst(e, &copies);
                 }
             }
             Stmt::Pop { target } => invalidate(&mut copies, target),
             Stmt::Call { target, args, .. } => {
-                subst(target, &copies);
+                *changed |= subst(target, &copies);
                 for a in args.iter_mut() {
-                    subst(a, &copies);
+                    *changed |= subst(a, &copies);
                 }
                 // A call clobbers caller-saved registers — drop everything.
                 copies.clear();
@@ -942,18 +1141,18 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 else_body,
             } => {
                 let return_guard = is_exact_return_guard(then_body, else_body);
-                subst(cond, &copies);
-                propagate_run(then_body);
+                *changed |= subst(cond, &copies);
+                propagate_run(then_body, changed);
                 if let Some(eb) = else_body {
-                    propagate_run(eb);
+                    propagate_run(eb, changed);
                 }
                 if !return_guard {
                     copies.clear();
                 }
             }
             Stmt::While { cond, body } => {
-                subst(cond, &copies_stable_across_loop(&copies, body));
-                propagate_run(body);
+                *changed |= subst(cond, &copies_stable_across_loop(&copies, body));
+                propagate_run(body, changed);
                 copies.clear();
             }
             Stmt::For {
@@ -962,10 +1161,10 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 step,
                 body,
             } => {
-                propagate_run(std::slice::from_mut(init.as_mut()));
-                subst(cond, &copies);
-                propagate_run(body);
-                propagate_run(std::slice::from_mut(step.as_mut()));
+                propagate_run(std::slice::from_mut(init.as_mut()), changed);
+                *changed |= subst(cond, &copies);
+                propagate_run(body, changed);
+                propagate_run(std::slice::from_mut(step.as_mut()), changed);
                 copies.clear();
             }
             Stmt::DoWhile { body, cond } => {
@@ -973,8 +1172,8 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 // the body on every iteration.  Carry only the body's final
                 // straight-line copies into it; any branch, call, or other
                 // control-flow boundary clears that set conservatively.
-                let tail_copies = propagate_run(body);
-                subst(cond, &tail_copies);
+                let tail_copies = propagate_run(body, changed);
+                *changed |= subst(cond, &tail_copies);
                 copies.clear();
             }
             Stmt::Switch {
@@ -982,12 +1181,12 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 cases,
                 default,
             } => {
-                subst(discriminant, &copies);
+                *changed |= subst(discriminant, &copies);
                 for (_, body) in cases.iter_mut() {
-                    propagate_run(body);
+                    propagate_run(body, changed);
                 }
                 if let Some(b) = default {
-                    propagate_run(b);
+                    propagate_run(b, changed);
                 }
                 copies.clear();
             }
@@ -996,7 +1195,7 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
             // Substitute THEN end the run: the dispatch reads its target, so a
             // copy that reaches it has to be applied before the barrier.
             Stmt::IndirectGoto { target } => {
-                subst(target, &copies);
+                *changed |= subst(target, &copies);
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
@@ -1015,7 +1214,7 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
 /// the immediately dominating straight-line prefix. Other control flow clears
 /// the environment; nested bodies are searched independently.
 fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
-    let mut copies: Copies = HashMap::new();
+    let mut copies = Copies::new();
     let mut changed = false;
     for statement in body {
         match statement {
@@ -1165,12 +1364,12 @@ fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
 /// scratch destination is read exactly once in the whole body — safe because
 /// value-numbering makes each such destination single-def, so folding it in
 /// duplicates no computation. Copies still do not cross control-flow edges.
-fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Copies {
-    let mut copies: Copies = HashMap::new();
+fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mut bool) -> Copies {
+    let mut copies = Copies::new();
     for s in stmts.iter_mut() {
         match s {
             Stmt::Assign { dst, src } => {
-                subst(src, &copies);
+                *changed |= subst(src, &copies);
                 invalidate(&mut copies, dst);
                 if !is_self_ref(dst, src) {
                     let record = is_pure_copyable(src)
@@ -1199,8 +1398,8 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 }
             }
             Stmt::Store { addr, src, size } => {
-                subst_store_addr(addr, &copies);
-                subst(src, &copies);
+                *changed |= subst_store_addr(addr, &copies);
+                *changed |= subst(src, &copies);
                 if let Expr::Reg(r) = addr {
                     invalidate(&mut copies, r);
                 }
@@ -1211,20 +1410,20 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 invalidate_loads_for_store(&mut copies, addr, *size);
             }
             Stmt::Push { value } => {
-                subst(value, &copies);
+                *changed |= subst(value, &copies);
                 // A push has no AST address to reason about.
                 invalidate_loads(&mut copies);
             }
             Stmt::Return { value } => {
                 if let Some(e) = value {
-                    subst(e, &copies);
+                    *changed |= subst(e, &copies);
                 }
             }
             Stmt::Pop { target } => invalidate(&mut copies, target),
             Stmt::Call { target, args, .. } => {
-                subst(target, &copies);
+                *changed |= subst(target, &copies);
                 for a in args.iter_mut() {
-                    subst(a, &copies);
+                    *changed |= subst(a, &copies);
                 }
                 copies.clear();
             }
@@ -1234,18 +1433,18 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 else_body,
             } => {
                 let return_guard = is_exact_return_guard(then_body, else_body);
-                subst(cond, &copies);
-                propagate_run_counted(then_body, reads);
+                *changed |= subst(cond, &copies);
+                propagate_run_counted(then_body, reads, changed);
                 if let Some(eb) = else_body {
-                    propagate_run_counted(eb, reads);
+                    propagate_run_counted(eb, reads, changed);
                 }
                 if !return_guard {
                     copies.clear();
                 }
             }
             Stmt::While { cond, body } => {
-                subst(cond, &copies_stable_across_loop(&copies, body));
-                propagate_run_counted(body, reads);
+                *changed |= subst(cond, &copies_stable_across_loop(&copies, body));
+                propagate_run_counted(body, reads, changed);
                 copies.clear();
             }
             Stmt::For {
@@ -1254,15 +1453,15 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 step,
                 body,
             } => {
-                propagate_run_counted(std::slice::from_mut(init.as_mut()), reads);
-                subst(cond, &copies);
-                propagate_run_counted(body, reads);
-                propagate_run_counted(std::slice::from_mut(step.as_mut()), reads);
+                propagate_run_counted(std::slice::from_mut(init.as_mut()), reads, changed);
+                *changed |= subst(cond, &copies);
+                propagate_run_counted(body, reads, changed);
+                propagate_run_counted(std::slice::from_mut(step.as_mut()), reads, changed);
                 copies.clear();
             }
             Stmt::DoWhile { body, cond } => {
-                let tail_copies = propagate_run_counted(body, reads);
-                subst(cond, &tail_copies);
+                let tail_copies = propagate_run_counted(body, reads, changed);
+                *changed |= subst(cond, &tail_copies);
                 copies.clear();
             }
             Stmt::Switch {
@@ -1270,19 +1469,19 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 cases,
                 default,
             } => {
-                subst(discriminant, &copies);
+                *changed |= subst(discriminant, &copies);
                 for (_, body) in cases.iter_mut() {
-                    propagate_run_counted(body, reads);
+                    propagate_run_counted(body, reads, changed);
                 }
                 if let Some(b) = default {
-                    propagate_run_counted(b, reads);
+                    propagate_run_counted(b, reads, changed);
                 }
                 copies.clear();
             }
             // Substitute THEN end the run: the dispatch reads its target, so a
             // copy that reaches it has to be applied before the barrier.
             Stmt::IndirectGoto { target } => {
-                subst(target, &copies);
+                *changed |= subst(target, &copies);
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
@@ -1301,19 +1500,23 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
 /// overwritten by a later write before any intervening read (a dead store).
 /// Conservative: resets at every control-flow boundary and only removes writes
 /// whose source is side-effect-free.
-fn dead_store_runs(body: &mut Vec<Stmt>) {
+fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
     // last_write[reg] = index of the most recent not-yet-consumed removable
     // write to `reg` in this run.
-    let mut last_write: HashMap<VReg, usize> = HashMap::new();
+    let mut last_write: RegMap<usize> = RegMap::default();
     let mut dead: Vec<usize> = Vec::new();
     for (i, s) in body.iter().enumerate() {
         match s {
             Stmt::Assign { dst, src } => {
-                // Reads in `src` consume any pending write of those regs.
-                let mut r: HashMap<VReg, usize> = HashMap::new();
-                count_reads_expr(src, &mut r);
-                for reg in r.keys() {
-                    last_write.remove(reg);
+                // Reads in `src` consume any pending write of those regs. The
+                // histogram this used to build was thrown away after its keys
+                // were walked, so visit the names directly — and only while
+                // there is a pending write for one of them to consume.
+                if !last_write.is_empty() {
+                    visit_expr_reads(src, &mut |reg| {
+                        last_write.remove(reg);
+                        true
+                    });
                 }
                 // This write shadows a pending one to `dst` with no read between.
                 if let Some(prev) = last_write.remove(dst) {
@@ -1327,18 +1530,23 @@ fn dead_store_runs(body: &mut Vec<Stmt>) {
                 // Any read anywhere consumes pending writes; be safe and clear
                 // on anything that isn't a pure Assign (stores, calls, control
                 // flow, returns all either read or branch).
-                let mut r: HashMap<VReg, usize> = HashMap::new();
-                count_reads_stmt(other, &mut r);
-                for reg in r.keys() {
-                    last_write.remove(reg);
-                }
+                //
+                // The read scan that used to stand here was dead work in both
+                // directions. `count_reads_stmt` descends into the WHOLE nested
+                // body of an `If`/`While`/`For`/`Switch`, so a function whose
+                // top level is one `if` re-walked the entire function at that
+                // statement — and the `clear()` below then discarded every
+                // removal it had just made. The only statements that survive
+                // the clear are `Nop` and `Comment`, and neither reads a
+                // register, so their removals were no-ops too.
                 if !matches!(other, Stmt::Nop | Stmt::Comment(_)) {
                     last_write.clear();
                 }
             }
         }
     }
-    if !dead.is_empty() {
+    let mut removed = !dead.is_empty();
+    if removed {
         let dead: std::collections::HashSet<usize> = dead.into_iter().collect();
         let mut i = 0;
         body.retain(|_| {
@@ -1355,24 +1563,27 @@ fn dead_store_runs(body: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                dead_store_runs(then_body);
+                removed |= dead_store_runs(then_body);
                 if let Some(eb) = else_body {
-                    dead_store_runs(eb);
+                    removed |= dead_store_runs(eb);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => dead_store_runs(body),
-            Stmt::For { body, .. } => dead_store_runs(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                removed |= dead_store_runs(body);
+            }
+            Stmt::For { body, .. } => removed |= dead_store_runs(body),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
-                    dead_store_runs(b);
+                    removed |= dead_store_runs(b);
                 }
                 if let Some(b) = default {
-                    dead_store_runs(b);
+                    removed |= dead_store_runs(b);
                 }
             }
             _ => {}
         }
     }
+    removed
 }
 
 /// Remove register copies (`A = <pure>`) whose destination is never read in the
@@ -1381,12 +1592,12 @@ fn dead_store_runs(body: &mut Vec<Stmt>) {
 /// clean scratch registers/temporaries the copy-prop just made dead.
 fn eliminate_dead_copies(body: &mut Vec<Stmt>) -> bool {
     // Count reads of every register across the whole (nested) body.
-    let mut reads: HashMap<VReg, usize> = HashMap::new();
+    let mut reads: RegMap<usize> = RegMap::default();
     count_reads_body(body, &mut reads);
     remove_dead(body, &reads)
 }
 
-fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
+fn remove_dead(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
     let mut changed = false;
     body.retain(|s| {
         // A lazy select may contain a value-producing call. Preserve that
@@ -1445,7 +1656,7 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
 /// indirect write into an assignment. Keep the scratch in that one ambiguous
 /// case; substitutions nested inside arithmetic addresses remain safe because
 /// the address expression cannot be mistaken for local storage.
-fn subst_store_addr(address: &mut Expr, copies: &Copies) {
+fn subst_store_addr(address: &mut Expr, copies: &Copies) -> bool {
     if let Expr::Lea {
         base: Some(register),
         index: None,
@@ -1462,7 +1673,7 @@ fn subst_store_addr(address: &mut Expr, copies: &Copies) {
                     // trivial Lea to its value, which is incorrect only at
                     // this overloaded Store-lvalue boundary.
                     *register = replacement.clone();
-                    return;
+                    return true;
                 }
             }
         }
@@ -1472,15 +1683,23 @@ fn subst_store_addr(address: &mut Expr, copies: &Copies) {
         Expr::Reg(register)
             if matches!(copies.get(register), Some(Expr::Reg(replacement)) if is_promoted_local_reg(replacement))
     ) {
-        return;
+        return false;
     }
-    subst(address, copies);
+    subst(address, copies)
 }
 
 /// Substitute every active copy `dst -> src` into `e`.
-fn subst(e: &mut Expr, copies: &Copies) {
+///
+/// Returns whether it rewrote anything. This is the ONLY thing in
+/// `propagate_run`/`propagate_run_counted` that edits an expression, so the
+/// answer it gives is what those two report to `propagate_copies`, and in turn
+/// what the [`crate::ir::ast::prepare`] fixpoint stops on. Every `return` below
+/// is therefore an explicit `true`/`false` rather than a bare `return`, and
+/// every recursion is folded into the answer with `|` — never `||`, which
+/// would skip the rest of the expression.
+fn subst(e: &mut Expr, copies: &Copies) -> bool {
     if copies.is_empty() {
-        return;
+        return false;
     }
     // Lea stores base/index as VRegs for the machine IR. Once a single-use
     // index is reconstructed as a real expression (for example the signed
@@ -1491,7 +1710,7 @@ fn subst(e: &mut Expr, copies: &Copies) {
     if let Some(expanded) = expanded_lea {
         *e = expanded;
         subst(e, copies);
-        return;
+        return true;
     }
     // A trivial `Lea` — base only, no index, zero displacement — denotes exactly
     // its base register. When that base has a recorded copy (which for a single-
@@ -1511,65 +1730,71 @@ fn subst(e: &mut Expr, copies: &Copies) {
     if let Some(repl) = trivial_lea_repl {
         *e = repl;
         subst(e, copies); // substitute within the inlined expression too
-        return;
+        return true;
     }
     match e {
         Expr::Reg(r) => {
             if let Some(src) = copies.get(r) {
                 *e = src.clone();
+                return true;
             }
+            false
         }
         // A stack object's identity is stable storage, not a scalar value to
         // replace from the copy environment.
-        Expr::StackAddr { .. } => {}
+        Expr::StackAddr { .. } => false,
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
-        | Expr::Unknown(_) => {}
+        | Expr::Unknown(_) => false,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             // Only substitute when the replacement is itself a bare register
             // (an Lea base/index must stay a register).
+            let mut substituted = false;
             if let Some(r) = base {
                 if let Some(Expr::Reg(nr)) = copies.get(r) {
-                    *base = Some(nr.clone());
+                    let nr = nr.clone();
+                    *base = Some(nr);
+                    substituted = true;
                 }
             }
             if let Some(r) = index {
                 if let Some(Expr::Reg(nr)) = copies.get(r) {
-                    *index = Some(nr.clone());
+                    let nr = nr.clone();
+                    *index = Some(nr);
+                    substituted = true;
                 }
             }
+            substituted
         }
         Expr::Deref { addr, .. } => subst(addr, copies),
         Expr::Call { target, args, .. } => {
-            subst(target, copies);
+            let mut substituted = subst(target, copies);
             for argument in args {
-                subst(argument, copies);
+                substituted |= subst(argument, copies);
             }
+            substituted
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            subst(lhs, copies);
-            subst(rhs, copies);
+            subst(lhs, copies) | subst(rhs, copies)
         }
         Expr::Select {
             cond,
             if_true,
             if_false,
             ..
-        } => {
-            subst(cond, copies);
-            subst(if_true, copies);
-            subst(if_false, copies);
-        }
+        } => subst(cond, copies) | subst(if_true, copies) | subst(if_false, copies),
         Expr::Un { src, .. } => subst(src, copies),
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => subst(expr, copies),
         Expr::FunctionTableEntry { index, .. } => subst(index, copies),
         Expr::WideArithmetic { args, .. } => {
+            let mut substituted = false;
             for argument in args {
-                subst(argument, copies);
+                substituted |= subst(argument, copies);
             }
+            substituted
         }
     }
 }

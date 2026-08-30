@@ -261,7 +261,7 @@ fn ast_passes() -> Vec<AstPass> {
             expr_reconstruct::reconstruct(f)
         }),
         ("const_fold::fold_constants", |f, _, _| {
-            const_fold::fold_constants(f)
+            let _ = const_fold::fold_constants(f);
         }),
         ("dce::prune_overwritten_flags", |f, _, _| {
             dce::prune_overwritten_flags(f)
@@ -271,7 +271,7 @@ fn ast_passes() -> Vec<AstPass> {
             call_args::reconstruct_args_with_params(f, cc, slots)
         }),
         ("copy_prop::propagate_copies", |f, _, _| {
-            copy_prop::propagate_copies(f)
+            let _ = copy_prop::propagate_copies(f);
         }),
         ("stack_locals::promote_stack_locals_typed", |f, cc, _| {
             let _ = stack_locals::promote_stack_locals_typed(f, Some(cc));
@@ -314,18 +314,16 @@ fn run_ast_pipeline(f: &mut ast::Function, cc: CallConv, slots: &HashSet<usize>)
 /// The bounded copy-propagation / constant-folding fixpoint from
 /// `ir::ast::prepare::prepare_for_decbench_with_output_and_protected_locals`.
 ///
-/// Worth its own bench: the loop clones the entire function body once per round
-/// and compares it structurally, so its cost is at least quadratic in rounds x
-/// body size before either pass does any work.
+/// Worth its own bench: it is the one place in the AST schedule that runs a
+/// pass more than once, so a per-pass regression is multiplied here.
+///
+/// This calls `ast::settle_copies_and_constants` — the schedule's own function
+/// — rather than restating the loop. It used to restate it, and that cost a
+/// real measurement: the loop's clone-and-compare was replaced in
+/// `prepare.rs`, and the bench went on measuring the old shape, so the change
+/// could not be observed here at all.
 fn run_copyprop_constfold_fixpoint(f: &mut ast::Function) {
-    for _ in 0..4 {
-        let before = f.clone();
-        copy_prop::propagate_copies(f);
-        const_fold::fold_constants(f);
-        if *f == before {
-            break;
-        }
-    }
+    ast::settle_copies_and_constants(f);
 }
 
 // ----------------------------------------------------------------- LLIR tier

@@ -19,7 +19,7 @@
 use crate::ir::ast::Expr;
 use crate::ir::types::{BinOp, VReg};
 
-use super::reads::count_reg_uses;
+use super::reads::expr_reads_reg;
 use super::Copies;
 
 /// A register we're willing to delete a dead copy to: physical scratch/role
@@ -36,7 +36,10 @@ pub(super) fn is_scratch_reg(v: &VReg) -> bool {
 }
 
 pub(super) fn contains_reg(e: &Expr, target: &VReg) -> bool {
-    count_reg_uses(e, target) > 0
+    // Stops at the first occurrence. This is `invalidate`'s inner loop — it
+    // runs once per recorded copy per write — and counting every occurrence of
+    // a name to answer "any?" walked the whole source expression every time.
+    expr_reads_reg(e, target)
 }
 
 /// True if `e` reads memory (contains a `Deref`). A recorded copy whose source

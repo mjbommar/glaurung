@@ -81,7 +81,9 @@ pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
 pub use lower_region::lower;
 pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
-pub use prepare::{prepare_for_decbench, prepare_for_decbench_with_output};
+pub use prepare::{
+    prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,
+};
 pub(crate) use return_folds::remove_redundant_return_constant_assignments;
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
 

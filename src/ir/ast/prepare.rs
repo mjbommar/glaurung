@@ -20,6 +20,47 @@ use super::{
     remove_redundant_return_constant_assignments, Function,
 };
 
+/// Run copy propagation and constant folding to their bounded fixpoint.
+///
+/// Copy propagation exposes algebraic flag identities, while folding those
+/// identities changes use counts and exposes new one-use copies. Iterate the
+/// monotone pair to a small bounded fixpoint: x86 partial-register returns need
+/// three rounds (fold the observed mask, inline the parent, delete the now-dead
+/// pre-loop copy). Four is a defensive bound, not an unbounded optimiser loop;
+/// all transformations strictly remove a copy or expression layer and ordinary
+/// functions settle after one round.
+///
+/// # Why the passes report instead of the loop comparing
+///
+/// This used to read `let before = owned.clone(); ...; if owned == before`,
+/// which deep-cloned the entire function and structurally compared it once per
+/// round. That was ~30% of the fixpoint's cost, and a quarter of it was
+/// provably wasted: the fourth round clones and compares to decide something
+/// the loop bound has already decided.
+///
+/// Both passes now answer the question directly. The contract they hold is
+/// documented on [`crate::ir::copy_prop::propagate_copies`] and on
+/// `const_fold`'s `rewrite`: a pass may over-report (an extra round over a body
+/// already at its fixed point re-derives the same body, so the output is
+/// unchanged) and must never under-report, because a `false` over a body that
+/// was edited stops the loop early and silently changes the emitted C.
+///
+/// Note the answers are combined with a NON-short-circuiting `||` over two
+/// separately bound results: both passes must run every round, and `a() || b()`
+/// would skip `fold_constants` on any round where propagation reported first.
+///
+/// `benches/ir_dataflow.rs` calls this function rather than restating the loop,
+/// so the bench cannot drift from the schedule it claims to measure.
+pub fn settle_copies_and_constants(owned: &mut Function) {
+    for _ in 0..4 {
+        let copies_changed = crate::ir::copy_prop::propagate_copies(owned);
+        let constants_changed = crate::ir::const_fold::fold_constants(owned);
+        if !(copies_changed || constants_changed) {
+            break;
+        }
+    }
+}
+
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
 /// These nineteen steps change *definitions, uses, value identities, or control-flow
@@ -134,19 +175,8 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
-    // monotone pair to a small bounded fixpoint: x86 partial-register returns
-    // need three rounds (fold the observed mask, inline the parent, delete the
-    // now-dead pre-loop copy). Four is a defensive bound, not an unbounded
-    // optimiser loop; all transformations strictly remove a copy or expression
-    // layer and ordinary functions settle after one round.
-    for _ in 0..4 {
-        let before = owned.clone();
-        crate::ir::copy_prop::propagate_copies(&mut owned);
-        crate::ir::const_fold::fold_constants(&mut owned);
-        if owned == before {
-            break;
-        }
-    }
+    // monotone pair to a small bounded fixpoint — see the function's own docs.
+    settle_copies_and_constants(&mut owned);
     // Folding can prove that an initially composite narrow-register rebuild is
     // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
     // the same guarded home analysis again so byte/halfword parameter spills
