@@ -915,6 +915,17 @@ fn result_register_candidates(cc: CallConv) -> Option<(&'static [&'static str], 
 pub fn annotate_calls(lf: &mut LlirFunction, cc: CallConv) {
     for block in &mut lf.blocks {
         for index in 0..block.instrs.len() {
+            // Cheap discriminant test FIRST. Everything below is discarded for a
+            // non-call, and `result_register_consumed_after` is a forward scan to
+            // the next call or return -- so paying it per instruction makes this
+            // pass quadratic in BLOCK LENGTH. Measured by `benches/ir_dataflow.rs`
+            // before this guard: 5.09s on one 18,202-instruction function, ~360x
+            // the next-largest LLIR pass, and enough to dominate the whole stage
+            // (throughput collapsed 170 -> 3.2 Kelem/s with it, and held flat at
+            // 111-256 Kelem/s over a 280x size range without it).
+            if !matches!(block.instrs[index].op, Op::Call { .. }) {
+                continue;
+            }
             let mut effects = call_effects(cc);
             if let Some((candidates, fallback)) = result_register_candidates(cc) {
                 effects.result = Some(result_register_consumed_after(
