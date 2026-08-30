@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 
-use super::{build, Cfg, Region};
+use super::{build, BlockSet, Cfg, Region};
 
 pub(super) struct LoopRegion {
     pub(super) region: Region,
@@ -44,7 +44,7 @@ pub(super) fn detect_raw_dispatch_loop(
 
     let mut body = HashSet::new();
     for tail in tails {
-        body.extend(natural_loop_body(header, tail, cfg));
+        body.extend(natural_loop_body(header, tail, cfg).iter().copied());
     }
     if body
         .iter()
@@ -123,7 +123,7 @@ pub(super) fn detect_raw_multi_latch_loop(
 
     let mut body = HashSet::new();
     for tail in tails {
-        body.extend(natural_loop_body(header, tail, cfg));
+        body.extend(natural_loop_body(header, tail, cfg).iter().copied());
     }
     if cfg.succs[header].is_empty()
         || cfg.succs[header].iter().any(|succ| !body.contains(succ))
@@ -379,7 +379,21 @@ fn terminal_path_stays_outside_loop(start: usize, loop_body: &HashSet<usize>, cf
 /// The blocks of the natural loop with the given `header` and back-edge `tail`:
 /// `header` itself plus every block that can reach `tail` by walking
 /// predecessors without going through `header`.
-pub(super) fn natural_loop_body(header: usize, tail: usize, cfg: &Cfg) -> HashSet<usize> {
+///
+/// Memoised on the `Cfg`, which is why this hands back a shared `Rc` rather than
+/// a fresh set. The body of one `(header, tail)` pair is a pure function of the
+/// graph, and the shape predicates ask for the *same* pair over and over: the
+/// worst offender was [`super::loop_break_shape`], which rebuilt the entire
+/// natural loop of `header` once per candidate conditional *inside* that same
+/// loop, so recognising one loop cost O(body²) predecessor walks. Every caller
+/// only reads the set (`contains`, `extend`, `iter`), so sharing is invisible
+/// to them.
+pub(super) fn natural_loop_body(header: usize, tail: usize, cfg: &Cfg) -> BlockSet {
+    // `cached_natural_loop_body` returns an owned `Option<Rc<_>>` so no read
+    // guard survives into the walk below, which ends in a `borrow_mut()`.
+    if let Some(cached) = cfg.cached_natural_loop_body(header, tail) {
+        return cached;
+    }
     let mut body = HashSet::new();
     body.insert(header);
     let mut stack = vec![tail];
@@ -392,5 +406,5 @@ pub(super) fn natural_loop_body(header: usize, tail: usize, cfg: &Cfg) -> HashSe
             }
         }
     }
-    body
+    cfg.store_natural_loop_body(header, tail, body)
 }

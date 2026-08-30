@@ -20,6 +20,7 @@
 //! to `Unstructured`.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::ir::ssa::SsaInfo;
 use crate::ir::types::LlirFunction;
@@ -215,6 +216,10 @@ impl Region {
     }
 }
 
+/// A shared, immutable set of block indices — what the natural-loop memos hand
+/// out. Shared rather than cloned because every consumer only reads it.
+pub(super) type BlockSet = Rc<HashSet<usize>>;
+
 /// Lookup helpers built once per call to [`recover`].
 struct Cfg {
     /// Block index → list of successor block indices.
@@ -260,6 +265,38 @@ struct Cfg {
     /// Re-deriving is what inverted rotated-loop conditions: "successor 0 is the
     /// fallthrough" is a guess, and the branch's own target is a fact.
     edges: Vec<Vec<crate::ir::cfg_edges::Edge>>,
+    /// Lazily-built reflexive-transitive reachability closure, one dense bitset
+    /// row of `⌈n/64⌉` words per block: bit `t` of row `s` is set iff `t` is
+    /// reachable from `s` (with `s` reachable from itself).
+    ///
+    /// [`can_reach`] used to run a fresh depth-first search, with a fresh
+    /// `HashSet` allocation, on every call. It is asked the same question
+    /// thousands of times per function: the shape predicates call it once per
+    /// (loop header, body conditional, successor) triple, and reachability does
+    /// not change while a `Cfg` is alive. Building the closure once turns each
+    /// of those O(V+E) walks into one bit test.
+    ///
+    /// Lazy rather than eager because the majority of functions never ask: the
+    /// predicates that call [`can_reach`] all sit behind a loop-detection guard,
+    /// so a loop-free function must not pay for a closure nobody reads.
+    reaches: std::cell::OnceCell<Vec<u64>>,
+    /// Memo for [`natural_loop_body`], keyed by `(header, tail)`.
+    ///
+    /// The same pair is requested many times per function — the shape
+    /// predicates iterate headers, and several of them then call a helper that
+    /// rebuilds the *same* header's body once per block inside it. The set is a
+    /// pure function of `preds`, so caching it changes nothing but the count.
+    loop_bodies: std::cell::RefCell<HashMap<(usize, usize), BlockSet>>,
+    /// Memo for [`Cfg::natural_loop_body_of`] — the union of every natural loop
+    /// body headed at a block, keyed by that header.
+    ///
+    /// Four shape predicates and [`loop_break_shape`] open with the identical
+    /// five lines: collect the dominating predecessors of `header`, then union
+    /// their natural loop bodies. `loop_break_shape` runs them once per
+    /// candidate conditional *within* the loop it is describing, so the union
+    /// was rebuilt O(body) times per header even after the per-`(header, tail)`
+    /// walk itself became a memo hit.
+    header_loop_bodies: std::cell::RefCell<HashMap<usize, BlockSet>>,
 }
 
 impl Cfg {
@@ -374,11 +411,120 @@ impl Cfg {
             ends_in_return,
             explicit_dispatch,
             edges,
+            reaches: std::cell::OnceCell::new(),
+            loop_bodies: std::cell::RefCell::new(HashMap::new()),
+            header_loop_bodies: std::cell::RefCell::new(HashMap::new()),
         }
+    }
+
+    /// The predecessors of `header` that `header` dominates — the back-edge
+    /// tails, i.e. the latches of the natural loops headed there.
+    fn dominating_tails(&self, header: usize) -> Vec<usize> {
+        self.preds[header]
+            .iter()
+            .copied()
+            .filter(|&tail| self.dominates(header, tail))
+            .collect()
+    }
+
+    /// `header` plus every block of every natural loop headed at it, memoised.
+    ///
+    /// Empty (not even `header`) when there is no back edge, which is the same
+    /// thing the open-coded `if tails.is_empty() { continue; }` guard tested
+    /// for; callers that need to distinguish "no loop" still consult
+    /// [`Cfg::dominating_tails`] themselves.
+    fn natural_loop_body_of(&self, header: usize) -> BlockSet {
+        // The borrow is scoped to this statement on purpose: the miss path
+        // below calls `natural_loop_body`, which borrows the sibling memo, and
+        // `borrow_mut()`s this one at the end. Holding a read guard across
+        // either would be a runtime panic rather than a compile error.
+        let cached = self.header_loop_bodies.borrow().get(&header).cloned();
+        if let Some(cached) = cached {
+            return cached;
+        }
+        let mut body = HashSet::new();
+        for tail in self.dominating_tails(header) {
+            body.extend(natural_loop_body(header, tail, self).iter().copied());
+        }
+        let body = Rc::new(body);
+        self.header_loop_bodies
+            .borrow_mut()
+            .insert(header, Rc::clone(&body));
+        body
+    }
+
+    /// The memoised natural loop body for `(header, tail)`, if already built.
+    fn cached_natural_loop_body(&self, header: usize, tail: usize) -> Option<BlockSet> {
+        self.loop_bodies.borrow().get(&(header, tail)).cloned()
+    }
+
+    /// Record a freshly walked natural loop body and hand back the shared copy.
+    fn store_natural_loop_body(
+        &self,
+        header: usize,
+        tail: usize,
+        body: HashSet<usize>,
+    ) -> BlockSet {
+        let body = Rc::new(body);
+        self.loop_bodies
+            .borrow_mut()
+            .insert((header, tail), Rc::clone(&body));
+        body
     }
 
     fn dominates(&self, a: usize, b: usize) -> bool {
         self.dom[a][b]
+    }
+
+    /// Number of `u64` words in one row of the reachability closure.
+    fn reach_words(&self) -> usize {
+        self.succs.len().div_ceil(64).max(1)
+    }
+
+    /// The reachability closure, built on first use.
+    ///
+    /// `reaches[s] = {s} ∪ ⋃ reaches[t] for t ∈ succs[s]`, iterated to a true
+    /// fixpoint (no sweep cap — this is a cache of an exact depth-first search
+    /// and a truncated one would answer differently). Sweeping in descending
+    /// block index makes it converge in a couple of passes on the
+    /// forward-biased graphs a lifter produces, while remaining correct for
+    /// back edges and irreducible entries because the loop runs until nothing
+    /// changes.
+    fn reachability(&self) -> &[u64] {
+        self.reaches.get_or_init(|| {
+            let n = self.succs.len();
+            let words = self.reach_words();
+            let mut reaches = vec![0u64; n * words];
+            for s in 0..n {
+                reaches[s * words + s / 64] |= 1u64 << (s % 64);
+            }
+            let mut scratch = vec![0u64; words];
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for s in (0..n).rev() {
+                    scratch.copy_from_slice(&reaches[s * words..(s + 1) * words]);
+                    for &t in &self.succs[s] {
+                        let row = &reaches[t * words..(t + 1) * words];
+                        for (accumulated, &incoming) in scratch.iter_mut().zip(row) {
+                            *accumulated |= incoming;
+                        }
+                    }
+                    let current = &mut reaches[s * words..(s + 1) * words];
+                    if current != scratch.as_slice() {
+                        current.copy_from_slice(&scratch);
+                        changed = true;
+                    }
+                }
+            }
+            reaches
+        })
+    }
+
+    /// Whether `target` is reachable from `start` (reflexively).
+    fn can_reach(&self, start: usize, target: usize) -> bool {
+        let words = self.reach_words();
+        self.reachability()[start * words + target / 64] & (1u64 << (target % 64)) != 0
     }
 
     fn is_switch_dispatch(&self, block: usize) -> bool {
@@ -394,24 +540,59 @@ impl Cfg {
 }
 
 /// Immediate post-dominators via an iterative set fixpoint on the reversed CFG.
-/// Blocks are few, so a dense set-per-node fixpoint is simplest and fast enough.
 /// `pdom[n] = {n} ∪ (⋂ over succs s of pdom[s])`, seeded so exit blocks
 /// post-dominate only themselves; a node whose successors never converge (can
 /// diverge without exiting) keeps no post-dominator (`None`).
+///
+/// The sets are dense bitsets — one row of `⌈n/64⌉` words per block, stored in a
+/// single flat allocation — rather than one `BTreeSet` per block. The fixpoint
+/// is unchanged: same seeding, same Gauss-Seidel sweep in index order, same
+/// `n + 4` sweep guard, same "last of the equal maxima" tie-break when picking
+/// the immediate post-dominator. Only the representation moved.
+///
+/// **Why this is not a micro-optimisation.** A `BTreeSet` round of `clone()` +
+/// `intersection().collect()` allocates a fresh node per element, so one sweep
+/// over one block costs O(|pdom|) allocations and the whole fixpoint costs
+/// O(sweeps · n · n) of them. That is the entire superlinear curve in region
+/// recovery: measured at `047ccfe4`, this function was 16.5 ms of the 21.5 ms
+/// `structure::recover` spent on the 601-block `wide154_sparse_switch`
+/// (~2.9 M allocations over 4 sweeps).
+///
+/// It is also the *shape* anomaly, not just the size one. The sweep count is
+/// driven by loop-nesting depth, because a Gauss-Seidel pass in index order
+/// propagates post-dominance one nesting level at a time: 50-block
+/// `deep152_nested_loops` (twelve nested loops) needs **26** sweeps where
+/// 34-block `deep152_conditional_tower` needs **4**. With `BTreeSet` rows those
+/// 26 sweeps cost 726 µs — 73% of that lane's `recover` — which is why a
+/// 50-block function was costing 41x a 34-block one. Word-at-a-time rows make a
+/// sweep ~O(n²/64) branch-free word ops with no allocation at all, so the depth
+/// factor stops being expensive instead of the sweep count having to shrink.
 fn compute_ipostdom(n: usize, succs: &[Vec<usize>]) -> Vec<Option<usize>> {
-    use std::collections::BTreeSet;
-    let universe: BTreeSet<usize> = (0..n).collect();
-    let mut pdom: Vec<BTreeSet<usize>> = (0..n)
-        .map(|i| {
-            if succs[i].is_empty() {
-                let mut s = BTreeSet::new();
-                s.insert(i);
-                s
-            } else {
-                universe.clone()
-            }
-        })
-        .collect();
+    if n == 0 {
+        return Vec::new();
+    }
+    let words = n.div_ceil(64);
+
+    // Row-major dense bitset: block `i` owns `pdom[i * words .. (i + 1) * words]`.
+    // Bits at index >= n are never set, so `count_ones` is an exact cardinality
+    // and row equality is exact set equality.
+    let mut pdom = vec![0u64; n * words];
+    let mut universe = vec![u64::MAX; words];
+    if !n.is_multiple_of(64) {
+        // Mask the tail word so no bit above `n - 1` is ever set.
+        universe[words - 1] = (1u64 << (n % 64)) - 1;
+    }
+    for i in 0..n {
+        let row = &mut pdom[i * words..(i + 1) * words];
+        if succs[i].is_empty() {
+            // An exit post-dominates only itself.
+            row[i / 64] = 1u64 << (i % 64);
+        } else {
+            row.copy_from_slice(&universe);
+        }
+    }
+
+    let mut next = vec![0u64; words];
     let mut changed = true;
     let mut guard = 0;
     while changed && guard < n + 4 {
@@ -421,30 +602,58 @@ fn compute_ipostdom(n: usize, succs: &[Vec<usize>]) -> Vec<Option<usize>> {
             if succs[i].is_empty() {
                 continue;
             }
-            let mut inter: Option<BTreeSet<usize>> = None;
+            // next = ⋂ pdom[s] over successors, then ∪ {i}.
+            let mut first = true;
             for &s in &succs[i] {
-                inter = Some(match inter {
-                    None => pdom[s].clone(),
-                    Some(acc) => acc.intersection(&pdom[s]).copied().collect(),
-                });
+                let row = &pdom[s * words..(s + 1) * words];
+                if first {
+                    next.copy_from_slice(row);
+                    first = false;
+                } else {
+                    for (accumulated, &incoming) in next.iter_mut().zip(row) {
+                        *accumulated &= incoming;
+                    }
+                }
             }
-            let mut new = inter.unwrap_or_default();
-            new.insert(i);
-            if new != pdom[i] {
-                pdom[i] = new;
+            next[i / 64] |= 1u64 << (i % 64);
+            let current = &mut pdom[i * words..(i + 1) * words];
+            if current != next.as_slice() {
+                current.copy_from_slice(&next);
                 changed = true;
             }
         }
     }
+
     // ipostdom[n] = the closest strict post-dominator: the member of
     // pdom[n]\{n} with the largest pdom set (deepest in the post-dom tree).
+    let cardinality: Vec<u32> = (0..n)
+        .map(|i| {
+            pdom[i * words..(i + 1) * words]
+                .iter()
+                .map(|word| word.count_ones())
+                .sum()
+        })
+        .collect();
     (0..n)
         .map(|i| {
-            pdom[i]
-                .iter()
-                .filter(|&&p| p != i)
-                .max_by_key(|&&p| pdom[p].len())
-                .copied()
+            let mut best: Option<usize> = None;
+            let mut best_cardinality = 0u32;
+            for (word_index, &word) in pdom[i * words..(i + 1) * words].iter().enumerate() {
+                let mut remaining = word;
+                while remaining != 0 {
+                    let p = word_index * 64 + remaining.trailing_zeros() as usize;
+                    remaining &= remaining - 1;
+                    // `>=`, not `>`: members are visited in ascending index
+                    // order and `Iterator::max_by_key` keeps the *last* of
+                    // several equal maxima. Using `>` would pick a different
+                    // post-dominator on ties and silently reshape conditionals.
+                    if p != i && (best.is_none() || cardinality[p] >= best_cardinality) {
+                        best = Some(p);
+                        best_cardinality = cardinality[p];
+                    }
+                }
+            }
+            best
         })
         .collect()
 }
@@ -868,19 +1077,10 @@ fn contains_structured_loop(region: &Region) -> bool {
 /// whole-function fallback.
 fn has_inner_loop_exit_that_reenters_via_outer_cycle(cfg: &Cfg) -> bool {
     for header in 0..cfg.succs.len() {
-        let tails: Vec<usize> = cfg.preds[header]
-            .iter()
-            .copied()
-            .filter(|&tail| cfg.dominates(header, tail))
-            .collect();
-        if tails.is_empty() {
+        if cfg.dominating_tails(header).is_empty() {
             continue;
         }
-
-        let mut body = HashSet::new();
-        for tail in tails {
-            body.extend(natural_loop_body(header, tail, cfg));
-        }
+        let body = cfg.natural_loop_body_of(header);
         let header_exits: HashSet<usize> = cfg.succs[header]
             .iter()
             .copied()
@@ -907,19 +1107,10 @@ fn has_inner_loop_exit_that_reenters_via_outer_cycle(cfg: &Cfg) -> bool {
 
 fn has_multi_latch_loop_with_distinct_exits(cfg: &Cfg) -> bool {
     for header in 0..cfg.succs.len() {
-        let tails: Vec<usize> = cfg.preds[header]
-            .iter()
-            .copied()
-            .filter(|&tail| cfg.dominates(header, tail))
-            .collect();
-        if tails.len() < 2 {
+        if cfg.dominating_tails(header).len() < 2 {
             continue;
         }
-
-        let mut body = HashSet::new();
-        for tail in tails {
-            body.extend(natural_loop_body(header, tail, cfg));
-        }
+        let body = cfg.natural_loop_body_of(header);
         let header_exits: HashSet<usize> = cfg.succs[header]
             .iter()
             .copied()
@@ -959,18 +1150,10 @@ fn has_loop_conditional_with_join_beyond_loop(cfg: &Cfg) -> bool {
         return false;
     }
     for header in 0..cfg.succs.len() {
-        let tails: Vec<usize> = cfg.preds[header]
-            .iter()
-            .copied()
-            .filter(|&tail| cfg.dominates(header, tail))
-            .collect();
-        if tails.is_empty() {
+        if cfg.dominating_tails(header).is_empty() {
             continue;
         }
-        let mut body = HashSet::new();
-        for tail in tails {
-            body.extend(natural_loop_body(header, tail, cfg));
-        }
+        let body = cfg.natural_loop_body_of(header);
 
         for cond in body.iter().copied().filter(|&block| block != header) {
             if cfg.succs[cond].len() != 2 {
@@ -1022,18 +1205,10 @@ fn loop_break_shape(cond: usize, header: usize, cfg: &Cfg) -> Option<(usize, usi
     if cfg.succs.get(cond)?.len() != 2 || cfg.succs.get(header)?.len() != 2 {
         return None;
     }
-    let tails: Vec<usize> = cfg.preds[header]
-        .iter()
-        .copied()
-        .filter(|&tail| cfg.dominates(header, tail))
-        .collect();
-    if tails.is_empty() {
+    if cfg.dominating_tails(header).is_empty() {
         return None;
     }
-    let mut body = HashSet::new();
-    for tail in tails {
-        body.extend(natural_loop_body(header, tail, cfg));
-    }
+    let body = cfg.natural_loop_body_of(header);
     let header_exits: Vec<usize> = cfg.succs[header]
         .iter()
         .copied()

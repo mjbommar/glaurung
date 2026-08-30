@@ -392,7 +392,7 @@ fn innermost_natural_loop_containing(node: usize, cfg: &Cfg) -> Option<(usize, H
         }
         let mut body = HashSet::new();
         for tail in tails {
-            body.extend(natural_loop_body(header, tail, cfg));
+            body.extend(natural_loop_body(header, tail, cfg).iter().copied());
         }
         if body.contains(&node) {
             loops.push((header, body));

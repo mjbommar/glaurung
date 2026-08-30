@@ -185,18 +185,17 @@ pub(super) fn cyclic_body_exits_only_to_join(
             .all(|block| can_reach(block, join, cfg))
 }
 
+/// Whether `target` is reachable from `start` along successor edges, `start`
+/// included (`can_reach(b, b)` is true).
+///
+/// This was a fresh depth-first search, with a fresh `HashSet`, per call. It is
+/// the innermost question the loop-shape predicates ask — once per (header,
+/// body conditional, successor) triple — and its answer is fixed for the life
+/// of the `Cfg`, so it now reads a bit out of the closure `Cfg` builds on first
+/// use. Same relation, same reflexive convention; only the number of times it
+/// is computed changed.
 pub(super) fn can_reach(start: usize, target: usize, cfg: &Cfg) -> bool {
-    let mut seen = HashSet::new();
-    let mut stack = vec![start];
-    while let Some(block) = stack.pop() {
-        if block == target {
-            return true;
-        }
-        if seen.insert(block) {
-            stack.extend(cfg.succs[block].iter().copied());
-        }
-    }
-    false
+    cfg.can_reach(start, target)
 }
 
 pub(super) fn contains_multiway_before(start: usize, boundary: usize, cfg: &Cfg) -> bool {
