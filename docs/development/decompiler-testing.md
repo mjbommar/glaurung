@@ -639,6 +639,26 @@ The same two limits as the sample-set path apply, and one more:
   decompiled. Report `scored` alongside `perfect`, always — the whole point of
   this section is what happens when someone does not.
 
+### One deviation from DecBench's own adapter, measured
+
+`decbench_redecompile_tree.py` always passes `--vas`. DecBench's adapter
+(`decompilers/raw/glaurung_raw.py`) passes `--vas` only when the target set is
+`<= _MAX_VAS_INLINE` (400) and otherwise runs `--all --limit 30000` and narrows
+afterwards. That threshold is not a corner: **55 of 803 binaries exceed it, and
+they hold 65,742 of 94,575 functions — 69.5% of the corpus.**
+
+So the difference was measured rather than waved through. Decompiling one binary
+both ways and diffing the pseudocode for the functions both produced:
+
+    --vas  60 functions      --all  192 functions
+    overlap 58  ->  57 byte-identical, 1 different
+
+The single difference is a thunk: `--vas` renders `ret = sub_2560(...)`, `--all`
+renders `goto L_2560`. Whole-binary mode sees the callee and folds the jump;
+targeted mode does not and calls it. Materially equivalent for scoring, but real
+— quote it if a number is ever challenged, and switch the tool to match the
+adapter's threshold if an exact-adapter reproduction is ever required.
+
 ## A real DecBench score, without Joern
 
 `decbench_matrix.py` above spawns a Joern JVM per cell, which is why it is
