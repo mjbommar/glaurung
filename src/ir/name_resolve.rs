@@ -487,8 +487,8 @@ mod tests {
     #[test]
     fn an_analyst_name_overrides_an_automatic_one() {
         let mut map = HashMap::from([
-            (0x1140u64, "validate".to_string()),   // from the symbol table
-            (0x1200u64, "sub_1200".to_string()),   // from discovery
+            (0x1140u64, "validate".to_string()), // from the symbol table
+            (0x1200u64, "sub_1200".to_string()), // from discovery
         ]);
         let applied = apply_analyst_names(
             &mut map,
@@ -499,7 +499,10 @@ mod tests {
             vec![("validate".to_string(), "parse_packet_hdr".to_string())],
             "the old->new pair is reported so name-keyed structures can be rekeyed"
         );
-        assert_eq!(map.get(&0x1140).map(String::as_str), Some("parse_packet_hdr"));
+        assert_eq!(
+            map.get(&0x1140).map(String::as_str),
+            Some("parse_packet_hdr")
+        );
         assert_eq!(
             map.get(&0x1200).map(String::as_str),
             Some("sub_1200"),
@@ -521,7 +524,10 @@ mod tests {
         );
         assert!(applied.is_empty());
         assert_eq!(map.get(&0x1140).map(String::as_str), Some("validate"));
-        assert!(!map.contains_key(&0), "address zero is never a function entry");
+        assert!(
+            !map.contains_key(&0),
+            "address zero is never a function entry"
+        );
     }
 
     /// An analyst name for an address no automatic source knew about is still
@@ -530,7 +536,10 @@ mod tests {
     fn an_analyst_name_for_an_unknown_address_is_added() {
         let mut map: HashMap<u64, String> = HashMap::new();
         assert_eq!(
-            apply_analyst_names(&mut map, &HashMap::from([(0x2000u64, "handler".to_string())])),
+            apply_analyst_names(
+                &mut map,
+                &HashMap::from([(0x2000u64, "handler".to_string())])
+            ),
             Vec::new(),
             "an address with no previous name has no old spelling to rekey"
         );

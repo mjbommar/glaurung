@@ -268,12 +268,16 @@ pub(super) fn decompile_at_session(
     // the definition AND every call site, and it rekeys the recovered symbol
     // environment so the callee keeps the prototype recovered under its old
     // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-    if let Some(names) = analyst_names {{
-        let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-        if !renames.is_empty() {{
-            callee_facts.env.rename_display(&renames);
-        }}
-    }}
+    if let Some(names) = analyst_names {
+        {
+            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
+            if !renames.is_empty() {
+                {
+                    callee_facts.env.rename_display(&renames);
+                }
+            }
+        }
+    }
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -319,7 +323,8 @@ pub(super) fn decompile_at_session(
     }
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let outer_name = resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
+    let outer_name =
+        resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
     let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
     let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
@@ -452,10 +457,10 @@ pub(super) fn decompile_at_session(
                 crate::ir::call_contracts::CallPrototype::from_analyst(ret, params, *variadic)
             })
             .or_else(|| {
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va))
-                .and_then(dwarf_render_prototype)
+                dwarf_outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.get(&func_va))
+                    .and_then(dwarf_render_prototype)
             });
         decbench_text(
             &f,
@@ -1042,12 +1047,16 @@ fn decompile_all_py(
         // the definition AND every call site, and it rekeys the recovered symbol
         // environment so the callee keeps the prototype recovered under its old
         // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-        if let Some(names) = analyst_names.as_ref() {{
-            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-            if !renames.is_empty() {{
-                callee_facts.env.rename_display(&renames);
-            }}
-        }}
+        if let Some(names) = analyst_names.as_ref() {
+            {
+                let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
+                if !renames.is_empty() {
+                    {
+                        callee_facts.env.rename_display(&renames);
+                    }
+                }
+            }
+        }
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -1078,7 +1087,12 @@ fn decompile_all_py(
             let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
             refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
         }
-        let outer_name = resolve_outer_function_name_with_analyst(&func.name, func.entry_point.value, &addr_map, analyst_names.as_ref());
+        let outer_name = resolve_outer_function_name_with_analyst(
+            &func.name,
+            func.entry_point.value,
+            &addr_map,
+            analyst_names.as_ref(),
+        );
         let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(
             &outer_name,
             func.entry_point.value,
@@ -1365,12 +1379,16 @@ fn decompile_many_py(
         // the definition AND every call site, and it rekeys the recovered symbol
         // environment so the callee keeps the prototype recovered under its old
         // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-        if let Some(names) = analyst_names.as_ref() {{
-            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-            if !renames.is_empty() {{
-                callee_facts.env.rename_display(&renames);
-            }}
-        }}
+        if let Some(names) = analyst_names.as_ref() {
+            {
+                let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
+                if !renames.is_empty() {
+                    {
+                        callee_facts.env.rename_display(&renames);
+                    }
+                }
+            }
+        }
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -1401,7 +1419,12 @@ fn decompile_many_py(
             let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
             refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
         }
-        let outer_name = resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names.as_ref());
+        let outer_name = resolve_outer_function_name_with_analyst(
+            &func.name,
+            func_va,
+            &addr_map,
+            analyst_names.as_ref(),
+        );
         let mut profiler =
             crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
         let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
@@ -1522,7 +1545,12 @@ fn decompile_many_py(
             Some(note) => format!("{note}\n{text}"),
             None => text,
         };
-        let name = resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names.as_ref());
+        let name = resolve_outer_function_name_with_analyst(
+            &func.name,
+            func_va,
+            &addr_map,
+            analyst_names.as_ref(),
+        );
         // The structured inventory a consumer needs to match our locals without
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually

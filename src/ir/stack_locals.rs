@@ -252,7 +252,9 @@ pub fn apply_analyst_locals(
         let promoted = candidates[0].clone();
         let ctype = ctype.trim();
         if !ctype.is_empty() {
-            facts.source_types.insert(promoted.clone(), ctype.to_string());
+            facts
+                .source_types
+                .insert(promoted.clone(), ctype.to_string());
         }
         let name = name.trim();
         // The pair, never one half of it -- see the note above.
@@ -261,7 +263,9 @@ pub fn apply_analyst_locals(
             && will_have_a_type
             && crate::ir::naming::valid_authoritative_local_name(name)
         {
-            facts.source_names.insert(promoted.clone(), name.to_string());
+            facts
+                .source_names
+                .insert(promoted.clone(), name.to_string());
             applied.insert(promoted);
         }
     }
@@ -4785,9 +4789,13 @@ mod analyst_locals_tests {
     #[test]
     fn an_offset_is_joined_to_its_promoted_name() {
         let mut facts = facts_with(&[("local_18", "rbp", -24)]);
-        let applied = apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "struct packet *")]));
+        let applied =
+            apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "struct packet *")]));
         assert_eq!(applied, HashSet::from(["local_18".to_string()]));
-        assert_eq!(facts.source_names.get("local_18").map(String::as_str), Some("hdr"));
+        assert_eq!(
+            facts.source_names.get("local_18").map(String::as_str),
+            Some("hdr")
+        );
         assert_eq!(
             facts.source_types.get("local_18").map(String::as_str),
             Some("struct packet *")
@@ -4801,7 +4809,10 @@ mod analyst_locals_tests {
         let mut facts = facts_with(&[("local_18", "rbp", -24), ("stack_0", "entry_rsp", -24)]);
         assert!(apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "int")])).is_empty());
         assert!(facts.source_names.is_empty());
-        assert!(facts.source_types.is_empty(), "the type must not land either");
+        assert!(
+            facts.source_types.is_empty(),
+            "the type must not land either"
+        );
     }
 
     /// A coordinate `stack_locals` already withheld stays withheld.
@@ -4859,13 +4870,21 @@ mod analyst_locals_tests {
     #[test]
     fn a_rename_alone_applies_when_a_type_was_already_recovered() {
         let mut facts = facts_with(&[("local_18", "rbp", -24)]);
-        facts.source_types.insert("local_18".to_string(), "int".to_string());
+        facts
+            .source_types
+            .insert("local_18".to_string(), "int".to_string());
         assert_eq!(
             apply_analyst_locals(&mut facts, &overrides(&[(-24, "hdr", "")])),
             HashSet::from(["local_18".to_string()])
         );
-        assert_eq!(facts.source_names.get("local_18").map(String::as_str), Some("hdr"));
-        assert_eq!(facts.source_types.get("local_18").map(String::as_str), Some("int"));
+        assert_eq!(
+            facts.source_names.get("local_18").map(String::as_str),
+            Some("hdr")
+        );
+        assert_eq!(
+            facts.source_types.get("local_18").map(String::as_str),
+            Some("int")
+        );
     }
 
     /// An override for an offset this function does not have is a no-op, which
@@ -4882,14 +4901,21 @@ mod analyst_locals_tests {
     #[test]
     fn an_analyst_name_replaces_a_debug_name() {
         let mut facts = facts_with(&[("local_18", "rbp", -24)]);
-        facts.source_names.insert("local_18".to_string(), "from_dwarf".to_string());
-        facts.source_types.insert("local_18".to_string(), "int".to_string());
+        facts
+            .source_names
+            .insert("local_18".to_string(), "from_dwarf".to_string());
+        facts
+            .source_types
+            .insert("local_18".to_string(), "int".to_string());
         apply_analyst_locals(&mut facts, &overrides(&[(-24, "from_analyst", "long")]));
         assert_eq!(
             facts.source_names.get("local_18").map(String::as_str),
             Some("from_analyst")
         );
-        assert_eq!(facts.source_types.get("local_18").map(String::as_str), Some("long"));
+        assert_eq!(
+            facts.source_types.get("local_18").map(String::as_str),
+            Some("long")
+        );
     }
 
     #[test]

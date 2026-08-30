@@ -905,7 +905,6 @@ impl DispatchTracker {
         self.memory.forget_through(&canon(register));
     }
 
-
     /// Resolve an indirect transfer, given the tables discovered in this binary.
     ///
     /// `Some` for a register-indirect transfer (whether or not it resolved);

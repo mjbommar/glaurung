@@ -347,7 +347,11 @@ mod tests {
         let record = env.get("parse_packet_hdr").expect("record moved");
         assert_eq!(record.prototype.return_type, "int");
         assert_eq!(record.prototype.parameter_types, ["const char *", "int"]);
-        assert_eq!(env.len(), 1, "a rename moves a record, it does not clone it");
+        assert_eq!(
+            env.len(),
+            1,
+            "a rename moves a record, it does not clone it"
+        );
     }
 
     /// Renames are read against the original key set, so swapping two names

@@ -244,9 +244,7 @@ pub fn stack_slot_addresses(
                     continue;
                 }
                 if let Some(Some(name)) = owner.get(&coordinate) {
-                    out.entry((*name).to_string())
-                        .or_default()
-                        .insert(instr.va);
+                    out.entry((*name).to_string()).or_default().insert(instr.va);
                 }
             }
         }
