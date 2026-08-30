@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::sync::OnceLock;
+
 use crate::core::address::Address;
 use crate::core::binary::Endianness;
 use crate::core::disassembler::{
@@ -5,10 +8,159 @@ use crate::core::disassembler::{
 };
 use crate::core::instruction::{Access, Instruction, Operand};
 
+/// Lowercased spelling of every `iced_x86::Mnemonic`, interned once per process.
+///
+/// The per-instruction expression this replaces was
+/// `format!("{:?}", instr.mnemonic()).to_ascii_lowercase()`: two heap
+/// allocations plus a trip through `core::fmt`'s `Debug` machinery on an enum
+/// with 1,894 variants, paid on every decoded instruction in both the discovery
+/// and lift phases. The table is *filled with that same expression*, so the
+/// strings it hands out are identical by construction rather than by a
+/// hand-transcribed table that could drift from iced-x86.
+///
+/// `Mnemonic::values()` yields the variants in discriminant order starting at
+/// zero, so the index of an entry is `mnemonic as usize`; `mnemonic_name`
+/// falls back to formatting if that ever stops holding.
+fn mnemonic_names() -> &'static [String] {
+    static NAMES: OnceLock<Box<[String]>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        iced_x86::Mnemonic::values()
+            .map(|m| format!("{:?}", m).to_ascii_lowercase())
+            .collect()
+    })
+}
+
+/// Lowercased spelling of every `iced_x86::Register`, interned once per process.
+///
+/// Same mechanism, same guarantee as [`mnemonic_names`]. Register names are the
+/// hotter of the two: an ordinary x86-64 instruction carries two register
+/// operands, and a memory operand adds a base and an index on top.
+fn register_names() -> &'static [String] {
+    static NAMES: OnceLock<Box<[String]>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        iced_x86::Register::values()
+            .map(|r| format!("{:?}", r).to_ascii_lowercase())
+            .collect()
+    })
+}
+
+/// Interned lowercase mnemonic spelling: one allocation instead of two.
+fn mnemonic_name(m: iced_x86::Mnemonic) -> String {
+    match mnemonic_names().get(m as usize) {
+        Some(name) => name.clone(),
+        None => format!("{:?}", m).to_ascii_lowercase(),
+    }
+}
+
+/// Interned lowercase register spelling: one allocation instead of two.
+fn register_name(r: iced_x86::Register) -> String {
+    match register_names().get(r as usize) {
+        Some(name) => name.clone(),
+        None => format!("{:?}", r).to_ascii_lowercase(),
+    }
+}
+
+/// A memory operand carrying the exact `text` [`Operand::memory`] would derive,
+/// composed in one allocation instead of four.
+///
+/// `Operand::memory` builds its text with `String::new()` and a
+/// `push_str(&format!(..))` per part. Each `format!` is a throwaway `String`,
+/// and the target reallocates as it grows out of the allocator's first bucket,
+/// so `[rbp - 0x8]` -- the commonest operand shape in unoptimised code -- cost
+/// three allocations for its text and a fourth for the base register name.
+/// Writing straight into one pre-sized `String` with `write!` removes the
+/// temporaries; `write!` on a `String` is infallible and appends in place.
+///
+/// The rules are transcribed from `Operand::memory` exactly, *including* the one
+/// that reads like a bug: the leading `seg:` prefix is emitted from the BASE
+/// register rather than from a segment, so `[rbp-8]` renders as
+/// `rbp:[rbp - 0x8]`. That is what the decoder has always produced and what
+/// every string-keyed consumer downstream already expects, so it is preserved
+/// deliberately rather than quietly corrected here.
+///
+/// `memory_operand_text_matches_operand_memory` below is the link that keeps the
+/// two in step: it compares this against `Operand::memory` over a grid of bases,
+/// indexes, scales and displacements, so a future edit to either side fails
+/// loudly instead of diverging.
+fn memory_operand(
+    size: u8,
+    access: Access,
+    displacement: Option<i64>,
+    base: Option<String>,
+    index: Option<String>,
+    scale: Option<u8>,
+) -> Operand {
+    use std::fmt::Write as _;
+    // Enough for `rbp:[rbp + rax * 8 + 0x7fffffffffffffff]`, the widest shape
+    // the rules below can produce, so the common case never reallocates.
+    let mut text = String::with_capacity(48);
+    if let Some(seg) = &base {
+        if seg != "ds" {
+            text.push_str(seg);
+            text.push(':');
+        }
+    }
+    text.push('[');
+    if let Some(b) = &base {
+        text.push_str(b);
+    }
+    if let Some(idx) = &index {
+        if base.is_some() {
+            text.push_str(" + ");
+        }
+        text.push_str(idx);
+        if let Some(s) = scale {
+            if s > 1 {
+                let _ = write!(text, " * {}", s);
+            }
+        }
+    }
+    if let Some(disp) = displacement {
+        if base.is_some() || index.is_some() {
+            if disp >= 0 {
+                let _ = write!(text, " + 0x{:x}", disp);
+            } else {
+                let _ = write!(text, " - 0x{:x}", -disp);
+            }
+        } else {
+            let _ = write!(text, "0x{:x}", disp);
+        }
+    }
+    text.push(']');
+    Operand {
+        kind: crate::core::instruction::OperandKind::Memory,
+        size,
+        access,
+        text,
+        register: None,
+        immediate: None,
+        displacement,
+        segment: None,
+        scale,
+        base,
+        index,
+        vector_shape: None,
+        vector_index: None,
+    }
+}
+
 pub struct IcedDisassembler {
     bits: u32,
     arch: Architecture,
     endianness: Endianness,
+    /// Reused across `disassemble_instruction` calls.
+    ///
+    /// `InstructionInfoFactory::new()` allocates two `Vec`s sized for the
+    /// worst-case used-register and used-memory sets — measured at two
+    /// allocations and ~850 bytes *per instruction* when built inside the decode
+    /// loop, which was the single largest allocation term in the decoder. The
+    /// factory is a scratch buffer: `info()` overwrites it, so one per
+    /// disassembler is enough and the returned `InstructionInfo` is identical.
+    ///
+    /// `RefCell` rather than `&mut self` because `Disassembler::disassemble_instruction`
+    /// takes `&self`. Nothing re-enters the decoder while the borrow is live, so
+    /// the borrow cannot conflict.
+    info_factory: RefCell<iced_x86::InstructionInfoFactory>,
 }
 
 impl IcedDisassembler {
@@ -22,15 +174,16 @@ impl IcedDisassembler {
             bits,
             arch,
             endianness,
+            info_factory: RefCell::new(iced_x86::InstructionInfoFactory::new()),
         }
     }
 
-    fn iced_operands(instr: &iced_x86::Instruction, bits: u32) -> Vec<Operand> {
-        use iced_x86::{InstructionInfoFactory, OpAccess, OpKind, Register as IReg};
+    fn iced_operands(&self, instr: &iced_x86::Instruction, bits: u32) -> Vec<Operand> {
+        use iced_x86::{OpAccess, OpKind, Register as IReg};
         // Per-operand read/write access (op_access(i) aligns with op_kind(i)).
         // Without this every operand was reported Read, so the lifter could not
         // tell a destination from a source.
-        let mut factory = InstructionInfoFactory::new();
+        let mut factory = self.info_factory.borrow_mut();
         let info = factory.info(instr);
         let map_access = |a: OpAccess| -> Access {
             match a {
@@ -39,15 +192,19 @@ impl IcedDisassembler {
                 _ => Access::Read,
             }
         };
-        let mut out = Vec::new();
         let op_count = instr.op_count() as usize;
+        // Exact capacity: `Vec::new()` grew 0->1->2->4 as operands were pushed,
+        // so a two-operand instruction paid two allocations for the vector alone.
+        // Kinds that fall through the `_ =>` arm below leave spare capacity,
+        // which is not observable in the decoded instruction.
+        let mut out = Vec::with_capacity(op_count);
         for i in 0..op_count {
             let kind = instr.op_kind(i as u32);
             let acc = map_access(info.op_access(i as u32));
             match kind {
                 OpKind::Register => {
                     let r = instr.op_register(i as u32);
-                    let name = format!("{:?}", r).to_ascii_lowercase();
+                    let name = register_name(r);
                     // Register width in bits (iced reports bytes). Saturate to u8:
                     // zmm (512b) exceeds u8, but gp/xmm sizes are the common case.
                     let size_bits = r.size().saturating_mul(8).min(255) as u8;
@@ -59,12 +216,12 @@ impl IcedDisassembler {
                     let scale = instr.memory_index_scale();
                     let disp = instr.memory_displacement64() as i64;
                     let base_s = if base != IReg::None {
-                        Some(format!("{:?}", base).to_ascii_lowercase())
+                        Some(register_name(base))
                     } else {
                         None
                     };
                     let index_s = if index != IReg::None {
-                        Some(format!("{:?}", index).to_ascii_lowercase())
+                        Some(register_name(index))
                     } else {
                         None
                     };
@@ -72,7 +229,7 @@ impl IcedDisassembler {
                     // Access width in bits (0 for address-only operands like lea,
                     // where iced reports MemorySize::Unknown).
                     let mem_bits = instr.memory_size().size().saturating_mul(8).min(255) as u8;
-                    out.push(Operand::memory(
+                    out.push(memory_operand(
                         mem_bits,
                         acc,
                         Some(disp),
@@ -122,7 +279,7 @@ impl IcedDisassembler {
                     let seg_pfx = |default: &str| -> String {
                         let s = instr.segment_prefix();
                         if s != IReg::None {
-                            format!("{:?}", s).to_ascii_lowercase()
+                            register_name(s)
                         } else {
                             default.to_string()
                         }
@@ -141,7 +298,7 @@ impl IcedDisassembler {
                     };
                     let mem_bits = instr.memory_size().size().saturating_mul(8).min(255) as u8;
                     let mut op =
-                        Operand::memory(mem_bits, acc, None, Some(base.to_string()), None, None);
+                        memory_operand(mem_bits, acc, None, Some(base.to_string()), None, None);
                     op.segment = Some(seg);
                     out.push(op);
                 }
@@ -189,8 +346,8 @@ impl Disassembler for IcedDisassembler {
         // `notrack` and made every control-flow consumer miss the jump. Iced's
         // decoded mnemonic is the authoritative operation and deliberately
         // excludes prefixes.
-        let mnemonic = format!("{:?}", instr.mnemonic()).to_ascii_lowercase();
-        let operands = Self::iced_operands(&instr, self.bits);
+        let mnemonic = mnemonic_name(instr.mnemonic());
+        let operands = self.iced_operands(&instr, self.bits);
 
         let text_bytes = &bytes[..len.min(bytes.len())];
         let ins = Instruction {
@@ -327,6 +484,129 @@ mod tests {
         for (bytes, expect, name) in cases {
             let ins = d.disassemble_instruction(&va(0x1000), bytes).unwrap();
             assert_eq!(ins.operands.len(), *expect, "{name}: operand count");
+        }
+    }
+
+    /// The interned tables must agree with the `format!` expressions they
+    /// replaced for *every* variant, not just the ones a fixture happens to
+    /// decode. The mnemonic and register spellings are load-bearing: the lifter
+    /// dispatches on the mnemonic and every dataflow map is keyed on the
+    /// register name, so a single divergent entry would silently change every
+    /// emitted function.
+    #[test]
+    fn interned_mnemonic_names_match_the_format_they_replaced() {
+        for m in iced_x86::Mnemonic::values() {
+            assert_eq!(
+                mnemonic_name(m),
+                format!("{:?}", m).to_ascii_lowercase(),
+                "mnemonic {m:?} (discriminant {})",
+                m as usize
+            );
+        }
+    }
+
+    #[test]
+    fn interned_register_names_match_the_format_they_replaced() {
+        for r in iced_x86::Register::values() {
+            assert_eq!(
+                register_name(r),
+                format!("{:?}", r).to_ascii_lowercase(),
+                "register {r:?} (discriminant {})",
+                r as usize
+            );
+        }
+    }
+
+    /// The tables are indexed by `enum as usize`, which is only correct while
+    /// `values()` yields the variants in discriminant order from zero. Pin it.
+    #[test]
+    fn interning_tables_are_indexed_by_discriminant() {
+        for (i, m) in iced_x86::Mnemonic::values().enumerate() {
+            assert_eq!(
+                i, m as usize,
+                "Mnemonic::values() is not discriminant-ordered"
+            );
+        }
+        for (i, r) in iced_x86::Register::values().enumerate() {
+            assert_eq!(
+                i, r as usize,
+                "Register::values() is not discriminant-ordered"
+            );
+        }
+        assert_eq!(mnemonic_names().len(), iced_x86::Mnemonic::values().count());
+        assert_eq!(register_names().len(), iced_x86::Register::values().count());
+    }
+
+    /// `memory_operand` transcribes `Operand::memory`'s text rules to compose
+    /// them in one allocation. The transcription is only safe while the two
+    /// agree, so compare them over a grid that covers every branch: with and
+    /// without a base, with and without an index, every scale the encoding can
+    /// carry, positive, negative and absent displacements, and the `"ds"` base
+    /// that suppresses the (mis-named) prefix.
+    #[test]
+    fn memory_operand_text_matches_operand_memory() {
+        let bases = [None, Some("rbp"), Some("rax"), Some("ds"), Some("r15d")];
+        let indexes = [None, Some("rcx"), Some("r9")];
+        let scales = [None, Some(1u8), Some(2), Some(4), Some(8)];
+        let disps = [
+            None,
+            Some(0i64),
+            Some(1),
+            Some(-1),
+            Some(8),
+            Some(-8),
+            Some(0x7fff_ffff),
+            Some(-0x8000_0000),
+            Some(i64::MAX),
+        ];
+        let mut checked = 0usize;
+        for base in bases {
+            for index in indexes {
+                for scale in scales {
+                    for disp in disps {
+                        let b = base.map(str::to_string);
+                        let i = index.map(str::to_string);
+                        let mine =
+                            memory_operand(64, Access::Read, disp, b.clone(), i.clone(), scale);
+                        let theirs = Operand::memory(64, Access::Read, disp, b, i, scale);
+                        assert_eq!(
+                            mine, theirs,
+                            "base={base:?} index={index:?} scale={scale:?} disp={disp:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 5 * 3 * 5 * 9);
+    }
+
+    /// The shared `InstructionInfoFactory` is a scratch buffer that `info()`
+    /// overwrites. Decoding a long run through one disassembler must give the
+    /// same operand accesses as decoding each instruction through a fresh one.
+    #[test]
+    fn a_reused_info_factory_does_not_leak_state_between_instructions() {
+        let shared = dis();
+        // A mix whose accesses differ per position: write-dest, read-only,
+        // read-modify-write, and a zero-operand form in between.
+        let program: &[&[u8]] = &[
+            &[0x48, 0x89, 0x18],       // mov [rax], rbx
+            &[0x90],                   // nop
+            &[0x48, 0x01, 0xd8],       // add rax, rbx
+            &[0xa4],                   // movsb
+            &[0x48, 0x8b, 0x45, 0xf8], // mov rax, [rbp-8]
+            &[0xc3],                   // ret
+        ];
+        // Two passes over the shared decoder, so the second pass sees a factory
+        // already filled by the first.
+        for _ in 0..2 {
+            for bytes in program {
+                let fresh = dis();
+                assert_eq!(
+                    shared.disassemble_instruction(&va(0x1000), bytes).unwrap(),
+                    fresh.disassemble_instruction(&va(0x1000), bytes).unwrap(),
+                );
+            }
         }
     }
 

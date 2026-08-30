@@ -53,10 +53,12 @@ use crate::core::instruction::{Access, Instruction};
 
 mod arm_tables;
 mod memory_guard;
+mod registers;
 
 pub use arm_tables::{ArmPcMode, ArmWordTableBranch};
 pub use memory_guard::MemKey;
 use memory_guard::MemoryBounds;
+use registers::{ascii_lower, canon, canon_ref};
 
 /// What a register holds, as far as dispatch resolution is concerned.
 ///
@@ -201,35 +203,6 @@ pub enum Resolution {
     Table { table_va: u64, targets: Vec<u64> },
     /// Targets not recoverable. The resulting CFG is incomplete and must say so.
     Unresolved(Unresolved),
-}
-
-/// x86 register aliases, narrowed to the 64-bit parent so `%eax` and `%rax` are
-/// one location. Dispatch sequences mix widths freely — clang's `movslq` writes
-/// the 64-bit register while the index arrives in a 32-bit one — and treating
-/// them as distinct silently loses the chain.
-fn canon(reg: &str) -> String {
-    let r = reg.trim_start_matches('%').to_ascii_lowercase();
-    let full = match r.as_str() {
-        "rax" | "eax" | "ax" | "al" | "ah" => "rax",
-        "rbx" | "ebx" | "bx" | "bl" | "bh" => "rbx",
-        "rcx" | "ecx" | "cx" | "cl" | "ch" => "rcx",
-        "rdx" | "edx" | "dx" | "dl" | "dh" => "rdx",
-        "rsi" | "esi" | "si" | "sil" => "rsi",
-        "rdi" | "edi" | "di" | "dil" => "rdi",
-        "rbp" | "ebp" | "bp" | "bpl" => "rbp",
-        "rsp" | "esp" | "sp" | "spl" => "rsp",
-        other => {
-            // r8..r15 and their d/w/b views.
-            if let Some(rest) = other.strip_prefix('r') {
-                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                if !digits.is_empty() {
-                    return format!("r{digits}");
-                }
-            }
-            return other.to_string();
-        }
-    };
-    full.to_string()
 }
 
 /// Streaming register tracker for one basic block.
@@ -385,7 +358,7 @@ impl DispatchTracker {
     }
 
     fn get(&self, reg: &str) -> Option<Val> {
-        self.regs.get(&canon(reg)).cloned()
+        self.regs.get(canon_ref(reg).as_ref()).cloned()
     }
 
     fn set(&mut self, reg: &str, v: Val) {
@@ -393,7 +366,7 @@ impl DispatchTracker {
     }
 
     fn clear(&mut self, reg: &str) {
-        self.regs.remove(&canon(reg));
+        self.regs.remove(canon_ref(reg).as_ref());
     }
 
     /// Absolute VA of a RIP-relative memory operand, as the adapters report it
@@ -461,7 +434,7 @@ impl DispatchTracker {
                     index_bound = Some(bound);
                 }
                 _ if address_scale == 4 && index_bound.is_none() => {
-                    index_bound = Some(self.bounded.get(&canon(register)).copied());
+                    index_bound = Some(self.bounded.get(canon_ref(register).as_ref()).copied());
                 }
                 _ => {}
             }
@@ -475,21 +448,21 @@ impl DispatchTracker {
     }
 
     fn value_of(&mut self, reg: &str) -> u64 {
-        let reg = canon(reg);
-        if let Some(value) = self.reg_values.get(&reg) {
+        let key = canon_ref(reg);
+        if let Some(value) = self.reg_values.get(key.as_ref()) {
             *value
         } else {
             let value = self.fresh_value();
-            self.reg_values.insert(reg, value);
+            self.reg_values.insert(key.into_owned(), value);
             value
         }
     }
 
     fn define_fresh_value(&mut self, reg: &str) {
-        let reg = canon(reg);
+        let key = canon_ref(reg);
         let value = self.fresh_value();
-        self.reg_values.insert(reg.clone(), value);
-        self.bounded.remove(&reg);
+        self.bounded.remove(key.as_ref());
+        self.reg_values.insert(key.into_owned(), value);
     }
 
     /// Record that a value is in `[0, max]` for every register and stack slot
@@ -598,7 +571,7 @@ impl DispatchTracker {
         if let (Some(destination), Some(bound)) = (Self::dest_reg(ins), loaded) {
             // Never loosen a bound the body already proved: the tightest
             // surviving proof decides the table's extent.
-            let known = self.bounded.get(&canon(destination)).copied();
+            let known = self.bounded.get(canon_ref(destination).as_ref()).copied();
             self.bound_value(destination, known.map_or(bound, |old| old.min(bound)));
         }
         if let Some(defined) = defined {
@@ -607,7 +580,7 @@ impl DispatchTracker {
     }
 
     fn observe_instruction(&mut self, ins: &Instruction) {
-        let m = ins.mnemonic.to_ascii_lowercase();
+        let m = ascii_lower(&ins.mnemonic);
 
         // Snapshot the whole effective-address expression before the
         // destination write kills an aliased index or table-base register.
@@ -620,7 +593,7 @@ impl DispatchTracker {
         // usually not still in the register that was compared.
         let reg0 = ins.operands.first().and_then(|o| o.register.as_deref());
         let imm1 = ins.operands.get(1).and_then(|o| o.immediate);
-        match m.as_str() {
+        match m.as_ref() {
             // The range check itself. `cmp` leaves the register alone; `sub`
             // rebases it so in-range values become `[0, N]`. Recorded for the
             // walker to carry across the guard's in-range edge, and applied here
@@ -640,14 +613,14 @@ impl DispatchTracker {
                 if let (Some(r), Some(n)) = (reg0, imm1) {
                     if n >= 0 {
                         self.last_cmp = Some((canon(r), n as u64));
-                        self.bound_value(&canon(r), n as u64);
+                        self.bound_value(canon_ref(r).as_ref(), n as u64);
                     }
                 } else if m == "cmp" {
                     let stack_slot = ins.operands.first().and_then(|operand| {
-                        let base = canon(operand.base.as_deref()?);
+                        let base = canon_ref(operand.base.as_deref()?);
                         let displacement = operand.displacement?;
-                        (matches!(base.as_str(), "rbp" | "rsp") && operand.index.is_none())
-                            .then_some((base, displacement))
+                        (matches!(base.as_ref(), "rbp" | "rsp") && operand.index.is_none())
+                            .then(|| (base.into_owned(), displacement))
                     });
                     if let (Some(key), Some(n)) = (stack_slot, imm1) {
                         if n >= 0 {
@@ -663,23 +636,23 @@ impl DispatchTracker {
         // carries it back out, possibly into a different register. This is the
         // clang -O0 switch shape, and it is 11 of the 21 dispatches the
         // name-matching version declined.
-        if matches!(m.as_str(), "mov" | "movq" | "movl") {
+        if matches!(m.as_ref(), "mov" | "movq" | "movl") {
             let dst_mem = ins
                 .operands
                 .first()
-                .and_then(|o| o.displacement.map(|d| (o.base.clone(), d)));
+                .and_then(|o| o.displacement.map(|d| (o.base.as_deref(), d)));
             let src_reg = ins.operands.get(1).and_then(|o| o.register.as_deref());
             let src_mem = ins
                 .operands
                 .get(1)
-                .and_then(|o| o.displacement.map(|d| (o.base.clone(), d)));
+                .and_then(|o| o.displacement.map(|d| (o.base.as_deref(), d)));
             match (dst_mem, src_reg, src_mem, reg0) {
                 // store: [base+disp] <- reg
                 (Some((Some(b), d)), Some(sr), _, _) => {
-                    let key = (canon(&b), d);
+                    let key = (canon(b), d);
                     let value = self.value_of(sr);
                     self.slot_values.insert(key.clone(), value);
-                    match self.bounded.get(&canon(sr)).copied() {
+                    match self.bounded.get(canon_ref(sr).as_ref()).copied() {
                         Some(n) => {
                             self.bounded_slots.insert(key, n);
                         }
@@ -690,31 +663,35 @@ impl DispatchTracker {
                 }
                 // load: reg <- [base+disp]
                 (None, None, Some((Some(b), d)), Some(dr)) => {
-                    let key = (canon(&b), d);
+                    let key = (canon(b), d);
+                    let destination = canon_ref(dr);
                     if let Some(value) = self.slot_values.get(&key).copied() {
-                        self.reg_values.insert(canon(dr), value);
+                        self.reg_values
+                            .insert(destination.clone().into_owned(), value);
                     } else {
                         self.define_fresh_value(dr);
                     }
                     match self.bounded_slots.get(&key).copied() {
                         Some(n) => {
-                            self.bounded.insert(canon(dr), n);
+                            self.bounded.insert(destination.into_owned(), n);
                         }
                         None => {
-                            self.bounded.remove(&canon(dr));
+                            self.bounded.remove(destination.as_ref());
                         }
                     }
                 }
                 // copy: reg <- reg
                 (None, Some(sr), None, Some(dr)) => {
                     let value = self.value_of(sr);
-                    self.reg_values.insert(canon(dr), value);
-                    match self.bounded.get(&canon(sr)).copied() {
+                    let destination = canon_ref(dr);
+                    self.reg_values
+                        .insert(destination.clone().into_owned(), value);
+                    match self.bounded.get(canon_ref(sr).as_ref()).copied() {
                         Some(n) => {
-                            self.bounded.insert(canon(dr), n);
+                            self.bounded.insert(destination.into_owned(), n);
                         }
                         None => {
-                            self.bounded.remove(&canon(dr));
+                            self.bounded.remove(destination.as_ref());
                         }
                     }
                 }
@@ -728,7 +705,7 @@ impl DispatchTracker {
                 }
             }
         } else if let Some(d) = Self::dest_reg(ins) {
-            let previous_bound = self.bounded.get(&canon(d)).copied();
+            let previous_bound = self.bounded.get(canon_ref(d).as_ref()).copied();
             // Synthetic instruction adapters may mark `cmp`'s first operand as
             // ReadWrite even though the machine instruction does not write it.
             // Preserve its identity just as the real decoder does.
@@ -746,7 +723,7 @@ impl DispatchTracker {
                     .operands
                     .get(1)
                     .and_then(|operand| operand.register.as_deref())
-                    .is_some_and(|source| canon(source) == canon(d))
+                    .is_some_and(|source| canon_ref(source) == canon_ref(d))
             {
                 self.bound_value(d, 0);
             } else if m.starts_with("set") {
@@ -801,7 +778,7 @@ impl DispatchTracker {
             return;
         };
 
-        match m.as_str() {
+        match m.as_ref() {
             // `lea rD, [rip+d]` materialises an absolute address — how position-
             // independent code names a table.
             "lea" => {
@@ -901,8 +878,9 @@ impl DispatchTracker {
     /// reports them here.
     pub fn kill_register(&mut self, register: &str) {
         self.define_fresh_value(register);
-        self.regs.remove(&canon(register));
-        self.memory.forget_through(&canon(register));
+        let key = canon_ref(register);
+        self.regs.remove(key.as_ref());
+        self.memory.forget_through(key.as_ref());
     }
 
     /// Resolve an indirect transfer, given the tables discovered in this binary.
