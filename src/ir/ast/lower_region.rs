@@ -198,7 +198,13 @@ fn lower_region_inner(
             target: lf.blocks[*bi].start_va,
         }],
         Region::Seq(parts) => {
-            let mut out = Vec::new();
+            // `out` adopts the first non-empty part's vector rather than copying
+            // into a fresh one. A `Stmt` is 320 bytes, so `Vec::new()` + `extend`
+            // paid a full re-copy of the largest part plus the doubling reallocs
+            // that got the accumulator up to its size. Extending an EMPTY vector
+            // and assigning it are the same value, so this is the same statement
+            // list either way.
+            let mut out: Vec<Stmt> = Vec::new();
             for (idx, p) in parts.iter().enumerate() {
                 let mut lowered = lower_region(p, lf, targets, lower_scalar_float);
                 // A sequence emits its next region immediately after this one,
@@ -216,7 +222,11 @@ fn lower_region_inner(
                         lowered.pop();
                     }
                 }
-                out.extend(lowered);
+                if out.is_empty() {
+                    out = lowered;
+                } else {
+                    out.extend(lowered);
+                }
             }
             out
         }

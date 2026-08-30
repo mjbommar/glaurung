@@ -313,10 +313,15 @@ fn scalar_float_gate_note(op: &Op, all_caller_saved: bool) -> Option<String> {
 /// purpose: a function that does float arithmetic without ever naming an SSE
 /// register is the shape that misled the old predicate, and it is invisible in
 /// the recovered C.
-fn trace_scalar_float_gate(lf: &LlirFunction, closed: bool, all_caller_saved: bool) {
+fn trace_scalar_float_gate(lf: &LlirFunction, closed: bool) {
     if std::env::var_os("GLAURUNG_PASS_HEALTH").is_none() {
         return;
     }
+    // Computed here, not by the caller: `float_registers_are_all_caller_saved`
+    // walks every instruction and calls `def_uses`, which allocates a `Vec` and
+    // clones each `VReg` name. Passing it as an argument made the caller pay for
+    // it on every lowered function whether or not the trace was enabled.
+    let all_caller_saved = float_registers_are_all_caller_saved(lf);
     let float_bank_seen = any_physical_register(lf, |base| {
         base.starts_with("xmm") || crate::ir::x87::is_slot_name(base)
     });
@@ -423,7 +428,7 @@ fn any_physical_register(lf: &LlirFunction, predicate: impl Fn(&str) -> bool) ->
 /// Keep the entire scalar-float subset opaque until those producers are modeled.
 pub(super) fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
     let closed = scalar_float_semantics_proof(lf);
-    trace_scalar_float_gate(lf, closed, float_registers_are_all_caller_saved(lf));
+    trace_scalar_float_gate(lf, closed);
     closed
 }
 

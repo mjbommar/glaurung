@@ -25,7 +25,7 @@
 //! never answer with a wildcard, so every walker here is exhaustive and a new
 //! `Expr` variant is a compile error rather than a silent permission.
 
-use super::lower_ops::lower_op;
+use super::lower_ops::lower_op_stmt;
 use super::{Expr, Stmt, WideArithmetic};
 use crate::ir::types::{BinOp, CmpOp, LlirBlock, LlirFunction, LlirInstr, Op, UnOp, VReg};
 
@@ -280,7 +280,7 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
 pub(super) fn lower_block(b: &LlirBlock, lower_scalar_float: bool) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(b.instrs.len());
     for ins in &b.instrs {
-        out.extend(lower_op(&ins.op, lower_scalar_float));
+        out.push(lower_op_stmt(&ins.op, lower_scalar_float));
     }
     hoist_inline_flag_conds(out)
 }
@@ -301,6 +301,42 @@ pub(super) fn lower_block(b: &LlirBlock, lower_scalar_float: bool) -> Vec<Stmt> 
 /// On real PE binaries (e.g. wkssvc!WsOpenCreateConnectionSpecifyImpersonation)
 /// most conditionals fall through to this path and produce unreadable output.
 pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
+    /// Whether `stmt` is one of the four shapes the loop below can rewrite: a
+    /// select whose condition is a bare flag, or an `if` on a bare flag, on a
+    /// negated bare flag, or on `flag == 0`. Every other statement is pushed
+    /// through untouched.
+    fn may_hoist(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Assign {
+                src: Expr::Select { cond, .. },
+                ..
+            } => matches!(cond.as_ref(), Expr::Reg(_)),
+            Stmt::If { cond, .. } => match cond {
+                Expr::Reg(_) => true,
+                Expr::Un { op: UnOp::Not, src } => matches!(src.as_ref(), Expr::Reg(_)),
+                Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs,
+                    rhs,
+                } => {
+                    matches!(lhs.as_ref(), Expr::Reg(_)) && matches!(rhs.as_ref(), Expr::Const(0))
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    // With no candidate anywhere in the block, `take_reaching_cmp` is never
+    // reached and the loop below is the identity: every statement is moved into
+    // a second vector and moved back out unchanged. Rejecting on a discriminant
+    // scan skips that rebuild -- one allocation plus a 320-byte move per
+    // statement -- for every block that ends in a jump, a return or a call,
+    // which is most of them.
+    if !stmts.iter().any(may_hoist) {
+        return stmts;
+    }
+
     fn take_reaching_cmp(out: &mut Vec<Stmt>, flag: &VReg) -> Option<Expr> {
         for i in (0..out.len()).rev() {
             match &out[i] {

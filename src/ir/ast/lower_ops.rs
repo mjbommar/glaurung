@@ -594,8 +594,15 @@ pub(super) fn switch_index_of(target: &Expr) -> Option<Expr> {
     scaled_index(find_deref(target)?)
 }
 
-/// Lower a single LLIR op to one or more Stmts.
-pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
+/// Lower a single LLIR op to the one statement it denotes.
+///
+/// Every arm produces exactly one [`Stmt`]; the `Vec` shape this used to return
+/// was allocated, memcpy'd into the block's statement list and freed once per
+/// LLIR instruction, which on an ordinary function is the single largest source
+/// of allocations in the whole lowering phase. The `Vec` shape survives as a
+/// test-only wrapper (`lower_op`, at the foot of this file) for the tests that
+/// pattern-match on a slice.
+pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
     fn predicate_expr(cond: &VReg, inverted: bool) -> Expr {
         if inverted {
             Expr::Cmp {
@@ -609,15 +616,15 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
     }
 
     match op {
-        Op::Nop => vec![Stmt::Nop],
-        Op::Assign { dst, src } => vec![Stmt::Assign {
+        Op::Nop => Stmt::Nop,
+        Op::Assign { dst, src } => Stmt::Assign {
             dst: dst.clone(),
             src: lower_value(src),
-        }],
-        Op::Undef { dst, reason } => vec![Stmt::Assign {
+        },
+        Op::Undef { dst, reason } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Unknown(format!("undefined({reason})")),
-        }],
+        },
         Op::Bin { dst, op, lhs, rhs } => {
             let mut lhs = lower_value(lhs);
             // Arithmetic right shift is signed at the machine operand width.
@@ -638,41 +645,41 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                     };
                 }
             }
-            vec![Stmt::Assign {
+            Stmt::Assign {
                 dst: dst.clone(),
                 src: Expr::Bin {
                     op: *op,
                     lhs: Box::new(lhs),
                     rhs: Box::new(lower_value(rhs)),
                 },
-            }]
+            }
         }
-        Op::Un { dst, op, src } => vec![Stmt::Assign {
+        Op::Un { dst, op, src } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Un {
                 op: *op,
                 src: Box::new(lower_value(src)),
             },
-        }],
-        Op::Cmp { dst, op, lhs, rhs } => vec![Stmt::Assign {
+        },
+        Op::Cmp { dst, op, lhs, rhs } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Cmp {
                 op: *op,
                 lhs: Box::new(lower_value(lhs)),
                 rhs: Box::new(lower_value(rhs)),
             },
-        }],
-        Op::Load { dst, addr } => vec![Stmt::Assign {
+        },
+        Op::Load { dst, addr } => Stmt::Assign {
             dst: dst.clone(),
             src: lower_memop(addr),
-        }],
+        },
         Op::CondLoad {
             dst,
             cond,
             inverted,
             addr,
             fallback,
-        } => vec![Stmt::Assign {
+        } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Select {
                 cond: Box::new(predicate_expr(cond, *inverted)),
@@ -680,8 +687,8 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                 if_false: Box::new(lower_value(fallback)),
                 width: addr.size,
             },
-        }],
-        Op::Store { addr, src } => vec![Stmt::Store {
+        },
+        Op::Store { addr, src } => Stmt::Store {
             addr: Expr::Lea {
                 base: addr.base.clone(),
                 index: addr.index.clone(),
@@ -691,13 +698,13 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             },
             src: lower_value(src),
             size: addr.size,
-        }],
+        },
         Op::CondStore {
             cond,
             inverted,
             addr,
             src,
-        } => vec![Stmt::If {
+        } => Stmt::If {
             cond: predicate_expr(cond, *inverted),
             then_body: vec![Stmt::Store {
                 addr: Expr::Lea {
@@ -711,8 +718,8 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                 size: addr.size,
             }],
             else_body: None,
-        }],
-        Op::Jump { target } => vec![Stmt::Goto { target: *target }],
+        },
+        Op::Jump { target } => Stmt::Goto { target: *target },
         // A computed transfer. Where it goes lives in the CFG — the arms are
         // real successors, and the structurer turns them into `Region::Switch`
         // — so there is nothing to emit here. It must NOT become a statement:
@@ -724,9 +731,9 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         // An UNSTRUCTURED indirect jump — one the structurer did not turn into
         // a switch — still has to say so rather than vanish, or the function
         // silently reads as if control fell through.
-        Op::IndirectJump { target, .. } => vec![Stmt::IndirectGoto {
+        Op::IndirectJump { target, .. } => Stmt::IndirectGoto {
             target: lower_value(target),
-        }],
+        },
         // A CondJump on its own (not absorbed into a structured If/While)
         // becomes a conditional goto. If the CondJump carries `inverted`
         // (i.e. lifted from JNE / JAE / JGE / b.ne / b.hs / ...), wrap the
@@ -737,28 +744,28 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             target,
             inverted,
         } => {
-            vec![Stmt::If {
+            Stmt::If {
                 cond: predicate_expr(cond, *inverted),
                 then_body: vec![Stmt::Goto { target: *target }],
                 else_body: None,
-            }]
+            }
         }
-        Op::CondReturn { cond, inverted } => vec![Stmt::If {
+        Op::CondReturn { cond, inverted } => Stmt::If {
             cond: predicate_expr(cond, *inverted),
             then_body: vec![Stmt::Return { value: None }],
             else_body: None,
-        }],
+        },
         Op::CondReturnValue {
             cond,
             inverted,
             value,
-        } => vec![Stmt::If {
+        } => Stmt::If {
             cond: predicate_expr(cond, *inverted),
             then_body: vec![Stmt::Return {
                 value: Some(lower_value(value)),
             }],
             else_body: None,
-        }],
+        },
         Op::Call { target, effects } => {
             let target = match target {
                 CallTarget::Direct(a) => Expr::Addr(*a),
@@ -769,17 +776,17 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             // carries. Re-deriving it at the AST level from ABI register names does
             // not work: after renaming, the read is `var4`, not `rax`, so the two
             // never meet and the AST ends up with a value nobody defines.
-            vec![Stmt::Call {
+            Stmt::Call {
                 target,
                 args: Vec::new(),
                 dst: effects.as_ref().and_then(|e| e.result.clone()),
                 call_spec: None,
-            }]
+            }
         }
-        Op::ReturnValue { value } => vec![Stmt::Return {
+        Op::ReturnValue { value } => Stmt::Return {
             value: Some(lower_value(value)),
-        }],
-        Op::Return => vec![Stmt::Return { value: None }],
+        },
+        Op::Return => Stmt::Return { value: None },
         // Width changes must preserve their semantics, not collapse to `dst = src`.
         //
         // An extension states BOTH widths: `(int<to>)(int<from>)src`. The inner cast
@@ -798,22 +805,22 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         //
         //   Trunc to W: keep exactly the low W bits. A C cast provides that mask
         //   for byte-aligned widths; arbitrary LLIR widths need it explicitly.
-        Op::ZExt { dst, src, from, to } => vec![Stmt::Assign {
+        Op::ZExt { dst, src, from, to } => Stmt::Assign {
             dst: dst.clone(),
             src: widen_cast(lower_value(src), false, *from, *to),
-        }],
-        Op::SExt { dst, src, from, to } => vec![Stmt::Assign {
+        },
+        Op::SExt { dst, src, from, to } => Stmt::Assign {
             dst: dst.clone(),
             src: widen_cast(lower_value(src), true, *from, *to),
-        }],
-        Op::Trunc { dst, src, to, .. } => vec![Stmt::Assign {
+        },
+        Op::Trunc { dst, src, to, .. } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Cast {
                 signed: false,
                 width: containing_c_integer_bytes(*to),
                 expr: Box::new(exact_non_byte_value(lower_value(src), *to, false)),
             },
-        }],
+        },
         // Bit-slice `src[lo:hi]` → (src >> lo) & ((1<<(hi-lo))-1).
         Op::Extract { dst, src, hi, lo } => {
             let shifted = if *lo == 0 {
@@ -827,25 +834,25 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             };
             let width = hi.saturating_sub(*lo);
             let mask: i64 = if width >= 64 { -1 } else { (1i64 << width) - 1 };
-            vec![Stmt::Assign {
+            Stmt::Assign {
                 dst: dst.clone(),
                 src: Expr::Bin {
                     op: BinOp::And,
                     lhs: Box::new(shifted),
                     rhs: Box::new(Expr::Const(mask)),
                 },
-            }]
+            }
         }
         // Concatenation: render as `hi | lo` (the shift amount needs operand
         // widths, refined when widths flow through values — Phase 0.7).
-        Op::Concat { dst, hi, lo } => vec![Stmt::Assign {
+        Op::Concat { dst, hi, lo } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Bin {
                 op: BinOp::Or,
                 lhs: Box::new(lower_value(hi)),
                 rhs: Box::new(lower_value(lo)),
             },
-        }],
+        },
         // A pure select is one expression-level assignment, not manufactured
         // control flow. Keeping both arms inside the expression also preserves
         // the three-input use-def semantics of `Op::Ite`.
@@ -855,7 +862,7 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             t,
             e,
             width,
-        } => vec![Stmt::Assign {
+        } => Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Select {
                 cond: Box::new(Expr::Reg(cond.clone())),
@@ -863,7 +870,7 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                 if_false: Box::new(lower_value(e)),
                 width: containing_c_integer_bytes(*width),
             },
-        }],
+        },
         // Opaque intrinsic. For the lowered-`Unknown` case (no typed operands)
         // render exactly as the old `Unknown` did — including the semantic
         // comments for known system instructions — so decompiler output is
@@ -873,46 +880,46 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             name, ins, outs, ..
         } => {
             if let Some(statement) = memory_fill_intrinsic(name, ins, outs) {
-                return vec![statement];
+                return statement;
             }
             if let Some(statement) = memory_copy_intrinsic(name, ins, outs) {
-                return vec![statement];
+                return statement;
             }
             if let (Some(src), Some((dst, _))) =
                 (byte_swap_intrinsic(name, ins, outs), outs.first())
             {
-                return vec![Stmt::Assign {
+                return Stmt::Assign {
                     dst: dst.clone(),
                     src,
-                }];
+                };
             }
             if let (Some(src), Some((dst, _))) =
                 (packed_byte_table_intrinsic(name, ins, outs), outs.first())
             {
-                return vec![Stmt::Assign {
+                return Stmt::Assign {
                     dst: dst.clone(),
                     src,
-                }];
+                };
             }
             if let (Some(src), Some((dst, _))) =
                 (packed_signed_shift_intrinsic(name, ins, outs), outs.first())
             {
-                return vec![Stmt::Assign {
+                return Stmt::Assign {
                     dst: dst.clone(),
                     src,
-                }];
+                };
             }
             if let (Some((op, width)), Some((dst, _))) =
                 (wide_integer_intrinsic(name, ins, outs), outs.first())
             {
-                return vec![Stmt::Assign {
+                return Stmt::Assign {
                     dst: dst.clone(),
                     src: Expr::WideArithmetic {
                         op,
                         args: ins.iter().map(lower_value).collect(),
                         width,
                     },
-                }];
+                };
             }
             if let (Some((operation, width)), Some((dst, _))) =
                 (scalar_float_intrinsic(name, ins, outs), outs.first())
@@ -946,10 +953,10 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                         _ => None,
                     };
                     if let Some(src) = expression {
-                        return vec![Stmt::Assign {
+                        return Stmt::Assign {
                             dst: dst.clone(),
                             src,
-                        }];
+                        };
                     }
                 }
             }
@@ -968,7 +975,7 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             // one is honest about the dataflow, and an execution-differential
             // lane can see the difference either way.
             match semantic_comment_for_unknown(name) {
-                Some(comment) => vec![Stmt::Comment(comment.to_string())],
+                Some(comment) => Stmt::Comment(comment.to_string()),
                 None => {
                     let call = if ins.is_empty() {
                         name.clone()
@@ -976,18 +983,25 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                         format!("{}(...)", name)
                     };
                     match outs.first() {
-                        Some((dst, _)) => vec![Stmt::Assign {
+                        Some((dst, _)) => Stmt::Assign {
                             dst: dst.clone(),
                             src: Expr::Unknown(call),
-                        }],
-                        None => vec![Stmt::Unknown(call)],
+                        },
+                        None => Stmt::Unknown(call),
                     }
                 }
             }
         }
         Op::Unknown { mnemonic } => match semantic_comment_for_unknown(mnemonic) {
-            Some(comment) => vec![Stmt::Comment(comment.to_string())],
-            None => vec![Stmt::Unknown(mnemonic.clone())],
+            Some(comment) => Stmt::Comment(comment.to_string()),
+            None => Stmt::Unknown(mnemonic.clone()),
         },
     }
+}
+
+/// The `Vec` shape of [`lower_op_stmt`], retained for the tests that assert on
+/// `statements.as_slice()`. Product code lowers a block statement by statement.
+#[cfg(test)]
+pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
+    vec![lower_op_stmt(op, lower_scalar_float)]
 }
