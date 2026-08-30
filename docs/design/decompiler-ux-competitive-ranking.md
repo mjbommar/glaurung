@@ -44,6 +44,7 @@ Legend: **●** full · **◐** partial · **○** absent. Glaurung entries mark
 | 3 | Function prototype drives the rendered signature | ● | ● | ● | **●** *(2026-08-28)* |
 | 4 | Comments on the decompiled function | ● | ● | ◐ | **◐** *(2026-08-28 — anchored, not placed)* |
 | 5 | **Line → address map** | ● | ● | ● | **○** |
+| 5b | Per-variable machine addresses | ● | ● | ● | **●** *(2026-08-29)* |
 | 6 | Cross-references queryable from pseudocode | ● | ● | ◐ | ◐ |
 | 7 | Apply a struct to a variable (`base->field`) | ● | ● | ◐ | ○ |
 | 8 | Split / merge a variable | ● | ◐ | ○ | ○ |
@@ -86,6 +87,15 @@ Ours dies at `lower_block`, which calls `lower_op(&ins.op, ..)` and drops
 `ins.va`. `ast::Function` carries only `entry_va`; the sole in-body anchors are
 `Stmt::Label(u64)` for goto targets, which a well-structured function does not
 emit. **This is the #1 gap and the top of the work queue.** §4 has the design.
+
+**A correction, 2026-08-29.** This section originally treated that as blocking
+per-variable `addresses` too. It does not, and the conflation cost us the
+capability for months. A line map needs AST-node-to-instruction lineage; a
+variable-to-address map joins on the frame COORDINATE, which `stack_locals`
+publishes and the LLIR still carries alongside the machine `va` — no node
+identity required. dewolf and Reko ship exactly that shape (direct addresses, no
+line map) and DecBench's ingest counts it as a first-class case. Row 5b is now
+`●`; row 5 is still `○`, and the two are genuinely different problems.
 
 **3. Prototype drives the signature.** Hex-Rays: setting the callee's type *"will
 cause changes to all places where `off_5C6E4` is called"*. Ours now does —

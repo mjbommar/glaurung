@@ -327,6 +327,56 @@ pub fn detect_optimizations(ir: &IR) -> Vec<CompilerOptimization> {
 
 ## Output Formats
 
+### Structured JSON (`decompile --format json`)
+
+The machine-readable form, and the one an external consumer or benchmark
+harness should read. One object per function:
+
+```json
+{
+  "name": "x87_accumulate",
+  "entry_va": 4345,
+  "size": 125,
+  "pseudocode": "int x87_accumulate(int arg0) { ... }",
+  "variables": [
+    {"name": "arg0", "type": "int", "kind": "arg",
+     "arg_index": 0, "stack_offset": null, "size": null, "addresses": []},
+    {"name": "i", "type": "int32_t", "kind": "stack",
+     "arg_index": null, "stack_offset": -20, "size": 4,
+     "addresses": [4390, 4418, 4422]}
+  ]
+}
+```
+
+`variables` is the recovered inventory (`ir::recovered_variables`), reported only
+for names the render actually emitted — we never invent a variable from the C.
+
+**`addresses` are the machine addresses the slot is read or written at**,
+ascending and deduplicated. **Empty means UNCLAIMED, never "there are none."**
+Three things follow from that, all deliberate:
+
+* A **parameter carries none.** A register's live range is not a storage
+  coordinate, and deriving one needs liveness this join does not do.
+* A slot is silent wherever the coordinate the decompiler published is not the
+  coordinate the machine uses — an omitted frame pointer at `-O2`, or ARM32,
+  where the published frame is entry-relative while the machine addresses it
+  through a live register. Silence, never a wrong address.
+* An address can fall **outside `[entry_va, entry_va + size)`**. A function is
+  not always contiguous: `cpp_exception.cold` sits below its hot part. Those
+  addresses are correct; a consumer that clamps to the contiguous extent will
+  drop them.
+
+There is deliberately **no line map** — no `{line → address}`. That needs
+AST-node-to-instruction lineage, which lowering discards (`lower_block` calls
+`lower_op(&ins.op, ..)` and drops `ins.va`). Per-variable addresses are a
+different problem and need no node identity at all; see
+`src/ir/variable_addresses.rs` for the join and its fail-closed rules.
+
+Every emitted address is validated against an external disassembler — 8,441
+addresses across ELF, PE and Mach-O on x86-64, i386 and aarch64, checked by both
+`objdump` and `llvm-objdump`, with zero found to be anything other than a real
+instruction start accessing that slot.
+
 ### C/C++ Output
 ```c
 // Decompiled function with recovered types
