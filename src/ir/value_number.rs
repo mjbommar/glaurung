@@ -24,7 +24,9 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::call_args::CallConv;
 use crate::ir::ssa::SsaValue;
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
-use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
+use crate::ir::use_def::{
+    def_ref, def_uses, for_each_use, use_count, use_is_proven_input, InstrAddr,
+};
 
 /// A source variable's authoritative residence in one machine register.
 ///
@@ -95,15 +97,22 @@ fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
                 phi_copies.push(pair);
                 continue;
             }
-            let (_, uses) = def_uses(&ins.op);
-            for (use_index, used) in uses.into_iter().enumerate() {
-                if !use_is_proven_input(&ins.op, use_index) {
-                    continue;
+            // Borrowed walk: the collecting form clones the spelling of
+            // every operand, and all but the first sighting of a name is then
+            // dropped by the set.
+            let mut use_index = 0;
+            for_each_use(&ins.op, |used| {
+                let index = use_index;
+                use_index += 1;
+                if !use_is_proven_input(&ins.op, index) {
+                    return;
                 }
                 if let VReg::Phys(name) = used {
-                    read.insert(name);
+                    if !read.contains(name.as_str()) {
+                        read.insert(name.clone());
+                    }
                 }
-            }
+            });
         }
     }
     loop {
@@ -193,7 +202,6 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
                     }
                 }
             }
-            let (def, uses) = def_uses(&ins.op);
             // A CALL's argument-register uses say what the CALLEE may read. They are
             // not evidence that THIS function has a parameter. Over-approximating uses
             // is right for liveness and dead-code elimination, which is why `def_uses`
@@ -231,9 +239,12 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             }
             // Reads first, then the def — a use and a def of the same slot in one
             // op (`rdx = rdx + 1`) counts as a read (the incoming value is used).
-            for (use_index, u) in uses.iter().enumerate() {
-                if !use_is_proven_input(&ins.op, use_index) {
-                    continue;
+            let mut use_index = 0;
+            for_each_use(&ins.op, |u| {
+                let index = use_index;
+                use_index += 1;
+                if !use_is_proven_input(&ins.op, index) {
+                    return;
                 }
                 if alignment_padding.excludes_use(
                     InstrAddr {
@@ -242,15 +253,15 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
                     },
                     u,
                 ) {
-                    continue;
+                    return;
                 }
                 if let VReg::Phys(n) = u {
                     if let Some(slot) = read_slot(n) {
                         decided.entry(slot).or_insert(true);
                     }
                 }
-            }
-            if let Some(VReg::Phys(n)) = &def {
+            });
+            if let Some(VReg::Phys(n)) = def_ref(&ins.op) {
                 if let Some(slot) = base_slot(n) {
                     decided.entry(slot).or_insert(false);
                 }
@@ -266,7 +277,34 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
 /// `(register, version)` pairs kept bare despite version ≥ 1 — the value a
 /// return register holds when it reaches a `Return`, so downstream naming still
 /// maps it to `ret` rather than a scratch `varN`.
-type KeepBare = HashSet<(String, u32)>;
+/// Canonical register names whose listed SSA versions must keep a bare
+/// spelling.
+///
+/// Keyed by name rather than by `(name, version)` so a membership test can be
+/// asked with a borrowed `&str`. As a `HashSet<(String, u32)>` the only way to
+/// probe it was to clone the register spelling for the lookup key — and
+/// [`tag_phys`] asks once per register operand.
+#[derive(Debug, Default)]
+struct KeepBare(HashMap<String, Vec<u32>>);
+
+impl KeepBare {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&mut self, name: String, version: u32) {
+        let versions = self.0.entry(name).or_default();
+        if !versions.contains(&version) {
+            versions.push(version);
+        }
+    }
+
+    fn contains(&self, name: &str, version: u32) -> bool {
+        self.0
+            .get(name)
+            .is_some_and(|versions| versions.contains(&version))
+    }
+}
 
 /// Remaps each reused lifter temporary `(Temp base, version)` to a fresh, unique
 /// temporary id. A lifter reuses one `Temp` for many unrelated values within a
@@ -278,7 +316,7 @@ type TempRemap = std::collections::HashMap<(u32, u32), u32>;
 struct VnCtx {
     keep: KeepBare,
     temps: TempRemap,
-    structural: HashSet<String>,
+    structural: Vec<&'static str>,
 }
 
 fn canonical_phys_name(name: &str) -> &str {
@@ -290,7 +328,7 @@ fn canonical_phys_name(name: &str) -> &str {
 /// register is not automatically a frame pointer: optimized code may use `rbp`
 /// as an ordinary loop value after saving it in the prologue.  In that case its
 /// distinct writes need SSA names like every other data register.
-fn structural_registers(lf: &LlirFunction) -> HashSet<String> {
+fn structural_registers(lf: &LlirFunction) -> Vec<&'static str> {
     fn frame_family_is_structural(
         lf: &LlirFunction,
         frame_names: &[&str],
@@ -299,11 +337,10 @@ fn structural_registers(lf: &LlirFunction) -> HashSet<String> {
         let mut saw_definition = false;
         for block in &lf.blocks {
             for instruction in &block.instrs {
-                let (definition, _) = def_uses(&instruction.op);
-                let Some(VReg::Phys(definition)) = definition else {
+                let Some(VReg::Phys(definition)) = def_ref(&instruction.op) else {
                     continue;
                 };
-                if !frame_names.contains(&canonical_phys_name(&definition)) {
+                if !frame_names.contains(&canonical_phys_name(definition)) {
                     continue;
                 }
                 saw_definition = true;
@@ -334,12 +371,16 @@ fn structural_registers(lf: &LlirFunction) -> HashSet<String> {
         !saw_definition
     }
 
-    let mut structural = HashSet::from(["rsp".to_string(), "esp".to_string(), "sp".to_string()]);
+    // A list of static names, not a `HashSet<String>`: every member is a
+    // literal, there are at most nine, and `tag_phys` asks whether a register is
+    // structural once per operand — a scan of nine short strings beats hashing
+    // one, and it drops the owned copies entirely.
+    let mut structural: Vec<&'static str> = vec!["rsp", "esp", "sp"];
     if frame_family_is_structural(lf, &["rbp", "ebp", "bp"], &["rsp", "esp", "sp"]) {
-        structural.extend(["rbp", "ebp", "bp"].map(str::to_string));
+        structural.extend(["rbp", "ebp", "bp"]);
     }
     if frame_family_is_structural(lf, &["x29", "w29", "fp"], &["sp"]) {
-        structural.extend(["x29", "w29", "fp"].map(str::to_string));
+        structural.extend(["x29", "w29", "fp"]);
     }
     structural
 }
@@ -354,18 +395,29 @@ fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
             // written as `%rax` and read back as `%eax` (or vice versa) renders
             // as ONE name at the shared SSA version — otherwise the two views get
             // distinct names and the read dangles.
-            let canon = crate::ir::ssa::parent64(n)
-                .map(str::to_string)
-                .unwrap_or_else(|| n.clone());
-            if version == 0 {
-                *n = canon; // entry-def / live-in — bare (canonical) register
-                return;
+            //
+            // `parent64` returns a `&'static str`, so the canonical spelling
+            // costs nothing to look at. Only the decision to REWRITE `n`
+            // allocates: this used to build the canonical `String` (plus a
+            // second copy as a `KeepBare` probe key) for every register
+            // operand, including the common case where the register is already
+            // canonical and stays bare, where nothing needed to be written.
+            let parent = crate::ir::ssa::parent64(n);
+            let canon: &str = parent.unwrap_or(n.as_str());
+            let stays_bare = version == 0
+                || ctx.structural.contains(&canon)
+                || ctx.keep.contains(canon, version);
+            let renamed = if stays_bare {
+                // entry-def / live-in / structural / kept-bare: the canonical
+                // spelling, which is already in place unless this is a
+                // sub-register view.
+                parent.map(str::to_string)
+            } else {
+                Some(format!("{canon}#{version}"))
+            };
+            if let Some(renamed) = renamed {
+                *n = renamed;
             }
-            if ctx.structural.contains(&canon) || ctx.keep.contains(&(canon.clone(), version)) {
-                *n = canon;
-                return;
-            }
-            *n = format!("{}#{}", canon, version);
         }
         VReg::Temp(base) => {
             if let Some(&nid) = ctx.temps.get(&(*base, version)) {
@@ -554,7 +606,7 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
 
 /// Does `op` define a return register under `ret_names`?
 fn defs_return_reg(op: &Op, ret_names: &[&str]) -> bool {
-    matches!(def_uses(op).0, Some(VReg::Phys(n)) if ret_names.contains(&n.as_str()))
+    matches!(def_ref(op), Some(VReg::Phys(n)) if ret_names.contains(&n.as_str()))
 }
 
 /// Can the return-register def at (`def_bi`, `def_ii`) reach a return
@@ -669,16 +721,19 @@ fn def_read_by_alias_before_redef(
         // bound in `36_quicksort`. The rule exists for `%al`/`%ax`, which
         // `parent64` deliberately does not canonicalise.
         if ins.op.returned_value().is_none() {
-            let (_, uses) = def_uses(&ins.op);
-            for u in &uses {
+            let mut aliased = false;
+            for_each_use(&ins.op, |u| {
                 if let VReg::Phys(n) = u {
                     if ret_names.contains(&n.as_str())
                         && n != def_name
                         && !ssa_unifies_aliases(n, def_name)
                     {
-                        return true;
+                        aliased = true;
                     }
                 }
+            });
+            if aliased {
+                return true;
             }
         }
         if defs_return_reg(&ins.op, ret_names) {
@@ -766,7 +821,7 @@ fn operation_definition_width(op: &Op) -> Option<u8> {
         Op::Ite { width, .. } => Some(width_bytes(*width)),
         Op::Load { addr, .. } => Some(addr.size.max(1)),
         Op::Intrinsic { outs, .. } if outs.len() == 1 => Some(width_bytes(outs[0].1)),
-        _ => def_uses(op).0.and_then(|dst| dst.width()).map(width_bytes),
+        _ => def_ref(op).and_then(|dst| dst.width()).map(width_bytes),
     }
 }
 
@@ -826,24 +881,23 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     let mut keep: KeepBare = KeepBare::new();
     for (bi, block) in lf.blocks.iter().enumerate() {
         for (ii, ins) in block.instrs.iter().enumerate() {
-            if let (Some(VReg::Phys(n)), _) = def_uses(&ins.op) {
+            if let Some(VReg::Phys(n)) = def_ref(&ins.op) {
                 if ret_names.contains(&n.as_str())
                     && (def_reaches_unresolved_return(lf, ret_names, &va_to_idx, bi, ii)
-                        || def_read_by_alias_before_redef(lf, ret_names, bi, ii, &n))
+                        || def_read_by_alias_before_redef(lf, ret_names, bi, ii, n))
                 {
-                    let v = ssa
-                        .def_versions
-                        .get(&InstrAddr {
+                    let v = ssa.def_version(
+                        lf,
+                        InstrAddr {
                             block_idx: bi,
                             instr_idx: ii,
-                        })
-                        .copied()
-                        .unwrap_or(0);
+                        },
+                    );
                     // Key by the canonical (64-bit) name to match tag_phys.
-                    let canon = crate::ir::ssa::parent64(&n)
+                    let canon = crate::ir::ssa::parent64(n)
                         .map(str::to_string)
                         .unwrap_or_else(|| n.clone());
-                    keep.insert((canon, v));
+                    keep.insert(canon, v);
                 }
             }
         }
@@ -860,26 +914,32 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     let mut definition_widths = HashMap::new();
     let mut definition_widths_by_site = DefinitionWidthsBySite::new();
     let mut definition_widths_by_value = DefinitionWidthsByValue::new();
+    // One buffer for every instruction's use versions. The per-instruction
+    // `Vec` was a heap allocation for a list that is normally one or two long.
+    let mut use_vers: Vec<u32> = Vec::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
             let addr = InstrAddr {
                 block_idx: bi,
                 instr_idx: ii,
             };
-            let def_ver = ssa.def_versions.get(&addr).copied().unwrap_or(0);
-            let (_, uses) = def_uses(&ins.op);
-            let use_vers: Vec<u32> = (0..uses.len())
-                .map(|k| ssa.use_versions.get(&(addr, k)).copied().unwrap_or(0))
-                .collect();
+            // Read out of the indexed SSA tables rather than the
+            // address-keyed maps: same answer, no hashing. See
+            // `SsaInfo::def_version`.
+            let def_ver = ssa.def_version(lf, addr);
+            // Only the use ARITY is wanted here; `def_uses` would allocate a
+            // vector of cloned register spellings to report it.
+            use_vers.clear();
+            use_vers.extend((0..use_count(&ins.op)).map(|k| ssa.use_version(lf, addr, k)));
             tag_op(&mut ins.op, def_ver, &use_vers, &ctx);
             if let (Some(dst), Some(width)) = (
-                def_uses(&ins.op).0,
+                def_ref(&ins.op),
                 operation_definition_width(&lf.blocks[bi].instrs[ii].op),
             ) {
-                definition_widths.insert(dst, width);
+                definition_widths.insert(dst.clone(), width);
                 definition_widths_by_site.insert(addr, width);
-                if let Some(value) = ssa.def_value(lf, addr) {
-                    definition_widths_by_value.insert(value, width);
+                if let Some(value) = ssa.def_value_ref(lf, addr) {
+                    definition_widths_by_value.insert(value.clone(), width);
                 }
             }
         }
@@ -976,8 +1036,11 @@ fn insert_phi_copies(
     let mut read: HashSet<VReg> = HashSet::new();
     for b in &out.blocks {
         for ins in &b.instrs {
-            let (_, uses) = def_uses(&ins.op);
-            read.extend(uses);
+            for_each_use(&ins.op, |u| {
+                if !read.contains(u) {
+                    read.insert(u.clone());
+                }
+            });
         }
     }
 
@@ -1334,7 +1397,7 @@ fn coalescing_definition_claims(
     let mut claims = HashMap::new();
     for (block_idx, block) in out.blocks.iter().enumerate() {
         for (instr_idx, instruction) in block.instrs.iter().enumerate() {
-            let Some(destination) = def_uses(&instruction.op).0 else {
+            let Some(destination) = def_ref(&instruction.op).cloned() else {
                 continue;
             };
             let site = InstrAddr {
@@ -1546,7 +1609,7 @@ fn consumed_live_ins_before_phi_copy(
         .blocks
         .iter()
         .flat_map(|block| block.instrs.iter())
-        .filter_map(|instruction| def_uses(&instruction.op).0)
+        .filter_map(|instruction| def_ref(&instruction.op).cloned())
         .collect();
     let mut first_copy = HashMap::<VReg, u64>::new();
     let mut read_through_phi = HashSet::<VReg>::new();
@@ -1578,10 +1641,9 @@ fn consumed_live_ins_before_phi_copy(
     let mut first_semantic_use = HashMap::<VReg, u64>::new();
     for block in &out.blocks {
         for instruction in &block.instrs {
-            let (_, uses) = def_uses(&instruction.op);
-            for source in uses {
-                if !first_copy.contains_key(&source) {
-                    continue;
+            for_each_use(&instruction.op, |source| {
+                if !first_copy.contains_key(source) {
+                    return;
                 }
                 let is_phi_copy = matches!(
                     &instruction.op,
@@ -1590,11 +1652,11 @@ fn consumed_live_ins_before_phi_copy(
                 );
                 if !is_phi_copy {
                     first_semantic_use
-                        .entry(source)
+                        .entry(source.clone())
                         .and_modify(|va| *va = (*va).min(instruction.va))
                         .or_insert(instruction.va);
                 }
-            }
+            });
         }
     }
     first_copy
@@ -1989,8 +2051,20 @@ fn build_temp_remap(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo) -> TempRem
     // Stable key iteration is part of the rendered-artifact contract: assigning
     // fresh ids by HashMap iteration made two identical decompilations spell the
     // same temporary as (for example) t35 and t36 in separate processes.
-    let mut versions_by_base: std::collections::BTreeMap<u32, std::collections::BTreeSet<u32>> =
-        std::collections::BTreeMap::new();
+    //
+    // Temporary ids are dense small integers, so the ordered map is an array
+    // indexed by base and the ordered set of versions is a vector sorted and
+    // deduplicated once at the end — the same ascending-base, ascending-version
+    // walk the `BTreeMap<u32, BTreeSet<u32>>` gave, without a tree node per
+    // version.
+    let mut versions_by_base: Vec<Vec<u32>> = Vec::new();
+    let mut note = |base: u32, version: u32, versions_by_base: &mut Vec<Vec<u32>>| {
+        let index = base as usize;
+        if index >= versions_by_base.len() {
+            versions_by_base.resize(index + 1, Vec::new());
+        }
+        versions_by_base[index].push(version);
+    };
     let mut max_temp_id = 0u32;
     for (bi, block) in lf.blocks.iter().enumerate() {
         for (ii, ins) in block.instrs.iter().enumerate() {
@@ -1998,39 +2072,45 @@ fn build_temp_remap(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo) -> TempRem
                 block_idx: bi,
                 instr_idx: ii,
             };
-            let (def, uses) = def_uses(&ins.op);
-            if let Some(VReg::Temp(base)) = def {
-                max_temp_id = max_temp_id.max(base);
-                let v = ssa.def_versions.get(&addr).copied().unwrap_or(0);
-                versions_by_base.entry(base).or_default().insert(v);
+            if let Some(VReg::Temp(base)) = def_ref(&ins.op) {
+                max_temp_id = max_temp_id.max(*base);
+                let v = ssa.def_version(lf, addr);
+                note(*base, v, &mut versions_by_base);
             }
-            for (k, u) in uses.iter().enumerate() {
+            let mut k = 0;
+            for_each_use(&ins.op, |u| {
+                let index = k;
+                k += 1;
                 if let VReg::Temp(base) = u {
                     max_temp_id = max_temp_id.max(*base);
-                    let v = ssa.use_versions.get(&(addr, k)).copied().unwrap_or(0);
-                    versions_by_base.entry(*base).or_default().insert(v);
+                    let v = ssa.use_version(lf, addr, index);
+                    note(*base, v, &mut versions_by_base);
                 }
-            }
+            });
         }
     }
     let mut remap = TempRemap::new();
     let mut next_id = max_temp_id + 1;
-    for (base, versions) in &versions_by_base {
+    for (base, versions) in versions_by_base.iter_mut().enumerate() {
+        if versions.is_empty() {
+            continue;
+        }
+        versions.sort_unstable();
+        versions.dedup();
+        let base = base as u32;
         if versions.len() <= 1 {
-            for &v in versions {
-                remap.insert((*base, v), *base);
+            for &v in versions.iter() {
+                remap.insert((base, v), base);
             }
             continue;
         }
         // Reused: the lowest version keeps the original id, the rest get fresh
         // ids, so `Temp(base)` splits into distinct single-def temporaries.
-        let mut vs: Vec<u32> = versions.iter().copied().collect();
-        vs.sort_unstable();
-        for (i, v) in vs.into_iter().enumerate() {
+        for (i, &v) in versions.iter().enumerate() {
             if i == 0 {
-                remap.insert((*base, v), *base);
+                remap.insert((base, v), base);
             } else {
-                remap.insert((*base, v), next_id);
+                remap.insert((base, v), next_id);
                 next_id += 1;
             }
         }

@@ -18,7 +18,7 @@ use crate::ir::abi;
 use crate::ir::call_args::CallConv;
 use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, Op, UnOp, VReg, Value, Width};
-use crate::ir::use_def::{def_uses, InstrAddr};
+use crate::ir::use_def::{use_count, InstrAddr};
 
 const FULL: u64 = u64::MAX;
 
@@ -26,13 +26,19 @@ const FULL: u64 = u64::MAX;
 #[derive(Debug, Default, Clone)]
 pub struct BitDemandOracle {
     values: HashMap<SsaValue, u64>,
-    uses: HashMap<(InstrAddr, usize), u64>,
+    /// Demand per `(instruction, source-order use)`. Indexed, not hashed: the
+    /// key is a dense coordinate and the fixed point writes it once per operand
+    /// per sweep.
+    uses: crate::ir::ssa::OperandGrid<u64>,
 }
 
 impl BitDemandOracle {
     /// Compute a conservative backward demand fixed point.
     pub fn analyze(function: &LlirFunction, ssa: &SsaInfo, cc: CallConv) -> Self {
-        let mut oracle = Self::default();
+        let mut oracle = Self {
+            values: HashMap::new(),
+            uses: crate::ir::ssa::OperandGrid::with_widths(function, use_count),
+        };
         let has_unresolved_return = function
             .blocks
             .iter()
@@ -56,8 +62,10 @@ impl BitDemandOracle {
                     instr_idx,
                 };
                 if has_observable_uses(&instruction.op) {
-                    let (_, uses) = def_uses(&instruction.op);
-                    for use_index in 0..uses.len() {
+                    // Only the arity is wanted. `def_uses` would allocate a
+                    // `Vec<VReg>` and clone the register spelling of every
+                    // operand to produce values this loop never reads.
+                    for use_index in 0..use_count(&instruction.op) {
                         oracle.demand_use(function, ssa, addr, use_index, FULL);
                     }
                 }
@@ -69,7 +77,7 @@ impl BitDemandOracle {
                 // above, so this compatibility path disappears as prototype
                 // coverage grows.
                 if let (Some(va_to_idx), Some(value)) =
-                    (va_to_idx.as_ref(), ssa.def_value(function, addr))
+                    (va_to_idx.as_ref(), ssa.def_value_ref(function, addr))
                 {
                     if let VReg::Phys(name) = &value.base {
                         if let Some(class) = abi::return_register_class(cc, name) {
@@ -84,43 +92,66 @@ impl BitDemandOracle {
             }
         }
 
+        // Every phi identity, built once. Each sweep used to rebuild the
+        // destination and every incoming `SsaValue`, which clones the physical
+        // register spelling — one `String` allocation per phi operand per sweep.
+        let phi_values: Vec<(SsaValue, Vec<SsaValue>)> = ssa
+            .phis
+            .iter()
+            .map(|phi| {
+                (
+                    SsaValue {
+                        base: phi.base.clone(),
+                        version: phi.dst_version,
+                    },
+                    phi.incoming
+                        .iter()
+                        .map(|(_, version)| SsaValue {
+                            base: phi.base.clone(),
+                            version: *version,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+
+        let mut masks: Vec<(usize, u64)> = Vec::new();
         loop {
             let mut changed = false;
 
-            for phi in &ssa.phis {
-                let dst = SsaValue {
-                    base: phi.base.clone(),
-                    version: phi.dst_version,
-                };
-                let demanded = oracle.value_demand(&dst);
+            for (dst, incoming) in &phi_values {
+                let demanded = oracle.value_demand(dst);
                 if demanded == 0 {
                     continue;
                 }
-                for (_, version) in &phi.incoming {
-                    changed |= oracle.demand_value(
-                        SsaValue {
-                            base: phi.base.clone(),
-                            version: *version,
-                        },
-                        demanded,
-                    );
+                for value in incoming {
+                    changed |= oracle.demand_value(value, demanded);
                 }
             }
 
-            for (block_idx, block) in function.blocks.iter().enumerate() {
-                for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+            // Demand flows from an instruction to the definitions it reads, so
+            // a sweep that visits instructions in reverse program order carries
+            // a newly-demanded bit all the way back to its producers within one
+            // pass. Forward order moved it one instruction per sweep: on
+            // `07_packet_parser::parse_packet` (17 blocks, 510 instructions)
+            // that was 17 sweeps where reverse order needs 2. The fixed point
+            // is the least one above the seed either way, so the result is
+            // identical — only the number of sweeps changes.
+            for (block_idx, block) in function.blocks.iter().enumerate().rev() {
+                for (instr_idx, instruction) in block.instrs.iter().enumerate().rev() {
                     let addr = InstrAddr {
                         block_idx,
                         instr_idx,
                     };
-                    let Some(dst) = ssa.def_value(function, addr) else {
+                    let Some(dst) = ssa.def_value_ref(function, addr) else {
                         continue;
                     };
-                    let demanded = oracle.value_demand(&dst);
+                    let demanded = oracle.value_demand(dst);
                     if demanded == 0 {
                         continue;
                     }
-                    for (use_index, mask) in transfer_masks(&instruction.op, demanded) {
+                    transfer_masks_into(&instruction.op, demanded, &mut masks);
+                    for &(use_index, mask) in &masks {
                         changed |= oracle.demand_use(function, ssa, addr, use_index, mask);
                     }
                 }
@@ -130,7 +161,6 @@ impl BitDemandOracle {
                 break;
             }
         }
-
         oracle
     }
 
@@ -141,17 +171,22 @@ impl BitDemandOracle {
 
     /// Bits demanded from one source-order use of an instruction.
     pub fn use_demand(&self, addr: InstrAddr, use_index: usize) -> u64 {
-        self.uses.get(&(addr, use_index)).copied().unwrap_or(0)
+        self.uses.cell(addr, use_index).copied().unwrap_or(0)
     }
 
-    fn demand_value(&mut self, value: SsaValue, mask: u64) -> bool {
+    fn demand_value(&mut self, value: &SsaValue, mask: u64) -> bool {
         if mask == 0 {
             return false;
         }
-        let demanded = self.values.entry(value).or_default();
-        let before = *demanded;
-        *demanded |= mask;
-        *demanded != before
+        // `entry` needs an owned key, so it allocated the register spelling on
+        // every call including the overwhelmingly common already-present one.
+        if let Some(demanded) = self.values.get_mut(value) {
+            let before = *demanded;
+            *demanded |= mask;
+            return *demanded != before;
+        }
+        self.values.insert(value.clone(), mask);
+        true
     }
 
     fn demand_use(
@@ -165,11 +200,15 @@ impl BitDemandOracle {
         if mask == 0 {
             return false;
         }
-        let demanded = self.uses.entry((addr, use_index)).or_default();
-        let before = *demanded;
-        *demanded |= mask;
-        let mut changed = *demanded != before;
-        if let Some(value) = ssa.use_value(function, addr, use_index) {
+        let mut changed = match self.uses.cell_mut(addr, use_index) {
+            Some(demanded) => {
+                let before = *demanded;
+                *demanded |= mask;
+                *demanded != before
+            }
+            None => false,
+        };
+        if let Some(value) = ssa.use_value_ref(function, addr, use_index) {
             changed |= self.demand_value(value, mask);
         }
         changed
@@ -187,13 +226,36 @@ pub fn erase_unobserved_masked_inputs(
     ssa: &SsaInfo,
     oracle: &BitDemandOracle,
 ) -> usize {
-    let demanded_definitions: HashSet<InstrAddr> = ssa
-        .def_versions
-        .keys()
-        .copied()
+    // Only a constant-mask `And` can be rewritten below, and that is a
+    // discriminant test on the operation itself. Asking the demand question
+    // first meant an SSA lookup and a demand probe for every definition in the
+    // function to build a set the rewrite consults for a handful of them.
+    let demanded_definitions: HashSet<InstrAddr> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(block_idx, block)| {
+            block
+                .instrs
+                .iter()
+                .enumerate()
+                .filter(|(_, instruction)| {
+                    matches!(
+                        instruction.op,
+                        Op::Bin {
+                            op: BinOp::And,
+                            ..
+                        }
+                    )
+                })
+                .map(move |(instr_idx, _)| InstrAddr {
+                    block_idx,
+                    instr_idx,
+                })
+        })
         .filter(|addr| {
-            ssa.def_value(function, *addr)
-                .is_some_and(|value| oracle.value_demand(&value) != 0)
+            ssa.def_value_ref(function, *addr)
+                .is_some_and(|value| oracle.value_demand(value) != 0)
         })
         .collect();
     let mut rewritten = 0;
@@ -255,8 +317,14 @@ fn has_observable_uses(op: &Op) -> bool {
     )
 }
 
-fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
-    let mut masks = Vec::new();
+/// Per-operand demand of `op`, written into `masks` (cleared first).
+///
+/// Takes the buffer rather than returning one: the fixed point calls this once
+/// per demanded definition per sweep, and a fresh `Vec` per call is a heap
+/// allocation for a list that is almost always one or two entries long.
+fn transfer_masks_into(op: &Op, demanded: u64, masks: &mut Vec<(usize, u64)>) {
+    masks.clear();
+    let masks = masks;
     let mut use_index = 0;
 
     fn value(masks: &mut Vec<(usize, u64)>, use_index: &mut usize, operand: &Value, mask: u64) {
@@ -267,15 +335,15 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
     }
 
     match op {
-        Op::Assign { src, .. } => value(&mut masks, &mut use_index, src, demanded),
+        Op::Assign { src, .. } => value(masks, &mut use_index, src, demanded),
         Op::Bin { op, lhs, rhs, .. } => {
             let lhs_mask = bin_operand_mask(*op, lhs, rhs, demanded, true);
             let rhs_mask = bin_operand_mask(*op, rhs, lhs, demanded, false);
-            value(&mut masks, &mut use_index, lhs, lhs_mask);
-            value(&mut masks, &mut use_index, rhs, rhs_mask);
+            value(masks, &mut use_index, lhs, lhs_mask);
+            value(masks, &mut use_index, rhs, rhs_mask);
         }
         Op::Un { op, src, .. } => value(
-            &mut masks,
+            masks,
             &mut use_index,
             src,
             match op {
@@ -284,11 +352,11 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
             },
         ),
         Op::Cmp { lhs, rhs, .. } => {
-            value(&mut masks, &mut use_index, lhs, FULL);
-            value(&mut masks, &mut use_index, rhs, FULL);
+            value(masks, &mut use_index, lhs, FULL);
+            value(masks, &mut use_index, rhs, FULL);
         }
         Op::ZExt { src, from, .. } | Op::Trunc { src, from, .. } => value(
-            &mut masks,
+            masks,
             &mut use_index,
             src,
             demanded & width_mask(*from),
@@ -301,10 +369,10 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
             } else {
                 0
             };
-            value(&mut masks, &mut use_index, src, low | sign);
+            value(masks, &mut use_index, src, low | sign);
         }
         Op::Extract { src, lo, .. } => value(
-            &mut masks,
+            masks,
             &mut use_index,
             src,
             if *lo < 64 { demanded << *lo } else { FULL },
@@ -312,14 +380,14 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
         Op::Concat { hi, lo, .. } => {
             // Concat does not yet carry operand widths.  Keep both operands
             // whole until that missing type evidence exists.
-            value(&mut masks, &mut use_index, hi, FULL);
-            value(&mut masks, &mut use_index, lo, FULL);
+            value(masks, &mut use_index, hi, FULL);
+            value(masks, &mut use_index, lo, FULL);
         }
         Op::Ite { cond: _, t, e, .. } => {
             masks.push((0, FULL));
             use_index = 1;
-            value(&mut masks, &mut use_index, t, demanded);
-            value(&mut masks, &mut use_index, e, demanded);
+            value(masks, &mut use_index, t, demanded);
+            value(masks, &mut use_index, e, demanded);
         }
         // Observable operands were seeded before the fixed point.  Loads and
         // calls may also define a result, but its demand does not change their
@@ -341,7 +409,6 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
         | Op::Intrinsic { .. }
         | Op::Unknown { .. } => {}
     }
-    masks
 }
 
 fn bin_operand_mask(op: BinOp, operand: &Value, other: &Value, demanded: u64, is_lhs: bool) -> u64 {

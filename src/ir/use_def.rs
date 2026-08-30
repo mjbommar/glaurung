@@ -99,11 +99,181 @@ fn reads_of_memop(m: &MemOp, out: &mut Vec<VReg>) {
     }
 }
 
+/// Shared handle to the register an operation defines.
+///
+/// The read-side mirror of [`def_mut`], and the single source of truth for the
+/// `def` half of [`def_uses`]. A borrowing accessor exists because a `VReg` owns
+/// a `String` for the physical-register spelling, so the cloning form allocates
+/// on every call — and the SSA renamer, the bit-demand fixed point and value
+/// numbering all ask this question once per instruction per sweep.
+pub fn def_ref(op: &Op) -> Option<&VReg> {
+    match op {
+        Op::Assign { dst, .. }
+        | Op::Undef { dst, .. }
+        | Op::Bin { dst, .. }
+        | Op::Un { dst, .. }
+        | Op::Cmp { dst, .. }
+        | Op::Load { dst, .. }
+        | Op::CondLoad { dst, .. }
+        | Op::ZExt { dst, .. }
+        | Op::SExt { dst, .. }
+        | Op::Trunc { dst, .. }
+        | Op::Extract { dst, .. }
+        | Op::Concat { dst, .. }
+        | Op::Ite { dst, .. } => Some(dst),
+        Op::Call { effects, .. } => effects.as_ref().and_then(|effects| effects.result.as_ref()),
+        Op::Intrinsic { outs, .. } => outs.first().map(|(register, _)| register),
+        Op::Store { .. }
+        | Op::CondStore { .. }
+        | Op::IndirectJump { .. }
+        | Op::CondJump { .. }
+        | Op::CondReturn { .. }
+        | Op::CondReturnValue { .. }
+        | Op::Jump { .. }
+        | Op::ReturnValue { .. }
+        | Op::Return
+        | Op::Nop
+        | Op::Unknown { .. } => None,
+    }
+}
+
+/// Visit every register an operation reads, in the source order [`def_uses`]
+/// enumerates, borrowing rather than cloning.
+///
+/// This is the definition of that order: [`def_uses`] is written in terms of it,
+/// so a consumer that walks uses without allocating cannot drift from one that
+/// collects them.
+pub fn for_each_use(op: &Op, mut f: impl FnMut(&VReg)) {
+    fn of_value<'a>(v: &'a Value, f: &mut impl FnMut(&'a VReg)) {
+        if let Value::Reg(r) = v {
+            f(r);
+        }
+    }
+    fn of_memop<'a>(m: &'a MemOp, f: &mut impl FnMut(&'a VReg)) {
+        if let Some(b) = &m.base {
+            f(b);
+        }
+        if let Some(i) = &m.index {
+            f(i);
+        }
+    }
+    match op {
+        Op::Assign { src, .. } => of_value(src, &mut f),
+        Op::Undef { .. } => {}
+        Op::Bin { lhs, rhs, .. } => {
+            of_value(lhs, &mut f);
+            of_value(rhs, &mut f);
+        }
+        Op::IndirectJump { target, index } => {
+            of_value(target, &mut f);
+            if let Some(index) = index {
+                of_value(index, &mut f);
+            }
+        }
+        Op::Un { src, .. } => of_value(src, &mut f),
+        Op::Cmp { lhs, rhs, .. } => {
+            of_value(lhs, &mut f);
+            of_value(rhs, &mut f);
+        }
+        Op::Load { addr, .. } => of_memop(addr, &mut f),
+        Op::CondLoad {
+            cond,
+            addr,
+            fallback,
+            ..
+        } => {
+            f(cond);
+            of_memop(addr, &mut f);
+            of_value(fallback, &mut f);
+        }
+        Op::Store { addr, src } => {
+            of_memop(addr, &mut f);
+            of_value(src, &mut f);
+        }
+        Op::CondStore {
+            cond, addr, src, ..
+        } => {
+            f(cond);
+            of_memop(addr, &mut f);
+            of_value(src, &mut f);
+        }
+        Op::CondJump { cond, .. } | Op::CondReturn { cond, .. } => f(cond),
+        Op::CondReturnValue { cond, value, .. } => {
+            f(cond);
+            of_value(value, &mut f);
+        }
+        Op::Call { target, effects } => {
+            if let CallTarget::Indirect(v) = target {
+                of_value(v, &mut f);
+            }
+            if let Some(e) = effects {
+                for argument in &e.args {
+                    f(argument);
+                }
+            }
+        }
+        Op::ReturnValue { value } => of_value(value, &mut f),
+        Op::ZExt { src, .. } | Op::SExt { src, .. } | Op::Trunc { src, .. } => {
+            of_value(src, &mut f)
+        }
+        Op::Extract { src, .. } => of_value(src, &mut f),
+        Op::Concat { hi, lo, .. } => {
+            of_value(hi, &mut f);
+            of_value(lo, &mut f);
+        }
+        Op::Ite { cond, t, e, .. } => {
+            f(cond);
+            of_value(t, &mut f);
+            of_value(e, &mut f);
+        }
+        Op::Intrinsic { ins, .. } => {
+            for v in ins {
+                of_value(v, &mut f);
+            }
+        }
+        Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
+    }
+}
+
+/// How many registers an operation reads — [`for_each_use`] without the values.
+pub fn use_count(op: &Op) -> usize {
+    let mut count = 0;
+    for_each_use(op, |_| count += 1);
+    count
+}
+
+/// Visit every register an operation writes, in the order [`defs_uses`]
+/// enumerates them, borrowing rather than cloning.
+///
+/// [`defs_uses`] is written in terms of this, so the complete def surface has
+/// one definition and a non-allocating walk cannot drift from a collecting one.
+pub fn for_each_def(op: &Op, mut f: impl FnMut(&VReg)) {
+    match op {
+        Op::Intrinsic { outs, .. } => {
+            for (register, _) in outs {
+                f(register);
+            }
+        }
+        _ => {
+            if let Some(definition) = def_ref(op) {
+                f(definition);
+            }
+        }
+    }
+}
+
 /// Return `(def, uses)` for a given op.
 ///
 /// `def` is the VReg written (at most one per LLIR op — three-address form).
 /// `uses` lists every VReg read, in source order, possibly with duplicates.
 pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
+    let mut uses = Vec::new();
+    for_each_use(op, |register| uses.push(register.clone()));
+    (def_ref(op).cloned(), uses)
+}
+
+#[cfg(test)]
+fn def_uses_reference_shapes(op: &Op) -> (Option<VReg>, Vec<VReg>) {
     let mut uses = Vec::new();
     let def = match op {
         Op::Assign { dst, src } => {
@@ -240,11 +410,10 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
 /// write multiple independent values, and dropping outputs after index zero
 /// makes later reads look like live-ins.
 pub fn defs_uses(op: &Op) -> (Vec<VReg>, Vec<VReg>) {
-    let (first, uses) = def_uses(op);
-    let definitions = match op {
-        Op::Intrinsic { outs, .. } => outs.iter().map(|(register, _)| register.clone()).collect(),
-        _ => first.into_iter().collect(),
-    };
+    let mut definitions = Vec::new();
+    for_each_def(op, |register| definitions.push(register.clone()));
+    let mut uses = Vec::new();
+    for_each_use(op, |register| uses.push(register.clone()));
     (definitions, uses)
 }
 
@@ -323,6 +492,213 @@ pub fn compute_use_def(lf: &LlirFunction) -> UseDefIndex {
 mod tests {
     use super::*;
     use crate::ir::types::{BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirInstr, Op};
+
+    /// One operation of every shape `def_uses` distinguishes, with a register
+    /// in each operand position that can hold one — plus the variants that
+    /// make an operand optional, since those are where an order or a count can
+    /// silently drift.
+    fn every_op_shape() -> Vec<Op> {
+        use crate::ir::types::{CallEffects, MemOp, UnOp, Value, VReg, Width};
+        let r = |n: &str| VReg::phys(n);
+        let v = |n: &str| Value::Reg(VReg::phys(n));
+        let mem = |base: Option<&str>, index: Option<&str>| {
+            MemOp::plain(base.map(r), index.map(r), 1, 8, 8)
+        };
+        vec![
+            Op::Assign {
+                dst: r("rax"),
+                src: v("rbx"),
+            },
+            Op::Assign {
+                dst: r("rax"),
+                src: Value::Const(7),
+            },
+            Op::Undef {
+                dst: r("rax"),
+                reason: "test".into(),
+            },
+            Op::Bin {
+                dst: r("rax"),
+                op: BinOp::Add,
+                lhs: v("rbx"),
+                rhs: v("rcx"),
+            },
+            Op::Bin {
+                dst: r("rax"),
+                op: BinOp::And,
+                lhs: v("rbx"),
+                rhs: Value::Const(0xff),
+            },
+            Op::Bin {
+                dst: r("rax"),
+                op: BinOp::Or,
+                lhs: Value::Const(1),
+                rhs: v("rcx"),
+            },
+            Op::Un {
+                dst: r("rax"),
+                op: UnOp::Not,
+                src: v("rbx"),
+            },
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: v("rbx"),
+                rhs: Value::Const(0),
+            },
+            Op::Load {
+                dst: r("rax"),
+                addr: mem(Some("rbx"), Some("rcx")),
+            },
+            Op::Load {
+                dst: r("rax"),
+                addr: mem(None, Some("rcx")),
+            },
+            Op::Load {
+                dst: r("rax"),
+                addr: mem(Some("rbx"), None),
+            },
+            Op::CondLoad {
+                dst: r("rax"),
+                cond: VReg::Flag(Flag::Z),
+                inverted: false,
+                addr: mem(Some("rbx"), Some("rcx")),
+                fallback: v("rdx"),
+            },
+            Op::Store {
+                addr: mem(Some("rbx"), None),
+                src: v("rdx"),
+            },
+            Op::CondStore {
+                cond: VReg::Flag(Flag::Z),
+                inverted: true,
+                addr: mem(Some("rbx"), Some("rcx")),
+                src: Value::Const(3),
+            },
+            Op::Jump { target: 0x1000 },
+            Op::IndirectJump {
+                target: v("rax"),
+                index: Some(v("rcx")),
+            },
+            Op::IndirectJump {
+                target: v("rax"),
+                index: None,
+            },
+            Op::CondJump {
+                cond: VReg::Flag(Flag::Z),
+                target: 0x1000,
+                inverted: false,
+            },
+            Op::CondReturn {
+                cond: VReg::Flag(Flag::C),
+                inverted: false,
+            },
+            Op::CondReturnValue {
+                cond: VReg::Flag(Flag::C),
+                inverted: false,
+                value: v("rax"),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: None,
+            },
+            Op::Call {
+                target: CallTarget::Indirect(v("r11")),
+                effects: Some(CallEffects {
+                    result: Some(r("rax")),
+                    args: vec![r("rdi"), r("rsi")],
+                    ..CallEffects::default()
+                }),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    result: None,
+                    args: vec![r("rdi")],
+                    ..CallEffects::default()
+                }),
+            },
+            Op::ReturnValue { value: v("rax") },
+            Op::Return,
+            Op::Nop,
+            Op::ZExt {
+                dst: r("rax"),
+                src: v("ebx"),
+                from: Width::W32,
+                to: Width::W64,
+            },
+            Op::SExt {
+                dst: r("rax"),
+                src: v("ebx"),
+                from: Width::W32,
+                to: Width::W64,
+            },
+            Op::Trunc {
+                dst: r("eax"),
+                src: v("rbx"),
+                from: Width::W64,
+                to: Width::W32,
+            },
+            Op::Extract {
+                dst: r("eax"),
+                src: v("rbx"),
+                hi: 63,
+                lo: 32,
+            },
+            Op::Concat {
+                dst: r("rax"),
+                hi: v("edx"),
+                lo: v("eax"),
+            },
+            Op::Ite {
+                dst: r("rax"),
+                cond: VReg::Flag(Flag::Z),
+                t: v("rbx"),
+                e: Value::Const(0),
+                width: Width::W64,
+            },
+            Op::Intrinsic {
+                name: "cpuid".into(),
+                ins: vec![v("rax"), Value::Const(0)],
+                outs: vec![(r("rax"), Width::W64), (r("rbx"), Width::W64)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            Op::Unknown {
+                mnemonic: "ud2".into(),
+            },
+        ]
+    }
+
+    /// The borrowing walkers must agree with the shape table `def_uses` was
+    /// originally written as — same def, same uses, same ORDER, same count.
+    ///
+    /// `def_uses` is now written in terms of `for_each_use`/`def_ref`, so this
+    /// is what stops that rewrite from having quietly changed an operand order
+    /// (which would misalign every SSA use index) or dropped an operand.
+    #[test]
+    fn borrowing_walkers_match_the_original_def_uses_shape_table() {
+        for op in every_op_shape() {
+            let (reference_def, reference_uses) = def_uses_reference_shapes(&op);
+            let (def, uses) = def_uses(&op);
+            assert_eq!(def, reference_def, "def mismatch for {op:?}");
+            assert_eq!(uses, reference_uses, "uses mismatch for {op:?}");
+
+            assert_eq!(def_ref(&op).cloned(), reference_def, "def_ref for {op:?}");
+            assert_eq!(
+                use_count(&op),
+                reference_uses.len(),
+                "use_count for {op:?}"
+            );
+            let mut walked = Vec::new();
+            for_each_use(&op, |register| walked.push(register.clone()));
+            assert_eq!(walked, reference_uses, "for_each_use order for {op:?}");
+
+            let mut definitions = Vec::new();
+            for_each_def(&op, |register| definitions.push(register.clone()));
+            assert_eq!(definitions, defs_uses(&op).0, "for_each_def for {op:?}");
+        }
+    }
 
     fn mk_lf(blocks: Vec<Vec<Op>>) -> LlirFunction {
         let mut out = Vec::new();

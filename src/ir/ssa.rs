@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::ir::regview;
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, VReg, Value};
-use crate::ir::use_def::{defs_uses, InstrAddr};
+use crate::ir::use_def::{for_each_def, for_each_use, use_count, InstrAddr};
 use crate::target::{TargetId, TargetSpec};
 
 /// The identity of one machine value in SSA form.
@@ -70,18 +70,142 @@ pub struct SsaInfo {
     pub use_versions: HashMap<(InstrAddr, usize), u32>,
     /// Complete output identities, including every output of a multi-output
     /// intrinsic. The legacy `def_versions` map remains the output-zero view.
-    def_values_all: HashMap<(InstrAddr, usize), SsaValue>,
+    def_values_all: OperandTable,
     /// Complete use identities with canonical storage captured at analysis
     /// time. This prevents queries from re-canonicalizing under a different
     /// architecture later.
-    use_values_all: HashMap<(InstrAddr, usize), SsaValue>,
+    use_values_all: OperandTable,
+}
+
+/// Per-`(block, instruction, operand)` storage, indexed rather than hashed.
+///
+/// The key of these two tables is a dense coordinate — block index,
+/// instruction index, operand position — so a `HashMap` was hashing 24 bytes of
+/// integers on every query and every insert to reach a slot arithmetic can
+/// address directly. On `07_packet_parser::parse_packet` that was the single
+/// largest cost in the dataflow phase: SipHash accounted for 16.6% of it, and
+/// `hash_one::<&(InstrAddr, usize)>` for another 4.9%, because the bit-demand
+/// fixed point asks for the definition and every use of every instruction on
+/// every sweep.
+///
+/// Indexing is also why the tables cannot reorder anything: there is no
+/// iteration order to depend on, and a slot's address is a function of the
+/// coordinate alone.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct OperandGrid<T> {
+    /// Flat index of each block's first instruction, with a final terminator,
+    /// so `block_base[b + 1] - block_base[b]` is block `b`'s length.
+    block_base: Vec<u32>,
+    /// Start offset into `slots` for each flat instruction, with a terminator.
+    instr_base: Vec<u32>,
+    slots: Vec<T>,
+}
+
+/// The SSA identity tables: one optional value per operand position.
+type OperandTable = OperandGrid<Option<SsaValue>>;
+
+impl<T: Clone + Default> OperandGrid<T> {
+    /// Reserve exactly `width(op)` operand slots for each instruction of `lf`.
+    pub(crate) fn with_widths(lf: &LlirFunction, width: impl Fn(&Op) -> usize) -> Self {
+        let mut block_base: Vec<u32> = Vec::with_capacity(lf.blocks.len() + 1);
+        let mut instr_base: Vec<u32> = Vec::new();
+        let mut flat = 0u32;
+        let mut total = 0u32;
+        for block in &lf.blocks {
+            block_base.push(flat);
+            for instruction in &block.instrs {
+                instr_base.push(total);
+                total = total.saturating_add(width(&instruction.op) as u32);
+                flat += 1;
+            }
+        }
+        block_base.push(flat);
+        instr_base.push(total);
+        Self {
+            block_base,
+            instr_base,
+            slots: vec![T::default(); total as usize],
+        }
+    }
+
+    /// Total operand slots, which is also an exact capacity for any map keyed
+    /// by the same coordinates.
+    pub(crate) fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    fn slot(&self, addr: InstrAddr, index: usize) -> Option<usize> {
+        let start = *self.block_base.get(addr.block_idx)? as usize;
+        let end = *self.block_base.get(addr.block_idx + 1)? as usize;
+        let flat = start.checked_add(addr.instr_idx)?;
+        if flat >= end {
+            return None;
+        }
+        let operand_start = self.instr_base[flat] as usize;
+        let operand_end = self.instr_base[flat + 1] as usize;
+        let slot = operand_start.checked_add(index)?;
+        (slot < operand_end).then_some(slot)
+    }
+
+    pub(crate) fn cell(&self, addr: InstrAddr, index: usize) -> Option<&T> {
+        Some(&self.slots[self.slot(addr, index)?])
+    }
+
+    pub(crate) fn cell_mut(&mut self, addr: InstrAddr, index: usize) -> Option<&mut T> {
+        let slot = self.slot(addr, index)?;
+        Some(&mut self.slots[slot])
+    }
+}
+
+impl OperandTable {
+    fn get(&self, addr: InstrAddr, index: usize) -> Option<&SsaValue> {
+        self.cell(addr, index)?.as_ref()
+    }
+
+    fn set(&mut self, addr: InstrAddr, index: usize, value: SsaValue) {
+        if let Some(cell) = self.cell_mut(addr, index) {
+            *cell = Some(value);
+        }
+    }
+}
+
+/// How many SSA-eligible registers an operation defines.
+pub(crate) fn ssa_def_width(op: &Op) -> usize {
+    let mut width = 0;
+    for_each_def(op, |register| {
+        if is_ssa_reg(register) {
+            width += 1;
+        }
+    });
+    width
 }
 
 impl SsaInfo {
     /// Return the SSA value defined by the instruction at `addr`.
     pub fn def_value(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<SsaValue> {
+        self.def_value_ref(lf, addr).cloned()
+    }
+
+    /// Borrow the SSA value defined by the instruction at `addr`.
+    ///
+    /// An `SsaValue` owns the physical-register spelling, so the cloning form
+    /// allocates a `String` per call. The bit-demand fixed point asks this once
+    /// per instruction per sweep, which is the only reason this exists.
+    pub fn def_value_ref(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<&SsaValue> {
         lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
-        self.def_values_all.get(&(addr, 0)).cloned()
+        self.def_values_all.get(addr, 0)
+    }
+
+    /// Borrow the SSA value read at source-order use `use_index`. See
+    /// [`SsaInfo::def_value_ref`].
+    pub fn use_value_ref(
+        &self,
+        lf: &LlirFunction,
+        addr: InstrAddr,
+        use_index: usize,
+    ) -> Option<&SsaValue> {
+        lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
+        self.use_values_all.get(addr, use_index)
     }
 
     /// Return every SSA value defined by one instruction, in output order.
@@ -95,8 +219,24 @@ impl SsaInfo {
             return Vec::new();
         }
         (0..)
-            .map_while(|index| self.def_values_all.get(&(addr, index)).cloned())
+            .map_while(|index| self.def_values_all.get(addr, index).cloned())
             .collect()
+    }
+
+    /// The version of the definition at `addr`, or 0 when there is none.
+    ///
+    /// The same answer as `def_versions[addr]`, read out of the indexed table
+    /// rather than by hashing the address: renaming writes both from one
+    /// `new_version`, so they agree by construction.
+    pub fn def_version(&self, lf: &LlirFunction, addr: InstrAddr) -> u32 {
+        self.def_value_ref(lf, addr).map_or(0, |value| value.version)
+    }
+
+    /// The version read at source-order use `use_index`, or 0. See
+    /// [`SsaInfo::def_version`].
+    pub fn use_version(&self, lf: &LlirFunction, addr: InstrAddr, use_index: usize) -> u32 {
+        self.use_value_ref(lf, addr, use_index)
+            .map_or(0, |value| value.version)
     }
 
     /// Return the SSA value read at the source-order use `use_index` of the
@@ -108,8 +248,7 @@ impl SsaInfo {
         addr: InstrAddr,
         use_index: usize,
     ) -> Option<SsaValue> {
-        lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
-        self.use_values_all.get(&(addr, use_index)).cloned()
+        self.use_value_ref(lf, addr, use_index).cloned()
     }
 }
 
@@ -162,17 +301,36 @@ pub fn canon_gpr(v: &VReg) -> VReg {
     v.clone()
 }
 
-fn write_regs(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg) -> Vec<VReg> {
-    defs_uses(op)
-        .0
-        .into_iter()
-        .filter(is_ssa_reg)
-        .map(|register| canonicalize(&register))
-        .collect()
+/// Canonicalized SSA-eligible definitions of `op`, appended to `out`.
+///
+/// Written against [`for_each_def`] rather than [`defs_uses`]: the collecting
+/// form allocates a `Vec<VReg>` and clones the physical-register `String` of
+/// every definition, only for this to clone each survivor a second time under
+/// `canonicalize`. The renamer asks this per instruction.
+fn write_regs_into(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg, out: &mut Vec<VReg>) {
+    out.clear();
+    for_each_def(op, |register| {
+        if is_ssa_reg(register) {
+            out.push(canonicalize(register));
+        }
+    });
 }
 
-fn uses_of_op_canonical(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg) -> Vec<VReg> {
-    defs_uses(op).1.iter().map(canonicalize).collect()
+fn write_regs(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg) -> Vec<VReg> {
+    let mut out = Vec::new();
+    write_regs_into(op, canonicalize, &mut out);
+    out
+}
+
+/// Canonicalized reads of `op`, appended to `out`. See [`write_regs_into`] for
+/// why this borrows instead of collecting twice.
+fn uses_of_op_canonical_into(
+    op: &Op,
+    canonicalize: &impl Fn(&VReg) -> VReg,
+    out: &mut Vec<VReg>,
+) {
+    out.clear();
+    for_each_use(op, |register| out.push(canonicalize(register)));
 }
 
 /// Canonicalize one register under the function's actual target.
@@ -252,24 +410,27 @@ fn compute_dominators(lf: &LlirFunction, preds: &[Vec<usize>]) -> (Vec<Option<us
         stack.push((0, 0));
         visited[0] = true;
 
-        let succ_of = |bi: usize| -> Vec<usize> {
-            let va_to_idx: HashMap<u64, usize> = lf
-                .blocks
-                .iter()
-                .enumerate()
-                .map(|(i, b)| (b.start_va, i))
-                .collect();
-            let mut out = Vec::new();
+        // One VA->index map for the whole walk. Rebuilding it inside the
+        // closure made every stack visit pay an O(blocks) hash-map build, so
+        // the depth-first walk itself cost O(blocks * (blocks + edges)).
+        let va_to_idx: HashMap<u64, usize> = lf
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.start_va, i))
+            .collect();
+        let succ_of = |bi: usize, out: &mut Vec<usize>| {
+            out.clear();
             for s in &lf.blocks[bi].succs {
                 if let Some(&j) = va_to_idx.get(s) {
                     out.push(j);
                 }
             }
-            out
         };
 
+        let mut succs: Vec<usize> = Vec::new();
         while let Some(&(node, cursor)) = stack.last() {
-            let succs = succ_of(node);
+            succ_of(node, &mut succs);
             if cursor < succs.len() {
                 let next = succs[cursor];
                 // advance cursor
@@ -383,15 +544,23 @@ fn compute_frontiers(idom: &[Option<usize>], preds: &[Vec<usize>]) -> Vec<BTreeS
 }
 
 /// Compute which blocks define each SSA-eligible VReg.
+/// The blocks are visited in ascending order, so each variable's list is built
+/// already sorted and deduplicated — which is what a `BTreeSet<usize>` was
+/// providing at the cost of a tree node per element.
 fn def_blocks(
     lf: &LlirFunction,
     canonicalize: &impl Fn(&VReg) -> VReg,
-) -> BTreeMap<VReg, BTreeSet<usize>> {
-    let mut out: BTreeMap<VReg, BTreeSet<usize>> = BTreeMap::new();
+) -> BTreeMap<VReg, Vec<usize>> {
+    let mut out: BTreeMap<VReg, Vec<usize>> = BTreeMap::new();
+    let mut defs: Vec<VReg> = Vec::new();
     for (bi, b) in lf.blocks.iter().enumerate() {
         for ins in &b.instrs {
-            for d in write_regs(&ins.op, canonicalize) {
-                out.entry(d).or_default().insert(bi);
+            write_regs_into(&ins.op, canonicalize, &mut defs);
+            for d in defs.drain(..) {
+                let blocks = out.entry(d).or_default();
+                if blocks.last() != Some(&bi) {
+                    blocks.push(bi);
+                }
             }
         }
     }
@@ -402,25 +571,38 @@ fn def_blocks(
 /// each variable. Returns a parallel vector indexed by block number of phi
 /// records (one per VReg requiring a phi at that block).
 fn place_phis(
-    def_blocks: &BTreeMap<VReg, BTreeSet<usize>>,
+    def_blocks: &BTreeMap<VReg, Vec<usize>>,
     frontier: &[BTreeSet<usize>],
     preds: &[Vec<usize>],
 ) -> Vec<Vec<(VReg, Vec<usize>)>> {
     let n = frontier.len();
     let mut phi_blocks: Vec<Vec<(VReg, Vec<usize>)>> = vec![Vec::new(); n];
+    // Membership over block indices, which are dense: two reused bit vectors
+    // rather than two fresh `HashSet`s per variable. `stamp` avoids clearing
+    // them between variables — a block belongs to the current variable's set
+    // only if its stamp matches.
+    let mut has_phi: Vec<u32> = vec![0; n];
+    let mut in_work: Vec<u32> = vec![0; n];
+    let mut work: VecDeque<usize> = VecDeque::new();
+    let mut stamp = 0u32;
     for (v, defs) in def_blocks {
-        let mut work: VecDeque<usize> = defs.iter().copied().collect();
-        let mut has_phi: HashSet<usize> = HashSet::new();
-        let mut in_work: HashSet<usize> = defs.iter().copied().collect();
+        stamp += 1;
+        work.clear();
+        work.extend(defs.iter().copied());
+        for &b in defs {
+            in_work[b] = stamp;
+        }
         while let Some(b) = work.pop_front() {
-            in_work.remove(&b);
+            in_work[b] = 0;
             for &y in &frontier[b] {
-                if has_phi.insert(y) {
-                    phi_blocks[y].push((v.clone(), preds[y].clone()));
-                    if !defs.contains(&y) && !in_work.contains(&y) {
-                        work.push_back(y);
-                        in_work.insert(y);
-                    }
+                if has_phi[y] == stamp {
+                    continue;
+                }
+                has_phi[y] = stamp;
+                phi_blocks[y].push((v.clone(), preds[y].clone()));
+                if defs.binary_search(&y).is_err() && in_work[y] != stamp {
+                    work.push_back(y);
+                    in_work[y] = stamp;
                 }
             }
         }
@@ -456,10 +638,15 @@ fn rename(
     let mut counter: HashMap<VReg, u32> = HashMap::new();
     let mut stack: HashMap<VReg, Vec<u32>> = HashMap::new();
 
-    let mut def_versions: HashMap<InstrAddr, u32> = HashMap::new();
-    let mut use_versions: HashMap<(InstrAddr, usize), u32> = HashMap::new();
-    let mut def_values_all = HashMap::new();
-    let mut use_values_all = HashMap::new();
+    let mut def_values_all = OperandTable::with_widths(lf, ssa_def_width);
+    let mut use_values_all = OperandTable::with_widths(lf, use_count);
+    // Exact capacities from the operand counts already computed above. Growing
+    // these incrementally made `reserve_rehash` 3.9% of the dataflow phase on
+    // `07_packet_parser::parse_packet`.
+    let mut def_versions: HashMap<InstrAddr, u32> =
+        HashMap::with_capacity(def_values_all.len());
+    let mut use_versions: HashMap<(InstrAddr, usize), u32> =
+        HashMap::with_capacity(use_values_all.len());
     // Phi results and incoming version slots, filled in as we rename.
     let mut phi_dst: Vec<HashMap<VReg, u32>> = vec![HashMap::new(); n];
     let mut phi_inputs: Vec<HashMap<VReg, HashMap<usize, u32>>> = vec![HashMap::new(); n];
@@ -476,16 +663,44 @@ fn rename(
         stack: &mut HashMap<VReg, Vec<u32>>,
         v: &VReg,
     ) -> u32 {
-        let c = counter.entry(v.clone()).or_insert(1);
-        let ver = *c;
-        *c += 1;
-        stack.entry(v.clone()).or_default().push(ver);
+        // `entry` takes the key by value, so the plain form allocated a `String`
+        // for the physical-register spelling on every definition even when the
+        // register was already known. Look up first; clone only to insert.
+        let ver = match counter.get_mut(v) {
+            Some(c) => {
+                let ver = *c;
+                *c += 1;
+                ver
+            }
+            None => {
+                counter.insert(v.clone(), 2);
+                1
+            }
+        };
+        match stack.get_mut(v) {
+            Some(s) => s.push(ver),
+            None => {
+                stack.insert(v.clone(), vec![ver]);
+            }
+        }
         ver
     }
 
     fn top_version(stack: &HashMap<VReg, Vec<u32>>, v: &VReg) -> u32 {
         stack.get(v).and_then(|s| s.last().copied()).unwrap_or(0)
     }
+
+    let va_to_idx: HashMap<u64, usize> = lf
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.start_va, i))
+        .collect();
+
+    // Reused across every instruction so the canonicalized def/use walks do not
+    // allocate a fresh `Vec<VReg>` per instruction.
+    let mut use_scratch: Vec<VReg> = Vec::new();
+    let mut def_scratch: Vec<VReg> = Vec::new();
 
     // Iterative DFS of the dominator tree so we don't blow the stack on deep
     // CFGs. Each stack entry is (block, child_cursor, pushed_vregs).
@@ -514,27 +729,26 @@ fn rename(
                     block_idx: block,
                     instr_idx: ii,
                 };
-                let uses = uses_of_op_canonical(&ins.op, canonicalize);
-                for (ui, u) in uses.iter().enumerate() {
-                    if is_ssa_reg(u) {
-                        let version = top_version(&stack, u);
+                uses_of_op_canonical_into(&ins.op, canonicalize, &mut use_scratch);
+                // Drained, so the canonicalized register moves into the SSA
+                // value instead of being cloned into it — one `String`
+                // allocation per use rather than two.
+                for (ui, u) in use_scratch.drain(..).enumerate() {
+                    if is_ssa_reg(&u) {
+                        let version = top_version(&stack, &u);
                         use_versions.insert((addr, ui), version);
-                        use_values_all.insert(
-                            (addr, ui),
-                            SsaValue {
-                                base: u.clone(),
-                                version,
-                            },
-                        );
+                        use_values_all.set(addr, ui, SsaValue { base: u, version });
                     }
                 }
-                for (output_index, d) in write_regs(&ins.op, canonicalize).into_iter().enumerate() {
+                write_regs_into(&ins.op, canonicalize, &mut def_scratch);
+                for (output_index, d) in def_scratch.drain(..).enumerate() {
                     let ver = new_version(&mut counter, &mut stack, &d);
                     if output_index == 0 {
                         def_versions.insert(addr, ver);
                     }
-                    def_values_all.insert(
-                        (addr, output_index),
+                    def_values_all.set(
+                        addr,
+                        output_index,
                         SsaValue {
                             base: d.clone(),
                             version: ver,
@@ -545,20 +759,13 @@ fn rename(
             }
 
             // 3. Fill successor phi's incoming-version slots for this predecessor.
-            let succ_blocks: Vec<usize> = {
-                let va_to_idx: HashMap<u64, usize> = lf
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .map(|(i, b)| (b.start_va, i))
-                    .collect();
-                lf.blocks[block]
-                    .succs
-                    .iter()
-                    .filter_map(|s| va_to_idx.get(s).copied())
-                    .collect()
-            };
-            for succ in &succ_blocks {
+            // `va_to_idx` is hoisted out of the dominator-tree walk: building it
+            // here rebuilt an O(blocks) hash map once per block.
+            for succ in lf.blocks[block]
+                .succs
+                .iter()
+                .filter_map(|s| va_to_idx.get(s))
+            {
                 for (v, _preds) in &phi_blocks[*succ] {
                     let ver = top_version(&stack, v);
                     phi_inputs[*succ]
