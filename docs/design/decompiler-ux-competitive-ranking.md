@@ -44,7 +44,7 @@ Legend: **●** full · **◐** partial · **○** absent. Glaurung entries mark
 | 3 | Function prototype drives the rendered signature | ● | ● | ● | **●** *(2026-08-28)* |
 | 4 | Comments on the decompiled function | ● | ● | ◐ | **◐** *(2026-08-28 — anchored, not placed)* |
 | 5 | **Line → address map** | ● | ● | ● | **○** |
-| 5b | Per-variable machine addresses | ● | ● | ● | **●** *(2026-08-29)* |
+| 5b | Per-variable machine addresses | ● | ● | ● | **◐** *(2026-08-29 — stack slots only; see below)* |
 | 6 | Cross-references queryable from pseudocode | ● | ● | ◐ | ◐ |
 | 7 | Apply a struct to a variable (`base->field`) | ● | ● | ◐ | ○ |
 | 8 | Split / merge a variable | ● | ◐ | ○ | ○ |
@@ -95,7 +95,24 @@ variable-to-address map joins on the frame COORDINATE, which `stack_locals`
 publishes and the LLIR still carries alongside the machine `va` — no node
 identity required. dewolf and Reko ship exactly that shape (direct addresses, no
 line map) and DecBench's ingest counts it as a first-class case. Row 5b is now
-`●`; row 5 is still `○`, and the two are genuinely different problems.
+`◐`; row 5 is still `○`, and the two are genuinely different problems.
+
+**Row 5b is `◐` and not `●`, deliberately.** We have the capability; we do not
+have angr's coverage, and scoring them level would flatter us. `VariableAccess`
+carries a `CodeLocation` with `ins_addr` and
+`VariableManager.get_variable_accesses(variable)` returns them, so angr covers
+variables *generally* — register variables included, via def-use — and
+classifies each access as `READ` / `WRITE` / `REFERENCE`
+(`knowledge_plugins/variables/variable_access.py`). Ours covers **stack slots
+with a stable frame coordinate and nothing else**: a parameter carries no
+addresses, `-O2` with an omitted frame pointer carries none, ARM32 carries none,
+and we do not distinguish a read from a write. That is 287 of 374 slots at
+x86-64 `-O0` and 0 of 330 at `-O2`.
+
+What we do have that the bare mark hides is a validated silence rule: where the
+coordinate spaces do not agree we emit nothing rather than something plausible,
+and 8,441 emitted addresses across four formats and two disassemblers contained
+zero that were not a real instruction start accessing that slot.
 
 **3. Prototype drives the signature.** Hex-Rays: setting the callee's type *"will
 cause changes to all places where `off_5C6E4` is called"*. Ours now does —
