@@ -543,6 +543,102 @@ checkout's Python, registers the backend, and then delegates to DecBench's
 normal CLI. Set `DECBENCH_PYTHON` only when that interpreter is not at
 `$DECBENCH_DIR/.venv/bin/python`; do not patch the external checkout.
 
+## The full corpus, from the published dataset
+
+The section below scores the 250-function **sample set**. The whole 94,575-function
+corpus is also scorable here, from published data, with no Joern and no help from
+the DecBench maintainers.
+
+### Why this matters: our published row is a coverage artifact, not a score
+
+The published full-corpus leaderboard has Glaurung **11th of 13 at 0.09%** —
+`82 / 94,267`. That number is not a measurement of the decompiler. The published
+scoreboard says so itself:
+
+```toml
+[decompiler_scores.glaurung]
+overall_perfect_count = 82
+overall_total_count = 94267
+total_functions_evaluated = 0     # <- nothing was evaluated for this row
+```
+
+Glaurung is registered `sample_set_only`. The 82 perfect functions are the entire
+**250-function** sample-set submission, divided by the full corpus denominator.
+Every function we never submitted counts as a miss.
+
+Score each column over the functions it *actually produced output for* — same
+file, same `perfect_values`, their definitions throughout — and the picture
+inverts:
+
+| decompiler | perfect | scored | rate |
+|---|---:|---:|---|
+| ida | 35,973 | 87,156 | 41.27% |
+| kuna | 36,348 | 88,593 | 41.03% |
+| angr | 34,879 | 88,045 | 39.61% |
+| ghidra | 25,565 | 76,914 | 33.24% |
+| binja | 22,135 | 66,678 | 33.20% |
+| **glaurung** | **82** | **250** | **32.80%** |
+| fission | 56 | 250 | 22.40% |
+| dewolf | 2,856 | 35,583 | 8.03% |
+
+Our per-function quality sits with Ghidra and Binary Ninja. What we lack is
+**coverage of the board**, and coverage is a submission problem, not a decompiler
+problem. (`codex` and `claude-code` show 57% on ~254 functions — per the dataset
+card those two are LLM agents that run on a sampled slice, so they have the same
+denominator caveat in the other direction.)
+
+`tools/decbench_compare_full.py` computes that table, and is validated by
+reproducing the published counts exactly: 82 Union, 69 `ged`, 22 `type_match`,
+5 `byte_match`.
+
+### Running it
+
+Everything is pinned, because a run whose inputs float cannot be compared to an
+earlier one. The dataset revision is pinned in `tools/decbench_fetch_full.py`;
+pin the DecBench commit yourself.
+
+```bash
+TREE=~/.cache/glaurung/decbench-full/tree
+
+# 1. Fetch. 803 binaries + 800 Joern-extracted source CFGs, ~680 MB, sha256
+#    verified against the manifest, resumable. BSD-2, public, ungated.
+uv run python tools/decbench_fetch_full.py "$TREE"
+
+# 2. Decompile, current build. Same discipline as the sample-set path:
+#    stripped bytes at DWARF-derived addresses. ~35 min.
+export DECBENCH_SAMPLE_TREE="$TREE"
+uv run python tools/decbench_redecompile_tree.py "$(git rev-parse --short=7 HEAD)"
+
+# 3. Score with DecBench's own metric code, pinned.
+git clone https://github.com/Noelo-Lab/decbench.git && cd decbench
+git checkout f76dae075d4d82004fb21132b3f15e43b680e179
+uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
+.venv/bin/decbench evaluate-tree "$TREE" -m ged -m byte_match \
+    -d "glaurung-$(git -C ~/projects/personal/glaurung rev-parse --short=7 HEAD)" -j 12
+
+# 4. Compare against the published board.
+uv run python tools/decbench_compare_full.py "$TREE/function_results.json" \
+    --published ~/.cache/glaurung/decbench-full/published_function_results.json \
+    --column "glaurung-$(git rev-parse --short=7 HEAD)"
+```
+
+`decbench_fetch_full.py` writes `decbench_dataset_provenance.json` beside the
+tree recording repo, revision and config — a scored tree whose provenance is not
+written down cannot be defended later.
+
+### What it does and does not measure
+
+The same two limits as the sample-set path apply, and one more:
+
+* **`ged` and `byte_match` only.** `evaluate-tree` states it: `type_match` needs
+  recovered variables and stored `.c` artifacts do not carry them.
+* **`ged` needs a source CFG.** 800 of 803 binaries have one published; the
+  other three have no ground truth and are skipped.
+* **The denominator moves**, for the same reason it moves on the sample set: a
+  target function with no resolvable symbol in its compiled binary is not
+  decompiled. Report `scored` alongside `perfect`, always — the whole point of
+  this section is what happens when someone does not.
+
 ## A real DecBench score, without Joern
 
 `decbench_matrix.py` above spawns a Joern JVM per cell, which is why it is

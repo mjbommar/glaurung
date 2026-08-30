@@ -149,6 +149,10 @@ for opt, proj, binstem in keys:
     if not parts:
         stats["no-output"] += 1
         continue
+    # A tree fetched straight from the published dataset has no `decompiled/`
+    # yet -- only a tree materialized from a completed pipeline run does. Create
+    # it rather than requiring the caller to have run something else first.
+    (d / "decompiled").mkdir(parents=True, exist_ok=True)
     out_c = d / "decompiled" / f"{NAME}_{binstem}.c"
     out_c.write_text("\n".join(parts))
     lines = [
@@ -172,6 +176,12 @@ for opt, proj, binstem in keys:
         ]
     (d / "decompiled" / f"{NAME}_{binstem}.toml").write_text("\n".join(lines))
     stats["binaries"] += 1
+    if stats["binaries"] % 25 == 0:
+        print(
+            f"  {stats['binaries']}/{len(keys)} binaries, "
+            f"{stats['functions']} functions, {time.time() - t0:.0f}s",
+            flush=True,
+        )
 print(
     f"decompiled {stats['binaries']} binaries / {stats['functions']} functions "
     f"in {time.time() - t0:.0f}s as {NAME}"
