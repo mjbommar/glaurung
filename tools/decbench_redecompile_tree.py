@@ -66,6 +66,35 @@ for e in man:
     want[(e["opt"], e["project"], e["binary"])].append(e["function"])
 
 
+def _pe_symbol_addr(binary: pathlib.Path, names):
+    """name -> address for a PE binary, via glaurung's own object reader.
+
+    `readelf` returns nothing for PE, so the 12 Windows binaries in the corpus
+    (dexter, minipig, mydoom, x0r-usb at three opt levels each) were recorded
+    `no-symbols` and never decompiled at all -- ~500 functions absent from the
+    score, which reads as failure rather than as never-attempted.
+
+    i386 PE also decorates cdecl symbols with a leading underscore: the source
+    CFG names `crc32`, the symbol table holds `_crc32`. Match both.
+    """
+    import glaurung
+
+    try:
+        table = glaurung.symbol_address_map(str(binary))
+    except Exception:
+        return {}
+    by_name = {}
+    for addr, nm in table:
+        if addr:
+            by_name.setdefault(nm, addr)
+    found = {}
+    for nm in names:
+        a = by_name.get(nm) or by_name.get("_" + nm)
+        if a:
+            found[nm] = a
+    return found
+
+
 def symbol_addr(binary: pathlib.Path, names):
     """name -> address, from the compiled binary's symbol table."""
     out = subprocess.run(
@@ -83,6 +112,9 @@ def symbol_addr(binary: pathlib.Path, names):
                     continue
                 if a:
                     found[nm] = a
+    # readelf is ELF-only; fall back to glaurung's reader for PE/Mach-O.
+    if not found:
+        return _pe_symbol_addr(binary, names)
     return found
 
 
