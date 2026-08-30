@@ -41,24 +41,40 @@
 //!    one coordinate after later passes rename them.
 //! 4. **No base, no claim.** `MemOp { base: None }` is an absolute address, not
 //!    a frame slot.
+//! 5. **A moving base names no fixed storage.** A coordinate `(base, disp)`
+//!    denotes one location only while `base` holds the value it held when the
+//!    slot was minted. A frame pointer does; a STACK pointer does not, and our
+//!    lifter makes that visible: `push` decomposes into `rsp = rsp - 8` and
+//!    `store [rsp + 0]` sharing one `va`, so a push through a function's
+//!    `stack_top` slot at `(sp, 0)` matches its coordinate exactly while
+//!    referring to entirely different bytes. Measured on real binaries: 17
+//!    such matches in `hello-rust-debug`, 14 in `hello-rust-musl`, 3 in
+//!    `test_mathlib`, every one of them a `push` or `pop`.
+//!
+//!    So an access is withheld when its own instruction redefines its base, and
+//!    a function that does that anywhere loses ALL of its stack-pointer-based
+//!    coordinates — one push invalidates every later `(sp, d)` in that
+//!    function, not just the push's own. Frame-pointer bases are unaffected,
+//!    which is where the evidence overwhelmingly is.
 //!
 //! # Where this produces evidence, and where it is silent
 //!
-//! The join succeeds when the coordinate `stack_locals` published is the same
-//! coordinate the machine instruction uses. Measured 2026-08-29 over the
-//! fixture corpus, validated address-by-address against `objdump`:
+//! Every claim below was validated address-by-address against a disassembler,
+//! checking that each address is a real instruction start whose instruction
+//! actually accesses that displacement. Measured 2026-08-29:
 //!
-//! | build | slots | addressed | addresses | wrong |
-//! |---|---|---|---|---|
-//! | x86-64 gcc `-O0` | 374 | 287 (77%) | 3,551 | 0 |
-//! | x86-64 clang `-O0` | 576 | 496 (86%) | 5,696 | 0 |
-//! | aarch64 gcc `-O0` | 108 | 85 | 242 | 0 |
-//! | x86-64 gcc `-O2` | 330 | 0 | 0 | 0 |
+//! | corpus | tool | addresses | wrong |
+//! |---|---|---|---|
+//! | 250 fixture binaries, all compilers and `-O` levels | objdump | 6,726 | 0 |
+//! | 25 of those, re-run through a second disassembler | llvm-objdump | 661 (identical) | 0 |
+//! | real Rust / Go / C executables | objdump | 1,519 | 0 |
+//! | aarch64 `-O0` | aarch64 objdump | 102 | 0 |
+//! | i386 `-O0` | objdump | 37 | 0 |
+//! | 4 real Microsoft PE DLLs | llvm-objdump | 50 | 0 |
+//! | Mach-O | llvm-objdump | 7 | 0 |
 //!
-//! Across a wider sweep — 250 fixture binaries, all compilers and optimisation
-//! levels — 6,726 addresses were emitted for 632 variables, of which **zero**
-//! failed to be a real instruction start and **zero** landed on an instruction
-//! that does not access that slot.
+//! Per-slot coverage on the fixture corpus: 287/374 slots at x86-64 gcc `-O0`
+//! (77%), 496/576 at clang `-O0` (86%), 0/330 at gcc `-O2`.
 //!
 //! It is SILENT — never wrong — whenever `stack_locals` normalised the slot to
 //! an ENTRY-RELATIVE frame while the machine addresses it through a live
@@ -111,6 +127,23 @@ fn mem_operands(op: &Op) -> Vec<&MemOp> {
     }
 }
 
+/// Registers that name the stack pointer, whose value moves within a function.
+///
+/// A frame pointer is deliberately absent: `rbp`/`x29`/`r7` are set once in the
+/// prologue and constant thereafter, which is exactly what makes a coordinate
+/// through one denote fixed storage.
+fn is_stack_pointer(name: &str) -> bool {
+    matches!(name, "rsp" | "esp" | "sp")
+}
+
+/// The physical register an op defines, unversioned.
+fn defined_register(op: &Op) -> Option<String> {
+    match crate::ir::use_def::def_uses(op).0 {
+        Some(VReg::Phys(name)) => Some(ssa_base(&name).to_string()),
+        _ => None,
+    }
+}
+
 /// The frame coordinate an access denotes, or `None` when it does not denote
 /// one unambiguously. See the module's fail-closed rules.
 fn coordinate_of(addr: &MemOp) -> Option<(&str, i64)> {
@@ -148,13 +181,68 @@ pub fn stack_slot_addresses(
             .or_insert(Some(name.as_str()));
     }
 
+    // Rule 5, first half: which machine instructions redefine the very base
+    // they access through. `push` is `rsp = rsp - 8` and `store [rsp + 0]`
+    // sharing one `va`, so both facts are visible at the same address.
+    let mut self_modifying: BTreeSet<u64> = BTreeSet::new();
+    let mut moving_sp_sites: BTreeSet<u64> = BTreeSet::new();
+    let mut sp_access_span: Option<(u64, u64)> = None;
+    for block in &lf.blocks {
+        let mut defined_at: HashMap<u64, Vec<String>> = HashMap::new();
+        for instr in &block.instrs {
+            if let Some(register) = defined_register(&instr.op) {
+                defined_at.entry(instr.va).or_default().push(register);
+            }
+        }
+        for instr in &block.instrs {
+            for addr in mem_operands(&instr.op) {
+                let Some((base, _)) = coordinate_of(addr) else {
+                    continue;
+                };
+                if defined_at
+                    .get(&instr.va)
+                    .is_some_and(|regs| regs.iter().any(|r| r == base))
+                {
+                    self_modifying.insert(instr.va);
+                    if is_stack_pointer(base) {
+                        moving_sp_sites.insert(instr.va);
+                    }
+                } else if is_stack_pointer(base) {
+                    sp_access_span = Some(match sp_access_span {
+                        None => (instr.va, instr.va),
+                        Some((lo, hi)) => (lo.min(instr.va), hi.max(instr.va)),
+                    });
+                }
+            }
+        }
+    }
+
+    // Second half of rule 5: a stack pointer that moves only in the prologue
+    // and epilogue leaves the body in ONE coordinate space, and every access
+    // there agrees with the coordinate the slot was minted in. What breaks that
+    // is a move BETWEEN two accesses -- an x86 `push` mid-function. So the test
+    // is whether any moving site falls inside the span of sp-based accesses,
+    // not whether one exists at all. AArch64's pre-indexed
+    // `stp x29, x30, [sp, #-32]!` is a prologue site outside that span, and
+    // treating it as disqualifying cost 235 of 242 correct addresses.
+    let stack_pointer_moves = match sp_access_span {
+        None => !moving_sp_sites.is_empty(),
+        Some((lo, hi)) => moving_sp_sites.iter().any(|va| (lo..=hi).contains(va)),
+    };
+
     let mut out: HashMap<String, BTreeSet<u64>> = HashMap::new();
     for block in &lf.blocks {
         for instr in &block.instrs {
+            if self_modifying.contains(&instr.va) {
+                continue;
+            }
             for addr in mem_operands(&instr.op) {
                 let Some(coordinate) = coordinate_of(addr) else {
                     continue;
                 };
+                if stack_pointer_moves && is_stack_pointer(coordinate.0) {
+                    continue;
+                }
                 if let Some(Some(name)) = owner.get(&coordinate) {
                     out.entry((*name).to_string())
                         .or_default()
@@ -363,6 +451,142 @@ mod tests {
         assert_eq!(
             stack_slot_addresses(&lf, &coords(&[("s", "rbp", -24)])).get("s"),
             Some(&vec![0x1004, 0x1010])
+        );
+    }
+
+    /// `push` is `rsp = rsp - 8` and `store [rsp + 0]` at ONE `va`, so it
+    /// matches a `(sp, 0)` slot's coordinate exactly while referring to
+    /// entirely different bytes. Measured on real binaries before this rule:
+    /// 17 such matches in `hello-rust-debug`, 14 in `hello-rust-musl`.
+    #[test]
+    fn an_instruction_that_moves_its_own_base_claims_nothing() {
+        let lf = func(vec![
+            (
+                0x1004,
+                Op::Bin {
+                    dst: VReg::Phys("rsp".into()),
+                    op: crate::ir::types::BinOp::Sub,
+                    lhs: Value::Reg(VReg::Phys("rsp".into())),
+                    rhs: Value::Const(8),
+                },
+            ),
+            (
+                0x1004,
+                Op::Store {
+                    addr: mem(Some("rsp"), None, 0),
+                    src: Value::Const(7),
+                },
+            ),
+        ]);
+        assert!(stack_slot_addresses(&lf, &coords(&[("stack_top", "rsp", 0)])).is_empty());
+    }
+
+    /// A push ANYWHERE between two sp-based accesses shifts the storage the
+    /// second one names, so neither is claimed -- not just the push itself.
+    #[test]
+    fn a_push_between_two_accesses_invalidates_both() {
+        let lf = func(vec![
+            (
+                0x1000,
+                Op::Load {
+                    dst: VReg::Phys("rax".into()),
+                    addr: mem(Some("rsp"), None, 8),
+                },
+            ),
+            (
+                0x1004,
+                Op::Bin {
+                    dst: VReg::Phys("rsp".into()),
+                    op: crate::ir::types::BinOp::Sub,
+                    lhs: Value::Reg(VReg::Phys("rsp".into())),
+                    rhs: Value::Const(8),
+                },
+            ),
+            (
+                0x1004,
+                Op::Store {
+                    addr: mem(Some("rsp"), None, 0),
+                    src: Value::Const(7),
+                },
+            ),
+            (
+                0x1008,
+                Op::Load {
+                    dst: VReg::Phys("rdx".into()),
+                    addr: mem(Some("rsp"), None, 8),
+                },
+            ),
+        ]);
+        assert!(stack_slot_addresses(&lf, &coords(&[("s", "rsp", 8)])).is_empty());
+    }
+
+    /// A stack pointer moved only in the PROLOGUE leaves the body in one
+    /// coordinate space. AArch64's pre-indexed `stp x29, x30, [sp, #-32]!` is
+    /// exactly this; treating it as disqualifying cost 235 of 242 correct
+    /// addresses.
+    #[test]
+    fn a_prologue_only_adjustment_does_not_disqualify_the_body() {
+        let lf = func(vec![
+            (
+                0x1000,
+                Op::Bin {
+                    dst: VReg::Phys("sp".into()),
+                    op: crate::ir::types::BinOp::Sub,
+                    lhs: Value::Reg(VReg::Phys("sp".into())),
+                    rhs: Value::Const(32),
+                },
+            ),
+            (
+                0x1000,
+                Op::Store {
+                    addr: mem(Some("sp"), None, 0),
+                    src: Value::Const(0),
+                },
+            ),
+            (
+                0x1004,
+                Op::Store {
+                    addr: mem(Some("sp"), None, 28),
+                    src: Value::Const(1),
+                },
+            ),
+            (
+                0x1008,
+                Op::Load {
+                    dst: VReg::Phys("w0".into()),
+                    addr: mem(Some("sp"), None, 28),
+                },
+            ),
+        ]);
+        assert_eq!(
+            stack_slot_addresses(&lf, &coords(&[("local_1c", "sp", 28)])).get("local_1c"),
+            Some(&vec![0x1004, 0x1008])
+        );
+    }
+
+    /// A FRAME pointer is set once and constant after, which is what makes a
+    /// coordinate through one denote fixed storage. The rule must not punish it.
+    #[test]
+    fn a_frame_pointer_setup_does_not_disqualify_anything() {
+        let lf = func(vec![
+            (
+                0x1000,
+                Op::Assign {
+                    dst: VReg::Phys("rbp".into()),
+                    src: Value::Reg(VReg::Phys("rsp".into())),
+                },
+            ),
+            (
+                0x1004,
+                Op::Store {
+                    addr: mem(Some("rbp"), None, -24),
+                    src: Value::Const(0),
+                },
+            ),
+        ]);
+        assert_eq!(
+            stack_slot_addresses(&lf, &coords(&[("local_18", "rbp", -24)])).get("local_18"),
+            Some(&vec![0x1004])
         );
     }
 

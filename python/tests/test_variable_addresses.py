@@ -23,6 +23,7 @@ tests assert ZERO violations rather than a tolerance.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -194,6 +195,61 @@ def test_addresses_are_sorted_and_unique(tmp_path):
         for variable in variables:
             addresses = variable["addresses"]
             assert addresses == sorted(set(addresses)), variable
+
+
+def test_i386_addresses_survive_the_audit(tmp_path):
+    """A different frame base (`ebp`) and a 32-bit address space."""
+    probe = subprocess.run(
+        ["gcc", "-m32", "-E", "-x", "c", "/dev/null"], capture_output=True
+    )
+    if probe.returncode != 0:
+        pytest.skip("no 32-bit toolchain")
+    out = tmp_path / "i386.so"
+    built = subprocess.run(
+        ["gcc", "-m32", "-shared", "-fPIC", "-g", "-O0", "-o", str(out), str(SOURCE)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if built.returncode != 0:
+        pytest.skip("32-bit build failed")
+    counts = audit(out, "objdump")
+    assert counts["addresses"] > 0
+    assert counts["start"] == 0 and counts["ref"] == 0, counts
+
+
+def test_a_push_is_not_attributed_to_the_stack_top_slot(tmp_path):
+    """The defect real binaries exposed that the fixture corpus could not.
+
+    `push` decomposes into `rsp = rsp - 8` and `store [rsp + 0]` sharing one
+    `va`, so it matches a `(sp, 0)` slot's coordinate exactly while referring to
+    entirely different bytes. Before the moving-base rule this produced 17 bad
+    addresses in `hello-rust-debug` and 14 in `hello-rust-musl` -- every one of
+    them a `push` or `pop` attributed to `stack_top`.
+
+    Runs against whatever real executables the sample tree has, because the
+    fixture corpus is entirely frame-pointer based and cannot reach this.
+    """
+    # Targeted, not a blind glob: hand-written and Rust/Go prologues are what
+    # push and pop mid-function. The 73 plain-C samples are frame-pointer based
+    # and cannot reach this, so a glob that happens to hit them first proves
+    # nothing -- an earlier version of this test did exactly that and passed
+    # with the rule disabled.
+    root = ROOT / "samples" / "binaries" / "platforms" / "linux" / "amd64"
+    samples = [
+        s
+        for group in ("rust", "go", "libraries")
+        for s in sorted((root / group).glob("*"))
+        if s.is_file() and os.access(s, os.X_OK)
+    ]
+    if not samples:
+        pytest.skip("no real sample executables present")
+    total = 0
+    for sample in samples:
+        counts = audit(sample, "objdump")
+        assert counts["start"] == 0 and counts["ref"] == 0, (sample.name, counts)
+        total += counts["addresses"]
+    assert total > 0, "no addresses emitted across any real executable"
 
 
 def test_an_omitted_frame_pointer_build_is_silent_not_wrong(tmp_path):

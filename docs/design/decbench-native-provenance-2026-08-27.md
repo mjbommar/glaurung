@@ -741,7 +741,32 @@ exactly the plausible-but-wrong address this work exists to avoid.
 
 Across a wider sweep — 250 fixture binaries, every compiler and optimisation
 level — 6,726 addresses for 632 variables: **zero** not a real instruction
-start, **zero** on an instruction that does not access that slot. Two landed
+start, **zero** on an instruction that does not access that slot. Widened again
+across formats, architectures and a second disassembler:
+
+| corpus | tool | addresses | wrong |
+|---|---|---|---|
+| 250 fixture binaries | objdump | 6,726 | 0 |
+| 25 of those, second parser | llvm-objdump | 661 (identical) | 0 |
+| real Rust / Go / C executables | objdump | 1,519 | 0 |
+| aarch64 `-O0` | aarch64 objdump | 102 | 0 |
+| i386 `-O0` | objdump | 37 | 0 |
+| 4 real Microsoft PE DLLs | llvm-objdump | 50 | 0 |
+| Mach-O | llvm-objdump | 7 | 0 |
+
+**The real executables found a defect the 250-binary fixture corpus could
+not.** A `push` decomposes into `rsp = rsp - 8` and `store [rsp + 0]` sharing
+one `va`, so it matched a `(sp, 0)` slot's coordinate exactly while naming
+entirely different bytes — 17 bad addresses in `hello-rust-debug`, 14 in
+`hello-rust-musl`, 3 in `test_mathlib`. Every fixture is frame-pointer based
+and `rbp` does not move, so nothing in the corpus could reach it.
+
+Rule 5 is the fix: an access whose own instruction redefines its base is
+withheld, and a stack pointer that moves *between* two sp-based accesses
+disqualifies all of them in that function. The "between" matters — the first
+version disqualified any function whose sp moved at all, which cost 235 of
+aarch64's 242 correct addresses to its pre-indexed `stp x29, x30, [sp, #-32]!`
+prologue. Two landed
 outside `[entry_va, entry_va + size)`, both in `cpp_exception.cold`, which is
 placed BELOW its hot part: the addresses are correct and a consumer that clamps
 to the contiguous extent will simply drop them.

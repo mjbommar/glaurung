@@ -362,6 +362,15 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     above names. `product_files_above_1000` 26 -> 27 and the two totals that
     follow from it are that one file and nothing else.
 
+    2026-08-29 (fourth): the moving-base rule in `ir/variable_addresses.rs`,
+    +88 lines. `product_mean_loc` 427.518 -> 427.726; `loc_above_1000` and
+    `files_above_1000` unchanged, because the file is well under the threshold.
+    This is a CORRECTNESS fix, not growth for its own sake: real binaries
+    exposed 34 addresses attributed to the wrong storage -- a `push` is
+    `rsp = rsp - 8` plus `store [rsp + 0]` at one `va`, so it matched a
+    `(sp, 0)` slot exactly while naming different bytes. The rule and the four
+    tests that pin it are what stop that.
+
     2026-08-29 (third): +14 lines, all of them the module docstring recording
     what the objdump sweep measured -- where the join is silent, and the two
     chunked-function addresses that fall outside a contiguous extent.
@@ -434,9 +443,9 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "product_files_above_2000": 4,
         "product_loc_above_1000": 39931,
         "product_max_loc": 2451,
-        "product_mean_loc": pytest.approx(427.5177304964539),
+        "product_mean_loc": pytest.approx(427.725768321513),
         "product_median_loc": pytest.approx(309),
-        "product_pct_loc_above_1000": pytest.approx(22.08084494580845),
+        "product_pct_loc_above_1000": pytest.approx(22.070105235231694),
     }
 
 
