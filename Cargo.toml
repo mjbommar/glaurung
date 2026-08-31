@@ -70,6 +70,7 @@ windows-metadata = "0.60"
 # APK/AAB/JAR member extraction (ZIP central directory + DEFLATE). Already
 # present transitively; declared directly for the `formats::apk` reader.
 flate2 = "1.0"
+mimalloc = { version = "0.1.52", default-features = false }
 
 [features]
 default = ["triage-core"]

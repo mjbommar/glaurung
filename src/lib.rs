@@ -1,4 +1,19 @@
 /// Core data types module
+/// Rust-side global allocator.
+///
+/// A release decompile of `/usr/bin/bash` spends **26% of its cycles in glibc
+/// malloc**, and the shape is free-path coalescing -- `_int_free_merge_chunk`
+/// 7.7%, `_int_malloc` 7.4%, `cfree` 4.7%, `unlink_chunk` 2.8%. That is what
+/// high-churn allocation of many short-lived, varied-size objects costs in an
+/// allocator tuned for general workloads. Decompilation is exactly that
+/// workload: per-instruction `Vec`s and `String`s, per-function maps, and
+/// expression trees built and dropped for every one of thousands of functions.
+///
+/// This replaces the allocator for RUST allocations in this crate only. Python
+/// keeps `pymalloc`; the interpreter is unaffected.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod core;
 
 /// Error types and error handling
