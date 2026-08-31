@@ -1,5 +1,25 @@
 # Reference Implementations
 
+> **The third-party checkouts here are no longer submodules.**
+>
+> Until 2026-08-31 this directory held 43 git submodules (ghidra, angr, radare2,
+> LIEF, ILSpy, …). They had no code consumers — nothing in `src/`, `python/`,
+> `tools/` or the build reads them, only prose in `docs/` cites them — but `uv`
+> and `pip` clone a git dependency *with* its submodules, so
+> `uvx --from git+https://github.com/mjbommar/glaurung.git` spent minutes
+> pulling a reverse-engineering library collection before it could build.
+>
+> Fetch them on demand instead:
+>
+> ```bash
+> scripts/fetch-reference.sh            # all 43
+> scripts/fetch-reference.sh ghidra angr
+> ```
+>
+> `reference/specifications/` is unaffected — those files are tracked in the
+> repository and have real consumers.
+
+
 This directory catalogs reference implementations that inform the design of
 Glaurung. Most are configured as git submodules; entries marked external are
 consulted directly from their upstream repository.
