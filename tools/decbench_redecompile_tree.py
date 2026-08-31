@@ -51,10 +51,13 @@ TREE = pathlib.Path(
         pathlib.Path.home() / "projects/personal/decbench-sample-set-glaurung-tree",
     )
 )
-G = str(pathlib.Path(__file__).resolve().parents[1] / ".venv/bin/glaurung")
+G = os.environ.get(
+    "GLAURUNG_BIN",
+    str(pathlib.Path(__file__).resolve().parents[1] / ".venv/bin/glaurung"),
+)
 SHA = sys.argv[1]
 ONLY = sys.argv[2] if len(sys.argv) > 2 else None
-NAME = f"glaurung-{SHA}"
+NAME = os.environ.get("DECBENCH_COLUMN", f"glaurung-{SHA}")
 # Set GLAURUNG_REDECOMP_FORCE=1 to re-decompile binaries that already have output.
 FORCE = os.environ.get("GLAURUNG_REDECOMP_FORCE") == "1"
 TMP = pathlib.Path(os.environ["TMPDIR"]) / "redecomp"

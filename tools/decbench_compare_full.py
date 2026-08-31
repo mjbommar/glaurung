@@ -86,8 +86,11 @@ def main() -> int:
     parser.add_argument(
         "--leaderboard-denominator",
         type=int,
-        default=94267,
-        help="published overall_total_count, identical for every column (0 to omit)",
+        default=0,
+        help=(
+            "fixed historical reference only; not a merged DecBench denominator "
+            "(default: omit)"
+        ),
     )
     args = parser.parse_args()
 
@@ -120,20 +123,21 @@ def main() -> int:
             f"  {label:<12}{entry['perfect']:>9}{entry['scored']:>9}{pct(entry['perfect'], entry['scored']):>9}"
         )
 
-    # The leaderboard divides every column by the SAME denominator, so a rate
-    # over our own `scored` count is not comparable to it. Our tree can score
-    # 91,548 functions where the published total is 94,267 -- the shortfall is
-    # `nuttx` (no source CFGs at any opt level) plus functions the manifest
-    # lists that the published CFGs do not contain. Those are unscoreable for
-    # every decompiler, so reporting over the published denominator keeps us on
-    # identical footing and is the conservative choice.
+    # A new column can make previously unmeasurable functions measurable, which
+    # changes the shared denominator for EVERY column. A fixed denominator is
+    # therefore only a historical reference, never a leaderboard recomputation.
     if args.leaderboard_denominator:
         d = args.leaderboard_denominator
         u = mine["_union"]["perfect"]
         print(
-            f"\nLEADERBOARD-EQUIVALENT (perfect / {d:,}, the denominator every column uses)"
+            f"\nFIXED-DENOMINATOR REFERENCE (NOT A MERGED LEADERBOARD) (perfect / {d:,})"
         )
         print(f"  glaurung {u:>9}{d:>10}{pct(u, d):>9}")
+
+    print(
+        "\nFor a comparable merged leaderboard, use tools/decbench_audit_full.py "
+        "on the raw evaluated fragments."
+    )
 
     print(
         f"\nPUBLISHED, same corpus ({published.get('decompiler_versions', {}).get('glaurung', '?')})"

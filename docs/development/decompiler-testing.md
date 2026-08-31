@@ -613,17 +613,20 @@ uv run python tools/decbench_fetch_full.py "$TREE"
 export DECBENCH_SAMPLE_TREE="$TREE"
 uv run python tools/decbench_redecompile_tree.py "$(git rev-parse --short=7 HEAD)"
 
-# 3. Score with DecBench's own metric code, pinned.
+# 3. Score with DecBench's own metric code, pinned. Do not restrict metrics:
+#    Union includes GED, type_match, and byte_match.
 git clone https://github.com/Noelo-Lab/decbench.git && cd decbench
 git checkout f76dae075d4d82004fb21132b3f15e43b680e179
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
-.venv/bin/decbench evaluate-tree "$TREE" -m ged -m byte_match \
+.venv/bin/decbench evaluate-tree "$TREE" \
     -d "glaurung-$(git -C ~/projects/personal/glaurung rev-parse --short=7 HEAD)" -j 12
 
-# 4. Compare against the published board.
-uv run python tools/decbench_compare_full.py "$TREE/function_results.json" \
+# 4. Merge the new values into the shared measurable universe. This rebuilds
+#    every column's denominator from the 803 raw evaluated fragments.
+uv run python tools/decbench_audit_full.py "$TREE" \
     --published ~/.cache/glaurung/decbench-full/published_function_results.json \
-    --column "glaurung-$(git rev-parse --short=7 HEAD)"
+    --column "glaurung-$(git rev-parse --short=7 HEAD)" \
+    --output ~/.cache/glaurung/decbench-full/audited_score.json
 ```
 
 `decbench_fetch_full.py` writes `decbench_dataset_provenance.json` beside the
@@ -632,16 +635,26 @@ written down cannot be defended later.
 
 ### What it does and does not measure
 
-The same two limits as the sample-set path apply, and one more:
+The materialized path has these limits:
 
-* **`ged` and `byte_match` only.** `evaluate-tree` states it: `type_match` needs
-  recovered variables and stored `.c` artifacts do not carry them.
+* **All three metrics run.** Stored artifacts do not carry structured variable
+  records, but DecBench's `type_match` implementation falls back to parsing the
+  emitted C signature and declarations. The 2026-08-30 run scored type match on
+  86,612 functions. Do not describe it as a two-metric run.
 * **`ged` needs a source CFG.** 800 of 803 binaries have one published; the
   other three have no ground truth and are skipped.
-* **The denominator moves**, for the same reason it moves on the sample set: a
-  target function with no resolvable symbol in its compiled binary is not
-  decompiled. Report `scored` alongside `perfect`, always — the whole point of
-  this section is what happens when someone does not.
+* **The denominator is shared and can move for every decompiler.** DecBench
+  includes a function when any column has a finite value for at least one
+  metric. A new column can make an old unmeasurable function measurable. Never
+  divide only the new column by its own coverage, and never reuse the old
+  leaderboard denominator. Merge first with `decbench_audit_full.py`.
+
+The audited 2026-08-30 run illustrates the distinction. The manifest has
+94,575 functions; the published measurable universe has 94,267; Glaurung
+produced at least one metric for 94,358; and the merged shared universe is
+94,423. The comparable Union result is therefore `39,236 / 94,423`, not
+`39,236 / 94,267` or `39,236 / 94,358`. See
+`docs/design/decbench-full-score-audit-2026-08-30.md`.
 
 ### One deviation from DecBench's own adapter, measured
 
@@ -651,7 +664,8 @@ The same two limits as the sample-set path apply, and one more:
 afterwards. That threshold is not a corner: **55 of 803 binaries exceed it, and
 they hold 65,742 of 94,575 functions — 69.5% of the corpus.**
 
-So the difference was measured rather than waved through. Decompiling one binary
+This means the run is a target-address evaluation, **not an exact replay of the
+current DecBench adapter** for those 55 binaries. Decompiling one binary
 both ways and diffing the pseudocode for the functions both produced:
 
     --vas  60 functions      --all  192 functions
@@ -659,9 +673,9 @@ both ways and diffing the pseudocode for the functions both produced:
 
 The single difference is a thunk: `--vas` renders `ret = sub_2560(...)`, `--all`
 renders `goto L_2560`. Whole-binary mode sees the callee and folds the jump;
-targeted mode does not and calls it. Materially equivalent for scoring, but real
-— quote it if a number is ever challenged, and switch the tool to match the
-adapter's threshold if an exact-adapter reproduction is ever required.
+targeted mode does not and calls it. Materially equivalent in that probe, but
+real. One probe does not certify all 55 large-target binaries. Report this as
+the targeted-VA route unless an exact-adapter full replay has also completed.
 
 ## A real DecBench score, without Joern
 
