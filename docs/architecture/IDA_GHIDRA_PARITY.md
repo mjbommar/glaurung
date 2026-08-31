@@ -40,7 +40,7 @@ why each gap matters. Updated whenever a roadmap task completes.
 |---|---|---|---|
 | 157 | DWARF + PDB ingestion (DWARF v1) | ✅ | gimli-based; functions, chunks, signatures, language; DWARF 5 + addrx |
 | 158 | Signature library + matcher (exact-prologue, "FLIRT-lite") | ✅ | 32-byte exact-prologue hash + scan-and-rename — a lightweight scheme, **not** a full masked-byte FLIRT or Ghidra FunctionID; baseline lib at `data/sigs/glaurung-base.x86_64.flirt.json` |
-| 159 | Diff-verification benchmark harness | ✅ | `python -m glaurung.bench` — 10-binary CI matrix + `--packed-matrix` UPX tier; 12+ metrics, baseline at `benchmarks/baseline.{json,md}` |
+| 159 | Diff-verification benchmark harness | ✅ | `python -m glaurung.bench` — 10-binary CI matrix + `--packed-matrix` UPX tier; 12+ metrics, baseline at `docs/benchmarks/baseline.{json,md}` |
 | 160 | Indirect-call resolution (vtable v1) | ✅ | rodata-scan for arrays of code pointers; jump-table walker shipped as #177 |
 | 163 | Auto-struct recovery (Layer-1 pass) | ✅ | `[reg+offset]` access patterns → struct candidates with set_by="auto" |
 | 170 | Cross-binary symbol borrowing | ✅ | donor → target exact-prologue match (32-byte); no masked-byte FLIRT |

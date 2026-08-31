@@ -12,7 +12,7 @@ This test does exactly that, deterministically:
   * Bucket each import as either CRT scaffolding (legitimately not
     called from user code) or a libgfortran user-code call.
   * For each user-code import, verify it appears in at least one
-    .c file under out/hello-fortran-recovered/.
+    .c file under tests/recovered/hello-fortran-recovered/.
 
 This locks in that any future re-run of the rewriter must keep
 referencing every libgfortran symbol the binary actually depends
@@ -29,7 +29,7 @@ _REPO = Path(__file__).resolve().parents[2]
 _SAMPLE = _REPO / (
     "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2"
 )
-_RECOVERED = _REPO / "out/hello-fortran-recovered"
+_RECOVERED = _REPO / "tests/recovered/hello-fortran-recovered"
 
 
 # Imports the dynamic linker / glibc CRT pulls in regardless of user

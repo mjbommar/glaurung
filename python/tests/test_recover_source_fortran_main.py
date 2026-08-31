@@ -21,7 +21,7 @@ refactor cannot regress on:
   5. The whole module compiles clean under -Wall -Werror.
 
 These tests parse the existing recovered fixture
-(out/hello-fortran-recovered/main.c) — the artefact the Bug L
+(tests/recovered/hello-fortran-recovered/main.c) — the artefact the Bug L
 verification commit landed. If the orchestrator regenerates a main
 that drifts from this shape, the test catches it.
 """
@@ -34,7 +34,7 @@ import subprocess
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_MAIN_C = _REPO / "out/hello-fortran-recovered/main.c"
+_MAIN_C = _REPO / "tests/recovered/hello-fortran-recovered/main.c"
 
 
 @pytest.mark.skipif(not _MAIN_C.exists(), reason="recovered main.c missing")
@@ -166,8 +166,8 @@ def test_recovered_tree_keeps_MAIN__symbol():
     any other paraphrase. main.c calls MAIN__() so the call target
     must exist under that name."""
     candidates = [
-        _REPO / "out/hello-fortran-recovered/hello.c",
-        _REPO / "out/hello-fortran-recovered/src/core.c",
+        _REPO / "tests/recovered/hello-fortran-recovered/hello.c",
+        _REPO / "tests/recovered/hello-fortran-recovered/src/core.c",
     ]
     found = False
     for path in candidates:

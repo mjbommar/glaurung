@@ -1,7 +1,7 @@
 """End-to-end build gate for the gfortran-recovered tree (Bug Y).
 
 After Bugs P-W closed, the Fortran-recovered tree at
-``out/hello-fortran-recovered`` compiles + links cleanly under
+``tests/recovered/hello-fortran-recovered`` compiles + links cleanly under
 ``gcc -O2 -Wall -Werror`` plus ``-lgfortran``. The build-clean
 state is the regression watchdog: if a future rewriter change
 re-introduces an undeclared extern, a missing struct body, an
@@ -21,7 +21,7 @@ import tempfile
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_RECOVERED = _REPO / "out/hello-fortran-recovered"
+_RECOVERED = _REPO / "tests/recovered/hello-fortran-recovered"
 
 
 def _find_gcc_with_libgfortran() -> str | None:

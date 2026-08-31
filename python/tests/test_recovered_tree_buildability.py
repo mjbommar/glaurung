@@ -1,11 +1,11 @@
 """Project-wide build-gate for every recovered-source tree under
-``out/`` (Bug Z).
+``tests/recovered/`` (Bug Z).
 
 Bug Y wired up an end-to-end build gate for the gfortran-recovered
 tree. The same regression class — extern prototypes, struct
 bodies, mangled-name preservation, LOCAL statics — can affect any
 language the rewriter targets. This test parametrises across
-every recovered tree found under ``out/`` and records the build
+every recovered tree found under ``tests/recovered/`` and records the build
 status so:
 
   * Trees that currently build pass and stay green.
@@ -32,7 +32,7 @@ import tempfile
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_OUT = _REPO / "out"
+_OUT = _REPO / "tests/recovered"
 
 
 def _find_gcc_with_libgfortran() -> str | None:
@@ -55,7 +55,7 @@ def _find_gcc_with_libgfortran() -> str | None:
 
 
 def _list_recovered_trees() -> list[Path]:
-    """Every immediate subdir of ``out/`` that has a CMakeLists.txt
+    """Every immediate subdir of ``tests/recovered/`` that has a CMakeLists.txt
     and at least one .c / .cpp source file."""
     if not _OUT.exists():
         return []
