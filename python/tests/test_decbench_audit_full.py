@@ -87,7 +87,7 @@ def _inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
     )
     (evaluated / "a.toml").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'binary = "a"',
                 '"new.ged.functions.both" = 2.0',
@@ -128,9 +128,7 @@ def test_merged_shared_denominator_expands_for_newly_measurable_functions(
     }
 
 
-def test_new_column_replaces_same_named_published_column(
-    audit_module, tmp_path: Path
-):
+def test_new_column_replaces_same_named_published_column(audit_module, tmp_path: Path):
     tree, published, _ = _inputs(tmp_path)
     data = json.loads(published.read_text(encoding="utf-8"))
     data["decompilers"] = ["new"]
@@ -209,7 +207,14 @@ def test_legacy_compare_does_not_claim_a_fixed_leaderboard_denominator_by_defaul
     compare = _load_compare_tool()
     monkeypatch.setattr(
         "sys.argv",
-        [str(COMPARE_TOOL), str(published), "--published", str(published), "--column", "old"],
+        [
+            str(COMPARE_TOOL),
+            str(published),
+            "--published",
+            str(published),
+            "--column",
+            "old",
+        ],
     )
 
     assert compare.main() == 0
