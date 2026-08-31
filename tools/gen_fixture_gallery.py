@@ -26,6 +26,7 @@ import argparse
 import json
 import re
 import subprocess
+import tomllib
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -38,8 +39,33 @@ STRUCTURAL = ROOT / "tests/decompiler_fixtures/structural_baseline.json"
 
 #: Source suffix -> the toolchains that build it. `rustc` is its own front and
 #: back end, so the {gcc, clang} axis has no meaning for a `.rs` fixture.
-TOOLCHAINS = {".c": ("gcc", "clang"), ".cpp": ("gcc", "clang"), ".rs": ("rustc",)}
+TOOLCHAINS = {
+    ".c": ("gcc", "clang"),
+    ".cpp": ("gcc", "clang"),
+    ".rs": ("rustc",),
+    ".go": ("go",),
+    ".S": ("gcc", "clang"),
+}
 OPTS = ("O0", "O2")
+
+#: Display names. `.S` is hand-written assembly, which has a source view but no
+#: "recovered from a higher-level language" story -- it is here because the
+#: corpus has one and dropping it silently is how Go went missing.
+LANGUAGES = {".c": "C", ".cpp": "C++", ".rs": "Rust", ".go": "Go", ".S": "Assembly"}
+
+#: `arch_baseline.json` is a SEPARATE matrix from `baseline.json`: the same
+#: per-function execution-differential verdicts, but across six cross-compiled
+#: targets at two optimisation levels rather than the two host compilers. It
+#: covers 206 fixtures x 12 lanes. A gallery that reads only `baseline.json`
+#: shows the host lanes and silently omits every architecture, which is what the
+#: first version of this script did.
+ARCH_BASELINE = ROOT / "tests/decompiler_fixtures/arch_baseline.json"
+
+#: Named slices from `tests/decompiler_fixtures/sets.toml` -- the corpus's own
+#: taxonomy, with descriptions written by whoever added each set. Far better
+#: than any grouping inferred from the fixture numbers, which are
+#: chronological-by-addition.
+SETS = ROOT / "tests/decompiler_fixtures/sets.toml"
 
 #: A fixture's header comment states which recovery problem it isolates and why
 #: existing fixtures do not cover it. That is the page's prose, already written
@@ -139,8 +165,41 @@ def decompile(binary: Path, func: str) -> str | None:
     return done.stdout.rstrip("\n")
 
 
-def build_fixture(args: tuple[str, dict, dict]) -> dict | None:
-    stem, baseline, structural = args
+def load_sets() -> tuple[list[dict], dict[str, list[str]]]:
+    """`sets.toml` as (set metadata, fixture -> set names).
+
+    These are the corpus's own named slices, each with a description written by
+    whoever added it. Wildcard selectors (`*:gcc:O0`, `187_*`) are skipped for
+    membership: a set that names every fixture describes a lane, not a subject.
+    """
+    if not SETS.exists():
+        return [], {}
+    raw = tomllib.loads(SETS.read_text())
+    meta, by_fixture = [], {}
+    for name, body in sorted(raw.items()):
+        selectors = body.get("selectors", []) or []
+        stems = sorted(
+            {
+                s.split(":")[0]
+                for s in selectors
+                if not s.startswith("@") and "*" not in s.split(":")[0]
+            }
+        )
+        meta.append(
+            {
+                "name": name,
+                "description": body.get("description", ""),
+                "fixtures": stems,
+                "kind": "curriculum" if name.startswith("curriculum") else "capability",
+            }
+        )
+        for stem in stems:
+            by_fixture.setdefault(stem, []).append(name)
+    return meta, by_fixture
+
+
+def build_fixture(args: tuple[str, dict, dict, dict, dict]) -> dict | None:
+    stem, baseline, structural, arch, sets_by_fixture = args
     source_path = next(
         (SRC / f"{stem}{s}" for s in TOOLCHAINS if (SRC / f"{stem}{s}").exists()), None
     )
@@ -182,13 +241,38 @@ def build_fixture(args: tuple[str, dict, dict]) -> dict | None:
                     "total": len(functions),
                 }
             )
-    if not lanes:
+    # The cross-compiled matrix. `tools/arch_roundtrip.py` builds these into a
+    # temporary directory and leaves nothing behind, so there is no binary here
+    # to decompile -- the verdicts are the artifact. Recording them without the
+    # code is honest and still answers "does this shape survive on AArch64".
+    arch_lanes = []
+    for key, verdicts in sorted(arch.items()):
+        if not key.startswith(f"{stem}:") or not isinstance(verdicts, dict):
+            continue
+        _, target, opt = key.split(":", 2)
+        fns = {k: v for k, v in verdicts.items() if isinstance(v, str)}
+        if not fns:
+            continue
+        arch_lanes.append(
+            {
+                "target": target,
+                "opt": opt,
+                "id": f"{target}-{opt}",
+                "passed": sum(1 for v in fns.values() if v == "pass"),
+                "total": len(fns),
+                "functions": [
+                    {"name": k, "verdict": v} for k, v in sorted(fns.items())
+                ],
+            }
+        )
+
+    if not lanes and not arch_lanes:
         return None
     all_fns = sorted({f["name"] for l in lanes for f in l["functions"]})
     total = sum(l["total"] for l in lanes)
     passed = sum(l["passed"] for l in lanes)
     number = stem.split("_", 1)[0] if stem[0].isdigit() else None
-    language = {".c": "C", ".cpp": "C++", ".rs": "Rust"}[source_path.suffix]
+    language = LANGUAGES[source_path.suffix]
     # How much C the fixture makes the decompiler produce, summed over lanes.
     # A size proxy, not a difficulty one -- difficulty is the pass rate.
     recovered_lines = sum(f["lines"] for l in lanes for f in l["functions"])
@@ -207,6 +291,10 @@ def build_fixture(args: tuple[str, dict, dict]) -> dict | None:
         "lanes": lanes,
         "passed": passed,
         "total": total,
+        "arch_lanes": arch_lanes,
+        "arch_passed": sum(l["passed"] for l in arch_lanes),
+        "arch_total": sum(l["total"] for l in arch_lanes),
+        "sets": sets_by_fixture.get(stem, []),
         "structural": {
             k.split(":", 1)[1]: v
             for k, v in structural.get("closure", {}).items()
@@ -224,7 +312,14 @@ def main() -> int:
 
     baseline = json.loads(BASELINE.read_text())
     structural = json.loads(STRUCTURAL.read_text()) if STRUCTURAL.exists() else {}
-    stems = sorted({k.split(":")[0] for k in baseline if ":" in k})
+    arch = json.loads(ARCH_BASELINE.read_text()) if ARCH_BASELINE.exists() else {}
+    set_meta, sets_by_fixture = load_sets()
+    # Union of both matrices: a fixture present only in the arch baseline still
+    # gets a page.
+    stems = sorted(
+        {k.split(":")[0] for k in baseline if ":" in k}
+        | {k.split(":")[0] for k in arch if ":" in k}
+    )
     if args.only:
         stems = [s for s in stems if s in set(args.only)]
 
@@ -232,7 +327,7 @@ def main() -> int:
     print(f"{len(stems)} fixtures, {args.jobs} workers", flush=True)
 
     index, done_n = [], 0
-    payload = [(s, baseline, structural) for s in stems]
+    payload = [(s, baseline, structural, arch, sets_by_fixture) for s in stems]
     with ProcessPoolExecutor(max_workers=args.jobs) as ex:
         for fixture in ex.map(build_fixture, payload):
             done_n += 1
@@ -279,8 +374,11 @@ def main() -> int:
                     if grand_total
                     else 0.0,
                 },
+                "sets": set_meta,
                 "source": {
                     "baseline": "tests/decompiler_fixtures/baseline.json",
+                    "arch_baseline": "tests/decompiler_fixtures/arch_baseline.json",
+                    "sets": "tests/decompiler_fixtures/sets.toml",
                     "commit": subprocess.run(
                         ["git", "rev-parse", "--short=8", "HEAD"],
                         capture_output=True,

@@ -48,6 +48,31 @@ control-flow and memory-recovery challenge while making every generated input
 terminating and memory-safe. Malformed indices and cycles are explicit negative
 inputs, not undefined behavior.
 
+## The Go fixtures are written but not wired in
+
+`tests/decompiler_fixtures/src/` contains five Go sources —
+`176_go_itab_dispatch`, `177_go_slices_strings`, `178_go_defer_panic_recover`,
+`179_go_struct_methods`, `180_go_overflow_bits` — and one hand-written assembly
+fixture. Nothing builds or runs them:
+
+* no binaries under `tests/decompiler_fixtures/build/`;
+* no verdicts in `baseline.json`, `arch_baseline.json`,
+  `structural_baseline.json` or `defuse_baseline.json`;
+* no Go toolchain in `tools/fixture_harness.py`, whose `TOOLCHAINS` map has
+  entries for `.c`, `.cpp` and `.rs` only.
+
+The only thing that knows they exist is
+`python/tests/test_decompiler_curriculum_corpus.py:81`, which counts `.go` among
+the suffixes in the catalogue. So the corpus advertises Go coverage in its file
+listing and has none in its gates, and the numbering gap this leaves — fixtures
+run 175 then 181 in every report — is the visible symptom.
+
+Wiring them up means a Go lane in the harness and a decision about what a Go
+"exported semantic unit" is: `//export` cgo symbols are the closest analogue to
+the `__attribute__((noinline))` C functions the differential drives, but a plain
+Go build produces a runtime-heavy binary whose exported surface is nothing like
+the C fixtures'. That is a design question, not an oversight to patch quietly.
+
 ## Running it
 
 ```bash
