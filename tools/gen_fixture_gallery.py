@@ -52,6 +52,41 @@ C_HEADER = re.compile(r"/\*(.*?)\*/", re.S)
 RUST_HEADER = re.compile(r"\A((?:\s*//!.*\n)+)")
 
 
+#: Thematic bands. The fixture numbers are chronological-by-addition rather than
+#: a difficulty curve, but they were added in runs, so the ranges do carry
+#: meaning -- 15-40 is the data-structures run, 132-139 the C++ object model,
+#: 182-219 the ABI and codegen edges found while chasing DecBench cells. Every
+#: band below was read against its actual contents, not assumed from the range.
+#: Language wins over number: 218 is a C++ fixture inside the ABI run, 219 a
+#: Rust one.
+BANDS = [
+    (1, 14, "Control flow and calls"),
+    (15, 40, "Data structures and algorithms"),
+    (41, 53, "Strings, encoding, hashing"),
+    (54, 80, "Numeric and domain code"),
+    (81, 131, "C language semantics"),
+    (140, 150, "Runtime and obfuscation"),
+    (151, 165, "Scale, linkage, wire formats"),
+    (172, 181, "Floating point"),
+    (182, 220, "ABI and codegen edges"),
+]
+
+
+def band_of(number: str | None, language: str) -> str:
+    """The group a fixture belongs to, language first."""
+    if language == "Rust":
+        return "Rust"
+    if language == "C++":
+        return "C++ object model"
+    if not number or not number.isdigit():
+        return "Other"
+    n = int(number)
+    for lo, hi, name in BANDS:
+        if lo <= n <= hi:
+            return name
+    return "Other"
+
+
 def header_prose(text: str, suffix: str) -> str:
     """The fixture's own explanation of what it isolates, as plain paragraphs."""
     if suffix == ".rs":
@@ -152,11 +187,19 @@ def build_fixture(args: tuple[str, dict, dict]) -> dict | None:
     all_fns = sorted({f["name"] for l in lanes for f in l["functions"]})
     total = sum(l["total"] for l in lanes)
     passed = sum(l["passed"] for l in lanes)
+    number = stem.split("_", 1)[0] if stem[0].isdigit() else None
+    language = {".c": "C", ".cpp": "C++", ".rs": "Rust"}[source_path.suffix]
+    # How much C the fixture makes the decompiler produce, summed over lanes.
+    # A size proxy, not a difficulty one -- difficulty is the pass rate.
+    recovered_lines = sum(f["lines"] for l in lanes for f in l["functions"])
     return {
         "stem": stem,
+        "group": band_of(number, language),
+        "recovered_lines": recovered_lines,
+        "source_lines": len(text.splitlines()),
         "title": stem.split("_", 1)[1].replace("_", " ") if "_" in stem else stem,
-        "number": stem.split("_", 1)[0] if stem[0].isdigit() else None,
-        "language": {".c": "C", ".cpp": "C++", ".rs": "Rust"}[source_path.suffix],
+        "number": number,
+        "language": language,
         "source_file": source_path.name,
         "source": text,
         "prose": header_prose(text, source_path.suffix),
@@ -201,7 +244,17 @@ def main() -> int:
             index.append(
                 {
                     k: fixture[k]
-                    for k in ("stem", "title", "number", "language", "passed", "total")
+                    for k in (
+                        "stem",
+                        "title",
+                        "number",
+                        "language",
+                        "passed",
+                        "total",
+                        "group",
+                        "recovered_lines",
+                        "source_lines",
+                    )
                 }
                 | {
                     "functions": len(fixture["functions"]),
