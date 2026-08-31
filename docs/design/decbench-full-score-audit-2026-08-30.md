@@ -2,8 +2,9 @@
 
 ## Verdict
 
-The raw evaluation fragments consistently support this result for the
-target-address route at the recorded Glaurung revision:
+The raw evaluation fragments and a clean, full-corpus reproduction support this
+result for the target-address route at Glaurung revision
+`229fbb1d373bdc7bfc3ff3e6f69b105723852225`:
 
 | metric | perfect | shared denominator | rate |
 |---|---:|---:|---:|
@@ -12,19 +13,21 @@ target-address route at the recorded Glaurung revision:
 | byte match | 5,563 | 94,405 | 5.893% |
 | **Union** | **39,236** | **94,423** | **41.553%** |
 
-This is not yet an exact replay of DecBench's current Glaurung adapter. The run
+This is not an exact replay of DecBench's current Glaurung adapter. The run
 used target VAs for every binary, while the adapter switches to whole-binary
 mode above 400 targets. Fifty-five of 803 binaries cross that threshold. The
 score is defensible as a targeted-VA evaluation because DecBench supplies the
 DWARF-derived target addresses, but it must not be labelled an exact adapter or
-submission replay until that route is run corpus-wide.
+submission replay.
 
-There is also a retrospective provenance limit. The column says
+There is a retrospective provenance limit on the original column. It says
 `glaurung-229fbb1`, and repository history places that revision at the start of
 the run, but the old runner accepted the label as an argument and did not store
 the native extension's hash. The artifacts do not cryptographically prove that
-the loaded extension was built from that commit. Future runs must record and
-verify the executable and extension hashes before decompilation.
+the loaded extension was built from that commit. To resolve that uncertainty,
+the reproduction used a clean detached worktree at the full commit, forced a
+fresh build, and recorded both executable hashes before decompilation. Its
+column is `glaurung-229fbb1-clean`.
 
 ## Frozen inputs
 
@@ -40,6 +43,17 @@ verify the executable and extension hashes before decompilation.
 The separate `/nas4/data/workspace-infosec/decbench` checkout was dirty, but it
 was not the executable environment used by the run. The scorer resolves to the
 clean pinned checkout under `~/.cache/glaurung/decbench-full/decbench`.
+
+The clean reproduction recorded:
+
+- Glaurung full commit: `229fbb1d373bdc7bfc3ff3e6f69b105723852225`.
+- Clean detached worktree and a `fresh` build-guard result.
+- CLI SHA-256:
+  `38dfcba48e9308b71b8f6c0985468e747b500379c8d85420ec141ceca667a13d`.
+- Native-extension SHA-256:
+  `0b4bcff631b4e9f9281887f0745e69a1f1f1282124e3f162a47af431c642680d`.
+- Reproduction provenance file:
+  `~/.cache/glaurung/decbench-full/clean-229fbb1-run-provenance.json`.
 
 ## Completeness and identity checks
 
@@ -93,6 +107,49 @@ They produced the same Union count and denominator, the same three per-metric
 counts and denominators, and the same revised denominators for the existing
 columns.
 
+The clean exact-commit reproduction then decompiled all 803 binaries and wrote
+803 C artifacts plus 803 metadata TOMLs. The pinned scorer completed all 116
+optimization/project shards; all 803 evaluated TOMLs contain the clean column
+and none is empty. The independent audit found 94,358 scored function
+identities, all backed by stored C markers and all inside the 94,575-function
+manifest. Its deterministic report is
+`~/.cache/glaurung/decbench-full/audited-score-clean-229fbb1.json` (SHA-256
+`7f73c045dd11209a6eb784aeb3bc995daa10c85bc546ecfbbcad19a91c84b2b8`).
+
+Pinned DecBench's own `build_scoreboard_from_function_data` independently
+recomputed the merged data and matched the audit for all 14 columns, all three
+metric denominators, and Union. For the clean column it reported exactly
+`39,236 / 94,423 = 41.553435074%`.
+
+The clean and historical artifacts are not merely aliases. Of 803 generated C
+files, 783 are byte-identical and 20 differ. Those differences changed 13
+non-perfect type-match values and five non-perfect byte-match values; they
+changed no GED values and produced zero perfect-score gains or losses. After
+normalizing only the column name, 785 evaluated binary TOMLs are byte-identical
+and 18 contain those non-perfect changes. This explains, rather than merely
+observes, why the independently rebuilt column has the same perfect counts.
+
+## Ground-truth and leakage boundary
+
+The materialized protocol uses the unstripped binary's symbol table to map each
+manifest function name to an address, strips a copy of the binary, and passes
+only those addresses and the stripped bytes to Glaurung. Glaurung does not
+receive source bodies, source CFGs, DWARF types, expected pseudocode, or metric
+values. DecBench alone reads those ground-truth products after decompilation.
+
+Glaurung names functions in a stripped binary `sub_<va>`. The runner therefore
+uses the already-established name/address map to relabel each returned entry
+for DecBench's name-keyed result join. This relabel changes the emitted function
+identifier, not its recovered signature body, control flow, types, or machine
+code. Without it, a result produced at the requested address cannot join to its
+manifest function at all. It is benchmark bookkeeping, not decompilation input.
+
+The anti-caching negative control provides a separate direction of evidence:
+changing one recovered `xmalloc` parameter type changed type match from 1.0 to
+0.5 and removed that function's perfect contribution. The scorer was therefore
+reading the candidate C rather than replaying a cached score or accepting the
+manifest identity as correctness.
+
 A clean sequential replay of `O0/base-passwd/update-passwd` produced a TOML
 byte-identical to the fragment created by the sharded run. As a negative
 control, changing `xmalloc(long)` to `xmalloc(void)` reduced its type-match value
@@ -102,7 +159,10 @@ responds in the expected direction rather than preserving a cached perfect.
 ## Remaining claim boundary
 
 The evidence supports the metric arithmetic, artifact completeness, pinned
-metric implementation, shared denominator, and one sequential-vs-sharded
-replay. It does not prove exact-adapter equivalence for the 55 large-target
-binaries or exact native-build provenance for the historical run. Those are
-claim restrictions, not reasons to discard the measured targeted-VA result.
+metric implementation, shared denominator, exact-commit clean-build
+reproduction, and one sequential-vs-sharded replay. It does not prove
+exact-adapter equivalence for the 55 large-target binaries, and it cannot
+retroactively add a binary hash to the historical run. The clean reproduction
+removes the latter uncertainty from the reproduced score; the former remains a
+route-specific claim restriction, not a reason to discard the measured
+targeted-VA result.

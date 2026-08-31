@@ -16,7 +16,7 @@ import math
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 
 class AuditError(ValueError):
@@ -26,6 +26,20 @@ class AuditError(ValueError):
 FunctionKey = tuple[str, str, str, str]
 BinaryKey = tuple[str, str, str]
 MARKER = re.compile(r"^// Function: (\S+) @ 0x[0-9a-fA-F]+\s*$", re.MULTILINE)
+
+
+class MetricTally(TypedDict):
+    """Perfect and shared-universe counts for one metric or Union."""
+
+    perfect: int
+    denominator: int
+
+
+class ScoreTally(TypedDict):
+    """All metric tallies for one decompiler column."""
+
+    metrics: dict[str, MetricTally]
+    union: MetricTally
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -115,8 +129,16 @@ def _evaluated(
                     continue
                 if not _finite(value):
                     raise AuditError(f"non-finite metric in {path}: {field}={value}")
-                key = binary + (field[len(prefix) :],)
-                metric_values = values.setdefault(key, {})
+                key: FunctionKey = (
+                    binary[0],
+                    binary[1],
+                    binary[2],
+                    field[len(prefix) :],
+                )
+                metric_values = values.get(key)
+                if metric_values is None:
+                    metric_values = {}
+                    values[key] = metric_values
                 if metric in metric_values:
                     raise AuditError(f"duplicate evaluated metric: {key} {metric}")
                 metric_values[metric] = float(value)
@@ -181,7 +203,7 @@ def audit(tree: Path, published_path: Path, column: str) -> dict[str, Any]:
     new_measurable = set(new_values)
     merged_measurable: set[FunctionKey] = set()
     metric_denominators = {metric: 0 for metric in metrics}
-    scores = {
+    scores: dict[str, ScoreTally] = {
         name: {
             "metrics": {
                 metric: {"perfect": 0, "denominator": 0} for metric in metrics
