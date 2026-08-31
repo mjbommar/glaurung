@@ -227,6 +227,29 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   because its lane is `slow`-marked, so a scoped `dectest` run and the three
   ordinary baseline gates all stay green while the full suite fails — that is
   exactly how fixtures 195 and 196 reached `master` with a red census.
+- **`maturin develop` builds DEBUG, and the shares in a debug profile are not
+  the shares you ship.** The workflow above installs `target/debug` (276 MB
+  against 974 KB for release), so every Python-side measurement runs
+  unoptimized code. Profiled on `/usr/bin/bash`, the two builds disagree
+  completely: SIMD/`memchr` scanning is 12.7% in debug and **0.5%** in release;
+  the allocator is 6.5% in debug and **26.2%** in release — sixth place versus
+  first. An afternoon of optimisation targets was picked off the debug profile
+  before anyone checked. Use `uv run maturin develop --release` for anything
+  you intend to measure, and say which build a number came from.
+- **A split has SIX side files, not four.** Beyond the four fixture baselines
+  and the two this file already names, `python/tests/test_stranded_doc_comments.py`
+  holds `REVIEWED_DOC_SUMMARIES`, ALSO keyed by file path — moving a registered
+  doc summary into a new module silently orphans its key. Three of four splits
+  on 2026-08-31 tripped it. `test_src_dependency_boundaries.py`'s env-var
+  allowlist has the same shape and the same failure.
+- **The structural gates are the ones an optimisation loop never runs.** On
+  2026-08-31 seven tests were red on pushed `master` for hours -- the fitness
+  ratchet, the large-module review, the env-var allowlist and the stranded-doc
+  check -- while `cargo test --features python-ext`, `dectest @o0 @o2` and a
+  byte-identity sweep over 419 binaries all stayed green the entire time. Those
+  gates ask whether the CODEBASE is healthy, not whether the decompiler is
+  correct, so nothing in a perf or fixture loop touches them. After any commit
+  touching `src/`, run `uv run pytest python/tests/` in full, not the subset.
 - **`perf` works here — check the sysctl before hand-rolling timers.**
   `kernel.perf_event_paranoid` ships at `4` on this box and `ptrace_scope` at
   `1`, so `perf record` and gdb attach both fail. Passwordless sudo is
