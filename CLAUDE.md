@@ -57,6 +57,16 @@ tools/dectest.py --list-sets                      # what sets exist
 scripts/decbench-local-gate.sh                    # OUR fixture lanes 1-3 (~50m)
 scripts/decbench-local-gate.sh --decbench         # + DecBench/Joern lanes 4-5 (~100m)
 
+# Criterion microbenchmarks over the decompiler (ir/ and analysis/)
+cargo bench --bench ir_lift            # lifters: x86/ARM32/ARM64/x87, micro -> whole object
+cargo bench --bench ir_dataflow        # 17 passes isolated + pipeline groups
+cargo bench --bench ir_structure       # structuring/render, 14-SHAPE sweep
+cargo bench --bench analysis_cfg       # CFG discovery, whole-binary Throughput::Bytes
+cargo bench --bench decompile_pipeline # end-to-end + an 8-phase split
+# NOTE: no baseline is recorded, so these do NOT yet gate anything. A change
+# that doubles decompile time still ships green. `bench/harness.py` records
+# `decompile_ms` but never compares it, and no baseline holds a timing.
+
 # Bench / regression scorecard
 uv run python -m glaurung.bench
 
@@ -217,6 +227,34 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   because its lane is `slow`-marked, so a scoped `dectest` run and the three
   ordinary baseline gates all stay green while the full suite fails — that is
   exactly how fixtures 195 and 196 reached `master` with a red census.
+- **`perf` works here — check the sysctl before hand-rolling timers.**
+  `kernel.perf_event_paranoid` ships at `4` on this box and `ptrace_scope` at
+  `1`, so `perf record` and gdb attach both fail. Passwordless sudo is
+  available: `sudo sysctl -w kernel.perf_event_paranoid=1 kernel.yama.ptrace_scope=0`
+  (runtime only; a reboot restores the defaults). Four agents built hand-rolled
+  phase timers before anyone checked. The first real profile immediately
+  surfaced things none of the timers had: SipHash at 7.8%, ~11% in
+  `memmove`/`memcmp`, and `copy_prop::reads::count_reg_uses` as the largest
+  single project function at 8.40%.
+- **`perf` self-time can be badly wrong for allocation-driven costs.** It put
+  `disasm::iced` at 2.2% of a discovery profile, and the decoder still turned
+  out to be worth fixing — its cost was the 12–16 `malloc`/`free` pairs it
+  *drove* per instruction, charged to libc, which was **47.5%** of that same
+  profile. Count allocations with a `GlobalAlloc` when the suspicion is
+  allocation churn; the sampling profiler will say "don't bother".
+- **Do not read a size curve through `Throughput::Bytes`.** A four-rung ladder
+  reported CFG discovery at `n^2.13`; the rungs differed 32x in instructions per
+  file byte, and against instructions decoded the exponent is 0.97. A 12.8 MB
+  fixture finishes faster than a 359 KB one because 12.5 MB of it is DWARF.
+  Pick the denominator the work is actually proportional to.
+- **`git stash` writes a repository-SHARED ref, across worktrees.** Two agents
+  in separate worktrees raced a push/pop and swapped each other's changes; both
+  recovered from dangling commits, but only because both happened to notice.
+  Use `git diff > patch` / `git apply [-R]` for A/B measurements instead.
+- **`cargo fmt -- <files>` ignores the file list and formats the whole crate.**
+  It has twice reformatted files owned by other concurrent work. Use
+  `rustfmt --edition 2021 <file>` for a single file, and check `git status`
+  after.
 - **Nothing this project does may write to `/tmp`. Export `TMPDIR` first:**
 
   ```bash
