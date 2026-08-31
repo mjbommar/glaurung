@@ -221,10 +221,17 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     # it did not run this suite, and `cargo test`, `dectest`, `cargo fmt` and the
     # fitness ratchet were all green over the gap.
     ("ir/ast/float_gate.rs", '"GLAURUNG_PASS_HEALTH"'): "diagnostic",
+    # The lowering stack reservation, added in `aea49ddc`. Not a diagnostic: it
+    # sizes the thread `ast::lower` runs on. It cannot disable the guard -- values
+    # below a 16 MB floor clamp and warn -- so it tunes a resource reservation and
+    # changes no decompiler output. Registered late; the commit that added it did
+    # not run this suite, exactly as `ir/ast/float_gate.rs` above records for its
+    # own gap.
+    ("ir/ast/lower_region.rs", '"GLAURUNG_LOWERING_STACK_MB"'): "resource",
     ("ir/high_variables.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("ir/pass_stats.rs", '"GLAURUNG_PASS_STATS"'): "diagnostic",
     ("ir/structure.rs", '"GLAURUNG_ACCOUNT_STRUCTURE"'): "diagnostic",
-    ("ir/value_number.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
+    ("ir/value_number/coalesce.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/format_environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("python_bindings/ir.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",

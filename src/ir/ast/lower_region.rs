@@ -725,6 +725,18 @@ const LOWERING_STACK_BYTES: usize = 256 * 1024 * 1024;
 /// So this tunes the reservation; it cannot switch the guard off.
 const MIN_LOWERING_STACK_MB: usize = 16;
 
+/// Emit a configuration warning to stderr, once per process.
+///
+/// Not `tracing`: a subscriber is only installed by `logging::init_logging`,
+/// which the CLI does not call, so a `tracing::warn!` here is dropped and a
+/// misconfigured variable is silently ignored -- the same class of silent
+/// failure this guard exists to prevent. `Once` because `lower` runs per
+/// function, and a per-function warning would bury the decompile it warns about.
+fn warn_once(message: &str) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| eprintln!("[glaurung] {message}"));
+}
+
 /// Stack reserved for lowering, honouring `GLAURUNG_LOWERING_STACK_MB`.
 ///
 /// The 256 MB default is RESERVED ADDRESS SPACE, not committed memory, so on
@@ -738,18 +750,6 @@ const MIN_LOWERING_STACK_MB: usize = 16;
 /// with a warning rather than rejected: lowering is deep inside a decompile,
 /// and failing a whole run over a malformed environment variable would be a
 /// worse outcome than proceeding with a stack we can still justify.
-/// Emit a configuration warning to stderr, once per process.
-///
-/// Not `tracing`: a subscriber is only installed by `logging::init_logging`,
-/// which the CLI does not call, so a `tracing::warn!` here is dropped and a
-/// misconfigured variable is silently ignored -- the same class of silent
-/// failure this guard exists to prevent. `Once` because `lower` runs per
-/// function, and a per-function warning would bury the decompile it warns about.
-fn warn_once(message: &str) {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| eprintln!("[glaurung] {message}"));
-}
-
 fn lowering_stack_bytes() -> usize {
     let Ok(raw) = std::env::var("GLAURUNG_LOWERING_STACK_MB") else {
         return LOWERING_STACK_BYTES;

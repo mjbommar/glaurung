@@ -74,6 +74,19 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "declaration planning, cleanup, and renderers. The roadmap's single "
         "largest owner and the target of Phase 7."
     ),
+    "ir/ast/lower_ops.rs": (
+        "accepted (2026-08-31): one LLIR `Op` becomes one `Stmt`. A 26-arm "
+        "dispatch over `Op` plus fourteen small helpers it dispatches into "
+        "(`lower_value`, `widen_cast`, the memory-fill and memory-copy "
+        "intrinsic recognisers). The arms do not share state and are not "
+        "separately callable, so splitting by arm produces files that exist "
+        "only to be re-imported by the same match; splitting helpers out leaves "
+        "a match that cannot be read without them. It crossed 1,000 LOC by "
+        "three lines in `5547b56c`, which turned `lower_op` from returning a "
+        "`Vec<Stmt>` into returning one `Stmt` -- the change that made the "
+        "one-op-one-statement property explicit rather than incidental. "
+        "Reviewed as the delta, not as a fresh read of the whole file."
+    ),
     "ir/lift_x86.rs": "scheduled split: shared lift builder plus x86 instruction families.",
     "ir/lift_arm32.rs": "scheduled split: shared lift builder plus ARM32 instruction families.",
     "ir/lift_arm64.rs": "scheduled split: shared lift builder plus ARM64 instruction families.",
@@ -98,9 +111,6 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "copies, and the pointer/pointer meet rule that goes with it -- the "
         "-O2 counterpart to the spill-shaped producers already in tagging.rs "
         "and valued.rs, so it sits beside them rather than in the driver."
-    ),
-    "ir/structure.rs": (
-        "scheduled split: graph algorithms, regions, selection, verification, and HIR."
     ),
     "python_bindings/ir.rs": (
         "scheduled split, three cuts taken 2026-08-18 (2,738 -> 1,422): "
@@ -260,41 +270,6 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "fired on 11634706 and produced the 2026-08-19 re-review above, which "
         "supersedes these three.] A cut here buys a module boundary and no "
         "narrowing."
-    ),
-    "analysis/cfg.rs": (
-        "accepted, under review: the entry-rooted walk that turns bytes into "
-        "blocks, edges, and functions. Three clusters have been lifted out to "
-        "descendant modules -- `cfg/scan.rs` (speculative image scans, "
-        "3c61879), `cfg/repair.rs` (post-discovery repairs: split-chunk "
-        "merge, DWARF overrides, landing-pad attachment, 5b60729) and "
-        "`cfg/pe_tables.rs` (the authoritative PE `.pdata` and export tables "
-        "read as seeds, 426 LOC, 2 pub(super), 0 widenings). What remains is "
-        "one walk with one reason to change. The earlier note here claimed the "
-        "jump-table and budget responsibilities were separable; measurement "
-        "says otherwise. The jump-table DECODERS already live in "
-        "analysis/jump_table.rs, and what is left under that name is dispatch "
-        "edge replay inside `discover_function` -- 22 call sites, all "
-        "internal, 7 widenings to buy 258 lines. `Budgets` is separable and "
-        "worth 165 lines against 19 importers across four subsystems."
-    ),
-    "ir/value_number.rs": "accepted: one global value-numbering pass and its lattice.",
-    "ir/copy_prop.rs": (
-        "under review (2026-08-17): NOT one pass. The previous note said "
-        "'accepted: one copy/constant propagation pass and its safety proofs' "
-        "and the first half is false -- the file exports EIGHT pub entry "
-        "points, scheduled independently at seven call sites in "
-        "ir/ast/prepare.rs plus two in python_bindings/ir.rs. A module whose "
-        "callers interleave seven of its passes at different pipeline "
-        "positions has seven reasons to change, which is the exact question "
-        "this list asks. The 'safety proofs' half is accurate and the "
-        "2026-08-17 cuts are the evidence: copy_prop/alias.rs took the "
-        "memory-disjointness proof out at 284 lines with only 7 names crossing "
-        "the boundary, and four of its items turned out to have no reference "
-        "anywhere outside it. copy_prop/reads.rs took the read-counting "
-        "analysis at 207. Both at token ratio 1.000000. Remaining work is to "
-        "decide whether the eight entry points are one owner -- and note that "
-        "prune_unobservable_scratch_dataflow is pub with ZERO callers outside "
-        "this module, which pub visibility hides from both dead-code counts."
     ),
     "ir/call_contracts.rs": (
         "accepted (2026-08-16, c2fb19d): one pass with one reason to change — "

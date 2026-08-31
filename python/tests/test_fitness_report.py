@@ -437,15 +437,15 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
-        "ir_files_above_1000": 15,
-        "ir_median_loc": pytest.approx(429.5),
-        "product_files_above_1000": 26,
-        "product_files_above_2000": 4,
-        "product_loc_above_1000": 39931,
-        "product_max_loc": 2451,
-        "product_mean_loc": pytest.approx(427.725768321513),
-        "product_median_loc": pytest.approx(309),
-        "product_pct_loc_above_1000": pytest.approx(22.070105235231694),
+        "ir_files_above_1000": 13,
+        "ir_median_loc": pytest.approx(405),
+        "product_files_above_1000": 23,
+        "product_files_above_2000": 3,
+        "product_loc_above_1000": 33255,
+        "product_max_loc": 2268,
+        "product_mean_loc": pytest.approx(408.64),
+        "product_median_loc": pytest.approx(305.0),
+        "product_pct_loc_above_1000": pytest.approx(18.084377447141737),
     }
 
 
@@ -699,6 +699,23 @@ def test_the_committed_baseline_shows_the_growth_this_measure_was_added_for(fr):
     predicate legible -- and it is listed here rather than trimmed to fit the
     counter, because a comment deleted to keep a number flat is exactly the
     drift this measure exists to surface.
+
+    2026-08-31: regenerated after four splits, and EVERY measure improved --
+    `files_above_1000` 26 -> 23, `files_above_2000` 4 -> 3,
+    `loc_in_files_above_1000` 39,931 -> 33,255 (-6,676), `max_loc` 2,451 ->
+    2,268, `mean_loc` 427.7 -> 408.6, `pct_loc_above_1000` 22.07 -> 18.08. The
+    cut came first, as the docstring below requires. A day of optimisation work
+    had grown four files past the sizes their reviews examined -- `analysis/cfg.rs`
+    2,451 -> 2,535, `ir/value_number.rs` 1,991 -> 2,071, `ir/copy_prop.rs`
+    1,631 -> 1,856, `ir/structure.rs` 1,668 -> 1,843 -- and this measure plus
+    `test_large_module_review` were the only things that said so, while
+    `cargo test`, `dectest` and a byte-identity sweep over the whole fixture
+    corpus all stayed green. All four were split rather than blessed: 2,535 ->
+    293, 2,071 -> 430, 1,856 -> 412, 1,843 -> 486, into 24 modules cut on
+    ownership, each proving byte-identical output over the fixture corpus
+    first. Three files remain listed here at small growth from the same work
+    (`ir/ast.rs` +2, `ir/const_fold.rs` +32, `python_bindings/ir.rs` +28); they
+    are recorded rather than trimmed, for the reason the 2026-08-19 note gives.
 
     2026-08-28: the baseline was regenerated after the analyst-annotation work.
     Only ONE measure got worse -- `product_mean_loc` 427.05 -> 427.91 -- and
