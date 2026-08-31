@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Emit the JSON the glaurung.dev fixture gallery renders.
+
+WHY IT IS GENERATED AND NOT WRITTEN. glaurung.dev's house rule is that a code
+block holds real captured output -- run the command, paste what came back. A
+gallery of 213 fixtures across six toolchain/optimisation lanes is 1,278
+decompilations; the only honest way to publish it is to run every one and record
+what the tool actually emitted, together with the verdict the execution
+differential already reached for it.
+
+WHAT MAKES THIS WORTH PUBLISHING. `baseline.json` is not a similarity score. It
+records, per fixture per lane per function, whether the recovered C was
+recompiled, dlopened beside the original, called with the same seeded inputs,
+and returned the same values and buffers. So a page can say `pass` and mean
+"this recompiles and behaves identically", and say `fail` and mean it too. The
+failures are the reason to believe the passes, which is the site's rule 6.
+
+Output: one JSON per fixture plus an index, under `--out`.
+
+    uv run python tools/gen_fixture_gallery.py --out ../glaurung.dev/src/data/fixtures
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "tests/decompiler_fixtures/src"
+BUILD = ROOT / "tests/decompiler_fixtures/build"
+BASELINE = ROOT / "tests/decompiler_fixtures/baseline.json"
+STRUCTURAL = ROOT / "tests/decompiler_fixtures/structural_baseline.json"
+
+#: Source suffix -> the toolchains that build it. `rustc` is its own front and
+#: back end, so the {gcc, clang} axis has no meaning for a `.rs` fixture.
+TOOLCHAINS = {".c": ("gcc", "clang"), ".cpp": ("gcc", "clang"), ".rs": ("rustc",)}
+OPTS = ("O0", "O2")
+
+#: A fixture's header comment states which recovery problem it isolates and why
+#: existing fixtures do not cover it. That is the page's prose, already written
+#: by whoever built the fixture -- far better than anything generated.
+#: The block comment is usually first, but often sits just after the `#include`
+#: lines -- `102_duffs_device.c` and `212_loop_with_returning_arm.c` both do.
+#: Anchoring at position 0 silently dropped the prose for those, so search the
+#: head of the file instead and take the first substantial comment.
+C_HEADER = re.compile(r"/\*(.*?)\*/", re.S)
+RUST_HEADER = re.compile(r"\A((?:\s*//!.*\n)+)")
+
+
+def header_prose(text: str, suffix: str) -> str:
+    """The fixture's own explanation of what it isolates, as plain paragraphs."""
+    if suffix == ".rs":
+        m = RUST_HEADER.match(text)
+        if not m:
+            return ""
+        body = "\n".join(
+            l.strip().removeprefix("//!").strip() for l in m.group(1).splitlines()
+        )
+    else:
+        head = "\n".join(text.splitlines()[:60])
+        m = next(
+            (c for c in C_HEADER.finditer(head) if len(c.group(1)) > 80),
+            None,
+        )
+        if not m:
+            return ""
+        body = "\n".join(
+            re.sub(r"^\s*\*ractical?", "", l).strip().lstrip("*").strip()
+            for l in m.group(1).splitlines()
+        )
+    # The first line is usually just the filename; drop it when so.
+    lines = [l for l in body.splitlines()]
+    while lines and (not lines[0] or lines[0].endswith((".c", ".cpp", ".rs"))):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def decompile(binary: Path, func: str) -> str | None:
+    """One function's recovered C, or None when the tool produced nothing."""
+    done = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            str(binary),
+            "--func",
+            func,
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+        cwd=ROOT,
+    )
+    if done.returncode != 0 or not done.stdout.strip():
+        return None
+    return done.stdout.rstrip("\n")
+
+
+def build_fixture(args: tuple[str, dict, dict]) -> dict | None:
+    stem, baseline, structural = args
+    source_path = next(
+        (SRC / f"{stem}{s}" for s in TOOLCHAINS if (SRC / f"{stem}{s}").exists()), None
+    )
+    if source_path is None:
+        return None
+    text = source_path.read_text(errors="replace")
+    lanes = []
+    for tc in TOOLCHAINS[source_path.suffix]:
+        for opt in OPTS:
+            key = f"{stem}:{tc}:{opt}"
+            verdicts = baseline.get(key)
+            if not isinstance(verdicts, dict):
+                continue
+            binary = BUILD / f"{stem}-{tc}-{opt}.so"
+            if not binary.exists():
+                continue
+            functions = []
+            for fn, verdict in sorted(verdicts.items()):
+                if not isinstance(verdict, str):
+                    continue
+                code = decompile(binary, fn)
+                functions.append(
+                    {
+                        "name": fn,
+                        "verdict": verdict,
+                        "code": code,
+                        "lines": len(code.splitlines()) if code else 0,
+                    }
+                )
+            passed = sum(1 for f in functions if f["verdict"] == "pass")
+            lanes.append(
+                {
+                    "toolchain": tc,
+                    "opt": opt,
+                    "id": f"{tc}-{opt}",
+                    "binary": binary.name,
+                    "functions": functions,
+                    "passed": passed,
+                    "total": len(functions),
+                }
+            )
+    if not lanes:
+        return None
+    all_fns = sorted({f["name"] for l in lanes for f in l["functions"]})
+    total = sum(l["total"] for l in lanes)
+    passed = sum(l["passed"] for l in lanes)
+    return {
+        "stem": stem,
+        "title": stem.split("_", 1)[1].replace("_", " ") if "_" in stem else stem,
+        "number": stem.split("_", 1)[0] if stem[0].isdigit() else None,
+        "language": {".c": "C", ".cpp": "C++", ".rs": "Rust"}[source_path.suffix],
+        "source_file": source_path.name,
+        "source": text,
+        "prose": header_prose(text, source_path.suffix),
+        "functions": all_fns,
+        "lanes": lanes,
+        "passed": passed,
+        "total": total,
+        "structural": {
+            k.split(":", 1)[1]: v
+            for k, v in structural.get("closure", {}).items()
+            if k.startswith(f"{stem}:")
+        },
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--only", nargs="*", help="fixture stems to build (default: all)")
+    ap.add_argument("--jobs", type=int, default=8)
+    args = ap.parse_args()
+
+    baseline = json.loads(BASELINE.read_text())
+    structural = json.loads(STRUCTURAL.read_text()) if STRUCTURAL.exists() else {}
+    stems = sorted({k.split(":")[0] for k in baseline if ":" in k})
+    if args.only:
+        stems = [s for s in stems if s in set(args.only)]
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    print(f"{len(stems)} fixtures, {args.jobs} workers", flush=True)
+
+    index, done_n = [], 0
+    payload = [(s, baseline, structural) for s in stems]
+    with ProcessPoolExecutor(max_workers=args.jobs) as ex:
+        for fixture in ex.map(build_fixture, payload):
+            done_n += 1
+            if fixture is None:
+                continue
+            (args.out / f"{fixture['stem']}.json").write_text(
+                json.dumps(fixture, indent=1)
+            )
+            index.append(
+                {
+                    k: fixture[k]
+                    for k in ("stem", "title", "number", "language", "passed", "total")
+                }
+                | {
+                    "functions": len(fixture["functions"]),
+                    "lanes": len(fixture["lanes"]),
+                }
+            )
+            if done_n % 25 == 0:
+                print(f"  {done_n}/{len(stems)}", flush=True)
+
+    index.sort(key=lambda f: f["stem"])
+    grand_total = sum(f["total"] for f in index)
+    grand_pass = sum(f["passed"] for f in index)
+    (args.out / "index.json").write_text(
+        json.dumps(
+            {
+                "fixtures": index,
+                "counts": {
+                    "fixtures": len(index),
+                    "function_lanes": grand_total,
+                    "passing": grand_pass,
+                    "rate": round(100.0 * grand_pass / grand_total, 1)
+                    if grand_total
+                    else 0.0,
+                },
+                "source": {
+                    "baseline": "tests/decompiler_fixtures/baseline.json",
+                    "commit": subprocess.run(
+                        ["git", "rev-parse", "--short=8", "HEAD"],
+                        capture_output=True,
+                        text=True,
+                        cwd=ROOT,
+                    ).stdout.strip(),
+                },
+            },
+            indent=1,
+        )
+    )
+    print(f"\n{len(index)} fixtures -> {args.out}")
+    print(
+        f"{grand_pass:,} of {grand_total:,} function-lanes pass ({100.0 * grand_pass / grand_total:.1f}%)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
