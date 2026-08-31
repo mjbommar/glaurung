@@ -1,13 +1,21 @@
 # DecBench full-leaderboard data completion plan
 
-Status: proposed execution plan  
+Status: execution in progress (run `20260831T180316Z`)  
 Scope: one publication-quality Glaurung run covering every data-dependent element on
 `https://decbench.com/`  
 Primary corpus: DecBench `full`, 803 binary/config cells, 94,575 manifest functions  
 Leaderboard presets: `unoptimized`, `optimized`, `inlined`, `large`, `sample-set`  
 Modes per preset: ordinary and `normalize failures`  
-Glaurung target: newest committed and pushed `master` after the current performance
-and CLI work lands; full SHA intentionally pending until the concurrent agent handoff
+Glaurung target: `7bc7353923cc659d3e970dbde8455b2b9b503a6d` (committed,
+pushed, and frozen in a detached clean worktree)
+
+Pinned inputs for the active run:
+
+- Glaurung parent: `a34cab98cd9eae0c15763612c515c34f168aeb63`
+- DecBench: `f76dae075d4d82004fb21132b3f15e43b680e179`
+- dataset: `noelo-lab/decbench-dataset` at
+  `e5eb576d66ee36793b800a4dd45e291e0add4472`, config `full`
+- run root: `~/.cache/glaurung/decbench-submission/20260831T180316Z`
 
 ## 1. Outcome
 
@@ -71,9 +79,44 @@ not input to the new candidate column.
 The new run is deliberately **not** a replay of `229fbb1`. Since that run, Glaurung
 has added file/stdin-backed `--vas`, structured per-variable machine addresses in the
 CLI JSON, narrower target-scoped batch output, and substantial core performance work.
-The candidate must exercise those paths directly. The pending Git commit is not a
-reason to guess a revision now: Phase 0 freezes the remote SHA only after the other
-agent has committed, pushed, and handed it off.
+The candidate must exercise those paths directly. The active run froze the pushed
+revision above only after local `HEAD` and `origin/master` agreed.
+
+### 2.1 Active-run evidence (not yet submission evidence)
+
+As of 2026-08-31, the fresh full corpus is materialized and reconciled:
+
+- 803/803 compiled binaries and 800 source CFG files are present; the three missing
+  source CFGs are corpus-level absences, not download omissions;
+- all 1,603 expected fetched files passed hash verification;
+- the manifest contains 94,575 functions across 803 unique binary keys;
+- the release extension is fresh, 2,754 Rust unit tests plus integration tests pass,
+  and all 11 feature-build configurations pass;
+- one full functional sweep reached 803/803 terminal binary outcomes and
+  94,575/94,575 explicit function outcomes;
+- 94,358 functions produced candidate C and 217 are explicit failures/abstentions;
+- the successful identity set exactly matches `glaurung-229fbb1-clean`: 94,358 old,
+  94,358 new, zero lost keys, and zero gained keys;
+- raw conversion retained 390,349 structured variables and 181,561 direct machine
+  addresses, with no out-of-target, duplicate-address, parse, or conversion errors.
+
+The initial functional sweep ran on a loaded system and is therefore a coverage
+oracle only. A subsequent idle-system concurrency probe produced byte-identical raw
+JSON at 1, 2, and 4 workers and selected 4 workers (75.76 s, 48.15 s, and 30.78 s
+respectively on the 21-binary Bash probe; peak per-process RSS approximately 241
+MiB). The authoritative full decompilation then completed 803/803 binaries and
+94,358 candidate bodies in 212.27 seconds wall time. Candidate/parent Criterion and
+phase-profile comparisons, all-metric evaluation, and all ten site aggregates remain
+required.
+
+Two runner defects were found and repaired before accepting the coverage count:
+
+1. dotted binary names were incorrectly shortened with `Path.stem`;
+2. an ELF leading underscore was incorrectly treated as PE name decoration, merging
+   distinct symbols such as `_rl_clear_screen` and `rl_clear_screen`.
+
+Stale artifacts from the first defect were quarantined rather than reused. Targeted
+repair after the second defect restored exact successful-key parity with the old run.
 
 ## 3. Site data contract
 
@@ -215,6 +258,11 @@ performance refactor and is finalizing its commit and push. When that handoff ar
 If `master` advances again before the full run starts, either deliberately adopt the
 newer remote SHA and repeat every gate, or keep the frozen SHA. Never silently move a
 running benchmark to a later build.
+
+For the active run, this handoff is complete: local `HEAD` and `origin/master` both
+resolved to `7bc7353923cc659d3e970dbde8455b2b9b503a6d`, whose parent is
+`a34cab98cd9eae0c15763612c515c34f168aeb63`. The detached run worktree, rather than
+the shared checkout, is the build and test authority.
 
 ### 5.4 Latest-code acceptance gate
 
@@ -742,15 +790,15 @@ Stop and do not submit if any of these is true:
 
 ## 15. Milestone checklist
 
-- [ ] M0: concurrent agent's candidate SHA is committed, pushed, and remote-verified.
+- [x] M0: concurrent agent's candidate SHA is committed, pushed, and remote-verified.
 - [ ] M1: publication identity, privacy, and exact-target adapter route accepted.
-- [ ] M2: clean Glaurung and DecBench revisions pinned; environment hashed.
+- [x] M2: clean Glaurung and DecBench revisions pinned; environment hashed.
 - [ ] M3: latest-code semantic and release-performance acceptance gates pass.
 - [ ] M4: 401+ target adapter test uses file-backed `--vas`, never `--all`.
 - [ ] M5: stripped ELF/PE address joins and failure accounting pass.
 - [ ] M6: structured variables/direct addresses survive CLI, adapter, and JSON round trip.
 - [ ] M7: per-function `compiles` persistence passes JSON/shard/site tests.
-- [ ] M8: full official-adapter decompilation reaches 803/803 terminal outcomes.
+- [x] M8: full official-adapter decompilation reaches 803/803 terminal outcomes.
 - [ ] M9: all three metrics complete with no empty or unclassified result cells.
 - [ ] M10: canonical replacement overlay covers 94,575/94,575 explicit outcomes.
 - [ ] M11: timing, compile, distance, pipeline, variable, and sample extras are complete.
