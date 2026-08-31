@@ -1,6 +1,6 @@
 # Glaurung
 
-![Glaurung logo](assets/glaurung-512.png)
+![Glaurung logo](assets/glaurung-logo-512px.png)
 
 Glaurung is a pre-1.0 reverse-engineering framework with a Rust analysis core,
 Python bindings, a command-line interface, persistent SQLite project files,
