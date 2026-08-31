@@ -29,9 +29,11 @@
 //!   `pe_tail_target_looks_like_function_start` and the parent's
 //!   `classify_function_shapes`.
 //!
-//! `PeTinyStubScanResult` and `PeRawCallFunctionStart` are the two scan results
-//! whose fields the parent reads directly, so they stay declared there and cost
-//! no widening.
+//! `PeCodePointer`, `PeTinyStubScanResult` and `PeRawCallFunctionStart` are
+//! declared at the foot of this file, with the scans that produce them.
+//! [`super::seeds`] reads their fields directly, which costs `pub(super)` on
+//! each -- the alternative, leaving them in the parent, costs the reader a file
+//! hop to find out what a scan here returns.
 
 use super::*;
 
@@ -1378,4 +1380,47 @@ mod elf_prologue_scan_tests {
             truth.len()
         );
     }
+}
+
+// What the scans above return, and the alignment step they all walk on.
+//
+// These were declared in the parent while the parent was the only thing large
+// enough to hold them. They belong to their producers: `PeCodePointer` is what
+// `scan_pe_code_pointers` yields (and the only type in this file that leaves the
+// crate, through `FunctionDiscoveryStats::code_labels`' neighbour field),
+// `PeTinyStubScanResult` and `PeRawCallFunctionStart` are the two richer scan
+// results, and `align_up_u64` is the stride every region sweep starts from.
+
+#[derive(Debug, Clone)]
+pub struct PeCodePointer {
+    pub pointer_va: u64,
+    pub target_va: u64,
+    pub section_name: String,
+    pub slot_size: usize,
+    pub table_index: usize,
+    pub table_length: usize,
+    pub confidence: String,
+}
+
+pub(super) fn align_up_u64(value: u64, align: u64) -> u64 {
+    if align <= 1 {
+        return value;
+    }
+    value
+        .checked_add(align - 1)
+        .map(|v| v & !(align - 1))
+        .unwrap_or(value)
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct PeTinyStubScanResult {
+    pub(super) starts: Vec<u64>,
+    pub(super) pdata_rejected: Vec<u64>,
+    pub(super) unpromoted_candidates: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PeRawCallFunctionStart {
+    pub(super) va: u64,
+    pub(super) allow_body_split: bool,
 }

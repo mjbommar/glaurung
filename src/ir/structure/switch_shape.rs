@@ -18,8 +18,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::build;
+use super::cfg::{natural_loop_body, Cfg};
 use super::path_predicates::can_reach;
-use super::{build, natural_loop_body, Cfg, Region};
+use super::region::Region;
 
 /// Commit the blocks a switch arm uniquely owns while leaving a shared tail
 /// available to the enclosing region.

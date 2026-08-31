@@ -22,14 +22,13 @@
 //!   ask: does this conditional branch's fallthrough carry the compare's range
 //!   bound, and is this opcode inter-function padding.
 //!
-//! What stays in the parent, because the call graph says so: the image and
-//! pointer lookups `indexed_file_offset`, `indexed_code_offset`,
-//! `read_pointer_at_va` and `indirect_memory_target` sit physically between
-//! this module's two source ranges. `indirect_memory_target` *calls*
-//! [`memory_operand_va`], which makes the contiguous range look right, but they
-//! answer "what is at this address in the image", not "what does this opcode
-//! do" -- and `read_pointer_at_va` calls the parent's `pe_va_to_file_off`, so
-//! taking them would cost a widening for nothing.
+//! What is NOT here, because the call graph says so: the image and pointer
+//! lookups `indexed_file_offset`, `indexed_code_offset`, `read_pointer_at_va`
+//! and `indirect_memory_target` live in [`super::image_view`].
+//! `indirect_memory_target` *calls* [`memory_operand_va`], which makes them
+//! look like neighbours, but they answer "what is at this address in the
+//! image", not "what does this opcode do" -- and `read_pointer_at_va` calls
+//! `pe_va_to_file_off`, which is address plumbing all the way down.
 //!
 //! The two test modules below are this module's own. Two further tests of
 //! [`is_code_padding_terminator`] and [`memory_operand_va`] live in

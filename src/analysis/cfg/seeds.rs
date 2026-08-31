@@ -33,15 +33,18 @@
 //! suppress candidates the exception directory already covers),
 //! `code_pointer_target_set` and `pe_code_pointers`.
 //!
-//! What stays in the parent, because the call graph says so: `bits` is derived
-//! before this call and used again by the worklist loop and the callgraph
-//! build; `noreturn_targets` and `plt_stub_ranges` are `DiscoveryFacts` inputs,
-//! not seeds; and the `Vec<Function>` passed in as `discovered` is the parent's
-//! result vector, which the FLIRT scan reads to skip matches inside a known
-//! body. It is empty at this point in the pass -- the parameter exists so that
-//! stays a fact about the caller rather than an assumption made here.
+//! What stays in [`super::worklist`], because the call graph says so: `bits` is
+//! derived before this call and used again by the worklist loop and the
+//! callgraph build; `noreturn_targets` and `plt_stub_ranges` are
+//! `DiscoveryFacts` inputs, not seeds; and the `Vec<Function>` passed in as
+//! `discovered` is the caller's result vector, which the FLIRT scan reads to
+//! skip matches inside a known body. It is empty at this point in the pass --
+//! the parameter exists so that stays a fact about the caller rather than an
+//! assumption made here.
 
 use super::*;
+
+use object::{Object, ObjectSymbol};
 
 /// Everything the discovery pass needs that was computed while collecting seeds.
 ///
@@ -619,4 +622,50 @@ pub(super) fn collect_seeds(
         eh_frame_extent,
         is_pe_image,
     }
+}
+
+/// Every defined symbol in an executable region, as a function-entry seed.
+///
+/// The first and cheapest seed source, and the only one that needs no
+/// heuristic: a symbol table that says a function starts here is taken at its
+/// word. Address 0 is NOT special-cased -- `in_exec_regions` already excludes it
+/// in a linked binary, while keeping a genuine function at offset 0 of a
+/// relocatable object, which is where the first Thumb function lands once
+/// `code_addr` has masked its T-bit off.
+
+pub(super) fn parse_function_seeds(
+    data: &[u8],
+    regions: &[ExecRegion],
+    arch: BArch,
+) -> Vec<Address> {
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let mut seeds: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
+        // Symbols defined in executable regions. We do NOT special-case
+        // addr==0: `in_exec_regions` already excludes address 0 in linked
+        // binaries (where it is never executable), while keeping a genuine
+        // function at offset 0 in a relocatable object — e.g. the first Thumb
+        // function, whose symbol value is the T-bit `1` masked to `0`.
+        for sym in obj.symbols() {
+            if sym.is_definition() {
+                let addr = code_addr(sym.address(), arch);
+                if in_exec_regions(regions, addr).is_some() {
+                    seeds.insert(addr);
+                }
+            }
+        }
+        // Also consider dynamic symbols (ELF .plt entries often appear here)
+        for sym in obj.dynamic_symbols() {
+            if sym.is_definition() {
+                let addr = code_addr(sym.address(), arch);
+                if in_exec_regions(regions, addr).is_some() {
+                    seeds.insert(addr);
+                }
+            }
+        }
+    }
+    seeds
+        .into_iter()
+        .filter_map(|va| Address::new(AddressKind::VA, va, bits, None, None).ok())
+        .collect()
 }

@@ -21,13 +21,16 @@
 //! predecessor lists. `chunk_tests` (below) tests the split-chunk merge and
 //! moved here with it.
 //!
-//! What stays in the parent, because the call graph says it is shared and not
+//! What is NOT here, because the call graph says it is shared and not
 //! repair-private: `DiscoveryFacts` is the discovery context that
-//! `discover_function_image_at` and `analyze_functions_bytes_within` also
-//! build and read, and `discover_function` — which landing-pad recovery
-//! re-enters with a narrowed `DiscoveryFacts` — is the walk itself.
+//! `discover_function_image_at` and [`super::worklist`] also build and read,
+//! and `discover_function` — which landing-pad recovery re-enters with a
+//! narrowed `DiscoveryFacts` — is the walk itself. Both live in
+//! [`super::walk`].
 
 use super::*;
+
+use object::Object;
 
 /// Apply DWARF subprogram entries on top of heuristically-discovered
 /// functions. When a DWARF entry matches an existing Function by entry
@@ -970,5 +973,81 @@ mod chunk_tests {
         let merged = merge_compiler_split_chunks(&mut funcs);
         assert_eq!(merged, 0);
         assert_eq!(funcs.len(), 1);
+    }
+}
+
+/// Give every discovered function the name the binary itself declares.
+///
+/// The first repair, and the one the rest depend on being first: it must run
+/// before `merge_compiler_split_chunks`, because the fold keys on the
+/// `.cold`/`.part.N` suffixes a symbol table supplies and DWARF erases. Applying
+/// DWARF first renames both `dispatch` and `dispatch.cold` to `dispatch`, the
+/// suffix disappears, and the child survives as a duplicate function.
+///
+/// Three sources, in a deliberate order -- static symbols, dynamic symbols, then
+/// the PE export table. The last is not redundant: `object::File::dynamic_symbols()`
+/// is empty for PE exports, so without it a publicly named entry point that the
+/// export scan already seeded comes back as an anonymous `sub_<va>`. `or_insert`
+/// throughout, so the first source to name an address wins.
+pub(super) fn apply_symbol_and_export_names(
+    data: &[u8],
+    arch: BArch,
+    regions: &[ExecRegion],
+    functions: &mut [Function],
+) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
+        use object::read::ObjectSymbol;
+        // Build VA->name map from defined symbols in executable regions
+        let mut sym_by_va: std::collections::HashMap<u64, String> =
+            std::collections::HashMap::new();
+        for sym in obj.symbols() {
+            if sym.is_definition() {
+                let addr = code_addr(sym.address(), arch);
+                if addr != 0 && in_exec_regions(regions, addr).is_some() {
+                    if let Ok(name) = sym.name() {
+                        if !name.is_empty() {
+                            sym_by_va.entry(addr).or_insert_with(|| name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        for sym in obj.dynamic_symbols() {
+            if sym.is_definition() {
+                let addr = code_addr(sym.address(), arch);
+                if addr != 0 && in_exec_regions(regions, addr).is_some() {
+                    if let Ok(name) = sym.name() {
+                        if !name.is_empty() {
+                            sym_by_va.entry(addr).or_insert_with(|| name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        // `object::File::dynamic_symbols()` is empty for PE exports.  The
+        // export table already seeded these function starts above; attach the
+        // corresponding names here as well so discovery does not return an
+        // anonymous `sub_<va>` for a publicly named entry point.
+        if let Ok(parser) = crate::formats::pe::PeParser::new(data) {
+            let image_base = parser.image_base();
+            if let Ok(exports) = parser.exports() {
+                for export in &exports.exports {
+                    let (Some(name), None) = (export.name, export.forwarder) else {
+                        continue;
+                    };
+                    let va = image_base + u64::from(export.rva);
+                    if !name.is_empty() && export.rva != 0 && in_exec_regions(regions, va).is_some()
+                    {
+                        sym_by_va.entry(va).or_insert_with(|| name.to_string());
+                    }
+                }
+            }
+        }
+        // Apply renames
+        for f in functions.iter_mut() {
+            if let Some(name) = sym_by_va.get(&f.entry_point.value) {
+                f.name = name.clone();
+            }
+        }
     }
 }

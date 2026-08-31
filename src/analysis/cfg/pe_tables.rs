@@ -21,19 +21,20 @@
 //! this module and `unwind_info_tests` (below) is their test, moved here with
 //! them.
 //!
-//! What stays in the parent, because the call graph says so:
-//! - `pe_va_to_file_off` sits physically *between* this module's two ranges in
-//!   the file it came from, and has 11 call sites -- 4 in the parent, 7 in
-//!   [`super::scan`]. It is the general VA-to-offset walk, not a table reader,
+//! What stays elsewhere, because the call graph says so:
+//! - `pe_va_to_file_off` is the general VA-to-offset walk, not a table reader,
 //!   and nothing here calls it: the `.pdata` and export walks each build their
-//!   own section index once per call instead of per lookup.
-//! - `PdataSeedStats` is declared in the parent because the parent reads ten of
-//!   its fields directly when it folds them into `FunctionDiscoveryStats`.
-//! - `ExecRegion` and `in_exec_regions` are the shared executable-range
-//!   vocabulary; `code_addr` and `align_up_u64` are used by the parent and
-//!   [`super::scan`] and never here.
+//!   own section index once per call instead of per lookup. It lives with the
+//!   rest of the address plumbing in [`super::image_view`], alongside
+//!   `ExecRegion`, `in_exec_regions` and `code_addr`.
+//! - `PdataSeedStats` is declared in [`super::stats`] rather than here because
+//!   it is a census, not a table: [`super::worklist`] reads ten of its fields
+//!   directly when it folds them into `FunctionDiscoveryStats`.
+//! - `align_up_u64` is the stride every region sweep starts from and belongs to
+//!   [`super::scan`], which is its only caller.
 //!
-//! A descendant module sees all of those for free through `use super::*`.
+//! A sibling module sees all of those for free through `use super::*`, because
+//! the parent re-exports them.
 
 use super::*;
 

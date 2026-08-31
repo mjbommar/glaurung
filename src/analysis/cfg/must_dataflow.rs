@@ -6,19 +6,19 @@
 //! block once, in queue order, so a fact it derived from the only predecessor
 //! it had seen so far can be falsified by a back-edge decoded later. These two
 //! passes re-derive the same facts to a fixed point over the finished graph,
-//! and the dispatch validation downstream trusts only what survives them.
+//! and [`validate_dispatch_edges`] -- the third item here -- trusts only what
+//! survives them.
 //!
 //! Each is a pure function of `(blocks, edges, index_bounds)` plus the decoder
 //! inputs: they read the graph, they never mutate it, and neither reads the
 //! other's output. That is why they could be lifted at all -- everything
 //! between the BFS and the `Function` build shares mutable state with its
 //! neighbours, and these do not. The maps they return are read exactly once
-//! each, by the dispatch-revalidation loop in the parent.
+//! each, by the dispatch revalidation below.
 //!
-//! What stays in the parent: `thumb`. It is derived from `arm32_mode` under the
-//! comment that now documents [`bound_fixed_point`], but the dispatch
-//! revalidation reads it again after both calls return, so it is a parameter
-//! here rather than a local.
+//! What stays in the walk: `thumb`. It is derived from `arm32_mode` under the
+//! comment that now documents [`bound_fixed_point`], so it arrives here as a
+//! parameter rather than a local.
 
 use super::*;
 
@@ -187,4 +187,178 @@ pub(super) fn address_fixed_point(
         }
     }
     final_address_inputs
+}
+
+/// Re-derive both fixed points over the finished graph, and keep only the
+/// dispatch arms that survive them.
+///
+/// This is where a speculative resolution becomes a real one or leaves the
+/// graph. The streaming walk attached table arms from the predecessors it
+/// happened to have seen; the two passes above re-derive the same facts to a
+/// fixed point over the completed CFG, and every tentative dispatch is then
+/// replayed against them. Three outcomes:
+///
+/// * the replay proves exactly what was attached -- the edges stand;
+/// * it proves a strict prefix of a `needs_bound_proof` dispatch -- the
+///   unproven suffix is trimmed and the recorded arm count is read back off the
+///   surviving edges, not asserted;
+/// * it proves something else, or nothing -- every edge the site contributed is
+///   removed and the site is recorded in `unresolved_indirect`, because a
+///   dropped arm is a CFG missing real edges and every verifier downstream
+///   would otherwise report clean on the truncated graph.
+///
+/// It lives beside the fixed points rather than in the walk because it is their
+/// only consumer, and because it is the second half of one idea: the first walk
+/// speculates, this closes the graph.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_dispatch_edges(
+    facts: &DiscoveryFacts<'_>,
+    data: &[u8],
+    arch: BArch,
+    end: Endianness,
+    thumb: Option<bool>,
+    regions: &[ExecRegion],
+    entry: &Address,
+    blocks: &HashMap<u64, (u64, u32)>,
+    edges: &mut Vec<(u64, u64, ControlFlowEdgeKind)>,
+    index_bounds: &HashMap<u64, crate::analysis::dispatch::Bounds>,
+    block_streams: &BlockStreams,
+    resolved_dispatch_edges: &[TentativeDispatchEdges],
+    stats: &mut SingleFunctionDiscoveryStats,
+) {
+    let final_bound_inputs = bound_fixed_point(
+        facts,
+        data,
+        arch,
+        end,
+        thumb,
+        entry,
+        blocks,
+        edges,
+        block_streams,
+    );
+    let final_address_inputs = address_fixed_point(
+        facts,
+        data,
+        arch,
+        end,
+        thumb,
+        entry,
+        blocks,
+        edges,
+        index_bounds,
+        block_streams,
+    );
+
+    let mut invalid_dispatches: Vec<(u64, u64, Vec<u64>, crate::analysis::dispatch::Unresolved)> =
+        Vec::new();
+    let mut trimmed_dispatches: Vec<(u64, u64, Vec<u64>, usize)> = Vec::new();
+    for dispatch_edge in resolved_dispatch_edges {
+        let inherited_bounds = combine_dispatch_bounds(
+            final_bound_inputs
+                .get(&dispatch_edge.block_start)
+                .cloned()
+                .unwrap_or_default(),
+            index_bounds.get(&dispatch_edge.block_start),
+        );
+        let resolution = blocks
+            .get(&dispatch_edge.block_start)
+            .and_then(|(block_end, _)| {
+                replay_dispatch_block(
+                    facts.image,
+                    data,
+                    arch,
+                    end,
+                    thumb,
+                    dispatch_edge.block_start,
+                    *block_end,
+                    Some(inherited_bounds),
+                    final_address_inputs.get(&dispatch_edge.block_start),
+                    Some(dispatch_edge.site),
+                    block_streams
+                        .get(&dispatch_edge.block_start)
+                        .map(Vec::as_slice),
+                )
+                .and_then(|(tracker, instruction)| {
+                    instruction.and_then(|instruction| {
+                        resolve_dispatch(
+                            facts.image,
+                            data,
+                            regions,
+                            &tracker,
+                            &instruction,
+                            facts.tables,
+                        )
+                    })
+                })
+            });
+        let resolved_targets = match &resolution {
+            Some(crate::analysis::dispatch::Resolution::Table { targets, .. }) => Some(
+                targets
+                    .iter()
+                    .copied()
+                    .filter(|target| in_exec_regions(regions, *target).is_some())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        let still_exact = resolved_targets.as_ref().is_some_and(|targets| {
+            if dispatch_edge.needs_bound_proof {
+                !targets.is_empty() && dispatch_edge.attached.starts_with(targets)
+            } else {
+                targets == &dispatch_edge.attached
+            }
+        });
+        if still_exact {
+            if dispatch_edge.needs_bound_proof {
+                let targets = resolved_targets.expect("checked above");
+                if targets.len() < dispatch_edge.attached.len() {
+                    trimmed_dispatches.push((
+                        dispatch_edge.site,
+                        dispatch_edge.block_start,
+                        dispatch_edge.attached.clone(),
+                        targets.len(),
+                    ));
+                }
+            }
+        } else {
+            let why = match resolution {
+                Some(crate::analysis::dispatch::Resolution::Unresolved(why)) => why,
+                Some(crate::analysis::dispatch::Resolution::Table { .. }) | None => {
+                    crate::analysis::dispatch::Unresolved::UnknownBase
+                }
+            };
+            invalid_dispatches.push((
+                dispatch_edge.site,
+                dispatch_edge.block_start,
+                dispatch_edge.attached.clone(),
+                why,
+            ));
+        }
+    }
+    for (site, block_start, attached, retained) in trimmed_dispatches {
+        let kept = trim_unproven_dispatch_edges(edges, block_start, &attached, retained);
+        if let Some((_, arms)) = stats
+            .resolved_dispatches
+            .iter_mut()
+            .find(|(resolved, _)| *resolved == site)
+        {
+            // `kept`, not `retained`: the arm count is read off the surviving
+            // edges instead of being asserted next to them.
+            *arms = kept;
+        }
+    }
+    for (site, block_start, attached, why) in invalid_dispatches {
+        edges.retain(|(source, target, _)| !(*source == block_start && attached.contains(target)));
+        stats
+            .resolved_dispatches
+            .retain(|(resolved, _)| *resolved != site);
+        if !stats
+            .unresolved_indirect
+            .iter()
+            .any(|(unresolved, _)| *unresolved == site)
+        {
+            stats.unresolved_indirect.push((site, why));
+        }
+    }
 }

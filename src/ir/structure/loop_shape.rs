@@ -7,12 +7,21 @@
 //! [`detect_raw_dispatch_loop`] and [`detect_raw_multi_latch_loop`] own a
 //! proven loop body as labelled CFG when no binary header condition exists;
 //! [`detect_natural_loop`] and [`detect_bottom_tested_loop`] recover `While`
-//! and `DoWhile`. [`natural_loop_body`] is the shared dominator-free
-//! back-walk, also used by the sibling shape modules.
+//! and `DoWhile`. [`loop_break_shape`] is the fifth recogniser and the odd one
+//! out: it hands back the three blocks of a `break` rather than a region,
+//! because both `super::build` and the fallback policy ask about it.
+//!
+//! The block-set walk they all share, [`natural_loop_body`], lives in
+//! [`super::cfg`] with the memo it reads.
+//!
+//! [`natural_loop_body`]: super::cfg::natural_loop_body
 
 use std::collections::HashSet;
 
-use super::{build, BlockSet, Cfg, Region};
+use super::build;
+use super::cfg::{natural_loop_body, Cfg};
+use super::path_predicates::can_reach;
+use super::region::Region;
 
 pub(super) struct LoopRegion {
     pub(super) region: Region,
@@ -376,35 +385,59 @@ fn terminal_path_stays_outside_loop(start: usize, loop_body: &HashSet<usize>, cf
     )
 }
 
-/// The blocks of the natural loop with the given `header` and back-edge `tail`:
-/// `header` itself plus every block that can reach `tail` by walking
-/// predecessors without going through `header`.
+/// A conditional inside the natural loop headed at `header` whose one edge
+/// reaches that loop's ordinary exit through an optional linear bridge and
+/// whose sibling continues to a latch.
 ///
-/// Memoised on the `Cfg`, which is why this hands back a shared `Rc` rather than
-/// a fresh set. The body of one `(header, tail)` pair is a pure function of the
-/// graph, and the shape predicates ask for the *same* pair over and over: the
-/// worst offender was [`super::loop_break_shape`], which rebuilt the entire
-/// natural loop of `header` once per candidate conditional *inside* that same
-/// loop, so recognising one loop cost O(body²) predecessor walks. Every caller
-/// only reads the set (`contains`, `extend`, `iter`), so sharing is invisible
-/// to them.
-pub(super) fn natural_loop_body(header: usize, tail: usize, cfg: &Cfg) -> BlockSet {
-    // `cached_natural_loop_body` returns an owned `Option<Rc<_>>` so no read
-    // guard survives into the walk below, which ends in a `borrow_mut()`.
-    if let Some(cached) = cfg.cached_natural_loop_body(header, tail) {
-        return cached;
+/// The bridge is retained in the returned region, so result setup on a
+/// break/early-return path is not discarded or moved after the loop.
+pub(super) fn loop_break_shape(
+    cond: usize,
+    header: usize,
+    cfg: &Cfg,
+) -> Option<(usize, usize, usize, bool)> {
+    if cfg.succs.get(cond)?.len() != 2 || cfg.succs.get(header)?.len() != 2 {
+        return None;
     }
-    let mut body = HashSet::new();
-    body.insert(header);
-    let mut stack = vec![tail];
-    while let Some(n) = stack.pop() {
-        if body.insert(n) {
-            for &p in &cfg.preds[n] {
-                if p != header {
-                    stack.push(p);
+    if cfg.dominating_tails(header).is_empty() {
+        return None;
+    }
+    let body = cfg.natural_loop_body_of(header);
+    let header_exits: Vec<usize> = cfg.succs[header]
+        .iter()
+        .copied()
+        .filter(|successor| !body.contains(successor))
+        .collect();
+    let [exit] = header_exits.as_slice() else {
+        return None;
+    };
+    let exit = *exit;
+    for break_entry in cfg.succs[cond].iter().copied() {
+        let continuation = cfg.succs[cond]
+            .iter()
+            .copied()
+            .find(|&successor| successor != break_entry)?;
+        if !body.contains(&continuation) || !can_reach(continuation, header, cfg) {
+            continue;
+        }
+        if break_entry != exit {
+            let mut current = break_entry;
+            let mut seen = HashSet::new();
+            while current != exit && seen.insert(current) {
+                if body.contains(&current)
+                    || !cfg.dominates(cond, current)
+                    || cfg.succs[current].len() != 1
+                {
+                    break;
                 }
+                current = cfg.succs[current][0];
+            }
+            if current != exit {
+                continue;
             }
         }
+        let taken = cfg.cond_taken[cond]?;
+        return Some((exit, continuation, break_entry, taken != break_entry));
     }
-    cfg.store_natural_loop_body(header, tail, body)
+    None
 }

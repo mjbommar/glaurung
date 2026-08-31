@@ -19,8 +19,8 @@
 use crate::ir::ast::Expr;
 use crate::ir::types::{BinOp, VReg};
 
+use super::env::Copies;
 use super::reads::expr_reads_reg;
-use super::Copies;
 
 /// A register we're willing to delete a dead copy to: physical scratch/role
 /// registers, temporaries, and SSA-versioned predicate values, but NOT promoted

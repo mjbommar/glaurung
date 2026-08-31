@@ -1,10 +1,11 @@
 //! Declared function extents, and what they prove about a heuristic seed.
 //!
 //! Discovery already refuses a heuristic seed that lands inside a function it
-//! has *walked* ([`super::va_in_discovered_body`]). That gate is blind to the
-//! one case that matters most on C++ code, because it reasons about reachable
-//! blocks and a **landing pad is not reachable**: the unwinder arrives there by
-//! indirect jump from outside the CFG, so no walk of the parent ever covers it.
+//! has *walked* ([`super::body_index::va_in_discovered_body`]). That gate is
+//! blind to the one case that matters most on C++ code, because it reasons
+//! about reachable blocks and a **landing pad is not reachable**: the unwinder
+//! arrives by indirect jump from outside the CFG, so no walk of the parent ever
+//! covers it.
 //!
 //! `136_cpp_exception_unwinding:gcc:O0` is the worked example. Its FDE table
 //! declares `cpp_destructors_run_while_unwinding` as `0x13f0..0x1558`. At

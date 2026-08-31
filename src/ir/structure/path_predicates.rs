@@ -1,7 +1,7 @@
 //! Path predicates over the CFG: the reachability proofs the shape detectors
 //! ask before they commit to a structured region.
 //!
-//! Every item here is a pure question about [`super::Cfg`] — nothing is built
+//! Every item here is a pure question about [`super::cfg::Cfg`] — nothing is built
 //! and no block ownership is claimed. They are the "may I?" half of
 //! structuring. [`every_path_reaches_join`] and
 //! [`every_path_reaches_join_or_terminates`] decide whether a diamond really
@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{natural_loop_body, Cfg};
+use super::cfg::{natural_loop_body, Cfg};
 
 /// Return the exact acyclic block chain from a shared entry through a machine
 /// return.  Interior blocks must be private to the chain; only its terminal may

@@ -26,10 +26,14 @@
 //!   [`pe_xref_seed_looks_like_function_start`] are the three questions the
 //!   parent's walk actually asks.
 //!
-//! `pe_va_to_file_off`, `indexed_code_offset` and `classify_function_shapes`
-//! stay in the parent. The first two are shared address plumbing with callers
-//! all over `cfg`, and the third mutates `Function` metadata -- which is
-//! exactly the work this module does not do.
+//! `pe_va_to_file_off` and `indexed_code_offset` stay in
+//! [`super::image_view`]: they are shared address plumbing with callers all
+//! over `cfg`, and answering "where are these bytes" is not this module's
+//! question. `classify_function_shapes` DOES live here, at the foot of the
+//! file. It mutates `Function` metadata, which no other item here does, but
+//! every judgement it makes is `classify_pe_thunk_head`'s -- it is this
+//! module's predicate applied to the whole discovered set, and splitting the
+//! two left the promotion rule and the shape rule free to drift apart.
 //!
 //! The tests for these predicates live in `scan::prologue_gate_tests` and stay
 //! there. That module is not a test module for this one: its cases interleave
@@ -40,7 +44,7 @@
 
 use crate::core::binary::Arch as BArch;
 
-use super::{indexed_code_offset, pe_va_to_file_off};
+use super::*;
 
 pub(super) fn pe_tail_target_looks_like_function_start(
     data: &[u8],
@@ -337,4 +341,73 @@ pub(super) fn classify_pe_thunk_head(
         });
     }
     None
+}
+
+// The whole-result pass over the shapes above.
+//
+// `classify_pe_thunk_head` answers "is this 16 bytes a thunk head?"; this is the
+// sweep that asks it of every discovered function small enough to be one, and
+// promotes the matches to `FunctionKind::Thunk` with a resolved target. It sits
+// here because it has no independent judgement -- every decision it makes is
+// this file's, applied to the discovered set.
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct FunctionShapeStats {
+    pub(super) thunk_functions: usize,
+    pub(super) import_thunk_functions: usize,
+    pub(super) tail_thunk_functions: usize,
+    pub(super) tiny_functions_le8: usize,
+    pub(super) tiny_functions_le32: usize,
+}
+
+pub(super) fn classify_function_shapes(
+    data: &[u8],
+    arch: BArch,
+    functions: &mut [Function],
+) -> FunctionShapeStats {
+    let mut stats = FunctionShapeStats::default();
+    let is_pe_image = data.len() >= 2 && &data[..2] == b"MZ";
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+
+    for func in functions {
+        let size = func.total_size();
+        if size <= 8 {
+            stats.tiny_functions_le8 = stats.tiny_functions_le8.saturating_add(1);
+        }
+        if size <= 32 {
+            stats.tiny_functions_le32 = stats.tiny_functions_le32.saturating_add(1);
+        }
+        if !is_pe_image || !(arch.is_64_bit() || arch == BArch::X86) || size > 32 {
+            continue;
+        }
+        let Some(file_off) = pe_va_to_file_off(data, func.entry_point.value) else {
+            continue;
+        };
+        if file_off >= data.len() {
+            continue;
+        }
+        let head_end = std::cmp::min(file_off.saturating_add(16), data.len());
+        let Some(matched) = classify_pe_thunk_head(
+            func.entry_point.value,
+            &data[file_off..head_end],
+            arch.is_64_bit(),
+        ) else {
+            continue;
+        };
+        if let Ok(target) = Address::new(AddressKind::VA, matched.target_va, bits, None, None) {
+            func.kind = FunctionKind::Thunk;
+            func.thunk_target = Some(target);
+            stats.thunk_functions = stats.thunk_functions.saturating_add(1);
+            match matched.kind {
+                PeThunkKind::TailJump => {
+                    stats.tail_thunk_functions = stats.tail_thunk_functions.saturating_add(1);
+                }
+                PeThunkKind::ImportMemory => {
+                    stats.import_thunk_functions = stats.import_thunk_functions.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    stats
 }
