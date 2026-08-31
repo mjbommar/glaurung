@@ -165,13 +165,19 @@ class DecompileCommand(BaseCommand):
             "--vas",
             dest="vas",
             default=None,
-            help="Decompile exactly this comma/space-separated list of entry "
-            "VAs (each hex 0x... or decimal) in a single analysis pass. "
-            "Emits a JSON list of {name, entry_va, pseudocode}. Intended "
-            "for batch/benchmark harnesses that already know their target "
-            "function set (e.g. DWARF low_pc addresses). Entries that "
-            "recover no body are named on stderr and omitted from the "
-            "list; exits 2 only when no requested entry recovers at all.",
+            metavar="VAS|@FILE|-",
+            help="Decompile exactly these entry VAs (each hex 0x... or "
+            "decimal) in a single analysis pass. Accepts an inline "
+            "comma/space-separated list, @FILE to read them from a file, or "
+            "- to read them from stdin; a file or stdin may also use one VA "
+            "per line and may carry # comments. Emits a JSON list of "
+            "{name, entry_va, pseudocode}. Intended for batch/benchmark "
+            "harnesses that already know their target function set (e.g. "
+            "DWARF low_pc addresses) -- @FILE and - carry no argv length "
+            "bound, so a caller never has to split or cap a target set. "
+            "Entries that recover no body are named on stderr and omitted "
+            "from the list; exits 2 only when no requested entry recovers "
+            "at all.",
         )
         parser.add_argument(
             "--limit",
@@ -278,7 +284,8 @@ class DecompileCommand(BaseCommand):
             # single analysis pass. Mirrors the JSON shape of --all.
             if args.vas is not None:
                 try:
-                    vas = _parse_va_list(args.vas)
+                    raw_vas, va_origin = _read_va_source(args.vas)
+                    vas = _parse_va_list(raw_vas, va_origin)
                 except ValueError as e:
                     formatter.output_plain(f"Error: {e}")
                     return 2
@@ -601,24 +608,54 @@ def _report_unverified_functions() -> None:
         )
 
 
-def _parse_va_list(raw: str) -> list[int]:
-    """Parse a comma/space-separated list of entry VAs (hex ``0x..`` or decimal).
+def _read_va_source(raw: str) -> tuple[str, str]:
+    """Resolve ``--vas`` to (text, origin) from an inline list, ``@FILE`` or ``-``.
+
+    An argv-borne list is bounded by ``ARG_MAX``, which is why DecBench's own
+    adapter carries a `_MAX_VAS_INLINE = 400` safety valve and falls back to
+    whole-binary mode above it -- a different code path for the same question.
+    ``@FILE`` and ``-`` have no such bound, so a caller never has to split, cap,
+    or switch strategies on target count.
+
+    ``origin`` names the source in error messages, because "invalid VA" is not
+    actionable when the caller did not type the value.
+    """
+    import sys  # local, matching this module's convention
+
+    if raw == "-":
+        return sys.stdin.read(), "stdin"
+    if raw.startswith("@"):
+        path = Path(raw[1:]).expanduser()
+        try:
+            return path.read_text(), f"{path}"
+        except OSError as e:
+            raise ValueError(f"--vas {raw}: {e.strerror or e}") from e
+    return raw, "--vas"
+
+
+def _parse_va_list(raw: str, origin: str = "--vas") -> list[int]:
+    """Parse entry VAs (hex ``0x..`` or decimal) from a list, file, or stdin.
+
+    Tokens separate on commas or any whitespace, so one-VA-per-line files work
+    unchanged. A ``#`` begins a comment to end of line, so a generated target
+    file can carry its own provenance without a second file to keep in sync.
 
     Returns the de-duplicated VAs in first-seen order. Raises ``ValueError`` on
     any unparseable token so the caller can surface a clean CLI error.
     """
     seen: set[int] = set()
     out: list[int] = []
-    for tok in raw.replace(",", " ").split():
+    stripped = "\n".join(line.split("#", 1)[0] for line in raw.splitlines())
+    for tok in stripped.replace(",", " ").split():
         try:
             va = int(tok, 0)
         except ValueError as e:
-            raise ValueError(f"invalid VA in --vas: {tok!r}") from e
+            raise ValueError(f"invalid VA in {origin}: {tok!r}") from e
         if va not in seen:
             seen.add(va)
             out.append(va)
     if not out:
-        raise ValueError("--vas was empty")
+        raise ValueError(f"{origin} produced no VAs")
     return out
 
 
