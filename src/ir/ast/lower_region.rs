@@ -714,11 +714,135 @@ pub(super) fn deduplicate_labels(body: &mut Vec<Stmt>) {
 /// thirty times the case that failed.
 const LOWERING_STACK_BYTES: usize = 256 * 1024 * 1024;
 
+/// Floor for `GLAURUNG_LOWERING_STACK_MB`.
+///
+/// The failure this guard exists to prevent is a SIGSEGV in a function
+/// prologue with no panic message, no stdout and no stderr -- the crash that
+/// `tools/arch_roundtrip.py` could only report as `gate-crashed: ` with an
+/// empty reason. A knob that can lower the reservation below the case already
+/// known to fail (442 levels at ~18 KB each, about 8 MB) would hand a caller a
+/// silent, undiagnosable crash in exchange for roughly 0.13% of a decompile.
+/// So this tunes the reservation; it cannot switch the guard off.
+const MIN_LOWERING_STACK_MB: usize = 16;
+
+/// Stack reserved for lowering, honouring `GLAURUNG_LOWERING_STACK_MB`.
+///
+/// The 256 MB default is RESERVED ADDRESS SPACE, not committed memory, so on
+/// 64-bit hosts it costs nothing to leave alone. It is tunable because the
+/// reservation is per concurrent lowering: decompiling in parallel across two
+/// dozen threads reserves about 6 GB of address space, which is unremarkable on
+/// 64-bit Linux and may not be on the Windows port or inside a container with a
+/// constrained address space.
+///
+/// An unparseable or out-of-range value is clamped to `MIN_LOWERING_STACK_MB`
+/// with a warning rather than rejected: lowering is deep inside a decompile,
+/// and failing a whole run over a malformed environment variable would be a
+/// worse outcome than proceeding with a stack we can still justify.
+/// Emit a configuration warning to stderr, once per process.
+///
+/// Not `tracing`: a subscriber is only installed by `logging::init_logging`,
+/// which the CLI does not call, so a `tracing::warn!` here is dropped and a
+/// misconfigured variable is silently ignored -- the same class of silent
+/// failure this guard exists to prevent. `Once` because `lower` runs per
+/// function, and a per-function warning would bury the decompile it warns about.
+fn warn_once(message: &str) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| eprintln!("[glaurung] {message}"));
+}
+
+fn lowering_stack_bytes() -> usize {
+    let Ok(raw) = std::env::var("GLAURUNG_LOWERING_STACK_MB") else {
+        return LOWERING_STACK_BYTES;
+    };
+    let trimmed = raw.trim();
+    match trimmed.parse::<usize>() {
+        Ok(mb) if mb >= MIN_LOWERING_STACK_MB => mb * 1024 * 1024,
+        Ok(mb) => {
+            warn_once(&format!(
+                "GLAURUNG_LOWERING_STACK_MB={mb} is below the {MIN_LOWERING_STACK_MB} MB \
+                 floor; using {MIN_LOWERING_STACK_MB} MB. Lowering recurses about 18 KB per \
+                 region level and the known worst case is 442 levels, so a smaller stack \
+                 risks a SIGSEGV with no message."
+            ));
+            MIN_LOWERING_STACK_MB * 1024 * 1024
+        }
+        Err(_) => {
+            warn_once(&format!(
+                "GLAURUNG_LOWERING_STACK_MB={trimmed:?} is not a positive integer number of \
+                 megabytes; using the {} MB default.",
+                LOWERING_STACK_BYTES / (1024 * 1024)
+            ));
+            LOWERING_STACK_BYTES
+        }
+    }
+}
+
+#[cfg(test)]
+mod lowering_stack_tests {
+    use super::{lowering_stack_bytes, LOWERING_STACK_BYTES, MIN_LOWERING_STACK_MB};
+
+    /// The env var is read per call, and these tests mutate process-global
+    /// state, so they must not interleave. One test, sequential sections.
+    #[test]
+    fn the_reservation_is_tunable_but_never_disableable() {
+        const VAR: &str = "GLAURUNG_LOWERING_STACK_MB";
+        let restore = std::env::var(VAR).ok();
+
+        // Unset: the documented default.
+        std::env::remove_var(VAR);
+        assert_eq!(lowering_stack_bytes(), LOWERING_STACK_BYTES);
+
+        // A sane value is honoured -- the reason the knob exists is a
+        // constrained address space, so tuning DOWN must work.
+        std::env::set_var(VAR, "32");
+        assert_eq!(lowering_stack_bytes(), 32 * 1024 * 1024);
+
+        // Tuning up works too.
+        std::env::set_var(VAR, "512");
+        assert_eq!(lowering_stack_bytes(), 512 * 1024 * 1024);
+
+        // THE POINT OF THE FLOOR. The crash this guard prevents needed ~8 MB
+        // (442 levels at ~18 KB). Zero, one, or any value under the floor must
+        // NOT hand back a stack that can reproduce it -- the failure mode is a
+        // SIGSEGV in a prologue with no message at all.
+        for disabling in ["0", "1", "8", "15"] {
+            std::env::set_var(VAR, disabling);
+            assert_eq!(
+                lowering_stack_bytes(),
+                MIN_LOWERING_STACK_MB * 1024 * 1024,
+                "{disabling:?} must clamp to the floor, not disable the guard"
+            );
+        }
+
+        // Malformed input falls back to the default rather than failing a run:
+        // lowering is deep inside a decompile and a bad env var must not lose
+        // the whole thing.
+        for junk in ["", "  ", "abc", "-1", "12.5", "256MB"] {
+            std::env::set_var(VAR, junk);
+            assert_eq!(
+                lowering_stack_bytes(),
+                LOWERING_STACK_BYTES,
+                "{junk:?} must fall back to the default"
+            );
+        }
+
+        // Surrounding whitespace is tolerated; a value copied from a shell
+        // script should not silently become the default.
+        std::env::set_var(VAR, "  64  ");
+        assert_eq!(lowering_stack_bytes(), 64 * 1024 * 1024);
+
+        match restore {
+            Some(v) => std::env::set_var(VAR, v),
+            None => std::env::remove_var(VAR),
+        }
+    }
+}
+
 /// Lower an entire function given its region tree.
 ///
-/// The work runs on a thread with [`LOWERING_STACK_BYTES`] of stack rather than
-/// whatever `ulimit -s` happens to be, so a deep region tree cannot turn into a
-/// silent SIGSEGV. Every pass below recurses over the same deep structure — the
+/// The work runs on a thread with [`lowering_stack_bytes()`] of stack rather
+/// than whatever `ulimit -s` happens to be, so a deep region tree cannot turn
+/// into a silent SIGSEGV. Every pass below recurses over the same deep structure — the
 /// region tree in `lower_region`, then the resulting statement tree in
 /// `collect_goto_targets` and `deduplicate_labels` — so the whole body needs the
 /// headroom, not just the first pass.
@@ -727,7 +851,7 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("glaurung-lower".to_string())
-            .stack_size(LOWERING_STACK_BYTES)
+            .stack_size(lowering_stack_bytes())
             .spawn_scoped(scope, move || lower_on_this_stack(lf, region, name))
             .expect("spawn the lowering thread")
             .join()
