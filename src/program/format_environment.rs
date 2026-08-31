@@ -96,10 +96,46 @@ fn format_consumers(address_names: &HashMap<u64, String>) -> HashMap<u64, Format
         .collect()
 }
 
-pub(super) fn has_format_consumer(address_names: &HashMap<u64, String>) -> bool {
-    address_names
-        .values()
-        .any(|name| format_consumer(clean_import_name(name)).is_some())
+/// The views of `address_names` this module actually consults, built once.
+///
+/// `known_call_semantics` and `format_consumers` each walk the WHOLE address
+/// -name map and allocate a fresh `HashMap`, and both are derived purely from
+/// `address_names`, which does not change while a binary is being analysed.
+/// They were being rebuilt inside `recover_format_parameter_hints`, which
+/// `recover_program_environment` calls once per requested function -- and that
+/// function calls two helpers which each rebuild both, so a binary paid up to
+/// FOUR full map walks and four map constructions per function. On
+/// `/usr/bin/bash` (2,954 functions) that is roughly 11,800 walks of a map
+/// whose contents never move.
+///
+/// perf attributed 5.2% of a release decompile to the two `fold_impl`
+/// specializations alone, before counting the allocator and hashing work the
+/// rebuilt maps drive -- and the allocator is 26% of that profile.
+pub(super) struct FormatIndex {
+    semantics: HashMap<u64, CallSemantics>,
+    consumers: HashMap<u64, FormatConsumer>,
+    has_consumer: bool,
+}
+
+impl FormatIndex {
+    /// Build every derived view in one pass over `address_names`.
+    pub(super) fn build(address_names: &HashMap<u64, String>) -> Self {
+        let consumers = format_consumers(address_names);
+        Self {
+            semantics: known_call_semantics(address_names),
+            has_consumer: !consumers.is_empty(),
+            consumers,
+        }
+    }
+
+    /// Whether any address names a format consumer.
+    ///
+    /// `format_consumers` keeps exactly the addresses whose cleaned name
+    /// resolves to a `FormatConsumer`, so emptiness is the same predicate the
+    /// former `has_format_consumer` scan computed.
+    pub(super) fn has_consumer(&self) -> bool {
+        self.has_consumer
+    }
 }
 
 fn parameter_index(value: Option<&AbstractValue>) -> Option<usize> {
@@ -122,10 +158,10 @@ fn recover_format_forwarding(
     function: &LlirFunction,
     image: &ProgramImage,
     cc: CallConv,
-    address_names: &HashMap<u64, String>,
+    index: &FormatIndex,
 ) -> Option<FormatForwarding> {
-    let semantics = known_call_semantics(address_names);
-    let consumers = format_consumers(address_names);
+    let semantics = &index.semantics;
+    let consumers = &index.consumers;
     if consumers.is_empty() {
         return None;
     }
@@ -232,13 +268,13 @@ fn recover_local_format_sink(
     function: &LlirFunction,
     image: &ProgramImage,
     cc: CallConv,
-    address_names: &HashMap<u64, String>,
+    index: &FormatIndex,
 ) -> Option<usize> {
-    let consumers = format_consumers(address_names);
+    let consumers = &index.consumers;
     if consumers.is_empty() {
         return None;
     }
-    let semantics = known_call_semantics(address_names);
+    let semantics = &index.semantics;
     let inputs = input_states_for_image(function, cc, image, &semantics, true);
     let argument_registers = crate::ir::abi::argument_registers(cc);
     let mut found = None;
@@ -416,13 +452,16 @@ fn recover_direct_literal_parameter_hints(
     image: &ProgramImage,
     budgets: &Budgets,
     cc: CallConv,
-    address_names: &HashMap<u64, String>,
+    index: &FormatIndex,
 ) -> Option<Vec<Option<TypeHint>>> {
     let targeted_budgets = Budgets {
         max_functions: 1,
         ..*budgets
     };
-    let mut sinks = format_consumers(address_names)
+    let mut sinks = index
+        .consumers
+        .iter()
+        .map(|(k, v)| (*k, *v))
         .into_iter()
         .filter_map(|(target, consumer)| {
             consumer
@@ -452,8 +491,7 @@ fn recover_direct_literal_parameter_hints(
         let Ok(lifted) = lift_function_from_image(image, &callee) else {
             continue;
         };
-        if let Some(format_parameter) = recover_local_format_sink(&lifted, image, cc, address_names)
-        {
+        if let Some(format_parameter) = recover_local_format_sink(&lifted, image, cc, index) {
             sinks.insert(target, format_parameter);
         }
     }
@@ -464,7 +502,7 @@ fn recover_direct_literal_parameter_hints(
     let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(function, cc);
     let arity = parameter_slots.iter().copied().max()?.saturating_add(1);
     let mut hints = vec![None; arity];
-    let semantics = known_call_semantics(address_names);
+    let semantics = &index.semantics;
     let inputs = input_states_for_image(function, cc, image, &semantics, true);
     let argument_registers = crate::ir::abi::argument_registers(cc);
     let string_pool = crate::ir::strings_fold::collect_string_pool_from_image(image);
@@ -515,11 +553,11 @@ pub(super) fn recover_format_parameter_hints(
     image: &ProgramImage,
     budgets: &Budgets,
     cc: CallConv,
-    address_names: &HashMap<u64, String>,
+    index: &FormatIndex,
     fdes: &[crate::analysis::exception::EhFrameFunction],
     target: u64,
 ) -> Option<Vec<Option<TypeHint>>> {
-    if !has_format_consumer(address_names) {
+    if !index.has_consumer() {
         return None;
     }
     let targeted_budgets = Budgets {
@@ -528,10 +566,8 @@ pub(super) fn recover_format_parameter_hints(
     };
     let target_function = discover_function_image_at(image, &targeted_budgets, target)?;
     let target_lifted = lift_function_from_image(image, &target_function).ok()?;
-    let direct =
-        recover_direct_literal_parameter_hints(&target_lifted, image, budgets, cc, address_names);
-    let Some(forwarding) = recover_format_forwarding(&target_lifted, image, cc, address_names)
-    else {
+    let direct = recover_direct_literal_parameter_hints(&target_lifted, image, budgets, cc, index);
+    let Some(forwarding) = recover_format_forwarding(&target_lifted, image, cc, index) else {
         return direct;
     };
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {

@@ -803,7 +803,12 @@ pub fn recover_program_environment(
     if dump {
         eprintln!("\n===== program callback API targets =====\n{api_targets:#x?}");
     }
-    let has_format_sink = super::format_environment::has_format_consumer(address_names);
+    // Built ONCE per binary. Its two derived maps are pure functions of
+    // `address_names`, and the loop below calls into this module once per
+    // requested function -- rebuilding them there cost up to four full walks of
+    // the address-name map per function.
+    let format_index = super::format_environment::FormatIndex::build(address_names);
+    let has_format_sink = format_index.has_consumer();
     let fdes = image.eh_frame_functions();
     if fdes.is_empty() {
         return ProgramEnvironment {
@@ -882,7 +887,7 @@ pub fn recover_program_environment(
                     image,
                     budgets,
                     cc,
-                    address_names,
+                    &format_index,
                     fdes,
                     *target,
                 )
