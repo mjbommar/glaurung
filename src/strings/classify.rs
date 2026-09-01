@@ -174,9 +174,20 @@ fn is_valid_network_ipv4(ip: &Ipv4Addr) -> bool {
     }
 
     // Reject sequential patterns (1.2.3.4, 2.3.4.5, etc.)
+    //
+    // `checked_add` rather than `+`: the old form was `w[1] == w[0] + 1 ||
+    // w[1] == w[0].wrapping_add(1)`, where the first disjunct panics in a
+    // debug build for `w[0] == 255` ("attempt to add with overflow") and the
+    // second made it redundant anyway. `.all()` evaluates every window, so
+    // `254.255.0.1` reached it.
+    //
+    // Wrapping was also the wrong rule: it made 255 -> 0 count as an ascending
+    // step, so `254.255.0.1` was rejected as a "sequential pattern" when it is
+    // nothing of the kind. `checked_add` is `None` at 255 and therefore never
+    // matches, which is both panic-free and the behaviour the check describes.
     if octets
         .windows(2)
-        .all(|w| w[1] == w[0] + 1 || w[1] == w[0].wrapping_add(1))
+        .all(|w| w[0].checked_add(1) == Some(w[1]))
     {
         return false;
     }

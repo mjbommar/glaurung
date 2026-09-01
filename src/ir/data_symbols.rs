@@ -196,7 +196,8 @@ mod tests {
     fn no_nearest_symbol_fallback() {
         // The angr/Ghidra failure mode, as a test. A computed page base at
         // 0x1000 must NOT pick up `_init`-like symbols that merely precede it.
-        let table = DataSymbols::from_entries([(0x900u64, 8u64, "before"), (0x2000u64, 8u64, "after")]);
+        let table =
+            DataSymbols::from_entries([(0x900u64, 8u64, "before"), (0x2000u64, 8u64, "after")]);
         assert_eq!(table.name_for(0x1000), None);
     }
 
@@ -232,8 +233,10 @@ mod tests {
 
     #[test]
     fn duplicate_addresses_resolve_independently_of_input_order() {
-        let forward = DataSymbols::from_entries([(0x40u64, 4u64, "alpha"), (0x40u64, 4u64, "beta")]);
-        let reverse = DataSymbols::from_entries([(0x40u64, 4u64, "beta"), (0x40u64, 4u64, "alpha")]);
+        let forward =
+            DataSymbols::from_entries([(0x40u64, 4u64, "alpha"), (0x40u64, 4u64, "beta")]);
+        let reverse =
+            DataSymbols::from_entries([(0x40u64, 4u64, "beta"), (0x40u64, 4u64, "alpha")]);
         assert_eq!(forward.name_for(0x40), reverse.name_for(0x40));
         assert_eq!(forward.name_for(0x40), Some("alpha"));
     }

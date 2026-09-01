@@ -23,7 +23,12 @@ fn collect_matching_files(root: &Path, needle: &str, limit: usize) -> Vec<PathBu
                 walk(&path, needle, limit, out);
             } else if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    if name.contains(needle) {
+                    // `samples/binaries/platforms/linux/amd64/metadata/` holds
+                    // one `<name>.json` per binary, and `read_dir` reaches it
+                    // before the build trees. Without this filter the 16-file
+                    // budget is spent entirely on metadata and the test
+                    // analyses no binary at all.
+                    if name.contains(needle) && !name.ends_with(".json") {
                         out.push(path);
                     }
                 }
@@ -59,8 +64,12 @@ fn suspicious_imports_detected_in_suspicious_samples() {
         return;
     }
 
-    let limits = IOLimits { max_read_bytes: 512 * 1024, max_file_size: u64::MAX };
+    let limits = IOLimits {
+        max_read_bytes: 512 * 1024,
+        max_file_size: u64::MAX,
+    };
     let mut any_detected = false;
+    let mut inspected = 0usize;
     for p in candidates {
         let art = match analyze_path(&p, &limits) {
             Ok(a) => a,
@@ -69,6 +78,7 @@ fn suspicious_imports_detected_in_suspicious_samples() {
                 continue;
             }
         };
+        inspected += 1;
         if let Some(sym) = art.symbols {
             if let Some(list) = sym.suspicious_imports {
                 // Check for at least one known suspicious API (normalized)
@@ -89,6 +99,10 @@ fn suspicious_imports_detected_in_suspicious_samples() {
             }
         }
     }
-    assert!(any_detected, "expected at least one suspicious import to be detected");
+    assert!(inspected > 0, "no candidate binary was analysed");
+    assert!(
+        any_detected,
+        "expected at least one suspicious import to be detected across {} binaries",
+        inspected
+    );
 }
-

@@ -44,7 +44,7 @@ pub fn scan_strings(
         let mut cur: Vec<u8> = Vec::new();
         let mut cur_offset: usize = 0;
         for (i, &b) in scan.iter().enumerate() {
-            if (i & 0x0FFF) == 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
+            if (i & 0x0FFF) == 0 && cfg.time_guard_ms > 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
                 tracing::debug!("strings/ascii time budget exhausted at {} bytes", i);
                 break;
             }
@@ -83,7 +83,7 @@ pub fn scan_strings(
         let mut run_has_non_ascii = false;
         let mut char_count = 0usize;
         while i < scan.len() {
-            if (i & 0x0FFF) == 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
+            if (i & 0x0FFF) == 0 && cfg.time_guard_ms > 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
                 tracing::debug!("strings/utf8 time budget exhausted at {} bytes", i);
                 break;
             }
@@ -226,7 +226,7 @@ pub fn scan_strings(
         let mut run: Vec<u16> = Vec::new();
         let mut run_offset: usize = 0;
         for (i, chunk) in scan.chunks_exact(2).enumerate() {
-            if (i & 0x07FF) == 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
+            if (i & 0x07FF) == 0 && cfg.time_guard_ms > 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
                 tracing::debug!("strings/utf16le time budget exhausted at chunk {}", i);
                 break;
             }
@@ -272,7 +272,7 @@ pub fn scan_strings(
         let mut run: Vec<u16> = Vec::new();
         let mut run_offset: usize = 0;
         for (i, chunk) in scan.chunks_exact(2).enumerate() {
-            if (i & 0x07FF) == 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
+            if (i & 0x07FF) == 0 && cfg.time_guard_ms > 0 && start.elapsed().as_millis() as u64 > cfg.time_guard_ms {
                 tracing::debug!("strings/utf16be time budget exhausted at chunk {}", i);
                 break;
             }

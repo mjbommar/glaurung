@@ -134,18 +134,28 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
     } else {
         return SymbolSummary::default();
     };
-    let num_dirs = read_u32_le(data, opt_off + 92).unwrap_or(0); // NumberOfRvaAndSizes
+    // `NumberOfRvaAndSizes` is the last field of the optional header, so it is
+    // always the four bytes immediately before the data directory -- 92 for
+    // PE32 and 108 for PE32+. Deriving it from `data_dir_offset` rather than
+    // hardcoding 92 is what keeps the two in step: the hardcoded form read a
+    // reserved part of `LoaderFlags` on every 64-bit image, got 0, and made
+    // `dd()` reject every directory index. The visible symptom was that every
+    // PE32+ binary reported imports=0, exports=0 and libs=0.
+    let num_dirs = read_u32_le(data, data_dir_offset - 4).unwrap_or(0);
     let opt = OptionalHeaderLocs {
         data_dir_offset,
         num_data_dirs: num_dirs,
     };
 
-    // DLLCharacteristics flags for NX/ASLR/CFG
-    let dll_char_off = if is_pe32_plus {
-        opt_off + 0x5E // 94
-    } else {
-        opt_off + 0x46 // 70
-    };
+    // DLLCharacteristics flags for NX/ASLR/CFG.
+    //
+    // Offset 70 in BOTH formats: the PE32/PE32+ divergence starts at
+    // `SizeOfStackReserve` (72), which widens to 8 bytes, so every field up to
+    // and including `DllCharacteristics` sits at the same place. The previous
+    // code applied a +0x5E offset for PE32+, landing inside
+    // `SizeOfStackReserve` and reporting nx/aslr/cfg as false for every 64-bit
+    // image.
+    let dll_char_off = opt_off + 0x46; // 70
     let dll_chars = read_u16_le(data, dll_char_off).unwrap_or(0) as u32;
     let pe_aslr = (dll_chars & 0x0040) != 0; // IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
     let pe_nx = (dll_chars & 0x0100) != 0; // IMAGE_DLLCHARACTERISTICS_NX_COMPAT

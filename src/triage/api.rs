@@ -923,7 +923,9 @@ pub fn analyze_path_py(
         min_length: _min_string_length,
         max_samples: _max_string_samples,
         max_scan_bytes: MAX_ENTROPY_SIZE as usize,
-        time_guard_ms: 10,
+        // Zero: triage JSON must be reproducible for identical input, and a
+        // wall-clock cutoff made it load-dependent. See `SearchBudget`.
+        time_guard_ms: 0,
         enable_language: _enable_language,
         max_lang_detect: _max_lang_detect,
         min_len_for_detect: 4,
@@ -1011,7 +1013,9 @@ pub fn analyze_bytes_py(
         min_length: min_string_length,
         max_samples: max_string_samples,
         max_scan_bytes: ent_len,
-        time_guard_ms: 10,
+        // Zero: triage JSON must be reproducible for identical input, and a
+        // wall-clock cutoff made it load-dependent. See `SearchBudget`.
+        time_guard_ms: 0,
         enable_language,
         max_lang_detect,
         min_len_for_detect: 4,

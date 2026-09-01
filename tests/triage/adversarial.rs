@@ -1,12 +1,11 @@
 use std::fs;
 use std::path::Path;
 
-use glaurung::core::binary::Format;
-use glaurung::core::triage::{Budgets, TriageErrorKind};
-use glaurung::triage::api::compute_sniffer_header_mismatches;
+use glaurung::core::triage::TriageErrorKind;
+use glaurung::triage::api::analyze_path;
 use glaurung::triage::containers::detect_containers;
 use glaurung::triage::headers;
-use glaurung::triage::io::{MAX_HEADER_SIZE, MAX_SNIFF_SIZE};
+use glaurung::triage::io::{IOLimits, MAX_HEADER_SIZE, MAX_SNIFF_SIZE};
 use glaurung::triage::sniffers::CombinedSniffer;
 
 #[test]
@@ -38,17 +37,25 @@ fn adversarial_pe_bad_optional_header_reports_error() {
 
 #[test]
 fn adversarial_zip_masquerade_exe_is_exempt_from_mismatch() {
+    // `compute_sniffer_header_mismatches` is `pub(crate)`, so this asserts the
+    // same property through the public entry point: a ZIP carrying an `.exe`
+    // extension is a detected container, not a sniffer/header mismatch.
     let p = Path::new("samples/adversarial/zip_masquerade_exe.exe");
-    let d = fs::read(p).expect("read zip masquerade");
-    let sniff = &d[..d.len().min(MAX_SNIFF_SIZE as usize)];
-    let header = &d[..d.len().min(MAX_HEADER_SIZE as usize)];
-    let sn = CombinedSniffer::sniff(sniff, Some(p));
-    let hdr = headers::validate(header);
-    let header_formats: Vec<Format> = hdr.candidates.iter().map(|v| v.format).collect();
-    let containers = detect_containers(&d);
-    let labels: Vec<String> = containers.iter().map(|c| c.type_name.clone()).collect();
-    let errs = compute_sniffer_header_mismatches(&sn.hints, &header_formats, &labels);
-    assert!(errs.is_empty());
+    let limits = IOLimits {
+        max_read_bytes: 1024 * 1024,
+        max_file_size: u64::MAX,
+    };
+    let art = analyze_path(p, &limits).expect("analyze zip masquerade");
+    let errs = art.errors.clone().unwrap_or_default();
+    let mismatches: Vec<_> = errs
+        .iter()
+        .filter(|e| e.kind == TriageErrorKind::SnifferMismatch)
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "unexpected sniffer/header mismatch: {:?}",
+        mismatches
+    );
 }
 
 #[test]
@@ -59,4 +66,3 @@ fn adversarial_truncated_gzip_detected_no_panic() {
     assert!(v.iter().any(|c| c.type_name == "gzip"));
     // metadata may be None because of truncation; ensure no panic
 }
-

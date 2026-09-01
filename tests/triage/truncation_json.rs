@@ -10,7 +10,10 @@ fn graceful_truncation_and_json_roundtrip_on_real_sample() {
     // Use a known sample if available; otherwise skip
     let sample = Path::new("samples/containers/zip/hello-cpp-g++-O0.zip");
     if !sample.exists() {
-        eprintln!("Skipping truncation test; sample not found: {}", sample.display());
+        eprintln!(
+            "Skipping truncation test; sample not found: {}",
+            sample.display()
+        );
         return;
     }
 
@@ -29,11 +32,15 @@ fn graceful_truncation_and_json_roundtrip_on_real_sample() {
 
     // Error taxonomy contains BudgetExceeded
     let errs = artifact.errors.clone().unwrap_or_default();
-    assert!(errs.iter().any(|e| e.kind == TriageErrorKind::BudgetExceeded));
+    assert!(errs
+        .iter()
+        .any(|e| e.kind == TriageErrorKind::BudgetExceeded));
 
     // JSON schema persistence: round-trip equals
     let json = artifact.to_json_string().expect("serialize");
     let back = glaurung::core::triage::TriagedArtifact::from_json_str(&json).expect("deserialize");
-    assert_eq!(artifact, back, "artifact must be stable through JSON round-trip");
+    assert_eq!(
+        artifact, back,
+        "artifact must be stable through JSON round-trip"
+    );
 }
-

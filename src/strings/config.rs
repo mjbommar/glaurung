@@ -8,7 +8,23 @@ pub struct StringsConfig {
     pub max_samples: usize,
     /// Maximum number of bytes scanned from input
     pub max_scan_bytes: usize,
-    /// Time guard for scanning/detection (milliseconds)
+    /// Wall-clock guard for scanning and detection, in milliseconds, or `0`
+    /// to disable it.
+    ///
+    /// **Zero by default, because a non-zero value makes output
+    /// nondeterministic.** The guard is checked inside the scan loops, so a
+    /// loaded machine stops at a different byte than an idle one and the same
+    /// input yields different results. At the previous default of 10 ms this
+    /// was reached routinely rather than exceptionally: triage JSON for one
+    /// sample was observed reporting 9 IOC samples on one run and 49 on the
+    /// next, and sometimes none at all.
+    ///
+    /// Nothing is lost by disabling it. Scanning is already bounded by
+    /// `max_scan_bytes`, `max_samples` and the match caps, and every pattern
+    /// is a `regex` crate `Regex` with a linear-time guarantee and no
+    /// catastrophic backtracking -- so total work is bounded by construction.
+    /// The clock was only ever choosing *which* of the bounded results a
+    /// caller happened to see.
     pub time_guard_ms: u64,
     /// Whether to perform language detection
     pub enable_language: bool,
@@ -42,7 +58,7 @@ impl Default for StringsConfig {
             min_length: 4,
             max_samples: 40,
             max_scan_bytes: 1_048_576, // 1 MiB
-            time_guard_ms: 10,
+            time_guard_ms: 0,
             enable_language: true,
             max_lang_detect: 100,
             min_len_for_detect: 4,

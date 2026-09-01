@@ -54,7 +54,6 @@ pub mod endianness {
 /// Architecture inference based on opcode and byte-frequency patterns.
 pub mod architecture {
     use super::*;
-    use std::collections::HashMap;
 
     // Simplified indicative opcode bytes
     const X86_PROFILE: &[u8] = &[0x90, 0x55, 0x89, 0x48, 0xE8, 0xC3, 0xFF];
@@ -75,16 +74,28 @@ pub mod architecture {
             return vec![(Arch::Unknown, 0.0)];
         }
 
-        let mut scores: HashMap<Arch, f32> = HashMap::new();
-        scores.insert(Arch::X86_64, score_profile(&histogram, X86_PROFILE));
-        scores.insert(Arch::X86, score_profile(&histogram, X86_PROFILE));
-        scores.insert(Arch::AArch64, score_profile(&histogram, ARM64_PROFILE));
-        scores.insert(Arch::ARM, score_profile(&histogram, ARM_PROFILE));
-        scores.insert(Arch::MIPS, score_profile(&histogram, MIPS_PROFILE));
-        scores.insert(Arch::RISCV64, score_profile(&histogram, RISCV_PROFILE));
-
-        let mut v: Vec<(Arch, f32)> = scores.into_iter().collect();
-        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        // A fixed-order `Vec`, not a `HashMap`. The map's iteration order is
+        // randomised per process (SipHash with a random seed), and `sort_by`
+        // is stable, so for any two architectures with EQUAL scores the map
+        // order decided the ranking and the same input produced different
+        // output on different runs.
+        //
+        // That tie is not hypothetical, it is guaranteed: `X86_64` and `X86`
+        // are scored against the same `X86_PROFILE` and therefore always tie.
+        // Triage JSON was observed swapping them between two runs on one
+        // sample, which is exactly the kind of unreproducibility that makes a
+        // baseline untrustworthy.
+        let mut v: Vec<(Arch, f32)> = vec![
+            (Arch::X86_64, score_profile(&histogram, X86_PROFILE)),
+            (Arch::X86, score_profile(&histogram, X86_PROFILE)),
+            (Arch::AArch64, score_profile(&histogram, ARM64_PROFILE)),
+            (Arch::ARM, score_profile(&histogram, ARM_PROFILE)),
+            (Arch::MIPS, score_profile(&histogram, MIPS_PROFILE)),
+            (Arch::RISCV64, score_profile(&histogram, RISCV_PROFILE)),
+        ];
+        // `total_cmp` rather than `partial_cmp().unwrap()`: the latter panics
+        // on a NaN score, which a degenerate histogram could produce.
+        v.sort_by(|a, b| b.1.total_cmp(&a.1));
         v.truncate(3);
         if v.is_empty() {
             vec![(Arch::Unknown, 0.0)]

@@ -24,26 +24,48 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
         data
     };
 
-    // UPX
-    let mut upx = 0.0f32;
-    if memchr::memmem::find(hay, b"UPX!").is_some() {
-        upx += 0.4;
-    }
+    // UPX.
+    //
+    // `UPX!` is the packer's own header magic and is written on EVERY format
+    // it produces. `UPX0`/`UPX1` are PE *section names* and never appear in a
+    // packed ELF. The previous model summed all four signals and then scaled
+    // the total by `upx_detection_weight`, which made the score
+    // format-dependent in the wrong direction: measured over the ten packed
+    // builds in `samples/packed/`, every one scored **0.36** -- below any
+    // threshold that would call it packed -- because two of the four signals
+    // are structurally unavailable on ELF.
+    //
+    // So the magic is treated as what it is, a definitive and
+    // format-independent identification, and the PE section names and version
+    // banner corroborate it. Re-measured the same way: all ten packed builds
+    // move 0.36 -> 0.72, and 60 unpacked binaries from the export tree still
+    // score zero. That is the absolute calibration the note on
+    // `demote_generic_below_named` deferred as "needing its own validation";
+    // the ordering invariant it established is unaffected.
+    let corroboration = cfg.upx_detection_weight.max(0.5);
+    let mut upx_corroborating = 0.0f32;
     if memchr::memmem::find(hay, b"UPX0").is_some() {
-        upx += 0.3;
+        upx_corroborating += 0.2;
     }
     if memchr::memmem::find(hay, b"UPX1").is_some() {
-        upx += 0.3;
+        upx_corroborating += 0.2;
     }
-    // Version/signature hints increase confidence
     if memchr::memmem::find(hay, b"$Id: UPX ").is_some()
         || memchr::memmem::find(hay, b"UPX ").is_some()
     {
-        upx += 0.2;
+        // `upx_version_weight` has existed since the config was written, with
+        // a default, a Python getter and a Python setter -- and was read by
+        // nothing. The banner was worth a hardcoded 0.2, so anyone tuning the
+        // knob changed nothing at all.
+        upx_corroborating += cfg.upx_version_weight;
     }
-    if upx > 0.0 {
-        // Calibrate lightly using config weights without hard-coding
-        let conf = (upx * cfg.upx_detection_weight.max(0.5)).min(1.0);
+    if memchr::memmem::find(hay, b"UPX!").is_some() {
+        let conf = (0.6 + upx_corroborating * corroboration).min(1.0);
+        out.push(PackerMatch::new("UPX".to_string(), conf));
+    } else if upx_corroborating > 0.0 {
+        // Corroboration with no magic: possible, but much weaker -- a string
+        // mentioning UPX is not a packed file.
+        let conf = (upx_corroborating * corroboration).min(1.0);
         out.push(PackerMatch::new("UPX".to_string(), conf));
     }
 

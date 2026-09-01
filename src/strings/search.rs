@@ -9,6 +9,21 @@ use regex::Regex;
 pub struct SearchBudget {
     pub max_matches_total: usize,
     pub max_matches_per_kind: usize,
+    /// Wall-clock cutoff for a scan, or `0` to disable it.
+    ///
+    /// **A non-zero value makes the output nondeterministic.** The cutoff is
+    /// checked between matches, so a loaded machine stops at a different point
+    /// than an idle one and the same input yields different results: measured
+    /// on one triage sample, `ioc_samples` came back with 9 entries on one run
+    /// and 49 on another, at the default 10 ms.
+    ///
+    /// It is off by default because it buys nothing that the two deterministic
+    /// caps above do not already provide. The scan is bounded by
+    /// `max_scan_bytes` and every pattern is a `regex` crate `Regex`, which
+    /// guarantees linear time in the input and cannot backtrack
+    /// catastrophically -- so total work is bounded by construction, and the
+    /// clock was only ever deciding *which* of the bounded results a caller
+    /// happened to see.
     pub time_guard_ms: u64,
 }
 
@@ -17,7 +32,7 @@ impl Default for SearchBudget {
         Self {
             max_matches_total: 10_000,
             max_matches_per_kind: 1_000,
-            time_guard_ms: 25,
+            time_guard_ms: 0,
         }
     }
 }
@@ -67,7 +82,9 @@ pub fn scan_text(text: &str, budget: &SearchBudget) -> Vec<TextMatch> {
         if out.len() >= budget.max_matches_total {
             return;
         }
-        if start.elapsed().as_millis() as u64 > budget.time_guard_ms {
+        if budget.time_guard_ms > 0
+            && start.elapsed().as_millis() as u64 > budget.time_guard_ms
+        {
             return;
         }
         for m in cap(re.find_iter(text), budget.max_matches_per_kind) {
@@ -212,7 +229,9 @@ pub fn scan_bytes(data: &[u8], cfg: &StringsConfig, budget: &SearchBudget) -> Ve
             if out.len() >= budget.max_matches_total {
                 break;
             }
-            if start.elapsed().as_millis() as u64 > budget.time_guard_ms {
+            if budget.time_guard_ms > 0
+                && start.elapsed().as_millis() as u64 > budget.time_guard_ms
+            {
                 break;
             }
             let mut matches = scan_text(s, budget);
