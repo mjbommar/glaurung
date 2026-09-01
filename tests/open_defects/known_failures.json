@@ -1,0 +1,7067 @@
+{
+ "note": "Measured decompiler failures. Regenerate with tools/gen_known_failures.py.",
+ "elapsed_seconds": 1365.5,
+ "objects_scanned": 1676,
+ "counts": {
+  "types": 307,
+  "structure": 715,
+  "goto_statements": 6791
+ },
+ "types": [
+  {
+   "obj": "02_integer_widths-gcc-O2.so",
+   "fn": "trunc_u8",
+   "va": 4496,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "signed char"
+  },
+  {
+   "obj": "02_integer_widths-gcc-O2strip.dwarf.so",
+   "fn": "trunc_u8",
+   "va": 4496,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "signed char"
+  },
+  {
+   "obj": "08_indirect_dispatch-gcc-O2.so",
+   "fn": "tail_dispatch",
+   "va": 4608,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "08_indirect_dispatch-gcc-O2.so",
+   "fn": "tail_dispatch",
+   "va": 4608,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "08_indirect_dispatch-gcc-O2strip.dwarf.so",
+   "fn": "tail_dispatch",
+   "va": 4608,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "08_indirect_dispatch-gcc-O2strip.dwarf.so",
+   "fn": "tail_dispatch",
+   "va": 4608,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "129_struct_by_value-gcc-O0.so",
+   "fn": "consume_large",
+   "va": 4378,
+   "arg": 0,
+   "kind": "width",
+   "want": 20,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "seed",
+   "va": 30208,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "step",
+   "va": 30224,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "seed",
+   "va": 30352,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "step",
+   "va": 30368,
+   "arg": 0,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "step",
+   "va": 30368,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "out",
+   "va": 30416,
+   "arg": 0,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "pick_max",
+   "va": 30432,
+   "arg": 0,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "pick_max",
+   "va": 30432,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "fold_generic<i16>",
+   "va": 30624,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "fold_generic<i8>",
+   "va": 30736,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "rust_generic_i8",
+   "va": 31712,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "rust_generic_i16",
+   "va": 31744,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "rust_generic_dispatch",
+   "va": 31808,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "rust_generic_dispatch",
+   "va": 31808,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "rust_generic_max",
+   "va": 32096,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "rust_generic_fill",
+   "va": 32352,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 146768,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 146768,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "fold_generic<i16>",
+   "va": 4352,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "fold_generic<i8>",
+   "va": 4496,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned char"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "fold_generic<i32>",
+   "va": 4624,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "rust_generic_i8",
+   "va": 5568,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "rust_generic_i16",
+   "va": 5584,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "rust_generic_i32",
+   "va": 5600,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "rust_generic_dispatch",
+   "va": 5616,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "rust_generic_dispatch",
+   "va": 5616,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "rust_generic_mixed",
+   "va": 5680,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned char"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "fold_generic<i16>",
+   "va": 4352,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "fold_generic<i8>",
+   "va": 4496,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned char"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "fold_generic<i32>",
+   "va": 4624,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "rust_generic_i8",
+   "va": 5568,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "rust_generic_i16",
+   "va": 5584,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "rust_generic_i32",
+   "va": 5600,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "rust_generic_dispatch",
+   "va": 5616,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "rust_generic_dispatch",
+   "va": 5616,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "rust_generic_mixed",
+   "va": 5680,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned char"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "exchange_malloc",
+   "va": 29968,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "(no_stack_protector)) char  _ZN5alloc5alloc15exchange_malloc17h45cb24404d666705E(long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "exchange_malloc",
+   "va": 29968,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "rust_dyn_apply",
+   "va": 32752,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "rust_dyn_two_slots",
+   "va": 32800,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "rust_dyn_boxed",
+   "va": 34192,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "rust_dyn_fill",
+   "va": 34384,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 148784,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 148784,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "rust_dyn_apply",
+   "va": 28960,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "rust_dyn_two_slots",
+   "va": 28992,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "rust_dyn_pipeline",
+   "va": 29120,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "rust_dyn_pipeline",
+   "va": 29120,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "rust_dyn_fill",
+   "va": 29584,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 143648,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 143648,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "rust_dyn_apply",
+   "va": 28960,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "rust_dyn_two_slots",
+   "va": 28992,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "rust_dyn_pipeline",
+   "va": 29120,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "rust_dyn_pipeline",
+   "va": 29120,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "rust_dyn_fill",
+   "va": 29584,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 143648,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 143648,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "new",
+   "va": 4368,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "make",
+   "va": 5616,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "make",
+   "va": 5616,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "make",
+   "va": 5616,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_enum_eval",
+   "va": 6192,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_enum_eval",
+   "va": 6192,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "combine",
+   "va": 6240,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "char"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "combine",
+   "va": 6240,
+   "arg": 1,
+   "kind": "width",
+   "want": 16,
+   "got": "char"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_enum_by_value",
+   "va": 6304,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_enum_by_value",
+   "va": 6304,
+   "arg": 3,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_enum_discriminant",
+   "va": 6400,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_enum_discriminant",
+   "va": 6400,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O0.so",
+   "fn": "rust_option_nested",
+   "va": 7072,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "make",
+   "va": 4352,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "void"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "make",
+   "va": 4352,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "make",
+   "va": 4352,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_enum_eval",
+   "va": 4560,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_enum_eval",
+   "va": 4560,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "combine",
+   "va": 4608,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "char"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "combine",
+   "va": 4608,
+   "arg": 1,
+   "kind": "width",
+   "want": 16,
+   "got": "char"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_enum_by_value",
+   "va": 4656,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_enum_by_value",
+   "va": 4656,
+   "arg": 3,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_enum_discriminant",
+   "va": 4736,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_enum_discriminant",
+   "va": 4736,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_option_ref_find",
+   "va": 4848,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_option_nonzero",
+   "va": 4912,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_option_nested",
+   "va": 4928,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_option_nested",
+   "va": 4928,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2.so",
+   "fn": "rust_option_niche_fill",
+   "va": 4960,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "make",
+   "va": 4352,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "void"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "make",
+   "va": 4352,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "make",
+   "va": 4352,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_enum_eval",
+   "va": 4560,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_enum_eval",
+   "va": 4560,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "combine",
+   "va": 4608,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "char"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "combine",
+   "va": 4608,
+   "arg": 1,
+   "kind": "width",
+   "want": 16,
+   "got": "char"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_enum_by_value",
+   "va": 4656,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_enum_by_value",
+   "va": 4656,
+   "arg": 3,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_enum_discriminant",
+   "va": 4736,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_enum_discriminant",
+   "va": 4736,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_option_ref_find",
+   "va": 4848,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_option_nonzero",
+   "va": 4912,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_option_nested",
+   "va": 4928,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_option_nested",
+   "va": 4928,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
+   "fn": "rust_option_niche_fill",
+   "va": 4960,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "swap_nonoverlapping<i32>",
+   "va": 31968,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_index",
+   "va": 39824,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_index",
+   "va": 39824,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_index_pair",
+   "va": 40144,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_index_pair",
+   "va": 40144,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_get",
+   "va": 40720,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_get",
+   "va": 40720,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_get_range",
+   "va": 40944,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_get_range",
+   "va": 40944,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_iter_sum",
+   "va": 41264,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_rev_enumerate",
+   "va": 41440,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_windows",
+   "va": 41936,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_chunks",
+   "va": 42448,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_split_zip",
+   "va": 43008,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_split_zip",
+   "va": 43008,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_write",
+   "va": 43744,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_reverse",
+   "va": 44144,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 158272,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 158272,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_index",
+   "va": 28656,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_get",
+   "va": 28784,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_get",
+   "va": 28784,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_get_range",
+   "va": 28832,
+   "arg": 3,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_iter_sum",
+   "va": 29040,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_rev_enumerate",
+   "va": 29168,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_windows",
+   "va": 29248,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_chunks",
+   "va": 29472,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_write",
+   "va": 29984,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 144608,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 144608,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_index",
+   "va": 28656,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_get",
+   "va": 28784,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_get",
+   "va": 28784,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_get_range",
+   "va": 28832,
+   "arg": 3,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_iter_sum",
+   "va": 29040,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_rev_enumerate",
+   "va": 29168,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_windows",
+   "va": 29248,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_chunks",
+   "va": 29472,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_write",
+   "va": 29984,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 144608,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 144608,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "black_box<u32>",
+   "va": 30208,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "black_box<usize>",
+   "va": 30240,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "strict_div",
+   "va": 31104,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_guarded_div",
+   "va": 31200,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_guarded_div",
+   "va": 31200,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "table_lookup",
+   "va": 31424,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_expect",
+   "va": 31648,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_bounds",
+   "va": 31776,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_bounds",
+   "va": 31776,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_unreachable",
+   "va": 32272,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_unreachable",
+   "va": 32272,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_multi",
+   "va": 32576,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 146848,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 146848,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "rust_panic_guarded_div",
+   "va": 28880,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "decode",
+   "va": 29120,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "rust_panic_expect",
+   "va": 29200,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "rust_panic_multi",
+   "va": 29632,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "rust_panic_multi",
+   "va": 29632,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 143696,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 143696,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "rust_panic_guarded_div",
+   "va": 28880,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "decode",
+   "va": 29120,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "rust_panic_expect",
+   "va": 29200,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "rust_panic_multi",
+   "va": 29632,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "rust_panic_multi",
+   "va": 29632,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 143696,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 143696,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "checked_mul",
+   "va": 28864,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "checked_shl",
+   "va": 29072,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "checked_shl",
+   "va": 29072,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "checked_shr",
+   "va": 29168,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "checked_shr",
+   "va": 29168,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "checked_sub",
+   "va": 29472,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "unwrap_or<u32>",
+   "va": 29792,
+   "arg": 0,
+   "kind": "width",
+   "want": 8,
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "unwrap_or<u32>",
+   "va": 29792,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "unwrap_or<i32>",
+   "va": 29872,
+   "arg": 0,
+   "kind": "width",
+   "want": 8,
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_checked_mul",
+   "va": 30880,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_saturating_sub",
+   "va": 31024,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_saturating_mul",
+   "va": 31072,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_overflowing_mul",
+   "va": 31088,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_u32_sub_family",
+   "va": 31296,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_u32_bits",
+   "va": 31456,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_u32_rotate",
+   "va": 31760,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_shift_family",
+   "va": 31824,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_checked_shift",
+   "va": 32096,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_checked_shift",
+   "va": 32096,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_cast_chain",
+   "va": 32224,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_overflow_matrix",
+   "va": 32352,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 147360,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 147360,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_wrapping_add",
+   "va": 4352,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_wrapping_add",
+   "va": 4352,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_checked_mul",
+   "va": 4432,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_checked_div",
+   "va": 4448,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_checked_rem",
+   "va": 4480,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_saturating_add",
+   "va": 4512,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_saturating_add",
+   "va": 4512,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_saturating_mul",
+   "va": 4576,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_overflowing_mul",
+   "va": 4608,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_u32_sub_family",
+   "va": 4640,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_u32_rotate",
+   "va": 4832,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_shift_family",
+   "va": 4848,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_shift_family",
+   "va": 4848,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_checked_shift",
+   "va": 4880,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_checked_shift",
+   "va": 4880,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_cast_chain",
+   "va": 4912,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_overflow_matrix",
+   "va": 4960,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2.so",
+   "fn": "rust_overflow_matrix",
+   "va": 4960,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_wrapping_add",
+   "va": 4352,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_wrapping_add",
+   "va": 4352,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_checked_mul",
+   "va": 4432,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_checked_div",
+   "va": 4448,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_checked_rem",
+   "va": 4480,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_saturating_add",
+   "va": 4512,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_saturating_add",
+   "va": 4512,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_saturating_mul",
+   "va": 4576,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_overflowing_mul",
+   "va": 4608,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_u32_sub_family",
+   "va": 4640,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_u32_rotate",
+   "va": 4832,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_shift_family",
+   "va": 4848,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_shift_family",
+   "va": 4848,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_checked_shift",
+   "va": 4880,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_checked_shift",
+   "va": 4880,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "int"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_cast_chain",
+   "va": 4912,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_overflow_matrix",
+   "va": 4960,
+   "arg": 1,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
+   "fn": "rust_overflow_matrix",
+   "va": 4960,
+   "arg": 2,
+   "kind": "width",
+   "want": 4,
+   "got": "long"
+  },
+  {
+   "obj": "195_by_value_aggregates-clang-O2.so",
+   "fn": "bv195_consume_pair",
+   "va": 4560,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned long"
+  },
+  {
+   "obj": "195_by_value_aggregates-clang-O2strip.dwarf.so",
+   "fn": "bv195_consume_pair",
+   "va": 4560,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23632,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23632,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23632,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "forward_unchecked",
+   "va": 33424,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "backward_unchecked",
+   "va": 33456,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "forward_unchecked",
+   "va": 33488,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "forward_unchecked",
+   "va": 33488,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "__iterator_get_unchecked<i64>",
+   "va": 34464,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "rev<core::ops::range::Range<i64>>",
+   "va": 35248,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "chain<core::iter::adapters::rev::Rev<core::ops::range::Range<i64>>, core::ops::range::Range<i64>>",
+   "va": 36816,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "chain<core::iter::adapters::rev::Rev<core::ops::range::Range<i64>>, core::ops::range::Range<i64>>",
+   "va": 36816,
+   "arg": 1,
+   "kind": "width",
+   "want": 16,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "enumerate<core::ops::range::Range<i64>>",
+   "va": 38272,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "{closure#0}<(i64, i64), i64, i64, 219_rust_iterator_chains::iter_zip_dot::{closure_env#1}, core::iter::traits::accum::{impl#16}::sum::{closure_env#0}<core::iter::adapters::map::Map<core::iter::adapters::zip::Zip<core::ops::range::Range<i64>, core::iter::adapters::map::Map<core::ops::range::Range<i64>, 219_rust_iterator_chains::iter_zip_dot::{closure_env#0}>>, 219_rust_iterator_chains::iter_zip_dot::{closure_env#1}>>>",
+   "va": 38800,
+   "arg": 1,
+   "kind": "width",
+   "want": 16,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "into_iter<core::ops::range::Range<i64>>",
+   "va": 47328,
+   "arg": 0,
+   "kind": "width",
+   "want": 16,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "try_get_unchecked<core::ops::range::Range<i64>>",
+   "va": 47760,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "iter_capturing_closure",
+   "va": 51296,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "(no_stack_protector)) void  iter_capturing_closure(int"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 165856,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "__rdl_dealloc",
+   "va": 165856,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "iter_enumerate_fold",
+   "va": 29088,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "iter_take_skip",
+   "va": 29184,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "iter_capturing_closure",
+   "va": 29392,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 143600,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2.so",
+   "fn": "__rdl_dealloc",
+   "va": 143600,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 1,
+   "kind": "width",
+   "want": 2,
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "bool"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "iter_enumerate_fold",
+   "va": 29088,
+   "arg": 0,
+   "kind": "width",
+   "want": 4,
+   "got": "unsigned long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "iter_take_skip",
+   "va": 29184,
+   "arg": 0,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "iter_capturing_closure",
+   "va": 29392,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "signed",
+   "got": "unsigned int"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 143600,
+   "arg": 1,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
+   "fn": "__rdl_dealloc",
+   "va": 143600,
+   "arg": 2,
+   "kind": "signedness",
+   "want": "unsigned",
+   "got": "long"
+  }
+ ],
+ "structure": [
+  {
+   "obj": "01_conditional_polarity-clang-O0.so",
+   "fn": "sc_mixed",
+   "va": 5008,
+   "gotos": 2
+  },
+  {
+   "obj": "03_loop_shapes-clang-O0.so",
+   "fn": "while_prefix",
+   "va": 4592,
+   "gotos": 1
+  },
+  {
+   "obj": "03_loop_shapes-clang-O0.so",
+   "fn": "while_reload_header",
+   "va": 4704,
+   "gotos": 1
+  },
+  {
+   "obj": "03_loop_shapes-clang-O0.so",
+   "fn": "loop_early_return",
+   "va": 5600,
+   "gotos": 3
+  },
+  {
+   "obj": "03_loop_shapes-clang-O0.so",
+   "fn": "loop_return_on_neg",
+   "va": 5696,
+   "gotos": 3
+  },
+  {
+   "obj": "03_loop_shapes-clang-O0.so",
+   "fn": "cond_reload_and_transform",
+   "va": 5936,
+   "gotos": 1
+  },
+  {
+   "obj": "03_loop_shapes-clang-O2.so",
+   "fn": "loop_return_on_neg",
+   "va": 5856,
+   "gotos": 7
+  },
+  {
+   "obj": "03_loop_shapes-clang-O2strip.dwarf.so",
+   "fn": "loop_return_on_neg",
+   "va": 5856,
+   "gotos": 7
+  },
+  {
+   "obj": "03_loop_shapes-gcc-O0.so",
+   "fn": "loop_break",
+   "va": 5251,
+   "gotos": 2
+  },
+  {
+   "obj": "03_loop_shapes-gcc-O0.so",
+   "fn": "loop_early_return",
+   "va": 5464,
+   "gotos": 2
+  },
+  {
+   "obj": "03_loop_shapes-gcc-O0.so",
+   "fn": "loop_return_on_neg",
+   "va": 5536,
+   "gotos": 2
+  },
+  {
+   "obj": "03_loop_shapes-gcc-O2.so",
+   "fn": "dowhile_atleastonce",
+   "va": 4592,
+   "gotos": 2
+  },
+  {
+   "obj": "03_loop_shapes-gcc-O2strip.dwarf.so",
+   "fn": "dowhile_atleastonce",
+   "va": 4592,
+   "gotos": 2
+  },
+  {
+   "obj": "06_calling_conventions-gcc-O2.so",
+   "fn": "fib",
+   "va": 5312,
+   "gotos": 21
+  },
+  {
+   "obj": "06_calling_conventions-gcc-O2strip.dwarf.so",
+   "fn": "fib",
+   "va": 5312,
+   "gotos": 21
+  },
+  {
+   "obj": "07_packet_parser-clang-O2.so",
+   "fn": "parse_packet",
+   "va": 4464,
+   "gotos": 3
+  },
+  {
+   "obj": "07_packet_parser-clang-O2strip.dwarf.so",
+   "fn": "parse_packet",
+   "va": 4464,
+   "gotos": 3
+  },
+  {
+   "obj": "07_packet_parser-gcc-O0.so",
+   "fn": "parse_packet",
+   "va": 4996,
+   "gotos": 2
+  },
+  {
+   "obj": "09_memory_effects-clang-O2.so",
+   "fn": "mem_copy",
+   "va": 4512,
+   "gotos": 4
+  },
+  {
+   "obj": "09_memory_effects-clang-O2.so",
+   "fn": "mem_set",
+   "va": 4880,
+   "gotos": 1
+  },
+  {
+   "obj": "09_memory_effects-clang-O2.so",
+   "fn": "vec_sum",
+   "va": 5168,
+   "gotos": 1
+  },
+  {
+   "obj": "09_memory_effects-clang-O2.so",
+   "fn": "vec_transform",
+   "va": 5456,
+   "gotos": 3
+  },
+  {
+   "obj": "09_memory_effects-clang-O2strip.dwarf.so",
+   "fn": "mem_copy",
+   "va": 4512,
+   "gotos": 4
+  },
+  {
+   "obj": "09_memory_effects-clang-O2strip.dwarf.so",
+   "fn": "mem_set",
+   "va": 4880,
+   "gotos": 1
+  },
+  {
+   "obj": "09_memory_effects-clang-O2strip.dwarf.so",
+   "fn": "vec_sum",
+   "va": 5168,
+   "gotos": 1
+  },
+  {
+   "obj": "09_memory_effects-clang-O2strip.dwarf.so",
+   "fn": "vec_transform",
+   "va": 5456,
+   "gotos": 3
+  },
+  {
+   "obj": "102_duffs_device-clang-O0.so",
+   "fn": "duff_copy",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "102_duffs_device-gcc-O0.so",
+   "fn": "duff_copy",
+   "va": 4345,
+   "gotos": 1
+  },
+  {
+   "obj": "102_duffs_device-gcc-O2.so",
+   "fn": "duff_copy",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "102_duffs_device-gcc-O2strip.dwarf.so",
+   "fn": "duff_copy",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "106_switch_shapes_dense_sparse-gcc-O0.so",
+   "fn": "hybrid_switch",
+   "va": 4585,
+   "gotos": 1
+  },
+  {
+   "obj": "107_short_circuit-clang-O0.so",
+   "fn": "short_circuit_or",
+   "va": 4512,
+   "gotos": 1
+  },
+  {
+   "obj": "109_subscript_commutativity-clang-O2.so",
+   "fn": "mixed_subscript_sum",
+   "va": 4384,
+   "gotos": 1
+  },
+  {
+   "obj": "109_subscript_commutativity-clang-O2strip.dwarf.so",
+   "fn": "mixed_subscript_sum",
+   "va": 4384,
+   "gotos": 1
+  },
+  {
+   "obj": "110_pointer_arithmetic-clang-O0.so",
+   "fn": "walk_until_sentinel",
+   "va": 4576,
+   "gotos": 4
+  },
+  {
+   "obj": "110_pointer_arithmetic-gcc-O0.so",
+   "fn": "walk_until_sentinel",
+   "va": 4512,
+   "gotos": 3
+  },
+  {
+   "obj": "111_self_referential_struct-clang-O0.so",
+   "fn": "link_and_sum",
+   "va": 4352,
+   "gotos": 10
+  },
+  {
+   "obj": "111_self_referential_struct-clang-O2.so",
+   "fn": "link_and_sum",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "111_self_referential_struct-clang-O2strip.dwarf.so",
+   "fn": "link_and_sum",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "111_self_referential_struct-gcc-O0.so",
+   "fn": "link_and_sum",
+   "va": 4377,
+   "gotos": 9
+  },
+  {
+   "obj": "111_self_referential_struct-gcc-O2.so",
+   "fn": "link_and_sum",
+   "va": 4384,
+   "gotos": 2
+  },
+  {
+   "obj": "111_self_referential_struct-gcc-O2strip.dwarf.so",
+   "fn": "link_and_sum",
+   "va": 4384,
+   "gotos": 2
+  },
+  {
+   "obj": "112_recursion_shapes-clang-O2.so",
+   "fn": "mutual_parity",
+   "va": 4400,
+   "gotos": 3
+  },
+  {
+   "obj": "112_recursion_shapes-clang-O2.so",
+   "fn": "nontail_depth",
+   "va": 4496,
+   "gotos": 1
+  },
+  {
+   "obj": "112_recursion_shapes-clang-O2strip.dwarf.so",
+   "fn": "mutual_parity",
+   "va": 4400,
+   "gotos": 3
+  },
+  {
+   "obj": "112_recursion_shapes-clang-O2strip.dwarf.so",
+   "fn": "nontail_depth",
+   "va": 4496,
+   "gotos": 1
+  },
+  {
+   "obj": "113_varargs-gcc-O2.so",
+   "fn": "sum_variadic",
+   "va": 4384,
+   "gotos": 4
+  },
+  {
+   "obj": "113_varargs-gcc-O2strip.dwarf.so",
+   "fn": "sum_variadic",
+   "va": 4384,
+   "gotos": 4
+  },
+  {
+   "obj": "116_string_literals-clang-O2.so",
+   "fn": "count_matching",
+   "va": 4400,
+   "gotos": 1
+  },
+  {
+   "obj": "116_string_literals-clang-O2strip.dwarf.so",
+   "fn": "count_matching",
+   "va": 4400,
+   "gotos": 1
+  },
+  {
+   "obj": "119_branch_hints-clang-O2.so",
+   "fn": "hinted_validation",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "119_branch_hints-clang-O2.so",
+   "fn": "unhinted_validation",
+   "va": 4608,
+   "gotos": 1
+  },
+  {
+   "obj": "119_branch_hints-clang-O2strip.dwarf.so",
+   "fn": "hinted_validation",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "119_branch_hints-clang-O2strip.dwarf.so",
+   "fn": "unhinted_validation",
+   "va": 4608,
+   "gotos": 1
+  },
+  {
+   "obj": "122_compound_assignment-clang-O2.so",
+   "fn": "narrow_compound_truncates",
+   "va": 4400,
+   "gotos": 2
+  },
+  {
+   "obj": "122_compound_assignment-clang-O2strip.dwarf.so",
+   "fn": "narrow_compound_truncates",
+   "va": 4400,
+   "gotos": 2
+  },
+  {
+   "obj": "127_inline_linkage-clang-O2.so",
+   "fn": "inline_in_loop",
+   "va": 4384,
+   "gotos": 1
+  },
+  {
+   "obj": "127_inline_linkage-clang-O2strip.dwarf.so",
+   "fn": "inline_in_loop",
+   "va": 4384,
+   "gotos": 1
+  },
+  {
+   "obj": "128_qualifier_combinations-clang-O2.so",
+   "fn": "pointer_to_const_walks",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "128_qualifier_combinations-clang-O2.so",
+   "fn": "const_pointer_writes",
+   "va": 4656,
+   "gotos": 1
+  },
+  {
+   "obj": "128_qualifier_combinations-clang-O2strip.dwarf.so",
+   "fn": "pointer_to_const_walks",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "128_qualifier_combinations-clang-O2strip.dwarf.so",
+   "fn": "const_pointer_writes",
+   "va": 4656,
+   "gotos": 1
+  },
+  {
+   "obj": "131_obfuscated_composite-gcc-O2.so",
+   "fn": "obfuscated_pipeline",
+   "va": 4400,
+   "gotos": 5
+  },
+  {
+   "obj": "131_obfuscated_composite-gcc-O2strip.dwarf.so",
+   "fn": "obfuscated_pipeline",
+   "va": 4400,
+   "gotos": 5
+  },
+  {
+   "obj": "132_cpp_vtable_layout-gcc-O0.so",
+   "fn": "cpp_vtable_area",
+   "va": 4795,
+   "gotos": 1
+  },
+  {
+   "obj": "135_cpp_rtti-gcc-O0.so",
+   "fn": "cpp_typeid_compare",
+   "va": 5315,
+   "gotos": 3
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-clang-O0.so",
+   "fn": "cpp_rethrow_and_nest",
+   "va": 5328,
+   "gotos": 2
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-clang-O2.so",
+   "fn": "cpp_catch_by_type",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-clang-O2.so",
+   "fn": "cpp_rethrow_and_nest",
+   "va": 4784,
+   "gotos": 1
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-clang-O2strip.dwarf.so",
+   "fn": "cpp_catch_by_type",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-clang-O2strip.dwarf.so",
+   "fn": "cpp_rethrow_and_nest",
+   "va": 4784,
+   "gotos": 1
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-gcc-O0.so",
+   "fn": "cpp_destructors_run_while_unwinding",
+   "va": 5104,
+   "gotos": 1
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-gcc-O0.so",
+   "fn": "cpp_rethrow_and_nest",
+   "va": 5464,
+   "gotos": 2
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-gcc-O2.so",
+   "fn": "cpp_catch_by_type",
+   "va": 5040,
+   "gotos": 2
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-gcc-O2.so",
+   "fn": "cpp_rethrow_and_nest",
+   "va": 5184,
+   "gotos": 4
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-gcc-O2strip.dwarf.so",
+   "fn": "cpp_catch_by_type",
+   "va": 5040,
+   "gotos": 2
+  },
+  {
+   "obj": "136_cpp_exception_unwinding-gcc-O2strip.dwarf.so",
+   "fn": "cpp_rethrow_and_nest",
+   "va": 5184,
+   "gotos": 4
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2.so",
+   "fn": "cpp_template_int32",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2.so",
+   "fn": "cpp_template_int16",
+   "va": 4496,
+   "gotos": 2
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2.so",
+   "fn": "cpp_template_uint8",
+   "va": 4944,
+   "gotos": 11
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2.so",
+   "fn": "cpp_template_predicate",
+   "va": 5456,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2.so",
+   "fn": "cpp_template_nontype",
+   "va": 5648,
+   "gotos": 8
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2strip.dwarf.so",
+   "fn": "cpp_template_int32",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2strip.dwarf.so",
+   "fn": "cpp_template_int16",
+   "va": 4496,
+   "gotos": 2
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2strip.dwarf.so",
+   "fn": "cpp_template_uint8",
+   "va": 4944,
+   "gotos": 11
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2strip.dwarf.so",
+   "fn": "cpp_template_predicate",
+   "va": 5456,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-clang-O2strip.dwarf.so",
+   "fn": "cpp_template_nontype",
+   "va": 5648,
+   "gotos": 8
+  },
+  {
+   "obj": "137_cpp_templates-gcc-O2.so",
+   "fn": "cpp_template_int16",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-gcc-O2.so",
+   "fn": "cpp_template_uint8",
+   "va": 4592,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-gcc-O2strip.dwarf.so",
+   "fn": "cpp_template_int16",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "137_cpp_templates-gcc-O2strip.dwarf.so",
+   "fn": "cpp_template_uint8",
+   "va": 4592,
+   "gotos": 1
+  },
+  {
+   "obj": "139_cpp_object_lifetime-gcc-O2.so",
+   "fn": "cpp_array_destruction",
+   "va": 4480,
+   "gotos": 6
+  },
+  {
+   "obj": "139_cpp_object_lifetime-gcc-O2strip.dwarf.so",
+   "fn": "cpp_array_destruction",
+   "va": 4480,
+   "gotos": 6
+  },
+  {
+   "obj": "141_atomics-clang-O0.so",
+   "fn": "atomic_compare_exchange_loop",
+   "va": 4480,
+   "gotos": 1
+  },
+  {
+   "obj": "141_atomics-gcc-O0.so",
+   "fn": "atomic_compare_exchange_loop",
+   "va": 4523,
+   "gotos": 2
+  },
+  {
+   "obj": "142_nonlocal_control-gcc-O0.so",
+   "fn": "setjmp_returns_twice",
+   "va": 4520,
+   "gotos": 2
+  },
+  {
+   "obj": "142_nonlocal_control-gcc-O2.so",
+   "fn": "setjmp_returns_twice",
+   "va": 4448,
+   "gotos": 4
+  },
+  {
+   "obj": "142_nonlocal_control-gcc-O2.so",
+   "fn": "longjmp_unwinds_frames",
+   "va": 4624,
+   "gotos": 5
+  },
+  {
+   "obj": "142_nonlocal_control-gcc-O2strip.dwarf.so",
+   "fn": "setjmp_returns_twice",
+   "va": 4448,
+   "gotos": 4
+  },
+  {
+   "obj": "142_nonlocal_control-gcc-O2strip.dwarf.so",
+   "fn": "longjmp_unwinds_frames",
+   "va": 4624,
+   "gotos": 5
+  },
+  {
+   "obj": "143_dynamic_frames-clang-O2.so",
+   "fn": "alloca_dynamic_frame",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "143_dynamic_frames-clang-O2strip.dwarf.so",
+   "fn": "alloca_dynamic_frame",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "143_dynamic_frames-gcc-O2.so",
+   "fn": "alloca_dynamic_frame",
+   "va": 4384,
+   "gotos": 5
+  },
+  {
+   "obj": "143_dynamic_frames-gcc-O2.so",
+   "fn": "alloca_in_loop",
+   "va": 4608,
+   "gotos": 6
+  },
+  {
+   "obj": "143_dynamic_frames-gcc-O2strip.dwarf.so",
+   "fn": "alloca_dynamic_frame",
+   "va": 4384,
+   "gotos": 5
+  },
+  {
+   "obj": "143_dynamic_frames-gcc-O2strip.dwarf.so",
+   "fn": "alloca_in_loop",
+   "va": 4608,
+   "gotos": 6
+  },
+  {
+   "obj": "144_inline_asm-clang-O2.so",
+   "fn": "builtin_bit_intrinsics",
+   "va": 4400,
+   "gotos": 1
+  },
+  {
+   "obj": "144_inline_asm-clang-O2strip.dwarf.so",
+   "fn": "builtin_bit_intrinsics",
+   "va": 4400,
+   "gotos": 1
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O0.so",
+   "fn": "flattened_accumulate",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O0.so",
+   "fn": "flattened_search",
+   "va": 4736,
+   "gotos": 4
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O0.so",
+   "fn": "flattened_gcd",
+   "va": 5072,
+   "gotos": 11
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O0.so",
+   "fn": "flattened_classify",
+   "va": 5328,
+   "gotos": 2
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O2.so",
+   "fn": "flattened_accumulate",
+   "va": 4352,
+   "gotos": 11
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O2.so",
+   "fn": "flattened_search",
+   "va": 4544,
+   "gotos": 1
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O2.so",
+   "fn": "flattened_gcd",
+   "va": 4720,
+   "gotos": 4
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
+   "fn": "flattened_accumulate",
+   "va": 4352,
+   "gotos": 11
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
+   "fn": "flattened_search",
+   "va": 4544,
+   "gotos": 1
+  },
+  {
+   "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
+   "fn": "flattened_gcd",
+   "va": 4720,
+   "gotos": 4
+  },
+  {
+   "obj": "145_control_flow_flattening-gcc-O0.so",
+   "fn": "flattened_gcd",
+   "va": 4985,
+   "gotos": 1
+  },
+  {
+   "obj": "146_opaque_predicates-clang-O2.so",
+   "fn": "opaque_loop_filter",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "146_opaque_predicates-clang-O2strip.dwarf.so",
+   "fn": "opaque_loop_filter",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "150_obfuscation_composite-clang-O0.so",
+   "fn": "obfuscated_transform",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "150_obfuscation_composite-clang-O0.so",
+   "fn": "obfuscated_digest",
+   "va": 5008,
+   "gotos": 16
+  },
+  {
+   "obj": "150_obfuscation_composite-clang-O2.so",
+   "fn": "obfuscated_transform",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "150_obfuscation_composite-clang-O2.so",
+   "fn": "obfuscated_digest",
+   "va": 4704,
+   "gotos": 10
+  },
+  {
+   "obj": "150_obfuscation_composite-clang-O2strip.dwarf.so",
+   "fn": "obfuscated_transform",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "150_obfuscation_composite-clang-O2strip.dwarf.so",
+   "fn": "obfuscated_digest",
+   "va": 4704,
+   "gotos": 10
+  },
+  {
+   "obj": "150_obfuscation_composite-gcc-O0.so",
+   "fn": "obfuscated_digest",
+   "va": 5157,
+   "gotos": 1
+  },
+  {
+   "obj": "151_wide_branch_ladder-clang-O0.so",
+   "fn": "big151_branch_ladder",
+   "va": 4352,
+   "gotos": 845
+  },
+  {
+   "obj": "153_many_live_locals-clang-O2.so",
+   "fn": "spill153_live_set",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "153_many_live_locals-clang-O2.so",
+   "fn": "spill153_static_web",
+   "va": 13296,
+   "gotos": 1
+  },
+  {
+   "obj": "153_many_live_locals-clang-O2strip.dwarf.so",
+   "fn": "spill153_live_set",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "153_many_live_locals-clang-O2strip.dwarf.so",
+   "fn": "spill153_static_web",
+   "va": 13296,
+   "gotos": 1
+  },
+  {
+   "obj": "154_wide_switch-clang-O0.so",
+   "fn": "wide154_dense_effects",
+   "va": 7520,
+   "gotos": 208
+  },
+  {
+   "obj": "154_wide_switch-clang-O2.so",
+   "fn": "wide154_sparse_switch",
+   "va": 10256,
+   "gotos": 70
+  },
+  {
+   "obj": "154_wide_switch-clang-O2strip.dwarf.so",
+   "fn": "wide154_sparse_switch",
+   "va": 10256,
+   "gotos": 70
+  },
+  {
+   "obj": "154_wide_switch-gcc-O0.so",
+   "fn": "wide154_dense_effects",
+   "va": 6952,
+   "gotos": 190
+  },
+  {
+   "obj": "154_wide_switch-gcc-O2.so",
+   "fn": "wide154_dense_effects",
+   "va": 4448,
+   "gotos": 203
+  },
+  {
+   "obj": "154_wide_switch-gcc-O2.so",
+   "fn": "wide154_sparse_switch",
+   "va": 10256,
+   "gotos": 133
+  },
+  {
+   "obj": "154_wide_switch-gcc-O2strip.dwarf.so",
+   "fn": "wide154_dense_effects",
+   "va": 4448,
+   "gotos": 203
+  },
+  {
+   "obj": "154_wide_switch-gcc-O2strip.dwarf.so",
+   "fn": "wide154_sparse_switch",
+   "va": 10256,
+   "gotos": 133
+  },
+  {
+   "obj": "155_long_dependency_chain-clang-O2.so",
+   "fn": "chain155_buffered",
+   "va": 7840,
+   "gotos": 14
+  },
+  {
+   "obj": "155_long_dependency_chain-clang-O2strip.dwarf.so",
+   "fn": "chain155_buffered",
+   "va": 7840,
+   "gotos": 14
+  },
+  {
+   "obj": "155_long_dependency_chain-gcc-O2.so",
+   "fn": "chain155_buffered",
+   "va": 7824,
+   "gotos": 1
+  },
+  {
+   "obj": "155_long_dependency_chain-gcc-O2strip.dwarf.so",
+   "fn": "chain155_buffered",
+   "va": 7824,
+   "gotos": 1
+  },
+  {
+   "obj": "156_plt_and_got_calls-gcc-O2.so",
+   "fn": "plt_fold_calls",
+   "va": 4560,
+   "gotos": 3
+  },
+  {
+   "obj": "156_plt_and_got_calls-gcc-O2strip.dwarf.so",
+   "fn": "plt_fold_calls",
+   "va": 4560,
+   "gotos": 3
+  },
+  {
+   "obj": "158_weak_symbols-gcc-O2.so",
+   "fn": "weak_fold",
+   "va": 4544,
+   "gotos": 2
+  },
+  {
+   "obj": "158_weak_symbols-gcc-O2strip.dwarf.so",
+   "fn": "weak_fold",
+   "va": 4544,
+   "gotos": 2
+  },
+  {
+   "obj": "15_binary_search_tree-clang-O0.so",
+   "fn": "bst_search",
+   "va": 4352,
+   "gotos": 5
+  },
+  {
+   "obj": "15_binary_search_tree-clang-O0.so",
+   "fn": "bst_inorder_checksum",
+   "va": 4624,
+   "gotos": 7
+  },
+  {
+   "obj": "15_binary_search_tree-gcc-O0.so",
+   "fn": "bst_search",
+   "va": 4377,
+   "gotos": 5
+  },
+  {
+   "obj": "15_binary_search_tree-gcc-O0.so",
+   "fn": "bst_inorder_checksum",
+   "va": 4638,
+   "gotos": 9
+  },
+  {
+   "obj": "15_binary_search_tree-gcc-O2.so",
+   "fn": "bst_inorder_checksum",
+   "va": 4480,
+   "gotos": 13
+  },
+  {
+   "obj": "15_binary_search_tree-gcc-O2strip.dwarf.so",
+   "fn": "bst_inorder_checksum",
+   "va": 4480,
+   "gotos": 13
+  },
+  {
+   "obj": "161_packed_struct_layout-gcc-O0.so",
+   "fn": "pk161_read_field",
+   "va": 4855,
+   "gotos": 1
+  },
+  {
+   "obj": "162_unaligned_memcpy_access-clang-O2.so",
+   "fn": "ua162_move_field32",
+   "va": 4688,
+   "gotos": 1
+  },
+  {
+   "obj": "162_unaligned_memcpy_access-clang-O2strip.dwarf.so",
+   "fn": "ua162_move_field32",
+   "va": 4688,
+   "gotos": 1
+  },
+  {
+   "obj": "162_unaligned_memcpy_access-gcc-O2.so",
+   "fn": "ua162_move_field32",
+   "va": 4864,
+   "gotos": 8
+  },
+  {
+   "obj": "162_unaligned_memcpy_access-gcc-O2strip.dwarf.so",
+   "fn": "ua162_move_field32",
+   "va": 4864,
+   "gotos": 8
+  },
+  {
+   "obj": "163_wire_header_parser-gcc-O2.so",
+   "fn": "hdr163_copy_payload",
+   "va": 4944,
+   "gotos": 1
+  },
+  {
+   "obj": "163_wire_header_parser-gcc-O2strip.dwarf.so",
+   "fn": "hdr163_copy_payload",
+   "va": 4944,
+   "gotos": 1
+  },
+  {
+   "obj": "164_nested_tlv_walker-gcc-O0.so",
+   "fn": "tlv164_walk",
+   "va": 4419,
+   "gotos": 6
+  },
+  {
+   "obj": "164_nested_tlv_walker-gcc-O0.so",
+   "fn": "tlv164_seek",
+   "va": 4801,
+   "gotos": 2
+  },
+  {
+   "obj": "164_nested_tlv_walker-gcc-O2.so",
+   "fn": "tlv164_walk",
+   "va": 4384,
+   "gotos": 17
+  },
+  {
+   "obj": "164_nested_tlv_walker-gcc-O2.so",
+   "fn": "tlv164_seek",
+   "va": 4736,
+   "gotos": 9
+  },
+  {
+   "obj": "164_nested_tlv_walker-gcc-O2strip.dwarf.so",
+   "fn": "tlv164_walk",
+   "va": 4384,
+   "gotos": 17
+  },
+  {
+   "obj": "164_nested_tlv_walker-gcc-O2strip.dwarf.so",
+   "fn": "tlv164_seek",
+   "va": 4736,
+   "gotos": 9
+  },
+  {
+   "obj": "165_bitstream_reader-clang-O0.so",
+   "fn": "bit165_read_sequence",
+   "va": 5168,
+   "gotos": 3
+  },
+  {
+   "obj": "165_bitstream_reader-clang-O2.so",
+   "fn": "bit165_cross_check",
+   "va": 4592,
+   "gotos": 2
+  },
+  {
+   "obj": "165_bitstream_reader-clang-O2.so",
+   "fn": "bit165_read_sequence",
+   "va": 5008,
+   "gotos": 5
+  },
+  {
+   "obj": "165_bitstream_reader-clang-O2strip.dwarf.so",
+   "fn": "bit165_cross_check",
+   "va": 4592,
+   "gotos": 2
+  },
+  {
+   "obj": "165_bitstream_reader-clang-O2strip.dwarf.so",
+   "fn": "bit165_read_sequence",
+   "va": 5008,
+   "gotos": 5
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "get_backtrace_style",
+   "va": 41312,
+   "gotos": 3
+  },
+  {
+   "obj": "166_rust_generics-rustc-O0.so",
+   "fn": "{closure#0}",
+   "va": 43168,
+   "gotos": 4
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "fold_generic<i16>",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "fold_generic<i8>",
+   "va": 4496,
+   "gotos": 4
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2.so",
+   "fn": "fold_generic<i32>",
+   "va": 4624,
+   "gotos": 4
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "fold_generic<i16>",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "fold_generic<i8>",
+   "va": 4496,
+   "gotos": 4
+  },
+  {
+   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
+   "fn": "fold_generic<i32>",
+   "va": 4624,
+   "gotos": 4
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "rust_dyn_pipeline",
+   "va": 33024,
+   "gotos": 3
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "get_backtrace_style",
+   "va": 43328,
+   "gotos": 3
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O0.so",
+   "fn": "{closure#0}",
+   "va": 45184,
+   "gotos": 4
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "get_backtrace_style",
+   "va": 38192,
+   "gotos": 3
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2.so",
+   "fn": "{closure#0}",
+   "va": 40048,
+   "gotos": 4
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "get_backtrace_style",
+   "va": 38192,
+   "gotos": 3
+  },
+  {
+   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
+   "fn": "{closure#0}",
+   "va": 40048,
+   "gotos": 4
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "swap_nonoverlapping<i32>",
+   "va": 31968,
+   "gotos": 6
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_index",
+   "va": 39824,
+   "gotos": 11
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_index_pair",
+   "va": 40144,
+   "gotos": 17
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_rev_enumerate",
+   "va": 41440,
+   "gotos": 8
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_windows",
+   "va": 41936,
+   "gotos": 10
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_chunks",
+   "va": 42448,
+   "gotos": 8
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "rust_slice_split_zip",
+   "va": 43008,
+   "gotos": 8
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "get_backtrace_style",
+   "va": 52816,
+   "gotos": 3
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O0.so",
+   "fn": "{closure#0}",
+   "va": 54672,
+   "gotos": 4
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_get_range",
+   "va": 28832,
+   "gotos": 4
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_iter_sum",
+   "va": 29040,
+   "gotos": 1
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_windows",
+   "va": 29248,
+   "gotos": 1
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "rust_slice_split_zip",
+   "va": 29584,
+   "gotos": 7
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "get_backtrace_style",
+   "va": 39152,
+   "gotos": 3
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2.so",
+   "fn": "{closure#0}",
+   "va": 41008,
+   "gotos": 4
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_get_range",
+   "va": 28832,
+   "gotos": 4
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_iter_sum",
+   "va": 29040,
+   "gotos": 1
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_windows",
+   "va": 29248,
+   "gotos": 1
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "rust_slice_split_zip",
+   "va": 29584,
+   "gotos": 7
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "get_backtrace_style",
+   "va": 39152,
+   "gotos": 3
+  },
+  {
+   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
+   "fn": "{closure#0}",
+   "va": 41008,
+   "gotos": 4
+  },
+  {
+   "obj": "16_red_black_tree-clang-O0.so",
+   "fn": "rb_validate",
+   "va": 4368,
+   "gotos": 24
+  },
+  {
+   "obj": "16_red_black_tree-clang-O2.so",
+   "fn": "rb_validate",
+   "va": 4352,
+   "gotos": 38
+  },
+  {
+   "obj": "16_red_black_tree-clang-O2strip.dwarf.so",
+   "fn": "rb_validate",
+   "va": 4352,
+   "gotos": 38
+  },
+  {
+   "obj": "16_red_black_tree-gcc-O0.so",
+   "fn": "rb_validate",
+   "va": 4377,
+   "gotos": 30
+  },
+  {
+   "obj": "16_red_black_tree-gcc-O2.so",
+   "fn": "rb_validate",
+   "va": 4384,
+   "gotos": 39
+  },
+  {
+   "obj": "16_red_black_tree-gcc-O2strip.dwarf.so",
+   "fn": "rb_validate",
+   "va": 4384,
+   "gotos": 39
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "read_contended",
+   "va": 23120,
+   "gotos": 9
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23472,
+   "gotos": 6
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "gotos": 8
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "overflowing_div",
+   "va": 29776,
+   "gotos": 4
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "rust_panic_bounds",
+   "va": 31776,
+   "gotos": 8
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "get_backtrace_style",
+   "va": 41392,
+   "gotos": 3
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O0.so",
+   "fn": "{closure#0}",
+   "va": 43248,
+   "gotos": 4
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "read_contended",
+   "va": 23120,
+   "gotos": 9
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23472,
+   "gotos": 6
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "gotos": 8
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "rust_panic_caught",
+   "va": 29424,
+   "gotos": 3
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "get_backtrace_style",
+   "va": 38240,
+   "gotos": 3
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2.so",
+   "fn": "{closure#0}",
+   "va": 40096,
+   "gotos": 4
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "read_contended",
+   "va": 23120,
+   "gotos": 9
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23472,
+   "gotos": 6
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "{closure#2}",
+   "va": 23696,
+   "gotos": 8
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "rust_panic_caught",
+   "va": 29424,
+   "gotos": 3
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "get_backtrace_style",
+   "va": 38240,
+   "gotos": 3
+  },
+  {
+   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
+   "fn": "{closure#0}",
+   "va": 40096,
+   "gotos": 4
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "lock_contended",
+   "va": 21248,
+   "gotos": 7
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "read_contended",
+   "va": 23040,
+   "gotos": 9
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "wake_writer_or_readers",
+   "va": 23392,
+   "gotos": 6
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "{closure#2}",
+   "va": 23616,
+   "gotos": 8
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_shift_family",
+   "va": 31824,
+   "gotos": 2
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "rust_overflow_matrix",
+   "va": 32352,
+   "gotos": 18
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "get_backtrace_style",
+   "va": 41904,
+   "gotos": 3
+  },
+  {
+   "obj": "171_rust_overflow-rustc-O0.so",
+   "fn": "{closure#0}",
+   "va": 43760,
+   "gotos": 4
+  },
+  {
+   "obj": "174_float_compare_classify-gcc-O0.so",
+   "fn": "unordered_compare_flags",
+   "va": 4593,
+   "gotos": 2
+  },
+  {
+   "obj": "174_float_compare_classify-gcc-O2.so",
+   "fn": "unordered_compare_flags",
+   "va": 4400,
+   "gotos": 7
+  },
+  {
+   "obj": "174_float_compare_classify-gcc-O2strip.dwarf.so",
+   "fn": "unordered_compare_flags",
+   "va": 4400,
+   "gotos": 7
+  },
+  {
+   "obj": "175_float_matrix_kernel-clang-O2.so",
+   "fn": "scale_series_f32",
+   "va": 5152,
+   "gotos": 1
+  },
+  {
+   "obj": "175_float_matrix_kernel-clang-O2strip.dwarf.so",
+   "fn": "scale_series_f32",
+   "va": 5152,
+   "gotos": 1
+  },
+  {
+   "obj": "17_hash_table-clang-O0.so",
+   "fn": "hash_lookup",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "17_hash_table-clang-O0.so",
+   "fn": "hash_insert",
+   "va": 4624,
+   "gotos": 5
+  },
+  {
+   "obj": "17_hash_table-clang-O2.so",
+   "fn": "hash_insert",
+   "va": 4464,
+   "gotos": 1
+  },
+  {
+   "obj": "17_hash_table-clang-O2strip.dwarf.so",
+   "fn": "hash_insert",
+   "va": 4464,
+   "gotos": 1
+  },
+  {
+   "obj": "17_hash_table-gcc-O0.so",
+   "fn": "hash_lookup",
+   "va": 4382,
+   "gotos": 3
+  },
+  {
+   "obj": "17_hash_table-gcc-O0.so",
+   "fn": "hash_insert",
+   "va": 4601,
+   "gotos": 4
+  },
+  {
+   "obj": "182_cold_and_part_splits-clang-O0.so",
+   "fn": "scan_with_two_cold_exits",
+   "va": 4576,
+   "gotos": 1
+  },
+  {
+   "obj": "182_cold_and_part_splits-clang-O0.so",
+   "fn": "mix_with_outlinable_tail",
+   "va": 4896,
+   "gotos": 2
+  },
+  {
+   "obj": "182_cold_and_part_splits-clang-O2.so",
+   "fn": "scan_with_two_cold_exits",
+   "va": 4432,
+   "gotos": 8
+  },
+  {
+   "obj": "182_cold_and_part_splits-clang-O2.so",
+   "fn": "mix_with_outlinable_tail",
+   "va": 4560,
+   "gotos": 2
+  },
+  {
+   "obj": "182_cold_and_part_splits-clang-O2strip.dwarf.so",
+   "fn": "scan_with_two_cold_exits",
+   "va": 4432,
+   "gotos": 8
+  },
+  {
+   "obj": "182_cold_and_part_splits-clang-O2strip.dwarf.so",
+   "fn": "mix_with_outlinable_tail",
+   "va": 4560,
+   "gotos": 2
+  },
+  {
+   "obj": "182_cold_and_part_splits-gcc-O0.so",
+   "fn": "scan_with_two_cold_exits",
+   "va": 4522,
+   "gotos": 3
+  },
+  {
+   "obj": "182_cold_and_part_splits-gcc-O0.so",
+   "fn": "mix_with_outlinable_tail",
+   "va": 4774,
+   "gotos": 2
+  },
+  {
+   "obj": "182_cold_and_part_splits-gcc-O2.so",
+   "fn": "mix_with_outlinable_tail",
+   "va": 4592,
+   "gotos": 2
+  },
+  {
+   "obj": "182_cold_and_part_splits-gcc-O2strip.dwarf.so",
+   "fn": "mix_with_outlinable_tail",
+   "va": 4592,
+   "gotos": 2
+  },
+  {
+   "obj": "183_sentinel_list_search-clang-O0.so",
+   "fn": "find_by_key",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "183_sentinel_list_search-clang-O0.so",
+   "fn": "find_terminated_by_sentinel",
+   "va": 4544,
+   "gotos": 3
+  },
+  {
+   "obj": "183_sentinel_list_search-clang-O0.so",
+   "fn": "find_byte_before_nul",
+   "va": 4720,
+   "gotos": 2
+  },
+  {
+   "obj": "183_sentinel_list_search-clang-O0.so",
+   "fn": "length_to_nul",
+   "va": 4896,
+   "gotos": 2
+  },
+  {
+   "obj": "183_sentinel_list_search-clang-O0.so",
+   "fn": "find_before_either_sentinel",
+   "va": 5008,
+   "gotos": 5
+  },
+  {
+   "obj": "183_sentinel_list_search-gcc-O0.so",
+   "fn": "find_by_key",
+   "va": 4345,
+   "gotos": 2
+  },
+  {
+   "obj": "183_sentinel_list_search-gcc-O0.so",
+   "fn": "find_terminated_by_sentinel",
+   "va": 4464,
+   "gotos": 2
+  },
+  {
+   "obj": "183_sentinel_list_search-gcc-O0.so",
+   "fn": "find_byte_before_nul",
+   "va": 4585,
+   "gotos": 3
+  },
+  {
+   "obj": "183_sentinel_list_search-gcc-O0.so",
+   "fn": "length_to_nul",
+   "va": 4699,
+   "gotos": 3
+  },
+  {
+   "obj": "183_sentinel_list_search-gcc-O0.so",
+   "fn": "find_before_either_sentinel",
+   "va": 4774,
+   "gotos": 3
+  },
+  {
+   "obj": "184_rep_stos_widths-clang-O2.so",
+   "fn": "fill_dwords_and_probe",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "184_rep_stos_widths-clang-O2.so",
+   "fn": "fill_qwords_and_probe",
+   "va": 4576,
+   "gotos": 2
+  },
+  {
+   "obj": "184_rep_stos_widths-clang-O2strip.dwarf.so",
+   "fn": "fill_dwords_and_probe",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "184_rep_stos_widths-clang-O2strip.dwarf.so",
+   "fn": "fill_qwords_and_probe",
+   "va": 4576,
+   "gotos": 2
+  },
+  {
+   "obj": "186_defaultless_guarded_switch-clang-O0.so",
+   "fn": "fallthrough_no_default",
+   "va": 4688,
+   "gotos": 3
+  },
+  {
+   "obj": "186_defaultless_guarded_switch-clang-O2.so",
+   "fn": "loop_switch_no_default",
+   "va": 4512,
+   "gotos": 40
+  },
+  {
+   "obj": "186_defaultless_guarded_switch-clang-O2strip.dwarf.so",
+   "fn": "loop_switch_no_default",
+   "va": 4512,
+   "gotos": 40
+  },
+  {
+   "obj": "186_defaultless_guarded_switch-gcc-O0.so",
+   "fn": "fallthrough_no_default",
+   "va": 4613,
+   "gotos": 3
+  },
+  {
+   "obj": "186_defaultless_guarded_switch-gcc-O2.so",
+   "fn": "loop_switch_no_default",
+   "va": 4592,
+   "gotos": 4
+  },
+  {
+   "obj": "186_defaultless_guarded_switch-gcc-O2strip.dwarf.so",
+   "fn": "loop_switch_no_default",
+   "va": 4592,
+   "gotos": 4
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2.so",
+   "fn": "bias_backward_pair",
+   "va": 4480,
+   "gotos": 1
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2.so",
+   "fn": "adjacent_difference",
+   "va": 4672,
+   "gotos": 1
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2.so",
+   "fn": "value_bias_not_index",
+   "va": 4800,
+   "gotos": 2
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2.so",
+   "fn": "variable_bias",
+   "va": 4976,
+   "gotos": 1
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2strip.dwarf.so",
+   "fn": "bias_backward_pair",
+   "va": 4480,
+   "gotos": 1
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2strip.dwarf.so",
+   "fn": "adjacent_difference",
+   "va": 4672,
+   "gotos": 1
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2strip.dwarf.so",
+   "fn": "value_bias_not_index",
+   "va": 4800,
+   "gotos": 2
+  },
+  {
+   "obj": "187_constant_bias_index-clang-O2strip.dwarf.so",
+   "fn": "variable_bias",
+   "va": 4976,
+   "gotos": 1
+  },
+  {
+   "obj": "188_vector_transport-clang-O2.so",
+   "fn": "vt188_copy_forward",
+   "va": 4352,
+   "gotos": 5
+  },
+  {
+   "obj": "188_vector_transport-clang-O2.so",
+   "fn": "vt188_copy_two_streams",
+   "va": 4720,
+   "gotos": 6
+  },
+  {
+   "obj": "188_vector_transport-clang-O2.so",
+   "fn": "vt188_copy_backward",
+   "va": 5152,
+   "gotos": 4
+  },
+  {
+   "obj": "188_vector_transport-clang-O2.so",
+   "fn": "vt188_lane_math",
+   "va": 5616,
+   "gotos": 3
+  },
+  {
+   "obj": "188_vector_transport-clang-O2strip.dwarf.so",
+   "fn": "vt188_copy_forward",
+   "va": 4352,
+   "gotos": 5
+  },
+  {
+   "obj": "188_vector_transport-clang-O2strip.dwarf.so",
+   "fn": "vt188_copy_two_streams",
+   "va": 4720,
+   "gotos": 6
+  },
+  {
+   "obj": "188_vector_transport-clang-O2strip.dwarf.so",
+   "fn": "vt188_copy_backward",
+   "va": 5152,
+   "gotos": 4
+  },
+  {
+   "obj": "188_vector_transport-clang-O2strip.dwarf.so",
+   "fn": "vt188_lane_math",
+   "va": 5616,
+   "gotos": 3
+  },
+  {
+   "obj": "189_effectful_select-clang-O2.so",
+   "fn": "se189_nested_select",
+   "va": 4512,
+   "gotos": 5
+  },
+  {
+   "obj": "189_effectful_select-clang-O2strip.dwarf.so",
+   "fn": "se189_nested_select",
+   "va": 4512,
+   "gotos": 5
+  },
+  {
+   "obj": "189_effectful_select-gcc-O2.so",
+   "fn": "se189_nested_select",
+   "va": 4560,
+   "gotos": 3
+  },
+  {
+   "obj": "189_effectful_select-gcc-O2strip.dwarf.so",
+   "fn": "se189_nested_select",
+   "va": 4560,
+   "gotos": 3
+  },
+  {
+   "obj": "18_binary_heap-clang-O0.so",
+   "fn": "heap_pop",
+   "va": 4592,
+   "gotos": 5
+  },
+  {
+   "obj": "18_binary_heap-clang-O2.so",
+   "fn": "heap_pop",
+   "va": 4448,
+   "gotos": 3
+  },
+  {
+   "obj": "18_binary_heap-clang-O2strip.dwarf.so",
+   "fn": "heap_pop",
+   "va": 4448,
+   "gotos": 3
+  },
+  {
+   "obj": "18_binary_heap-gcc-O0.so",
+   "fn": "heap_push",
+   "va": 4345,
+   "gotos": 3
+  },
+  {
+   "obj": "18_binary_heap-gcc-O0.so",
+   "fn": "heap_pop",
+   "va": 4633,
+   "gotos": 3
+  },
+  {
+   "obj": "18_binary_heap-gcc-O2.so",
+   "fn": "heap_pop",
+   "va": 4448,
+   "gotos": 8
+  },
+  {
+   "obj": "18_binary_heap-gcc-O2strip.dwarf.so",
+   "fn": "heap_pop",
+   "va": 4448,
+   "gotos": 8
+  },
+  {
+   "obj": "191_indirect_table_args-clang-O0.so",
+   "fn": "t191_dispatch",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "191_indirect_table_args-clang-O0.so",
+   "fn": "t191_computed_args",
+   "va": 4528,
+   "gotos": 1
+  },
+  {
+   "obj": "191_indirect_table_args-clang-O0.so",
+   "fn": "t191_fold",
+   "va": 4720,
+   "gotos": 1
+  },
+  {
+   "obj": "191_indirect_table_args-gcc-O0.so",
+   "fn": "t191_dispatch",
+   "va": 4638,
+   "gotos": 1
+  },
+  {
+   "obj": "191_indirect_table_args-gcc-O0.so",
+   "fn": "t191_computed_args",
+   "va": 4797,
+   "gotos": 1
+  },
+  {
+   "obj": "192_pointer_chased_list-clang-O0.so",
+   "fn": "l192_find_key",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "192_pointer_chased_list-clang-O0.so",
+   "fn": "l192_chase_keys",
+   "va": 4448,
+   "gotos": 3
+  },
+  {
+   "obj": "192_pointer_chased_list-clang-O0.so",
+   "fn": "l192_scan_index_control",
+   "va": 4848,
+   "gotos": 4
+  },
+  {
+   "obj": "192_pointer_chased_list-gcc-O0.so",
+   "fn": "l192_find_key",
+   "va": 4345,
+   "gotos": 2
+  },
+  {
+   "obj": "192_pointer_chased_list-gcc-O0.so",
+   "fn": "l192_sum_until_key",
+   "va": 4537,
+   "gotos": 2
+  },
+  {
+   "obj": "192_pointer_chased_list-gcc-O0.so",
+   "fn": "l192_scan_index_control",
+   "va": 4727,
+   "gotos": 3
+  },
+  {
+   "obj": "193_mapped_constant_roles-clang-O0.so",
+   "fn": "mc193_names_differ",
+   "va": 4608,
+   "gotos": 2
+  },
+  {
+   "obj": "193_mapped_constant_roles-gcc-O0.so",
+   "fn": "mc193_names_differ",
+   "va": 4619,
+   "gotos": 2
+  },
+  {
+   "obj": "193_mapped_constant_roles-gcc-O2.so",
+   "fn": "mc193_names_differ",
+   "va": 4528,
+   "gotos": 7
+  },
+  {
+   "obj": "193_mapped_constant_roles-gcc-O2strip.dwarf.so",
+   "fn": "mc193_names_differ",
+   "va": 4528,
+   "gotos": 7
+  },
+  {
+   "obj": "199_pointer_return_kinds-clang-O0.so",
+   "fn": "ptr199_find_i32",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "199_pointer_return_kinds-clang-O0.so",
+   "fn": "ptr199_find_void",
+   "va": 4496,
+   "gotos": 3
+  },
+  {
+   "obj": "199_pointer_return_kinds-clang-O0.so",
+   "fn": "ptr199_find_const",
+   "va": 4640,
+   "gotos": 3
+  },
+  {
+   "obj": "199_pointer_return_kinds-clang-O0.so",
+   "fn": "ptr199_find_index",
+   "va": 4896,
+   "gotos": 3
+  },
+  {
+   "obj": "199_pointer_return_kinds-clang-O2.so",
+   "fn": "ptr199_edge_element",
+   "va": 4592,
+   "gotos": 3
+  },
+  {
+   "obj": "199_pointer_return_kinds-clang-O2strip.dwarf.so",
+   "fn": "ptr199_edge_element",
+   "va": 4592,
+   "gotos": 3
+  },
+  {
+   "obj": "199_pointer_return_kinds-gcc-O0.so",
+   "fn": "ptr199_find_i32",
+   "va": 4345,
+   "gotos": 2
+  },
+  {
+   "obj": "199_pointer_return_kinds-gcc-O0.so",
+   "fn": "ptr199_find_void",
+   "va": 4454,
+   "gotos": 2
+  },
+  {
+   "obj": "199_pointer_return_kinds-gcc-O0.so",
+   "fn": "ptr199_find_const",
+   "va": 4563,
+   "gotos": 2
+  },
+  {
+   "obj": "199_pointer_return_kinds-gcc-O0.so",
+   "fn": "ptr199_find_index",
+   "va": 4754,
+   "gotos": 2
+  },
+  {
+   "obj": "19_disjoint_set-clang-O0.so",
+   "fn": "dsu_find",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "19_disjoint_set-clang-O2.so",
+   "fn": "dsu_union",
+   "va": 4496,
+   "gotos": 13
+  },
+  {
+   "obj": "19_disjoint_set-clang-O2strip.dwarf.so",
+   "fn": "dsu_union",
+   "va": 4496,
+   "gotos": 13
+  },
+  {
+   "obj": "19_disjoint_set-gcc-O0.so",
+   "fn": "find_root",
+   "va": 4345,
+   "gotos": 4
+  },
+  {
+   "obj": "19_disjoint_set-gcc-O2.so",
+   "fn": "dsu_union",
+   "va": 4464,
+   "gotos": 13
+  },
+  {
+   "obj": "19_disjoint_set-gcc-O2strip.dwarf.so",
+   "fn": "dsu_union",
+   "va": 4464,
+   "gotos": 13
+  },
+  {
+   "obj": "206_aarch64_wide_dispatch-clang-O0.so",
+   "fn": "dispatch_in_loop",
+   "va": 4816,
+   "gotos": 6
+  },
+  {
+   "obj": "206_aarch64_wide_dispatch-clang-O2.so",
+   "fn": "dispatch_in_loop",
+   "va": 4544,
+   "gotos": 2
+  },
+  {
+   "obj": "206_aarch64_wide_dispatch-clang-O2strip.dwarf.so",
+   "fn": "dispatch_in_loop",
+   "va": 4544,
+   "gotos": 2
+  },
+  {
+   "obj": "206_aarch64_wide_dispatch-gcc-O0.so",
+   "fn": "dispatch_in_loop",
+   "va": 4712,
+   "gotos": 6
+  },
+  {
+   "obj": "206_aarch64_wide_dispatch-gcc-O2.so",
+   "fn": "dispatch_in_loop",
+   "va": 4656,
+   "gotos": 9
+  },
+  {
+   "obj": "206_aarch64_wide_dispatch-gcc-O2strip.dwarf.so",
+   "fn": "dispatch_in_loop",
+   "va": 4656,
+   "gotos": 9
+  },
+  {
+   "obj": "207_scaled_index_addressing-clang-O2.so",
+   "fn": "word_stride_sum",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "207_scaled_index_addressing-clang-O2.so",
+   "fn": "quad_stride_sum",
+   "va": 4496,
+   "gotos": 1
+  },
+  {
+   "obj": "207_scaled_index_addressing-clang-O2.so",
+   "fn": "byte_stride_unscaled",
+   "va": 4848,
+   "gotos": 1
+  },
+  {
+   "obj": "207_scaled_index_addressing-clang-O2strip.dwarf.so",
+   "fn": "word_stride_sum",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "207_scaled_index_addressing-clang-O2strip.dwarf.so",
+   "fn": "quad_stride_sum",
+   "va": 4496,
+   "gotos": 1
+  },
+  {
+   "obj": "207_scaled_index_addressing-clang-O2strip.dwarf.so",
+   "fn": "byte_stride_unscaled",
+   "va": 4848,
+   "gotos": 1
+  },
+  {
+   "obj": "20_graph_bfs-clang-O2.so",
+   "fn": "graph_bfs",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "20_graph_bfs-clang-O2strip.dwarf.so",
+   "fn": "graph_bfs",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "20_graph_bfs-gcc-O2.so",
+   "fn": "graph_bfs",
+   "va": 4384,
+   "gotos": 7
+  },
+  {
+   "obj": "20_graph_bfs-gcc-O2strip.dwarf.so",
+   "fn": "graph_bfs",
+   "va": 4384,
+   "gotos": 7
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O0.so",
+   "fn": "two_returning_arms",
+   "va": 4656,
+   "gotos": 12
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O0.so",
+   "fn": "nested_loop_returning_arm",
+   "va": 4896,
+   "gotos": 14
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2.so",
+   "fn": "fsm_returns_from_arm",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2.so",
+   "fn": "two_returning_arms",
+   "va": 4512,
+   "gotos": 8
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2.so",
+   "fn": "nested_loop_returning_arm",
+   "va": 4608,
+   "gotos": 42
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2.so",
+   "fn": "all_arms_break",
+   "va": 5136,
+   "gotos": 6
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2strip.dwarf.so",
+   "fn": "fsm_returns_from_arm",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2strip.dwarf.so",
+   "fn": "two_returning_arms",
+   "va": 4512,
+   "gotos": 8
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2strip.dwarf.so",
+   "fn": "nested_loop_returning_arm",
+   "va": 4608,
+   "gotos": 42
+  },
+  {
+   "obj": "212_loop_with_returning_arm-clang-O2strip.dwarf.so",
+   "fn": "all_arms_break",
+   "va": 5136,
+   "gotos": 6
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O0.so",
+   "fn": "fsm_returns_from_arm",
+   "va": 4345,
+   "gotos": 5
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O0.so",
+   "fn": "two_returning_arms",
+   "va": 4566,
+   "gotos": 9
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O0.so",
+   "fn": "nested_loop_returning_arm",
+   "va": 4713,
+   "gotos": 11
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O0.so",
+   "fn": "all_arms_break",
+   "va": 4899,
+   "gotos": 1
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2.so",
+   "fn": "fsm_returns_from_arm",
+   "va": 4352,
+   "gotos": 11
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2.so",
+   "fn": "two_returning_arms",
+   "va": 4464,
+   "gotos": 11
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2.so",
+   "fn": "nested_loop_returning_arm",
+   "va": 4592,
+   "gotos": 5
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2.so",
+   "fn": "all_arms_break",
+   "va": 4720,
+   "gotos": 8
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2strip.dwarf.so",
+   "fn": "fsm_returns_from_arm",
+   "va": 4352,
+   "gotos": 11
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2strip.dwarf.so",
+   "fn": "two_returning_arms",
+   "va": 4464,
+   "gotos": 11
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2strip.dwarf.so",
+   "fn": "nested_loop_returning_arm",
+   "va": 4592,
+   "gotos": 5
+  },
+  {
+   "obj": "212_loop_with_returning_arm-gcc-O2strip.dwarf.so",
+   "fn": "all_arms_break",
+   "va": 4720,
+   "gotos": 8
+  },
+  {
+   "obj": "213_arm_predicated_execution-gcc-O2.so",
+   "fn": "branchless_classify",
+   "va": 4512,
+   "gotos": 2
+  },
+  {
+   "obj": "213_arm_predicated_execution-gcc-O2strip.dwarf.so",
+   "fn": "branchless_classify",
+   "va": 4512,
+   "gotos": 2
+  },
+  {
+   "obj": "218_cpp_lambdas_and_callables-gcc-O2.so",
+   "fn": "capture_by_reference",
+   "va": 4416,
+   "gotos": 3
+  },
+  {
+   "obj": "218_cpp_lambdas_and_callables-gcc-O2.so",
+   "fn": "mixed_capture",
+   "va": 4496,
+   "gotos": 3
+  },
+  {
+   "obj": "218_cpp_lambdas_and_callables-gcc-O2.so",
+   "fn": "erased_callable",
+   "va": 4560,
+   "gotos": 3
+  },
+  {
+   "obj": "218_cpp_lambdas_and_callables-gcc-O2strip.dwarf.so",
+   "fn": "capture_by_reference",
+   "va": 4416,
+   "gotos": 3
+  },
+  {
+   "obj": "218_cpp_lambdas_and_callables-gcc-O2strip.dwarf.so",
+   "fn": "mixed_capture",
+   "va": 4496,
+   "gotos": 3
+  },
+  {
+   "obj": "218_cpp_lambdas_and_callables-gcc-O2strip.dwarf.so",
+   "fn": "erased_callable",
+   "va": 4560,
+   "gotos": 3
+  },
+  {
+   "obj": "21_graph_dfs-gcc-O2.so",
+   "fn": "graph_dfs",
+   "va": 4384,
+   "gotos": 7
+  },
+  {
+   "obj": "21_graph_dfs-gcc-O2strip.dwarf.so",
+   "fn": "graph_dfs",
+   "va": 4384,
+   "gotos": 7
+  },
+  {
+   "obj": "22_dijkstra-clang-O0.so",
+   "fn": "dijkstra_dense",
+   "va": 4368,
+   "gotos": 15
+  },
+  {
+   "obj": "22_dijkstra-clang-O2.so",
+   "fn": "dijkstra_dense",
+   "va": 4352,
+   "gotos": 19
+  },
+  {
+   "obj": "22_dijkstra-clang-O2strip.dwarf.so",
+   "fn": "dijkstra_dense",
+   "va": 4352,
+   "gotos": 19
+  },
+  {
+   "obj": "22_dijkstra-gcc-O2.so",
+   "fn": "dijkstra_dense",
+   "va": 4384,
+   "gotos": 17
+  },
+  {
+   "obj": "22_dijkstra-gcc-O2strip.dwarf.so",
+   "fn": "dijkstra_dense",
+   "va": 4384,
+   "gotos": 17
+  },
+  {
+   "obj": "23_topological_sort-gcc-O2.so",
+   "fn": "topological_sort",
+   "va": 4384,
+   "gotos": 8
+  },
+  {
+   "obj": "23_topological_sort-gcc-O2strip.dwarf.so",
+   "fn": "topological_sort",
+   "va": 4384,
+   "gotos": 8
+  },
+  {
+   "obj": "24_merge_sort-clang-O0.so",
+   "fn": "merge_sort_i32",
+   "va": 4352,
+   "gotos": 19
+  },
+  {
+   "obj": "24_merge_sort-clang-O2.so",
+   "fn": "merge_sort_i32",
+   "va": 4368,
+   "gotos": 3
+  },
+  {
+   "obj": "24_merge_sort-clang-O2strip.dwarf.so",
+   "fn": "merge_sort_i32",
+   "va": 4368,
+   "gotos": 3
+  },
+  {
+   "obj": "24_merge_sort-gcc-O2.so",
+   "fn": "merge_sort_i32",
+   "va": 4416,
+   "gotos": 17
+  },
+  {
+   "obj": "24_merge_sort-gcc-O2strip.dwarf.so",
+   "fn": "merge_sort_i32",
+   "va": 4416,
+   "gotos": 17
+  },
+  {
+   "obj": "25_kmp_search-clang-O0.so",
+   "fn": "kmp_search",
+   "va": 4352,
+   "gotos": 10
+  },
+  {
+   "obj": "25_kmp_search-clang-O2.so",
+   "fn": "kmp_search",
+   "va": 4352,
+   "gotos": 12
+  },
+  {
+   "obj": "25_kmp_search-clang-O2strip.dwarf.so",
+   "fn": "kmp_search",
+   "va": 4352,
+   "gotos": 12
+  },
+  {
+   "obj": "25_kmp_search-gcc-O0.so",
+   "fn": "kmp_search",
+   "va": 4377,
+   "gotos": 10
+  },
+  {
+   "obj": "25_kmp_search-gcc-O2.so",
+   "fn": "kmp_search",
+   "va": 4384,
+   "gotos": 25
+  },
+  {
+   "obj": "25_kmp_search-gcc-O2strip.dwarf.so",
+   "fn": "kmp_search",
+   "va": 4384,
+   "gotos": 25
+  },
+  {
+   "obj": "26_sparse_matrix-clang-O2.so",
+   "fn": "csr_matvec",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "26_sparse_matrix-clang-O2strip.dwarf.so",
+   "fn": "csr_matvec",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "27_newton_raphson-clang-O0.so",
+   "fn": "newton_isqrt",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "27_newton_raphson-gcc-O0.so",
+   "fn": "newton_isqrt",
+   "va": 4345,
+   "gotos": 2
+  },
+  {
+   "obj": "28_euler_ode-clang-O2.so",
+   "fn": "euler_decay_q16",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "28_euler_ode-clang-O2strip.dwarf.so",
+   "fn": "euler_decay_q16",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "30_finite_difference-clang-O2.so",
+   "fn": "heat_step_1d",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "30_finite_difference-clang-O2strip.dwarf.so",
+   "fn": "heat_step_1d",
+   "va": 4352,
+   "gotos": 1
+  },
+  {
+   "obj": "30_finite_difference-gcc-O2.so",
+   "fn": "heat_step_1d",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "30_finite_difference-gcc-O2strip.dwarf.so",
+   "fn": "heat_step_1d",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "31_edit_distance-clang-O2.so",
+   "fn": "edit_distance",
+   "va": 4352,
+   "gotos": 19
+  },
+  {
+   "obj": "31_edit_distance-clang-O2strip.dwarf.so",
+   "fn": "edit_distance",
+   "va": 4352,
+   "gotos": 19
+  },
+  {
+   "obj": "31_edit_distance-gcc-O2.so",
+   "fn": "edit_distance",
+   "va": 4384,
+   "gotos": 3
+  },
+  {
+   "obj": "31_edit_distance-gcc-O2strip.dwarf.so",
+   "fn": "edit_distance",
+   "va": 4384,
+   "gotos": 3
+  },
+  {
+   "obj": "32_longest_common_subsequence-clang-O0.so",
+   "fn": "lcs_recover",
+   "va": 4896,
+   "gotos": 18
+  },
+  {
+   "obj": "32_longest_common_subsequence-clang-O2.so",
+   "fn": "lcs_recover",
+   "va": 4576,
+   "gotos": 25
+  },
+  {
+   "obj": "32_longest_common_subsequence-clang-O2strip.dwarf.so",
+   "fn": "lcs_recover",
+   "va": 4576,
+   "gotos": 25
+  },
+  {
+   "obj": "32_longest_common_subsequence-gcc-O2.so",
+   "fn": "lcs_length",
+   "va": 4384,
+   "gotos": 12
+  },
+  {
+   "obj": "32_longest_common_subsequence-gcc-O2.so",
+   "fn": "lcs_recover",
+   "va": 4688,
+   "gotos": 25
+  },
+  {
+   "obj": "32_longest_common_subsequence-gcc-O2strip.dwarf.so",
+   "fn": "lcs_length",
+   "va": 4384,
+   "gotos": 12
+  },
+  {
+   "obj": "32_longest_common_subsequence-gcc-O2strip.dwarf.so",
+   "fn": "lcs_recover",
+   "va": 4688,
+   "gotos": 25
+  },
+  {
+   "obj": "33_knapsack-clang-O0.so",
+   "fn": "knapsack_best_value",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "33_knapsack-clang-O2.so",
+   "fn": "knapsack_best_value",
+   "va": 4368,
+   "gotos": 7
+  },
+  {
+   "obj": "33_knapsack-clang-O2strip.dwarf.so",
+   "fn": "knapsack_best_value",
+   "va": 4368,
+   "gotos": 7
+  },
+  {
+   "obj": "33_knapsack-gcc-O2.so",
+   "fn": "knapsack_best_value",
+   "va": 4384,
+   "gotos": 3
+  },
+  {
+   "obj": "33_knapsack-gcc-O2.so",
+   "fn": "unbounded_knapsack",
+   "va": 4688,
+   "gotos": 17
+  },
+  {
+   "obj": "33_knapsack-gcc-O2strip.dwarf.so",
+   "fn": "knapsack_best_value",
+   "va": 4384,
+   "gotos": 3
+  },
+  {
+   "obj": "33_knapsack-gcc-O2strip.dwarf.so",
+   "fn": "unbounded_knapsack",
+   "va": 4688,
+   "gotos": 17
+  },
+  {
+   "obj": "34_coin_change-clang-O0.so",
+   "fn": "count_change",
+   "va": 4816,
+   "gotos": 1
+  },
+  {
+   "obj": "34_coin_change-clang-O2.so",
+   "fn": "min_coins",
+   "va": 4368,
+   "gotos": 1
+  },
+  {
+   "obj": "34_coin_change-clang-O2.so",
+   "fn": "count_change",
+   "va": 4784,
+   "gotos": 7
+  },
+  {
+   "obj": "34_coin_change-clang-O2strip.dwarf.so",
+   "fn": "min_coins",
+   "va": 4368,
+   "gotos": 1
+  },
+  {
+   "obj": "34_coin_change-clang-O2strip.dwarf.so",
+   "fn": "count_change",
+   "va": 4784,
+   "gotos": 7
+  },
+  {
+   "obj": "34_coin_change-gcc-O2.so",
+   "fn": "min_coins",
+   "va": 4416,
+   "gotos": 2
+  },
+  {
+   "obj": "34_coin_change-gcc-O2.so",
+   "fn": "count_change",
+   "va": 4704,
+   "gotos": 1
+  },
+  {
+   "obj": "34_coin_change-gcc-O2strip.dwarf.so",
+   "fn": "min_coins",
+   "va": 4416,
+   "gotos": 2
+  },
+  {
+   "obj": "34_coin_change-gcc-O2strip.dwarf.so",
+   "fn": "count_change",
+   "va": 4704,
+   "gotos": 1
+  },
+  {
+   "obj": "35_matrix_chain-clang-O0.so",
+   "fn": "matrix_chain_cost",
+   "va": 4352,
+   "gotos": 17
+  },
+  {
+   "obj": "35_matrix_chain-clang-O2.so",
+   "fn": "matrix_chain_cost",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "35_matrix_chain-clang-O2strip.dwarf.so",
+   "fn": "matrix_chain_cost",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "35_matrix_chain-gcc-O0.so",
+   "fn": "matrix_chain_cost",
+   "va": 4377,
+   "gotos": 16
+  },
+  {
+   "obj": "35_matrix_chain-gcc-O2.so",
+   "fn": "matrix_chain_cost",
+   "va": 4384,
+   "gotos": 12
+  },
+  {
+   "obj": "35_matrix_chain-gcc-O2strip.dwarf.so",
+   "fn": "matrix_chain_cost",
+   "va": 4384,
+   "gotos": 12
+  },
+  {
+   "obj": "36_quicksort-clang-O0.so",
+   "fn": "quicksort_i32",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "36_quicksort-gcc-O0.so",
+   "fn": "quicksort_i32",
+   "va": 4743,
+   "gotos": 3
+  },
+  {
+   "obj": "37_heapsort-clang-O0.so",
+   "fn": "heapsort_i32",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "37_heapsort-clang-O2.so",
+   "fn": "heapsort_i32",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "37_heapsort-clang-O2strip.dwarf.so",
+   "fn": "heapsort_i32",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "37_heapsort-gcc-O0.so",
+   "fn": "sift_down",
+   "va": 4345,
+   "gotos": 2
+  },
+  {
+   "obj": "37_heapsort-gcc-O0.so",
+   "fn": "heapsort_i32",
+   "va": 4653,
+   "gotos": 7
+  },
+  {
+   "obj": "37_heapsort-gcc-O2.so",
+   "fn": "sift_down",
+   "va": 4352,
+   "gotos": 9
+  },
+  {
+   "obj": "37_heapsort-gcc-O2strip.dwarf.so",
+   "fn": "sift_down",
+   "va": 4352,
+   "gotos": 9
+  },
+  {
+   "obj": "38_insertion_shell_sort-clang-O0.so",
+   "fn": "insertion_sort_i32",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "38_insertion_shell_sort-clang-O0.so",
+   "fn": "shell_sort_i32",
+   "va": 4592,
+   "gotos": 12
+  },
+  {
+   "obj": "38_insertion_shell_sort-clang-O2.so",
+   "fn": "shell_sort_i32",
+   "va": 4464,
+   "gotos": 2
+  },
+  {
+   "obj": "38_insertion_shell_sort-clang-O2strip.dwarf.so",
+   "fn": "shell_sort_i32",
+   "va": 4464,
+   "gotos": 2
+  },
+  {
+   "obj": "38_insertion_shell_sort-gcc-O0.so",
+   "fn": "shell_sort_i32",
+   "va": 4573,
+   "gotos": 10
+  },
+  {
+   "obj": "38_insertion_shell_sort-gcc-O2.so",
+   "fn": "insertion_sort_i32",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "38_insertion_shell_sort-gcc-O2.so",
+   "fn": "shell_sort_i32",
+   "va": 4480,
+   "gotos": 15
+  },
+  {
+   "obj": "38_insertion_shell_sort-gcc-O2strip.dwarf.so",
+   "fn": "insertion_sort_i32",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "38_insertion_shell_sort-gcc-O2strip.dwarf.so",
+   "fn": "shell_sort_i32",
+   "va": 4480,
+   "gotos": 15
+  },
+  {
+   "obj": "39_counting_radix_sort-clang-O0.so",
+   "fn": "counting_sort_u8",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "39_counting_radix_sort-clang-O2.so",
+   "fn": "radix_sort_u32",
+   "va": 4720,
+   "gotos": 4
+  },
+  {
+   "obj": "39_counting_radix_sort-clang-O2strip.dwarf.so",
+   "fn": "radix_sort_u32",
+   "va": 4720,
+   "gotos": 4
+  },
+  {
+   "obj": "39_counting_radix_sort-gcc-O2.so",
+   "fn": "counting_sort_u8",
+   "va": 4416,
+   "gotos": 1
+  },
+  {
+   "obj": "39_counting_radix_sort-gcc-O2.so",
+   "fn": "radix_sort_u32",
+   "va": 4656,
+   "gotos": 1
+  },
+  {
+   "obj": "39_counting_radix_sort-gcc-O2strip.dwarf.so",
+   "fn": "counting_sort_u8",
+   "va": 4416,
+   "gotos": 1
+  },
+  {
+   "obj": "39_counting_radix_sort-gcc-O2strip.dwarf.so",
+   "fn": "radix_sort_u32",
+   "va": 4656,
+   "gotos": 1
+  },
+  {
+   "obj": "40_quickselect-clang-O0.so",
+   "fn": "quickselect_kth",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "40_quickselect-clang-O0.so",
+   "fn": "median_of_three",
+   "va": 4784,
+   "gotos": 6
+  },
+  {
+   "obj": "40_quickselect-clang-O2.so",
+   "fn": "quickselect_kth",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "40_quickselect-clang-O2.so",
+   "fn": "median_of_three",
+   "va": 4624,
+   "gotos": 3
+  },
+  {
+   "obj": "40_quickselect-clang-O2strip.dwarf.so",
+   "fn": "quickselect_kth",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "40_quickselect-clang-O2strip.dwarf.so",
+   "fn": "median_of_three",
+   "va": 4624,
+   "gotos": 3
+  },
+  {
+   "obj": "40_quickselect-gcc-O0.so",
+   "fn": "quickselect_kth",
+   "va": 4345,
+   "gotos": 6
+  },
+  {
+   "obj": "40_quickselect-gcc-O0.so",
+   "fn": "median_of_three",
+   "va": 4794,
+   "gotos": 3
+  },
+  {
+   "obj": "40_quickselect-gcc-O2.so",
+   "fn": "quickselect_kth",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "40_quickselect-gcc-O2.so",
+   "fn": "median_of_three",
+   "va": 4576,
+   "gotos": 7
+  },
+  {
+   "obj": "40_quickselect-gcc-O2strip.dwarf.so",
+   "fn": "quickselect_kth",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "40_quickselect-gcc-O2strip.dwarf.so",
+   "fn": "median_of_three",
+   "va": 4576,
+   "gotos": 7
+  },
+  {
+   "obj": "41_tokenizer-gcc-O2.so",
+   "fn": "tokenize",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "41_tokenizer-gcc-O2strip.dwarf.so",
+   "fn": "tokenize",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "42_rpn_evaluator-clang-O0.so",
+   "fn": "rpn_evaluate",
+   "va": 4352,
+   "gotos": 17
+  },
+  {
+   "obj": "42_rpn_evaluator-clang-O2.so",
+   "fn": "rpn_evaluate",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "42_rpn_evaluator-clang-O2strip.dwarf.so",
+   "fn": "rpn_evaluate",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "42_rpn_evaluator-gcc-O0.so",
+   "fn": "rpn_evaluate",
+   "va": 4377,
+   "gotos": 21
+  },
+  {
+   "obj": "42_rpn_evaluator-gcc-O2.so",
+   "fn": "rpn_evaluate",
+   "va": 4384,
+   "gotos": 26
+  },
+  {
+   "obj": "42_rpn_evaluator-gcc-O2strip.dwarf.so",
+   "fn": "rpn_evaluate",
+   "va": 4384,
+   "gotos": 26
+  },
+  {
+   "obj": "43_base64-clang-O0.so",
+   "fn": "base64_decode",
+   "va": 4912,
+   "gotos": 5
+  },
+  {
+   "obj": "43_base64-clang-O2.so",
+   "fn": "base64_encode",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "43_base64-clang-O2.so",
+   "fn": "base64_decode",
+   "va": 4816,
+   "gotos": 16
+  },
+  {
+   "obj": "43_base64-clang-O2strip.dwarf.so",
+   "fn": "base64_encode",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "43_base64-clang-O2strip.dwarf.so",
+   "fn": "base64_decode",
+   "va": 4816,
+   "gotos": 16
+  },
+  {
+   "obj": "43_base64-gcc-O0.so",
+   "fn": "base64_decode",
+   "va": 4894,
+   "gotos": 4
+  },
+  {
+   "obj": "43_base64-gcc-O2.so",
+   "fn": "base64_encode",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "43_base64-gcc-O2.so",
+   "fn": "base64_decode",
+   "va": 4960,
+   "gotos": 51
+  },
+  {
+   "obj": "43_base64-gcc-O2strip.dwarf.so",
+   "fn": "base64_encode",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "43_base64-gcc-O2strip.dwarf.so",
+   "fn": "base64_decode",
+   "va": 4960,
+   "gotos": 51
+  },
+  {
+   "obj": "44_run_length-clang-O0.so",
+   "fn": "rle_encode",
+   "va": 4352,
+   "gotos": 5
+  },
+  {
+   "obj": "44_run_length-clang-O0.so",
+   "fn": "rle_decode",
+   "va": 4704,
+   "gotos": 5
+  },
+  {
+   "obj": "44_run_length-clang-O2.so",
+   "fn": "rle_encode",
+   "va": 4368,
+   "gotos": 4
+  },
+  {
+   "obj": "44_run_length-clang-O2.so",
+   "fn": "rle_decode",
+   "va": 4576,
+   "gotos": 3
+  },
+  {
+   "obj": "44_run_length-clang-O2strip.dwarf.so",
+   "fn": "rle_encode",
+   "va": 4368,
+   "gotos": 4
+  },
+  {
+   "obj": "44_run_length-clang-O2strip.dwarf.so",
+   "fn": "rle_decode",
+   "va": 4576,
+   "gotos": 3
+  },
+  {
+   "obj": "44_run_length-gcc-O0.so",
+   "fn": "rle_encode",
+   "va": 4345,
+   "gotos": 4
+  },
+  {
+   "obj": "44_run_length-gcc-O0.so",
+   "fn": "rle_decode",
+   "va": 4598,
+   "gotos": 5
+  },
+  {
+   "obj": "44_run_length-gcc-O2.so",
+   "fn": "rle_encode",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "44_run_length-gcc-O2.so",
+   "fn": "rle_decode",
+   "va": 4560,
+   "gotos": 20
+  },
+  {
+   "obj": "44_run_length-gcc-O2strip.dwarf.so",
+   "fn": "rle_encode",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "44_run_length-gcc-O2strip.dwarf.so",
+   "fn": "rle_decode",
+   "va": 4560,
+   "gotos": 20
+  },
+  {
+   "obj": "45_string_algorithms-clang-O0.so",
+   "fn": "parse_decimal",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "45_string_algorithms-clang-O0.so",
+   "fn": "format_decimal",
+   "va": 4784,
+   "gotos": 3
+  },
+  {
+   "obj": "45_string_algorithms-clang-O0.so",
+   "fn": "is_palindrome",
+   "va": 5136,
+   "gotos": 2
+  },
+  {
+   "obj": "45_string_algorithms-clang-O2.so",
+   "fn": "parse_decimal",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "45_string_algorithms-clang-O2.so",
+   "fn": "format_decimal",
+   "va": 4528,
+   "gotos": 1
+  },
+  {
+   "obj": "45_string_algorithms-clang-O2strip.dwarf.so",
+   "fn": "parse_decimal",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "45_string_algorithms-clang-O2strip.dwarf.so",
+   "fn": "format_decimal",
+   "va": 4528,
+   "gotos": 1
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O0.so",
+   "fn": "parse_decimal",
+   "va": 4377,
+   "gotos": 6
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O0.so",
+   "fn": "format_decimal",
+   "va": 4717,
+   "gotos": 8
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O0.so",
+   "fn": "is_palindrome",
+   "va": 5037,
+   "gotos": 3
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O2.so",
+   "fn": "parse_decimal",
+   "va": 4384,
+   "gotos": 13
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O2.so",
+   "fn": "format_decimal",
+   "va": 4624,
+   "gotos": 3
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O2strip.dwarf.so",
+   "fn": "parse_decimal",
+   "va": 4384,
+   "gotos": 13
+  },
+  {
+   "obj": "45_string_algorithms-gcc-O2strip.dwarf.so",
+   "fn": "format_decimal",
+   "va": 4624,
+   "gotos": 3
+  },
+  {
+   "obj": "46_bitset-clang-O0.so",
+   "fn": "bitset_select",
+   "va": 4864,
+   "gotos": 4
+  },
+  {
+   "obj": "46_bitset-clang-O2.so",
+   "fn": "bitset_select",
+   "va": 5664,
+   "gotos": 3
+  },
+  {
+   "obj": "46_bitset-clang-O2strip.dwarf.so",
+   "fn": "bitset_select",
+   "va": 5664,
+   "gotos": 3
+  },
+  {
+   "obj": "46_bitset-gcc-O0.so",
+   "fn": "bitset_select",
+   "va": 4774,
+   "gotos": 3
+  },
+  {
+   "obj": "47_huffman-clang-O0.so",
+   "fn": "huffman_code_lengths",
+   "va": 4352,
+   "gotos": 20
+  },
+  {
+   "obj": "47_huffman-clang-O2.so",
+   "fn": "huffman_code_lengths",
+   "va": 4352,
+   "gotos": 28
+  },
+  {
+   "obj": "47_huffman-clang-O2strip.dwarf.so",
+   "fn": "huffman_code_lengths",
+   "va": 4352,
+   "gotos": 28
+  },
+  {
+   "obj": "47_huffman-gcc-O0.so",
+   "fn": "huffman_code_lengths",
+   "va": 4377,
+   "gotos": 23
+  },
+  {
+   "obj": "47_huffman-gcc-O2.so",
+   "fn": "huffman_code_lengths",
+   "va": 4384,
+   "gotos": 23
+  },
+  {
+   "obj": "47_huffman-gcc-O2strip.dwarf.so",
+   "fn": "huffman_code_lengths",
+   "va": 4384,
+   "gotos": 23
+  },
+  {
+   "obj": "49_crc32-clang-O2.so",
+   "fn": "internet_checksum",
+   "va": 4992,
+   "gotos": 2
+  },
+  {
+   "obj": "49_crc32-clang-O2strip.dwarf.so",
+   "fn": "internet_checksum",
+   "va": 4992,
+   "gotos": 2
+  },
+  {
+   "obj": "49_crc32-gcc-O2.so",
+   "fn": "internet_checksum",
+   "va": 4688,
+   "gotos": 7
+  },
+  {
+   "obj": "49_crc32-gcc-O2strip.dwarf.so",
+   "fn": "internet_checksum",
+   "va": 4688,
+   "gotos": 7
+  },
+  {
+   "obj": "50_varint-clang-O0.so",
+   "fn": "varint_encode",
+   "va": 4416,
+   "gotos": 3
+  },
+  {
+   "obj": "50_varint-clang-O0.so",
+   "fn": "varint_decode",
+   "va": 4608,
+   "gotos": 4
+  },
+  {
+   "obj": "50_varint-clang-O2.so",
+   "fn": "varint_decode",
+   "va": 4480,
+   "gotos": 5
+  },
+  {
+   "obj": "50_varint-clang-O2strip.dwarf.so",
+   "fn": "varint_decode",
+   "va": 4480,
+   "gotos": 5
+  },
+  {
+   "obj": "50_varint-gcc-O0.so",
+   "fn": "varint_encode",
+   "va": 4402,
+   "gotos": 2
+  },
+  {
+   "obj": "50_varint-gcc-O0.so",
+   "fn": "varint_decode",
+   "va": 4525,
+   "gotos": 3
+  },
+  {
+   "obj": "51_rc4-gcc-O2.so",
+   "fn": "rc4_keystream_checksum",
+   "va": 4384,
+   "gotos": 3
+  },
+  {
+   "obj": "51_rc4-gcc-O2strip.dwarf.so",
+   "fn": "rc4_keystream_checksum",
+   "va": 4384,
+   "gotos": 3
+  },
+  {
+   "obj": "53_pseudorandom-clang-O0.so",
+   "fn": "bounded_sample",
+   "va": 4512,
+   "gotos": 3
+  },
+  {
+   "obj": "53_pseudorandom-gcc-O2.so",
+   "fn": "bounded_sample",
+   "va": 4480,
+   "gotos": 7
+  },
+  {
+   "obj": "53_pseudorandom-gcc-O2strip.dwarf.so",
+   "fn": "bounded_sample",
+   "va": 4480,
+   "gotos": 7
+  },
+  {
+   "obj": "55_modular_arithmetic-clang-O0.so",
+   "fn": "gcd_i32",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "55_modular_arithmetic-clang-O0.so",
+   "fn": "extended_gcd",
+   "va": 4496,
+   "gotos": 2
+  },
+  {
+   "obj": "55_modular_arithmetic-clang-O0.so",
+   "fn": "mod_pow",
+   "va": 4816,
+   "gotos": 2
+  },
+  {
+   "obj": "55_modular_arithmetic-clang-O2.so",
+   "fn": "mod_pow",
+   "va": 4560,
+   "gotos": 4
+  },
+  {
+   "obj": "55_modular_arithmetic-clang-O2strip.dwarf.so",
+   "fn": "mod_pow",
+   "va": 4560,
+   "gotos": 4
+  },
+  {
+   "obj": "55_modular_arithmetic-gcc-O2.so",
+   "fn": "gcd_i32",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "55_modular_arithmetic-gcc-O2strip.dwarf.so",
+   "fn": "gcd_i32",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "56_sieve-clang-O0.so",
+   "fn": "factorize",
+   "va": 4688,
+   "gotos": 6
+  },
+  {
+   "obj": "56_sieve-clang-O2.so",
+   "fn": "sieve_primes",
+   "va": 4368,
+   "gotos": 18
+  },
+  {
+   "obj": "56_sieve-clang-O2.so",
+   "fn": "factorize",
+   "va": 4928,
+   "gotos": 8
+  },
+  {
+   "obj": "56_sieve-clang-O2strip.dwarf.so",
+   "fn": "sieve_primes",
+   "va": 4368,
+   "gotos": 18
+  },
+  {
+   "obj": "56_sieve-clang-O2strip.dwarf.so",
+   "fn": "factorize",
+   "va": 4928,
+   "gotos": 8
+  },
+  {
+   "obj": "56_sieve-gcc-O2.so",
+   "fn": "sieve_primes",
+   "va": 4384,
+   "gotos": 7
+  },
+  {
+   "obj": "56_sieve-gcc-O2.so",
+   "fn": "factorize",
+   "va": 4592,
+   "gotos": 12
+  },
+  {
+   "obj": "56_sieve-gcc-O2strip.dwarf.so",
+   "fn": "sieve_primes",
+   "va": 4384,
+   "gotos": 7
+  },
+  {
+   "obj": "56_sieve-gcc-O2strip.dwarf.so",
+   "fn": "factorize",
+   "va": 4592,
+   "gotos": 12
+  },
+  {
+   "obj": "57_bignum-clang-O0.so",
+   "fn": "bignum_mul_small",
+   "va": 4784,
+   "gotos": 3
+  },
+  {
+   "obj": "58_rational-gcc-O2.so",
+   "fn": "rational_add",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "58_rational-gcc-O2strip.dwarf.so",
+   "fn": "rational_add",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "59_combinatorics-clang-O2.so",
+   "fn": "pascal_row",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "59_combinatorics-clang-O2strip.dwarf.so",
+   "fn": "pascal_row",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "60_integer_matrix-clang-O2.so",
+   "fn": "matrix_multiply",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "60_integer_matrix-clang-O2strip.dwarf.so",
+   "fn": "matrix_multiply",
+   "va": 4352,
+   "gotos": 15
+  },
+  {
+   "obj": "62_gaussian_elimination-clang-O0.so",
+   "fn": "gaussian_solve",
+   "va": 4352,
+   "gotos": 19
+  },
+  {
+   "obj": "62_gaussian_elimination-clang-O2.so",
+   "fn": "gaussian_solve",
+   "va": 4352,
+   "gotos": 27
+  },
+  {
+   "obj": "62_gaussian_elimination-clang-O2strip.dwarf.so",
+   "fn": "gaussian_solve",
+   "va": 4352,
+   "gotos": 27
+  },
+  {
+   "obj": "62_gaussian_elimination-gcc-O0.so",
+   "fn": "gaussian_solve",
+   "va": 4429,
+   "gotos": 16
+  },
+  {
+   "obj": "62_gaussian_elimination-gcc-O2.so",
+   "fn": "gaussian_solve",
+   "va": 4352,
+   "gotos": 14
+  },
+  {
+   "obj": "62_gaussian_elimination-gcc-O2strip.dwarf.so",
+   "fn": "gaussian_solve",
+   "va": 4352,
+   "gotos": 14
+  },
+  {
+   "obj": "63_numerical_integration-gcc-O2.so",
+   "fn": "trapezoid_integrate",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "63_numerical_integration-gcc-O2.so",
+   "fn": "simpson_integrate",
+   "va": 4512,
+   "gotos": 9
+  },
+  {
+   "obj": "63_numerical_integration-gcc-O2strip.dwarf.so",
+   "fn": "trapezoid_integrate",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "63_numerical_integration-gcc-O2strip.dwarf.so",
+   "fn": "simpson_integrate",
+   "va": 4512,
+   "gotos": 9
+  },
+  {
+   "obj": "64_root_finding-clang-O0.so",
+   "fn": "bisection_sqrt",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "64_root_finding-clang-O0.so",
+   "fn": "newton_sqrt",
+   "va": 4672,
+   "gotos": 5
+  },
+  {
+   "obj": "64_root_finding-clang-O2.so",
+   "fn": "bisection_sqrt",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "64_root_finding-clang-O2strip.dwarf.so",
+   "fn": "bisection_sqrt",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "64_root_finding-gcc-O0.so",
+   "fn": "bisection_sqrt",
+   "va": 4467,
+   "gotos": 4
+  },
+  {
+   "obj": "64_root_finding-gcc-O0.so",
+   "fn": "newton_sqrt",
+   "va": 4653,
+   "gotos": 3
+  },
+  {
+   "obj": "64_root_finding-gcc-O2.so",
+   "fn": "bisection_sqrt",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "64_root_finding-gcc-O2strip.dwarf.so",
+   "fn": "bisection_sqrt",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "65_projectile_motion-gcc-O2.so",
+   "fn": "projectile_step",
+   "va": 4352,
+   "gotos": 9
+  },
+  {
+   "obj": "65_projectile_motion-gcc-O2strip.dwarf.so",
+   "fn": "projectile_step",
+   "va": 4352,
+   "gotos": 9
+  },
+  {
+   "obj": "66_orbital_step-clang-O0.so",
+   "fn": "orbital_step",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "66_orbital_step-clang-O2.so",
+   "fn": "orbital_step",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "66_orbital_step-clang-O2strip.dwarf.so",
+   "fn": "orbital_step",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "66_orbital_step-gcc-O0.so",
+   "fn": "orbital_step",
+   "va": 4429,
+   "gotos": 3
+  },
+  {
+   "obj": "69_molar_mass-clang-O0.so",
+   "fn": "molar_mass_centi",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "69_molar_mass-clang-O2.so",
+   "fn": "molar_mass_centi",
+   "va": 4352,
+   "gotos": 24
+  },
+  {
+   "obj": "69_molar_mass-clang-O2strip.dwarf.so",
+   "fn": "molar_mass_centi",
+   "va": 4352,
+   "gotos": 24
+  },
+  {
+   "obj": "69_molar_mass-gcc-O0.so",
+   "fn": "molar_mass_centi",
+   "va": 4525,
+   "gotos": 5
+  },
+  {
+   "obj": "69_molar_mass-gcc-O2.so",
+   "fn": "molar_mass_centi",
+   "va": 4352,
+   "gotos": 36
+  },
+  {
+   "obj": "69_molar_mass-gcc-O2strip.dwarf.so",
+   "fn": "molar_mass_centi",
+   "va": 4352,
+   "gotos": 36
+  },
+  {
+   "obj": "70_reaction_balance-clang-O0.so",
+   "fn": "balance_reaction",
+   "va": 4352,
+   "gotos": 17
+  },
+  {
+   "obj": "70_reaction_balance-clang-O2.so",
+   "fn": "balance_reaction",
+   "va": 4352,
+   "gotos": 18
+  },
+  {
+   "obj": "70_reaction_balance-clang-O2strip.dwarf.so",
+   "fn": "balance_reaction",
+   "va": 4352,
+   "gotos": 18
+  },
+  {
+   "obj": "70_reaction_balance-gcc-O0.so",
+   "fn": "balance_reaction",
+   "va": 4424,
+   "gotos": 12
+  },
+  {
+   "obj": "70_reaction_balance-gcc-O2.so",
+   "fn": "balance_reaction",
+   "va": 4352,
+   "gotos": 21
+  },
+  {
+   "obj": "70_reaction_balance-gcc-O2strip.dwarf.so",
+   "fn": "balance_reaction",
+   "va": 4352,
+   "gotos": 21
+  },
+  {
+   "obj": "72_loan_amortization-clang-O0.so",
+   "fn": "amortization_schedule",
+   "va": 4352,
+   "gotos": 2
+  },
+  {
+   "obj": "72_loan_amortization-clang-O0.so",
+   "fn": "remaining_balance",
+   "va": 4672,
+   "gotos": 4
+  },
+  {
+   "obj": "72_loan_amortization-gcc-O0.so",
+   "fn": "amortization_schedule",
+   "va": 4380,
+   "gotos": 3
+  },
+  {
+   "obj": "72_loan_amortization-gcc-O0.so",
+   "fn": "remaining_balance",
+   "va": 4617,
+   "gotos": 3
+  },
+  {
+   "obj": "73_present_value-clang-O0.so",
+   "fn": "net_present_value",
+   "va": 4368,
+   "gotos": 4
+  },
+  {
+   "obj": "73_present_value-clang-O0.so",
+   "fn": "internal_rate_of_return",
+   "va": 4672,
+   "gotos": 5
+  },
+  {
+   "obj": "73_present_value-clang-O2.so",
+   "fn": "net_present_value",
+   "va": 4368,
+   "gotos": 2
+  },
+  {
+   "obj": "73_present_value-clang-O2.so",
+   "fn": "internal_rate_of_return",
+   "va": 4512,
+   "gotos": 3
+  },
+  {
+   "obj": "73_present_value-clang-O2strip.dwarf.so",
+   "fn": "net_present_value",
+   "va": 4368,
+   "gotos": 2
+  },
+  {
+   "obj": "73_present_value-clang-O2strip.dwarf.so",
+   "fn": "internal_rate_of_return",
+   "va": 4512,
+   "gotos": 3
+  },
+  {
+   "obj": "73_present_value-gcc-O0.so",
+   "fn": "net_present_value",
+   "va": 4426,
+   "gotos": 3
+  },
+  {
+   "obj": "73_present_value-gcc-O0.so",
+   "fn": "internal_rate_of_return",
+   "va": 4604,
+   "gotos": 4
+  },
+  {
+   "obj": "73_present_value-gcc-O2.so",
+   "fn": "internal_rate_of_return",
+   "va": 4528,
+   "gotos": 8
+  },
+  {
+   "obj": "73_present_value-gcc-O2strip.dwarf.so",
+   "fn": "internal_rate_of_return",
+   "va": 4528,
+   "gotos": 8
+  },
+  {
+   "obj": "74_moving_statistics-clang-O0.so",
+   "fn": "simple_moving_average",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "74_moving_statistics-clang-O2.so",
+   "fn": "simple_moving_average",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "74_moving_statistics-clang-O2.so",
+   "fn": "population_variance",
+   "va": 5168,
+   "gotos": 5
+  },
+  {
+   "obj": "74_moving_statistics-clang-O2strip.dwarf.so",
+   "fn": "simple_moving_average",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "74_moving_statistics-clang-O2strip.dwarf.so",
+   "fn": "population_variance",
+   "va": 5168,
+   "gotos": 5
+  },
+  {
+   "obj": "74_moving_statistics-gcc-O2.so",
+   "fn": "simple_moving_average",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "74_moving_statistics-gcc-O2strip.dwarf.so",
+   "fn": "simple_moving_average",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "75_order_book-clang-O0.so",
+   "fn": "match_order",
+   "va": 4352,
+   "gotos": 11
+  },
+  {
+   "obj": "75_order_book-clang-O2.so",
+   "fn": "match_order",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "75_order_book-clang-O2strip.dwarf.so",
+   "fn": "match_order",
+   "va": 4352,
+   "gotos": 3
+  },
+  {
+   "obj": "75_order_book-gcc-O2.so",
+   "fn": "match_order",
+   "va": 4384,
+   "gotos": 21
+  },
+  {
+   "obj": "75_order_book-gcc-O2strip.dwarf.so",
+   "fn": "match_order",
+   "va": 4384,
+   "gotos": 21
+  },
+  {
+   "obj": "76_portfolio_rebalance-clang-O0.so",
+   "fn": "maximum_drift",
+   "va": 4352,
+   "gotos": 6
+  },
+  {
+   "obj": "76_portfolio_rebalance-clang-O0.so",
+   "fn": "rebalance_trades",
+   "va": 4768,
+   "gotos": 6
+  },
+  {
+   "obj": "76_portfolio_rebalance-clang-O2.so",
+   "fn": "maximum_drift",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "76_portfolio_rebalance-clang-O2.so",
+   "fn": "rebalance_trades",
+   "va": 4640,
+   "gotos": 7
+  },
+  {
+   "obj": "76_portfolio_rebalance-clang-O2strip.dwarf.so",
+   "fn": "maximum_drift",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "76_portfolio_rebalance-clang-O2strip.dwarf.so",
+   "fn": "rebalance_trades",
+   "va": 4640,
+   "gotos": 7
+  },
+  {
+   "obj": "76_portfolio_rebalance-gcc-O0.so",
+   "fn": "maximum_drift",
+   "va": 4394,
+   "gotos": 5
+  },
+  {
+   "obj": "76_portfolio_rebalance-gcc-O0.so",
+   "fn": "rebalance_trades",
+   "va": 4690,
+   "gotos": 6
+  },
+  {
+   "obj": "76_portfolio_rebalance-gcc-O2.so",
+   "fn": "maximum_drift",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "76_portfolio_rebalance-gcc-O2.so",
+   "fn": "rebalance_trades",
+   "va": 4528,
+   "gotos": 8
+  },
+  {
+   "obj": "76_portfolio_rebalance-gcc-O2strip.dwarf.so",
+   "fn": "maximum_drift",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "76_portfolio_rebalance-gcc-O2strip.dwarf.so",
+   "fn": "rebalance_trades",
+   "va": 4528,
+   "gotos": 8
+  },
+  {
+   "obj": "77_lru_cache-clang-O0.so",
+   "fn": "lru_access",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "77_lru_cache-clang-O2.so",
+   "fn": "lru_access",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "77_lru_cache-clang-O2strip.dwarf.so",
+   "fn": "lru_access",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "77_lru_cache-gcc-O0.so",
+   "fn": "lru_access",
+   "va": 4345,
+   "gotos": 5
+  },
+  {
+   "obj": "77_lru_cache-gcc-O2.so",
+   "fn": "lru_access",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "77_lru_cache-gcc-O2strip.dwarf.so",
+   "fn": "lru_access",
+   "va": 4352,
+   "gotos": 8
+  },
+  {
+   "obj": "80_trie-clang-O0.so",
+   "fn": "trie_insert",
+   "va": 4352,
+   "gotos": 4
+  },
+  {
+   "obj": "80_trie-clang-O0.so",
+   "fn": "trie_lookup",
+   "va": 4704,
+   "gotos": 4
+  },
+  {
+   "obj": "80_trie-clang-O2.so",
+   "fn": "trie_insert",
+   "va": 4352,
+   "gotos": 5
+  },
+  {
+   "obj": "80_trie-clang-O2.so",
+   "fn": "trie_lookup",
+   "va": 4512,
+   "gotos": 10
+  },
+  {
+   "obj": "80_trie-clang-O2strip.dwarf.so",
+   "fn": "trie_insert",
+   "va": 4352,
+   "gotos": 5
+  },
+  {
+   "obj": "80_trie-clang-O2strip.dwarf.so",
+   "fn": "trie_lookup",
+   "va": 4512,
+   "gotos": 10
+  },
+  {
+   "obj": "80_trie-gcc-O0.so",
+   "fn": "trie_insert",
+   "va": 4345,
+   "gotos": 4
+  },
+  {
+   "obj": "80_trie-gcc-O0.so",
+   "fn": "trie_lookup",
+   "va": 4677,
+   "gotos": 4
+  },
+  {
+   "obj": "80_trie-gcc-O2.so",
+   "fn": "trie_insert",
+   "va": 4352,
+   "gotos": 13
+  },
+  {
+   "obj": "80_trie-gcc-O2.so",
+   "fn": "trie_lookup",
+   "va": 4560,
+   "gotos": 10
+  },
+  {
+   "obj": "80_trie-gcc-O2strip.dwarf.so",
+   "fn": "trie_insert",
+   "va": 4352,
+   "gotos": 13
+  },
+  {
+   "obj": "80_trie-gcc-O2strip.dwarf.so",
+   "fn": "trie_lookup",
+   "va": 4560,
+   "gotos": 10
+  },
+  {
+   "obj": "84_compound_literals-gcc-O2.so",
+   "fn": "compound_literal_in_loop",
+   "va": 4528,
+   "gotos": 3
+  },
+  {
+   "obj": "84_compound_literals-gcc-O2strip.dwarf.so",
+   "fn": "compound_literal_in_loop",
+   "va": 4528,
+   "gotos": 3
+  },
+  {
+   "obj": "87_variable_length_array-clang-O2.so",
+   "fn": "vla_reverse_sum",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "87_variable_length_array-clang-O2strip.dwarf.so",
+   "fn": "vla_reverse_sum",
+   "va": 4352,
+   "gotos": 7
+  },
+  {
+   "obj": "87_variable_length_array-gcc-O2.so",
+   "fn": "vla_reverse_sum",
+   "va": 4384,
+   "gotos": 6
+  },
+  {
+   "obj": "87_variable_length_array-gcc-O2.so",
+   "fn": "vla_two_dimensional",
+   "va": 4624,
+   "gotos": 8
+  },
+  {
+   "obj": "87_variable_length_array-gcc-O2strip.dwarf.so",
+   "fn": "vla_reverse_sum",
+   "va": 4384,
+   "gotos": 6
+  },
+  {
+   "obj": "87_variable_length_array-gcc-O2strip.dwarf.so",
+   "fn": "vla_two_dimensional",
+   "va": 4624,
+   "gotos": 8
+  },
+  {
+   "obj": "92_anonymous_members-gcc-O0.so",
+   "fn": "anonymous_select",
+   "va": 4377,
+   "gotos": 1
+  },
+  {
+   "obj": "95_function_pointer_table-clang-O0.so",
+   "fn": "fold_operations",
+   "va": 4448,
+   "gotos": 1
+  },
+  {
+   "obj": "95_function_pointer_table-gcc-O2.so",
+   "fn": "fold_operations",
+   "va": 4480,
+   "gotos": 3
+  },
+  {
+   "obj": "95_function_pointer_table-gcc-O2strip.dwarf.so",
+   "fn": "fold_operations",
+   "va": 4480,
+   "gotos": 3
+  },
+  {
+   "obj": "97_signed_unsigned_pitfalls-clang-O0.so",
+   "fn": "division_truncates_toward_zero",
+   "va": 4528,
+   "gotos": 2
+  }
+ ]
+}
