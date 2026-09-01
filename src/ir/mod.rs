@@ -36,6 +36,7 @@ pub mod callee_return_pair;
 pub(crate) mod caller_arity;
 pub mod canary;
 pub mod cfg_edges;
+pub mod cmp_fusion;
 pub mod const_fold;
 pub mod control_semantics;
 pub mod copy_prop;

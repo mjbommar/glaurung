@@ -307,6 +307,14 @@ fn decbench_text_with_installed_environment(
             "fold_typed_comparison_extensions",
             crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm)
         );
+        // After the typed comparison folds, so both halves of a two-comparison
+        // guard have already had their extensions normalised -- the fusion
+        // matches on operand identity, and an unfolded cast on one side only
+        // would defeat it.
+        pass!(
+            "fuse_comparisons",
+            crate::ir::cmp_fusion::fuse_comparisons(&mut prepared)
+        );
         pass!(
             "fold_constants_after_typed_folds",
             crate::ir::const_fold::fold_constants(&mut prepared)
