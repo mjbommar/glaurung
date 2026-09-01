@@ -84,6 +84,8 @@ missing-body ledger in
 | [ ] gzip `__printf__` source/build provenance trace | real-binary R1 / failure F1d | 2 source-CFG-only rows |
 | [x] PE entry/TLS/import identity fixture | real-binary R1/R4 | `99113bc8` |
 | [x] TLS callbacks read from the wrong struct offset | estate 4 / R4 | `99113bc8` |
+| [x] parity #4 located: an intervening-read gate, not inlining | parity #4 | `576db136` |
+| [x] parity #4 both candidates measured and REVERTED | parity #4 | `e8dafd33` |
 | [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
 | [ ] Hermetic PDB type/layout lane | estate 4 / real-binary R4 | source declarations through recovered fields and prototypes |
 | [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
