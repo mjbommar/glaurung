@@ -324,17 +324,37 @@ STRUCTURAL_LANE: tuple[str, str] = ("gcc", "O0")
 #: currently recover nothing, and costs `break;` arms on shapes that already
 #: worked. Nothing in the gate could see that second half before this census.
 #:
-#: **KNOWN COVERAGE GAP, and it already bit once.** The population here is
-#: `manifest.REQUIRED_FUNCTIONS` over `tests/decompiler_fixtures/src/` -- 213
-#: fixtures. It does NOT include `tests/decbench_corpus/src/`, and that is
-#: where `statemachine.c` lives. Measured against this census the dispatch-loop
-#: fix looked free (switch 22->24, goto 2205->2223, break 388->388, i.e. no
-#: function losing a `break`), and it is not: on `statemachine.c` it takes
-#: clang-O0 from break-arms to goto-arms, which
-#: `test_switch_arms_reach_the_real_loop_latch` catches and this census cannot
-#: see. Extending the population to the decbench corpus is the next step before
-#: that fix can be weighed honestly.
-READABILITY_LANES: tuple[tuple[str, str], ...] = (("gcc", "O2"), ("clang", "O2"))
+#: The population is TWO corpora, and the second one exists because omitting it
+#: already produced a wrong answer. Measured over
+#: `tests/decompiler_fixtures/src/` alone, the dispatch-loop fix in
+#: `loop_shape::detect_raw_dispatch_loop` looked free -- switch 22->24, goto
+#: 2205->2223, break 388->388, no function losing a `break`. It is not free: on
+#: `statemachine.c` it takes clang-O0 from break-arms to goto-arms, and
+#: `statemachine.c` lives in `tests/decbench_corpus/src/`, which the census did
+#: not cover. "No regression" from a measurement that excludes the regressing
+#: case is not evidence.
+#:
+#: So `DECBENCH_CORPUS` is measured too. It has no manifest, so every exported
+#: function of each source is counted rather than a declared subset.
+#:
+#: And BOTH optimisation levels, for the same reason a second time. Adding the
+#: corpus but keeping O2-only still missed the regression, because the test that
+#: catches it (`test_switch_arms_reach_the_real_loop_latch`) compiles at
+#: clang -O0. Two rounds of "the census says it is free" were wrong for two
+#: different coverage reasons; the population now spans both corpora and both
+#: levels so the answer means what it says.
+READABILITY_LANES: tuple[tuple[str, str], ...] = (
+    ("gcc", "O0"),
+    ("clang", "O0"),
+    ("gcc", "O2"),
+    ("clang", "O2"),
+)
+
+#: The second census population: the DecBench corpus sources. No manifest
+#: declares their functions, so the census counts every exported one.
+DECBENCH_CORPUS = (
+    Path(__file__).resolve().parent.parent.parent / "tests" / "decbench_corpus" / "src"
+)
 
 
 def _build(stem: str, workdir: Path, lane: tuple[str, str] | None = None) -> Path:
@@ -450,6 +470,34 @@ def structural_report(workdir: Path) -> dict:
                 and not spec
             ):
                 gaps.append(f"{fixture}:{fn}")
+    # Second population: the DecBench corpus. Same lanes, same counts, no
+    # manifest -- every exported function is measured. Keys are prefixed so a
+    # reader can tell the two corpora apart at a glance.
+    for source in sorted(DECBENCH_CORPUS.glob("*.c")):
+        for cc, opt in READABILITY_LANES:
+            out = workdir / f"decbench-{source.stem}-{cc}-{opt}.so"
+            built = TC.run(
+                [
+                    "g++" if source.suffix == ".cpp" else cc,
+                    "-shared",
+                    "-fPIC",
+                    "-g",
+                    f"-{opt}",
+                    "-w",
+                    "-o",
+                    str(out),
+                    str(source),
+                ]
+            )
+            if built.returncode != 0:
+                continue
+            for fn, block in decompile_all(out, "decbench").items():
+                readability[f"decbench/{source.stem}:{fn}:{cc}:{opt}"] = {
+                    "switch": block.count("switch ("),
+                    "goto": block.count("goto "),
+                    "break": block.count("break;"),
+                }
+
     return {
         "closure": closure,
         "readability": readability,

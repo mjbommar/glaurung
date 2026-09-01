@@ -212,3 +212,52 @@ paid for in readability on shapes that already worked, and the only thing that
 can weigh the two is a ratchet that measures `switch`/`goto`/`break` rather
 than semantics. Landing it before that gate exists would trade a visible win
 for an invisible loss.
+
+### The verdict, once that gate existed — 2026-09-01
+
+The census now spans **3,580 functions** (both corpora, `{gcc,clang}` x
+`{O0,O2}`), and it answers the question the section above deferred. **Do not
+land the relaxation as written.**
+
+| lane | `switch` | `goto` | `break` |
+|---|---|---|---|
+| O0 | 61 -> 65 (+4) | 2300 -> 2462 (**+162**) | 155 -> 118 (**-37**) |
+| O2 | 24 -> 27 (+3) | 2304 -> 2328 (+24) | 390 -> 390 (0) |
+
+Seven functions gain a `switch`; seven **lose every `break` arm they had**:
+
+    145_control_flow_flattening:flattened_accumulate:gcc:O0  break 8 -> 0, goto 0 -> 18
+    145_control_flow_flattening:flattened_classify:gcc:O0    break 7 -> 0, goto 0 -> 19
+    145_control_flow_flattening:flattened_search:gcc:O0      break 7 -> 0, goto 0 -> 17
+    150_obfuscation_composite:obfuscated_transform:gcc:O0    break 8 -> 0, goto 0 -> 20
+    206_aarch64_wide_dispatch:dispatch_in_loop:gcc:O0        break 1 -> 0, goto 6 -> 13
+    212_loop_with_returning_arm:fsm_returns_from_arm:clang:O0 break 3 -> 0, goto 0 -> 12
+    decbench/statemachine:fsm:clang:O0                       break 3 -> 0, goto 0 -> 12
+
+Note the *same fixtures* appear on both sides of the trade: `145` and `150`
+gain a switch on clang and lose all their breaks on gcc. The relaxation does
+not convert unrecoverable shapes into good ones -- it converts *both* into
+goto-dispatch, which is an improvement only where the alternative was nothing.
+That is a net loss at the corpus scale, and the O0 `break` column is where it
+shows.
+
+A version worth landing must decline whenever a structured builder can take
+the shape. The two attempts recorded above failed because the builders are not
+side-effect-free; the ordering problem is real and unsolved, and this is the
+open work, not the guard constant.
+
+### How many wrong answers this took
+
+Three, and the first two were the same shape of mistake:
+
+1. Census over `tests/decompiler_fixtures/` only -> **"free."** Wrong: the
+   regressing `statemachine.c` lives in `tests/decbench_corpus/`.
+2. Both corpora, but `-O2` only -> **"free."** Wrong: every one of the seven
+   regressions is at **-O0**, because O0 is where structured recovery already
+   succeeds and therefore where there is something to lose.
+3. Both corpora, both levels -> the table above.
+
+The generalisation is in `structural.py` beside the constants: a readability
+census answers only for the population it covers, and "no regressions" from a
+partial population is indistinguishable from "no regressions". The execution
+differential was green at every step of this -- all three times.

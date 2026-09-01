@@ -78,19 +78,35 @@ not, the lane is decompile-only and says so).
 > function; the baseline is what would tell us how much of the corpus looks
 > like this.
 
-**Partly landed (`225088fb`).** A readability census now records `switch` /
-`goto` / `break` COUNTS per function over `gcc:O2` and `clang:O2` -- 1,502
-entries, and the baseline is itself a finding: **22 switches against 2,205
-gotos**. What remains of this phase is the full closure/effects map at O2,
-which needs the baseline key format to grow a lane component.
+**Landed.** A readability census records `switch` / `goto` / `break` COUNTS
+per function over **both corpora at both optimisation levels** --
+`tests/decompiler_fixtures/src/` and `tests/decbench_corpus/src/`, across
+`{gcc,clang}` x `{O0,O2}`. **3,580 entries**, and the baseline is itself a
+finding: **85 switches against 4,604 gotos**, with 545 `break`s.
 
-The census has a **known coverage gap** and it is written into
-`structural.py` beside the constant: the population is
-`REQUIRED_FUNCTIONS` over `tests/decompiler_fixtures/src/` and excludes
-`tests/decbench_corpus/src/`. That gap already produced one wrong answer --
-the `detect_raw_dispatch_loop` fix measured free against this census and
-regresses `statemachine.c`, which lives in the excluded corpus. Extending the
-population is the next step.
+The population grew in three steps, because it gave a wrong answer twice
+(`10-ci-environment-gap.md`, appendix):
+
+| population | entries | verdict on the `detect_raw_dispatch_loop` fix |
+|---|---|---|
+| fixtures, O2 | 1,502 | "free" -- **wrong**, missed the other corpus |
+| both corpora, O2 | ~1,800 | "free" -- **wrong**, the regressions are all at O0 |
+| both corpora, O0+O2 | **3,580** | **-37 `break`s, +162 `goto`s.** Not free. |
+
+That third measurement is the phase paying for itself: it is the only gate in
+the repository that could see the cost, the execution differential was green
+for all three, and the fix was reverted on its evidence.
+
+**The O0 lanes are not optional, and that is the counter-intuitive part.** The
+plan below assumed O0 structuring is "nearly free" and that O2 is where the
+goto-soup lives. Both are true of the *absolute* counts -- and both are why O0
+is where a regression shows up. O0 is where structured recovery already
+succeeds, so it is where there is something left to lose; at O2 the same change
+moved the `break` column by exactly zero, because there were barely any breaks
+left to destroy.
+
+What remains of this phase is the full closure/effects map at O2, which needs
+the baseline key format to grow a lane component.
 
 `structural_baseline.json` was gcc-O0-only. O0 structuring is nearly free;
 **O2 is where goto-soup happens** — and the execution differential is blind
@@ -100,6 +116,11 @@ predicates (`switch`, `goto_free`, loop kinds) to the `gcc:O2` and
 ratchet. This is arguably the highest-value *quality* item in the plan: it is
 the only gate that measures whether output is readable rather than merely
 correct.
+
+> *(Kept as written, because its one wrong assumption is instructive.)* The
+> last sentence held. The reasoning that "O0 is nearly free, so measure O2"
+> did not: it is exactly the argument that produced the second wrong answer,
+> by scoping the census to O2 and hiding all seven regressions.
 
 ## 7.6 Explicitly deferred
 
