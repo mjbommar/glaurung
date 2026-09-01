@@ -79,6 +79,21 @@ jobs:
           enable-cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Five test files cross-compile their own fixtures -- i386 via `-m32`,
+      # plus aarch64 and armv7 cross-gcc -- to cover three lifter families
+      # that an x86-64-only run cannot see at all. Without these packages the
+      # runner's linker fails with "cannot find crti.o" and those tests ERROR
+      # rather than skip, which is how the first completed Python run went red
+      # after 55 minutes for a reason that had nothing to do with the code.
+      #
+      # Installing them rather than skipping them, deliberately: a skip here
+      # would hide exactly the cross-architecture coverage the tests exist for.
+      - name: Install cross toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib libc6-dev-i386 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
       - name: Sync dependencies
         run: uv sync --locked --dev
       # --release, not the default debug build. The debug extension is 276 MB
