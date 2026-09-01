@@ -8,6 +8,11 @@ parity backlog). `[x]` landed and verified, `[~]` in flight, `[ ]` not started.
 toolset, so the plan lives here instead — which is more durable anyway, since
 it survives the session and is reviewable in a diff.
 
+The full-corpus evidence update and cross-plan priority order live in
+[`../real-binary-decompiler-roadmap-2026-08-31.md`](../real-binary-decompiler-roadmap-2026-08-31.md).
+Its missing-body ledger is
+[`../../design/decbench-full-failure-taxonomy-2026-08-31.md`](../../design/decbench-full-failure-taxonomy-2026-08-31.md).
+
 ## Landed
 
 | item | plan ref | commit |
@@ -33,11 +38,21 @@ it survives the session and is reviewable in a diff.
 | [x] Reachability ratchet (15 tests) | estate 1.1 | `95249c54` |
 | [x] Three CWD-dead Python files fixed | estate 1.4 | `95249c54` |
 | [x] `-ra` for visible skips | estate 1.6 | `95249c54` |
+| [x] Demangle corpus (2,115 pairs) + versioned-symbol fix | estate 5.1 | `4c0f2ffe` |
+| [x] Perf ratchet, instructions-based | estate 6 | `a5f47189` |
+| [x] Full Python suite green | — | `4c0f2ffe` |
 
 ## Next
 
 | item | plan ref | state |
 |---|---|---|
+| [ ] i386 stdcall identity fixture + collision-safe normalization | real-binary R1 / failure F1a | proven cause of 33 pinned rows |
+| [ ] External/import disposition contract | real-binary R1 / failure F1b | 63 rows have no local body |
+| [ ] Dataset manifest/source-CFG/binary consistency validator | real-binary R1 / failure F1c | 88 manifest-only rows |
+| [ ] gzip `__printf__` source/build provenance trace | real-binary R1 / failure F1d | 2 source-CFG-only rows |
+| [ ] PE entry/TLS/import identity fixture | real-binary R1/R4 | write failing fixture first |
+| [ ] Cortex-M MRS/MSR body-recovery fixture | real-binary R1 / failure F2a | proven common cause of all 31 F2 rows |
+| [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
 | [ ] Page-align fixture + symbol-snapping guard | parity #9 | needs 4 baselines |
 | [ ] Pointer/array render (`char **argv`) | parity #6 | |
 | [ ] Variadic / call-site arity | parity #3 | |
@@ -45,8 +60,7 @@ it survives the session and is reviewable in a diff.
 | [ ] Wire Go fixtures 176-180 | estate 7.1 | needs a quiet machine |
 | [ ] Structural baseline at O2 | estate 7.5 / parity #8 | |
 | [ ] Canary + determinism in the default suite | estate 2 | |
-| [ ] Thin-module corpora | estate 5 | |
-| [ ] Perf ratchet | estate 6 | |
+| [~] Thin-module corpora: similarity, flirt, target | estate 5.2-5.4 | agent in flight |
 | [ ] `samples/` 18.8 MB dedup | estate 9.2 | investigated, see below |
 
 ## Findings worth keeping
