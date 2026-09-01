@@ -1,0 +1,89 @@
+# Do the fuzz targets survive being run?
+#
+# Eight targets exist and, until this file, NOTHING executed any of them. They
+# became compile-verified when `scripts/feature-build-gate.sh` grew a twelfth
+# lane for `fuzz/Cargo.toml` -- before that they had been building by luck,
+# since `fuzz/` is a separate crate that no root-manifest `cargo check` can
+# see. Compiling is not running, and a crash in the disassembler is a denial
+# of service on an analyst pointed at a hostile binary.
+#
+# Nightly rather than per-push, because fuzzing is a search: two minutes per
+# target finds shallow crashes, and finding deep ones is a matter of total
+# machine time rather than of which commit triggered the run. Per-push would
+# pay the cost on every commit and still only scratch the surface.
+#
+# The corpus is SEEDED, not committed. `fuzz/seed_corpus.py` slices headers,
+# mangled symbols and `.text` out of binaries the repository already tracks --
+# committing those slices would store the same bytes twice, which is the
+# defect `docs/test-inventory/findings.md` records as 18.8 MB of duplication.
+# Without seeding, libFuzzer spends its first minutes rediscovering that an
+# ELF starts with \x7fELF.
+name: fuzz nightly
+
+on:
+  schedule:
+    # 04:17 UTC. Offset from the hour because every cron-scheduled job in the
+    # world fires at :00 and the runner queue reflects it.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds_per_target:
+        description: Seconds to run each target
+        default: "120"
+
+jobs:
+  fuzz:
+    name: cargo fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # One job per target, and DO NOT cancel siblings when one finds a crash:
+      # a crash in the demangler says nothing about whether the disassembler is
+      # also broken, and finding out costs another full night.
+      fail-fast: false
+      matrix:
+        target:
+          - disasm_decode
+          - demangle_all
+          - formats_parse
+          - headers_validate
+          - containers_detect
+          - sniffers_sniff
+          - parsers_parse
+          - entropy_analyze
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Seeding reads real sample binaries, which are LFS objects. Without
+          # this the seeder finds 130-byte pointer files and produces a corpus
+          # of pointer files -- see the note in test-suite.yml.
+          lfs: true
+      # cargo-fuzz needs nightly for `-Z sanitizer`.
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Seed the corpus
+        run: uv run python fuzz/seed_corpus.py --limit 120
+      - name: Fuzz
+        run: |
+          cargo fuzz run ${{ matrix.target }} -- \
+            -max_total_time=${{ github.event.inputs.seconds_per_target || '120' }} \
+            -rss_limit_mb=4096
+      # A crash reproducer is only useful if it leaves the runner. Its
+      # permanent home is a unit test in the module that owns the bug -- the
+      # artifact is how it gets there.
+      - name: Upload any crash reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

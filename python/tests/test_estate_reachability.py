@@ -267,6 +267,39 @@ def test_every_fuzz_bin_declaration_has_a_target_file():
     )
 
 
+def test_every_fuzz_target_is_actually_run_by_the_nightly_workflow():
+    """Declared and built is not the same as run.
+
+    The two checks above make a target buildable; they say nothing about
+    whether anything executes it. All eight were compile-verified by the
+    twelfth feature-gate lane and executed by NOTHING until
+    `.github/workflows/fuzz-nightly.yml` existed -- and a target that is built
+    and never run is the same defect this whole file exists to catch, one
+    layer up.
+
+    So the workflow's matrix must name every declared target. A new [[bin]]
+    that nobody adds here is a fuzzer that quietly never runs.
+    """
+    workflow = ROOT / ".github" / "workflows" / "fuzz-nightly.yml"
+    assert workflow.is_file(), (
+        f"{workflow.relative_to(ROOT)} is missing. If nightly fuzzing was "
+        "retired deliberately, delete this test with it and say why -- do not "
+        "leave eight targets that nothing runs."
+    )
+    import yaml
+
+    matrix = yaml.safe_load(workflow.read_text())["jobs"]["fuzz"]["strategy"]["matrix"][
+        "target"
+    ]
+    declared = set(fuzz_bin_declarations())
+    listed = set(matrix)
+    assert declared == listed, (
+        "the nightly fuzz matrix and fuzz/Cargo.toml disagree about which "
+        f"targets exist.\n  declared but never run: {sorted(declared - listed)}"
+        f"\n  run but not declared:    {sorted(listed - declared)}"
+    )
+
+
 def test_every_fuzz_target_file_is_declared_as_a_bin():
     declared_paths = {
         (FUZZ / path).resolve() for path in fuzz_bin_declarations().values()
