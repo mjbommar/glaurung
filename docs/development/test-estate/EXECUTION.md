@@ -126,7 +126,10 @@ directory for such a DLL at all. Annotated in place.
 | [x] Hermetic PDB type/layout lane | estate 4 / R4 | `c7200d2d` |
 | [x] clang-cl PE32/PE32+ identity lane | estate 4.1 / R4 | `8c0a89f6` |
 | [x] Resolver was COFF-only, blind to shipped Windows binaries | estate 4 / R4 | `8c0a89f6` |
-| [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
+| [x] Mach-O x86-64 + ARM64 thin lanes | estate 4 / R4 | `ba2fe5c2` |
+| [x] AArch64 scalar FP immediate dropped by the decoder | estate 4 / R4 | `ba2fe5c2` |
+| [x] AArch64 FMA lifting measured and REVERTED | estate 4 / R4 | `ba2fe5c2` |
+| [~] Mach-O universal (fat) lane | estate 4 / R4 | thin x86-64+ARM64 landed `ba2fe5c2`; fat slices still open |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
 | [ ] Promote realistic corpus beyond discovery-only evidence | real-binary R5 | body accounting, semantic subset, signal predicates, mandatory release lane |
