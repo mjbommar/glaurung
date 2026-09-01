@@ -106,8 +106,61 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Top-level helper: symbol address map for a file
     m.add_function(wrap_pyfunction!(symbol_address_map_py, m)?)?;
+    m.add_function(wrap_pyfunction!(symbol_table_entries_py, m)?)?;
 
     Ok(())
+}
+
+/// Symbol table entries with kind and definedness, for a file.
+///
+/// `symbol_address_map` answers "what address is this name?" and is
+/// deliberately lossy: it dedups by address and drops everything that is not a
+/// definition. A caller resolving a *function body* request needs three things
+/// that map cannot express -- whether a hit is code or data, whether it is a
+/// local definition or an import, and whether two distinct addresses claim the
+/// same name. Returning them separately keeps the existing helper's contract
+/// intact while letting the DecBench resolver refuse a data symbol, report an
+/// import as an import, and treat a duplicate as an ambiguity instead of
+/// silently taking the first entry.
+///
+/// Each entry is `(address, name, kind, defined)` where `kind` is one of
+/// `text`, `data`, `tls`, `section`, `file`, `label`, `unknown`.
+#[cfg(feature = "python-ext")]
+#[pyfunction]
+#[pyo3(name = "symbol_table_entries")]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+fn symbol_table_entries_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Vec<(u64, String, String, bool)>> {
+    use object::read::Object;
+    use object::ObjectSymbol;
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let mut out: Vec<(u64, String, String, bool)> = Vec::new();
+    if let Ok(obj) = crate::decompile::profile::parse_object(&data[..]) {
+        for sym in obj.symbols().chain(obj.dynamic_symbols()) {
+            let name = match sym.name() {
+                Ok(n) if !n.is_empty() => n.to_string(),
+                _ => continue,
+            };
+            let kind = match sym.kind() {
+                object::SymbolKind::Text => "text",
+                object::SymbolKind::Data => "data",
+                object::SymbolKind::Tls => "tls",
+                object::SymbolKind::Section => "section",
+                object::SymbolKind::File => "file",
+                object::SymbolKind::Label => "label",
+                _ => "unknown",
+            };
+            out.push((sym.address(), name, kind.to_string(), sym.is_definition()));
+        }
+    }
+    out.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+    out.dedup();
+    Ok(out)
 }
 
 /// Symbol address map helper for a file.

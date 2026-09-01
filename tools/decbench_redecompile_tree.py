@@ -77,25 +77,25 @@ def _pe_symbol_addr(binary: pathlib.Path, names):
     `no-symbols` and never decompiled at all -- ~500 functions absent from the
     score, which reads as failure rather than as never-attempted.
 
-    i386 PE also decorates cdecl symbols with a leading underscore: the source
-    CFG names `crc32`, the symbol table holds `_crc32`. Match both.
+    The name matching itself lives in `tools/decbench_symbols.py`, which is
+    importable without starting a run and is tested against a real i386 PE. It
+    knows three decorations rather than two: the missing one, stdcall
+    `_name@N`, is DecBench failure class F1a and 33 unresolved rows in the
+    pinned run.
     """
-    import glaurung
+    import decbench_symbols as S
 
-    try:
-        table = glaurung.symbol_address_map(str(binary))
-    except Exception:
-        return {}
-    by_name = {}
-    for addr, nm in table:
-        if addr:
-            by_name.setdefault(nm, addr)
-    found = {}
-    for nm in names:
-        a = by_name.get(nm) or by_name.get("_" + nm)
-        if a:
-            found[nm] = a
-    return found
+    resolutions = S.resolve_many(str(binary), names)
+    # Non-LOCAL dispositions are deliberately NOT collapsed into "missing":
+    # an import has no local body by construction, an ambiguity is a dataset
+    # defect, and a data hit is a resolver bug. The caller records them.
+    RESOLUTIONS[str(binary)] = {n: r.as_record() for n, r in resolutions.items()}
+    return {n: r.address for n, r in resolutions.items() if r.ok}
+
+
+#: binary path -> {requested name: resolution record}. Written into the
+#: checkpoint so a run can be audited without re-reading the binaries.
+RESOLUTIONS: dict[str, dict] = {}
 
 
 def symbol_addr(binary: pathlib.Path, names):

@@ -373,8 +373,16 @@ __all__ = [
 # spelling actually resolves.
 symbol_address_map = _native.symbol_address_map
 
+# Its kind-aware sibling. `symbol_address_map` dedups by address and keeps only
+# definitions, which is right for "what address is this name" and wrong for
+# "does this name have a local function body" -- the latter has to be able to
+# refuse a data symbol, report an import as an import, and treat two addresses
+# claiming one name as an ambiguity. See tools/decbench_symbols.py.
+symbol_table_entries = _native.symbol_table_entries
+
 __all__ += [
     "symbol_address_map",
+    "symbol_table_entries",
 ]
 
 # Expose logging config from native and Python wrapper

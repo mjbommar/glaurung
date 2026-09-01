@@ -1,0 +1,14 @@
+{
+  "purpose": "i386 PE stdcall decoration fixture for tools/decbench_symbols.py",
+  "built_by": "tests/decbench_adapter/build.sh (i686-w64-mingw32-gcc, -shared -O1)",
+  "sha256": "f78e20441590bc3e3245e1cbe35d9f32207d3bc4917c8e4644fb70bc49659e57",
+  "size": 83260,
+  "clauses": {
+    "1 exact name wins": "`worker` and `_worker` are distinct functions at distinct addresses; a request for 'worker' must take `worker`.",
+    "2 cdecl underscore fallback": "`_crc32_fn` answers a request for 'crc32_fn'.",
+    "3 stdcall _name@N": "`_worker_fn@4`, `_entry_fn@12`, `_handler_fn@16` -- the F1a shapes, 33 pinned rows.",
+    "4 ambiguity never first-wins": "`_dup@8` and `_dup@12` both canonicalize to 'dup' at distinct addresses. Within-tier, so precedence cannot resolve it.",
+    "5 data cannot satisfy a body request": "`__lookalike` is a data symbol named like a function.",
+    "6 decoration recorded": "every resolution records which rule matched and the raw symbol chosen."
+  }
+}
