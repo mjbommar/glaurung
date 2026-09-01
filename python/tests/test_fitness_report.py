@@ -248,6 +248,12 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01 (seventh, same day): R8's measurement-integrity work --
+    `src/testing.rs` plus the `missing_tool` call sites that replaced 21 silent
+    `NotFound => return` arms. Each converted arm carries a comment saying what
+    the skip costs, which is the growth: the alternative was to keep a suite
+    where 33 tests could pass without asserting anything.
+
     2026-09-01 (sixth, same day): `product_loc_above_1000` 33,347 -> 33,351,
     +4, from the note at `lift_arm64.rs`'s `arity` site recording that FMA
     lifting was measured and reverted. Four lines that stop the next person
@@ -500,11 +506,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": pytest.approx(404.0),
         "product_files_above_1000": 23,
         "product_files_above_2000": 3,
-        "product_loc_above_1000": 33351,
+        "product_loc_above_1000": 33355,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(408.01762114537445),
-        "product_median_loc": pytest.approx(302.0),
-        "product_pct_loc_above_1000": pytest.approx(18.00421075361693),
+        "product_mean_loc": pytest.approx(407.2923076923077),
+        "product_median_loc": pytest.approx(301),
+        "product_pct_loc_above_1000": pytest.approx(17.99879126690338),
     }
 
 

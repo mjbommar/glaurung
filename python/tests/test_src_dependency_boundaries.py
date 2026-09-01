@@ -231,6 +231,13 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     ("ir/high_variables.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("ir/pass_stats.rs", '"GLAURUNG_PASS_STATS"'): "diagnostic",
     ("ir/structure.rs", '"GLAURUNG_ACCOUNT_STRUCTURE"'): "diagnostic",
+    # R8.1. `src/testing.rs` is `#[cfg(test)]`-gated, so this never reaches a
+    # shipped build -- but the allowlist is keyed by file path and does not
+    # know that, and being asked to justify it is the right outcome. It gates
+    # nothing semantic: it only decides whether a test that CANNOT run reports
+    # a skip or a failure. Set in CI so a missing compiler is loud there;
+    # unset locally so a machine without cross-compilers still works.
+    ("testing.rs", "REQUIRE_ENV"): "diagnostic",
     ("ir/value_number/coalesce.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/format_environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
