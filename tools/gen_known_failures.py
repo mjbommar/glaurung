@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]
+import diff_decompile as D
 
 BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 SRC = ROOT / "tests" / "decompiler_fixtures" / "src"

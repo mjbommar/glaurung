@@ -64,11 +64,25 @@ import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
 # about which parameter `arg2` even is.
 import gen_known_failures as G  # ty: ignore[unresolved-import]  # added above
 
-_DATA = (
+#: The measured inventory. Typed explicitly because `json.loads` returns
+#: `Any | list | dict`, so every `.get` below is an unresolved-attribute error
+#: against the list arm until the union is narrowed.
+_DATA: dict[str, object] = (
     json.loads(INVENTORY.read_text())
     if INVENTORY.is_file()
     else {"types": [], "structure": [], "counts": {}}
 )
+
+
+def _rows(key: str) -> list[dict]:
+    value = _DATA.get(key, [])
+    return value if isinstance(value, list) else []
+
+
+def _counts() -> dict:
+    value = _DATA.get("counts", {})
+    return value if isinstance(value, dict) else {}
+
 
 #: One decompile per (object, function), shared across both axes.
 _CACHE: dict[tuple[str, str], str | None] = {}
@@ -115,7 +129,7 @@ def _signature_of(text: str) -> str | None:
 
 
 def _type_params():
-    for r in _DATA.get("types", []):
+    for r in _rows("types"):
         want = f"width {r['want']} bytes" if r["kind"] == "width" else str(r["want"])
         yield pytest.param(
             r,
@@ -132,7 +146,7 @@ def _type_params():
 
 
 def _structure_params():
-    for r in _DATA.get("structure", []):
+    for r in _rows("structure"):
         yield pytest.param(
             r,
             id=f"{r['obj']}::{r['fn']}@{r['va']:#x}::goto",
@@ -155,7 +169,7 @@ def test_the_inventory_is_present_and_populated():
         f"{INVENTORY.name} missing; regenerate with "
         "`uv run python tools/gen_known_failures.py`"
     )
-    counts = _DATA.get("counts", {})
+    counts = _counts()
     assert counts.get("types", 0) + counts.get("structure", 0) > 500, (
         f"the inventory records only {counts}; it should hold the ~1,022 "
         "failures the corpus demonstrates. An empty inventory makes this whole "
@@ -196,7 +210,7 @@ def test_the_failure_count_does_not_grow():
     Individual xfails catch a fix; this catches a regression that adds NEW
     failures, which would otherwise appear as entries nobody recorded.
     """
-    counts = _DATA.get("counts", {})
+    counts = _counts()
     assert counts.get("types", 0) <= 307, (
         f"prototype mismatches grew to {counts.get('types')} (recorded 307)"
     )
