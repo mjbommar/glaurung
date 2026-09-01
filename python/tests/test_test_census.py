@@ -5,11 +5,19 @@ recorded anywhere before this. Measured 2026-09-01:
 
 * `ir` declares **1,875** of 3,187 tests — 59% of every `#[test]` in the tree —
   against `disasm` 19, `symbols` 22 and `entropy` 20;
-* **271 tests are never executed by any gate.** `src/symbolic/` (195) and
-  `src/exec/` (76) are behind features that neither `cargo test` nor
-  `--features python-ext` enables, and `scripts/feature-build-gate.sh` runs
-  `cargo check --all-targets`, which compiles test code without running it. So
-  they are type-checked forever and executed never.
+* **195 tests are never executed by any gate.** `src/symbolic/` is behind a
+  feature that neither `cargo test` nor `--features python-ext` enables, and
+  `scripts/feature-build-gate.sh` runs `cargo check --all-targets`, which
+  compiles test code without running it. Type-checked forever, executed never.
+
+  **This figure was first recorded as 271 and that was wrong.** It counted
+  `src/exec/` (76) as unreachable by reading `src/lib.rs`'s `cfg` gate. But
+  `Cargo.toml` defines `python-ext = [..., "exec"]`, so the extension build
+  enables the emulator: `cargo test --features python-ext` runs **65** exec
+  tests. The remaining 11 are `src/exec/oracle.rs`, behind `dev-oracle`, which
+  links system libunicorn and is never shipped. Corrected by counting
+  `^test exec::` lines in an actual run rather than reasoning from the feature
+  list — the same discipline this whole workstream exists to enforce.
 
 Why a declaration count
 -----------------------
@@ -94,11 +102,11 @@ def test_no_module_loses_declared_tests(now, recorded):
 
 
 def test_the_never_executed_pool_does_not_grow(now, recorded):
-    """271 tests are compiled and never run. That number may only fall.
+    """195 tests are compiled and never run. That number may only fall.
 
-    Adding a test to `src/symbolic/` or `src/exec/` writes a test nothing will
-    ever execute — it is type-checked by `feature-build-gate.sh` and run by
-    nothing. Growing that pool is a decision, not an accident.
+    Adding a test to `src/symbolic/` writes a test nothing will ever execute —
+    it is type-checked by `feature-build-gate.sh` and run by nothing. Growing
+    that pool is a decision, not an accident.
     """
     assert now["never_executed_total"] <= recorded["never_executed_total"], (
         f"tests that no gate executes grew "

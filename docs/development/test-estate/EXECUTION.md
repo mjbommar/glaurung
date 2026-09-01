@@ -291,11 +291,17 @@ attached and gates behind them:
 * **The correct pattern already existed.** `src/program/*_tests.rs` uses
   `.expect("host C compiler is available")` and goes red on a bare machine —
   21 tests doing the right thing while 21 sites did the wrong one.
-* **271 tests are compiled and executed by nothing.** `src/symbolic/` (195)
-  and `src/exec/` (76) are behind features neither `cargo test` nor
-  `--features python-ext` enables, and `feature-build-gate.sh` runs
-  `cargo check --all-targets`, which compiles test code without running it.
-  Ratcheted: the pool may only shrink.
+* **195 tests are compiled and executed by nothing** — `src/symbolic/`,
+  behind a feature neither `cargo test` nor `--features python-ext` enables,
+  while `feature-build-gate.sh` runs `cargo check --all-targets`, which
+  compiles test code without running it. Ratcheted: the pool may only shrink.
+
+  **First recorded as 271, which was wrong.** It counted `src/exec/` (76) as
+  unreachable from `src/lib.rs`'s `cfg` gate, but `Cargo.toml` defines
+  `python-ext = [..., "exec"]`, so `--features python-ext` runs 65 of them;
+  the other 11 are `oracle.rs` behind `dev-oracle`, which links libunicorn and
+  is never shipped. Corrected by counting `^test exec::` in a real run instead
+  of reasoning from the feature list.
 * **The perf gate could report success from an empty measurement**, and
   nothing invoked it. Both fixed — and in that order, because scheduling a
   fail-open gate manufactures assurance.

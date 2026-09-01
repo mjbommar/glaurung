@@ -21,12 +21,20 @@ TEST_ATTR = re.compile(r"^\s*#\[test\]", re.M)
 
 #: Trees whose tests NO gate executes.
 #:
-#: `cargo test` does not build them; `--features python-ext` does not either
-#: (`src/lib.rs` gates `symbolic` on its own feature, and `exec` likewise);
-#: and `scripts/feature-build-gate.sh` runs `cargo check --all-targets`, which
-#: compiles test code without running it. So these tests are type-checked and
-#: never executed.
-NEVER_EXECUTED = ("symbolic", "exec")
+#: `cargo test` does not build them, and `scripts/feature-build-gate.sh` runs
+#: `cargo check --all-targets`, which compiles test code without running it.
+#: So these are type-checked forever and executed never.
+#:
+#: **`exec` is deliberately NOT here, and the first version of this file was
+#: wrong to include it.** `Cargo.toml` defines
+#: `python-ext = ["pyo3", "pyo3/extension-module", "exec"]`, so the Python
+#: extension build enables the emulator and `cargo test --features python-ext`
+#: runs **65** of its 76 declared tests. The 11 that remain are in
+#: `src/exec/oracle.rs`, behind `dev-oracle`, which links system libunicorn and
+#: is explicitly never shipped. Counting all 76 as unreachable overstated the
+#: problem by 76 tests and was corrected by measuring the run rather than
+#: reading the feature list.
+NEVER_EXECUTED = ("symbolic",)
 
 
 def module_of(path: Path) -> str:
