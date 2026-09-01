@@ -39,6 +39,7 @@ pub mod cfg_edges;
 pub mod const_fold;
 pub mod control_semantics;
 pub mod copy_prop;
+pub mod data_symbols;
 pub mod dce;
 pub mod dead_stores;
 pub mod definedness;

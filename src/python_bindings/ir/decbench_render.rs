@@ -98,6 +98,7 @@ pub(super) fn decbench_text(
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
     symbol_env: &crate::ir::symbol_env::SymbolEnv,
+    data_symbols: &crate::ir::data_symbols::DataSymbols,
 ) -> String {
     // Install the program-level callee records for this render, and clear them
     // when it ends. The renderer used to do the clearing, which made it the
@@ -106,6 +107,9 @@ pub(super) fn decbench_text(
     // the same function, so the renderer's only remaining relationship with the
     // environment is to read it.
     crate::ir::symbol_env::install(symbol_env.clone());
+    // Same install/release discipline as the callee environment above: the
+    // renderer reads these names and never owns them.
+    crate::ir::ast::install_dec_global_names(data_symbols.clone());
     let text = decbench_text_with_installed_environment(
         f,
         profiler,
@@ -124,6 +128,7 @@ pub(super) fn decbench_text(
         addr_map,
     );
     crate::ir::symbol_env::clear();
+    crate::ir::ast::clear_dec_global_names();
     text
 }
 

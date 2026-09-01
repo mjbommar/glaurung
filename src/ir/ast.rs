@@ -1412,10 +1412,38 @@ thread_local! {
     /// register. They render as byte-array temporaries, never scalar `long`s.
     static DEC_WIDE_LOCALS: std::cell::RefCell<std::collections::BTreeSet<String>> =
         std::cell::RefCell::new(std::collections::BTreeSet::new());
+
+    /// Source names for static storage, from the image's own symbol table.
+    /// Consulted by [`dec_global_name`]; empty means every global keeps its
+    /// synthetic address-derived spelling.
+    static DEC_GLOBAL_NAMES: std::cell::RefCell<crate::ir::data_symbols::DataSymbols> =
+        std::cell::RefCell::new(crate::ir::data_symbols::DataSymbols::new());
 }
 
+/// Install the data-symbol names used for the rest of this render.
+///
+/// Thread-local and render-scoped, matching the other `DEC_*` state above;
+/// [`clear_dec_global_names`] must run at the end of a render or the next one
+/// on this thread inherits the previous image's names.
+pub fn install_dec_global_names(symbols: crate::ir::data_symbols::DataSymbols) {
+    DEC_GLOBAL_NAMES.with(|names| *names.borrow_mut() = symbols);
+}
+
+/// Drop any installed data-symbol names.
+pub fn clear_dec_global_names() {
+    DEC_GLOBAL_NAMES.with(|names| *names.borrow_mut() = crate::ir::data_symbols::DataSymbols::new());
+}
+
+/// The C identifier for static storage at `address`.
+///
+/// Prefers the image's own name for the object when the symbol table names one
+/// starting exactly there; otherwise falls back to the address-derived
+/// spelling. See [`crate::ir::data_symbols`] for why the match is exact and
+/// never a nearest-symbol search.
 fn dec_global_name(address: u64) -> String {
-    format!("glaurung_global_{address:x}")
+    DEC_GLOBAL_NAMES
+        .with(|names| names.borrow().name_for(address).map(str::to_string))
+        .unwrap_or_else(|| format!("glaurung_global_{address:x}"))
 }
 
 /// The original-image identity of a direct static-storage access.

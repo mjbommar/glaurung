@@ -211,6 +211,9 @@ pub(super) fn decompile_at_session(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+        // Names for static storage, from this image's symbol table. Built once
+        // per image beside the call-target map; see `ir::data_symbols`.
+        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
@@ -479,6 +482,7 @@ pub(super) fn decompile_at_session(
             cc,
             &addr_map,
             &callee_facts.env,
+            &data_symbols,
         )
     } else if style == "c" {
         let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
@@ -585,6 +589,9 @@ fn decompile_range_at_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+        // Names for static storage, from this image's symbol table. Built once
+        // per image beside the call-target map; see `ir::data_symbols`.
+        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
     let budgets = crate::analysis::cfg::Budgets {
         max_functions: 1,
         max_blocks,
@@ -742,6 +749,7 @@ fn decompile_range_at_py(
             cc,
             &addr_map,
             &callee_facts.env,
+            &data_symbols,
         )
     } else if style == "c" {
         profiler.measure("render_c", || crate::ir::ast::render_c(&f))
@@ -975,6 +983,9 @@ fn decompile_all_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+        // Names for static storage, from this image's symbol table. Built once
+        // per image beside the call-target map; see `ir::data_symbols`.
+        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
@@ -1181,6 +1192,7 @@ fn decompile_all_py(
                 cc,
                 &addr_map,
                 &callee_facts.env,
+                &data_symbols,
             )
         } else {
             profiler.measure("render", || render(&f))
@@ -1284,6 +1296,9 @@ fn decompile_many_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+        // Names for static storage, from this image's symbol table. Built once
+        // per image beside the call-target map; see `ir::data_symbols`.
+        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
@@ -1522,6 +1537,7 @@ fn decompile_many_py(
                 cc,
                 &addr_map,
                 &callee_facts.env,
+                &data_symbols,
             )
         } else if style == "c" {
             let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
