@@ -248,6 +248,18 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-08-31: `product_loc_above_1000` 33,255 -> 33,327 (+72), from three new
+    IR modules and the doc comments explaining them, landing partly inside two
+    files that were already over 1,000 lines (`ir/name_resolve.rs`,
+    `ir/ast/dec_render.rs`). Two helpers were moved into the modules that own
+    them first, which took the growth down from +88; the rest is prose
+    explaining a soundness trap and an object-parse ceiling, and is worth its
+    lines. Every other measure improved or held -- `product_mean_loc` 408.64 ->
+    407.86, `product_median_loc` 305 -> 303, `ir_median_loc` 405 -> 404 --
+    because the new modules are small. Recorded through `--write-baseline`, so
+    it also appears in the baseline's own `accepted_regressions` history rather
+    than only here.
+
     2026-08-16: the dec-renderer extraction moved these deliberately. It took
     `src/ir/ast.rs` from 11,582 product LOC to 9,461 by lifting a 2,170-line,
     one-owner renderer into `src/ir/ast/dec_render.rs` -- and made FOUR of the
@@ -438,14 +450,14 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 13,
-        "ir_median_loc": pytest.approx(405),
+        "ir_median_loc": pytest.approx(404.0),
         "product_files_above_1000": 23,
         "product_files_above_2000": 3,
-        "product_loc_above_1000": 33255,
+        "product_loc_above_1000": 33327,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(408.64),
-        "product_median_loc": pytest.approx(305.0),
-        "product_pct_loc_above_1000": pytest.approx(18.084377447141737),
+        "product_mean_loc": pytest.approx(407.86313465783667),
+        "product_median_loc": pytest.approx(303),
+        "product_pct_loc_above_1000": pytest.approx(18.037799980515473),
     }
 
 
