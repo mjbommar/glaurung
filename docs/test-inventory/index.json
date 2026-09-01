@@ -1,6 +1,6 @@
 {
  "generated_from": "tools/build_test_inventory.py",
- "commit": "78ad620e",
+ "commit": "abbab830",
  "counts": {
   "entries": 984,
   "test_functions": 6282,
@@ -46,9 +46,9 @@
    "demangle": 3
   },
   "by_reach": {
-   "default-suite": 781,
+   "default-suite": 784,
    "ci": 79,
-   "unreachable": 77,
+   "unreachable": 74,
    "opt-in": 36,
    "other": 11
   }
@@ -5619,11 +5619,11 @@
     "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
     "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
    ],
-   "gated_by": "nothing runs it",
+   "gated_by": "default suite (`uv run pytest python/tests/`)",
    "size_bytes": 1491,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- same '../samples/...' CWD-relative bug as test_symbols_demangled.py, same two sample paths, same skip. The two files are near-identical",
+   "notes": "Was unreachable -- resolved `../samples/...` CWD-relative, which lands outside the repository from every plausible working directory -- until 95249c54 anchored it from `Path(__file__)`. It passes; no product bug was behind it. no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- same '../samples/...' CWD-relative bug as test_symbols_demangled.py, same two sample paths, same skip. The two files are near-identical",
    "territory": "python-tests",
-   "reach": "unreachable"
+   "reach": "default-suite"
   },
   {
    "id": "python-tests/test_demangle_pass.py",
@@ -9920,11 +9920,11 @@
     "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
     "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
    ],
-   "gated_by": "nothing runs it",
+   "gated_by": "default suite (`uv run pytest python/tests/`)",
    "size_bytes": 1650,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- parametrized on Path('../samples/...'); resolves against the CWD, which is the repo root for the documented command, so '../samples' is outside the repo and both cases skip every run. Duplicates test_demangle_integration.py almost exactly",
+   "notes": "Was unreachable -- resolved `../samples/...` CWD-relative, which lands outside the repository from every plausible working directory -- until 95249c54 anchored it from `Path(__file__)`. It passes; no product bug was behind it. no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- parametrized on Path('../samples/...'); resolves against the CWD, which is the repo root for the documented command, so '../samples' is outside the repo and both cases skip every run. Duplicates test_demangle_integration.py almost exactly",
    "territory": "python-tests",
-   "reach": "unreachable"
+   "reach": "default-suite"
   },
   {
    "id": "python-tests/test_symbols_python.py",
@@ -10578,11 +10578,11 @@
    "consumes": [
     "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
    ],
-   "gated_by": "nothing runs it",
+   "gated_by": "default suite (`uv run pytest python/tests/`)",
    "size_bytes": 2503,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- module-level skipif on Path('../samples/.../hello-gfortran-O0').exists(), which is outside the repo from any plausible CWD; the single test never executes",
+   "notes": "Was unreachable -- resolved `../samples/...` CWD-relative, which lands outside the repository from every plausible working directory -- until 95249c54 anchored it from `Path(__file__)`. It passes; no product bug was behind it. no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- module-level skipif on Path('../samples/.../hello-gfortran-O0').exists(), which is outside the repo from any plausible CWD; the single test never executes",
    "territory": "python-tests",
-   "reach": "unreachable"
+   "reach": "default-suite"
   },
   {
    "id": "python-tests/test_vtable_discovery.py",

@@ -18,7 +18,8 @@ The plan that acts on what this inventory found is
 |---|---|
 | `index.json` | the whole inventory, machine-readable |
 | `index.yaml` | the same, for reading |
-| `unreachable.json` | the subset nothing runs — read this first |
+| `unreachable.json` | the subset nothing runs — the raw list |
+| `unreachable-triage.md` | **that list classified into buckets that imply different actions** — read this first |
 | `findings.md` | what the survey turned up, in prose |
 | `coverage.md` | reach and domain tables |
 

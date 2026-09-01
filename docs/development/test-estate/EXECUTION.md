@@ -52,6 +52,10 @@ missing-body ledger in
 | [x] flirt: recall + false-positive + prologue sweep | estate 5.3 | `36d0e0f3` |
 | [x] CTPH panic reachable from Python, fixed | (found by 5.2) | `36d0e0f3` |
 | [x] Perf baseline recorded and verified both ways | estate 6 | `a938d897` |
+| [x] CI reads real binaries (Git LFS) | estate 1.5 | `40ebe2cc` |
+| [x] Host-compiler test scoped to validated majors | (found by CI) | `09f4d511` |
+| [x] Canary set: default suite exercises the decompiler | estate 2 | `b4d23221` |
+| [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 
 ## Next
 
@@ -79,7 +83,6 @@ missing-body ledger in
 | [ ] Structural baseline at O2 | estate 7.5 / parity #8 | |
 | [ ] Structural schema v2 + GCC/Clang O0/O2 populations | estate 7.5 / real-binary R3 | preserve lane denominators and binary hashes |
 | [ ] Optimized shape/readability predicates | estate 7.5 / real-binary R3 | loops, switches, conditions, casts, temporaries, output expansion |
-| [ ] Canary + determinism in the default suite | estate 2 | |
 | [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | no baseline; missing/unit-mismatch/partial evidence currently exits zero |
 | [ ] Record provenance-complete release perf baseline | estate 6 / real-binary R6 | wait for clean committed Rust tree and exact release build |
 | [ ] Join perf with completeness, RSS, and determinism report | estate 2/6 / real-binary M7 | reuse profiler and existing determinism tests |
@@ -114,6 +117,13 @@ match linker placeholders. That is the matcher's ceiling, not our corpus.
 patch): `FlirtLibrary::from_file` resolves ambiguous prologues
 last-insert-wins, and with `set_by=flirt` outranking `auto` the losing name
 lands in the KB above the correct one; `prologue_len` is unenforced input.
+
+**Two things that were true in the working tree and false in the repository.**
+`git add` on the canary directory skipped all nine `.so` objects silently,
+because `.gitignore` carries a blanket `*.so` -- so a commit landed tests and
+a manifest describing binaries that were not there. And a link check that
+passed against the working tree found four broken links when run against
+`git archive HEAD`. Check what a CLONE gets, not what your disk has.
 
 **A structuring gap on another clang, found by CI.** `cfg.rs`'s
 `clang_o2_statemachine_retains_cross_block_dispatch_edges` compiles a fixture

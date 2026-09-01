@@ -1,6 +1,6 @@
 {
- "commit": "78ad620e",
- "count": 77,
+ "commit": "abbab830",
+ "count": 74,
  "entries": [
   {
    "id": "tests/decbench_corpus/baseline.json",
@@ -1085,84 +1085,6 @@
    "size_bytes": 197,
    "notes": "separate crate (fuzz/Cargo.toml, not a workspace member of the root manifest, so `cargo check --all-targets` never sees it); verified by hand that all five still match current API signatures, but nothing enforces that",
    "territory": "rust-tests",
-   "reach": "unreachable"
-  },
-  {
-   "id": "python-tests/test_demangle_integration.py",
-   "kind": "python-test",
-   "path": "python/tests/test_demangle_integration.py",
-   "title": "Demangle integration",
-   "subject": "Demangle integration: symbol summary includes demangled names if present.",
-   "domain": [
-    "demangle"
-   ],
-   "count": 1,
-   "count_of": "test functions",
-   "markers": [],
-   "features": [
-    "python-ext"
-   ],
-   "runs_by": "uv run pytest python/tests/test_demangle_integration.py",
-   "consumes": [
-    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
-    "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
-   ],
-   "gated_by": "nothing runs it",
-   "size_bytes": 1491,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- same '../samples/...' CWD-relative bug as test_symbols_demangled.py, same two sample paths, same skip. The two files are near-identical",
-   "territory": "python-tests",
-   "reach": "unreachable"
-  },
-  {
-   "id": "python-tests/test_symbols_demangled.py",
-   "kind": "python-test",
-   "path": "python/tests/test_symbols_demangled.py",
-   "title": "Symbols demangled",
-   "subject": "Symbols demangled: list symbols demangled if present.",
-   "domain": [
-    "symbols"
-   ],
-   "count": 1,
-   "count_of": "test functions",
-   "markers": [],
-   "features": [
-    "python-ext"
-   ],
-   "runs_by": "uv run pytest python/tests/test_symbols_demangled.py",
-   "consumes": [
-    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
-    "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
-   ],
-   "gated_by": "nothing runs it",
-   "size_bytes": 1650,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- parametrized on Path('../samples/...'); resolves against the CWD, which is the repo root for the documented command, so '../samples' is outside the repo and both cases skip every run. Duplicates test_demangle_integration.py almost exactly",
-   "territory": "python-tests",
-   "reach": "unreachable"
-  },
-  {
-   "id": "python-tests/test_view_function_tools.py",
-   "kind": "python-test",
-   "path": "python/tests/test_view_function_tools.py",
-   "title": "View function tools",
-   "subject": "View function tools: trace main printf hello.",
-   "domain": [
-    "analysis",
-    "llm"
-   ],
-   "count": 1,
-   "count_of": "test functions",
-   "markers": [],
-   "features": [
-    "python-ext"
-   ],
-   "runs_by": "uv run pytest python/tests/test_view_function_tools.py",
-   "consumes": [
-    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
-   ],
-   "gated_by": "nothing runs it",
-   "size_bytes": 2503,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- module-level skipif on Path('../samples/.../hello-gfortran-O0').exists(), which is outside the repo from any plausible CWD; the single test never executes",
-   "territory": "python-tests",
    "reach": "unreachable"
   },
   {
