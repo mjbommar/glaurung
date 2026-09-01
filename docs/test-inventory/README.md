@@ -9,6 +9,9 @@ to parse, names a path that does not exist, or uses a domain outside the fixed
 vocabulary — an inventory that quietly admits a stale path is worse than none,
 because it reads as authority.
 
+The plan that acts on what this inventory found is
+[`docs/development/test-estate/`](../development/test-estate/README.md).
+
 ## Files
 
 | file | what it is |
