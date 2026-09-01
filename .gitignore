@@ -156,3 +156,11 @@ fuzz/coverage/
 # What a short smoke run leaves behind is two random inputs, which would look
 # like a corpus without being one.
 fuzz/corpus/
+
+# The canary objects are the ONE exception to the `*.so` rule above. They are
+# committed on purpose: the default test suite decompiles them, and on a fresh
+# checkout `tests/decompiler_fixtures/build/` does not exist. Without this
+# negation `git add` skips them SILENTLY -- which is how they were first
+# committed as a manifest and two test files describing nine binaries that were
+# not there.
+!tests/decompiler_fixtures/canary/*.so
