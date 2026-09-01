@@ -303,12 +303,21 @@ def native_runner(arch: str) -> list[str] | None:
     if arch == "i386":
         return ["qemu-i386", "-L", "/"]
     if arch in {"armv7", "armv7_a32"}:
-        loader = subprocess.run(
-            [TARGETS[arch].cc, "-print-file-name=ld-linux-armhf.so.3"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        # `check=False` covers a probe that FAILS; it does not cover a probe
+        # that cannot run at all. On a machine without the cross compiler --
+        # every GitHub `ubuntu-latest` runner, for one -- `subprocess.run`
+        # raises `FileNotFoundError` before any return code exists, and the
+        # caller got a traceback where the function already had a perfectly
+        # good answer three lines below. Two CI tests failed on exactly this.
+        try:
+            loader = subprocess.run(
+                [TARGETS[arch].cc, "-print-file-name=ld-linux-armhf.so.3"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return ["qemu-arm", "-L", "/usr/arm-linux-gnueabihf"]
         if loader.returncode != 0 or not loader.stdout.strip():
             return ["qemu-arm", "-L", "/usr/arm-linux-gnueabihf"]
         sysroot = Path(loader.stdout.strip()).resolve().parent.parent

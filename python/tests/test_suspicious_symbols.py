@@ -44,13 +44,35 @@ def find_suspicious_binaries(limit: int = 8) -> List[Path]:
             if len(matches) >= limit:
                 return matches
 
-    # Fallback: glob recursively for any file containing 'suspicious'
-    # Filter out metadata (.json) and metadata/ directories; prefer actual binaries
-    for p in root.rglob("*suspicious*"):
+    # Fallback: glob recursively for any file containing 'suspicious'.
+    #
+    # SORTED, and filtered to Linux-target binaries. Both matter, and CI proved
+    # it: `rglob` yields filesystem order, so this test selected DIFFERENT
+    # samples on different machines, and the pool contains members that cannot
+    # possibly satisfy the assertion below.
+    #
+    # `suspicious_win.c` names Windows APIs (CreateRemoteThread,
+    # WriteProcessMemory, VirtualAllocEx). Cross-compiled for riscv64, armhf or
+    # arm64 LINUX those APIs do not exist, so the object imports none of them --
+    # verified: `suspicious_win-riscv64-gcc` has no suspicious imports at all,
+    # while `suspicious_linux-gcc-O0` has execve, mprotect and ptrace. Those
+    # cross builds are legitimate samples of something else; they are simply not
+    # evidence for this assertion.
+    #
+    # Locally the `limit` cut the pool before reaching them and the test was
+    # green for as long as it has existed. On a GitHub runner the order differed
+    # and five of them were selected. A test whose subject depends on directory
+    # iteration order is not a test of the thing it names.
+    windows_targets = ("windows-", "mingw")
+    for p in sorted(root.rglob("*suspicious*")):
         if not p.is_file():
             continue
         # Skip metadata JSON and anything under metadata dirs
         if p.suffix.lower() == ".json" or any(part == "metadata" for part in p.parts):
+            continue
+        # A `suspicious_win` build for a NON-Windows target imports no Windows
+        # API, so it carries no suspicious import to find.
+        if "suspicious_win" in p.name and not any(w in str(p) for w in windows_targets):
             continue
         matches.append(p)
         if len(matches) >= limit:
