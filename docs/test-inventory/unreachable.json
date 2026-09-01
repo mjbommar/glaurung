@@ -1,0 +1,2115 @@
+{
+ "commit": "2ce51f9d",
+ "count": 89,
+ "entries": [
+  {
+   "id": "tests/decbench_corpus/baseline.json",
+   "kind": "baseline",
+   "path": "tests/decbench_corpus/baseline.json",
+   "title": "DecBench-metric matrix baseline (56 cells)",
+   "subject": "Per-cell (program, compiler, opt) GED/type_match/byte_match baseline plus __toolchain__ fingerprint for the self-authored 14-program corpus.",
+   "domain": [
+    "decompiler",
+    "decbench"
+   ],
+   "count": 56,
+   "count_of": "cell entries (57 keys total including __toolchain__)",
+   "markers": [
+    "decbench"
+   ],
+   "features": [],
+   "runs_by": "tools/decbench_matrix.py --check",
+   "consumes": [],
+   "gated_by": "opt-in only -- requires DECBENCH_DIR / Joern JVM, never run unless the user explicitly asks per project policy (CLAUDE.md 'Never run DecBench / Joern unless explicitly asked')",
+   "size_bytes": 0,
+   "notes": "Regression comparison is strictly per-cell, not an aggregate mean -- the README documents a real prior incident where a missing cell flattered the mean.",
+   "territory": "fixtures",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/analysis_cfg.rs",
+   "kind": "bench",
+   "path": "benches/analysis_cfg.rs",
+   "title": "Analysis-layer benchmarks",
+   "subject": "Micro benchmarks per analysis module (elf_plt, pe_iat, jump_table, vtable, exception, xrefs, dispatch) plus a whole-binary analyze_functions_bytes sweep reported in MB/s.",
+   "domain": [
+    "analysis"
+   ],
+   "count": 29,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench analysis_cfg",
+   "consumes": [
+    "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2",
+    "samples/binaries/platforms/windows/vendor/realworld/win10-webservices.dll"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 19926,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; added 2026-08-30",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/decompile_pipeline.rs",
+   "kind": "bench",
+   "path": "benches/decompile_pipeline.rs",
+   "title": "End-to-end decompile pipeline",
+   "subject": "The composed lane: bytes to recovered C, with a per-function, per-phase and whole-binary split so a total-time movement is attributable.",
+   "domain": [
+    "decompiler",
+    "ir"
+   ],
+   "count": 14,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench decompile_pipeline",
+   "consumes": [
+    "tests/decompiler_fixtures/build/*.so"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 22975,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; added 2026-08-30; and it cannot bench the SHIPPED entry points -- decompile_at/all/many live in src/python_bindings/ir.rs behind python-ext, which turns on pyo3/extension-module and therefore will not link a bench binary, so this target re-implements the orchestration and can drift from what ships",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/emulator.rs",
+   "kind": "bench",
+   "path": "benches/emulator.rs",
+   "title": "Concrete emulator hot path",
+   "subject": "Whole-function execution throughput of the concrete emulator so register-file, memory and dispatch changes can be compared.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 3,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "exec"
+   ],
+   "runs_by": "cargo bench --features exec --bench emulator",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 6882,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; declared with required-features = [\"exec\"], so `cargo bench` under default features skips it entirely",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/entropy.rs",
+   "kind": "bench",
+   "path": "benches/entropy.rs",
+   "title": "Entropy throughput",
+   "subject": "Byte-throughput of compute_entropy over a low-entropy tar and a high-entropy gzip.",
+   "domain": [
+    "entropy",
+    "triage"
+   ],
+   "count": 2,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench entropy",
+   "consumes": [
+    "samples/containers/tar/hello-cpp-g++-O0.tar",
+    "samples/containers/gzip/hello-cpp-g++-O0.gz"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 844,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/ir_dataflow.rs",
+   "kind": "bench",
+   "path": "benches/ir_dataflow.rs",
+   "title": "LLIR dataflow and type-recovery passes",
+   "subject": "Per-pass micro benchmarks and the composed AST/LLIR pass pipelines over lifted functions of increasing size, each pass fed the prefix state the real pipeline gives it.",
+   "domain": [
+    "ir",
+    "decompiler"
+   ],
+   "count": 19,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench ir_dataflow",
+   "consumes": [
+    "tests/decompiler_fixtures/build/*.so"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 23210,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; added 2026-08-30; returns early with an eprintln when the gitignored fixture build/ dir is missing",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/ir_lift.rs",
+   "kind": "bench",
+   "path": "benches/ir_lift.rs",
+   "title": "LLIR lifter benchmarks",
+   "subject": "Two tiers over the x86/ARM32/ARM64/x87 lifters: hand-assembled per-instruction-shape micro windows, and whole-function/whole-binary lifting of real fixtures.",
+   "domain": [
+    "ir",
+    "disasm"
+   ],
+   "count": 15,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench ir_lift",
+   "consumes": [
+    "tests/decompiler_fixtures/build/*.so",
+    "samples/binaries"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 49443,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; added 2026-08-30 with the four other new targets; skips with an eprintln when tests/decompiler_fixtures/build/ (gitignored) is absent",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/ir_structure.rs",
+   "kind": "bench",
+   "path": "benches/ir_structure.rs",
+   "title": "Structuring and C rendering",
+   "subject": "Times structure::recover, lower_region, loop_form recovery and c_render separately on the same precomputed input so a regression attributes to one stage.",
+   "domain": [
+    "ir",
+    "decompiler"
+   ],
+   "count": 15,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench ir_structure",
+   "consumes": [
+    "tests/decompiler_fixtures/build/*.so"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 21014,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; added 2026-08-30; skips with an eprintln when the fixture binary is missing",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/lang_detect.rs",
+   "kind": "bench",
+   "path": "benches/lang_detect.rs",
+   "title": "Language detection throughput",
+   "subject": "Single-string and batched (rayon) language detection across whatlang, the fast detector and the lingua path, over multi-script short and long text.",
+   "domain": [
+    "strings"
+   ],
+   "count": 16,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench lang_detect",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 8373,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green; it also benchmarks detect_with_lingua, which is a stub in src/strings/detect.rs (its argument is `_text`) -- that lane measures a no-op",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/strings.rs",
+   "kind": "bench",
+   "path": "benches/strings.rs",
+   "title": "String extraction throughput",
+   "subject": "Byte-throughput of extract_summary across ELF, PE, ZIP and UPX-packed samples.",
+   "domain": [
+    "strings"
+   ],
+   "count": 2,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench strings",
+   "consumes": [
+    "samples/binaries",
+    "samples/containers/zip/hello-cpp-g++-O0.zip",
+    "samples/packed/hello-rust-release.upx9"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 1383,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "bench/benches/triage.rs",
+   "kind": "bench",
+   "path": "benches/triage.rs",
+   "title": "Whole-triage throughput",
+   "subject": "Times the full triage stack (sniffers, headers, parsers, entropy, packers, heuristics, scoring, recursion) over representative ELF/PE/container/packed samples.",
+   "domain": [
+    "triage"
+   ],
+   "count": 2,
+   "count_of": "criterion benchmark functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo bench --bench triage",
+   "consumes": [
+    "samples/binaries",
+    "samples/containers",
+    "samples/packed"
+   ],
+   "gated_by": "nothing runs it (no CI job, script or gate invokes cargo bench)",
+   "size_bytes": 4878,
+   "notes": "no baseline is recorded for this target and no script, workflow or gate invokes cargo bench, so it gates nothing -- a change that doubles the measured time still ships green",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "samples/binaries/metadata",
+   "kind": "binary-asset",
+   "path": "samples/binaries/metadata",
+   "title": "Orphaned, malformed system-binary metadata JSON (63 files)",
+   "subject": "Per-binary metadata records (source_path, output_file, timestamp, hostname) for system binaries (bash, gcc, clang-20, libclang-cpp.so, initrd.img, kernel configs) that are NOT present anywhere in the checked-in corpus.",
+   "domain": [
+    "infra"
+   ],
+   "count": 63,
+   "count_of": "JSON files",
+   "markers": [],
+   "features": [],
+   "runs_by": "n/a",
+   "consumes": [],
+   "gated_by": "nothing runs it",
+   "size_bytes": 141643,
+   "notes": "TWO separate defects found: (1) all 63 files are malformed JSON - they contain a literal backslash-n two-character sequence instead of real newlines (e.g. '{\\\\n  \\\"source_path\\\": ...'), confirmed with json.load raising JSONDecodeError on every one of them, while the 339 other metadata/*.json files elsewhere in the tree parse fine; (2) every referenced output_file path (e.g. .../native/system/bash) points at a binary that does not exist anywhere in samples/ - these describe a `system_binary` collection (host tool binaries like bash/awk/cat/grep/gcc/clang-20/libstdc++.so.6/initrd.img) that was apparently captured once (hostname 'mobile4', 2025-08-30) and never committed, or was later removed. Confirmed zero consumers anywhere in python/tests, src, tools, scripts - nothing reads this directory at all.",
+   "territory": "assets",
+   "reach": "unreachable"
+  },
+  {
+   "id": "samples/binaries/platform-metadata-json",
+   "kind": "binary-asset",
+   "path": "samples/binaries/platforms",
+   "title": "Per-artifact build-record JSON under */metadata/ and */export/metadata/ (339 files)",
+   "subject": "Valid JSON records (unlike samples/binaries/metadata) describing each built artifact's compiler, flags, and provenance, one per platform/arch subtree.",
+   "domain": [
+    "infra"
+   ],
+   "count": 339,
+   "count_of": "JSON files across all platforms/export/metadata + platforms/*/metadata dirs (402 total metadata json minus the 63 malformed ones above)",
+   "markers": [],
+   "features": [],
+   "runs_by": "n/a",
+   "consumes": [],
+   "gated_by": "nothing runs it",
+   "size_bytes": 0,
+   "notes": "Confirmed zero consumers: grepped python/tests, src, tools, scripts for any glob or literal reference into a metadata/ directory - found none. These are generation-time build records (compiler invocation, timestamps) that exist purely for human/maintainer inspection; no test asserts against them and no tool loads them. Not necessarily a problem (they document provenance), but 402 files / 156KB+ of JSON with zero programmatic readers is worth knowing.",
+   "territory": "assets",
+   "reach": "unreachable"
+  },
+  {
+   "id": "conftest.py",
+   "kind": "docs",
+   "path": "conftest.py",
+   "title": "Root pytest conftest",
+   "subject": "Empty pytest_sessionstart hook, kept as a placeholder; no monkeypatches or shims (per its own docstring).",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 186,
+   "runs_by": "auto-loaded by pytest",
+   "gated_by": "always loaded whenever pytest runs",
+   "notes": "Genuinely inert today.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/ast_demo.rs",
+   "kind": "example",
+   "path": "examples/ast_demo.rs",
+   "title": "Pseudocode AST demo",
+   "subject": "Renders the pseudocode AST for the first few discovered functions in a binary, end to end through lift, SSA, structure and AST lowering.",
+   "domain": [
+    "decompiler",
+    "ir"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo run --release --example ast_demo -- <binary>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 1094,
+   "notes": "no reference anywhere outside its own file",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/axeyum_bench_primitives.rs",
+   "kind": "example",
+   "path": "examples/axeyum_bench_primitives.rs",
+   "title": "Solver primitive benchmarks",
+   "subject": "Cold/warm timing of individual SMT primitives across the z3 and axeyum backends (18 KB).",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --features solver-z3,solver-axeyum --example axeyum_bench_primitives",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 18357,
+   "notes": "driven by docs/axeyum-integration/benchmark/run_benchmark.sh -- a doc-tree script, not part of any gate",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:axeyum_bench_primitives",
+   "kind": "example",
+   "path": "examples/axeyum_bench_primitives.rs",
+   "title": "cargo run --example axeyum_bench_primitives",
+   "subject": "Tier-0 solver-primitives benchmark: isolates every QF_BV operator glaurung's IR can emit, across a width sweep.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 18357,
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example axeyum_bench_primitives --features solver-z3,solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/axeyum_diff.rs",
+   "kind": "example",
+   "path": "examples/axeyum_diff.rs",
+   "title": "z3 vs axeyum differential",
+   "subject": "Runs the same queries through the z3 and axeyum backends and diffs their answers.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --features solver-z3,solver-axeyum --example axeyum_diff",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 10923,
+   "notes": "needs BOTH solver features, so it builds only in the feature-build-gate's ninth lane; referenced from docs/axeyum-integration/",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:axeyum_diff",
+   "kind": "example",
+   "path": "examples/axeyum_diff.rs",
+   "title": "cargo run --example axeyum_diff",
+   "subject": "Differential oracle + benchmark: z3 vs the native axeyum backend on realistic QF_BV path-condition formulas.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 10923,
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example axeyum_diff --features solver-z3,solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/axeyum_incremental.rs",
+   "kind": "example",
+   "path": "examples/axeyum_incremental.rs",
+   "title": "Incremental solving comparison",
+   "subject": "Compares incremental push/pop solving between the z3 and axeyum backends.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --features solver-z3,solver-axeyum --example axeyum_incremental",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 4867,
+   "notes": "driven by docs/axeyum-integration/benchmark/run_benchmark.sh",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:axeyum_incremental",
+   "kind": "example",
+   "path": "examples/axeyum_incremental.rs",
+   "title": "cargo run --example axeyum_incremental",
+   "subject": "Tests whether axeyum's incremental API closes the ~2-3x gap to z3 on the explorer's actual extend-and-recheck pattern.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 4867,
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example axeyum_incremental --features solver-z3,solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/axeyum_infeasible_path_proof.rs",
+   "kind": "example",
+   "path": "examples/axeyum_infeasible_path_proof.rs",
+   "title": "Infeasible path proof",
+   "subject": "Demonstrates proving an execution path infeasible with the native axeyum backend.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --features solver-axeyum --example axeyum_infeasible_path_proof",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 6906,
+   "notes": "declared with required-features = [\"solver-axeyum\"]; referenced from docs/axeyum-integration/03-architecture.md",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:axeyum_infeasible_path_proof",
+   "kind": "example",
+   "path": "examples/axeyum_infeasible_path_proof.rs",
+   "title": "cargo run --example axeyum_infeasible_path_proof",
+   "subject": "Exports one source-bound, DRAT-checked proof-carrying infeasible-path verdict (downstream consumer demo, not a whole-CFG proof).",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 6906,
+   "features": [
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example axeyum_infeasible_path_proof --features solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/axeyum_sweep.rs",
+   "kind": "example",
+   "path": "examples/axeyum_sweep.rs",
+   "title": "Solver sweep",
+   "subject": "Sweeps a query corpus through both solver backends and reports aggregate timings.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --features solver-z3,solver-axeyum --example axeyum_sweep",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 3479,
+   "notes": "driven by docs/axeyum-integration/benchmark/run_benchmark.sh",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:axeyum_sweep",
+   "kind": "example",
+   "path": "examples/axeyum_sweep.rs",
+   "title": "cargo run --example axeyum_sweep",
+   "subject": "Mechanism micro-benchmark sweeping formula size to show why axeyum beats the z3 crate on small formulas and converges on large ones.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 3479,
+   "features": [
+    "solver-z3",
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example axeyum_sweep --features solver-z3,solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/check_canary.rs",
+   "kind": "example",
+   "path": "examples/check_canary.rs",
+   "title": "Stack canary rendering check",
+   "subject": "Decompiles one function end to end and prints the C so stack-protector handling can be eyeballed.",
+   "domain": [
+    "decompiler",
+    "ir"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo run --release --example check_canary -- <binary>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 3331,
+   "notes": "no reference anywhere outside its own file; an ad-hoc debugging scratchpad kept in the tree",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/check_prologue.rs",
+   "kind": "example",
+   "path": "examples/check_prologue.rs",
+   "title": "AArch64 prologue recognition check",
+   "subject": "Runs recognise_arm64_prologue over discovered functions and renders the C, for eyeballing prologue classification.",
+   "domain": [
+    "decompiler",
+    "analysis"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo run --release --example check_prologue -- <binary>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 1623,
+   "notes": "no reference anywhere outside its own file; an ad-hoc debugging scratchpad kept in the tree",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "examples/(autodiscovered, unregistered in Cargo.toml)",
+   "kind": "example",
+   "path": "examples/check_prologue.rs",
+   "title": "6 autodiscovered examples with no [[example]] stanza",
+   "subject": "check_prologue.rs, ioctl_surface_scan.rs, check_canary.rs, linux_symbolic_frontend.rs, test_classifier.rs, ast_demo.rs -- cargo's default autoexamples picks these up from examples/*.rs even though none has a Cargo.toml [[example]] entry, unlike their 9 siblings above.",
+   "domain": [
+    "symbolic",
+    "analysis"
+   ],
+   "size_bytes": 15445,
+   "count": 6,
+   "count_of": "unregistered example .rs files",
+   "runs_by": "cargo run --example <name>  (default features suffice; none needs required-features)",
+   "gated_by": "built by every feature-build-gate.sh lane that doesn't restrict --all-targets away (they carry no required-features, so cargo always attempts them); never explicitly run by CI",
+   "notes": "ioctl_surface_scan.rs is the one with a real downstream consumer (scripts/ioctlance_parity.py reads its built binary directly) despite having no Cargo.toml stanza of its own.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/ioctl_scan.rs",
+   "kind": "example",
+   "path": "examples/ioctl_scan.rs",
+   "title": "Symbolic IOCTL scan",
+   "subject": "Drives the symbolic engine over a Windows driver to enumerate reachable IOCTL codes.",
+   "domain": [
+    "windows",
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo run --release --features symbolic --example ioctl_scan -- <file.sys>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 9860,
+   "notes": "declared with required-features = [\"symbolic\"]; referenced only from docs",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:ioctl_scan",
+   "kind": "example",
+   "path": "examples/ioctl_scan.rs",
+   "title": "cargo run --example ioctl_scan",
+   "subject": "First-slice PE->handler IOCTLance-style scan; lifts without precise DriverEntry->MajorFunction[14] dispatch discovery.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 9860,
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo run --release --example ioctl_scan --features symbolic",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/ioctlance.rs",
+   "kind": "example",
+   "path": "examples/ioctlance.rs",
+   "title": "IOCTLance-style driver bug hunt",
+   "subject": "The large symbolic driver-analysis example: IOCTLance-style vulnerability hunting over Windows drivers (28 KB, the biggest example).",
+   "domain": [
+    "windows",
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo run --release --features symbolic --example ioctlance -- <file.sys>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 28044,
+   "notes": "declared with required-features = [\"symbolic\"]; referenced only from docs/ and the axeyum benchmark README",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:ioctlance",
+   "kind": "example",
+   "path": "examples/ioctlance.rs",
+   "title": "cargo run --example ioctlance",
+   "subject": "Dispatch-aware IOCTLance-style scanner combining native IOCTL dispatch discovery with symbolic IRP sink detectors.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 28044,
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo run --release --example ioctlance --features symbolic",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/linux_symbolic_cve.rs",
+   "kind": "example",
+   "path": "examples/linux_symbolic_cve.rs",
+   "title": "Linux CVE symbolic reproduction",
+   "subject": "Symbolically reproduces a Linux kernel ioctl CVE path using the axeyum solver backend.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --features solver-axeyum --example linux_symbolic_cve",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 12890,
+   "notes": "declared with required-features = [\"solver-axeyum\"]; no reference anywhere outside its own file",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:linux_symbolic_cve",
+   "kind": "example",
+   "path": "examples/linux_symbolic_cve.rs",
+   "title": "cargo run --example linux_symbolic_cve",
+   "subject": "Executes one strictly-admitted Linux AArch64 ioctl handler with the selected in-process solver.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 12890,
+   "features": [
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example linux_symbolic_cve --features solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/linux_symbolic_frontend.rs",
+   "kind": "example",
+   "path": "examples/linux_symbolic_frontend.rs",
+   "title": "Linux AArch64 handler admission",
+   "subject": "Inspects strict admission of Linux AArch64 ET_REL ioctl handlers and prints the decision as JSON.",
+   "domain": [
+    "analysis",
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo run --example linux_symbolic_frontend -- <object> <handler>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 5194,
+   "notes": "no reference anywhere outside its own file; note it has NO required-features entry in Cargo.toml yet is symbolic-flavoured -- it compiles only because analysis::linux_symbolic_frontend is ungated",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/ordered_native_replay.rs",
+   "kind": "example",
+   "path": "examples/ordered_native_replay.rs",
+   "title": "Ordered native solver replay",
+   "subject": "Replays a captured ordered constraint sequence through the native axeyum backend.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --features solver-axeyum --example ordered_native_replay",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 684,
+   "notes": "declared with required-features = [\"solver-axeyum\"]; referenced from docs/axeyum-integration/capture/README.md",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "Cargo.toml:[[example]]:ordered_native_replay",
+   "kind": "example",
+   "path": "examples/ordered_native_replay.rs",
+   "title": "cargo run --example ordered_native_replay",
+   "subject": "Minimal ordered native-replay driver.",
+   "domain": [
+    "symbolic"
+   ],
+   "size_bytes": 684,
+   "features": [
+    "solver-axeyum"
+   ],
+   "runs_by": "cargo run --release --example ordered_native_replay --features solver-axeyum",
+   "gated_by": "type-checked by scripts/feature-build-gate.sh's per-feature `cargo check --all-targets` lanes (CI: feature-build-gate.yml); never actually RUN by any CI workflow or gate script",
+   "notes": "Declares required-features in Cargo.toml, so cargo skips it under configurations lacking that feature rather than failing.",
+   "markers": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "example/examples/test_classifier.rs",
+   "kind": "example",
+   "path": "examples/test_classifier.rs",
+   "title": "String classifier demo",
+   "subject": "Runs extract_summary over a file and prints the string classification.",
+   "domain": [
+    "strings"
+   ],
+   "count": 1,
+   "count_of": "example binaries",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "cargo run --release --example test_classifier -- <file>",
+   "consumes": [],
+   "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
+   "size_bytes": 2081,
+   "notes": "no reference anywhere outside its own file; the name reads like a test but it is a binary with no assertions",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tests/decbench_corpus",
+   "kind": "fixture-corpus",
+   "path": "tests/decbench_corpus",
+   "title": "Small self-authored DecBench-metric validation corpus",
+   "subject": "14 self-contained C programs (47 lines total, generated by committed gen_sources.py) each exercising one control-flow/data shape, used to measure GED/type_match/byte_match on inputs Glaurung controls rather than DecBench's own sample set.",
+   "domain": [
+    "decompiler",
+    "decbench"
+   ],
+   "count": 14,
+   "count_of": "source files under src/ (arith, sort, branches, structs, loops, matrix, checksum, arrays, linkedlist, switch_jt, statemachine, fixedpoint, strops, recursion)",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "tools/decbench_matrix.py --json / --check (56 cells = 14 x {gcc,clang} x {O0,O2}); contract-tested by test_decbench_corpus_contracts.py",
+   "consumes": [],
+   "gated_by": "test_decbench_corpus_contracts.py is in the default suite (no decbench marker); the actual metric matrix run (tools/decbench_matrix.py) is opt-in per project policy (never run unless asked)",
+   "size_bytes": 0,
+   "notes": "Distinct from tests/decbench_scoreboard/ -- this is the small 56-cell development matrix; the scoreboard is the pinned 250-function official submission record. Also referenced by test_decompiler_control_flow_semantics.py, test_decompiler_fixture_structural.py, test_decompiler_fixture_harness.py, test_decompiler_frame_semantics.py, test_local_gate_fails_closed.py, and two Rust files (src/analysis/cfg.rs, src/ir/types_recover.rs).",
+   "territory": "fixtures",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tests/decompiler_fixtures/src/go-and-asm-orphans",
+   "kind": "fixture-corpus",
+   "path": "tests/decompiler_fixtures/src",
+   "title": "Go fixtures and hand-written assembly, written but not wired in",
+   "subject": "Five Go sources (176_go_itab_dispatch .. 180_go_overflow_bits) and one .S fixture (09_nested_dispatch_loop.S) that exist as source but are not built or judged by any lane.",
+   "domain": [
+    "decompiler"
+   ],
+   "count": 6,
+   "count_of": "orphaned source files (5 .go + 1 .S)",
+   "markers": [],
+   "features": [],
+   "runs_by": "nothing runs the Go sources through the decompiler pipeline",
+   "consumes": [],
+   "gated_by": "nothing runs it",
+   "size_bytes": 0,
+   "notes": "CONFIRMED as a live gap, not stale documentation. Verified directly: (1) no *.so for 176-180 under build/; (2) zero matches for 176_/177_/178_/179_/180_ across baseline.json, arch_baseline.json, structural_baseline.json, defuse_baseline.json; (3) tools/fixture_harness.py's fixture-source glob at line 717 is `SRC.glob('*.c') + SRC.glob('*.cpp') + SRC.glob('*.rs')` -- no .go glob anywhere in the file. The only thing that knows the Go files exist is test_decompiler_curriculum_corpus.py:81 (counts .go among catalogued suffixes). 09_nested_dispatch_loop.S is used only by a Rust CFG unit test (src/analysis/cfg.rs), not by the Python fixture matrix -- confirmed via grep, only that one non-test consumer.",
+   "territory": "fixtures",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tests/fixtures/msvc-pdb",
+   "kind": "fixture-corpus",
+   "path": "tests/fixtures/msvc-pdb",
+   "title": "Windows PDB/PE fixture set (fetch-on-demand, not committed)",
+   "subject": "Provenance manifest (MANIFEST.json) and fetch.sh for 8 (PE,PDB) pairs from a Win11 23H2 corpus (ntoskrnl.exe, ntdll.dll, tcpip.sys, dxgkrnl.sys, win32k.sys, lsass.exe, kernel32.dll, spoolsv.exe) totalling ~78MB, fetched from msdl.microsoft.com rather than vendored.",
+   "domain": [
+    "windows",
+    "formats"
+   ],
+   "count": 4,
+   "count_of": "committed files (.gitignore, MANIFEST.json, README.md, fetch.sh) -- zero binary bytes committed",
+   "markers": [],
+   "features": [],
+   "runs_by": "python/tests/test_pdb_type_db.py and ~12 other windows-* tests",
+   "consumes": [],
+   "gated_by": "each consuming test calls pytest.skip() when the fetched fixture file is absent (confirmed in test_pdb_type_db.py:19) -- effectively opt-in, silent on a machine that never ran fetch.sh",
+   "size_bytes": 0,
+   "notes": "This is a real, intentional gap for any CI/dev machine that has not run fetch.sh -- ~13 windows/PDB tests silently skip rather than fail. Worth flagging alongside the Go gap as another 'looks covered, isn't running' case, though this one is by design (documented in the README's 'why no committed bytes' section) rather than an oversight.",
+   "territory": "fixtures",
+   "reach": "unreachable"
+  },
+  {
+   "id": "fuzz-target/fuzz/fuzz_targets/containers_detect.rs",
+   "kind": "fuzz-target",
+   "path": "fuzz/fuzz_targets/containers_detect.rs",
+   "title": "Fuzz triage::containers::detect_containers",
+   "subject": "Feeds arbitrary bytes to container detection and child-metadata extraction.",
+   "domain": [
+    "triage",
+    "containers"
+   ],
+   "count": 1,
+   "count_of": "libfuzzer entry points",
+   "markers": [],
+   "features": [
+    "triage-core",
+    "triage-heuristics",
+    "triage-containers"
+   ],
+   "runs_by": "cargo fuzz run containers_detect (from fuzz/, needs cargo-fuzz installed)",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate calls cargo fuzz; no corpus or artifacts dir is committed)",
+   "size_bytes": 146,
+   "notes": "separate crate (fuzz/Cargo.toml, not a workspace member of the root manifest, so `cargo check --all-targets` never sees it); verified by hand that all five still match current API signatures, but nothing enforces that",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "fuzz-target/fuzz/fuzz_targets/entropy_analyze.rs",
+   "kind": "fuzz-target",
+   "path": "fuzz/fuzz_targets/entropy_analyze.rs",
+   "title": "Fuzz triage::entropy::analyze_entropy",
+   "subject": "Feeds arbitrary bytes to windowed entropy analysis under the default config.",
+   "domain": [
+    "triage",
+    "entropy"
+   ],
+   "count": 1,
+   "count_of": "libfuzzer entry points",
+   "markers": [],
+   "features": [
+    "triage-core",
+    "triage-heuristics",
+    "triage-containers"
+   ],
+   "runs_by": "cargo fuzz run entropy_analyze (from fuzz/, needs cargo-fuzz installed)",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate calls cargo fuzz; no corpus or artifacts dir is committed)",
+   "size_bytes": 213,
+   "notes": "separate crate (fuzz/Cargo.toml, not a workspace member of the root manifest, so `cargo check --all-targets` never sees it); verified by hand that all five still match current API signatures, but nothing enforces that",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "fuzz-target/fuzz/fuzz_targets/headers_validate.rs",
+   "kind": "fuzz-target",
+   "path": "fuzz/fuzz_targets/headers_validate.rs",
+   "title": "Fuzz triage::headers::validate",
+   "subject": "Feeds arbitrary bytes to ELF/PE/Mach-O header validation; any panic is a bug.",
+   "domain": [
+    "triage",
+    "formats"
+   ],
+   "count": 1,
+   "count_of": "libfuzzer entry points",
+   "markers": [],
+   "features": [
+    "triage-core",
+    "triage-heuristics",
+    "triage-containers"
+   ],
+   "runs_by": "cargo fuzz run headers_validate (from fuzz/, needs cargo-fuzz installed)",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate calls cargo fuzz; no corpus or artifacts dir is committed)",
+   "size_bytes": 134,
+   "notes": "separate crate (fuzz/Cargo.toml, not a workspace member of the root manifest, so `cargo check --all-targets` never sees it); verified by hand that all five still match current API signatures, but nothing enforces that",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "fuzz-target/fuzz/fuzz_targets/parsers_parse.rs",
+   "kind": "fuzz-target",
+   "path": "fuzz/fuzz_targets/parsers_parse.rs",
+   "title": "Fuzz triage::parsers::parse",
+   "subject": "Feeds arbitrary bytes to the structured parser probes.",
+   "domain": [
+    "triage",
+    "formats"
+   ],
+   "count": 1,
+   "count_of": "libfuzzer entry points",
+   "markers": [],
+   "features": [
+    "triage-core",
+    "triage-heuristics",
+    "triage-containers"
+   ],
+   "runs_by": "cargo fuzz run parsers_parse (from fuzz/, needs cargo-fuzz installed)",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate calls cargo fuzz; no corpus or artifacts dir is committed)",
+   "size_bytes": 131,
+   "notes": "separate crate (fuzz/Cargo.toml, not a workspace member of the root manifest, so `cargo check --all-targets` never sees it); verified by hand that all five still match current API signatures, but nothing enforces that",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "fuzz-target/fuzz/fuzz_targets/sniffers_sniff.rs",
+   "kind": "fuzz-target",
+   "path": "fuzz/fuzz_targets/sniffers_sniff.rs",
+   "title": "Fuzz the combined sniffer",
+   "subject": "Feeds arbitrary bytes plus a synthetic path to CombinedSniffer::sniff.",
+   "domain": [
+    "triage"
+   ],
+   "count": 1,
+   "count_of": "libfuzzer entry points",
+   "markers": [],
+   "features": [
+    "triage-core",
+    "triage-heuristics",
+    "triage-containers"
+   ],
+   "runs_by": "cargo fuzz run sniffers_sniff (from fuzz/, needs cargo-fuzz installed)",
+   "consumes": [],
+   "gated_by": "nothing runs it (no CI job, script or gate calls cargo fuzz; no corpus or artifacts dir is committed)",
+   "size_bytes": 197,
+   "notes": "separate crate (fuzz/Cargo.toml, not a workspace member of the root manifest, so `cargo check --all-targets` never sees it); verified by hand that all five still match current API signatures, but nothing enforces that",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "python-tests/test_demangle_integration.py",
+   "kind": "python-test",
+   "path": "python/tests/test_demangle_integration.py",
+   "title": "Demangle integration",
+   "subject": "Demangle integration: symbol summary includes demangled names if present.",
+   "domain": [
+    "demangle"
+   ],
+   "count": 1,
+   "count_of": "test functions",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "uv run pytest python/tests/test_demangle_integration.py",
+   "consumes": [
+    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
+    "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
+   ],
+   "gated_by": "nothing runs it",
+   "size_bytes": 1491,
+   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- same '../samples/...' CWD-relative bug as test_symbols_demangled.py, same two sample paths, same skip. The two files are near-identical",
+   "territory": "python-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "python-tests/test_symbols_demangled.py",
+   "kind": "python-test",
+   "path": "python/tests/test_symbols_demangled.py",
+   "title": "Symbols demangled",
+   "subject": "Symbols demangled: list symbols demangled if present.",
+   "domain": [
+    "symbols"
+   ],
+   "count": 1,
+   "count_of": "test functions",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "uv run pytest python/tests/test_symbols_demangled.py",
+   "consumes": [
+    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
+    "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
+   ],
+   "gated_by": "nothing runs it",
+   "size_bytes": 1650,
+   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- parametrized on Path('../samples/...'); resolves against the CWD, which is the repo root for the documented command, so '../samples' is outside the repo and both cases skip every run. Duplicates test_demangle_integration.py almost exactly",
+   "territory": "python-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "python-tests/test_view_function_tools.py",
+   "kind": "python-test",
+   "path": "python/tests/test_view_function_tools.py",
+   "title": "View function tools",
+   "subject": "View function tools: trace main printf hello.",
+   "domain": [
+    "analysis",
+    "llm"
+   ],
+   "count": 1,
+   "count_of": "test functions",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "uv run pytest python/tests/test_view_function_tools.py",
+   "consumes": [
+    "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
+   ],
+   "gated_by": "nothing runs it",
+   "size_bytes": 2503,
+   "notes": "no CI workflow runs this; local `uv run pytest` only; DEAD: hardcodes '../samples/...' relative to CWD, which resolves outside the repo from every plausible working directory, so it skips unconditionally; DEAD -- module-level skipif on Path('../samples/.../hello-gfortran-O0').exists(), which is outside the repo from any plausible CWD; the single test never executes",
+   "territory": "python-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "java/glaurung-jvm-tools/src/test/java/com/glaurung/jvmtool/MainTest.java",
+   "kind": "rust-integration-test",
+   "path": "java/glaurung-jvm-tools/src/test/java/com/glaurung/jvmtool/MainTest.java",
+   "title": "glaurung-jvm-tools JUnit tests",
+   "subject": "5 JUnit 5 @Test methods covering the JVM helper's Main entry point / CLI dispatch.",
+   "domain": [
+    "java",
+    "decompiler"
+   ],
+   "count": 5,
+   "count_of": "@Test methods",
+   "size_bytes": 7611,
+   "runs_by": "mvn test  (or `mvn -q test package` per docs/parsers/java/JVM_AGENTIC_ANALYSIS_PLAN.md)",
+   "gated_by": "nothing runs it: the runtime auto-build path uses -DskipTests explicitly, and no CI workflow invokes Maven at all -- only documented manually in docs/parsers/java/JVM_AGENTIC_ANALYSIS_PLAN.md",
+   "notes": "Same shape as the cargo-test-skipped-by-CI finding, one layer further: even the one place that DOES build this module (the Python lazy-builder) explicitly skips its tests. kind is mismapped to the schema's rust-integration-test bucket for lack of a java-test kind; this is a JUnit 5 test class, not Rust.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/adversarial.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/adversarial.rs",
+   "title": "Adversarial triage inputs",
+   "subject": "Malformed and masquerading inputs (dope magic, truncated ELF/PE/gzip, ZIP-masquerading .exe) must produce errors, not panics.",
+   "domain": [
+    "triage"
+   ],
+   "count": 5,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 2446,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/determinism_json.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/determinism_json.rs",
+   "title": "Triage JSON determinism",
+   "subject": "The same input twice produces byte-identical triage JSON, including the budgets and truncation report.",
+   "domain": [
+    "triage"
+   ],
+   "count": 2,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 1646,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/entropy_real.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/entropy_real.rs",
+   "title": "Entropy analysis on real samples",
+   "subject": "Entropy behaviour across real formats: Python bytecode, ELF by optimization level, Java class, entropy cliffs, sliding windows.",
+   "domain": [
+    "triage",
+    "entropy"
+   ],
+   "count": 7,
+   "count_of": "#[test] functions",
+   "markers": [
+    "ignored"
+   ],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 8833,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/ioc_integration.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/ioc_integration.rs",
+   "title": "IOC detection via string classification",
+   "subject": "IOC counts (URLs, hosts, paths) are detected in classified strings from a sample.",
+   "domain": [
+    "triage",
+    "strings"
+   ],
+   "count": 1,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 1991,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/packers_real.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/packers_real.rs",
+   "title": "UPX packer detection on real samples",
+   "subject": "UPX detection on genuinely packed binaries, absence of false positives on unpacked ones, version detection and scan limits.",
+   "domain": [
+    "triage",
+    "packers"
+   ],
+   "count": 8,
+   "count_of": "#[test] functions",
+   "markers": [
+    "ignored"
+   ],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 9311,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/suspicious_integration.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/suspicious_integration.rs",
+   "title": "Suspicious import detection",
+   "subject": "Symbol summaries over adversarial samples must flag suspicious imports.",
+   "domain": [
+    "triage"
+   ],
+   "count": 1,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 3093,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/symbols_elf.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/symbols_elf.rs",
+   "title": "ELF symbol summary smoke test",
+   "subject": "The ELF symbol summary runs to completion on a sample.",
+   "domain": [
+    "symbols"
+   ],
+   "count": 1,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 762,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/symbols_macho.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/symbols_macho.rs",
+   "title": "Mach-O symbol summary smoke test",
+   "subject": "The Mach-O symbol summary runs to completion on a sample.",
+   "domain": [
+    "symbols"
+   ],
+   "count": 1,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 876,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/symbols_pe.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/symbols_pe.rs",
+   "title": "PE symbol summary smoke test",
+   "subject": "The PE symbol summary runs to completion on a sample.",
+   "domain": [
+    "symbols"
+   ],
+   "count": 1,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 844,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-integration-test/tests/triage/truncation_json.rs",
+   "kind": "rust-integration-test",
+   "path": "tests/triage/truncation_json.rs",
+   "title": "Graceful truncation and JSON round-trip",
+   "subject": "A truncated real sample triages gracefully and its artifact survives a JSON round-trip.",
+   "domain": [
+    "triage"
+   ],
+   "count": 1,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "default"
+   ],
+   "runs_by": "nothing -- not declared by tests/triage/mod.rs",
+   "consumes": [
+    "samples"
+   ],
+   "gated_by": "nothing runs it (never compiled)",
+   "size_bytes": 1537,
+   "notes": "ORPHAN: tests/triage/mod.rs declares only budgets, io, real_files, sniffers, so this file is never compiled and its tests never run",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/exec/oracle.rs",
+   "kind": "rust-unit-test",
+   "path": "src/exec/oracle.rs",
+   "title": "exec::oracle unit tests",
+   "subject": "DEV-ONLY differential oracle \u2014 validate the emulator against Unicorn.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 11,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "dev-oracle"
+   ],
+   "runs_by": "cargo test --features dev-oracle",
+   "consumes": [],
+   "gated_by": "cargo feature dev-oracle (dev only, links system libunicorn; nothing automated runs it)",
+   "size_bytes": 14586,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/python_bindings/ir.rs",
+   "kind": "rust-unit-test",
+   "path": "src/python_bindings/ir.rs",
+   "title": "python_bindings::ir unit tests",
+   "subject": "Python bindings for the LLIR (low-level IR) lifting pipeline.",
+   "domain": [
+    "ir",
+    "decompiler"
+   ],
+   "count": 17,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "cargo test --features python-ext",
+   "consumes": [],
+   "gated_by": "cargo feature python-ext (plain `cargo test` never compiles this tree)",
+   "size_bytes": 103366,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/python_bindings/ir/dwarf_contracts.rs",
+   "kind": "rust-unit-test",
+   "path": "src/python_bindings/ir/dwarf_contracts.rs",
+   "title": "python_bindings::ir::dwarf_contracts unit tests",
+   "subject": "Unit tests for the python_bindings::ir::dwarf_contracts module.",
+   "domain": [
+    "ir",
+    "decompiler"
+   ],
+   "count": 0,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "cargo test --features python-ext",
+   "consumes": [],
+   "gated_by": "cargo feature python-ext (plain `cargo test` never compiles this tree)",
+   "size_bytes": 22869,
+   "notes": "cfg(test) block declares a sibling *_tests.rs module or holds test-only helpers; no #[test] of its own",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/python_bindings/ir/type_maps.rs",
+   "kind": "rust-unit-test",
+   "path": "src/python_bindings/ir/type_maps.rs",
+   "title": "python_bindings::ir::type_maps unit tests",
+   "subject": "The DecBench type maps: the (declaration, expression-width) TypeMap pair",
+   "domain": [
+    "ir",
+    "decompiler"
+   ],
+   "count": 15,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "python-ext"
+   ],
+   "runs_by": "cargo test --features python-ext",
+   "consumes": [],
+   "gated_by": "cargo feature python-ext (plain `cargo test` never compiles this tree)",
+   "size_bytes": 44677,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/concretization.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/concretization.rs",
+   "title": "symbolic::concretization unit tests",
+   "subject": "Configurable model-value selection for symbolic exploration.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 6,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 15076,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/explore.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/explore.rs",
+   "title": "symbolic::explore unit tests",
+   "subject": "Symbolic path exploration (Phase 5, initial).",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 27,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 73441,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/explore/solve.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/explore/solve.rs",
+   "title": "symbolic::explore::solve unit tests",
+   "subject": "The explorer's contract with the solver layer.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 0,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 15021,
+   "notes": "cfg(test) block declares a sibling *_tests.rs module or holds test-only helpers; no #[test] of its own",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/expr.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/expr.rs",
+   "title": "symbolic::expr unit tests",
+   "subject": "Hash-consed bit-vector expression IR for symbolic execution.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 9,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 24669,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/ioctl.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/ioctl.rs",
+   "title": "symbolic::ioctl unit tests",
+   "subject": "IOCTLance-style Windows-driver analysis on the symbolic engine.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 29,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 64843,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/native_trace.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/native_trace.rs",
+   "title": "symbolic::native_trace unit tests",
+   "subject": "Deterministic native-expression packs for ordered trace replay.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 3,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 19517,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/ordered_trace.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/ordered_trace.rs",
+   "title": "symbolic::ordered_trace unit tests",
+   "subject": "Ordered, lineage-aware symbolic-solver trace capture.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 10,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 73232,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/solver/bitwuzla_backend.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/solver/bitwuzla_backend.rs",
+   "title": "symbolic::solver::bitwuzla_backend unit tests",
+   "subject": "Benchmark-only in-process Bitwuzla backend.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 7,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "solver-bitwuzla"
+   ],
+   "runs_by": "cargo test --features solver-bitwuzla",
+   "consumes": [],
+   "gated_by": "cargo feature solver-bitwuzla (bench-only cell, needs native Bitwuzla; nothing runs it)",
+   "size_bytes": 50442,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/solver/mod.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/solver/mod.rs",
+   "title": "symbolic::solver::mod unit tests",
+   "subject": "SMT solver layer \u2014 a pluggable [Solver] trait with production backends",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 12,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 74193,
+   "notes": "contains a test module double-gated on a cargo feature",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/solver/pipe.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/solver/pipe.rs",
+   "title": "symbolic::solver::pipe unit tests",
+   "subject": "Fallback SMT-LIB2 pipe backend \u2014 spawns a solver *binary* and speaks",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 7,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 10096,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "rust-unit/src/symbolic/symdomain.rs",
+   "kind": "rust-unit-test",
+   "path": "src/symbolic/symdomain.rs",
+   "title": "symbolic::symdomain unit tests",
+   "subject": "The symbolic value domain \u2014 builds bit-vector [Expr] terms.",
+   "domain": [
+    "symbolic"
+   ],
+   "count": 7,
+   "count_of": "#[test] functions",
+   "markers": [],
+   "features": [
+    "symbolic"
+   ],
+   "runs_by": "cargo test --features symbolic",
+   "consumes": [],
+   "gated_by": "cargo feature symbolic (in NEITHER default nor python-ext; nothing automated runs it)",
+   "size_bytes": 14014,
+   "notes": "",
+   "territory": "rust-tests",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/build-macho-samples.sh",
+   "kind": "script",
+   "path": "scripts/build-macho-samples.sh",
+   "title": "Mach-O sample builder",
+   "subject": "Builds a minimal Mach-O sample (multi_import-macho) with clang + ld64.lld to exercise the Mach-O stubs resolver, no macOS SDK required.",
+   "domain": [
+    "formats"
+   ],
+   "size_bytes": 1092,
+   "runs_by": "scripts/build-macho-samples.sh",
+   "gated_by": "nothing calls it; its output samples/binaries/platforms/darwin/amd64/export/native/multi_import-macho is committed and read by src/analysis/macho_stubs.rs tests and python/tests/test_macho_stubs.py",
+   "notes": "One-shot generator; the generated binary is tracked in git, the generator itself has no automated caller.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/fetch-reference.sh",
+   "kind": "script",
+   "path": "scripts/fetch-reference.sh",
+   "title": "Third-party reference checkout fetcher",
+   "subject": "Plain git-clones (no submodules) the 40+ third-party reference repos under reference/ on demand; replaced scripts/setup-references.sh's submodule approach on 2026-08-31 because uv/pip cloning a git dependency pulled all submodules transitively.",
+   "domain": [
+    "infra",
+    "docs"
+   ],
+   "size_bytes": 3455,
+   "runs_by": "scripts/fetch-reference.sh [name ...]",
+   "gated_by": "manual only; nothing in src/, python/, tools/ or the build reads reference/ checkouts -- only prose in docs/ cites them",
+   "notes": "Same day as this survey (2026-08-31 per its own header comment and file mtime). Supersedes scripts/setup-references.sh.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/format-python.sh",
+   "kind": "script",
+   "path": "scripts/format-python.sh",
+   "title": "ruff format wrapper",
+   "subject": "Thin wrapper: exec uvx ruff format python/ \"$@\".",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 262,
+   "runs_by": "scripts/format-python.sh",
+   "gated_by": "nothing calls it; CLAUDE.md documents the underlying `uvx ruff format python/` command directly instead of this wrapper",
+   "notes": "",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/format-rust.sh",
+   "kind": "script",
+   "path": "scripts/format-rust.sh",
+   "title": "cargo fmt wrapper",
+   "subject": "Thin wrapper: exec cargo fmt --all \"$@\".",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 234,
+   "runs_by": "scripts/format-rust.sh",
+   "gated_by": "nothing calls it directly, though feature-build-gate.yml runs the equivalent `cargo fmt --all -- --check` inline",
+   "notes": "",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/harden.sh",
+   "kind": "script",
+   "path": "scripts/harden.sh",
+   "title": "Combined format+lint+typecheck",
+   "subject": "Runs cargo fmt, cargo clippy --all-targets --all-features -D warnings, ruff format, ruff check --fix, ty check in sequence.",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 1259,
+   "runs_by": "scripts/harden.sh",
+   "gated_by": "nothing calls it -- confirmed explicitly in scripts/feature-build-gate.sh's own header comment ('neither is called from anywhere')",
+   "notes": "--all-features used to die in build.rs on any machine without Bitwuzla, before clippy saw a line; this is the documented reason feature-build-gate.sh exists as a separate, working gate.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/lint-python.sh",
+   "kind": "script",
+   "path": "scripts/lint-python.sh",
+   "title": "ruff check wrapper",
+   "subject": "Thin wrapper: exec uvx ruff check python/ --fix \"$@\".",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 267,
+   "runs_by": "scripts/lint-python.sh",
+   "gated_by": "nothing calls it; CLAUDE.md documents the underlying command directly",
+   "notes": "",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/lint-rust.sh",
+   "kind": "script",
+   "path": "scripts/lint-rust.sh",
+   "title": "cargo fmt --check + clippy -D warnings",
+   "subject": "Runs cargo fmt --all -- --check then cargo clippy --all-targets --all-features -- -D warnings, with GLAURUNG_BITWUZLA_TYPECHECK_ONLY=1 so the Bitwuzla-absent build.rs panic doesn't kill it before clippy runs.",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 860,
+   "runs_by": "scripts/lint-rust.sh",
+   "gated_by": "nothing calls it (confirmed in feature-build-gate.sh's own comment); currently red with ~260 pre-existing clippy errors under -D warnings",
+   "notes": "CLAUDE.md calls this out explicitly: would catch a whole class of feature-build-gate failures but nothing runs it, and it only became runnable at all on 2026-08-17 once GLAURUNG_BITWUZLA_TYPECHECK_ONLY existed.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/setup-references.sh",
+   "kind": "script",
+   "path": "scripts/setup-references.sh",
+   "title": "Legacy git-submodule reference setup",
+   "subject": "Adds ~30 third-party repos under reference/ as git submodules and runs `git submodule update --init --recursive`.",
+   "domain": [
+    "infra",
+    "docs"
+   ],
+   "size_bytes": 4429,
+   "runs_by": "scripts/setup-references.sh",
+   "gated_by": "dead: .gitmodules no longer exists (removed in commit 8cef6981 'drop 44 git submodules'); every git submodule add in this script would fail or no-op",
+   "notes": "Superseded by scripts/fetch-reference.sh (added the same day per that script's header) which plain-clones instead. This script was not deleted alongside the submodule removal and is now stale/broken.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/typecheck-python.sh",
+   "kind": "script",
+   "path": "scripts/typecheck-python.sh",
+   "title": "ty check wrapper",
+   "subject": "Thin wrapper: exec uvx ty check python/glaurung \"$@\" (package only, ignoring tests).",
+   "domain": [
+    "infra"
+   ],
+   "size_bytes": 298,
+   "runs_by": "scripts/typecheck-python.sh",
+   "gated_by": "nothing calls it; CLAUDE.md documents `uvx ty check python/` directly (a broader scope: package + tests)",
+   "notes": "Scope mismatch vs. the CLAUDE.md-documented command: this wrapper only checks python/glaurung, not all of python/.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "scripts/build_adversarial_samples.py",
+   "kind": "tool",
+   "path": "scripts/build_adversarial_samples.py",
+   "title": "Adversarial embedded-content corpus builder",
+   "subject": "Deterministically builds samples/adversarial/embedded/ (nested archives, base64-in-ELF, gzip-wrapped, etc.) from existing hello-* binaries plus synthetic constructions.",
+   "domain": [
+    "strings",
+    "packers"
+   ],
+   "size_bytes": 6191,
+   "runs_by": "python scripts/build_adversarial_samples.py",
+   "gated_by": "nothing calls it; its output (14 tracked files under samples/adversarial/) is read by python/tests/test_adversarial_coverage.py",
+   "notes": "Same shape as build-macho-samples.sh: one-shot committed-fixture generator, no automated caller.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tools/decbench_compare.py",
+   "kind": "tool",
+   "path": "tools/decbench_compare.py",
+   "title": "Head-to-head DecBench metrics",
+   "subject": "Compares DecBench metrics head-to-head across decompilers (glaurung/ghidra/angr), per lane and per program.",
+   "domain": [
+    "decbench"
+   ],
+   "size_bytes": 4943,
+   "runs_by": "tools/decbench_compare.py glaurung=g.json ghidra=gh.json angr=a.json",
+   "gated_by": "nothing calls it; only referenced from a July 2026 diary -- appears superseded by tools/decbench_compare_full.py",
+   "notes": "Orphan: no script/tool/test currently invokes it, unlike decbench_compare_full.py which has a live test.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tools/decbench_matrix.py",
+   "kind": "tool",
+   "path": "tools/decbench_matrix.py",
+   "title": "Per-cell DecBench metric ratchet",
+   "subject": "Runs the real decbench evaluate pipeline for 14 programs x {gcc,clang} x {O0,O2} = 56 cells and compares each against a committed baseline (GED / type-match / byte-match).",
+   "domain": [
+    "decbench"
+   ],
+   "size_bytes": 28646,
+   "runs_by": "tools/decbench_matrix.py --check",
+   "gated_by": "opt-in: scripts/decbench-local-gate.sh lanes 4-5 (--decbench flag / GLAURUNG_RUN_DECBENCH=1 only); never in CI",
+   "notes": "The ONLY lane that scores GED/type_match/byte_match; a missing DECBENCH_DIR used to skip silently and now hard-fails (test_local_gate_fails_closed.py guards this).",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tools/gen_defuse_baseline.py",
+   "kind": "tool",
+   "path": "tools/gen_defuse_baseline.py",
+   "title": "Regenerate defuse_baseline.json",
+   "subject": "Regenerates tests/decompiler_fixtures/defuse_baseline.json, the committed per-function def-before-use census the ratchet compares against.",
+   "domain": [
+    "decompiler"
+   ],
+   "size_bytes": 7827,
+   "runs_by": "uv run python tools/gen_defuse_baseline.py",
+   "gated_by": "manual only, run after independently confirming a change is real (CLAUDE.md); never to make a red gate green",
+   "notes": "CLAUDE.md: an arity fix once shipped with this baseline unrefreshed because the census lane isn't in any fast gate list.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  },
+  {
+   "id": "tools/gen_fixture_gallery.py",
+   "kind": "tool",
+   "path": "tools/gen_fixture_gallery.py",
+   "title": "glaurung.dev fixture gallery JSON",
+   "subject": "Runs every fixture across all toolchain/optimization lanes and emits the JSON that renders the public glaurung.dev fixture gallery, including the pass/fail execution-differential verdict per function.",
+   "domain": [
+    "decompiler",
+    "docs"
+   ],
+   "size_bytes": 15385,
+   "runs_by": "uv run python tools/gen_fixture_gallery.py --out ../glaurung.dev/src/data/fixtures",
+   "gated_by": "nothing calls it; manual publishing tool writing outside this repo (a sibling glaurung.dev checkout)",
+   "notes": "Most recently modified file in tools/ (Aug 31, same day as this survey). No caller anywhere in-repo -- entirely a human-run publishing step.",
+   "markers": [],
+   "features": [],
+   "consumes": [],
+   "count": null,
+   "count_of": null,
+   "territory": "tooling",
+   "reach": "unreachable"
+  }
+ ]
+}
