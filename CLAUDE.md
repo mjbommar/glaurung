@@ -99,7 +99,12 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
 - **No mocks/fake data without explicit permission** — especially for binary
   fixtures and analysis output. Use real binaries from `samples/`, `tests/`,
   `tests/fixtures/`.
-- **Don't claim "done" without running tests + ruff + ty.**
+- **Don't claim "done" without running tests + ruff + ty.** Since 2026-08-31
+  CI runs them too (`.github/workflows/test-suite.yml`: `cargo test --features
+  python-ext`, the full Python suite, and ruff). Before that no workflow ran
+  either suite — 6 of 445 Python test files executed in CI and the only
+  occurrence of "cargo test" under `.github/` was a comment. That is fixed, but
+  the fixture matrix and the six baselines still gate nothing automatically.
 - **`cargo test` does NOT build `src/python_bindings/`.** It is behind the
   `python-ext` feature (`src/lib.rs`), so a plain `cargo test` skips ~120 tests
   AND does not compile that code at all. On 2026-08-14 a signature change there
@@ -120,20 +125,23 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   built, this one is test code not being built. Use `check` for the inner loop;
   the command that says a refactor is done is `cargo test --features python-ext`.
 - **`--features python-ext` does not build `src/symbolic/` either, and that is
-  ten times bigger.** `src/lib.rs:65` is `#[cfg(feature = "symbolic")]`, and
-  `symbolic` is in neither `default` nor `python-ext`. **21 files, 14,649 product
-  LOC — 8.6% of the tree — that `cargo test --features python-ext` never
-  compiles.** Proven by experiment on 2026-08-17: appending invalid Rust to
+  ten times bigger.** `src/lib.rs:80` is `#[cfg(feature = "symbolic")]`, and
+  `symbolic` is in neither `default` nor `python-ext`. **26 files, 21,459 product
+  LOC that `cargo test --features python-ext` never compiles.** (Re-counted
+  2026-08-31: this bullet used to say 21 files / 14,649 LOC and line 65. The
+  tree grew 46% while the note stood still, which is its own small lesson about
+  numbers in prose.) Proven by experiment on 2026-08-17: appending invalid Rust to
   `src/symbolic/expr.rs` gives 0 errors under `--features python-ext` and 2 under
   `--features symbolic`. This is how all three SMT solver backends sat
   uncompilable for seventeen days (`BinOp::LogicalAnd`/`LogicalOr` added
   2026-07-31, no backend updated) and how `triage-parsers-extra` stayed broken
   for 350 days.
 - **Before pushing anything that touches a feature-gated tree, run
-  `scripts/feature-build-gate.sh`** — 11 `cargo check --all-targets` lanes,
+  `scripts/feature-build-gate.sh`** — 12 `cargo check --all-targets` lanes,
   ~4m30s, exit 1 on any failure. It is the only thing in the repository that
-  builds `solver-*`, `symbolic`, `exec`, `dev-oracle` or
-  `triage-parsers-extra`. Note `scripts/lint-rust.sh` DOES run
+  builds `solver-*`, `symbolic`, `exec`, `dev-oracle`, `triage-parsers-extra`
+  — or `fuzz/`, which is a separate crate that no root-manifest check can see
+  and which had therefore been compiling by luck (lane 12, added 2026-08-31). Note `scripts/lint-rust.sh` DOES run
   `cargo clippy --all-targets --all-features`, which would have caught all of
   the above — but nothing calls it, and until 2026-08-17 it died inside
   `build.rs` on any machine without Bitwuzla. It runs now and is red (260
@@ -179,18 +187,23 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   in pytest: `pytest.ini` deselects `-m decbench` by default, so no ordinary test
   run reaches the fork. `docs/design/decompiler-roadmap.md` Appendix A holds the
   metric/evaluation plan and is explicitly not a work queue.
-- **The def-use census is NOT in the fast suite, so a signature change ships
-  without it.** `test_decompiler_defuse_census.py` needs `-m ""` to run at all,
-  which means the gate list people actually type (`dectest @o0 @o2` plus the
-  fixture/structural/arch tests) never touches it. Any change that alters a
+- **The def-use census is not in the loop people iterate in, so a signature
+  change ships without it.** The gate list anyone actually types while working
+  (`dectest @o0 @o2` plus the fixture/structural/arch tests) never touches
+  `test_decompiler_defuse_census.py`, because `dectest` is not pytest. Any change that alters a
   RECOVERED SIGNATURE -- argument arity, parameter type, return type -- changes
   the emitted body and therefore the undefined-read count, and it will not show
   up until someone runs the census by hand. On 2026-08-19 an arity fix
   (`11d55613`) moved `rustc:O0` +20 and `rustc:O2` +12 and shipped with the
   baseline unrefreshed; it took three A/B experiments to attribute, because two
   later changes were suspected first and each took a full build to exonerate.
-  Run `uv run pytest python/tests/test_decompiler_defuse_census.py -q -m ""`
-  alongside the other gates whenever prototypes can move.
+  Run `uv run pytest python/tests/test_decompiler_defuse_census.py -q`
+  alongside the other gates whenever prototypes can move. (**Correction,
+  2026-08-31:** this bullet used to say the census "needs `-m ''` to run at
+  all". It does not, and has not for as long as `pytest.ini` has deselected
+  only `decbench` — verified by collecting it, which finds 6 tests. The real
+  gap is the bullet's second half: iteration happens through
+  `tools/dectest.py`, which is not pytest and never touches the census.)
 - **Run `tools/build_guard.py` before EVERY baseline regeneration.** A baseline
   written against a stale `.so` records the old behaviour under the new commit,
   and nothing downstream can tell. On 2026-08-19 a measurement sequence that
