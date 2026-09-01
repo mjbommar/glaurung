@@ -27,6 +27,43 @@ pub fn register_similarity_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) ->
     Ok(())
 }
 
+/// Reject CTPH parameters that would panic inside the hasher.
+///
+/// `window_size = 0` reaches `self.window.pop_front().unwrap()` on an empty
+/// deque, and `digest_size` is used as `% (digest_size as u8)`, so both `0` and
+/// `256` (which truncates to `0u8`) are a divide-by-zero. All three panicked
+/// the interpreter from Python before this existed -- a caller passing a number
+/// should get a `ValueError`, not a `PanicException` and a poisoned thread.
+///
+/// `crate::triage::api` already guarded the same two fields on its own path by
+/// falling back to recommended parameters, so the hazard was known on one route
+/// and unguarded on the other. A fallback is right there, where the config
+/// arrives from a file nobody typed; refusing is right here, where a caller
+/// named the value and deserves to be told it is wrong.
+fn validated_ctph_config(
+    window_size: usize,
+    digest_size: usize,
+    precision: u8,
+) -> PyResult<crate::similarity::CtphConfig> {
+    if window_size == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "window_size must be at least 1",
+        ));
+    }
+    if digest_size == 0 || digest_size > 255 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "digest_size must be between 1 and 255 (got {digest_size}); it is \
+             used as a modulus after truncation to one byte, so 0 and 256 are \
+             both a division by zero"
+        )));
+    }
+    Ok(crate::similarity::CtphConfig {
+        window_size,
+        digest_size,
+        precision,
+    })
+}
+
 /// Calculate CTPH hash from binary data.
 #[pyfunction]
 #[pyo3(name = "ctph_hash_bytes")]
@@ -36,13 +73,9 @@ fn ctph_hash_bytes_py(
     window_size: usize,
     digest_size: usize,
     precision: u8,
-) -> String {
-    let cfg = crate::similarity::CtphConfig {
-        window_size,
-        digest_size,
-        precision,
-    };
-    crate::similarity::ctph_hash(data, &cfg)
+) -> PyResult<String> {
+    let cfg = validated_ctph_config(window_size, digest_size, precision)?;
+    Ok(crate::similarity::ctph_hash(data, &cfg))
 }
 
 /// Calculate CTPH hash from file path.
@@ -60,11 +93,7 @@ fn ctph_hash_path_py(
     let limit = std::cmp::min(max_read_bytes, max_file_size);
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
-    let cfg = crate::similarity::CtphConfig {
-        window_size,
-        digest_size,
-        precision,
-    };
+    let cfg = validated_ctph_config(window_size, digest_size, precision)?;
     Ok(crate::similarity::ctph_hash(&data, &cfg))
 }
 

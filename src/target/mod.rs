@@ -6,6 +6,8 @@
 //! roles independently.
 
 pub mod abi;
+#[cfg(test)]
+mod conformance;
 mod registers;
 mod spec;
 
