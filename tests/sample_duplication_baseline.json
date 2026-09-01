@@ -1,0 +1,375 @@
+{
+ "groups": 75,
+ "redundant_bytes": 22363724,
+ "note": "Byte-identical files under samples/. Ratcheted, not deduplicated -- see the test module docstring.",
+ "inventory": {
+  "02242ebd97ca644a": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/rpath/hello-gcc-rpath",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/runpath/hello-gcc-runpath",
+   "samples/binaries/platforms/linux/amd64/native/gcc/rpath/hello-gcc-rpath",
+   "samples/binaries/platforms/linux/amd64/native/gcc/runpath/hello-gcc-runpath"
+  ],
+  "039bde5d911bdfbf": [
+   "samples/binaries/platforms/linux/amd64/cross/riscv64/suspicious_win-riscv64-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/riscv64/suspicious_win-riscv64-gcc"
+  ],
+  "07d0fa20e8f53c2c": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-clang-O0",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O0/hello-cpp-clang++-O0",
+   "samples/binaries/platforms/linux/amd64/native/clang/O0/hello-clang-O0"
+  ],
+  "0b968560bd278c7b": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/c2_demo-gcc-stripped",
+   "samples/binaries/platforms/linux/amd64/native/gcc/debug/c2_demo-gcc-stripped"
+  ],
+  "0d412fe5bd3e7f82": [
+   "samples/binaries/platforms/linux/amd64/cross/armhf/c2_demo-armhf-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/armhf/c2_demo-armhf-gcc"
+  ],
+  "11dcb46ce00ef908": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/c2_demo-clang-stripped",
+   "samples/binaries/platforms/linux/amd64/native/clang/debug/c2_demo-clang-stripped"
+  ],
+  "165e15920347417d": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/suspicious_linux-gcc-debug",
+   "samples/binaries/platforms/linux/amd64/native/gcc/debug/suspicious_linux-gcc-debug"
+  ],
+  "2219a0c882b3694c": [
+   "samples/binaries/platforms/linux/amd64/export/rust/hello-rust-debug",
+   "samples/binaries/platforms/linux/amd64/rust/hello-rust-debug"
+  ],
+  "22d005ded0199a6f": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/suspicious_linux-clang-debug",
+   "samples/binaries/platforms/linux/amd64/native/clang/debug/suspicious_linux-clang-debug"
+  ],
+  "262c83b3da0d25ee": [
+   "samples/binaries/platforms/linux/amd64/export/go/hello-go-debug",
+   "samples/binaries/platforms/linux/amd64/go/hello-go-debug"
+  ],
+  "29155fc14c04b21d": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/suspicious_linux-gcc-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O3/suspicious_linux-gcc-O3",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O2/suspicious_linux-gcc-O2",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O3/suspicious_linux-gcc-O3"
+  ],
+  "29b5e8323ed5b9c7": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/c2_demo-gcc-O0",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O0/c2_demo-gcc-O0"
+  ],
+  "2adfbbb07d33c59d": [
+   "samples/binaries/platforms/linux/amd64/export/libraries/test_mathlib",
+   "samples/binaries/platforms/linux/amd64/libraries/test_mathlib"
+  ],
+  "2c1f97a89281230d": [
+   "samples/binaries/platforms/linux/amd64/export/java/jdk11/HelloWorld.class",
+   "samples/binaries/platforms/linux/amd64/java/jdk11/HelloWorld.class",
+   "samples/binaries/platforms/linux/arm64/export/java/jdk11/HelloWorld.class",
+   "samples/binaries/platforms/windows/amd64/export/java/jdk11/HelloWorld.class",
+   "samples/binaries/platforms/windows/i386/export/java/jdk11/HelloWorld.class"
+  ],
+  "2ca2881c4143c487": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/rpath/c2_demo-clang-rpath",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/runpath/c2_demo-clang-runpath",
+   "samples/binaries/platforms/linux/amd64/native/clang/rpath/c2_demo-clang-rpath",
+   "samples/binaries/platforms/linux/amd64/native/clang/runpath/c2_demo-clang-runpath"
+  ],
+  "2d53b2f17c402b12": [
+   "samples/binaries/platforms/linux/amd64/cross/armhf/suspicious_win-armhf-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/armhf/suspicious_win-armhf-gcc"
+  ],
+  "2d68828c92984e30": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/suspicious_linux-clang-stripped",
+   "samples/binaries/platforms/linux/amd64/native/clang/debug/suspicious_linux-clang-stripped"
+  ],
+  "2f32f5a360c5f720": [
+   "samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-g++",
+   "samples/binaries/platforms/linux/amd64/export/cross/armhf/hello-armhf-g++",
+   "samples/binaries/platforms/linux/arm64/export/cross/armhf/hello-armhf-g++"
+  ],
+  "31f61a1108938a1c": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/rpath/hello-clang-rpath",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/runpath/hello-clang-runpath",
+   "samples/binaries/platforms/linux/amd64/native/clang/rpath/hello-clang-rpath",
+   "samples/binaries/platforms/linux/amd64/native/clang/runpath/hello-clang-runpath"
+  ],
+  "32bb9ec63c54cd01": [
+   "samples/binaries/platforms/linux/amd64/cross/riscv64/hello-riscv64-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/riscv64/hello-riscv64-gcc",
+   "samples/binaries/platforms/linux/arm64/export/cross/riscv64/hello-riscv64-gcc"
+  ],
+  "3332168afe1c3953": [
+   "samples/binaries/platforms/linux/amd64/export/lua/hello-luajit.luac",
+   "samples/binaries/platforms/linux/amd64/lua/hello-luajit.luac"
+  ],
+  "3529997b55621e3c": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O1/hello-cpp-g++-O1",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O1/hello-gcc-O1",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O1/hello-gcc-O1"
+  ],
+  "3bc627c112c13605": [
+   "samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class",
+   "samples/binaries/platforms/linux/amd64/export/java/jdk17/HelloWorld.class",
+   "samples/binaries/platforms/linux/amd64/java/jdk17/HelloWorld.class",
+   "samples/binaries/platforms/linux/arm64/export/java/jdk17/HelloWorld.class",
+   "samples/binaries/platforms/windows/amd64/export/java/jdk17/HelloWorld.class",
+   "samples/binaries/platforms/windows/i386/export/java/jdk17/HelloWorld.class"
+  ],
+  "40adc7cc01d4da69": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/suspicious_linux-gcc-O0",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O0/suspicious_linux-gcc-O0"
+  ],
+  "41444eafb804e000": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O3/hello-c-clang-O3"
+  ],
+  "4daa2548b69649fc": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O1/c2_demo-clang-O1",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O2/c2_demo-clang-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O3/c2_demo-clang-O3",
+   "samples/binaries/platforms/linux/amd64/native/clang/O1/c2_demo-clang-O1",
+   "samples/binaries/platforms/linux/amd64/native/clang/O2/c2_demo-clang-O2",
+   "samples/binaries/platforms/linux/amd64/native/clang/O3/c2_demo-clang-O3"
+  ],
+  "5303ea4da3c441cf": [
+   "samples/binaries/platforms/linux/amd64/cross/arm64/hello-arm64-g++",
+   "samples/binaries/platforms/linux/amd64/export/cross/arm64/hello-arm64-g++"
+  ],
+  "54599556e5f073c9": [
+   "samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/armhf/hello-armhf-gcc",
+   "samples/binaries/platforms/linux/arm64/export/cross/armhf/hello-armhf-gcc"
+  ],
+  "554458f35d3aaf4e": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O3/hello-clang-O3",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O3/hello-cpp-clang++-O3",
+   "samples/binaries/platforms/linux/amd64/native/clang/O3/hello-clang-O3"
+  ],
+  "59977660e66b0cea": [
+   "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0",
+   "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O1/hello-asm-gas-O1",
+   "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O2/hello-asm-gas-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/asm/gas/O3/hello-asm-gas-O3"
+  ],
+  "5f7719193c160e6e": [
+   "samples/binaries/platforms/linux/amd64/cross/riscv64/c2_demo-riscv64-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/riscv64/c2_demo-riscv64-gcc"
+  ],
+  "659132f824782840": [
+   "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O3",
+   "samples/binaries/platforms/linux/amd64/fortran/hello-gfortran-O3"
+  ],
+  "6b0bc9cf07cd0c80": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O1/c2_demo-gcc-O1",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O1/c2_demo-gcc-O1"
+  ],
+  "6dcdf2f930901b0e": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O3/hello-cpp-g++-O3",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O3/hello-gcc-O3",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O3/hello-gcc-O3"
+  ],
+  "6f873872be5297ab": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/rpath/suspicious_linux-clang-rpath",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/runpath/suspicious_linux-clang-runpath",
+   "samples/binaries/platforms/linux/amd64/native/clang/rpath/suspicious_linux-clang-rpath",
+   "samples/binaries/platforms/linux/amd64/native/clang/runpath/suspicious_linux-clang-runpath"
+  ],
+  "707f4a65a36cd829": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O2/hello-gcc-O2"
+  ],
+  "759a41b794df5682": [
+   "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-g++",
+   "samples/binaries/platforms/linux/arm64/export/native/gcc/O2/hello-cpp-g++-O2"
+  ],
+  "7651d1f094dfaaad": [
+   "samples/binaries/platforms/linux/amd64/export/libraries/static/libmathlib.a",
+   "samples/binaries/platforms/linux/amd64/libraries/static/libmathlib.a"
+  ],
+  "7824e6994fffa8b9": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O0/suspicious_linux-clang-O0",
+   "samples/binaries/platforms/linux/amd64/native/clang/O0/suspicious_linux-clang-O0"
+  ],
+  "7aa1fc72da7c097c": [
+   "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
+   "samples/binaries/platforms/linux/arm64/export/native/gcc/O2/hello-c-gcc-O2"
+  ],
+  "7b9ddfa01b4eab54": [
+   "samples/binaries/platforms/windows/i386/export/windows/i686/O2/hello-c-mingw32-O2.exe",
+   "samples/binaries/platforms/windows/i386/export/windows/i686/O3/hello-c-mingw32-O3.exe"
+  ],
+  "7bb36a8574ea0a62": [
+   "samples/packed/hello-go-static.upx9",
+   "samples/packed/hello-go.upx9"
+  ],
+  "7e1e685f075df8a4": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/c2_demo-gcc-debug",
+   "samples/binaries/platforms/linux/amd64/native/gcc/debug/c2_demo-gcc-debug"
+  ],
+  "86591cdd0d9661e4": [
+   "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O1",
+   "samples/binaries/platforms/linux/amd64/fortran/hello-gfortran-O1"
+  ],
+  "8b725143a5ef3b79": [
+   "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-debug",
+   "samples/binaries/platforms/linux/amd64/fortran/hello-gfortran-debug"
+  ],
+  "9100bcfbf435387a": [
+   "samples/binaries/platforms/linux/amd64/cross/arm64/suspicious_win-arm64-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/arm64/suspicious_win-arm64-gcc"
+  ],
+  "93d153229fb1d0e1": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/hello-cpp-g++-debug",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/hello-gcc-debug",
+   "samples/binaries/platforms/linux/amd64/native/gcc/debug/hello-gcc-debug"
+  ],
+  "99531323125a1184": [
+   "samples/binaries/platforms/linux/amd64/export/go/hello-go",
+   "samples/binaries/platforms/linux/amd64/export/go/hello-go-static",
+   "samples/binaries/platforms/linux/amd64/go/hello-go",
+   "samples/binaries/platforms/linux/amd64/go/hello-go-static"
+  ],
+  "9d0edd64c551dc26": [
+   "samples/binaries/platforms/linux/amd64/cross/riscv64/hello-riscv64-g++",
+   "samples/binaries/platforms/linux/amd64/export/cross/riscv64/hello-riscv64-g++",
+   "samples/binaries/platforms/linux/arm64/export/cross/riscv64/hello-riscv64-g++"
+  ],
+  "a28b8be2144d8256": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/rpath/c2_demo-gcc-rpath",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/runpath/c2_demo-gcc-runpath",
+   "samples/binaries/platforms/linux/amd64/native/gcc/rpath/c2_demo-gcc-rpath",
+   "samples/binaries/platforms/linux/amd64/native/gcc/runpath/c2_demo-gcc-runpath"
+  ],
+  "a2963d0300c2a1b0": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/c2_demo-clang-debug",
+   "samples/binaries/platforms/linux/amd64/native/clang/debug/c2_demo-clang-debug"
+  ],
+  "a49055254ae7ad4c": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O1/suspicious_linux-clang-O1",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O2/suspicious_linux-clang-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O3/suspicious_linux-clang-O3",
+   "samples/binaries/platforms/linux/amd64/native/clang/O1/suspicious_linux-clang-O1",
+   "samples/binaries/platforms/linux/amd64/native/clang/O2/suspicious_linux-clang-O2",
+   "samples/binaries/platforms/linux/amd64/native/clang/O3/suspicious_linux-clang-O3"
+  ],
+  "a994f16aee64dd62": [
+   "samples/binaries/platforms/linux/amd64/cross/arm64/hello-arm64-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/arm64/hello-arm64-gcc"
+  ],
+  "ab4f679954bc61d6": [
+   "samples/binaries/platforms/linux/amd64/export/rust/hello-rust-release",
+   "samples/binaries/platforms/linux/amd64/rust/hello-rust-release"
+  ],
+  "b13d42e7a21f3383": [
+   "samples/binaries/platforms/linux/amd64/export/cross/riscv64/hello-asm-riscv64-as",
+   "samples/binaries/platforms/linux/arm64/export/cross/riscv64/hello-asm-riscv64-as"
+  ],
+  "b1446f261e85f5b8": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O1/suspicious_linux-gcc-O1",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O1/suspicious_linux-gcc-O1"
+  ],
+  "b60ce5cd07800679": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/hello-cpp-g++-stripped",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/hello-gcc-stripped",
+   "samples/binaries/platforms/linux/amd64/native/gcc/debug/hello-gcc-stripped"
+  ],
+  "b8b354504a322777": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/suspicious_linux-gcc-stripped",
+   "samples/binaries/platforms/linux/amd64/native/gcc/debug/suspicious_linux-gcc-stripped"
+  ],
+  "ca26a5b7db9d7aec": [
+   "samples/binaries/platforms/linux/amd64/export/native/asm/nasm/O0/hello-asm-nasm-O0",
+   "samples/binaries/platforms/linux/amd64/export/native/asm/nasm/O1/hello-asm-nasm-O1",
+   "samples/binaries/platforms/linux/amd64/export/native/asm/nasm/O2/hello-asm-nasm-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/asm/nasm/O3/hello-asm-nasm-O3"
+  ],
+  "cadb4dc22bb42e50": [
+   "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0",
+   "samples/binaries/platforms/linux/amd64/fortran/hello-gfortran-O0"
+  ],
+  "d0a0c72b92e0c4a6": [
+   "samples/binaries/platforms/linux/amd64/export/rust/hello-rust-musl",
+   "samples/binaries/platforms/linux/amd64/rust/hello-rust-musl"
+  ],
+  "d2e80d4da24ce9f2": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/rpath/suspicious_linux-gcc-rpath",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/runpath/suspicious_linux-gcc-runpath",
+   "samples/binaries/platforms/linux/amd64/native/gcc/rpath/suspicious_linux-gcc-rpath",
+   "samples/binaries/platforms/linux/amd64/native/gcc/runpath/suspicious_linux-gcc-runpath"
+  ],
+  "d30c021c32993f02": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-stripped",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-cpp-clang++-stripped",
+   "samples/binaries/platforms/linux/amd64/native/clang/debug/hello-clang-stripped"
+  ],
+  "d381bd37f05534c9": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0",
+   "samples/binaries/platforms/linux/amd64/native/clang/O0/c2_demo-clang-O0"
+  ],
+  "d39a80cddc1c749d": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O1/hello-clang-O1",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O1/hello-cpp-clang++-O1",
+   "samples/binaries/platforms/linux/amd64/native/clang/O1/hello-clang-O1"
+  ],
+  "d80c8e09080c1c25": [
+   "samples/binaries/platforms/linux/amd64/export/java/jdk21/HelloWorld.class",
+   "samples/binaries/platforms/linux/amd64/java/jdk21/HelloWorld.class",
+   "samples/binaries/platforms/linux/arm64/export/java/jdk21/HelloWorld.class",
+   "samples/binaries/platforms/windows/amd64/export/java/HelloWorld.class",
+   "samples/binaries/platforms/windows/amd64/export/java/jdk21/HelloWorld.class",
+   "samples/binaries/platforms/windows/i386/export/java/HelloWorld.class",
+   "samples/binaries/platforms/windows/i386/export/java/jdk21/HelloWorld.class"
+  ],
+  "d999bd5ab3d31aa0": [
+   "samples/binaries/platforms/linux/amd64/dotnet/mono/Hello-mono.exe",
+   "samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe",
+   "samples/binaries/platforms/linux/arm64/export/dotnet/mono/Hello-mono.exe",
+   "samples/binaries/platforms/windows/amd64/export/windows/dotnet/mono/Hello-mono.exe"
+  ],
+  "dbd1aef9fced1c5a": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/c2_demo-gcc-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O3/c2_demo-gcc-O3",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O2/c2_demo-gcc-O2",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O3/c2_demo-gcc-O3"
+  ],
+  "e22f314c376a4874": [
+   "samples/binaries/platforms/linux/arm64/export/native/clang/O2/hello-c-clang-O2",
+   "samples/binaries/platforms/linux/arm64/export/native/clang/O3/hello-c-clang-O3"
+  ],
+  "e77d14f1266cb736": [
+   "samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2",
+   "samples/binaries/platforms/linux/amd64/fortran/hello-gfortran-O2"
+  ],
+  "e80af0f413daaa8b": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-cpp-clang++-O2",
+   "samples/binaries/platforms/linux/amd64/native/clang/O2/hello-clang-O2"
+  ],
+  "ecb06722e4db3fc9": [
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-cpp-g++-O0",
+   "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
+   "samples/binaries/platforms/linux/amd64/native/gcc/O0/hello-gcc-O0",
+   "samples/containers/hello-cpp-g++-O0",
+   "samples/containers/zstd/hello-cpp-g++-O0"
+  ],
+  "f2c4b6c855b82790": [
+   "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.1.luac",
+   "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.2.luac",
+   "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac",
+   "samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac",
+   "samples/binaries/platforms/linux/amd64/lua/hello-lua5.1.luac",
+   "samples/binaries/platforms/linux/amd64/lua/hello-lua5.2.luac",
+   "samples/binaries/platforms/linux/amd64/lua/hello-lua5.3.luac",
+   "samples/binaries/platforms/linux/amd64/lua/hello-lua5.4.luac"
+  ],
+  "f3e397ade064bdc2": [
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug",
+   "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-cpp-clang++-debug",
+   "samples/binaries/platforms/linux/amd64/native/clang/debug/hello-clang-debug"
+  ],
+  "fb78cf44c17762e1": [
+   "samples/binaries/platforms/linux/amd64/cross/arm64/c2_demo-arm64-gcc",
+   "samples/binaries/platforms/linux/amd64/export/cross/arm64/c2_demo-arm64-gcc"
+  ]
+ }
+}

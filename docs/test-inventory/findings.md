@@ -149,14 +149,29 @@ behavioural baseline is `slow`-marked.
   reads them. The other 339 metadata sidecars parse. **[FIXED]** `937425d0`
   deletes the 63; a ratchet in `test_estate_reachability.py` now asserts every
   remaining sidecar parses.
-* **18.8 MB of exact duplication** — 85 byte-identical pairs between
-  `samples/binaries/linux/amd64/export/` and the legacy tree, md5-confirmed,
-  including a 4.5 MB `hello-rust-debug`. Both sides are live, referenced by
-  different tests; the bytes simply exist twice. **Not yet acted on, and it is
-  not a straight delete**: same-relative-path is NOT proof of identical content
-  (`libraries/shared/mathlib.dll` exists at both paths and differs), and five
-  pairs are referenced from both sides. Any repoint-then-delete must verify
-  content per file.
+* **22.4 MB of exact duplication** — 75 groups of byte-identical files,
+  sha256-confirmed, the largest being a 4.5 MB `hello-rust-debug`.
+  **[CORRECTED 2026-09-01]** This entry used to read "18.8 MB, 85 pairs between
+  `samples/binaries/linux/amd64/export/` and the legacy tree". That legacy tree
+  **no longer exists**, so the location was wrong and the figure was stale in
+  the direction nobody expects: the duplication is *larger* than recorded, and
+  it sits between `platforms/linux/amd64/export/` and its siblings under
+  `platforms/linux/amd64/`.
+
+  Still not a straight delete, for a reason worth stating precisely. Of the 75
+  groups, 6 have every copy referenced by literal path and would need
+  repointing. The other 123 redundant copies are referenced by no literal path
+  — which is **not** proof they are unused, because much of the suite globs
+  over `samples/**` rather than naming files. Deleting them would shrink test
+  populations silently rather than fail. Choosing a canonical tree is a corpus
+  decision, not a sweep.
+
+  **[RATCHETED]** `python/tests/test_sample_corpus_duplication.py` pins the
+  current 75 groups / 22.4 MB with a full inventory in
+  `tests/sample_duplication_baseline.json`, so new duplication fails and the
+  number can only come down. It also fails if duplication DROPS without the
+  baseline being regenerated, since a ratchet that silently absorbs improvement
+  stops measuring.
 * `scripts/setup-references.sh` calls `git submodule add` against repositories
   that are no longer submodules — `.gitmodules` was removed. It cannot work.
   **[FIXED]** deleted in `937425d0`, after being proven non-functional by
