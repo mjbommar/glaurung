@@ -67,6 +67,17 @@ cargo bench --bench decompile_pipeline # end-to-end + an 8-phase split
 # that doubles decompile time still ships green. `bench/harness.py` records
 # `decompile_ms` but never compares it, and no baseline holds a timing.
 
+# Compare our output against angr and Ghidra on one function, side by side
+uv run python tools/compare_decompilers.py <binary> main print_sum
+# ...needs `uv pip install angr` and/or Ghidra at /opt/ghidra (JDK 21 — 17 is
+# too old, 25 is rejected). Both optional; an absent tool is reported, not
+# fatal. See docs/development/decompiler-parity-backlog.md.
+
+# Fuzzing. `cargo fuzz` reaches 8 targets; seed them from our own binaries
+# first, or libFuzzer spends its first minutes rediscovering the ELF magic.
+uv run python fuzz/seed_corpus.py
+cargo fuzz run disasm_decode -- -max_total_time=120
+
 # Bench / regression scorecard
 uv run python -m glaurung.bench
 
