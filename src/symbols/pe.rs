@@ -547,13 +547,28 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
             } else {
                 None
             } {
-                // AddressOfCallbacks: +0x14 (PE32) or +0x20 (PE32+)
+                // AddressOfCallBacks: +0x0C (PE32) or +0x18 (PE32+).
+                //
+                // These were +0x14 and +0x20, which are SizeOfZeroFill and
+                // Characteristics -- the two fields that FOLLOW the pointer.
+                // IMAGE_TLS_DIRECTORY64 is four 8-byte addresses
+                // (StartAddressOfRawData, EndAddressOfRawData, AddressOfIndex,
+                // AddressOfCallBacks) then two DWORDs; the 32-bit form is the
+                // same shape with 4-byte addresses.
+                //
+                // The old read did not fail loudly. On win10-dismcore.dll it
+                // produced 0x0030000000000000 (Characteristics << 32), which
+                // is non-zero, so the guard below passed and the value only
+                // failed later at RVA mapping -- yielding `None` for every
+                // binary rather than an error. TLS callbacks run before the
+                // entry point, so "no callbacks" is the most misleading
+                // possible answer here.
                 let cb_va_u64: u64 = if is_pe32_plus {
-                    let lo = read_u32_le(data, tls_off + 0x20).unwrap_or(0) as u64;
-                    let hi = read_u32_le(data, tls_off + 0x24).unwrap_or(0) as u64;
+                    let lo = read_u32_le(data, tls_off + 0x18).unwrap_or(0) as u64;
+                    let hi = read_u32_le(data, tls_off + 0x1C).unwrap_or(0) as u64;
                     (hi << 32) | lo
                 } else {
-                    read_u32_le(data, tls_off + 0x14).unwrap_or(0) as u64
+                    read_u32_le(data, tls_off + 0x0C).unwrap_or(0) as u64
                 };
                 if cb_va_u64 != 0 {
                     let cb_rva_u64 = cb_va_u64.saturating_sub(image_base);
@@ -596,11 +611,12 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
                 None
             } {
                 let cb_va_u64: u64 = if is_pe32_plus {
-                    let lo = read_u32_le(data, tls_off + 0x20).unwrap_or(0) as u64;
-                    let hi = read_u32_le(data, tls_off + 0x24).unwrap_or(0) as u64;
+                    // See the offset note above: +0x18/+0x0C, not +0x20/+0x14.
+                    let lo = read_u32_le(data, tls_off + 0x18).unwrap_or(0) as u64;
+                    let hi = read_u32_le(data, tls_off + 0x1C).unwrap_or(0) as u64;
                     (hi << 32) | lo
                 } else {
-                    read_u32_le(data, tls_off + 0x14).unwrap_or(0) as u64
+                    read_u32_le(data, tls_off + 0x0C).unwrap_or(0) as u64
                 };
                 if cb_va_u64 != 0 {
                     let cb_rva_u64 = cb_va_u64.saturating_sub(image_base);

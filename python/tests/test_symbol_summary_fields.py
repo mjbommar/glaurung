@@ -128,6 +128,63 @@ def test_pe_tls_directory_is_reported(pe_summary):
     assert pe_summary.tls_used is True
 
 
+#: A PE that really does register TLS callbacks. `win10-dismcore.dll` has a
+#: TLS *directory* but an empty callback array, which is the common case and
+#: not the one that exercises the walk.
+PE_WITH_CALLBACKS = (
+    ROOT
+    / "samples/binaries/platforms/windows/vendor/realworld"
+    / "windows-update-intel-npu-ze_loader.dll"
+)
+
+
+def test_a_tls_directory_with_no_callbacks_reports_zero_not_none(pe_summary):
+    """`tls_used` does not imply callbacks, and zero is a real answer.
+
+    A TLS directory exists to describe thread-local *storage*; the callback
+    array is optional and usually empty. `win10-dismcore.dll` is that case --
+    its `AddressOfCallBacks` is a valid pointer to an immediate NULL.
+
+    The distinction being pinned is `0` versus `None`: zero means "the array
+    was walked and is empty", `None` means "the pointer could not be read at
+    all", which is what the wrong struct offset produced.
+    """
+    assert pe_summary.tls_used is True
+    assert pe_summary.tls_callback_count == 0, (
+        f"expected a walked-and-empty array, got {pe_summary.tls_callback_count!r}"
+    )
+
+
+def test_pe_tls_callbacks_are_enumerated():
+    """The callback array is walked and its entries located.
+
+    glaurung reported `tls_callback_count=None` for every PE because it read
+    `AddressOfCallBacks` at the wrong struct offset: +0x20 in a PE32+ TLS
+    directory is `SizeOfZeroFill`, and the pointer is at +0x18 (+0x0C, not
+    +0x14, in the 32-bit form). The bad read yielded 0x0030000000000000
+    (Characteristics << 32) -- non-zero, so it passed the "has callbacks"
+    guard and failed later at RVA mapping. The answer was therefore a
+    confident `None` rather than an error.
+
+    TLS callbacks run BEFORE the entry point, so this is where a packer or an
+    anti-debug check hides, and "no callbacks" is the most misleading possible
+    answer. 26 binaries in `samples/` register callbacks; this asserts one.
+    """
+    if not PE_WITH_CALLBACKS.is_file() or PE_WITH_CALLBACKS.stat().st_size < 4096:
+        pytest.skip(f"{PE_WITH_CALLBACKS.name} absent or an unfetched LFS pointer")
+    s = summary(PE_WITH_CALLBACKS)
+    assert s.tls_used is True
+    assert s.tls_callback_count == 2, (
+        f"independent parse of the callback array finds 2 entries before the "
+        f"NULL terminator; got {s.tls_callback_count!r}"
+    )
+    vas = s.tls_callback_vas
+    assert vas and len(vas) == 2, vas
+    # Real callbacks live in the loaded image, well above any struct-field
+    # value that a misread offset could produce.
+    assert all(v > 0x100000000 for v in vas), [hex(v) for v in vas]
+
+
 def test_pe_without_a_coff_symbol_table_is_stripped(pe_summary):
     assert pe_summary.stripped is True
 

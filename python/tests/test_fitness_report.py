@@ -248,6 +248,18 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01 (second, same day): `product_mean_loc` 407.982 -> 408.342 and
+    `product_pct_loc_above_1000` 18.033 -> 18.017, from the PE symbol-summary
+    fixes -- `symbol_table_entries` in `src/lib.rs`, `codeview_payload_ranges`
+    in `src/symbols/pe.rs`, and a `pdb_path` getter. About 147 product lines
+    across three existing files, which is why the mean moved and no
+    file-count bucket did: nothing crossed a threshold, and the percentage of
+    LOC in large files actually improved because the additions landed in files
+    under 1,000 lines. Much of the addition is comment explaining three real
+    defects (a hardcoded `false`, a missing getter, and an RSDS scan reading
+    199,416 bytes short of the record); trimming that prose to hold a mean
+    would be the wrong trade.
+
     2026-09-01: `product_mean_loc` 407.863 -> 407.982, from the CTPH parameter
     validation that turned three PanicExceptions into ValueErrors. The first
     measurement of this change was larger and WRONG: `src/target/conformance.rs`
@@ -465,9 +477,9 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "product_files_above_2000": 3,
         "product_loc_above_1000": 33327,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(407.9823399558499),
+        "product_mean_loc": pytest.approx(408.3421633554084),
         "product_median_loc": pytest.approx(303),
-        "product_pct_loc_above_1000": pytest.approx(18.03252965111246),
+        "product_pct_loc_above_1000": pytest.approx(18.016639726671677),
     }
 
 
