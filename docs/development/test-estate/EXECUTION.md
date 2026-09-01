@@ -291,17 +291,26 @@ attached and gates behind them:
 * **The correct pattern already existed.** `src/program/*_tests.rs` uses
   `.expect("host C compiler is available")` and goes red on a bare machine —
   21 tests doing the right thing while 21 sites did the wrong one.
-* **195 tests are compiled and executed by nothing** — `src/symbolic/`,
-  behind a feature neither `cargo test` nor `--features python-ext` enables,
-  while `feature-build-gate.sh` runs `cargo check --all-targets`, which
-  compiles test code without running it. Ratcheted: the pool may only shrink.
+* **Tests executed by no gate: 271 -> 195 -> 0.** Both earlier numbers were
+  wrong, in different ways, and the sequence is the useful part.
 
-  **First recorded as 271, which was wrong.** It counted `src/exec/` (76) as
-  unreachable from `src/lib.rs`'s `cfg` gate, but `Cargo.toml` defines
-  `python-ext = [..., "exec"]`, so `--features python-ext` runs 65 of them;
-  the other 11 are `oracle.rs` behind `dev-oracle`, which links libunicorn and
-  is never shipped. Corrected by counting `^test exec::` in a real run instead
-  of reasoning from the feature list.
+  271 counted `src/exec/` (76) as unreachable from `src/lib.rs`'s `cfg` gate,
+  but `Cargo.toml` defines `python-ext = [..., "exec"]`, so
+  `--features python-ext` runs 65 of them; the other 11 are `oracle.rs` behind
+  `dev-oracle`, which links libunicorn and is never shipped. Reading a `cfg`
+  gate tells you what a module needs; only running the suite tells you what
+  executed.
+
+  195 was a correct measurement and an obsolete claim: **nothing was
+  preventing those tests from running.** `symbolic = ["exec"]` is pure Rust,
+  and the first `cargo test --features symbolic` passed 3,025 / 0 with 103
+  symbolic tests executing. A CI lane now runs them (`3fb3184c`). A ratchet
+  that merely counted the hole would have recorded it indefinitely while the
+  fix was one workflow stanza — worth remembering the next time a measurement
+  feels like progress.
+
+  92 remain behind `solver-*` features linking external SMT libraries,
+  recorded as `solver_gated_estimate` rather than hidden in the pool.
 * **The perf gate could report success from an empty measurement**, and
   nothing invoked it. Both fixed — and in that order, because scheduling a
   fail-open gate manufactures assurance.
