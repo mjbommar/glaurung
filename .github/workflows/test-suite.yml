@@ -13,6 +13,15 @@
 #
 # Two jobs, because they fail for different reasons and a reader should not
 # have to guess which half went red.
+#
+# **Git LFS is not optional here.** 1,214 sample binaries (~663 MB) are LFS
+# objects and `actions/checkout@v4` does NOT fetch them by default: without
+# `lfs: true` every test that opens a real binary reads a 130-byte pointer file
+# instead. That is not a subtle failure -- the first run of this workflow went
+# red across analysis::elf_plt, analysis::gopclntab, analysis::java_class and
+# every other module that touches the corpus, while the same commit was 2,944
+# green locally. Found by watching the run rather than assuming it. No other
+# workflow in this repository sets `lfs`, which is worth a look.
 name: test suite
 
 on:
@@ -34,6 +43,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `--features python-ext` and not a bare `cargo test`, which does not
@@ -55,6 +66,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
