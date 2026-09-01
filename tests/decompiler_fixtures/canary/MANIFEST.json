@@ -1,0 +1,108 @@
+{
+  "excluded": {
+    "166_rust_generics-rustc-O0.so": "13.3 MB -- a Rust cdylib statically links std, so one canary would be 78x the rest of the set combined. Rust is covered by the slow fixture matrix; paying 13 MB of git for smoke coverage is not the trade."
+  },
+  "objects": [
+    {
+      "bytes": 17456,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "13_loop_early_exit",
+      "object": "13_loop_early_exit-gcc-O0.so",
+      "optimization": "O0",
+      "sha256": "b17af4d02f4cf8321bd355ef00d9331314313f8bc973bc2ecb37509226a896a1",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "a loop with an early exit"
+    },
+    {
+      "bytes": 18712,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "04_switch_shapes",
+      "object": "04_switch_shapes-gcc-O0.so",
+      "optimization": "O0",
+      "sha256": "8ae8cc873a885dc144360f3706eadabf71a46b24fd75a90177e8d8fbaafa36b6",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "a multi-way switch"
+    },
+    {
+      "bytes": 18784,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "212_loop_with_returning_arm",
+      "object": "212_loop_with_returning_arm-gcc-O2.so",
+      "optimization": "O2",
+      "sha256": "7265f589ba2962214d5c38b28576ff665ca7e46d3e0c2fee530ff4026c123c81",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "a dispatch arm that returns from inside a loop"
+    },
+    {
+      "bytes": 18632,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "216_packed_union_wire_record",
+      "object": "216_packed_union_wire_record-gcc-O0.so",
+      "optimization": "O0",
+      "sha256": "59c6a42730c6bf6b7371bc91fbc17ac0b0015d61020838268477c1651e5e0e07",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "bitfields inside a packed union"
+    },
+    {
+      "bytes": 18048,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "172_float_double_widths",
+      "object": "172_float_double_widths-gcc-O0.so",
+      "optimization": "O0",
+      "sha256": "f6e4e6fa37be7e56e8b8a8c548f0c974a277ceb16c5a1978bec578d67f3e1628",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "float and double widths"
+    },
+    {
+      "bytes": 18680,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "09_memory_effects",
+      "object": "09_memory_effects-gcc-O2.so",
+      "optimization": "O2",
+      "sha256": "1d875f37d270c7d39f20080697baccd15d104585e9a7994aae274ed31982db5a",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "writable static storage"
+    },
+    {
+      "bytes": 22808,
+      "compiler": "clang",
+      "compiler_version": "Ubuntu clang version 14.0.0-1ubuntu1.1",
+      "fixture": "03_loop_shapes",
+      "object": "03_loop_shapes-clang-O2.so",
+      "optimization": "O2",
+      "sha256": "cc95d56cbbd74f5cb7f9eab616f84b8d8c92276196f53fd7628aa59b990ee258",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "loop forms under optimisation"
+    },
+    {
+      "bytes": 17664,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "05_cleanup_and_state_machine",
+      "object": "05_cleanup_and_state_machine-gcc-O0.so",
+      "optimization": "O0",
+      "sha256": "13015778dc5fe60006c15ff97edbd2405e76fc6b746aa4328fd8a4fd0bf5e998",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "a protocol state machine"
+    },
+    {
+      "bytes": 19936,
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "fixture": "07_packet_parser",
+      "object": "07_packet_parser-gcc-O2.so",
+      "optimization": "O2",
+      "sha256": "7116c6ef84a37db2699cf90429cdd135a906bec464c615c6abe67eaaeebe9035",
+      "toolchain_image": "sha256:19e8830546463902bdf130d6d940264347506d5bd8b34e0e5497cc7bdbda300c",
+      "why": "a wire-format parser"
+    }
+  ],
+  "purpose": "Prebuilt fixture objects so the DEFAULT test suite can exercise the decompiler end to end on a fresh checkout, where tests/decompiler_fixtures/build/ is gitignored and absent. Built hermetically in the pinned toolchain image, so the bytes are identical on every machine.",
+  "total_bytes": 170720
+}
