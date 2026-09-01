@@ -1,0 +1,7 @@
+{
+  "purpose": "Cortex-M BASEPRI critical section: DecBench failure class F2a",
+  "built_by": "tests/cortex_m/build.sh (arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O1 -c)",
+  "sha256": "7eded4d3dd38a31395fc9a43bc94ab7112e4cc88eef15cba353de59f04edf991",
+  "size": 952,
+  "why": "Capstone in generic ARM mode REJECTS `mrs r1, BASEPRI` (f3ef 8111). A function whose first instruction fails to decode is abandoned entirely, and a BASEPRI critical section appears in essentially every RTOS and bare-metal image -- 31 rows of the pinned DecBench run. Decoding needs CS_MODE_MCLASS, which cannot simply be enabled globally: it silently misdecodes A-profile `msr cpsr_c, r1` as `msr apsr_nzcvq, r1`."
+}

@@ -11,6 +11,23 @@ use capstone::{Arch, Capstone, Endian, ExtraMode, Mode};
 
 pub struct CapstoneDisassembler {
     cs: capstone::Capstone,
+    /// A second ARM decoder in Cortex-M (`CS_MODE_MCLASS`) mode, used **only**
+    /// when the primary decoder rejects an instruction.
+    ///
+    /// M-profile and A-profile assign different meanings to the same Thumb
+    /// system-register encodings, so no single Capstone configuration decodes
+    /// both. Enabling MClass globally is not an option: `f381 8100` is
+    /// `msr cpsr_c, r1` on A-profile and decodes as `msr apsr_nzcvq, r1` under
+    /// MClass -- a silently WRONG answer rather than a failed one.
+    ///
+    /// As a fallback it is safe in the direction that matters. A-profile
+    /// system instructions decode successfully on the primary, so the fallback
+    /// never sees them; Cortex-M `mrs r0, BASEPRI` (`f3ef 8011`) is rejected
+    /// outright by the primary, and rejection is what abandons the enclosing
+    /// function. That is DecBench failure class F2a, 31 rows: an `mrs` inside
+    /// an interrupt-priority critical section appears in essentially every
+    /// RTOS and bare-metal image, and the whole function is lost at it.
+    mclass: Option<capstone::Capstone>,
     arch: Architecture,
     endianness: Endianness,
 }
@@ -155,8 +172,24 @@ impl CapstoneDisassembler {
         let mut cs = Capstone::new_raw(a, m, extra_modes, endian).ok()?;
         // Enable details to recover structured operands (needed for PC-relative addressing)
         let _ = cs.set_detail(true);
+        // Cortex-M is Thumb-only, so the fallback decoder is built in Thumb
+        // mode and stays there; `set_thumb_mode` does not touch it.
+        let mclass = matches!(arch, Architecture::ARM)
+            .then(|| {
+                let mut m = Capstone::new_raw(
+                    a,
+                    Mode::Thumb,
+                    [ExtraMode::V8, ExtraMode::MClass].into_iter(),
+                    endian,
+                )
+                .ok()?;
+                let _ = m.set_detail(true);
+                Some(m)
+            })
+            .flatten();
         Some(Self {
             cs,
+            mclass,
             arch,
             endianness,
         })
@@ -283,19 +316,32 @@ impl Disassembler for CapstoneDisassembler {
         // Every other architecture here is fixed-width and far below 16.
         const MAX_INSN_BYTES: usize = 16;
         let window = &bytes[..MAX_INSN_BYTES.min(bytes.len())];
-        let insns = self
-            .cs
-            .disasm_count(window, address.value, 1)
-            .map_err(|_| DisassemblerError::InvalidInstruction())?;
-        if insns.is_empty() {
-            return Err(DisassemblerError::InvalidInstruction());
-        }
+        // Decode on the primary; fall back to the Cortex-M decoder only when
+        // the primary rejects the bytes. See the `mclass` field docs for why
+        // the order matters: MClass-first would silently misdecode A-profile
+        // system instructions, while MClass-last can only turn a rejection
+        // (which costs the whole function) into a decode.
+        let primary = self.cs.disasm_count(window, address.value, 1).ok();
+        let (cs, insns) = match primary {
+            Some(i) if !i.is_empty() => (&self.cs, i),
+            _ => {
+                let fallback = self
+                    .mclass
+                    .as_ref()
+                    .and_then(|m| m.disasm_count(window, address.value, 1).ok())
+                    .filter(|i| !i.is_empty());
+                match (self.mclass.as_ref(), fallback) {
+                    (Some(m), Some(i)) => (m, i),
+                    _ => return Err(DisassemblerError::InvalidInstruction()),
+                }
+            }
+        };
         let insn = insns.iter().next().unwrap();
         let len = insn.bytes().len();
         let mnemonic = insn.mnemonic().unwrap_or("").to_string();
         // Try detailed operands when available (ARM64 focus)
         let mut operands: Vec<Operand> = Vec::new();
-        if let Ok(detail) = self.cs.insn_detail(insn) {
+        if let Ok(detail) = cs.insn_detail(insn) {
             match self.arch {
                 Architecture::ARM64 => {
                     if let Some(ad) = detail.arch_detail().arm64() {
@@ -313,7 +359,7 @@ impl Disassembler for CapstoneDisassembler {
                         for op in ad.operands() {
                             match op.op_type {
                                 Arm64OperandType::Reg(r) => {
-                                    let name = self.cs.reg_name(r).unwrap_or_default();
+                                    let name = cs.reg_name(r).unwrap_or_default();
                                     let shape = arm64_vector_shape(op.vas);
                                     let mut operand = Operand::register(
                                         name,
@@ -329,12 +375,12 @@ impl Disassembler for CapstoneDisassembler {
                                 }
                                 Arm64OperandType::Mem(m) => {
                                     let base = if m.base().0 != 0 {
-                                        Some(self.cs.reg_name(m.base()).unwrap_or_default())
+                                        Some(cs.reg_name(m.base()).unwrap_or_default())
                                     } else {
                                         None
                                     };
                                     let index = if m.index().0 != 0 {
-                                        Some(self.cs.reg_name(m.index()).unwrap_or_default())
+                                        Some(cs.reg_name(m.index()).unwrap_or_default())
                                     } else {
                                         None
                                     };
@@ -376,7 +422,7 @@ impl Disassembler for CapstoneDisassembler {
                         for op in ad.operands() {
                             match op.op_type {
                                 ArmOperandType::Reg(r) => {
-                                    let name = self.cs.reg_name(r).unwrap_or_default();
+                                    let name = cs.reg_name(r).unwrap_or_default();
                                     operands.push(Operand::register(name, 0, Access::Read));
                                 }
                                 ArmOperandType::Imm(i) => {
@@ -398,12 +444,12 @@ impl Disassembler for CapstoneDisassembler {
                                 }
                                 ArmOperandType::Mem(m) => {
                                     let base = if m.base().0 != 0 {
-                                        Some(self.cs.reg_name(m.base()).unwrap_or_default())
+                                        Some(cs.reg_name(m.base()).unwrap_or_default())
                                     } else {
                                         None
                                     };
                                     let index = if m.index().0 != 0 {
-                                        Some(self.cs.reg_name(m.index()).unwrap_or_default())
+                                        Some(cs.reg_name(m.index()).unwrap_or_default())
                                     } else {
                                         None
                                     };
@@ -420,6 +466,38 @@ impl Disassembler for CapstoneDisassembler {
                                         base,
                                         index,
                                         scale,
+                                    ));
+                                }
+                                // A Cortex-M special register (BASEPRI, IPSR,
+                                // PSP, ...). It was falling into the catch-all
+                                // and being dropped, so `mrs r0, BASEPRI`
+                                // reached the lifter with ONE operand and no
+                                // indication of which system register it read.
+                                // The lifter cannot name the intrinsic without
+                                // it, and BASEPRI_MAX must stay distinct from
+                                // BASEPRI.
+                                ArmOperandType::SysReg(r) => {
+                                    // `reg_name` resolves `arm_reg` ids and
+                                    // returns empty for an `arm_sysreg` one,
+                                    // so the printed operand text is the only
+                                    // place the register's identity survives.
+                                    // Losing it would collapse BASEPRI_MAX
+                                    // into BASEPRI, whose update semantics
+                                    // differ.
+                                    let name = match cs.reg_name(r) {
+                                        Some(n) if !n.is_empty() => n,
+                                        _ => insn
+                                            .op_str()
+                                            .unwrap_or("")
+                                            .split(',')
+                                            .nth(operands.len())
+                                            .map(|s| s.trim().to_ascii_lowercase())
+                                            .unwrap_or_default(),
+                                    };
+                                    operands.push(Operand::register(
+                                        name,
+                                        0,
+                                        Access::Read,
                                     ));
                                 }
                                 _ => {}

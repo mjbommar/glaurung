@@ -389,6 +389,61 @@ fn lift_one_decoded(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
         }];
     }
 
+    // Cortex-M special registers (BASEPRI, IPSR, PSP, ...) are machine state,
+    // not memory. Model them as typed intrinsics so def-use stays honest: an
+    // `mrs` DEFINES its destination, so without an output the register reads as
+    // undefined everywhere downstream; an `msr` CONSUMES its source, so without
+    // an input a real dependency disappears and the producing computation looks
+    // dead. Claiming memory effects instead would make every surrounding load
+    // and store unorderable.
+    //
+    // The system register is part of the intrinsic name, which keeps
+    // `BASEPRI_MAX` distinct from `BASEPRI` -- their update semantics differ,
+    // `BASEPRI_MAX` only lowering the priority ceiling. An unrecognised SYSm
+    // encoding still yields a named intrinsic rather than nothing: an empty
+    // lift discards the enclosing function, which is the failure this whole
+    // path exists to prevent (DecBench F2a).
+    if (mnem == "mrs" || mnem == "msr") && ops.len() == 2 {
+        let is_mrs = mnem == "mrs";
+        // Capstone renders the special register as a bare name in the operand
+        // it cannot type as a GPR; `operand_reg` returns it either way, so the
+        // GPR side is identified by position rather than by shape.
+        let (gpr, sysreg) = if is_mrs { (&ops[0], &ops[1]) } else { (&ops[1], &ops[0]) };
+        let sys_name = operand_reg(sysreg)
+            .map(|r| match r {
+                VReg::Phys(n) => n.to_ascii_lowercase(),
+                other => format!("{other:?}").to_ascii_lowercase(),
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let name = format!("arm32.{mnem}.{sys_name}");
+        if let Some(reg) = operand_reg(gpr) {
+            return vec![if is_mrs {
+                Op::Intrinsic {
+                    name,
+                    ins: vec![],
+                    outs: vec![(reg, Width::W32)],
+                    reads_mem: false,
+                    writes_mem: false,
+                }
+            } else {
+                Op::Intrinsic {
+                    name,
+                    ins: vec![Value::Reg(reg)],
+                    outs: vec![],
+                    reads_mem: false,
+                    writes_mem: false,
+                }
+            }];
+        }
+        return vec![Op::Intrinsic {
+            name,
+            ins: vec![],
+            outs: vec![],
+            reads_mem: false,
+            writes_mem: false,
+        }];
+    }
+
     // VFP register moves are bit-preserving operations even though the source
     // type lattice cannot yet render their floating-point value.  Keep their
     // exact input/output footprint as an intrinsic so SSA and ABI recovery can
@@ -1980,6 +2035,159 @@ mod wide_multiply_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every Cortex-M system-register form observed in the DecBench ARM32
+    /// corpus, assembled by `arm-none-eabi-as -mcpu=cortex-m4 -mthumb`.
+    ///
+    /// These are machine state, not memory. Lifting them as an opaque
+    /// memory-clobbering unknown (or not at all) is what makes 31 rows return
+    /// no body: the whole function is abandoned at the first `mrs` in an
+    /// interrupt-priority critical section, and those appear in essentially
+    /// every RTOS and bare-metal image.
+    const SYSREG_PACKETS: &[(&str, [u8; 4], &str)] = &[
+        ("mrs r0, BASEPRI", [0xef, 0xf3, 0x11, 0x80], "r0"),
+        ("msr BASEPRI, r1", [0x81, 0xf3, 0x11, 0x88], "r1"),
+        ("msr BASEPRI_MAX, r2", [0x82, 0xf3, 0x12, 0x88], "r2"),
+        ("mrs r3, IPSR", [0xef, 0xf3, 0x05, 0x83], "r3"),
+        ("mrs r4, PSP", [0xef, 0xf3, 0x09, 0x84], "r4"),
+        ("msr PSP, r5", [0x85, 0xf3, 0x09, 0x88], "r5"),
+    ];
+
+    #[test]
+    fn cortex_m_system_registers_lift_to_typed_non_memory_intrinsics() {
+        for (asm, bytes, reg) in SYSREG_PACKETS {
+            let lifted = lift_bytes(bytes, 0x8000_0100, true);
+            assert!(
+                !lifted.is_empty(),
+                "{asm}: lifted to nothing, so the enclosing function is \
+                 abandoned at this instruction"
+            );
+            let is_mrs = asm.starts_with("mrs");
+            match &lifted[0].op {
+                Op::Intrinsic {
+                    name,
+                    ins,
+                    outs,
+                    reads_mem,
+                    writes_mem,
+                } => {
+                    // The exact name, not just the prefix: an empty or
+                    // wrong system register would still satisfy a prefix
+                    // check while collapsing BASEPRI_MAX into BASEPRI.
+                    let sys = asm.rsplit(&[',', ' '][..]).next().unwrap();
+                    let expect = format!(
+                        "arm32.{}.{}",
+                        if is_mrs { "mrs" } else { "msr" },
+                        if is_mrs {
+                            asm.split(", ").nth(1).unwrap().to_ascii_lowercase()
+                        } else {
+                            asm.split(' ').nth(1).unwrap().trim_end_matches(',').to_ascii_lowercase()
+                        }
+                    );
+                    let _ = sys;
+                    assert_eq!(
+                        name, &expect,
+                        "{asm}: the system register must be part of the \
+                         intrinsic name so BASEPRI_MAX stays distinct from \
+                         BASEPRI"
+                    );
+                    assert!(
+                        !reads_mem && !writes_mem,
+                        "{asm}: special registers are machine state, not \
+                         memory -- claiming memory effects here makes every \
+                         surrounding load and store unorderable"
+                    );
+                    if is_mrs {
+                        assert_eq!(
+                            outs,
+                            &[(VReg::phys(*reg), Width::W32)],
+                            "{asm}: MRS defines its destination; without the \
+                             output the register reads as undefined downstream"
+                        );
+                        assert!(ins.is_empty(), "{asm}: MRS takes no register input");
+                    } else {
+                        assert_eq!(
+                            ins,
+                            &[Value::Reg(VReg::phys(*reg))],
+                            "{asm}: MSR consumes its source; dropping the \
+                             input loses a real data dependency"
+                        );
+                        assert!(outs.is_empty(), "{asm}: MSR defines no GPR");
+                    }
+                }
+                other => panic!("{asm}: expected a typed intrinsic, got {other:#?}"),
+            }
+        }
+    }
+
+    /// The rest of the Cortex-M special registers, same assembler.
+    ///
+    /// `mrs r7, XPSR` is assembled from that spelling but disassembles as
+    /// `PSR`, so these assert the property that matters rather than a
+    /// spelling: every form lifts to a typed non-memory intrinsic, and
+    /// registers that differ get names that differ.
+    #[test]
+    fn the_remaining_cortex_m_special_registers_lift_distinctly() {
+        let packets: &[(&str, [u8; 4], &str)] = &[
+            ("mrs PRIMASK", [0xef, 0xf3, 0x10, 0x80], "r0"),
+            ("msr PRIMASK", [0x81, 0xf3, 0x10, 0x88], "r1"),
+            ("mrs FAULTMASK", [0xef, 0xf3, 0x13, 0x82], "r2"),
+            ("mrs CONTROL", [0xef, 0xf3, 0x14, 0x83], "r3"),
+            ("msr CONTROL", [0x84, 0xf3, 0x14, 0x88], "r4"),
+            ("mrs MSP", [0xef, 0xf3, 0x08, 0x85], "r5"),
+            ("msr MSP", [0x86, 0xf3, 0x08, 0x88], "r6"),
+            ("mrs XPSR", [0xef, 0xf3, 0x03, 0x87], "r7"),
+        ];
+        let mut mrs_names = std::collections::BTreeSet::new();
+        for (asm, bytes, reg) in packets {
+            let lifted = lift_bytes(bytes, 0x8000_0300, true);
+            assert!(!lifted.is_empty(), "{asm}: lifted to nothing");
+            let Op::Intrinsic {
+                name,
+                ins,
+                outs,
+                reads_mem,
+                writes_mem,
+            } = &lifted[0].op
+            else {
+                panic!("{asm}: expected a typed intrinsic, got {:#?}", lifted[0].op);
+            };
+            assert!(!reads_mem && !writes_mem, "{asm}: not memory");
+            let is_mrs = asm.starts_with("mrs");
+            let prefix = if is_mrs { "arm32.mrs." } else { "arm32.msr." };
+            assert!(name.starts_with(prefix), "{asm}: named {name:?}");
+            assert!(
+                name.len() > prefix.len(),
+                "{asm}: named {name:?} -- the system register is missing, so \
+                 this intrinsic is indistinguishable from every other {prefix}"
+            );
+            if is_mrs {
+                assert_eq!(outs, &[(VReg::phys(*reg), Width::W32)], "{asm}");
+                mrs_names.insert(name.clone());
+            } else {
+                assert_eq!(ins, &[Value::Reg(VReg::phys(*reg))], "{asm}");
+            }
+        }
+        // PRIMASK, FAULTMASK, CONTROL, MSP, XPSR are five distinct registers.
+        assert_eq!(mrs_names.len(), 5, "collapsed names: {mrs_names:?}");
+    }
+
+    /// BASEPRI_MAX is not BASEPRI: it only ever RAISES the priority ceiling,
+    /// so a fix that folded the two would silently model a critical section
+    /// as doing the opposite of what it does on one of the two paths.
+    #[test]
+    fn basepri_max_is_distinct_from_basepri() {
+        let basepri = lift_bytes(&[0x81, 0xf3, 0x11, 0x88], 0x8000_0400, true);
+        let basepri_max = lift_bytes(&[0x82, 0xf3, 0x12, 0x88], 0x8000_0400, true);
+        let name = |v: &[LlirInstr]| match &v[0].op {
+            Op::Intrinsic { name, .. } => name.clone(),
+            other => panic!("expected intrinsic, got {other:#?}"),
+        };
+        let (a, b) = (name(&basepri), name(&basepri_max));
+        assert_ne!(a, b, "BASEPRI and BASEPRI_MAX collapsed to {a:?}");
+        assert_eq!(a, "arm32.msr.basepri");
+        assert_eq!(b, "arm32.msr.basepri_max");
+    }
 
     #[test]
     fn thumb_vmov_f32_preserves_the_real_s0_output_footprint() {
