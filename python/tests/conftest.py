@@ -4,32 +4,30 @@ import pytest
 from pathlib import Path
 
 
+#: The repository's `samples/`, resolved from THIS file rather than guessed
+#: from the working directory.
+#:
+#: These helpers used to try `samples/` and then `../samples/`, which resolves
+#: for exactly two of the many directories pytest can be invoked from and
+#: silently reports "not found" everywhere else. A sample that is not found
+#: becomes a skip, and a skip looked identical to a pass until `-ra` landed in
+#: `pytest.ini`. Twelve other test files carried the same CWD-relative
+#: assumption about `tests/fixtures/msvc-pdb/` and were fixed the same way.
+SAMPLES = Path(__file__).resolve().parents[2] / "samples"
+
+
 def sample_file_exists(relative_path):
     """Check if a sample file exists."""
-    # Try relative to current directory first (python/tests/)
-    full_path = Path("samples") / relative_path
-    if full_path.exists():
-        return True
-
-    # Try relative to parent directory (project root)
-    full_path = Path("../samples") / relative_path
-    return full_path.exists()
+    return (SAMPLES / relative_path).exists()
 
 
 def sample_file_path(relative_path):
-    """Get the full path to a sample file."""
-    # Try relative to current directory first (python/tests/)
-    full_path = Path("samples") / relative_path
-    if full_path.exists():
-        return full_path
+    """Get the full path to a sample file.
 
-    # Try relative to parent directory (project root)
-    full_path = Path("../samples") / relative_path
-    if full_path.exists():
-        return full_path
-
-    # Return the relative path as fallback
-    return Path("samples") / relative_path
+    Returns the anchored path whether or not it exists, so a caller that
+    reports a missing file names somewhere a reader can actually look.
+    """
+    return SAMPLES / relative_path
 
 
 def get_sample_file_path(relative_path):
