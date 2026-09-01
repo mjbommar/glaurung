@@ -3162,6 +3162,7518 @@
     "99_char_and_endianness:load_big_endian": false,
     "99_char_and_endianness:plain_char_is_signed": false
   },
+  "readability": {
+    "01_conditional_polarity:classify:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:classify:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:cmp_signed:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:cmp_signed:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:cmp_unsigned:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:cmp_unsigned:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:early_return:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:early_return:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:early_return_ge:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:early_return_ge:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:elseif:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:elseif:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:nested:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:nested:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:sc_and:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:sc_and:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:sc_or:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:sc_or:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:ternary:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "01_conditional_polarity:ternary:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u16:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u16:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u8:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:rt_u8:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:sar_signed:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:sar_signed:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:sext_i8:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:sext_i8:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:shr_unsigned:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:shr_unsigned:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:smul_high64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:smul_high64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:srem64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:srem64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:trunc_u8:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:trunc_u8:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:umul_high64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:umul_high64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:urem64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:urem64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:zext_u32_to_u64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "02_integer_widths:zext_u32_to_u64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:dowhile_atleastonce:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:dowhile_atleastonce:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "03_loop_shapes:for_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:for_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:loop_break:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:loop_break:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:loop_continue:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:loop_continue:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:nested_pairs:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:nested_pairs:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:while_reload_header:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "03_loop_shapes:while_reload_header:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:dense_jumptable:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:dense_jumptable:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:explicit_fallthrough:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:explicit_fallthrough:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:negative_cases:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:negative_cases:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:no_default:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:no_default:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:shared_bodies:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:shared_bodies:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:sparse_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "04_switch_shapes:sparse_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "05_cleanup_and_state_machine:fsm:clang:O2": {
+      "break": 0,
+      "goto": 16,
+      "switch": 1
+    },
+    "05_cleanup_and_state_machine:fsm:gcc:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "05_cleanup_and_state_machine:process:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "05_cleanup_and_state_machine:process:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:fact_mod:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:fact_mod:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:fib:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:fib:gcc:O2": {
+      "break": 0,
+      "goto": 21,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg0:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg0:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg10:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg10:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg1:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg1:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg2:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg2:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg6:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg6:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg7:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "06_calling_conventions:sum_arg7:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "07_packet_parser:parse_packet:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "07_packet_parser:parse_packet:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "07_packet_parser:validate_header:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "07_packet_parser:validate_header:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "08_indirect_dispatch:apply:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "08_indirect_dispatch:apply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "08_indirect_dispatch:dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "08_indirect_dispatch:dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "08_indirect_dispatch:dispatch_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "08_indirect_dispatch:dispatch_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "08_indirect_dispatch:tail_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "08_indirect_dispatch:tail_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:cas_update:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:cas_update:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:mem_copy:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "09_memory_effects:mem_copy:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:mem_set:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "09_memory_effects:mem_set:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:read_counter:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:read_counter:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:reset_counter:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:reset_counter:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:tick:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:tick:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:tick_n:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:tick_n:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:vec_sum:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "09_memory_effects:vec_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "09_memory_effects:vec_transform:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "09_memory_effects:vec_transform:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "100_struct_layout:layout_offsets:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "100_struct_layout:layout_offsets:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "100_struct_layout:layout_size_delta:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "100_struct_layout:layout_size_delta:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "100_struct_layout:struct_assignment_copies:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "100_struct_layout:struct_assignment_copies:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "101_static_locals:counter_next:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "101_static_locals:counter_next:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "101_static_locals:counter_reset:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "101_static_locals:counter_reset:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "101_static_locals:static_table_lookup:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "101_static_locals:static_table_lookup:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "102_duffs_device:duff_copy:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "102_duffs_device:duff_copy:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "103_computed_goto:threaded_interpreter:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "103_computed_goto:threaded_interpreter:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "104_statement_expression:single_evaluation:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "104_statement_expression:single_evaluation:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "104_statement_expression:statement_expression_max:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "104_statement_expression:statement_expression_max:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "105_goto_ladder:acquire_and_release:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "105_goto_ladder:acquire_and_release:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "106_switch_shapes_dense_sparse:dense_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "106_switch_shapes_dense_sparse:dense_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "106_switch_shapes_dense_sparse:hybrid_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "106_switch_shapes_dense_sparse:hybrid_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "106_switch_shapes_dense_sparse:sparse_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "106_switch_shapes_dense_sparse:sparse_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "107_short_circuit:guarded_dereference:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "107_short_circuit:guarded_dereference:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "107_short_circuit:short_circuit_and:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "107_short_circuit:short_circuit_and:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "107_short_circuit:short_circuit_or:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "107_short_circuit:short_circuit_or:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "108_multidimensional_arrays:row_decay_span:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "108_multidimensional_arrays:row_decay_span:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "108_multidimensional_arrays:sum_flat_with_stride:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "108_multidimensional_arrays:sum_flat_with_stride:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "108_multidimensional_arrays:sum_true_2d:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "108_multidimensional_arrays:sum_true_2d:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "109_subscript_commutativity:mixed_subscript_sum:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "109_subscript_commutativity:mixed_subscript_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "109_subscript_commutativity:negative_offset_from_interior:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "109_subscript_commutativity:negative_offset_from_interior:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "109_subscript_commutativity:reversed_subscript:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "109_subscript_commutativity:reversed_subscript:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_ctor_dtor:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_ctor_dtor:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_exception:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_exception:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_lambda_capture:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_lambda_capture:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_move:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_move:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_raii_guard:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_raii_guard:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "110_pointer_arithmetic:byte_versus_element_step:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "110_pointer_arithmetic:byte_versus_element_step:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "110_pointer_arithmetic:element_distance:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "110_pointer_arithmetic:element_distance:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "110_pointer_arithmetic:walk_until_sentinel:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "110_pointer_arithmetic:walk_until_sentinel:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "111_self_referential_struct:link_and_sum:clang:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "111_self_referential_struct:link_and_sum:gcc:O2": {
+      "break": 1,
+      "goto": 2,
+      "switch": 0
+    },
+    "112_recursion_shapes:mutual_parity:clang:O2": {
+      "break": 1,
+      "goto": 3,
+      "switch": 0
+    },
+    "112_recursion_shapes:mutual_parity:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "112_recursion_shapes:nontail_depth:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "112_recursion_shapes:nontail_depth:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "112_recursion_shapes:recursion_entry:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "112_recursion_shapes:recursion_entry:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "112_recursion_shapes:tail_countdown:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "112_recursion_shapes:tail_countdown:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "113_varargs:variadic_none:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "113_varargs:variadic_none:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "113_varargs:variadic_three:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "113_varargs:variadic_three:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "113_varargs:variadic_weighted_four:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "113_varargs:variadic_weighted_four:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:nonvolatile_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:nonvolatile_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:volatile_loop_bound:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:volatile_loop_bound:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:volatile_reads_are_not_merged:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:volatile_reads_are_not_merged:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:volatile_store_then_load:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "114_volatile_access:volatile_store_then_load:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "115_enum_semantics:enum_arithmetic:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "115_enum_semantics:enum_arithmetic:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "115_enum_semantics:enum_sizes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "115_enum_semantics:enum_sizes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "115_enum_semantics:enum_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "115_enum_semantics:enum_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:count_matching:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "116_string_literals:count_matching:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:escape_sequences:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:escape_sequences:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:literal_index:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:literal_index:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:literal_size_versus_length:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "116_string_literals:literal_size_versus_length:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:absolute_without_branch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:absolute_without_branch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:maximum_plus_one:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:maximum_plus_one:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:modular_exponent_of_two:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:modular_exponent_of_two:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:signed_overflow_avoided:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:signed_overflow_avoided:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:wraps_to_zero:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "117_modular_arithmetic:wraps_to_zero:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:clear_lowest_set:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:clear_lowest_set:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:is_power_of_two:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:is_power_of_two:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:isolate_lowest_set:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:isolate_lowest_set:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:round_up_to_power_of_two:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:round_up_to_power_of_two:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:sign_without_branch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:sign_without_branch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:xor_swap:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "118_bit_tricks:xor_swap:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "119_branch_hints:hinted_validation:clang:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "119_branch_hints:hinted_validation:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "119_branch_hints:unhinted_validation:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "119_branch_hints:unhinted_validation:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_accumulate_bytes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_accumulate_bytes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_chain_in_loop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_chain_in_loop:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_fold_wide_result:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_fold_wide_result:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_forward_result:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_forward_result:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_into_spill:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_into_spill:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_nested:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_nested:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_result_drives_branch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_result_drives_branch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_result_unused:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_result_unused:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_twice_and_combine:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:call_twice_and_combine:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:signed_step:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:signed_step:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:spill_combine:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:spill_combine:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:widen_mul:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:widen_mul:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:wrap_byte:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "11_call_shapes:wrap_byte:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "120_const_and_literals:const_array_of_pointers:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "120_const_and_literals:const_array_of_pointers:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "120_const_and_literals:pointer_to_const_still_loads:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "120_const_and_literals:pointer_to_const_still_loads:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "120_const_and_literals:reads_foldable_constant:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "120_const_and_literals:reads_foldable_constant:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "121_dense_expression:chained_assignment:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "121_dense_expression:chained_assignment:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "121_dense_expression:conditional_lvalue_select:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "121_dense_expression:conditional_lvalue_select:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "121_dense_expression:dense_fold:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "121_dense_expression:dense_fold:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "122_compound_assignment:mixed_compound_operators:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "122_compound_assignment:mixed_compound_operators:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "122_compound_assignment:narrow_compound_truncates:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "122_compound_assignment:narrow_compound_truncates:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "122_compound_assignment:subscript_evaluated_once:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "122_compound_assignment:subscript_evaluated_once:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_after_decay:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_after_decay:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_array_versus_pointer:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_array_versus_pointer:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_does_not_evaluate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_does_not_evaluate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_probe_sets_flag:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_probe_sets_flag:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_vla_is_evaluated:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "123_sizeof_semantics:sizeof_vla_is_evaluated:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "124_loop_break_continue:break_binds_to_switch:clang:O2": {
+      "break": 0,
+      "goto": 14,
+      "switch": 0
+    },
+    "124_loop_break_continue:break_binds_to_switch:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "124_loop_break_continue:continue_in_do_while:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "124_loop_break_continue:continue_in_do_while:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "124_loop_break_continue:nested_loop_early_exit:clang:O2": {
+      "break": 0,
+      "goto": 51,
+      "switch": 0
+    },
+    "124_loop_break_continue:nested_loop_early_exit:gcc:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "125_loop_shapes:decrementing_loop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:decrementing_loop:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:do_while_always_once:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:do_while_always_once:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:infinite_with_internal_exit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:infinite_with_internal_exit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:while_zero_trips:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "125_loop_shapes:while_zero_trips:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "126_x_macros:apply_opcode:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "126_x_macros:apply_opcode:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "126_x_macros:opcode_weight:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "126_x_macros:opcode_weight:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "126_x_macros:total_weight:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "126_x_macros:total_weight:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "127_inline_linkage:inline_address_taken:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "127_inline_linkage:inline_address_taken:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "127_inline_linkage:inline_in_loop:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "127_inline_linkage:inline_in_loop:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "127_inline_linkage:inline_used_twice:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "127_inline_linkage:inline_used_twice:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "128_qualifier_combinations:const_pointer_writes:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "128_qualifier_combinations:const_pointer_writes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "128_qualifier_combinations:pointer_to_const_walks:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "128_qualifier_combinations:pointer_to_const_walks:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "128_qualifier_combinations:volatile_const_is_readable:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "128_qualifier_combinations:volatile_const_is_readable:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "129_struct_by_value:pass_large_by_value:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "129_struct_by_value:pass_large_by_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "129_struct_by_value:pass_small_by_value:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "129_struct_by_value:pass_small_by_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "129_struct_by_value:returns_small_struct_field:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "129_struct_by_value:returns_small_struct_field:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:count_up:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:count_up:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:do_while_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:do_while_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:down_by_negative_imm:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "12_loop_rotation:down_by_negative_imm:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:factorial_while:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:factorial_while:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:find_first_set:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:find_first_set:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:for_accumulate:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "12_loop_rotation:for_accumulate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:nested_rotated:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:nested_rotated:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "12_loop_rotation:skip_odd_sum:clang:O2": {
+      "break": 8,
+      "goto": 0,
+      "switch": 1
+    },
+    "12_loop_rotation:skip_odd_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "130_bitpacked_codec:codec_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "130_bitpacked_codec:codec_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "130_bitpacked_codec:pack_fields:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "130_bitpacked_codec:pack_fields:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "130_bitpacked_codec:unpack_field:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "130_bitpacked_codec:unpack_field:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "131_obfuscated_composite:nested_conditional_matrix:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "131_obfuscated_composite:nested_conditional_matrix:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "131_obfuscated_composite:obfuscated_pipeline:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "131_obfuscated_composite:obfuscated_pipeline:gcc:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "132_cpp_vtable_layout:cpp_vtable_area:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "132_cpp_vtable_layout:cpp_vtable_area:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "132_cpp_vtable_layout:cpp_vtable_devirtualized:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "132_cpp_vtable_layout:cpp_vtable_devirtualized:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "132_cpp_vtable_layout:cpp_vtable_inherited_slot:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "132_cpp_vtable_layout:cpp_vtable_inherited_slot:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "133_cpp_multiple_inheritance:cpp_mi_cross_cast:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "133_cpp_multiple_inheritance:cpp_mi_cross_cast:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "133_cpp_multiple_inheritance:cpp_mi_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "133_cpp_multiple_inheritance:cpp_mi_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "133_cpp_multiple_inheritance:cpp_mi_pointer_adjustment:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "133_cpp_multiple_inheritance:cpp_mi_pointer_adjustment:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "134_cpp_virtual_inheritance:cpp_virtual_base_is_shared:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "134_cpp_virtual_inheritance:cpp_virtual_base_is_shared:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "134_cpp_virtual_inheritance:cpp_virtual_base_offset:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "134_cpp_virtual_inheritance:cpp_virtual_base_offset:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "134_cpp_virtual_inheritance:cpp_virtual_final_overrider:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "134_cpp_virtual_inheritance:cpp_virtual_final_overrider:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "135_cpp_rtti:cpp_dynamic_cast_fails:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "135_cpp_rtti:cpp_dynamic_cast_fails:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "135_cpp_rtti:cpp_dynamic_cast_succeeds:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "135_cpp_rtti:cpp_dynamic_cast_succeeds:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "135_cpp_rtti:cpp_typeid_compare:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "135_cpp_rtti:cpp_typeid_compare:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "136_cpp_exception_unwinding:cpp_catch_by_type:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "136_cpp_exception_unwinding:cpp_catch_by_type:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "136_cpp_exception_unwinding:cpp_destructors_run_while_unwinding:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "136_cpp_exception_unwinding:cpp_destructors_run_while_unwinding:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "136_cpp_exception_unwinding:cpp_rethrow_and_nest:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "136_cpp_exception_unwinding:cpp_rethrow_and_nest:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_int16:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_int16:gcc:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_int32:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_int32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_nontype:clang:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_nontype:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_predicate:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_predicate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_uint8:clang:O2": {
+      "break": 0,
+      "goto": 11,
+      "switch": 0
+    },
+    "137_cpp_templates:cpp_template_uint8:gcc:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "138_cpp_operators:cpp_operator_arithmetic:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "138_cpp_operators:cpp_operator_arithmetic:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "138_cpp_operators:cpp_operator_compound:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "138_cpp_operators:cpp_operator_compound:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "138_cpp_operators:cpp_operator_conversion:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "138_cpp_operators:cpp_operator_conversion:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "139_cpp_object_lifetime:cpp_array_destruction:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "139_cpp_object_lifetime:cpp_array_destruction:gcc:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "139_cpp_object_lifetime:cpp_destruction_order:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "139_cpp_object_lifetime:cpp_destruction_order:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "139_cpp_object_lifetime:cpp_live_object_count:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "139_cpp_object_lifetime:cpp_live_object_count:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:bisect:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "13_loop_early_exit:bisect:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "13_loop_early_exit:classify_run:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:classify_run:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:find_first:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:find_first:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:has_pair:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "13_loop_early_exit:has_pair:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "13_loop_early_exit:sum_positive:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "13_loop_early_exit:sum_positive:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:sum_until_zero:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "13_loop_early_exit:sum_until_zero:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_address_is_stable:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_address_is_stable:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_increment:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_increment:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_indexed:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_indexed:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_versus_global:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "140_thread_local_storage:tls_versus_global:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_compare_exchange_loop:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_compare_exchange_loop:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_exchange_and_or:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_exchange_and_or:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_flag_round_trip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_flag_round_trip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_increment:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "141_atomics:atomic_increment:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "142_nonlocal_control:longjmp_unwinds_frames:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "142_nonlocal_control:longjmp_unwinds_frames:gcc:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "142_nonlocal_control:setjmp_returns_twice:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "142_nonlocal_control:setjmp_returns_twice:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "143_dynamic_frames:alloca_dynamic_frame:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "143_dynamic_frames:alloca_dynamic_frame:gcc:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "143_dynamic_frames:alloca_in_loop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "143_dynamic_frames:alloca_in_loop:gcc:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "143_dynamic_frames:cleanup_on_every_exit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "143_dynamic_frames:cleanup_on_every_exit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:asm_add_via_constraints:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:asm_add_via_constraints:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:asm_memory_barrier:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:asm_memory_barrier:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:builtin_bit_intrinsics:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "144_inline_asm:builtin_bit_intrinsics:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:builtin_overflow_checked:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "144_inline_asm:builtin_overflow_checked:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_accumulate:clang:O2": {
+      "break": 0,
+      "goto": 11,
+      "switch": 1
+    },
+    "145_control_flow_flattening:flattened_accumulate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_classify:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_classify:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_gcd:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_gcd:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_search:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "145_control_flow_flattening:flattened_search:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_always_true:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_always_true:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_guarded_store:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_guarded_store:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_loop_filter:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_loop_filter:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_square_residue:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_square_residue:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_two_way_join:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_two_way_join:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_volatile_select:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "146_opaque_predicates:opaque_volatile_select:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_add:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_add:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_bitops:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_bitops:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_checksum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_checksum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_multiply:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_multiply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_negate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_negate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_sub:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "147_instruction_substitution:substituted_sub:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:chained_table_walk:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:chained_table_walk:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:computed_index_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:computed_index_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:obfuscated_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:obfuscated_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "148_dispatch_obfuscation:permuted_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "148_dispatch_obfuscation:permuted_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "149_mba_expressions:mba_add_identities:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_add_identities:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_bit_population:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_bit_population:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_mix_buffer:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_mix_buffer:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_select:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_select:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_sub_identity:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_sub_identity:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_zero_polynomial:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "149_mba_expressions:mba_zero_polynomial:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:add_then_negative:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:add_then_negative:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:and_is_zero:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:and_is_zero:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:countdown:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:countdown:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:dec_loop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:dec_loop:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:dec_preserves_carry:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:dec_preserves_carry:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:shift_until_zero:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:shift_until_zero:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:sub_then_sign:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "14_flag_effects:sub_then_sign:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "150_obfuscation_composite:obfuscated_digest:clang:O2": {
+      "break": 0,
+      "goto": 10,
+      "switch": 0
+    },
+    "150_obfuscation_composite:obfuscated_digest:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "150_obfuscation_composite:obfuscated_predicate_chain:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "150_obfuscation_composite:obfuscated_predicate_chain:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "150_obfuscation_composite:obfuscated_transform:clang:O2": {
+      "break": 0,
+      "goto": 15,
+      "switch": 1
+    },
+    "150_obfuscation_composite:obfuscated_transform:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "151_wide_branch_ladder:big151_branch_ladder:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "151_wide_branch_ladder:big151_branch_ladder:gcc:O2": {
+      "break": 209,
+      "goto": 0,
+      "switch": 1
+    },
+    "151_wide_branch_ladder:big151_flat_cascade:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "151_wide_branch_ladder:big151_flat_cascade:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "152_deep_nesting:deep152_conditional_tower:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "152_deep_nesting:deep152_conditional_tower:gcc:O2": {
+      "break": 0,
+      "goto": 29,
+      "switch": 0
+    },
+    "152_deep_nesting:deep152_nested_loops:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "152_deep_nesting:deep152_nested_loops:gcc:O2": {
+      "break": 0,
+      "goto": 20,
+      "switch": 0
+    },
+    "152_deep_nesting:deep152_while_tower:clang:O2": {
+      "break": 2,
+      "goto": 4,
+      "switch": 0
+    },
+    "152_deep_nesting:deep152_while_tower:gcc:O2": {
+      "break": 4,
+      "goto": 0,
+      "switch": 0
+    },
+    "153_many_live_locals:spill153_live_set:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "153_many_live_locals:spill153_live_set:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "153_many_live_locals:spill153_static_web:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "153_many_live_locals:spill153_static_web:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "154_wide_switch:wide154_dense_effects:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "154_wide_switch:wide154_dense_effects:gcc:O2": {
+      "break": 34,
+      "goto": 203,
+      "switch": 1
+    },
+    "154_wide_switch:wide154_dense_switch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "154_wide_switch:wide154_dense_switch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "154_wide_switch:wide154_sparse_switch:clang:O2": {
+      "break": 0,
+      "goto": 70,
+      "switch": 0
+    },
+    "154_wide_switch:wide154_sparse_switch:gcc:O2": {
+      "break": 0,
+      "goto": 133,
+      "switch": 0
+    },
+    "155_long_dependency_chain:chain155_buffered:clang:O2": {
+      "break": 0,
+      "goto": 14,
+      "switch": 0
+    },
+    "155_long_dependency_chain:chain155_buffered:gcc:O2": {
+      "break": 1,
+      "goto": 1,
+      "switch": 0
+    },
+    "155_long_dependency_chain:chain155_scalar:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "155_long_dependency_chain:chain155_scalar:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "155_long_dependency_chain:chain155_signed:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "155_long_dependency_chain:chain155_signed:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_call_interposable:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_call_interposable:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_call_local:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_call_local:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_call_via_address:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_call_via_address:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_fold_calls:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_fold_calls:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_paths_agree:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_paths_agree:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_step_public:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "156_plt_and_got_calls:plt_step_public:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_call_both:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_call_both:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_fold_with_biases:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_fold_with_biases:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_public_helper:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_public_helper:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_read_bias:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_read_bias:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_set_biases:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "157_symbol_visibility:vis_set_biases:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_absent_probe:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_absent_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_defined_probe:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_defined_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_fold:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_fold:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_scale:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "158_weak_symbols:weak_scale:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_call_double:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_call_double:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_fold:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_fold:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_lazy_double:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_lazy_double:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_matches_reference:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_matches_reference:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_paths_agree:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "159_ifunc_resolver:ifunc_paths_agree:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "15_binary_search_tree:bst_inorder_checksum:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "15_binary_search_tree:bst_inorder_checksum:gcc:O2": {
+      "break": 0,
+      "goto": 13,
+      "switch": 0
+    },
+    "15_binary_search_tree:bst_search:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "15_binary_search_tree:bst_search:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_fold:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_fold:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_order:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_order:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_ready:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_ready:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_table:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_table:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_witness:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "160_init_and_fini:initfini_witness:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_encode:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_encode:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_layout_delta:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_layout_delta:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_member_offset:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_member_offset:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_read_field:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_read_field:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "161_packed_struct_layout:pk161_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_load_be32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_load_be32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_load_native16:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_load_native16:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_load_native32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_load_native32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_move_field32:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_move_field32:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_store_be32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_store_be32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_store_native32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "162_unaligned_memcpy_access:ua162_store_native32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_build:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_build:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_copy_payload:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_copy_payload:gcc:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_payload_digest:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_payload_digest:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_stream_id:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_stream_id:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_validate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "163_wire_header_parser:hdr163_validate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_encode_nested:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_encode_nested:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_find_type:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_find_type:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_leaf_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_leaf_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_max_depth:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_max_depth:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_node_count:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "164_nested_tlv_walker:tlv164_node_count:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_cross_check:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_cross_check:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_read_bits:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_read_bits:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_read_sequence:clang:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_read_sequence:gcc:O2": {
+      "break": 3,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_write_frame:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "165_bitstream_reader:bit165_write_frame:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "16_red_black_tree:rb_validate:clang:O2": {
+      "break": 0,
+      "goto": 38,
+      "switch": 0
+    },
+    "16_red_black_tree:rb_validate:gcc:O2": {
+      "break": 0,
+      "goto": 39,
+      "switch": 0
+    },
+    "172_float_double_widths:accumulate_narrow:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:accumulate_narrow:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:accumulate_wide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:accumulate_wide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:double_precision_horner:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:double_precision_horner:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:narrow_after_double_math:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:narrow_after_double_math:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:single_precision_horner:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:single_precision_horner:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:width_disagreement:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "172_float_double_widths:width_disagreement:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:int32_round_trip_delta:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:int32_round_trip_delta:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:round_half_away_from_zero:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:round_half_away_from_zero:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:truncate_double_to_i64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:truncate_double_to_i64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:truncate_to_unsigned:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:truncate_to_unsigned:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:truncate_toward_zero:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:truncate_toward_zero:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:widen_int_to_float:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:widen_int_to_float:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:widen_long_to_double:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "173_float_int_conversions:widen_long_to_double:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:absolute_binary32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:absolute_binary32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:classify_binary32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:classify_binary32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:negate_binary32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:negate_binary32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:ordered_compare_binary32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:ordered_compare_binary32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:sign_bit_of_binary32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:sign_bit_of_binary32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:unordered_compare_flags:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:unordered_compare_flags:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "174_float_compare_classify:zero_sign_from_product:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "174_float_compare_classify:zero_sign_from_product:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:dot_product_f32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:dot_product_f32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:dot_product_f64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:dot_product_f64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:matrix2_determinant:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:matrix2_determinant:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:matrix2_multiply:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:matrix2_multiply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:scale_series_f32:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:scale_series_f32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:sum_of_squares_f32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "175_float_matrix_kernel:sum_of_squares_f32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "17_hash_table:hash_insert:clang:O2": {
+      "break": 1,
+      "goto": 1,
+      "switch": 0
+    },
+    "17_hash_table:hash_insert:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "17_hash_table:hash_lookup:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "17_hash_table:hash_lookup:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:compensation_of_step:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:compensation_of_step:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:difference_of_products:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:difference_of_products:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:kahan_sum_f64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:kahan_sum_f64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:naive_sum_f64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:naive_sum_f64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:summation_disagrees:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "181_compensated_summation:summation_disagrees:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:always_reaches_the_cold_chunk:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:always_reaches_the_cold_chunk:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:mix_with_outlinable_tail:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:mix_with_outlinable_tail:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:scan_with_two_cold_exits:clang:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:scan_with_two_cold_exits:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:validate_with_cold_path:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "182_cold_and_part_splits:validate_with_cold_path:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_before_either_sentinel:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_before_either_sentinel:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_by_key:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_by_key:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_byte_before_nul:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_byte_before_nul:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_terminated_by_sentinel:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:find_terminated_by_sentinel:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:length_to_nul:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "183_sentinel_list_search:length_to_nul:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_bytes_and_probe:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_bytes_and_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_dwords_and_probe:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_dwords_and_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_qwords_and_probe:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_qwords_and_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_then_patch_and_probe:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:fill_then_patch_and_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:zero_fixed_block_and_probe:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "184_rep_stos_widths:zero_fixed_block_and_probe:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_short_by_seven:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_short_by_seven:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_signed_bytes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_signed_bytes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_signed_shorts:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_signed_shorts:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_unsigned_bytes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_unsigned_bytes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_unsigned_shorts:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:divide_unsigned_shorts:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:remainder_signed_bytes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:remainder_signed_bytes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:remainder_signed_shorts:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "185_subword_signed_division:remainder_signed_shorts:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:dense_no_default:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:dense_no_default:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:fallthrough_no_default:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "186_defaultless_guarded_switch:fallthrough_no_default:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "186_defaultless_guarded_switch:loop_switch_no_default:clang:O2": {
+      "break": 0,
+      "goto": 40,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:loop_switch_no_default:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:returning_arms_no_default:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:returning_arms_no_default:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:sparse_no_default:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "186_defaultless_guarded_switch:sparse_no_default:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "187_constant_bias_index:adjacent_difference:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "187_constant_bias_index:adjacent_difference:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "187_constant_bias_index:bias_backward_pair:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "187_constant_bias_index:bias_backward_pair:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "187_constant_bias_index:bias_forward_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "187_constant_bias_index:bias_forward_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "187_constant_bias_index:value_bias_not_index:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "187_constant_bias_index:value_bias_not_index:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "187_constant_bias_index:variable_bias:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "187_constant_bias_index:variable_bias:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_copy_backward:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_copy_backward:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_copy_forward:clang:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_copy_forward:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_copy_two_streams:clang:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_copy_two_streams:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_lane_math:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "188_vector_transport:vt188_lane_math:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_bump:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_bump:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_nested_select:clang:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "189_effectful_select:se189_nested_select:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "189_effectful_select:se189_select_call:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_select_call:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_select_one_arm:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_select_one_arm:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_select_pure:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "189_effectful_select:se189_select_pure:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "18_binary_heap:heap_pop:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "18_binary_heap:heap_pop:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "18_binary_heap:heap_push:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "18_binary_heap:heap_push:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_div_and_rem:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_div_and_rem:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_mul_both_halves:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_mul_both_halves:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_pair_across_join:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_pair_across_join:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_quotient_only:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_quotient_only:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_sdiv_and_rem:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "190_dual_role_products:dp190_sdiv_and_rem:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_computed_args:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_computed_args:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_direct_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_direct_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_fold:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "191_indirect_table_args:t191_fold:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_chase_keys:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_chase_keys:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_find_key:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_find_key:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_scan_index_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_scan_index_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_stamp_chain:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_stamp_chain:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_sum_until_key:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "192_pointer_chased_list:l192_sum_until_key:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_name_bytes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_name_bytes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_name_length:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_name_length:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_names_differ:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_names_differ:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_offset_matches:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_offset_matches:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_offset_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_offset_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_scaled_constant:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "193_mapped_constant_roles:mc193_scaled_constant:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_bool_and:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_bool_and:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_bool_bit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_bool_bit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_bool_wide_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_bool_wide_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_char_divide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_char_divide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_i16_divide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_i16_divide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_i32_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_i32_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_i8_divide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_i8_divide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_u16_mix:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_u16_mix:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_u8_mix:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_u8_mix:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_u8_value_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "194_narrow_return_widths:nrw194_u8_value_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_big_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_big_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_mixed_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_mixed_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_pair_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_pair_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_quad_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_quad_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_scalar_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "195_by_value_aggregates:bv195_scalar_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_alias_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_alias_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_indexed_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_indexed_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_overlap_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_overlap_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_spill_web:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "196_disjoint_frame_slots:dfs196_spill_web:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_pair2d_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_pair2d_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_quad4f_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_quad4f_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_scalar_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_scalar_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_tagged_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_tagged_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_trio3f_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "197_homogeneous_float_aggregates:hfa197_trio3f_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_arr2_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_arr2_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_bits_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_bits_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_bytes3_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_bytes3_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_five_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_five_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_i64_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_i64_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_make_i64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_make_i64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_one_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_one_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_scalar_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_scalar_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_trio_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "198_aggregate_return_edges:agr198_trio_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_edge_element:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_edge_element:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_const:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_const:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_i32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_i32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_index:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_index:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_void:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_find_void:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_offset:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "199_pointer_return_kinds:ptr199_offset:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "19_disjoint_set:dsu_find:clang:O2": {
+      "break": 3,
+      "goto": 0,
+      "switch": 0
+    },
+    "19_disjoint_set:dsu_find:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "19_disjoint_set:dsu_union:clang:O2": {
+      "break": 0,
+      "goto": 13,
+      "switch": 0
+    },
+    "19_disjoint_set:dsu_union:gcc:O2": {
+      "break": 2,
+      "goto": 13,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f32_single_bits:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f32_single_bits:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f32_slot_bits:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f32_slot_bits:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f32_slot_values:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f32_slot_values:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f64_copy_then_convert:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f64_copy_then_convert:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f64_slot_bits:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_f64_slot_bits:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_scalar_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_scalar_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_store_through_pointer:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_store_through_pointer:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_word_to_value:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "201_float_bit_stores:f201_word_to_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_assign_bit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_assign_bit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_clear_bit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_clear_bit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_clz32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_clz32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_clz64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_clz64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_count_and_index:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_count_and_index:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_ctz32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_ctz32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_ctz64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_ctz64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_msb_first_bit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_msb_first_bit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_reflect_in_byte:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_reflect_in_byte:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_scatter_bits:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_scatter_bits:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_set_bit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_set_bit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_toggle_bit:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "202_bit_scan_and_count:bsc202_toggle_bit:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_by_value_narrow:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_by_value_narrow:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_by_value_wide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_by_value_wide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_consume_narrow:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_consume_narrow:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_consume_wide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_consume_wide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_fill_narrow:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_fill_narrow:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_fill_wide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_fill_wide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_local_narrow_copy:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_local_narrow_copy:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_local_wide_copy:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_local_wide_copy:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_scalar_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "203_string_move_copies:mv203_scalar_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "204_adjacent_dispatch_tables:adt204_chained:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "204_adjacent_dispatch_tables:adt204_chained:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "204_adjacent_dispatch_tables:adt204_guarded_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "204_adjacent_dispatch_tables:adt204_guarded_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "204_adjacent_dispatch_tables:adt204_switch_a:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "204_adjacent_dispatch_tables:adt204_switch_a:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "204_adjacent_dispatch_tables:adt204_switch_b:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "204_adjacent_dispatch_tables:adt204_switch_b:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "204_adjacent_dispatch_tables:adt204_switch_c:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "204_adjacent_dispatch_tables:adt204_switch_c:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "205_x87_long_double:x87_accumulate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_accumulate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_compare_classify:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_compare_classify:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_many_live_values:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_many_live_values:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_mixed_widths:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_mixed_widths:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_product_chain:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "205_x87_long_double:x87_product_chain:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "206_aarch64_wide_dispatch:dense_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "206_aarch64_wide_dispatch:dense_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 1
+    },
+    "206_aarch64_wide_dispatch:dispatch_in_loop:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "206_aarch64_wide_dispatch:dispatch_in_loop:gcc:O2": {
+      "break": 0,
+      "goto": 9,
+      "switch": 0
+    },
+    "206_aarch64_wide_dispatch:sparse_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "206_aarch64_wide_dispatch:sparse_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:byte_stride_unscaled:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:byte_stride_unscaled:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:quad_stride_sum:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:quad_stride_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:shift_as_value:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:shift_as_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:word_at_index:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:word_at_index:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:word_store_at_index:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:word_store_at_index:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:word_stride_sum:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "207_scaled_index_addressing:word_stride_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:accumulate_across_barrier:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:accumulate_across_barrier:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:control_without_barrier:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:control_without_barrier:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:flags_do_not_leak:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:flags_do_not_leak:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:single_argument_survives:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "208_flag_register_roundtrip:single_argument_survives:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "209_out_of_line_guard_handlers:exclusive_handler_chain:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "209_out_of_line_guard_handlers:exclusive_handler_chain:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "209_out_of_line_guard_handlers:guard_chain_mixed_exits:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "209_out_of_line_guard_handlers:guard_chain_mixed_exits:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "209_out_of_line_guard_handlers:guard_chain_rejoins:clang:O2": {
+      "break": 0,
+      "goto": 10,
+      "switch": 0
+    },
+    "209_out_of_line_guard_handlers:guard_chain_rejoins:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "20_graph_bfs:graph_bfs:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "20_graph_bfs:graph_bfs:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:divergent_arms:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:divergent_arms:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_long:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_long:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_one:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_one:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_three_shared:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_three_shared:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_two:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "210_shared_return_epilogues:epilogue_chain_two:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "211_irreducible_loops:irreducible_inside_reducible:clang:O2": {
+      "break": 5,
+      "goto": 6,
+      "switch": 0
+    },
+    "211_irreducible_loops:irreducible_inside_reducible:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "211_irreducible_loops:reducible_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "211_irreducible_loops:reducible_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "211_irreducible_loops:shared_body_loops:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "211_irreducible_loops:shared_body_loops:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "211_irreducible_loops:two_entry_loop:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "211_irreducible_loops:two_entry_loop:gcc:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:all_arms_break:clang:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:all_arms_break:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:fsm_returns_from_arm:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:fsm_returns_from_arm:gcc:O2": {
+      "break": 0,
+      "goto": 11,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:nested_loop_returning_arm:clang:O2": {
+      "break": 0,
+      "goto": 42,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:nested_loop_returning_arm:gcc:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:two_returning_arms:clang:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "212_loop_with_returning_arm:two_returning_arms:gcc:O2": {
+      "break": 0,
+      "goto": 11,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:branched_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:branched_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:branchless_classify:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:branchless_classify:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:chained_selects:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:chained_selects:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:conditional_accumulate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:conditional_accumulate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:early_out_branchless:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:early_out_branchless:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:select_max:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "213_arm_predicated_execution:select_max:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:compare_against_pool:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:compare_against_pool:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:encodable_constants:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:encodable_constants:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:many_wide_constants:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:many_wide_constants:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:pool_inside_function:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:pool_inside_function:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:wide_64bit_constants:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:wide_64bit_constants:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:wide_constant_mix:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "214_arm_literal_pools:wide_constant_mix:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:narrow_selector_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:narrow_selector_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:signed_wide_selector:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:signed_wide_selector:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:wide_selector_dense:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:wide_selector_dense:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:wide_selector_high_labels:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:wide_selector_high_labels:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:wide_selector_mixed:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "215_switch_on_wide_selector:wide_selector_mixed:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:bitfield_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:bitfield_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:bitfield_seen_as_byte:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:bitfield_seen_as_byte:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:byte_seen_as_bitfields:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:byte_seen_as_bitfields:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:plain_struct_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:plain_struct_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:walk_packed_records:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "216_packed_union_wire_record:walk_packed_records:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_add_conj:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_add_conj:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_array_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_array_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_float_multiply:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_float_multiply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_multiply:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_multiply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_through_call:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:complex_through_call:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:struct_pair_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "217_complex_arithmetic:struct_pair_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:capture_by_reference:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:capture_by_reference:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:capture_by_value:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:capture_by_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:capture_then_mutate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:capture_then_mutate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:erased_callable:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:erased_callable:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:mixed_capture:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:mixed_capture:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:plain_call_control:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "218_cpp_lambdas_and_callables:plain_call_control:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "21_graph_dfs:graph_dfs:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "21_graph_dfs:graph_dfs:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "22_dijkstra:dijkstra_dense:clang:O2": {
+      "break": 0,
+      "goto": 19,
+      "switch": 0
+    },
+    "22_dijkstra:dijkstra_dense:gcc:O2": {
+      "break": 0,
+      "goto": 17,
+      "switch": 0
+    },
+    "23_topological_sort:topological_sort:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "23_topological_sort:topological_sort:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "24_merge_sort:merge_sort_i32:clang:O2": {
+      "break": 2,
+      "goto": 3,
+      "switch": 0
+    },
+    "24_merge_sort:merge_sort_i32:gcc:O2": {
+      "break": 0,
+      "goto": 17,
+      "switch": 0
+    },
+    "25_kmp_search:kmp_search:clang:O2": {
+      "break": 1,
+      "goto": 12,
+      "switch": 0
+    },
+    "25_kmp_search:kmp_search:gcc:O2": {
+      "break": 0,
+      "goto": 25,
+      "switch": 0
+    },
+    "26_sparse_matrix:csr_matvec:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "26_sparse_matrix:csr_matvec:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "27_newton_raphson:newton_isqrt:clang:O2": {
+      "break": 3,
+      "goto": 0,
+      "switch": 0
+    },
+    "27_newton_raphson:newton_isqrt:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "28_euler_ode:euler_decay_q16:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "28_euler_ode:euler_decay_q16:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "29_polynomial:polynomial_derivative_mod32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "29_polynomial:polynomial_derivative_mod32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "29_polynomial:polynomial_eval_mod32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "29_polynomial:polynomial_eval_mod32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "30_finite_difference:heat_step_1d:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "30_finite_difference:heat_step_1d:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "31_edit_distance:edit_distance:clang:O2": {
+      "break": 0,
+      "goto": 19,
+      "switch": 0
+    },
+    "31_edit_distance:edit_distance:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "31_edit_distance:hamming_distance:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "31_edit_distance:hamming_distance:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "32_longest_common_subsequence:lcs_length:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "32_longest_common_subsequence:lcs_length:gcc:O2": {
+      "break": 0,
+      "goto": 12,
+      "switch": 0
+    },
+    "32_longest_common_subsequence:lcs_recover:clang:O2": {
+      "break": 0,
+      "goto": 25,
+      "switch": 0
+    },
+    "32_longest_common_subsequence:lcs_recover:gcc:O2": {
+      "break": 0,
+      "goto": 25,
+      "switch": 0
+    },
+    "33_knapsack:knapsack_best_value:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "33_knapsack:knapsack_best_value:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "33_knapsack:unbounded_knapsack:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "33_knapsack:unbounded_knapsack:gcc:O2": {
+      "break": 0,
+      "goto": 17,
+      "switch": 0
+    },
+    "34_coin_change:count_change:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "34_coin_change:count_change:gcc:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "34_coin_change:min_coins:clang:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "34_coin_change:min_coins:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "35_matrix_chain:matrix_chain_cost:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "35_matrix_chain:matrix_chain_cost:gcc:O2": {
+      "break": 0,
+      "goto": 12,
+      "switch": 0
+    },
+    "36_quicksort:quicksort_i32:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "36_quicksort:quicksort_i32:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "37_heapsort:heapsort_i32:clang:O2": {
+      "break": 0,
+      "goto": 15,
+      "switch": 0
+    },
+    "37_heapsort:heapsort_i32:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "38_insertion_shell_sort:insertion_sort_i32:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "38_insertion_shell_sort:insertion_sort_i32:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "38_insertion_shell_sort:shell_sort_i32:clang:O2": {
+      "break": 3,
+      "goto": 2,
+      "switch": 0
+    },
+    "38_insertion_shell_sort:shell_sort_i32:gcc:O2": {
+      "break": 0,
+      "goto": 15,
+      "switch": 0
+    },
+    "39_counting_radix_sort:counting_sort_u8:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "39_counting_radix_sort:counting_sort_u8:gcc:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "39_counting_radix_sort:radix_sort_u32:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "39_counting_radix_sort:radix_sort_u32:gcc:O2": {
+      "break": 0,
+      "goto": 1,
+      "switch": 0
+    },
+    "40_quickselect:median_of_three:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "40_quickselect:median_of_three:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "40_quickselect:quickselect_kth:clang:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "40_quickselect:quickselect_kth:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "41_tokenizer:tokenize:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "41_tokenizer:tokenize:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "42_rpn_evaluator:rpn_evaluate:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "42_rpn_evaluator:rpn_evaluate:gcc:O2": {
+      "break": 0,
+      "goto": 26,
+      "switch": 0
+    },
+    "43_base64:base64_decode:clang:O2": {
+      "break": 0,
+      "goto": 16,
+      "switch": 0
+    },
+    "43_base64:base64_decode:gcc:O2": {
+      "break": 0,
+      "goto": 51,
+      "switch": 0
+    },
+    "43_base64:base64_encode:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "43_base64:base64_encode:gcc:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "44_run_length:rle_decode:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "44_run_length:rle_decode:gcc:O2": {
+      "break": 0,
+      "goto": 20,
+      "switch": 0
+    },
+    "44_run_length:rle_encode:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "44_run_length:rle_encode:gcc:O2": {
+      "break": 0,
+      "goto": 15,
+      "switch": 0
+    },
+    "45_string_algorithms:format_decimal:clang:O2": {
+      "break": 2,
+      "goto": 1,
+      "switch": 0
+    },
+    "45_string_algorithms:format_decimal:gcc:O2": {
+      "break": 2,
+      "goto": 3,
+      "switch": 0
+    },
+    "45_string_algorithms:is_palindrome:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "45_string_algorithms:is_palindrome:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "45_string_algorithms:parse_decimal:clang:O2": {
+      "break": 1,
+      "goto": 6,
+      "switch": 0
+    },
+    "45_string_algorithms:parse_decimal:gcc:O2": {
+      "break": 0,
+      "goto": 13,
+      "switch": 0
+    },
+    "46_bitset:bitset_population:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "46_bitset:bitset_population:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "46_bitset:bitset_rank:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "46_bitset:bitset_rank:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "46_bitset:bitset_select:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "46_bitset:bitset_select:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "47_huffman:huffman_code_lengths:clang:O2": {
+      "break": 0,
+      "goto": 28,
+      "switch": 0
+    },
+    "47_huffman:huffman_code_lengths:gcc:O2": {
+      "break": 0,
+      "goto": 23,
+      "switch": 0
+    },
+    "47_huffman:kraft_sum_q16:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "47_huffman:kraft_sum_q16:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:binary_to_gray:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:binary_to_gray:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:gray_sequence:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:gray_sequence:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:gray_to_binary:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:gray_to_binary:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:reverse_bits32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "48_gray_code:reverse_bits32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "49_crc32:crc32_bitwise:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "49_crc32:crc32_bitwise:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "49_crc32:crc32_table_driven:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "49_crc32:crc32_table_driven:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "49_crc32:internet_checksum:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "49_crc32:internet_checksum:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "50_varint:varint_decode:clang:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "50_varint:varint_decode:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "50_varint:varint_encode:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "50_varint:varint_encode:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "50_varint:zigzag_decode:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "50_varint:zigzag_decode:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "50_varint:zigzag_encode:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "50_varint:zigzag_encode:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "51_rc4:rc4_keystream_checksum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "51_rc4:rc4_keystream_checksum:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "52_hash_functions:djb2_xor:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "52_hash_functions:djb2_xor:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "52_hash_functions:fnv1a_32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "52_hash_functions:fnv1a_32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "52_hash_functions:murmur3_finalize:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "52_hash_functions:murmur3_finalize:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "53_pseudorandom:bounded_sample:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "53_pseudorandom:bounded_sample:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "53_pseudorandom:lcg64_next_high:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "53_pseudorandom:lcg64_next_high:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "53_pseudorandom:xorshift32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "53_pseudorandom:xorshift32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "54_sha256_block:sha256_compress_block:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "54_sha256_block:sha256_compress_block:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "55_modular_arithmetic:extended_gcd:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "55_modular_arithmetic:extended_gcd:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "55_modular_arithmetic:gcd_i32:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "55_modular_arithmetic:gcd_i32:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "55_modular_arithmetic:mod_pow:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "55_modular_arithmetic:mod_pow:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "56_sieve:factorize:clang:O2": {
+      "break": 1,
+      "goto": 8,
+      "switch": 0
+    },
+    "56_sieve:factorize:gcc:O2": {
+      "break": 0,
+      "goto": 12,
+      "switch": 0
+    },
+    "56_sieve:sieve_primes:clang:O2": {
+      "break": 0,
+      "goto": 18,
+      "switch": 0
+    },
+    "56_sieve:sieve_primes:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "57_bignum:bignum_add:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "57_bignum:bignum_add:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "57_bignum:bignum_mul_small:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "57_bignum:bignum_mul_small:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "58_rational:rational_add:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "58_rational:rational_add:gcc:O2": {
+      "break": 2,
+      "goto": 2,
+      "switch": 0
+    },
+    "58_rational:rational_compare:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "58_rational:rational_compare:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "59_combinatorics:binomial:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "59_combinatorics:binomial:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "59_combinatorics:catalan:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "59_combinatorics:catalan:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "59_combinatorics:pascal_row:clang:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "59_combinatorics:pascal_row:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "60_integer_matrix:determinant3:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "60_integer_matrix:determinant3:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "60_integer_matrix:matrix_multiply:clang:O2": {
+      "break": 0,
+      "goto": 15,
+      "switch": 0
+    },
+    "60_integer_matrix:matrix_multiply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "60_integer_matrix:matrix_transpose:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "60_integer_matrix:matrix_transpose:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_divide:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_divide:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_lerp:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_lerp:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_multiply:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_multiply:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_sqrt:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "61_fixed_point:fixed_sqrt:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "62_gaussian_elimination:gaussian_solve:clang:O2": {
+      "break": 0,
+      "goto": 27,
+      "switch": 0
+    },
+    "62_gaussian_elimination:gaussian_solve:gcc:O2": {
+      "break": 0,
+      "goto": 14,
+      "switch": 0
+    },
+    "63_numerical_integration:simpson_integrate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "63_numerical_integration:simpson_integrate:gcc:O2": {
+      "break": 0,
+      "goto": 9,
+      "switch": 0
+    },
+    "63_numerical_integration:trapezoid_integrate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "63_numerical_integration:trapezoid_integrate:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "64_root_finding:bisection_sqrt:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "64_root_finding:bisection_sqrt:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "64_root_finding:newton_sqrt:clang:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "64_root_finding:newton_sqrt:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "65_projectile_motion:kinetic_energy:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "65_projectile_motion:kinetic_energy:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "65_projectile_motion:projectile_step:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "65_projectile_motion:projectile_step:gcc:O2": {
+      "break": 0,
+      "goto": 9,
+      "switch": 0
+    },
+    "66_orbital_step:orbital_step:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "66_orbital_step:orbital_step:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "67_elastic_collision:elastic_velocity_a:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "67_elastic_collision:elastic_velocity_a:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "67_elastic_collision:inelastic_velocity:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "67_elastic_collision:inelastic_velocity:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "67_elastic_collision:momentum_residual:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "67_elastic_collision:momentum_residual:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "68_thermodynamics:ideal_gas_pressure:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "68_thermodynamics:ideal_gas_pressure:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "68_thermodynamics:mixing_temperature:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "68_thermodynamics:mixing_temperature:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "68_thermodynamics:newton_cooling:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "68_thermodynamics:newton_cooling:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "69_molar_mass:molar_mass_centi:clang:O2": {
+      "break": 0,
+      "goto": 24,
+      "switch": 0
+    },
+    "69_molar_mass:molar_mass_centi:gcc:O2": {
+      "break": 0,
+      "goto": 36,
+      "switch": 0
+    },
+    "70_reaction_balance:balance_reaction:clang:O2": {
+      "break": 0,
+      "goto": 18,
+      "switch": 0
+    },
+    "70_reaction_balance:balance_reaction:gcc:O2": {
+      "break": 0,
+      "goto": 21,
+      "switch": 0
+    },
+    "71_compound_interest:annuity_future_value:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "71_compound_interest:annuity_future_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "71_compound_interest:compound_balance:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "71_compound_interest:compound_balance:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "72_loan_amortization:amortization_schedule:clang:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "72_loan_amortization:amortization_schedule:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "72_loan_amortization:remaining_balance:clang:O2": {
+      "break": 3,
+      "goto": 0,
+      "switch": 0
+    },
+    "72_loan_amortization:remaining_balance:gcc:O2": {
+      "break": 2,
+      "goto": 0,
+      "switch": 0
+    },
+    "73_present_value:internal_rate_of_return:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "73_present_value:internal_rate_of_return:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "73_present_value:net_present_value:clang:O2": {
+      "break": 0,
+      "goto": 2,
+      "switch": 0
+    },
+    "73_present_value:net_present_value:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "74_moving_statistics:exponential_moving_average:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "74_moving_statistics:exponential_moving_average:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "74_moving_statistics:population_variance:clang:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "74_moving_statistics:population_variance:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "74_moving_statistics:simple_moving_average:clang:O2": {
+      "break": 2,
+      "goto": 4,
+      "switch": 0
+    },
+    "74_moving_statistics:simple_moving_average:gcc:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "75_order_book:match_order:clang:O2": {
+      "break": 4,
+      "goto": 3,
+      "switch": 0
+    },
+    "75_order_book:match_order:gcc:O2": {
+      "break": 0,
+      "goto": 21,
+      "switch": 0
+    },
+    "76_portfolio_rebalance:maximum_drift:clang:O2": {
+      "break": 0,
+      "goto": 4,
+      "switch": 0
+    },
+    "76_portfolio_rebalance:maximum_drift:gcc:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "76_portfolio_rebalance:rebalance_trades:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "76_portfolio_rebalance:rebalance_trades:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "77_lru_cache:lru_access:clang:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "77_lru_cache:lru_access:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "78_ring_buffer:ring_occupancy:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "78_ring_buffer:ring_occupancy:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "78_ring_buffer:ring_pop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "78_ring_buffer:ring_pop:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "78_ring_buffer:ring_push:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "78_ring_buffer:ring_push:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "79_segment_tree:segment_build:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "79_segment_tree:segment_build:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "79_segment_tree:segment_range_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "79_segment_tree:segment_range_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "79_segment_tree:segment_update:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "79_segment_tree:segment_update:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "80_trie:trie_insert:clang:O2": {
+      "break": 0,
+      "goto": 5,
+      "switch": 0
+    },
+    "80_trie:trie_insert:gcc:O2": {
+      "break": 0,
+      "goto": 13,
+      "switch": 0
+    },
+    "80_trie:trie_lookup:clang:O2": {
+      "break": 0,
+      "goto": 10,
+      "switch": 0
+    },
+    "80_trie:trie_lookup:gcc:O2": {
+      "break": 0,
+      "goto": 10,
+      "switch": 0
+    },
+    "81_call_argument_identity:argument_sink:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "81_call_argument_identity:argument_sink:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "81_call_argument_identity:two_decrements_one_scratch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "81_call_argument_identity:two_decrements_one_scratch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "82_comma_operator:comma_chain:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "82_comma_operator:comma_chain:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "82_comma_operator:comma_in_condition:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "82_comma_operator:comma_in_condition:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "82_comma_operator:comma_in_for:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "82_comma_operator:comma_in_for:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "83_ternary_chains:classify_ladder:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "83_ternary_chains:classify_ladder:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "83_ternary_chains:nested_ternary_assignment:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "83_ternary_chains:nested_ternary_assignment:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "83_ternary_chains:ternary_mixed_types:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "83_ternary_chains:ternary_mixed_types:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "84_compound_literals:compound_literal_argument:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "84_compound_literals:compound_literal_argument:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "84_compound_literals:compound_literal_array:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "84_compound_literals:compound_literal_array:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "84_compound_literals:compound_literal_in_loop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "84_compound_literals:compound_literal_in_loop:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "85_designated_initializers:designated_array_out_of_order:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "85_designated_initializers:designated_array_out_of_order:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "85_designated_initializers:designated_struct:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "85_designated_initializers:designated_struct:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "85_designated_initializers:designated_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "85_designated_initializers:designated_sum:gcc:O2": {
+      "break": 1,
+      "goto": 0,
+      "switch": 0
+    },
+    "86_flexible_array_member:flexible_header_size:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "86_flexible_array_member:flexible_header_size:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "86_flexible_array_member:flexible_sum:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "86_flexible_array_member:flexible_sum:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "87_variable_length_array:vla_reverse_sum:clang:O2": {
+      "break": 0,
+      "goto": 7,
+      "switch": 0
+    },
+    "87_variable_length_array:vla_reverse_sum:gcc:O2": {
+      "break": 0,
+      "goto": 6,
+      "switch": 0
+    },
+    "87_variable_length_array:vla_two_dimensional:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "87_variable_length_array:vla_two_dimensional:gcc:O2": {
+      "break": 0,
+      "goto": 8,
+      "switch": 0
+    },
+    "88_restrict_pointers:aliasing_accumulate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "88_restrict_pointers:aliasing_accumulate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "88_restrict_pointers:restrict_accumulate:clang:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "88_restrict_pointers:restrict_accumulate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "89_bool_semantics:bool_arithmetic:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "89_bool_semantics:bool_arithmetic:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "89_bool_semantics:bool_normalizes:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "89_bool_semantics:bool_normalizes:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "89_bool_semantics:bool_roundtrip_mask:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "89_bool_semantics:bool_roundtrip_mask:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "90_bitfields:bitfield_extract:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "90_bitfields:bitfield_extract:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "90_bitfields:bitfield_signed_range:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "90_bitfields:bitfield_signed_range:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "90_bitfields:bitfield_struct_size:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "90_bitfields:bitfield_struct_size:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "91_union_type_punning:pun_byte_of_word:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "91_union_type_punning:pun_byte_of_word:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "91_union_type_punning:pun_halves_swapped:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "91_union_type_punning:pun_halves_swapped:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "91_union_type_punning:pun_is_little_endian:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "91_union_type_punning:pun_is_little_endian:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "92_anonymous_members:anonymous_overlap_proof:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "92_anonymous_members:anonymous_overlap_proof:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "92_anonymous_members:anonymous_select:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "92_anonymous_members:anonymous_select:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_dispatch:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_dispatch:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_tag_of_int16:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_tag_of_int16:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_tag_of_int32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_tag_of_int32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_tag_of_int64:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "93_generic_selection:generic_tag_of_int64:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:alignment_of_padded:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:alignment_of_padded:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:offset_of_payload:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:offset_of_payload:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:padded_roundtrip:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:padded_roundtrip:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:size_difference:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "94_alignment:size_difference:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "95_function_pointer_table:dispatch_operation:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "95_function_pointer_table:dispatch_operation:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "95_function_pointer_table:fold_operations:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "95_function_pointer_table:fold_operations:gcc:O2": {
+      "break": 0,
+      "goto": 3,
+      "switch": 0
+    },
+    "96_integer_promotion:promote_narrow_product:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:promote_narrow_product:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:promote_then_truncate:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:promote_then_truncate:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:short_promotion_sign:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:short_promotion_sign:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:unsigned_conversion_rank:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "96_integer_promotion:unsigned_conversion_rank:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:division_truncates_toward_zero:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:division_truncates_toward_zero:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:negative_compares_greater:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:negative_compares_greater:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:size_like_loop:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:size_like_loop:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:unsigned_subtraction_wraps:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "97_signed_unsigned_pitfalls:unsigned_subtraction_wraps:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:arithmetic_right_shift:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:arithmetic_right_shift:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:logical_right_shift:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:logical_right_shift:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:masked_left_shift:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:masked_left_shift:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:rotate_left:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:rotate_left:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:shift_wider_than_operand:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "98_shift_semantics:shift_wider_than_operand:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:byte_swap32:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:byte_swap32:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:char_widening:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:char_widening:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:load_big_endian:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:load_big_endian:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:plain_char_is_signed:clang:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    },
+    "99_char_and_endianness:plain_char_is_signed:gcc:O2": {
+      "break": 0,
+      "goto": 0,
+      "switch": 0
+    }
+  },
   "skipped": [
     "166_rust_generics",
     "167_rust_trait_objects",

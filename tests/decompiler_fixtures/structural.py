@@ -310,6 +310,32 @@ def _c_source(stem: str) -> Path | None:
 #: parity #8; this constant is the seam it will be made at.
 STRUCTURAL_LANE: tuple[str, str] = ("gcc", "O0")
 
+#: Lanes the READABILITY census runs over, additional to `STRUCTURAL_LANE`.
+#:
+#: -O0 structuring is nearly free; **-O2 is where goto-soup happens**, and the
+#: execution differential is blind to it -- a function can recompile and behave
+#: identically while reading as a pile of labels. Measured on
+#: `212_loop_with_returning_arm::fsm_returns_from_arm`: gcc:O0 gives 5 `goto`
+#: and 1 `switch`, gcc:O2 gives 11 `goto` and NO `switch`, and the differential
+#: passes both.
+#:
+#: This is what makes a structuring change weighable. The dispatch-loop fix in
+#: `loop_shape::detect_raw_dispatch_loop` recovers four fixture lanes that
+#: currently recover nothing, and costs `break;` arms on shapes that already
+#: worked. Nothing in the gate could see that second half before this census.
+#:
+#: **KNOWN COVERAGE GAP, and it already bit once.** The population here is
+#: `manifest.REQUIRED_FUNCTIONS` over `tests/decompiler_fixtures/src/` -- 213
+#: fixtures. It does NOT include `tests/decbench_corpus/src/`, and that is
+#: where `statemachine.c` lives. Measured against this census the dispatch-loop
+#: fix looked free (switch 22->24, goto 2205->2223, break 388->388, i.e. no
+#: function losing a `break`), and it is not: on `statemachine.c` it takes
+#: clang-O0 from break-arms to goto-arms, which
+#: `test_switch_arms_reach_the_real_loop_latch` catches and this census cannot
+#: see. Extending the population to the decbench corpus is the next step before
+#: that fix can be weighed honestly.
+READABILITY_LANES: tuple[tuple[str, str], ...] = (("gcc", "O2"), ("clang", "O2"))
+
 
 def _build(stem: str, workdir: Path, lane: tuple[str, str] | None = None) -> Path:
     """Compile one fixture for structural inspection.
@@ -372,12 +398,35 @@ def structural_report(workdir: Path) -> dict:
     #: Reported rather than dropped: a silently shortened corpus reads as
     #: "everything passed" when it means "we did not look".
     skipped: list[str] = []
+    #: `{fixture:function:cc:opt -> {switch, goto, break}}` over
+    #: `READABILITY_LANES`. Counts, not booleans: the question a structuring
+    #: change has to answer is "how much worse did this read", and a predicate
+    #: that only says "has a goto" cannot answer it.
+    readability: dict[str, dict[str, int]] = {}
     for fixture, funcs in M.REQUIRED_FUNCTIONS.items():
         if _c_source(fixture) is None:
             skipped.append(fixture)
             continue
         so = _build(fixture, workdir)
         per_style = {style: decompile_all(so, style) for style in STYLES}
+        # The readability census: the same fixture at -O2, counted rather than
+        # predicated. Built into its own object so the -O0 map above is
+        # untouched by it.
+        for cc, opt in READABILITY_LANES:
+            try:
+                optimised = _build(fixture, workdir, lane=(cc, opt))
+            except RuntimeError:
+                continue
+            emitted = decompile_all(optimised, "decbench")
+            for fn in funcs:
+                block = emitted.get(fn)
+                if block is None:
+                    continue
+                readability[f"{fixture}:{fn}:{cc}:{opt}"] = {
+                    "switch": block.count("switch ("),
+                    "goto": block.count("goto "),
+                    "break": block.count("break;"),
+                }
         for fn in funcs:
             for style in STYLES:
                 block = per_style[style].get(fn)
@@ -403,6 +452,7 @@ def structural_report(workdir: Path) -> dict:
                 gaps.append(f"{fixture}:{fn}")
     return {
         "closure": closure,
+        "readability": readability,
         "effects": effects,
         "placeholder": placeholder,
         "verify": verify,
