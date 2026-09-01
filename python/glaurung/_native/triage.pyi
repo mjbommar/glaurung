@@ -388,6 +388,7 @@ class SymbolSummary:
     imports_count: Any
     libs_count: Any
     nx: Any
+    pdb_path: Any
     pie: Any
     relocations_present: Any
     relro: Any

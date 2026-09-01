@@ -61,6 +61,64 @@ fn rva_to_offset(rva: u32, secs: &[SectionHdr]) -> Option<usize> {
     None
 }
 
+/// File-offset ranges of the CodeView payloads named by the debug directory.
+///
+/// The debug data directory points at an ARRAY of 28-byte
+/// `IMAGE_DEBUG_DIRECTORY` structs, and each struct points elsewhere in the
+/// file via `PointerToRawData`. The RSDS record -- and therefore the PDB path
+/// -- lives at that destination, never inside the array itself.
+///
+/// `rsds_search_ranges` scanned the array, so it could not find an RSDS record
+/// unless one happened to sit within a few dozen bytes of the directory. On
+/// `win10-dismcore.dll` the array is 84 bytes at 0xd250 and the RSDS record is
+/// at 0x3dd9c -- 199,416 bytes past the end of the scanned range. The result
+/// was `debug_info_present = true` with `pdb_path = None` for effectively
+/// every real PE: the analyst is told debug info exists and not where.
+///
+/// Entries whose type is not CodeView (2) are skipped; POGO and Repro entries
+/// are common and contain no path.
+fn codeview_payload_ranges(
+    data_len: usize,
+    debug_offset: Option<usize>,
+    debug_size: u32,
+    data: &[u8],
+) -> Vec<(usize, usize)> {
+    const ENTRY: usize = 28;
+    const CODEVIEW: u32 = 2;
+    let Some(dir) = debug_offset else {
+        return Vec::new();
+    };
+    let count = (debug_size as usize) / ENTRY;
+    let mut out = Vec::new();
+    for i in 0..count {
+        let e = dir + i * ENTRY;
+        if e + ENTRY > data_len || e + ENTRY > data.len() {
+            break;
+        }
+        let Some(kind) = read_u32_le(data, e + 12) else {
+            continue;
+        };
+        if kind != CODEVIEW {
+            continue;
+        }
+        let (Some(size), Some(ptr)) = (read_u32_le(data, e + 16), read_u32_le(data, e + 24))
+        else {
+            continue;
+        };
+        let start = ptr as usize;
+        if start >= data_len {
+            continue;
+        }
+        let end = start
+            .saturating_add((size as usize).min(RSDS_SCAN_LIMIT))
+            .min(data_len);
+        if start < end {
+            out.push((start, end));
+        }
+    }
+    out
+}
+
 fn rsds_search_ranges(
     data_len: usize,
     debug_offset: Option<usize>,
@@ -591,11 +649,16 @@ pub fn summarize_pe(data: &[u8], caps: &BudgetCaps) -> SymbolSummary {
             // RSDS format: 'RSDS' (4) + GUID (16) + Age (4) + UTF-8 path (NUL-terminated)
             let mut found: Option<String> = None;
             // Try to locate the debug dir first
-            let search_ranges = rsds_search_ranges(
-                data.len(),
-                rva_to_offset(debug_dd.rva, &sections),
-                debug_dd.size,
-            );
+            // Follow the CodeView entries first; fall back to the old
+            // heuristic scan only when the directory cannot be walked (a
+            // truncated header buffer, or a producer that emits no CodeView
+            // entry at all).
+            let dbg_off = rva_to_offset(debug_dd.rva, &sections);
+            let mut search_ranges =
+                codeview_payload_ranges(data.len(), dbg_off, debug_dd.size, data);
+            if search_ranges.is_empty() {
+                search_ranges = rsds_search_ranges(data.len(), dbg_off, debug_dd.size);
+            }
             for (start, end) in search_ranges {
                 let hay = &data[start..end];
                 if let Some(pos) = memchr::memmem::find(hay, b"RSDS") {
@@ -656,5 +719,54 @@ mod tests {
         let ranges = rsds_search_ranges(100_000, None, 128);
 
         assert_eq!(ranges, vec![(0, RSDS_SCAN_LIMIT)]);
+    }
+
+    /// One 28-byte IMAGE_DEBUG_DIRECTORY entry, at `off` in `buf`.
+    fn debug_entry(buf: &mut [u8], off: usize, kind: u32, size: u32, ptr: u32) {
+        buf[off + 12..off + 16].copy_from_slice(&kind.to_le_bytes());
+        buf[off + 16..off + 20].copy_from_slice(&size.to_le_bytes());
+        buf[off + 24..off + 28].copy_from_slice(&ptr.to_le_bytes());
+    }
+
+    #[test]
+    fn codeview_range_points_at_the_payload_not_the_directory() {
+        // The regression: the payload sits far outside the directory array, so
+        // scanning the array can never reach it. Mirrors win10-dismcore.dll,
+        // where the gap is 199,416 bytes.
+        let mut buf = vec![0u8; 8192];
+        debug_entry(&mut buf, 100, 2, 64, 4000);
+
+        let ranges = codeview_payload_ranges(buf.len(), Some(100), 28, &buf);
+
+        assert_eq!(ranges, vec![(4000, 4064)]);
+    }
+
+    #[test]
+    fn non_codeview_entries_are_skipped() {
+        // POGO (13) and Repro (16) entries are common and carry no path.
+        let mut buf = vec![0u8; 8192];
+        debug_entry(&mut buf, 0, 13, 64, 4000);
+        debug_entry(&mut buf, 28, 2, 32, 5000);
+        debug_entry(&mut buf, 56, 16, 64, 6000);
+
+        let ranges = codeview_payload_ranges(buf.len(), Some(0), 84, &buf);
+
+        assert_eq!(ranges, vec![(5000, 5032)]);
+    }
+
+    #[test]
+    fn a_payload_pointer_past_the_buffer_is_dropped() {
+        let mut buf = vec![0u8; 1024];
+        debug_entry(&mut buf, 0, 2, 64, 900_000);
+
+        assert!(codeview_payload_ranges(buf.len(), Some(0), 28, &buf).is_empty());
+    }
+
+    #[test]
+    fn a_truncated_directory_yields_nothing_so_the_fallback_runs() {
+        // `debug_size` claims two entries but the buffer holds part of one.
+        let buf = vec![0u8; 20];
+
+        assert!(codeview_payload_ranges(buf.len(), Some(0), 56, &buf).is_empty());
     }
 }

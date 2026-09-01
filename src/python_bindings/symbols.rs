@@ -84,6 +84,24 @@ fn pdb_symbol_map_py(
     Ok(dict.into_any().unbind())
 }
 
+/// Fill the container-derived fields of a `SymbolSummary` from the real
+/// format readers.
+///
+/// `src/symbols/{pe,elf,macho}.rs` compute `stripped`, `debug_info_present`,
+/// `tls_used`, the TLS callback list and `pdb_path` correctly, and both
+/// `list_symbols` bindings used to hardcode all of them to `false`/`None`
+/// under a `// TODO: detect this`. The effect was not a missing feature but a
+/// uniform wrong answer: a stripped and an unstripped build of the same source
+/// returned identical summaries, and a PE whose debug directory named a PDB
+/// reported no debug info and no PDB path.
+///
+/// The name lists stay with the caller -- only the fields the caller cannot
+/// compute are taken from here.
+fn container_fields(data: &[u8]) -> Option<crate::symbols::SymbolSummary> {
+    let fmt = crate::triage::signatures::detect_format_from_magic(data)?;
+    crate::symbols::extract_symbols(data, fmt, &crate::symbols::BudgetCaps::default())
+}
+
 /// List symbols from a file.
 #[pyfunction]
 #[pyo3(name = "list_symbols")]
@@ -94,8 +112,9 @@ fn list_symbols_py(
     max_file_size: u64,
 ) -> PyResult<crate::symbols::SymbolSummary> {
     let limit = std::cmp::min(max_read_bytes, max_file_size);
-    let _data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let c = container_fields(&data[..]).unwrap_or_default();
 
     // Call the actual function and convert tuple to SymbolSummary
     let (_all_syms, _dyn_syms, imports, exports, libs) =
@@ -109,12 +128,12 @@ fn list_symbols_py(
         export_names: Some(exports),
         demangled_import_names: None,
         demangled_export_names: None,
-        stripped: false, // TODO: detect this
-        tls_used: false, // TODO: detect this
-        tls_callback_count: None,
-        tls_callback_vas: None,
-        debug_info_present: false, // TODO: detect this
-        pdb_path: None,
+        stripped: c.stripped,
+        tls_used: c.tls_used,
+        tls_callback_count: c.tls_callback_count,
+        tls_callback_vas: c.tls_callback_vas.clone(),
+        debug_info_present: c.debug_info_present,
+        pdb_path: c.pdb_path.clone(),
         suspicious_imports: None,
         entry_section: None,
         nx: None,
@@ -138,8 +157,9 @@ fn list_symbols_demangled_py(
     max_file_size: u64,
 ) -> PyResult<crate::symbols::SymbolSummary> {
     let limit = std::cmp::min(max_read_bytes, max_file_size);
-    let _data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let c = container_fields(&data[..]).unwrap_or_default();
 
     // Call the actual function and convert tuple to SymbolSummary
     let (all_syms, dyn_syms, imports, exports, libs) =
@@ -153,12 +173,12 @@ fn list_symbols_demangled_py(
         export_names: Some(exports),
         demangled_import_names: Some(all_syms), // Use demangled versions
         demangled_export_names: Some(dyn_syms), // Use demangled versions
-        stripped: false,                        // TODO: detect this
-        tls_used: false,                        // TODO: detect this
-        tls_callback_count: None,
-        tls_callback_vas: None,
-        debug_info_present: false, // TODO: detect this
-        pdb_path: None,
+        stripped: c.stripped,
+        tls_used: c.tls_used,
+        tls_callback_count: c.tls_callback_count,
+        tls_callback_vas: c.tls_callback_vas.clone(),
+        debug_info_present: c.debug_info_present,
+        pdb_path: c.pdb_path.clone(),
         suspicious_imports: None,
         entry_section: None,
         nx: None,

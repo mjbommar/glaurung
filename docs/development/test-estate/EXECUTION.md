@@ -68,13 +68,14 @@ missing-body ledger in
 | [x] Fixture gallery regenerated + arch lanes rendered | — | glaurung.dev |
 | [x] Census -> both corpora, both O-levels (3,580 entries) | estate 7.5 | `1329382d` |
 | [x] Dispatch relaxation judged and REVERTED on its evidence | parity/estate 10 | `1329382d` |
+| [x] i386 stdcall resolver + real PE32 fixture (F1a, 33 rows) | real-binary R1 | `0d6b30d1` |
+| [x] `symbol_table_entries` binding (kind + definedness) | (needed by F1a c5) | `0d6b30d1` |
+| [x] Import disposition, explicit not absent (F1b core) | real-binary R1 | `0d6b30d1` |
 
 ## Next
 
 | item | plan ref | state |
 |---|---|---|
-| [ ] i386 stdcall identity fixture + collision-safe normalization | real-binary R1 / failure F1a | proven cause of 33 pinned rows |
-| [ ] External/import disposition contract | real-binary R1 / failure F1b | 63 rows have no local body |
 | [ ] Dataset manifest/source-CFG/binary consistency validator | real-binary R1 / failure F1c | 88 manifest-only rows |
 | [ ] gzip `__printf__` source/build provenance trace | real-binary R1 / failure F1d | 2 source-CFG-only rows |
 | [ ] PE entry/TLS/import identity fixture | real-binary R1/R4 | write failing fixture first |

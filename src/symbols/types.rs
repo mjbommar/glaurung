@@ -188,6 +188,17 @@ impl SymbolSummary {
         self.debug_info_present
     }
 
+    /// Path to the PDB named by the PE's CodeView debug directory entry.
+    ///
+    /// The struct has carried this field and `src/symbols/pe.rs` has populated
+    /// it from the RSDS record, but no getter exposed it -- so from Python the
+    /// field did not exist, and `debug_info_present == True` could not be
+    /// acted on: knowing debug info exists is only useful with the path to it.
+    #[getter]
+    fn pdb_path(&self) -> Option<String> {
+        self.pdb_path.clone()
+    }
+
     #[getter]
     fn suspicious_imports(&self) -> Option<Vec<String>> {
         self.suspicious_imports.clone()
