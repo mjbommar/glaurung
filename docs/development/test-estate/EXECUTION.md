@@ -129,6 +129,7 @@ directory for such a DLL at all. Annotated in place.
 | [x] Mach-O x86-64 + ARM64 thin lanes | estate 4 / R4 | `ba2fe5c2` |
 | [x] AArch64 scalar FP immediate dropped by the decoder | estate 4 / R4 | `ba2fe5c2` |
 | [x] AArch64 FMA lifting measured and REVERTED | estate 4 / R4 | `ba2fe5c2` |
+| [x] samples duplication measured, corrected and ratcheted | — | `dc4c9759` |
 | [~] Mach-O universal (fat) lane | estate 4 / R4 | thin x86-64+ARM64 landed `ba2fe5c2`; fat slices still open |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
@@ -146,7 +147,7 @@ directory for such a DLL at all. Annotated in place.
 | [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | baseline exists; missing/unit-mismatch/partial evidence currently exits zero |
 | [ ] Record provenance-complete release perf baseline | estate 6 / real-binary R6 | wait for clean committed Rust tree and exact release build |
 | [ ] Join perf with completeness, RSS, and determinism report | estate 2/6 / real-binary M7 | reuse profiler and existing determinism tests |
-| [ ] `samples/` 18.8 MB dedup | estate 9.2 | investigated, see below |
+| [~] `samples/` dedup: 22.4 MB, ratcheted not deleted | — | needs a canonical-tree decision, `dc4c9759` |
 
 ## Verified state, 2026-09-01
 
