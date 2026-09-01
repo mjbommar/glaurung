@@ -163,6 +163,66 @@ def _structure_params():
         )
 
 
+def _return_params():
+    for r in _rows("returns"):
+        want = "a pointer" if r["kind"] == "ptr_lost" else f"{r['want']} bytes wide"
+        yield pytest.param(
+            r,
+            id=f"{r['obj']}::{r['fn']}@{r['va']:#x}::return::{r['kind']}",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    f"OPEN DEFECT (return type): {r['fn']} returns {want} in "
+                    f"DWARF, recovered as `{r['got']}`. A wrong return type is "
+                    "what makes a function look `void` -- the shape both the "
+                    "-flto collapse and the AArch64 FMA gap produce."
+                ),
+            ),
+        )
+
+
+def _unrecovered_params():
+    for r in _rows("unrecovered"):
+        yield pytest.param(
+            r,
+            id=f"{r['obj']}::{r['fn']}@{r['va']:#x}::unrecovered",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    f"OPEN DEFECT (unrecovered construct): {r['fn']} emits "
+                    f"{r['n']} `unrecovered` marker(s) -- the renderer stating "
+                    "outright that it could not model something. Unlike goto "
+                    "soup this is not even faithful-but-ugly; it is a hole."
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize("row", _return_params())
+def test_recovered_return_type_matches_dwarf(row):
+    """The return type the compiler recorded must survive recovery."""
+    _require_corpus(row["obj"])
+    text = _render(row["obj"], row["va"])
+    assert text, f"{row['obj']}::{row['fn']} produced no body"
+    sig = _signature_of(text)
+    assert sig, f"no signature line:\n{text[:200]}"
+    head = sig.split("(")[0]
+    got = G.classify(head.rsplit(" ", 1)[0])["raw"] if " " in head else head
+    assert got != row["got"], f"{row['fn']} still returns `{row['got']}`"
+
+
+@pytest.mark.parametrize("row", _unrecovered_params())
+def test_no_unrecovered_construct_remains(row):
+    """`unrecovered` in the output is the renderer conceding a hole."""
+    _require_corpus(row["obj"])
+    text = _render(row["obj"], row["va"])
+    assert text, f"{row['obj']}::{row['fn']} produced no body"
+    hits = [ln.strip() for ln in text.splitlines() if "unrecovered" in ln]
+    assert not hits, f"{len(hits)} unrecovered construct(s):\n  " + "\n  ".join(
+        hits[:3]
+    )
+
+
 def test_the_inventory_is_present_and_populated():
     """A vacuity guard: every xfail below would vanish over an empty file."""
     assert INVENTORY.is_file(), (
@@ -170,8 +230,8 @@ def test_the_inventory_is_present_and_populated():
         "`uv run python tools/gen_known_failures.py`"
     )
     counts = _counts()
-    assert counts.get("types", 0) + counts.get("structure", 0) > 500, (
-        f"the inventory records only {counts}; it should hold the ~1,022 "
+    assert sum(v for k, v in counts.items() if k != "goto_statements") > 900, (
+        f"the inventory records only {counts}; it should hold the ~1,162 "
         "failures the corpus demonstrates. An empty inventory makes this whole "
         "file silently vacuous."
     )
@@ -219,4 +279,20 @@ def test_the_failure_count_does_not_grow():
     )
     assert counts.get("goto_statements", 0) <= 6791, (
         f"goto statements grew to {counts.get('goto_statements')} (recorded 6,791)"
+    )
+    assert counts.get("returns", 0) <= 92, (
+        f"return-type mismatches grew to {counts.get('returns')} (recorded 92)"
+    )
+    assert counts.get("unrecovered", 0) <= 48, (
+        f"unrecovered constructs grew to {counts.get('unrecovered')} (recorded 48)"
+    )
+    # These two are ZERO today, which is worth pinning as an achievement
+    # rather than leaving as an absence: a DWARF pointer parameter never
+    # degrades to a scalar, and every function DWARF names produces a body.
+    assert counts.get("pointers", 0) == 0, (
+        f"{counts.get('pointers')} pointer parameter(s) now recover as scalars; "
+        "recovered C would dereference an integer"
+    )
+    assert counts.get("no_body", 0) == 0, (
+        f"{counts.get('no_body')} function(s) DWARF names now produce no body"
     )
