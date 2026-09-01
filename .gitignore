@@ -143,3 +143,16 @@ tests/realistic_corpus/build/
 # (reference/specifications/ IS tracked and must not be ignored)
 reference/*/
 !reference/specifications/
+
+# cargo-fuzz working state. A minimized seed corpus is worth committing (see
+# the test-estate plan, phase 3.3); these are not -- `target/` is build output,
+# `artifacts/` holds raw crash reproducers whose permanent home is a unit test
+# in the module that owns the bug, and `coverage/` is regenerated.
+fuzz/target/
+fuzz/artifacts/
+fuzz/coverage/
+# NOT committed yet, deliberately: phase 3.3 of the test-estate plan calls for a
+# seed corpus minimized from our own fixture .text sections and sample headers.
+# What a short smoke run leaves behind is two random inputs, which would look
+# like a corpus without being one.
+fuzz/corpus/

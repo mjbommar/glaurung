@@ -50,3 +50,24 @@ test = false
 doc = false
 bench = false
 
+
+[[bin]]
+name = "demangle_all"
+path = "fuzz_targets/demangle_all.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "formats_parse"
+path = "fuzz_targets/formats_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "disasm_decode"
+path = "fuzz_targets/disasm_decode.rs"
+test = false
+doc = false
+bench = false
