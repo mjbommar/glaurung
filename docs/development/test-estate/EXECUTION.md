@@ -71,6 +71,10 @@ missing-body ledger in
 | [x] i386 stdcall resolver + real PE32 fixture (F1a, 33 rows) | real-binary R1 | `0d6b30d1` |
 | [x] `symbol_table_entries` binding (kind + definedness) | (needed by F1a c5) | `0d6b30d1` |
 | [x] Import disposition, explicit not absent (F1b core) | real-binary R1 | `0d6b30d1` |
+| [x] `list_symbols` reported hardcoded False for 6 fields | estate 4 / R4 | `610d3afd` |
+| [x] `pdb_path` PyO3 getter (field existed, was unreachable) | estate 4 / R4 | `610d3afd` |
+| [x] RSDS scan read 199,416 bytes short of the record | estate 4 / R4 | `610d3afd` |
+| [x] clang-cl/lld-link lane: measured, 3 caveats recorded | estate 4.1 | doc |
 
 ## Next
 
@@ -78,7 +82,7 @@ missing-body ledger in
 |---|---|---|
 | [ ] Dataset manifest/source-CFG/binary consistency validator | real-binary R1 / failure F1c | 88 manifest-only rows |
 | [ ] gzip `__printf__` source/build provenance trace | real-binary R1 / failure F1d | 2 source-CFG-only rows |
-| [ ] PE entry/TLS/import identity fixture | real-binary R1/R4 | write failing fixture first |
+| [~] PE entry/TLS/import identity | real-binary R1/R4 | debug+stripped+TLS covered on real samples; TLS-callback VAs still unasserted |
 | [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
 | [ ] Hermetic PDB type/layout lane | estate 4 / real-binary R4 | source declarations through recovered fields and prototypes |
 | [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
