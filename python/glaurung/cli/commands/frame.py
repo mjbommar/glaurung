@@ -63,6 +63,10 @@ class FrameCommand(BaseCommand):
         # "unrecognized arguments" on every interpreter this project supports
         # except the newest one. `requires-python` is ">=3.12"; the command
         # worked only on 3.14, where the pattern was relaxed to `-\.?\d`.
+        # That relaxation is CPython PR #124823, and the resulting behaviour
+        # difference between 3.13 and 3.14 is what python/cpython#155339 was
+        # opened to get documented -- so this is a known upstream change and
+        # not a quirk of one interpreter build.
         #
         # Widening the matcher here makes the hex form parse identically on
         # every supported version. It is a private attribute, which is why this

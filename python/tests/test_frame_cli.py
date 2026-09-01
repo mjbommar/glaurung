@@ -261,6 +261,11 @@ def test_a_negative_hex_offset_parses_on_every_supported_python():
     relaxed. `requires-python` is ">=3.12", so the command was broken across
     most of its own supported range.
 
+    The relaxation in 3.14 is CPython PR #124823; python/cpython#155339 was
+    opened to get the resulting 3.13-vs-3.14 difference documented. So this is
+    a known upstream behaviour change, and a project supporting >=3.12 cannot
+    rely on the newer behaviour.
+
     Nothing caught it because the development machine runs 3.14. CI runs 3.12,
     which is the only reason it was ever seen.
 
