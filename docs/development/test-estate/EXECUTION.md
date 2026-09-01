@@ -61,6 +61,9 @@ missing-body ledger in
 | [x] 12 test files anchored off CWD (21 silent skips) | estate 1.7 | `c26b2464` |
 | [x] conftest sample paths anchored (59 usages) | estate 1.7 | `62bda4cc` |
 | [x] Structural lane seam + the O2 measurement | estate 7.5 | `b02b5883` |
+| [x] CI cross-toolchain + compile-probe availability | estate 10 | `c5f7df15` |
+| [x] Concurrent session's 11 planning docs landed | — | `dbf4f5ca` |
+| [x] Fixture gallery regenerated + arch lanes rendered | — | glaurung.dev |
 
 ## Next
 
@@ -92,6 +95,23 @@ missing-body ledger in
 | [ ] Record provenance-complete release perf baseline | estate 6 / real-binary R6 | wait for clean committed Rust tree and exact release build |
 | [ ] Join perf with completeness, RSS, and determinism report | estate 2/6 / real-binary M7 | reuse profiler and existing determinism tests |
 | [ ] `samples/` 18.8 MB dedup | estate 9.2 | investigated, see below |
+
+## Verified state, 2026-09-01
+
+| gate | result |
+|---|---|
+| `cargo test --features python-ext` (local) | **2,944 passing** |
+| `cargo test --features python-ext` (**CI**) | **2,944 passing** |
+| `uv run pytest python/tests/` (local) | **3,606 passed, 0 failed** |
+| `uv run pytest python/tests/` (**CI**) | 3,438 passed, **25 failed** — see [phase 10](10-ci-environment-gap.md) |
+| `dectest @o0 @o2` | 824 lanes, no regressions |
+| perf gate | passes; verified it also FAILS an injected 10% regression |
+| feature build gate | 12/12 lanes |
+| ruff + ty (local and CI) | clean |
+
+The 25 CI-only failures are environment, not product: no cross toolchains and
+no built fixture directory on the runner. That gap is phase 10, opened by the
+run that found it.
 
 ## Findings worth keeping
 
