@@ -173,7 +173,7 @@ pub fn from_object<'data, O>(object: &O) -> DataSymbols
 where
     O: object::Object<'data>,
 {
-    use object::{Object, ObjectSymbol, SymbolKind};
+    use object::{ObjectSymbol, SymbolKind};
     DataSymbols::from_entries(object.symbols().filter_map(|symbol| {
         (symbol.is_definition() && symbol.kind() == SymbolKind::Data)
             .then(|| {

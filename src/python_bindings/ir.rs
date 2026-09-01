@@ -590,7 +590,7 @@ fn decompile_range_at_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     // ONE parse of the image yields both the call-target names and the
     // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
+    let (addr_map, data_symbols) =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
             &data, &path, pdb_cache,
         );

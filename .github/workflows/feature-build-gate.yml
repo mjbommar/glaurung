@@ -11,6 +11,10 @@
 # nothing noticed for seventeen days. `--features triage-parsers-extra` had not
 # compiled since 2025-09-01.
 #
+# It also covers `fuzz/`, which is a SEPARATE crate and not a workspace member:
+# no `cargo check --all-targets` at the workspace root has ever seen a fuzz
+# target, so all five have compiled by luck rather than by verification.
+#
 # This is `cargo check`, not `cargo test`. Type checking is what catches a
 # non-exhaustive match, and it needs no solver binaries -- only libz3 headers
 # for the z3 crate. Running the feature-gated TESTS needs more than a hosted

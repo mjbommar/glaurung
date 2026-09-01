@@ -87,6 +87,12 @@ lanes=(
   "solver-z3|z3|--features solver-z3"
   "solver-z3 + solver-axeyum (shadow/diff)|z3|--features solver-z3,solver-axeyum"
   "all-features|z3|--all-features"
+  # `fuzz/` is a SEPARATE crate, not a workspace member, so every lane above
+  # is blind to it: no `cargo check --all-targets` at the root has ever seen
+  # a fuzz target. Five of them have sat there compiling by luck. Nothing
+  # runs `cargo fuzz` either, but a target that does not build cannot be run
+  # by anyone who later tries.
+  "fuzz targets|none||fuzz/Cargo.toml"
 )
 
 total=${#lanes[@]}
@@ -103,7 +109,15 @@ for lane in "${lanes[@]}"; do
   label=${lane%%|*}
   rest=${lane#*|}
   needs=${rest%%|*}
-  args=${rest#*|}
+  rest=${rest#*|}
+  args=${rest%%|*}
+  # Optional fourth field: a manifest other than the workspace root. Absent
+  # for every lane but the fuzz crate.
+  if [ "$rest" = "$args" ]; then
+    manifest=""
+  else
+    manifest="--manifest-path ${rest#*|}"
+  fi
 
   step "$index/$total  $label"
   if [ "$needs" = "z3" ] && [ "$have_z3" -eq 0 ]; then
@@ -114,10 +128,10 @@ for lane in "${lanes[@]}"; do
   fi
 
   # shellcheck disable=SC2086
-  if cargo check --all-targets $args >"$log" 2>&1; then
+  if cargo check --all-targets $manifest $args >"$log" 2>&1; then
     note "ok"
   else
-    note "FAILED: cargo check --all-targets $args"
+    note "FAILED: cargo check --all-targets $manifest $args"
     grep -E '^error' -A 8 "$log" | head -40
     fail=1
   fi
