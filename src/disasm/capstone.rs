@@ -347,9 +347,8 @@ impl Disassembler for CapstoneDisassembler {
                     if let Some(ad) = detail.arch_detail().arm64() {
                         // `s0`/`h0` are 32/16-bit lanes, `d0`/`q0` are wider.
                         // Used only to pick the precision of an FP immediate.
-                        let ins_reg_width: Option<u32> = ad
-                            .operands()
-                            .find_map(|op| match op.op_type {
+                        let ins_reg_width: Option<u32> =
+                            ad.operands().find_map(|op| match op.op_type {
                                 Arm64OperandType::Reg(r) => cs
                                     .reg_name(r)
                                     .and_then(|n| n.chars().next())
@@ -525,11 +524,7 @@ impl Disassembler for CapstoneDisassembler {
                                             .map(|s| s.trim().to_ascii_lowercase())
                                             .unwrap_or_default(),
                                     };
-                                    operands.push(Operand::register(
-                                        name,
-                                        0,
-                                        Access::Read,
-                                    ));
+                                    operands.push(Operand::register(name, 0, Access::Read));
                                 }
                                 _ => {}
                             }

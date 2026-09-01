@@ -57,7 +57,29 @@ jobs:
       # This does not cover src/symbolic/, src/exec/ or the solver backends;
       # those need more than a hosted runner has, and feature-build-gate.yml
       # type-checks them instead.
+      # 21 tests across analysis/cfg.rs and ir/ compile a fixture at test
+      # time. Until 2026-09-01 each returned SILENTLY when its compiler was
+      # absent -- reporting `ok` having asserted nothing, indistinguishable
+      # from a pass. Measured with a PATH shim: on a machine without these,
+      # **33 test executions pass while asserting nothing**, and the total does
+      # not move to say so.
+      #
+      # `GLAURUNG_REQUIRE_TOOLCHAINS=1` (below) turns every such skip into a
+      # failure, so CI is the place that guarantees those tests actually ran.
+      # That only works if the runner really has the compilers, hence this
+      # step -- and it deliberately has NO `|| true`: a provisioning failure
+      # must be loud here rather than resurfacing as two confusing test
+      # failures later. `gcc-arm-none-eabi` is the bare-metal ARM package and
+      # is unrelated to the `gcc-aarch64-linux-gnu` that the python job cannot
+      # install (see its comment).
+      - name: Install the fixture compilers the Rust tests demand
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
       - name: Rust tests
+        # REQUIRE_TOOLCHAINS makes a missing compiler fail instead of skip.
+        env:
+          GLAURUNG_REQUIRE_TOOLCHAINS: "1"
         run: cargo test --features python-ext
 
   python:

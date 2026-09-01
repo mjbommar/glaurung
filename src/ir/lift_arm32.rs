@@ -2033,7 +2033,11 @@ mod tests {
                         if is_mrs {
                             asm.split(", ").nth(1).unwrap().to_ascii_lowercase()
                         } else {
-                            asm.split(' ').nth(1).unwrap().trim_end_matches(',').to_ascii_lowercase()
+                            asm.split(' ')
+                                .nth(1)
+                                .unwrap()
+                                .trim_end_matches(',')
+                                .to_ascii_lowercase()
                         }
                     );
                     let _ = sys;

@@ -598,7 +598,11 @@ fn scalar_float_ops(ins: &Instruction, mnem: &str) -> Option<Vec<Op>> {
     // result. A definition the renderer cannot express is worse than no
     // definition. FMA is ternary and `float_gate`'s operator table has only
     // `Move`, `Negate` and `Binary`; it needs a form there first.
-    let arity = if matches!(stem, "vneg" | "vmov") { 2 } else { 3 };
+    let arity = if matches!(stem, "vneg" | "vmov") {
+        2
+    } else {
+        3
+    };
     if ins.operands.len() != arity {
         return None;
     }

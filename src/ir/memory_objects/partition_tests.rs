@@ -43,7 +43,10 @@ pub(super) fn real_x86_function(
         .output()
     {
         Ok(build) => build,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::testing::missing_tool("gcc");
+            return None;
+        }
         Err(error) => panic!("launch GCC: {error}"),
     };
     assert!(
@@ -103,7 +106,10 @@ pub(super) fn real_x86_objects(
         .output()
     {
         Ok(build) => build,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::testing::missing_tool("gcc");
+            return None;
+        }
         Err(error) => panic!("launch GCC: {error}"),
     };
     if !build.status.success() {
@@ -917,7 +923,10 @@ fn real_x86_frame_partitions(
         .output()
     {
         Ok(build) => build,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::testing::missing_tool("gcc");
+            return None;
+        }
         Err(error) => panic!("launch GCC: {error}"),
     };
     if !build.status.success() {

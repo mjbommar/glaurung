@@ -361,7 +361,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
@@ -565,7 +568,10 @@ mod gcc_dispatch_corpus_tests {
         {
             Ok(build) => build,
             // No ARM cross-assembler here; the x86 lanes still cover the rest.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("arm-none-eabi-gcc");
+                return;
+            }
             Err(error) => panic!("launch arm-none-eabi-gcc: {error}"),
         };
         if !build.status.success() {
@@ -649,7 +655,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
             Err(error) => panic!("launch Clang: {error}"),
         };
         assert!(
@@ -735,7 +744,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
             Err(error) => panic!("launch Clang: {error}"),
         };
         assert!(
@@ -822,7 +834,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
             Err(error) => panic!("launch Clang: {error}"),
         };
         assert!(
@@ -878,7 +893,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
@@ -1118,7 +1136,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
             Err(error) => panic!("launch Clang: {error}"),
         };
         assert!(
@@ -1242,7 +1263,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
             Err(error) => panic!("launch Clang: {error}"),
         };
         assert!(
@@ -1337,7 +1361,10 @@ mod gcc_dispatch_corpus_tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
             Err(error) => panic!("launch Clang: {error}"),
         };
         assert!(

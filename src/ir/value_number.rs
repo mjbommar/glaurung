@@ -1552,7 +1552,10 @@ mod tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
@@ -1617,7 +1620,10 @@ mod tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(

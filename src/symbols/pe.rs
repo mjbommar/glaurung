@@ -101,8 +101,7 @@ fn codeview_payload_ranges(
         if kind != CODEVIEW {
             continue;
         }
-        let (Some(size), Some(ptr)) = (read_u32_le(data, e + 16), read_u32_le(data, e + 24))
-        else {
+        let (Some(size), Some(ptr)) = (read_u32_le(data, e + 16), read_u32_le(data, e + 24)) else {
             continue;
         };
         let start = ptr as usize;

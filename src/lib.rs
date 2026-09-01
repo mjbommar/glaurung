@@ -80,6 +80,13 @@ pub mod exec;
 #[cfg(feature = "symbolic")]
 pub mod symbolic;
 
+/// Test-only support: visible skips for tests that compile fixtures.
+///
+/// Gated on `cfg(test)` so it ships in no build. See the module docs for why a
+/// silently-skipped test is worse than a failing one.
+#[cfg(test)]
+pub mod testing;
+
 pub mod program;
 
 /// Python bindings module

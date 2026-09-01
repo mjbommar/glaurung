@@ -2914,7 +2914,10 @@ mod tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
@@ -2981,7 +2984,10 @@ mod tests {
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
@@ -3066,7 +3072,13 @@ mod tests {
                 .output()
             {
                 Ok(build) => build,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // `compiler` is the loop variable: this arm skips ONE
+                    // toolchain, so without the record a partially-provisioned
+                    // machine tests half the matrix and reports a full pass.
+                    crate::testing::missing_tool(compiler);
+                    continue;
+                }
                 Err(error) => panic!("launch {compiler}: {error}"),
             };
             assert!(
@@ -3152,7 +3164,10 @@ int never_returns(void) { for (;;) {} }
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
@@ -3497,7 +3512,10 @@ int never_returns(void) { for (;;) {} }
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("arm-none-eabi-gcc");
+                return;
+            }
             Err(error) => panic!("launch arm-none-eabi-gcc: {error}"),
         };
         assert!(
@@ -3587,7 +3605,13 @@ int never_returns(void) { for (;;) {} }
                 .output()
             {
                 Ok(build) => build,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    // `compiler` is the loop variable: this arm skips ONE
+                    // toolchain, so without the record a partially-provisioned
+                    // machine tests half the matrix and reports a full pass.
+                    crate::testing::missing_tool(compiler);
+                    continue;
+                }
                 Err(error) => panic!("launch {compiler}: {error}"),
             };
             assert!(
@@ -3664,7 +3688,10 @@ int never_returns(void) { for (;;) {} }
             .output()
         {
             Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("gcc");
+                return;
+            }
             Err(error) => panic!("launch GCC: {error}"),
         };
         assert!(
