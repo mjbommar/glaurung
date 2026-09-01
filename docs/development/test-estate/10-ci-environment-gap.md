@@ -40,9 +40,50 @@ cross compilers omitted; run the failing files against it.
 | 3 | `FileNotFoundError` on a cross compiler | **FIXED** (`f0c1009c`) — `native_runner` used `check=False`, which covers a probe that FAILS and not one that cannot RUN; catching `OSError` fixed a second test by cascade |
 | 5 | `No suspicious imports` on cross binaries | **FIXED** (`f0c1009c`) — the sample selection used `rglob` (filesystem order) over a pool containing `suspicious_win` builds cross-compiled for LINUX, which cannot import a Windows API. Now sorted and filtered |
 | 4 | `SystemExit: 2` from the frame CLI | **FIXED** (`9bbfd50c`) — a real product bug: negative HEX offsets do not parse on Python 3.12/3.13, only on 3.14. `requires-python` is ">=3.12" |
-| 13 | assorted assertions on recovered output | **open** — most need the gitignored fixture build directory, which the runner does not have |
+| 11 | assertions on recovered output | **open**, and see the CORRECTION below |
 
-Twelve of twenty-five, each with a root cause rather than a suppression. The
+### Correction: the remaining eleven are not about the fixture directory
+
+The first version of this table said the remainder "need the gitignored
+fixture build directory, which the runner does not have." **That was wrong**,
+and it was wrong in the way this document exists to prevent -- a diagnosis
+written from a plausible story rather than a measurement.
+
+Tested by hiding `tests/decompiler_fixtures/build/` and running those files:
+**zero failures.** They skip correctly without it.
+
+The real cause is the one `CLAUDE.md` names for baselines and that this
+session already met once: **these tests compile a fixture with the HOST
+compiler and assert on the recovered output.**
+
+    test_decompiler_control_flow_semantics.py   16 host-compiler refs, 0 pinned
+    test_decompiler_curriculum_corpus.py         4 host-compiler refs, 0 pinned
+    test_decompiler_lazy_call_select.py          2 host-compiler refs, 0 pinned
+    test_decompiler_stripped_lane.py             1 host-compiler ref,  0 pinned
+
+The compilers are not the same on the two machines:
+
+| | this box | runner |
+|---|---|---|
+| gcc | 15.2.0 | 11.4.0 (in the pinned image) / 13.x on the host |
+| clang | 21.1.8 | 18.x |
+
+Different codegen, different recovered C, different assertion outcome. The
+three `[lto]` cases are the same thing inverted: they are `xfail` for a known
+`-flto` defect that does NOT reproduce on the runner's compiler, so the strict
+xfail failed by PASSING.
+
+`cfg.rs::clang_o2_statemachine_retains_cross_block_dispatch_edges` was this
+exact defect and was fixed in `09f4d511` by splitting the claim: the
+version-independent half stays asserted, the codegen-dependent half is scoped
+to validated compiler majors and reports what it saw. That is the pattern the
+remaining eight want, one at a time, each needing someone who knows which half
+of its assertion is version-independent.
+
+The alternative -- compiling them through the pinned toolchain image the way
+the fixture matrix does -- is the more thorough fix and a much larger one.
+
+Twelve of twenty-five fixed, each with a root cause rather than a suppression. The
 `suspicious_symbols` and `frame` ones were real defects that a single machine
 could not expose: one a test whose SUBJECT depended on directory iteration
 order, the other a command broken across most of its supported interpreter
