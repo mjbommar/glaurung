@@ -31,7 +31,9 @@ Marked `slow`: cross-compiles fixtures for four targets. Run with `-m slow`.
 from __future__ import annotations
 
 import re
+import functools
 import shutil
+import tempfile
 import subprocess
 import sys
 from itertools import pairwise
@@ -93,8 +95,45 @@ SCALAR_BYTES = {
 }
 
 
-def _have(compiler: str) -> bool:
-    return shutil.which(compiler) is not None
+@functools.lru_cache(maxsize=None)
+def _have(arch: str) -> bool:
+    """Whether this machine can actually BUILD the fixture for `arch`.
+
+    `shutil.which` is not enough and CI proved it. On a `ubuntu-latest`
+    runner `gcc` is present, so the i386 lane looked available -- and then
+    `gcc -m32` failed at link time with "cannot find crti.o", because 32-bit
+    multilib is not installed. The lane ERRORED instead of skipping, and the
+    whole Python job went red for a reason that had nothing to do with the
+    decompiler.
+
+    So availability is decided by compiling something trivial with the exact
+    flags the lane uses, cached per arch. A toolchain that cannot link a
+    two-line program cannot build the fixture either, and saying so as a SKIP
+    is the honest answer -- the alternative is a permanently red gate on every
+    machine that lacks a cross toolchain.
+    """
+    compiler, cflags = TARGETS[arch]
+    if shutil.which(compiler) is None:
+        return False
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe.c"
+        probe.write_text("int probe(void) { return 0; }\n")
+        done = subprocess.run(
+            [
+                compiler,
+                "-shared",
+                "-fPIC",
+                *cflags,
+                "-o",
+                str(Path(tmp) / "probe.so"),
+                str(probe),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        return done.returncode == 0
 
 
 def _compile(arch: str, opt: str, out: Path) -> None:
@@ -237,7 +276,7 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> dict[tuple[str, str], Pat
     root = tmp_path_factory.mktemp("emission-invariants")
     out: dict[tuple[str, str], Path] = {}
     for arch in ARCHES:
-        if not _have(TARGETS[arch][0]):
+        if not _have(arch):
             continue
         for opt in OPTS:
             binary = root / f"frame-{arch}{opt}.so"

@@ -88,12 +88,26 @@ jobs:
       #
       # Installing them rather than skipping them, deliberately: a skip here
       # would hide exactly the cross-architecture coverage the tests exist for.
-      - name: Install cross toolchains
+      # 32-bit multilib only. The i386 lane is the one that NEEDS this: `gcc`
+      # is present on the runner, so `shutil.which` said the lane was
+      # available, and then `gcc -m32` failed at link time with "cannot find
+      # crti.o" and the lane ERRORED instead of skipping.
+      #
+      # The aarch64 and armv7 cross compilers are deliberately NOT installed
+      # here. `gcc-aarch64-linux-gnu` depends on `gcc-13-aarch64-linux-gnu`,
+      # which is not installable on this runner image, and the whole step
+      # exited 100 -- turning a coverage improvement into a red job that never
+      # reached pytest. Those two lanes skip visibly instead, which is the
+      # honest state until someone pins a runner image that carries them.
+      #
+      # `|| true` because a coverage lane must never be able to fail the suite
+      # by not installing; the tests decide availability by probing a real
+      # compile, so an absent toolchain is a skip either way.
+      - name: Install 32-bit multilib (for the i386 lane)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-multilib libc6-dev-i386 \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+            gcc-multilib libc6-dev-i386 || true
       - name: Sync dependencies
         run: uv sync --locked --dev
       # --release, not the default debug build. The debug extension is 276 MB
