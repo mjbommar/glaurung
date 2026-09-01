@@ -48,8 +48,11 @@ def measured() -> dict:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("gen_test_census", GENERATOR)
+    assert spec is not None and spec.loader is not None, (
+        f"cannot load {GENERATOR}; the census tool and this ratchet must stay "
+        "together or neither measures anything"
+    )
     mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(mod)
     counts = mod.census()
     never = {k: v for k, v in counts.items() if k in mod.NEVER_EXECUTED}
