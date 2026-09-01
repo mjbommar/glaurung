@@ -65,7 +65,9 @@ def test_merge_is_sorted_and_recomputes_compile_rate() -> None:
 
 def test_merge_rejects_duplicate_function_keys() -> None:
     with pytest.raises(ValueError, match="duplicate function key"):
-        merge_module.merge_shards([_shard("a", "same", True), _shard("a", "same", True)])
+        merge_module.merge_shards(
+            [_shard("a", "same", True), _shard("a", "same", True)]
+        )
 
 
 def test_merge_rejects_incompatible_headers() -> None:

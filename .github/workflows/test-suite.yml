@@ -1,0 +1,94 @@
+# Does the test suite pass?
+#
+# An embarrassing question for a workflow to be the first to ask, but it was:
+# before this file, NO workflow in this repository ran `cargo test`, and none
+# ran the general Python suite. The inventory in docs/test-inventory/ counted
+# it -- 6 of 445 Python test files executed in CI, and the single occurrence of
+# the string "cargo test" under .github/ was a comment in feature-build-gate.yml
+# explaining that that lane is deliberately `cargo check` instead.
+#
+# The estate was inverted. decompiler-fixtures.yml runs an expensive slow
+# matrix on every push, while the cheap suite that answers "is anything broken"
+# ran only when a human typed the command. This is the cheap half.
+#
+# Two jobs, because they fail for different reasons and a reader should not
+# have to guess which half went red.
+name: test suite
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes an in-flight run of the same ref: this is a
+# correctness gate, not a historical record, and only the tip matters.
+concurrency:
+  group: test-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: cargo test --features python-ext
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `--features python-ext` and not a bare `cargo test`, which does not
+      # BUILD src/python_bindings/ at all -- on 2026-08-14 a signature change
+      # there left five test call sites on the old arity and `cargo test` still
+      # reported 2321 passed over code it never compiled. python_bindings/ir.rs
+      # is the real pipeline entry point, so most passes are only reachable
+      # through it.
+      #
+      # This does not cover src/symbolic/, src/exec/ or the solver backends;
+      # those need more than a hosted runner has, and feature-build-gate.yml
+      # type-checks them instead.
+      - name: Rust tests
+        run: cargo test --features python-ext
+
+  python:
+    name: uv run pytest python/tests/
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+      # --release, not the default debug build. The debug extension is 276 MB
+      # against 974 KB and runs unoptimized code; a suite that takes minutes
+      # locally can take much longer here, and the profile shares are not the
+      # ones we ship either.
+      - name: Build the extension
+        run: uv run maturin develop --release
+      # Tests needing tests/decompiler_fixtures/build/ will SKIP -- that
+      # directory is gitignored and built by decompiler-fixtures.yml, which is
+      # the workflow that owns the expensive matrix. The skips are visible
+      # because pytest.ini carries -ra, which is the point: a run with 200
+      # silent skips used to look identical to a clean one.
+      - name: Python tests
+        run: uv run pytest python/tests/
+
+  lint:
+    name: ruff and ty
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # Formatting and lint need no built extension, so this job does not pay
+      # for one. `ty` does -- it resolves the native module -- so it is checked
+      # in the python job's environment instead of here.
+      - name: ruff format --check
+        run: uvx ruff format --check python/
+      - name: ruff check
+        run: uvx ruff check python/
