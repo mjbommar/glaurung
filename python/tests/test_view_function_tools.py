@@ -1,12 +1,21 @@
+"""The LLM view-function/list-functions/PLT tool chain over a real binary.
+
+The sample path is anchored from `Path(__file__)` up to the repo root; it used
+to be a CWD-relative `"../samples/..."` inside a module-level
+`pytest.mark.skipif`, which resolved outside the repository and skipped this
+test unconditionally (`docs/development/test-estate/01-reachability.md` 1.4).
+"""
+
 from pathlib import Path
 import pytest
 import glaurung as g
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+SAMPLES = ROOT / "samples" / "binaries" / "platforms" / "linux" / "amd64" / "export"
+
 
 @pytest.mark.skipif(
-    not Path(
-        "../samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
-    ).exists(),
+    not (SAMPLES / "fortran" / "hello-gfortran-O0").exists(),
     reason="sample binary not present",
 )
 def test_trace_main_printf_hello():
@@ -21,9 +30,7 @@ def test_trace_main_printf_hello():
     except ImportError:
         pytest.skip("LLM dependencies not available")
 
-    sample = Path(
-        "../samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
-    )
+    sample = SAMPLES / "fortran" / "hello-gfortran-O0"
 
     # Check if sample is corrupted (contains text instead of binary)
     with open(sample, "rb") as f:

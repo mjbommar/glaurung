@@ -1,19 +1,30 @@
+"""Demangled names reaching the triage artifact, plus `strings.demangle_text`.
+
+Distinct from `test_symbols_demangled.py` despite the shared parameter list:
+that file exercises the direct `symbols.list_symbols_demangled` entry point,
+this one asserts the same evidence survives a full `triage.analyze_path`.
+
+Sample paths are anchored from `Path(__file__)` up to the repo root; they used
+to be CWD-relative `"../samples/..."` and resolved outside the repository, so
+this file had never run (`docs/development/test-estate/01-reachability.md`
+1.4).
+"""
+
 from pathlib import Path
 
 import pytest
 
 import glaurung as g
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+SAMPLES = ROOT / "samples" / "binaries" / "platforms" / "linux" / "amd64" / "export"
+
 
 @pytest.mark.parametrize(
     "path",
     [
-        Path(
-            "../samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
-        ),
-        Path(
-            "../samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
-        ),
+        SAMPLES / "fortran" / "hello-gfortran-O0",
+        SAMPLES / "native" / "asm" / "gas" / "O0" / "hello-asm-gas-O0",
     ],
 )
 def test_symbol_summary_includes_demangled_names_if_present(path: Path) -> None:

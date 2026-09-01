@@ -1,19 +1,28 @@
+"""`symbols.list_symbols_demangled` over two real export samples.
+
+Sample paths are anchored from `Path(__file__)` up to the repo root, the
+pattern the rest of the suite uses. They used to be written CWD-relative as
+`"../samples/..."`, which resolves *outside* the repository from every
+plausible working directory, so both parameters skipped on "sample not
+present" and this file had never run (see
+`docs/development/test-estate/01-reachability.md` 1.4).
+"""
+
 from pathlib import Path
 
 import pytest
 
 import glaurung as g
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+SAMPLES = ROOT / "samples" / "binaries" / "platforms" / "linux" / "amd64" / "export"
+
 
 @pytest.mark.parametrize(
     "path",
     [
-        Path(
-            "../samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O0"
-        ),
-        Path(
-            "../samples/binaries/platforms/linux/amd64/export/native/asm/gas/O0/hello-asm-gas-O0"
-        ),
+        SAMPLES / "fortran" / "hello-gfortran-O0",
+        SAMPLES / "native" / "asm" / "gas" / "O0" / "hello-asm-gas-O0",
     ],
 )
 def test_list_symbols_demangled_if_present(path: Path) -> None:
