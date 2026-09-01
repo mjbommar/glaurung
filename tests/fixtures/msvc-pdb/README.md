@@ -39,8 +39,22 @@ fetch script + provenance manifest instead:
    than a third-party mirror.
 3. **CI footprint.** A 78 MB checkout is unnecessary for the
    ~95% of contributors who never touch PDB-ingestion code.
-   Test invocations call `fetch.sh` first; CI caches the
-   fetched dir between runs.
+
+   **CORRECTION (2026-09-01).** This paragraph used to end "Test
+   invocations call `fetch.sh` first; CI caches the fetched dir
+   between runs." Neither half is true and neither ever was:
+   NOTHING in the repository calls `fetch.sh`, and no workflow
+   caches the directory. The observable effect is 21 skips in the
+   default suite -- visible only since `-ra` was added to
+   `pytest.ini` -- across 13 files that test PDB ingestion,
+   Windows risk scoring, xref and type databases.
+
+   To run them: `bash tests/fixtures/msvc-pdb/fetch.sh`. Wiring
+   that into a session-scoped pytest fixture is phase 1.7 of
+   `docs/development/test-estate/01-reachability.md`; the
+   decision it needs is whether a test run should fetch 78 MB
+   from Microsoft on its own initiative, which is why it has not
+   simply been done.
 
 If a future revision opts to vendor via git LFS, MANIFEST.json
 remains the authoritative provenance record and `fetch.sh`

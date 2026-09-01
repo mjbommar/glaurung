@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pathlib
 from pathlib import Path
 
 import glaurung as g
@@ -11,8 +12,18 @@ from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
 from glaurung.llm.tools.windows_syscall_stub_atlas import build_tool
 
+# Anchored from this file, not from the working directory. Every reference to
+# these fixtures used to be `Path("tests/fixtures/msvc-pdb/...")`, which only
+# resolves when pytest happens to be run from the repository root -- from
+# anywhere else the skipif silently reported the fixture missing and the test
+# never ran. That is the same defect that left three test files permanently
+# dead until 95249c54; this is the same shape, spread across twelve files.
+_MSVC_PDB = (
+    pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "msvc-pdb"
+)
 
-FIXTURE_NTDLL = Path("tests/fixtures/msvc-pdb/ntdll.dll")
+
+FIXTURE_NTDLL = _MSVC_PDB / "ntdll.dll"
 
 
 def _ctx(tmp_path: Path) -> MemoryContext:

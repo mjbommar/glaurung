@@ -5,9 +5,20 @@ from __future__ import annotations
 import io
 import json
 from contextlib import redirect_stdout
+import pathlib
 from pathlib import Path
 
 import pytest
+
+# Anchored from this file, not from the working directory. Every reference to
+# these fixtures used to be `Path("tests/fixtures/msvc-pdb/...")`, which only
+# resolves when pytest happens to be run from the repository root -- from
+# anywhere else the skipif silently reported the fixture missing and the test
+# never ran. That is the same defect that left three test files permanently
+# dead until 95249c54; this is the same shape, spread across twelve files.
+_MSVC_PDB = (
+    pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "msvc-pdb"
+)
 
 from glaurung.llm.kb.binary_diff import (
     diff_binaries,
@@ -131,8 +142,8 @@ def test_cli_diff_subcommand(tmp_path: Path) -> None:
 # function, and ntoskrnl has 10k+ of them. For the PDB-wiring
 # assertion below we only need ONE PDB-resolved row, which lsass.pdb
 # trivially provides.
-_NTOSKRNL = Path("tests/fixtures/msvc-pdb/lsass.exe")
-_PDB_CACHE = Path("tests/fixtures/msvc-pdb")
+_NTOSKRNL = _MSVC_PDB / "lsass.exe"
+_PDB_CACHE = _MSVC_PDB
 
 
 def test_diff_rows_have_public_name_fields_default_none() -> None:

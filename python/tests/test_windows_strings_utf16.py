@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import pathlib
 from pathlib import Path
 
 import pytest
 
 import glaurung as g
 
+# Anchored from this file, not from the working directory. Every reference to
+# these fixtures used to be `Path("tests/fixtures/msvc-pdb/...")`, which only
+# resolves when pytest happens to be run from the repository root -- from
+# anywhere else the skipif silently reported the fixture missing and the test
+# never ran. That is the same defect that left three test files permanently
+# dead until 95249c54; this is the same shape, spread across twelve files.
+_MSVC_PDB = (
+    pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "msvc-pdb"
+)
 
-_NTOSKRNL = Path("tests/fixtures/msvc-pdb/ntoskrnl.exe")
+
+_NTOSKRNL = _MSVC_PDB / "ntoskrnl.exe"
 
 
 def test_real_pe_utf16_strings_reach_python_triage() -> None:

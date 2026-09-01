@@ -7,10 +7,21 @@ as `{"kind": "reg"|"const"|"addr", ...}`.
 
 from __future__ import annotations
 
+import pathlib
 from pathlib import Path
 
 import glaurung as g
 import pytest
+
+# Anchored from this file, not from the working directory. Every reference to
+# these fixtures used to be `Path("tests/fixtures/msvc-pdb/...")`, which only
+# resolves when pytest happens to be run from the repository root -- from
+# anywhere else the skipif silently reported the fixture missing and the test
+# never ran. That is the same defect that left three test files permanently
+# dead until 95249c54; this is the same shape, spread across twelve files.
+_MSVC_PDB = (
+    pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "msvc-pdb"
+)
 
 
 def test_nop_lifts_to_nop_dict():
@@ -369,9 +380,9 @@ WIN64_SAMPLE = Path(
 RISCV64_SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/cross/riscv64/hello-riscv64-gcc"
 )
-NTDLL_SAMPLE = Path("tests/fixtures/msvc-pdb/ntdll.dll")
-NTOSKRNL_SAMPLE = Path("tests/fixtures/msvc-pdb/ntoskrnl.exe")
-MSVC_PDB_CACHE = Path("tests/fixtures/msvc-pdb")
+NTDLL_SAMPLE = _MSVC_PDB / "ntdll.dll"
+NTOSKRNL_SAMPLE = _MSVC_PDB / "ntoskrnl.exe"
+MSVC_PDB_CACHE = _MSVC_PDB
 
 
 def test_arm64_nop_lifts_via_arch_parameter():

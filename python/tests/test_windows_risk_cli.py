@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import pathlib
 import io
 import json
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 
 import glaurung as g
+
+# Anchored from this file, not from the working directory. Every reference to
+# these fixtures used to be `Path("tests/fixtures/msvc-pdb/...")`, which only
+# resolves when pytest happens to be run from the repository root -- from
+# anywhere else the skipif silently reported the fixture missing and the test
+# never ran. That is the same defect that left three test files permanently
+# dead until 95249c54; this is the same shape, spread across twelve files.
+_MSVC_PDB = (
+    pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "msvc-pdb"
+)
 
 
 def test_fallback_param_roles_distinguish_copy_sources() -> None:
@@ -794,7 +805,7 @@ def test_pe_tls_path_binding_smoke() -> None:
         Path(
             "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
         ),
-        Path("tests/fixtures/msvc-pdb/ntdll.dll"),
+        (_MSVC_PDB / "ntdll.dll"),
     ]
     sample = next((path for path in candidates if path.exists()), None)
     if sample is None:

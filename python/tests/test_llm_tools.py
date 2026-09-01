@@ -1,5 +1,6 @@
 """Tests for the new memory-first LLM tools and agent."""
 
+import pathlib
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -15,6 +16,16 @@ from glaurung.llm.tools.suggest_function_name import build_naming_prompt
 from glaurung.llm.tools.view_disassembly import build_tool as build_view_disassembly
 from glaurung.llm.tools.view_entry import build_tool as build_view_entry
 from glaurung.llm.tools.view_strings import build_tool as build_view_strings
+
+# Anchored from this file, not from the working directory. Every reference to
+# these fixtures used to be `Path("tests/fixtures/msvc-pdb/...")`, which only
+# resolves when pytest happens to be run from the repository root -- from
+# anywhere else the skipif silently reported the fixture missing and the test
+# never ran. That is the same defect that left three test files permanently
+# dead until 95249c54; this is the same shape, spread across twelve files.
+_MSVC_PDB = (
+    pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "msvc-pdb"
+)
 
 
 def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(
@@ -90,7 +101,7 @@ def _make_ctx_for_bytes(data: bytes, tmp_path: Path) -> MemoryContext:
 
 
 @pytest.mark.skipif(
-    not Path("tests/fixtures/msvc-pdb/ntdll.dll").exists(),
+    not (_MSVC_PDB / "ntdll.dll").exists(),
     reason="ntdll PE sample missing",
 )
 def test_decompile_function_tool_uses_pe_export_names():
@@ -98,7 +109,7 @@ def test_decompile_function_tool_uses_pe_export_names():
         build_tool as build_decompile_function,
     )
 
-    sample = Path("tests/fixtures/msvc-pdb/ntdll.dll")
+    sample = _MSVC_PDB / "ntdll.dll"
     art = g.triage.analyze_path(str(sample))
     ctx = MemoryContext(
         file_path=str(sample),
