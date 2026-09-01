@@ -248,6 +248,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01 (sixth, same day): `product_loc_above_1000` 33,347 -> 33,351,
+    +4, from the note at `lift_arm64.rs`'s `arity` site recording that FMA
+    lifting was measured and reverted. Four lines that stop the next person
+    retrying a change which broke a fixture cell.
+
     2026-09-01 (fifth, same day): `product_loc_above_1000` 33,334 -> 33,347,
     +13, from handling `Arm64OperandType::Fp` in `src/disasm/capstone.rs`
     (above 1,000 lines) -- mostly the comment recording that a dropped scalar
@@ -495,11 +500,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": pytest.approx(404.0),
         "product_files_above_1000": 23,
         "product_files_above_2000": 3,
-        "product_loc_above_1000": 33347,
+        "product_loc_above_1000": 33351,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(408.00881057268725),
+        "product_mean_loc": pytest.approx(408.01762114537445),
         "product_median_loc": pytest.approx(302.0),
-        "product_pct_loc_above_1000": pytest.approx(18.002440130428212),
+        "product_pct_loc_above_1000": pytest.approx(18.00421075361693),
     }
 
 

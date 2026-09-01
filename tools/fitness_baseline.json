@@ -464,18 +464,39 @@
         "product_pct_loc_above_1000: 17.99969761112791 -> 18.002440130428212 (worse)",
         "product_loc_above_1000: 33334 -> 33347 (worse)"
       ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 13,
+        "ir_median_loc": 404,
+        "product_files_above_1000": 23,
+        "product_files_above_2000": 3,
+        "product_loc_above_1000": 33347,
+        "product_max_loc": 2268,
+        "product_mean_loc": 408.00881057268725,
+        "product_median_loc": 302.0,
+        "product_pct_loc_above_1000": 18.002440130428212
+      },
+      "owners_grew": [
+        "ir/lift_arm64.rs: 2051 -> 2055 (+4)"
+      ],
+      "worsened": [
+        "product_mean_loc: 408.00881057268725 -> 408.01762114537445 (worse)",
+        "product_pct_loc_above_1000: 18.002440130428212 -> 18.00421075361693 (worse)",
+        "product_loc_above_1000: 33347 -> 33351 (worse)"
+      ]
     }
   ],
   "ir": {
     "file_count": 181,
     "files_above_1000": 13,
     "files_above_2000": 3,
-    "loc_in_files_above_1000": 20112,
+    "loc_in_files_above_1000": 20116,
     "max_loc": 2268,
-    "mean_loc": 498.8618784530387,
+    "mean_loc": 498.8839779005525,
     "median_loc": 404,
-    "pct_loc_above_1000": 22.27390524287328,
-    "total_loc": 90294
+    "pct_loc_above_1000": 22.277348335511306,
+    "total_loc": 90298
   },
   "largest_files": [
     {
@@ -483,7 +504,7 @@
       "path": "ir/lift_x86.rs"
     },
     {
-      "loc": 2051,
+      "loc": 2055,
       "path": "ir/lift_arm64.rs"
     },
     {
@@ -544,11 +565,11 @@
     "ir_median_loc": 404,
     "product_files_above_1000": 23,
     "product_files_above_2000": 3,
-    "product_loc_above_1000": 33347,
+    "product_loc_above_1000": 33351,
     "product_max_loc": 2268,
-    "product_mean_loc": 408.00881057268725,
+    "product_mean_loc": 408.01762114537445,
     "product_median_loc": 302.0,
-    "product_pct_loc_above_1000": 18.002440130428212
+    "product_pct_loc_above_1000": 18.00421075361693
   },
   "oversized_files": {
     "analysis/ioctl_taint.rs": 1081,
@@ -561,7 +582,7 @@
     "ir/const_fold.rs": 1421,
     "ir/dwarf_fields.rs": 1017,
     "ir/lift_arm32.rs": 1977,
-    "ir/lift_arm64.rs": 2051,
+    "ir/lift_arm64.rs": 2055,
     "ir/lift_x86.rs": 2268,
     "ir/loop_form.rs": 1259,
     "ir/types_recover.rs": 1906,
@@ -579,12 +600,12 @@
     "file_count": 454,
     "files_above_1000": 23,
     "files_above_2000": 3,
-    "loc_in_files_above_1000": 33347,
+    "loc_in_files_above_1000": 33351,
     "max_loc": 2268,
-    "mean_loc": 408.00881057268725,
+    "mean_loc": 408.01762114537445,
     "median_loc": 302.0,
-    "pct_loc_above_1000": 18.002440130428212,
-    "total_loc": 185236
+    "pct_loc_above_1000": 18.00421075361693,
+    "total_loc": 185240
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -594,7 +615,7 @@
       "measure": "product_mean_loc",
       "meets_target": true,
       "target": 450.0,
-      "value": 408.00881057268725
+      "value": 408.01762114537445
     },
     {
       "label": "Product-code median",
@@ -622,7 +643,7 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": true,
       "target": 25.0,
-      "value": 18.002440130428212
+      "value": 18.00421075361693
     },
     {
       "label": "src/ir median",
@@ -650,7 +671,7 @@
       "measure": "product_loc_above_1000",
       "meets_target": true,
       "target": 42000.0,
-      "value": 33347
+      "value": 33351
     }
   ]
 }
