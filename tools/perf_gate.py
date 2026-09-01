@@ -63,10 +63,16 @@ PYTHON = REPO / ".venv" / "bin" / "python"
 #: Every one is large enough that interpreter startup is under 1% of the work.
 #: A small binary is NOT a cheaper version of this measurement -- it is a
 #: measurement of Python startup, which is why none are here.
+#:
+#: The first version of this list ignored its own rule and included
+#: `hello-c-clang-O2`. It measured 670e6 instructions with a **28.7% spread**,
+#: against 0.2% and 2.4% for the two large binaries in the same run -- a
+#: reference that could not have held any threshold, in a list whose comment
+#: explained why it should not be there.
 REFERENCES = [
     "samples/binaries/platforms/linux/amd64/rust/hello-rust-release",
     "samples/binaries/platforms/linux/amd64/go/hello-go",
-    "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2",
+    "samples/binaries/platforms/linux/amd64/rust/hello-rust-debug",
 ]
 
 #: Instruction counts are stable to ~1%, so 5% is a real regression rather than

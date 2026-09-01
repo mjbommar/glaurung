@@ -1,0 +1,9 @@
+{
+  "measures": {
+    "samples/binaries/platforms/linux/amd64/go/hello-go": 124850889326.0,
+    "samples/binaries/platforms/linux/amd64/rust/hello-rust-debug": 92761786459.0,
+    "samples/binaries/platforms/linux/amd64/rust/hello-rust-release": 84685226759.0
+  },
+  "runs": 3,
+  "unit": "instructions"
+}
