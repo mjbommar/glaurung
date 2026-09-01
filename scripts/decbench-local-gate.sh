@@ -139,12 +139,28 @@ fi
 # Three SMT solver backends had therefore not compiled for seventeen days
 # (b03d5057 added `BinOp::LogicalAnd`/`LogicalOr` and updated no backend), and
 # `--features triage-parsers-extra` had not compiled since 2025-09-01, with
-# every lane here green throughout. This lane type-checks all eleven feature
+# every lane here green throughout. This lane type-checks all twelve feature
 # configurations. It is `cargo check`, so it costs ~3 minutes against a warm
 # target directory -- cheap next to lanes 2-5, and it is the only thing that
 # looks at the feature-gated tree at all.
 step "1a/$lanes  feature matrix type check (scripts/feature-build-gate.sh)"
 if scripts/feature-build-gate.sh 2>&1 | tail -6; then
+  note "ok"
+else
+  note "FAILED"; fail=1
+fi
+
+# A performance number something compares against. Ten criterion targets exist
+# with no baseline for any of them and nothing invoking `cargo bench`, so until
+# this lane a change that doubled decompile time shipped green -- CLAUDE.md has
+# said so for months. Instructions retired rather than wall-clock, because this
+# machine's wall-clock has already produced false failures in the arch gate.
+# Seconds of runtime; it belongs here rather than behind --decbench.
+#
+# A missing baseline is NOT a failure: the tool says how to record one and
+# exits 0, so a fresh checkout is not blocked by a number it has never taken.
+step "1c/$lanes  perf gate (tools/perf_gate.py)"
+if uv run python tools/perf_gate.py 2>&1 | tail -6; then
   note "ok"
 else
   note "FAILED"; fail=1
