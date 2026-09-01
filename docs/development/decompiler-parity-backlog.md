@@ -196,6 +196,86 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
    read. Target: match angr (arg present) with the correct name (which #1
    gives us) — i.e. beat both reference tools on this case.
 
+   > **Located 2026-09-01, and the title is wrong.** Inlining is not the
+   > cause, and neither is variadic arity. Two minimal candidates were built
+   > and *neither reproduced*:
+   >
+   > * a static counter inlined into a caller, feeding a `noinline` sink —
+   >   both call arguments recovered correctly;
+   > * the same with a **variadic** callee in the caller — all four arguments
+   >   recovered, `__printf_chk(2, "b=%d b2=%d\n", var6, var2+var6)`.
+   >
+   > What reproduces, on **both** gcc and clang, is 12 lines — the `printf`
+   > must be *inside* the function that gets inlined:
+   >
+   > ```c
+   > static void inlined_printf_arg(void) {
+   >   static int static_var = 0;
+   >   static_var++;
+   >   printf("called %d times\n", static_var);
+   > }
+   > int driver(int n) {
+   >   inlined_printf_arg();
+   >   if (n > 1) inlined_printf_arg();
+   >   return n;
+   > }
+   > ```
+   >
+   > **The discriminator is an intervening read, not inlining.** Compare the
+   > argument register's defining instruction in the two cases:
+   >
+   > ```asm
+   > ; works:  edx defined by a register move, nothing reads it before the call
+   >   mov  %r12d,%edx
+   >   mov  %ebx,counter(%rip)
+   >   call __printf_chk
+   >
+   > ; drops:  edx defined by lea, then READ by the store to the static
+   >   lea  0x1(%rax),%edx
+   >   mov  %edx,static_var(%rip)      <-- reads edx
+   >   call __printf_chk
+   > ```
+   >
+   > `call_args.rs`'s module contract requires that the argument register "is
+   > not read between the assignment and the call". The store reads `edx`, so
+   > the fold is refused and `blocked_incoming[slot] = true` — the argument is
+   > dropped entirely.
+   >
+   > **The conflation is the bug.** `read_between` answers *can this
+   > definition be moved into the call?*, and it is being used to answer *is
+   > this slot an argument at all?* Those are different questions. A read does
+   > not disturb the register: at the call it still holds the same value.
+   >
+   > `fold_one_call.rs` **already has the correct handling** and gates it too
+   > narrowly:
+   >
+   > ```rust
+   > if read_between[slot]
+   >     && (proven_aapcs_stack
+   >         || (arch == CallConv::Aarch64 && later_slot_proves_contiguous_prefix))
+   > {
+   >     // "An intervening read means its definition cannot be deleted, so
+   >     //  keep the statement rooted and pass the exact reaching SSA value."
+   >     found[slot] = Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())));
+   > ```
+   >
+   > On x86-64 SysV neither guard can hold, so the slot is blocked instead.
+   > Because the backward scan takes the *closest* definition of the slot,
+   > nothing writes the register between that definition and the call — so
+   > naming the register is sound there for the same reason it is sound under
+   > AArch64.
+   >
+   > **Why it is not simply relaxed here.** Widening the gate makes every
+   > SysV call with an intervening read claim the slot, which can invent
+   > arguments on calls that never had them. That is a corpus-wide trade, and
+   > it is exactly what the readability census and the def-use census exist to
+   > weigh — the same discipline that reverted `detect_raw_dispatch_loop`
+   > (`test-estate/10-ci-environment-gap.md`). Measure before landing.
+   >
+   > Ghidra makes the identical error on the real sample; angr keeps the
+   > argument. Ranking unchanged, but the effort is now known to be a
+   > one-condition change plus a corpus measurement, not dataflow work.
+
 ### Triage value & polish
 
 5. **~~Named constants for syscall/flag arguments.~~ LANDED** as
