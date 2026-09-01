@@ -38,6 +38,7 @@ that makes every later phase land somewhere that stays alive.
 | 7 | [07-matrix-extension.md](07-matrix-extension.md) | Wire Go; add stripped-O0, LTO, musl lanes; structural baseline at O2 | 1 |
 | 8 | [08-dwarf-oracle.md](08-dwarf-oracle.md) | Ground truth at scale from DWARF twins | 2, 7 |
 | 9 | [09-asset-hygiene.md](09-asset-hygiene.md) | Delete the broken, dedupe the doubled, retire the dead | — |
+| 10 | [10-ci-environment-gap.md](10-ci-environment-gap.md) | 25 CI-only failures the first completed run exposed: tests that crash rather than skip on a machine without every toolchain | 1 |
 
 Phases 3, 4, 5, 6 and 9 are independent of each other and can run in
 parallel once 1 has landed. 7 needs 1's baseline-refresh discipline; 8 is
