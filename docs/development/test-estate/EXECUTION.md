@@ -76,6 +76,40 @@ missing-body ledger in
 | [x] RSDS scan read 199,416 bytes short of the record | estate 4 / R4 | `610d3afd` |
 | [x] clang-cl/lld-link lane: measured, 3 caveats recorded | estate 4.1 | doc |
 
+## Findings that change a plan's premise
+
+Recorded here rather than edited into the plan documents, several of which have
+uncommitted local edits that are not mine to touch.
+
+**`decbench-failure-remediation-plan` Increment C (F2a) had the wrong layer.**
+It is written as an ARM32 *lifter* gap -- "Packet tests in
+`src/ir/lift_arm32.rs`... assert mnemonic-specific intrinsic" -- and the lifter
+was never reached. Capstone **rejected** every Cortex-M system-register
+encoding: `mrs r1, BASEPRI` (`f3ef 8111`) returned `InvalidInstruction`, and a
+function whose first instruction cannot be decoded is abandoned whole. That is
+why the symptom was 31 rows with no body rather than 31 bodies full of opaque
+unknowns. Three defects were stacked, each hidden by the one above it: no
+Cortex-M decoder mode, `ArmOperandType::SysReg` discarded by the operand
+match's catch-all, and only then the lift the plan describes. Fixed in
+`0031c3ee`; the plan's third bullet was correct and the first two were
+invisible from where it was written.
+
+The plan's "RED at three layers" structure is what found this -- layer 1 failed
+for a reason layer 1 could not have predicted. The generalisation for future
+increments: **confirm the instruction decodes before specifying how it lifts.**
+
+**`test-estate/07-matrix-extension.md` 7.5 assumed the wrong lane.** "O0
+structuring is nearly free, O2 is where goto-soup happens" is true of the
+absolute counts and is exactly why a census scoped to O2 measures where the
+least is at risk. All seven readability regressions from the
+`detect_raw_dispatch_loop` experiment were at **-O0**. Annotated in place, in a
+file I own.
+
+**`test-estate/04-pe-macho.md` overstated the clang-cl lane.** `lld-link`
+cannot link without the MSVC import libraries; `/nodefaultlib` is required,
+which makes every fixture in that lane freestanding, and lld emits no TLS
+directory for such a DLL at all. Annotated in place.
+
 ## Next
 
 | item | plan ref | state |
@@ -86,6 +120,8 @@ missing-body ledger in
 | [x] TLS callbacks read from the wrong struct offset | estate 4 / R4 | `99113bc8` |
 | [x] parity #4 located: an intervening-read gate, not inlining | parity #4 | `576db136` |
 | [x] parity #4 both candidates measured and REVERTED | parity #4 | `e8dafd33` |
+| [x] Cortex-M sysregs undecodable (F2a, 31 rows) | real-binary R1 / F2a | `0031c3ee` |
+| [x] MClass fallback decoder + SysReg operand + MRS/MSR lift | real-binary R1 / F2a | `0031c3ee` |
 | [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
 | [ ] Hermetic PDB type/layout lane | estate 4 / real-binary R4 | source declarations through recovered fields and prototypes |
 | [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
