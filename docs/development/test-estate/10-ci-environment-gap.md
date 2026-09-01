@@ -28,6 +28,26 @@ of which is a product defect.
 | 2 | fixture-matrix comparisons | `test_decompiler_fixture_matrix.py` |
 | 8 | assorted single assertions on recovered output | various |
 
+## Progress, same day
+
+Rather than wait 45 minutes per CI round trip, a PATH that mimics
+`ubuntu-latest` -- gcc and clang present, every cross compiler absent --
+reproduces two of the classes locally in seconds. `$TMPDIR/ci_path` with the
+cross compilers omitted; run the failing files against it.
+
+| n | what | status |
+|---:|---|---|
+| 3 | `FileNotFoundError` on a cross compiler | **FIXED** (`f0c1009c`) — `native_runner` used `check=False`, which covers a probe that FAILS and not one that cannot RUN; catching `OSError` fixed a second test by cascade |
+| 5 | `No suspicious imports` on cross binaries | **FIXED** (`f0c1009c`) — the sample selection used `rglob` (filesystem order) over a pool containing `suspicious_win` builds cross-compiled for LINUX, which cannot import a Windows API. Now sorted and filtered |
+| 4 | `SystemExit: 2` from the frame CLI | **FIXED** (`9bbfd50c`) — a real product bug: negative HEX offsets do not parse on Python 3.12/3.13, only on 3.14. `requires-python` is ">=3.12" |
+| 13 | assorted assertions on recovered output | **open** — most need the gitignored fixture build directory, which the runner does not have |
+
+Twelve of twenty-five, each with a root cause rather than a suppression. The
+`suspicious_symbols` and `frame` ones were real defects that a single machine
+could not expose: one a test whose SUBJECT depended on directory iteration
+order, the other a command broken across most of its supported interpreter
+range.
+
 ## The shape of it
 
 Most of these are one defect wearing several hats: **a test assumes a
