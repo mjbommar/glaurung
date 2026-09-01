@@ -138,3 +138,77 @@ product bugs -- `cargo test` found none, 2,944 green in CI and locally -- but
 to find the assumptions that a single machine cannot see. Fixing them
 individually and hastily would reproduce the thing this whole estate plan
 exists to stop: tests that report a state nobody has checked.
+
+## Appendix — the `Unstructured` dispatch loop, located and measured
+
+The clang-14 `fsm` failure was traced to a single guard, and a candidate fix
+was tried and **deliberately not landed**. Recording both, because the
+measurement is the useful part.
+
+### Where it is
+
+`analyze_functions_path_with_stats` reports
+`resolved_dispatches: [{va: 0x1166, arms: 4}]`, so jump-table recognition is
+**not** the problem: the base (`lea 0xede(%rip),%r9`, materialised in the loop
+preheader) is followed into `movslq (%r9,%rbx,4)` / `add %r9,%rbx` /
+`jmp *%rbx`, and every arm becomes a CFG edge.
+
+The recovered CFG:
+
+```
+[0] 0x1100 -> 8,1     [5] 0x1158 -> 6,7,2,9   <- 4-way dispatch, one arm exits
+[1] 0x1109 -> 4       [6] 0x1168 -> 3
+[2] 0x1130 -> 3       [7] 0x1180 -> 3
+[3] 0x113b -> 9,4     [8] 0x1192 -> 9
+[4] 0x1153 -> 3,5     [9] 0x1196 -> (exit)
+```
+
+Loop body `{2,3,4,5,6,7}`, header 4, back edge 3->4, `exits = {9}`.
+
+`loop_shape::detect_raw_dispatch_loop` declines on `exits.len() < 3`. Its
+comment justifies that: a lower count is "representable by the ordinary
+structured loop/switch builder". **For this shape it is not** -- no structured
+builder takes it, the back edge is owned by nothing,
+`structure_accounting` reports `BackEdgeUnowned{from:3,to:4}`, and
+`recover_verified` falls back to `Unstructured` for the whole function.
+`GLAURUNG_ACCOUNT_STRUCTURE=1` prints that finding.
+
+### The candidate fix, and why it is not landed
+
+Relaxing the guard to `exits.is_empty()` works, and the fixture gate liked it:
+
+    IMPROVEMENTS (4), no regressions
+      145_control_flow_flattening:clang:O0:flattened_accumulate  fail -> pass
+      145_control_flow_flattening:clang:O0:flattened_classify    fail -> pass
+      150_obfuscation_composite:clang:O0:obfuscated_transform    fail -> pass
+      206_aarch64_wide_dispatch:clang:O2:dispatch_in_loop        fail -> pass
+
+Control-flow flattening is a dispatch-in-loop obfuscation, so those are
+exactly the malware-relevant shapes.
+
+**But it also degrades output the execution differential cannot see.** On the
+same source built with clang 21, measured directly:
+
+| | `switch` | `case` | `break;` | `goto` |
+|---|---:|---:|---:|---:|
+| baseline | 1 | 4 | **3** | 0 |
+| with the relaxation | 1 | 4 | **0** | 8 |
+
+Identical semantics -- so the differential reports no regression -- and
+materially worse reading: arms become `goto` into labels after the loop
+instead of inlined cases with `break;`.
+
+Two attempts to keep both (declining when a better builder can take the shape,
+probing `detect_natural_loop`, then all three structured builders on cloned
+`visited` sets) did not work; the three-way probe broke BOTH compilers, which
+means those detectors are not side-effect-free in the way that approach
+assumed. Everything is reverted; the baseline is confirmed byte-restored.
+
+### What landing it needs
+
+The structural baseline at **-O2** (phase 7.5). This is precisely the change
+that gate exists to judge: a real improvement on shapes nothing else recovers,
+paid for in readability on shapes that already worked, and the only thing that
+can weigh the two is a ratchet that measures `switch`/`goto`/`break` rather
+than semantics. Landing it before that gate exists would trade a visible win
+for an invisible loss.
