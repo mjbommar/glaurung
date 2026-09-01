@@ -62,6 +62,22 @@ not, the lane is decompile-only and says so).
 
 ## 7.5 Structural baseline at O2
 
+> **Measured 2026-09-01, and it is worse than the plan assumed.** With the
+> lane seam now in `structural.py`, building `212_loop_with_returning_arm`
+> both ways and decompiling `fsm_returns_from_arm`:
+>
+> | lane | `goto` | `switch` | lines |
+> |---|---:|---:|---:|
+> | `gcc:O0` | 5 | **1** | 56 |
+> | `gcc:O2` | 11 | **0** | 63 |
+>
+> At `-O2` the switch is **gone** and the gotos more than double. The
+> execution differential scores this fixture as passing in both lanes,
+> because the behaviour is correct -- which is the entire argument for a
+> structural gate stated as a number instead of a worry. One fixture, one
+> function; the baseline is what would tell us how much of the corpus looks
+> like this.
+
 `structural_baseline.json` is gcc-O0-only. O0 structuring is nearly free;
 **O2 is where goto-soup happens** — and the execution differential is blind
 to it (memory: goto soup passes every fixture). Extend the structural

@@ -293,8 +293,26 @@ def _c_source(stem: str) -> Path | None:
     return None
 
 
-def _build(stem: str, workdir: Path) -> Path:
-    """Compile one fixture with gcc -O0 -g for structural inspection.
+#: The compile lane the structural map is recorded against.
+#:
+#: `("gcc", "O0")` today, which is what every committed entry in
+#: `structural_baseline.json` describes. It is a CONSTANT rather than a literal
+#: buried in `_build` so that adding `-O2` is a visible, reviewable change
+#: instead of an edit inside a compile call.
+#:
+#: Why O0-only is a real gap, and why widening it is not a one-line change:
+#: O0 structuring is nearly free, and **-O2 is where goto-soup happens**. The
+#: execution differential cannot see the difference -- goto soup passes every
+#: fixture -- so a structural predicate is the only thing that can. But every
+#: baseline key here is `fixture:function:style`, with no lane component, so
+#: adding a second lane needs the key format to grow one, the consuming test to
+#: read it, and the whole map regenerated. That is estate phase 7.5 /
+#: parity #8; this constant is the seam it will be made at.
+STRUCTURAL_LANE: tuple[str, str] = ("gcc", "O0")
+
+
+def _build(stem: str, workdir: Path, lane: tuple[str, str] | None = None) -> Path:
+    """Compile one fixture for structural inspection.
 
     Under the pinned toolchain (`tools/fixture_toolchain.py`), for the same reason
     the execution lane is: the structural baseline records decompiler OUTPUT, which
@@ -302,12 +320,28 @@ def _build(stem: str, workdir: Path) -> Path:
     host's gcc release — labels move, indirect-call recovery changes — so the
     committed map would only be checkable on the machine that wrote it.
     """
+    compiler, optimization = lane or STRUCTURAL_LANE
     src = _c_source(stem)
     if src is None:
         raise RuntimeError(f"compile {stem}: no C/C++ source")
-    cc = "g++" if src.suffix == ".cpp" else "gcc"
+    # C++ needs the C++ driver; the lane names the C one.
+    cc = "g++" if src.suffix == ".cpp" and compiler == "gcc" else compiler
+    if src.suffix == ".cpp" and compiler == "clang":
+        cc = "clang++"
     so = workdir / f"{stem}.so"
-    r = TC.run([cc, "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(so), str(src)])
+    r = TC.run(
+        [
+            cc,
+            "-shared",
+            "-fPIC",
+            "-g",
+            f"-{optimization}",
+            "-w",
+            "-o",
+            str(so),
+            str(src),
+        ]
+    )
     if r.returncode != 0:
         raise RuntimeError(f"compile {stem}: {r.stderr.strip()[-200:]}")
     return so
