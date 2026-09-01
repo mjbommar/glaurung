@@ -43,6 +43,14 @@ Phases 3, 4, 5, 6 and 9 are independent of each other and can run in
 parallel once 1 has landed. 7 needs 1's baseline-refresh discipline; 8 is
 last because it consumes 7's lanes and 2's canary harness.
 
+## Related
+
+[`../decompiler-parity-backlog.md`](../decompiler-parity-backlog.md) — a
+three-way comparison of glaurung against angr 9.3.3 and Ghidra 12.1.3 on our
+own samples, and the 10-item build/fix backlog it produced. Several items
+there (structural baseline at O2, the differential harness) are phases of this
+plan; the parity doc is the evidence for why they matter.
+
 ## Rules that apply to every phase
 
 * **Every new test names its runner.** A test lands together with the entry
