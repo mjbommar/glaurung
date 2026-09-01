@@ -49,6 +49,14 @@ REQUIRED_MATRIX = [("gcc", "O0"), ("gcc", "O2"), ("clang", "O0"), ("clang", "O2"
 #: cross-producted with a C compiler that never builds it.
 RUST_MATRIX = [("rustc", "O0"), ("rustc", "O2")]
 
+#: Go, like Rust, has exactly one compiler, so its lanes are named `go`.
+#:
+#: Go has no `-O` levels. The two lanes are the honest analogues: an ordinary
+#: `go build` (optimised, the O2 analogue) and `-gcflags=all=-N -l` (no
+#: optimisation, no inlining, the O0 analogue). They keep the `O0`/`O2` spelling
+#: so every downstream key format, selector and baseline reader works unchanged.
+GO_MATRIX = [("go", "O0"), ("go", "O2")]
+
 #: Suffix marking an optimisation level whose object is STRIPPED before it is
 #: decompiled: `O2strip` is `-O2 -g`, then `strip`.
 #:
@@ -143,12 +151,24 @@ def path_remap_flags(compiler: str) -> list[str]:
     """
     if compiler == "rustc":
         return [f"--remap-path-prefix={ROOT}=."]
+    if compiler == "go":
+        # Go spells this `-trimpath`, which takes no argument: it strips the
+        # module root unconditionally rather than remapping a given prefix. The
+        # effect is the same one the C and Rust flags buy -- no absolute build
+        # path baked into the object, so two checkouts at different depths
+        # produce identical bytes.
+        return ["-trimpath"]
     return [f"-ffile-prefix-map={ROOT}=."]
 
 
 def matrix_for(src) -> list[tuple[str, str]]:
     """The compiler/optimization lanes that apply to one fixture source."""
-    return RUST_MATRIX if str(src).endswith(".rs") else REQUIRED_MATRIX
+    name = str(src)
+    if name.endswith(".rs"):
+        return RUST_MATRIX
+    if name.endswith(".go"):
+        return GO_MATRIX
+    return REQUIRED_MATRIX
 
 
 def lanes_for(src, matrix) -> list[tuple[str, str]]:
@@ -209,11 +229,35 @@ def rust_lanes_enabled() -> bool:
     return os.environ.get("GLAURUNG_FIXTURE_RUST", "1") != "0"
 
 
+def go_lanes_enabled() -> bool:
+    """Whether the five Go fixtures (176-180) participate.
+
+    OFF by default, and that is a statement about the BASELINES rather than
+    about the toolchain. The sources have been in the tree since they were
+    written, already `-buildmode=c-shared` with `//export`ed drivers over C
+    scalars -- exactly the dlopen shape the execution differential consumes --
+    and the pinned image builds all five clean once `golang-go` is installed.
+    What is missing is a recorded verdict: turning them on adds ~10 host lanes
+    that appear in none of `baseline.json`, `structural_baseline.json`,
+    `arch_baseline.json` or `defuse_baseline.json`, so every one of those gates
+    reads the new lanes as unrecorded.
+
+    So the switch exists to make enabling them ONE deliberate act -- set this,
+    regenerate all four baselines on a quiet machine, and read every diff --
+    rather than a surprise the next person to run the gate discovers.
+
+    Set GLAURUNG_FIXTURE_GO=1 to opt in.
+    """
+    return os.environ.get("GLAURUNG_FIXTURE_GO", "0") != "0"
+
+
 def fixture_sources() -> list:
     """Every fixture source the matrix should cover."""
     srcs = list(SRC.glob("*.c")) + list(SRC.glob("*.cpp"))
     if rust_lanes_enabled():
         srcs += list(SRC.glob("*.rs"))
+    if go_lanes_enabled():
+        srcs += list(SRC.glob("*.go"))
     return sorted(srcs)
 
 
@@ -305,6 +349,40 @@ def _rust_argv(src: Path, opt: str, out: Path, strict: bool) -> list[str]:
     ]
 
 
+def _go_argv(src: Path, opt: str, out: Path, strict: bool) -> list[str]:
+    """The command line that builds a Go fixture as a C shared library.
+
+    `-buildmode=c-shared` is what the fixtures were written for: each exports
+    its `//export`ed entry points over plain C scalars and a caller-owned
+    buffer, which is precisely the dlopen shape the execution differential
+    drives. No adaptation was needed on the fixture side.
+
+    Go has no `-O`, so the two lanes are the honest analogues rather than an
+    invented axis: an ordinary build is the optimised one, and
+    `-gcflags=all=-N -l` (disable optimisation, disable inlining) is the O0 one.
+    `all=` matters -- without it the flags apply to the named package only and
+    the runtime is still built optimised, which is not the shape a debug build
+    of a Go program actually has.
+
+    Expect these lanes to record badly at first. Go's calling convention, its
+    goroutine-stack prologue and the enormous `.gopclntab` are exactly the
+    shapes fixtures 176-180 were written to expose, so a red-but-RECORDED
+    baseline is the deliverable here, not a green one.
+    """
+    return [
+        "go",
+        "build",
+        "-buildmode=c-shared",
+        *path_remap_flags("go"),
+        *(["-gcflags=all=-N -l"] if split_opt(opt)[0] == "O0" else []),
+        # Go has no `-Werror` analogue at build time; `strict` has nothing to
+        # bind to here, and pretending otherwise would be a silent no-op.
+        "-o",
+        str(out),
+        str(src),
+    ]
+
+
 def _c_argv(
     compiler: str, cc: str, src: Path, opt: str, out: Path, strict: bool
 ) -> list[str]:
@@ -385,6 +463,9 @@ def compile_plan(
     if src.suffix == ".rs":
         out = BUILD / f"{src.stem}-rustc-{opt}.so"
         return "rustc", out, _rust_argv(src, opt, out, strict)
+    if src.suffix == ".go":
+        out = BUILD / f"{src.stem}-go-{opt}.so"
+        return "go", out, _go_argv(src, opt, out, strict)
     compiler = _cpp_compiler(cc) if src.suffix == ".cpp" else cc
     out = BUILD / f"{src.stem}-{cc}-{opt}.so"
     return compiler, out, _c_argv(compiler, cc, src, opt, out, strict)

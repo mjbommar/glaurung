@@ -47,20 +47,34 @@ FROM ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce51
 # byte-identical fingerprint. Closing that needs one entry in
 # `fixture_toolchain._VERSION_PROBES` plus a regeneration of all four committed
 # baselines, since every recorded `__toolchain__` would then be missing a key.
+# golang-go (1.18.1 from jammy) builds the five `.go` fixtures (176-180) as
+# `-buildmode=c-shared`. Added 2026-08-31 together with the harness lanes; see
+# the note below on why they are still opt-in.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      gcc g++ clang libstdc++-11-dev libc6-dev rustc \
+      gcc g++ clang libstdc++-11-dev libc6-dev rustc golang-go \
  && rm -rf /var/lib/apt/lists/*
 
-# NOT provisioned: `golang-go`. Five Go fixtures sit in
-# `tests/decompiler_fixtures/src/` (176-180, 1,131 lines, 36 `//export`ed
-# entry points) that NOTHING builds and no gate declares -- `manifest.
-# assert_fixtures_declared` and `fixture_harness._fixture_sources` both glob
-# `.c`, `.cpp` and `.rs` only, so the sources are structurally invisible. Adding
-# the package alone would provision a compiler with no lane; the fixtures need
-# `manifest.REQUIRED_FUNCTIONS` entries and all four baselines regenerated
-# first. Measured 2026-08-18: with `golang-go` (Go 1.18.1) added to this image,
-# all five build `-buildmode=c-shared` clean, so the toolchain half is one line.
+# The Go lanes are PROVISIONED here but still OPT-IN, and the reason is the
+# baselines rather than the toolchain. `fixture_harness.go_lanes_enabled()`
+# reads `GLAURUNG_FIXTURE_GO` and defaults to off, because turning the five
+# fixtures on adds lanes that appear in NONE of the four committed baselines
+# (`baseline.json`, `structural_baseline.json`, `arch_baseline.json`,
+# `defuse_baseline.json`) -- so every one of those gates would read the new
+# lanes as unrecorded.
+#
+# Enabling them is therefore one deliberate act: set the variable, regenerate
+# all four baselines on a quiet machine, and read every diff. Expect the first
+# recorded verdicts to be BAD -- Go's calling convention, its goroutine-stack
+# prologue and its `.gopclntab` are exactly what fixtures 176-180 were written
+# to expose, and a red-but-recorded baseline is the deliverable rather than a
+# green one.
+#
+# Note also that `__toolchain__` does not probe `go`, exactly as it does not
+# probe `rustc` -- so this image and one without golang-go still fingerprint
+# identically. Closing that needs an entry in
+# `fixture_toolchain._VERSION_PROBES`, which makes every recorded fingerprint
+# missing a key and forces the same four-baseline regeneration.
 
 # Compilation is hermetic: no network, deterministic locale/timezone.
 ENV LC_ALL=C.UTF-8 TZ=UTC
