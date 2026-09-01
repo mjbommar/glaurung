@@ -124,7 +124,8 @@ directory for such a DLL at all. Annotated in place.
 | [x] MClass fallback decoder + SysReg operand + MRS/MSR lift | real-binary R1 / F2a | `0031c3ee` |
 | [x] Cortex-M MRS/MSR body-recovery fixture | real-binary R1 / F2a | `0031c3ee` |
 | [x] Hermetic PDB type/layout lane | estate 4 / R4 | `c7200d2d` |
-| [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
+| [x] clang-cl PE32/PE32+ identity lane | estate 4.1 / R4 | `8c0a89f6` |
+| [x] Resolver was COFF-only, blind to shipped Windows binaries | estate 4 / R4 | `8c0a89f6` |
 | [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
