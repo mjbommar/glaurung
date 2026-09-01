@@ -2,11 +2,17 @@
 
 ## The problem
 
-Windows is the project's **active frontier** (`CLAUDE.md`), with 165
-inventory entries — and its fixture story is: 142 tests waiting on gitignored
-`msvc-pdb/*.exe|dll` binaries that nothing fetches. Mach-O is worse: the
-inventory found `symbols_macho.rs` unwired and **zero** reachable test
-functions in the files that implement Mach-O support.
+Windows is the project's **active frontier** (`CLAUDE.md`), with a broad PE
+estate but many tests waiting on gitignored `msvc-pdb/*.exe|dll` binaries that
+nothing fetches automatically. The original audit also found
+`symbols_macho.rs` unwired. That part has since landed: the tracked Mach-O
+sample now has reachable triage, Rust stub-resolver, and Python integration
+tests. It remains only one x86-64 sample and provides no decompiler-semantic,
+ARM64, DWARF, chained-fixup, or universal-binary matrix.
+
+The current evidence and implementation contract superseding the rough counts
+in this phase are in
+[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../pe-pdb-macho-parity-plan-2026-08-31.md).
 
 Both are fixable on this Linux box with tools already installed and verified
 present:
@@ -66,10 +72,10 @@ good for: real MSVC codegen (not clang-cl's) and real PDB producer quirks.
   chained-fixups/stubs handling (`src/analysis/macho_stubs.rs` — currently
   zero tests), function discovery, decompile-and-predicate. Recorded in
   `arch_baseline.json`.
-* Wire `tests/triage/symbols_macho.rs` (Phase 1.2) against these binaries so
-  the Mach-O symbol path finally has a reachable test, and add
-  triage/format tests for fat (universal) binaries — `lipo`-style fat headers
-  can be assembled by a tiny committed script even without Apple tools.
+* Preserve the now-wired `tests/triage/symbols_macho.rs` and existing stub-map
+  integration tests, then add triage/format tests for fat (universal) binaries
+  — `lipo`-style fat headers can be assembled by a tiny committed script even
+  without Apple tools.
 
 ## 4.4 Hermeticity
 
@@ -83,7 +89,8 @@ byte-stable). Version-pin in the image, record versions in the lane manifest.
   decompile real PE/Mach-O built from committed source.
 * `arch_baseline.json` carries verdicts for both lanes; the census runs over
   them.
-* Zero Mach-O-implementing source files with zero reachable tests.
+* Every Mach-O parser/discovery/decompiler path names a reachable test and
+  source-grounded oracle; existing stub coverage alone is not parity.
 * The 142 fetched-fixture tests either run (cache hit), skip visibly
   (offline), or have migrated to hermetic fixtures.
 

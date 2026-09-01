@@ -45,11 +45,48 @@ last because it consumes 7's lanes and 2's canary harness.
 
 ## Related
 
+[`../decompiler-roadmap-package-2026-08-31.md`](../decompiler-roadmap-package-2026-08-31.md)
+— the entry point mapping R0–R7 and M1–M7 to evidence, detailed authorities,
+dependencies, first increments, and completion proof.
+
 [`../decompiler-parity-backlog.md`](../decompiler-parity-backlog.md) — a
 three-way comparison of glaurung against angr 9.3.3 and Ghidra 12.1.3 on our
 own samples, and the 10-item build/fix backlog it produced. Several items
 there (structural baseline at O2, the differential harness) are phases of this
 plan; the parity doc is the evidence for why they matter.
+
+[`../real-binary-decompiler-roadmap-2026-08-31.md`](../real-binary-decompiler-roadmap-2026-08-31.md)
+— the product-facing order after the complete 94,575-function run. It promotes
+missing-body identity, large-function coverage, optimized structural quality,
+and PE/PDB ahead of lower-signal breadth work while retaining this plan's
+reachability and fixture discipline.
+
+[`../decbench-failure-remediation-plan-2026-08-31.md`](../decbench-failure-remediation-plan-2026-08-31.md)
+— the TDD-level implementation plan for the complete failure taxonomy,
+including ownership boundaries between product, adapter, dataset, and evaluator.
+
+[`../test-inventory-authority-plan-2026-08-31.md`](../test-inventory-authority-plan-2026-08-31.md)
+— makes the inventory renewable: committed canonical inputs, a versioned
+schema, atomic generated views, `--check`, explicit runners, and roadmap queries.
+
+[`../real-world-malware-asset-plan-2026-08-31.md`](../real-world-malware-asset-plan-2026-08-31.md)
+— audits the existing realistic, packed, adversarial, and Windows assets and
+turns them into a source-grounded hostile-shape program with explicit body,
+structure, compile, execution, resource, and refusal oracles.
+
+[`../performance-determinism-ratchet-plan-2026-08-31.md`](../performance-determinism-ratchet-plan-2026-08-31.md)
+— audits the newly wired instruction-count gate and existing determinism tests,
+then specifies fail-closed measurement states, provenance, completeness/RSS
+ratchets, a reference ladder, and retained release evidence.
+
+[`../optimized-structural-quality-plan-2026-08-31.md`](../optimized-structural-quality-plan-2026-08-31.md)
+— expands the current GCC-O0 structural baseline into separate GCC/Clang O0/O2
+populations with optimized shape predicates, readability distributions, and
+semantic/performance safety ratchets.
+
+[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../pe-pdb-macho-parity-plan-2026-08-31.md)
+— updates Phase 4 against the live estate and specifies hermetic PE32/PE32+,
+PDB, Mach-O x86-64/ARM64, fixup, and universal-slice contracts.
 
 ## Rules that apply to every phase
 
