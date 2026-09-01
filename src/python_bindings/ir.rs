@@ -209,11 +209,12 @@ pub(super) fn decompile_at_session(
     // It is also what tells `soft_helpers` which call targets are libgcc
     // division helpers, and that has to happen while the IR is still physical.
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let mut addr_map =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
-        // Names for static storage, from this image's symbol table. Built once
-        // per image beside the call-target map; see `ir::data_symbols`.
-        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
+    // ONE parse of the image yields both the call-target names and the
+    // named static storage. Two parses tripped the object-parse ceiling.
+    let (mut addr_map, data_symbols) =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
+            &data, &path, pdb_cache,
+        );
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
@@ -587,11 +588,12 @@ fn decompile_range_at_py(
     ));
 
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let addr_map =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
-        // Names for static storage, from this image's symbol table. Built once
-        // per image beside the call-target map; see `ir::data_symbols`.
-        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
+    // ONE parse of the image yields both the call-target names and the
+    // named static storage. Two parses tripped the object-parse ceiling.
+    let (mut addr_map, data_symbols) =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
+            &data, &path, pdb_cache,
+        );
     let budgets = crate::analysis::cfg::Budgets {
         max_functions: 1,
         max_blocks,
@@ -981,11 +983,12 @@ fn decompile_all_py(
     let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let mut addr_map =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
-        // Names for static storage, from this image's symbol table. Built once
-        // per image beside the call-target map; see `ir::data_symbols`.
-        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
+    // ONE parse of the image yields both the call-target names and the
+    // named static storage. Two parses tripped the object-parse ceiling.
+    let (mut addr_map, data_symbols) =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
+            &data, &path, pdb_cache,
+        );
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
@@ -1294,11 +1297,12 @@ fn decompile_many_py(
     let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let mut addr_map =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
-        // Names for static storage, from this image's symbol table. Built once
-        // per image beside the call-target map; see `ir::data_symbols`.
-        let data_symbols = crate::ir::name_resolve::collect_data_symbols(&data);
+    // ONE parse of the image yields both the call-target names and the
+    // named static storage. Two parses tripped the object-parse ceiling.
+    let (mut addr_map, data_symbols) =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
+            &data, &path, pdb_cache,
+        );
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between

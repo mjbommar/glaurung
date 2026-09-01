@@ -162,6 +162,30 @@ fn is_nameable(raw: &str) -> bool {
         || raw.starts_with("__GNU_EH_FRAME"))
 }
 
+/// Build the table from an already-parsed object.
+///
+/// Takes a parsed object rather than bytes, so the caller can share one parse
+/// with whatever else it needs from the image. That is not a stylistic
+/// preference: a second `parse_object` per whole-program run took object
+/// parses from 20 to 21 and tripped the ceiling in
+/// `test_object_parse_count_is_a_session_constant_not_a_function_of_the_binary`.
+pub fn from_object<'data, O>(object: &O) -> DataSymbols
+where
+    O: object::Object<'data>,
+{
+    use object::{Object, ObjectSymbol, SymbolKind};
+    DataSymbols::from_entries(object.symbols().filter_map(|symbol| {
+        (symbol.is_definition() && symbol.kind() == SymbolKind::Data)
+            .then(|| {
+                symbol
+                    .name()
+                    .ok()
+                    .map(|name| (symbol.address(), symbol.size(), name.to_string()))
+            })
+            .flatten()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

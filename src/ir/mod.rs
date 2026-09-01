@@ -73,6 +73,7 @@ pub(crate) mod memory_objects;
 pub(crate) mod memory_ssa;
 pub mod mir;
 pub mod name_resolve;
+pub mod named_constants;
 pub mod naming;
 pub mod pass_stats;
 pub mod pdb_fields;

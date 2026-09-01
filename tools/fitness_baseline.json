@@ -354,18 +354,40 @@
         "python_bindings/ir.rs: 1630 -> 1658 (+28)",
         "ir/ast.rs: 1681 -> 1683 (+2)"
       ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 13,
+        "ir_median_loc": 405,
+        "product_files_above_1000": 23,
+        "product_files_above_2000": 3,
+        "product_loc_above_1000": 33255,
+        "product_max_loc": 2268,
+        "product_mean_loc": 408.64,
+        "product_median_loc": 305.0,
+        "product_pct_loc_above_1000": 18.084377447141737
+      },
+      "owners_grew": [
+        "ir/ast.rs: 1683 -> 1711 (+28)",
+        "ir/ast/dec_render.rs: 2013 -> 2033 (+20)",
+        "python_bindings/ir.rs: 1658 -> 1678 (+20)",
+        "triage/api.rs: 1026 -> 1030 (+4)"
+      ],
+      "worsened": [
+        "product_loc_above_1000: 33255 -> 33327 (worse)"
+      ]
     }
   ],
   "ir": {
-    "file_count": 177,
+    "file_count": 180,
     "files_above_1000": 13,
     "files_above_2000": 3,
-    "loc_in_files_above_1000": 20044,
+    "loc_in_files_above_1000": 20092,
     "max_loc": 2268,
-    "mean_loc": 505.35593220338984,
-    "median_loc": 405,
-    "pct_loc_above_1000": 22.408550219121725,
-    "total_loc": 89448
+    "mean_loc": 501.0888888888889,
+    "median_loc": 404.0,
+    "pct_loc_above_1000": 22.275932413854274,
+    "total_loc": 90196
   },
   "largest_files": [
     {
@@ -377,7 +399,7 @@
       "path": "ir/lift_arm64.rs"
     },
     {
-      "loc": 2013,
+      "loc": 2033,
       "path": "ir/ast/dec_render.rs"
     },
     {
@@ -393,15 +415,15 @@
       "path": "ir/types_recover.rs"
     },
     {
+      "loc": 1711,
+      "path": "ir/ast.rs"
+    },
+    {
       "loc": 1710,
       "path": "symbolic/solver/mod.rs"
     },
     {
-      "loc": 1683,
-      "path": "ir/ast.rs"
-    },
-    {
-      "loc": 1658,
+      "loc": 1678,
       "path": "python_bindings/ir.rs"
     },
     {
@@ -431,20 +453,20 @@
   ],
   "measures": {
     "ir_files_above_1000": 13,
-    "ir_median_loc": 405,
+    "ir_median_loc": 404.0,
     "product_files_above_1000": 23,
     "product_files_above_2000": 3,
-    "product_loc_above_1000": 33255,
+    "product_loc_above_1000": 33327,
     "product_max_loc": 2268,
-    "product_mean_loc": 408.64,
-    "product_median_loc": 305.0,
-    "product_pct_loc_above_1000": 18.084377447141737
+    "product_mean_loc": 407.86313465783667,
+    "product_median_loc": 303,
+    "product_pct_loc_above_1000": 18.037799980515473
   },
   "oversized_files": {
     "analysis/ioctl_taint.rs": 1081,
     "debug/dwarf.rs": 1362,
-    "ir/ast.rs": 1683,
-    "ir/ast/dec_render.rs": 2013,
+    "ir/ast.rs": 1711,
+    "ir/ast/dec_render.rs": 2033,
     "ir/ast/lower_ops.rs": 1003,
     "ir/call_args.rs": 1327,
     "ir/call_contracts.rs": 1038,
@@ -457,24 +479,24 @@
     "ir/types_recover.rs": 1906,
     "ir/x87.rs": 1101,
     "python_bindings/analysis.rs": 1908,
-    "python_bindings/ir.rs": 1658,
+    "python_bindings/ir.rs": 1678,
     "symbolic/ordered_replay.rs": 1037,
     "symbolic/ordered_trace.rs": 1235,
     "symbolic/solver/mod.rs": 1710,
     "symbols/pdb.rs": 1180,
-    "triage/api.rs": 1026,
+    "triage/api.rs": 1030,
     "triage/config.rs": 1014
   },
   "product": {
-    "file_count": 450,
+    "file_count": 453,
     "files_above_1000": 23,
     "files_above_2000": 3,
-    "loc_in_files_above_1000": 33255,
+    "loc_in_files_above_1000": 33327,
     "max_loc": 2268,
-    "mean_loc": 408.64,
-    "median_loc": 305.0,
-    "pct_loc_above_1000": 18.084377447141737,
-    "total_loc": 183888
+    "mean_loc": 407.86313465783667,
+    "median_loc": 303,
+    "pct_loc_above_1000": 18.037799980515473,
+    "total_loc": 184762
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -484,14 +506,14 @@
       "measure": "product_mean_loc",
       "meets_target": true,
       "target": 450.0,
-      "value": 408.64
+      "value": 407.86313465783667
     },
     {
       "label": "Product-code median",
       "measure": "product_median_loc",
       "meets_target": false,
       "target": 250.0,
-      "value": 305.0
+      "value": 303
     },
     {
       "label": "Product files above 1,000 LOC",
@@ -512,14 +534,14 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": true,
       "target": 25.0,
-      "value": 18.084377447141737
+      "value": 18.037799980515473
     },
     {
       "label": "src/ir median",
       "measure": "ir_median_loc",
       "meets_target": true,
       "target": 500.0,
-      "value": 405
+      "value": 404.0
     },
     {
       "label": "src/ir files above 1,000 LOC",
@@ -540,7 +562,7 @@
       "measure": "product_loc_above_1000",
       "meets_target": true,
       "target": 42000.0,
-      "value": 33255
+      "value": 33327
     }
   ]
 }

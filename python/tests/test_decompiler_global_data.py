@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -37,7 +38,16 @@ def test_writable_global_load_round_trips_in_every_lane() -> None:
     function = D.exported_functions(str(binary))["read_counter"]
     code = D.decompiled_c(str(binary), function)
     assert code is not None
-    assert "static unsigned char glaurung_global_" in code, code
+    # The property is *portable tentative storage*, not any particular spelling
+    # of the identifier. This used to assert the literal prefix
+    # `glaurung_global_`, which pinned the weaker of two behaviours: the
+    # renderer now takes the object's real name from the image's symbol table
+    # when one is present, so this fixture recovers `g_counter` -- which is
+    # what the C source calls it (09_memory_effects.c:33).
+    assert re.search(
+        r"^static unsigned char [A-Za-z_]\w*\[\d+\]", code, re.MULTILINE
+    ), code
+    # ...and the whole point: never a raw process VA.
     assert "*(int *)(0x" not in code, code
 
 

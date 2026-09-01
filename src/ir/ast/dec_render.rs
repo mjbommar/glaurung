@@ -1615,6 +1615,14 @@ fn write_call_dec(
             out.push_str("))");
         }
     }
+    // The callee's source-level name, for the symbolic-constant annotation
+    // below. Only a directly-named call can be looked up: an indirect call
+    // through a pointer is not known to be `mprotect` just because it might
+    // be.
+    let annotated_callee = match target {
+        Expr::Named { name, .. } => Some(sanitize_c_ident(callee_display_name(name))),
+        _ => None,
+    };
     out.push('(');
     for (i, a) in args.iter().enumerate() {
         if i > 0 {
@@ -1664,6 +1672,18 @@ fn write_call_dec(
             // Variadic tails and unknown calls retain their recovered value
             // spelling; default argument promotions belong to the C compiler.
             write_call_arg_dec(a, out);
+        }
+        // Name the magic numbers. `mprotect(page, 4096, 5)` is correct and
+        // nearly unreadable; the 5 is PROT_READ|PROT_EXEC, which is the most
+        // interesting thing in the call. As a COMMENT and not a substitution,
+        // because this render is recompiled by the execution differential and
+        // a bare `PROT_READ` would need headers the renderer does not emit.
+        if let Some(callee) = annotated_callee.as_deref() {
+            if let Some(value) = crate::ir::named_constants::constant_argument_value(a) {
+                if let Some(name) = crate::ir::named_constants::symbolic_name(callee, i, value) {
+                    let _ = write!(out, " /* {name} */");
+                }
+            }
         }
     }
     out.push(')');

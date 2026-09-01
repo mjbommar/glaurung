@@ -215,7 +215,23 @@ fn symbol_rank(name: &str, is_global: bool) -> u8 {
 /// overwrite earlier ones so — for example — a PLT entry hides a less
 /// specific GOT name at the same address.
 pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
+    collect_address_map_and_data_symbols(data, path).0
+}
+
+/// The call-target name map AND the named-static-storage table, from ONE parse
+/// of the image.
+///
+/// The two answer different questions -- "what callable lives here" admits any
+/// defined symbol, "what object begins exactly here" admits only sized data --
+/// and they are kept as separate outputs so a function name can never reach a
+/// data slot. They share a parse because parsing twice is measurable: see
+/// `test_object_parse_count_is_a_session_constant_not_a_function_of_the_binary`.
+pub fn collect_address_map_and_data_symbols(
+    data: &[u8],
+    path: &str,
+) -> (HashMap<u64, String>, crate::ir::data_symbols::DataSymbols) {
     let mut out = HashMap::new();
+    let mut data_symbols = crate::ir::data_symbols::DataSymbols::new();
     // Defined symbols (functions + exported vars). Several symbols routinely share
     // one address, so the FIRST one seen must not simply win — see `symbol_rank`.
     if let Ok(obj) = crate::decompile::profile::parse_object(data) {
@@ -246,6 +262,11 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
                 }
             }
         }
+        // Named static storage, gathered from the SAME parse. It used to have
+        // its own `parse_object`, which took whole-program object parses from
+        // 20 to 21 and tripped the object-parse ceiling. Parsing an image
+        // twice to ask it two questions is what that test exists to prevent.
+        data_symbols = crate::ir::data_symbols::from_object(&obj);
     }
     // PE exports. The object crate does not expose PE exports through
     // dynamic_symbols(), so recover the export table directly for Windows
@@ -273,33 +294,25 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     }
     // Keep `path` so future resolvers can hit debug info; unused today.
     let _ = path;
-    out
+    (out, data_symbols)
 }
 
 /// Helper: build an address map and optionally overlay PE/PDB public
 /// function symbols from a local Microsoft-style symbol cache. Export/IAT
 /// names stay preferred for exact-address collisions because they are the
 /// names the binary exposes at runtime.
-/// Named static-storage objects from the image's own symbol table.
-///
-/// A sibling of [`collect_address_map`], and deliberately separate from it:
-/// that map answers "what callable lives here" and admits any defined symbol,
-/// while this one answers "what *object* begins exactly here" and admits only
-/// sized data. Merging them would let a function name reach a data slot and a
-/// boundary marker reach a variable.
-///
-/// See [`crate::ir::data_symbols`] for the filtering rules and for why the
-/// eventual lookup is an exact-start match rather than a nearest-symbol one.
-pub fn collect_data_symbols(data: &[u8]) -> crate::ir::data_symbols::DataSymbols {
-    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
-        return crate::ir::data_symbols::DataSymbols::new();
-    };
-    use object::{Object, ObjectSymbol, SymbolKind};
-    let entries = obj
-        .symbols()
-        .filter(|sym| sym.is_definition() && sym.kind() == SymbolKind::Data)
-        .filter_map(|sym| sym.name().ok().map(|name| (sym.address(), sym.size(), name.to_string())));
-    crate::ir::data_symbols::DataSymbols::from_entries(entries)
+/// [`collect_address_map_with_pdb_cache`] plus the named-static-storage table,
+/// from one parse of the image.
+pub fn collect_address_map_with_pdb_cache_and_data_symbols(
+    data: &[u8],
+    path: &str,
+    pdb_cache: Option<&Path>,
+) -> (HashMap<u64, String>, crate::ir::data_symbols::DataSymbols) {
+    let (mut out, data_symbols) = collect_address_map_and_data_symbols(data, path);
+    if let Some(cache_dir) = pdb_cache {
+        collect_pe_pdb_publics(path, cache_dir, &mut out);
+    }
+    (out, data_symbols)
 }
 
 pub fn collect_address_map_with_pdb_cache(
