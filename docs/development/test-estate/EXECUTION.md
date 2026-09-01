@@ -82,7 +82,8 @@ missing-body ledger in
 |---|---|---|
 | [ ] Dataset manifest/source-CFG/binary consistency validator | real-binary R1 / failure F1c | 88 manifest-only rows |
 | [ ] gzip `__printf__` source/build provenance trace | real-binary R1 / failure F1d | 2 source-CFG-only rows |
-| [~] PE entry/TLS/import identity | real-binary R1/R4 | debug+stripped+TLS covered on real samples; TLS-callback VAs still unasserted |
+| [x] PE entry/TLS/import identity fixture | real-binary R1/R4 | `99113bc8` |
+| [x] TLS callbacks read from the wrong struct offset | estate 4 / R4 | `99113bc8` |
 | [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
 | [ ] Hermetic PDB type/layout lane | estate 4 / real-binary R4 | source declarations through recovered fields and prototypes |
 | [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
@@ -98,11 +99,9 @@ missing-body ledger in
 | [ ] Inlined-body register threading | parity #4 | |
 | [ ] Go fixtures: manifest entries + 4 baselines | estate 7.1 | wiring landed; needs a quiet machine |
 | [~] Structural baseline at O2 | estate 7.5 / parity #8 | readability census landed; closure/effects map still needs a lane key |
-| [ ] Extend the census to `tests/decbench_corpus/` | estate 7.5 | blocks weighing the `detect_raw_dispatch_loop` fix |
-| [ ] Land the dispatch-loop fix | parity #8 | +4 fixture lanes; blocked on the census gap above |
 | [ ] Structural schema v2 + GCC/Clang O0/O2 populations | estate 7.5 / real-binary R3 | preserve lane denominators and binary hashes |
 | [ ] Optimized shape/readability predicates | estate 7.5 / real-binary R3 | loops, switches, conditions, casts, temporaries, output expansion |
-| [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | no baseline; missing/unit-mismatch/partial evidence currently exits zero |
+| [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | baseline exists; missing/unit-mismatch/partial evidence currently exits zero |
 | [ ] Record provenance-complete release perf baseline | estate 6 / real-binary R6 | wait for clean committed Rust tree and exact release build |
 | [ ] Join perf with completeness, RSS, and determinism report | estate 2/6 / real-binary M7 | reuse profiler and existing determinism tests |
 | [ ] `samples/` 18.8 MB dedup | estate 9.2 | investigated, see below |
