@@ -7,7 +7,7 @@
 
 pub mod abi;
 #[cfg(test)]
-mod conformance;
+mod conformance_tests;
 mod registers;
 mod spec;
 

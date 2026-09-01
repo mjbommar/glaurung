@@ -248,6 +248,16 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01: `product_mean_loc` 407.863 -> 407.982, from the CTPH parameter
+    validation that turned three PanicExceptions into ValueErrors. The first
+    measurement of this change was larger and WRONG: `src/target/conformance.rs`
+    is 602 lines of pure `#[cfg(test)]`, but `is_test_path` classifies test-only
+    files by NAME, and `conformance` matches none of the `test`/`tests`/`_test`/
+    `_tests` forms the codebase already uses (`session_tests.rs`, `ast_tests/`).
+    Renaming it to `conformance_tests.rs` moved 602 lines out of the product
+    count where they never belonged -- the measure was right and the filename
+    was wrong. What remains is the real product addition.
+
     2026-08-31: `product_loc_above_1000` 33,255 -> 33,327 (+72), from three new
     IR modules and the doc comments explaining them, landing partly inside two
     files that were already over 1,000 lines (`ir/name_resolve.rs`,
@@ -455,9 +465,9 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "product_files_above_2000": 3,
         "product_loc_above_1000": 33327,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(407.86313465783667),
+        "product_mean_loc": pytest.approx(407.9823399558499),
         "product_median_loc": pytest.approx(303),
-        "product_pct_loc_above_1000": pytest.approx(18.037799980515473),
+        "product_pct_loc_above_1000": pytest.approx(18.03252965111246),
     }
 
 
