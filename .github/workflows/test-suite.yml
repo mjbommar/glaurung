@@ -82,6 +82,47 @@ jobs:
           GLAURUNG_REQUIRE_TOOLCHAINS: "1"
         run: cargo test --features python-ext
 
+  # 195 tests live in `src/symbolic/` and NOTHING ran them until 2026-09-01.
+  # `cargo test` does not enable the feature; `--features python-ext` does not
+  # either (it pulls in `exec`, not `symbolic`); and
+  # `scripts/feature-build-gate.sh` runs `cargo check --all-targets`, which
+  # COMPILES test code without running it. They were type-checked forever and
+  # executed never -- 21,459 product LOC that no gate could turn red.
+  #
+  # Nothing was stopping them. `symbolic = ["exec"]` is pure Rust (the solver
+  # is pluggable behind a trait), and the first run passed 3,025 / 0 with 103
+  # symbolic tests executing. It only needed wiring.
+  #
+  # The other 92 are behind `solver-axeyum`, `solver-bitwuzla` and `solver-z3`,
+  # which link external SMT libraries. Those stay out of this lane deliberately
+  # -- `feature-build-gate.sh` type-checks them, and running them needs
+  # provisioning this job should not silently depend on.
+  symbolic:
+    name: cargo test --features symbolic
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Symbolic engine tests
+        env:
+          GLAURUNG_REQUIRE_TOOLCHAINS: "1"
+        run: cargo test --features symbolic
+      # The invariant `fuzz-nightly.yml` models: prove the lane did what it
+      # claims. A run in which zero `symbolic::` tests executed is a wiring
+      # failure that would otherwise look exactly like a pass.
+      - name: Prove the symbolic tests actually ran
+        run: |
+          n=$(cargo test --features symbolic -- --list 2>/dev/null | grep -c '^symbolic::' || true)
+          echo "symbolic tests listed: $n"
+          if [ "$n" -lt 50 ]; then
+            echo "::error::only $n symbolic tests are reachable; this lane exists because they were unreachable once already"
+            exit 1
+          fi
+
   python:
     name: uv run pytest python/tests/
     runs-on: ubuntu-latest

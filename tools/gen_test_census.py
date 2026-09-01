@@ -21,20 +21,34 @@ TEST_ATTR = re.compile(r"^\s*#\[test\]", re.M)
 
 #: Trees whose tests NO gate executes.
 #:
-#: `cargo test` does not build them, and `scripts/feature-build-gate.sh` runs
-#: `cargo check --all-targets`, which compiles test code without running it.
-#: So these are type-checked forever and executed never.
+#: **Empty, as of the `symbolic` CI lane.** Every tree is now reached by some
+#: job, which is the outcome R8.3 existed to force rather than merely record.
+#: The tuple stays so the ratchet keeps a shape to fail on: adding a tree here
+#: means admitting its tests cannot fail.
 #:
-#: **`exec` is deliberately NOT here, and the first version of this file was
-#: wrong to include it.** `Cargo.toml` defines
-#: `python-ext = ["pyo3", "pyo3/extension-module", "exec"]`, so the Python
-#: extension build enables the emulator and `cargo test --features python-ext`
-#: runs **65** of its 76 declared tests. The 11 that remain are in
-#: `src/exec/oracle.rs`, behind `dev-oracle`, which links system libunicorn and
-#: is explicitly never shipped. Counting all 76 as unreachable overstated the
-#: problem by 76 tests and was corrected by measuring the run rather than
-#: reading the feature list.
-NEVER_EXECUTED = ("symbolic",)
+#: The history matters, because both earlier values were wrong in instructive
+#: ways:
+#:
+#: * `("symbolic", "exec")` — 271. Wrong by 76. `Cargo.toml` defines
+#:   `python-ext = [..., "exec"]`, so the extension build enables the emulator
+#:   and `--features python-ext` runs 65 of exec's 76 tests; the other 11 are
+#:   `src/exec/oracle.rs` behind `dev-oracle`, which links libunicorn and is
+#:   never shipped. Reading a `cfg` gate tells you what a module needs; only
+#:   running the suite tells you what executed.
+#: * `("symbolic",)` — 195. Correct as a measurement, obsolete as a claim:
+#:   nothing was preventing those tests from running. `symbolic = ["exec"]` is
+#:   pure Rust, and the first `cargo test --features symbolic` passed 3,025 / 0
+#:   with 103 symbolic tests executing. They needed a CI job, not a fix.
+#:
+#: 92 tests remain behind `solver-axeyum`/`solver-bitwuzla`/`solver-z3`, which
+#: link external SMT libraries. `feature-build-gate.sh` type-checks them and no
+#: lane runs them; that is a provisioning decision, recorded in
+#: `solver_gated_estimate` below rather than hidden in this tuple.
+NEVER_EXECUTED: tuple[str, ...] = ()
+
+#: Tests behind a `solver-*` feature, which need an external SMT library.
+#: Measured as (declared in symbolic) - (executed by `--features symbolic`).
+SOLVER_GATED_ESTIMATE = 92
 
 
 def module_of(path: Path) -> str:
@@ -64,6 +78,7 @@ def main() -> int:
         "total_declared": sum(counts.values()),
         "never_executed_total": sum(never.values()),
         "never_executed": never,
+        "solver_gated_estimate": SOLVER_GATED_ESTIMATE,
         "by_module": counts,
     }
     BASELINE.write_text(json.dumps(payload, indent=1) + "\n")

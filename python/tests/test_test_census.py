@@ -5,19 +5,22 @@ recorded anywhere before this. Measured 2026-09-01:
 
 * `ir` declares **1,875** of 3,187 tests — 59% of every `#[test]` in the tree —
   against `disasm` 19, `symbols` 22 and `entropy` 20;
-* **195 tests are never executed by any gate.** `src/symbolic/` is behind a
-  feature that neither `cargo test` nor `--features python-ext` enables, and
-  `scripts/feature-build-gate.sh` runs `cargo check --all-targets`, which
-  compiles test code without running it. Type-checked forever, executed never.
+* **Tests executed by no gate: 0**, as of the `symbolic` CI lane. Getting
+  there took two corrections, both worth keeping:
 
-  **This figure was first recorded as 271 and that was wrong.** It counted
-  `src/exec/` (76) as unreachable by reading `src/lib.rs`'s `cfg` gate. But
-  `Cargo.toml` defines `python-ext = [..., "exec"]`, so the extension build
-  enables the emulator: `cargo test --features python-ext` runs **65** exec
-  tests. The remaining 11 are `src/exec/oracle.rs`, behind `dev-oracle`, which
-  links system libunicorn and is never shipped. Corrected by counting
-  `^test exec::` lines in an actual run rather than reasoning from the feature
-  list — the same discipline this whole workstream exists to enforce.
+  - first recorded as **271** (`symbolic` 195 + `exec` 76). Wrong by 76:
+    `Cargo.toml` defines `python-ext = [..., "exec"]`, so the extension build
+    enables the emulator and `--features python-ext` runs 65 exec tests; the
+    other 11 are `src/exec/oracle.rs` behind `dev-oracle`, which links
+    libunicorn and is never shipped. Reading a `cfg` gate tells you what a
+    module needs; only running the suite tells you what executed;
+  - then **195**, correct as a measurement and obsolete as a claim. Nothing
+    was preventing those tests from running: `symbolic = ["exec"]` is pure
+    Rust, and the first `cargo test --features symbolic` passed **3,025 / 0**
+    with 103 symbolic tests executing. They needed a CI job, not a fix.
+
+  92 remain behind `solver-*` features that link external SMT libraries,
+  recorded as `solver_gated_estimate` rather than hidden in the pool.
 
 Why a declaration count
 -----------------------
@@ -102,11 +105,11 @@ def test_no_module_loses_declared_tests(now, recorded):
 
 
 def test_the_never_executed_pool_does_not_grow(now, recorded):
-    """195 tests are compiled and never run. That number may only fall.
+    """The pool is 0 and may only stay there.
 
-    Adding a test to `src/symbolic/` writes a test nothing will ever execute —
-    it is type-checked by `feature-build-gate.sh` and run by nothing. Growing
-    that pool is a decision, not an accident.
+    Adding a tree to `NEVER_EXECUTED` means admitting its tests cannot fail.
+    That is a decision someone must make explicitly, not something that
+    happens because a feature gate was added and no lane followed it.
     """
     assert now["never_executed_total"] <= recorded["never_executed_total"], (
         f"tests that no gate executes grew "
@@ -170,4 +173,21 @@ def test_the_imbalance_is_recorded_not_merely_felt(now):
     assert by.get("disasm", 0) < 60, (
         f"disasm is {by.get('disasm')} — if it really grew, update the R8 "
         "narrative, which cites 19 against ir's 1,875"
+    )
+
+
+def test_a_ci_lane_runs_the_symbolic_engine():
+    """The wiring invariant: `--features symbolic` must be in a workflow.
+
+    195 tests sat in `src/symbolic/` that no gate ran, not because they were
+    broken but because nothing invoked them. A ratchet that merely counts them
+    would have recorded the hole forever; this asserts the lane that closes it
+    still exists. If the job is renamed or removed, this fails rather than the
+    count quietly rising again.
+    """
+    workflows = (ROOT / ".github" / "workflows").glob("*.yml")
+    wired = [w.name for w in workflows if "--features symbolic" in w.read_text()]
+    assert wired, (
+        "no workflow runs `cargo test --features symbolic`. Those 195 tests "
+        "are type-checked by feature-build-gate.sh and executed by nothing."
     )
