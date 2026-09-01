@@ -66,6 +66,8 @@ missing-body ledger in
 | [x] CI cross-toolchain + compile-probe availability | estate 10 | `c5f7df15` |
 | [x] Concurrent session's 11 planning docs landed | — | `dbf4f5ca` |
 | [x] Fixture gallery regenerated + arch lanes rendered | — | glaurung.dev |
+| [x] Census -> both corpora, both O-levels (3,580 entries) | estate 7.5 | `1329382d` |
+| [x] Dispatch relaxation judged and REVERTED on its evidence | parity/estate 10 | `1329382d` |
 
 ## Next
 
