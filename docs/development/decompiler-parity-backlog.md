@@ -55,8 +55,10 @@ Both reference tools are installed on this box.
   style is the low-level IR view (exposes `%sf`/`%of` flag math); `decbench`
   is what we actually score and the only fair thing to compare.
 
-Item #7 of the backlog is to turn this into `tools/compare_decompilers.py` so
-it is one command instead of the above.
+All of the above is now one command -- `uv run python tools/compare_decompilers.py
+<binary> main print_sum` -- which is backlog item #7, landed. The manual recipe
+is kept here because it is what the tool automates, and because a reader
+debugging the tool needs it.
 
 ## The evidence
 
@@ -118,8 +120,13 @@ static_function_static_var = static_function_static_var + 1;
 __TMC_END__ = __TMC_END__ + 1;
 ```
 
-The binaries are unstripped; Ghidra ingests the DWARF *name*, we do not (though
-we do ingest DWARF for *function* names). → backlog #1.
+**Correction, found while implementing this.** The first version of this
+section said Ghidra was ingesting the DWARF name. It was not: these binaries
+have **no `.debug_*` sections at all**. The name is an ELF **symbol table**
+entry -- `static_function.static_var`, an `OBJECT` symbol at `0x4040`, which is
+exactly the address our synthetic name encoded. That correction is what made
+the fix small, and it also widens where it applies: an unstripped symbol table
+is far more common than shipped DWARF. → backlog #1, **landed**.
 
 ### O2 loop guard — condition simplification
 
@@ -156,18 +163,27 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
 
 ### Correctness & score cluster (closes the gap the comparison exposed)
 
-1. **Ingest DWARF local/static variable *names*.** `fix` · effort **M** ·
-   evidence: static-counter case above. We parse DWARF for function names
-   already; the local/static name is in the same DIE tree and is not wired
-   into recovered globals/locals. Highest value-to-effort here — the data is
-   already parsed. Verify with the unstripped samples where the expected name
-   is known.
+1. **~~Ingest DWARF local/static variable *names*.~~ LANDED** (`dfd2ddb4`)
+   as **symbol-table** ingestion, not DWARF -- see the correction above.
+   `src/ir/data_symbols.rs` maps an exact start address to a sized `OBJECT`
+   symbol; `dec_global_name` consults it. Output for the motivating case is
+   now `static_function_static_var`, matching Ghidra. The match is
+   exact-start-only, which is what stops us reproducing the `_init` error in
+   the next entry; `no_nearest_symbol_fallback` is that guard as a test.
 
-2. **Simplify comparison guards before render.** `fix` · effort **M** ·
-   evidence: O2 loop guard. A peephole recognizing the `(eq ∨ signed-lt)` →
-   `le` (and siblings) flag idioms, applied to the rendered condition. Most
-   likely single driver of our DecBench GED/byte-match deficit, because it
-   changes the shape of nearly every non-trivial branch.
+2. **~~Simplify comparison guards before render.~~ LANDED** (`96948a4b`)
+   as `src/ir/cmp_fusion.rs`. The eleven-token disjunction is now
+   `if (((long)((int)(var1)) <= 0))`, which is what Ghidra prints, cast and
+   all.
+
+   **Worth recording how it went wrong first.** The initial version matched
+   the two sides by peeling casts and rebuilt the result from the peeled
+   value, which silently changed the comparison's width -- for 64-bit `v`
+   holding 2^32, `v == 0` and `(int)v < 0` are both false but `(int)v <= 0` is
+   true. Eleven execution-differential lanes went red and caught it. The pass
+   now requires equal observed widths and reuses the signed operand verbatim.
+   The lesson generalises: a "readability" transform is a semantic transform,
+   and the fixture matrix is the thing that knows.
 
 3. **Recover variadic / call-site argument arity.** `fix` · effort **M–H** ·
    evidence: `ptrace(0)` (one arg) vs the real four. Needs call-site
@@ -182,10 +198,17 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
 
 ### Triage value & polish
 
-5. **Named constants for syscall/flag arguments.** `build` · effort **M** ·
-   evidence: Ghidra's `ptrace(PTRACE_TRACEME,...)`; our `mprotect(...,5)`
-   should read `PROT_READ|PROT_EXEC`. A curated table keyed by (function,
-   arg-position); no analysis change, high analyst value.
+5. **~~Named constants for syscall/flag arguments.~~ LANDED** as
+   `src/ir/named_constants.rs`. Output is now
+   `ptrace(0 /* PTRACE_TRACEME */)` and
+   `mprotect(local_20, 4096, 5 /* PROT_READ|PROT_EXEC */)`.
+
+   A **comment**, not a substitution, and that is the whole design decision:
+   this render is recompiled by the execution differential, so a bare
+   `PROT_READ` would need headers the renderer does not emit and would trade
+   readable output for output that does not build. On this call we are now
+   ahead of both reference tools -- Ghidra names the `ptrace` request but
+   still reports `mprotect(_init, 0x1000, 5)`.
 
 6. **Render pointer/array types in their real C form.** `fix` · effort **L** ·
    evidence: we recover the array but print `long *arg1` where it is
@@ -193,11 +216,12 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
 
 ### Measurement & lock-in (keeps the other eight honest)
 
-7. **`tools/compare_decompilers.py` — a reproducible differential harness.**
-   `build` · effort **M** · wrap the angr + Ghidra invocations above so
-   "where do we diverge from the reference" is one command. Depends on the
-   installed oracles (#10). This is what makes 1–6 measurable rather than
-   anecdotal.
+7. **~~`tools/compare_decompilers.py`~~ LANDED** (`dfd2ddb4`). One command,
+   both reference tools optional, JSON or side-by-side text. It carries the
+   two Ghidra gotchas so nobody pays for them twice: `analyzeHeadless` rejects
+   any path with a dot-prefixed element (so its project cannot live under
+   `~/.cache`), and Ghidra 12.x needs JDK 21 specifically -- 17 is too old and
+   25 is rejected.
 
 8. **Extend the structural baseline to O2.** `build` · effort **M** · the
    comparison *showed* angr/Ghidra structuring cleaner, but no glaurung gate
