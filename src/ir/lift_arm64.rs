@@ -590,11 +590,15 @@ fn scalar_float_ops(ins: &Instruction, mnem: &str) -> Option<Vec<Op>> {
         "fmov" => "vmov",
         _ => return None,
     };
-    let arity = if matches!(stem, "vneg" | "vmov") {
-        2
-    } else {
-        3
-    };
+    // No 4-operand arm: FMA (`fmadd`/`fmsub`/`fnmadd`/`fnmsub`) is deliberately
+    // NOT lifted here. Mapping it to an opaque intrinsic was tried and measured
+    // -- it recovered the prototype of every function ending in an FMA and
+    // broke `217_complex_arithmetic:aarch64:O2:complex_add_conj` from pass to
+    // fail, because the emitted C then calls `__unknown(0)` and uses its
+    // result. A definition the renderer cannot express is worse than no
+    // definition. FMA is ternary and `float_gate`'s operator table has only
+    // `Move`, `Negate` and `Binary`; it needs a form there first.
+    let arity = if matches!(stem, "vneg" | "vmov") { 2 } else { 3 };
     if ins.operands.len() != arity {
         return None;
     }
@@ -602,6 +606,19 @@ fn scalar_float_ops(ins: &Instruction, mnem: &str) -> Option<Vec<Op>> {
     let width = scalar_float_width(&dst)?;
     let mut sources = Vec::with_capacity(arity - 1);
     for operand in &ins.operands[1..] {
+        // `fmov Dd,#imm` materialises a float constant. Capstone renders the
+        // immediate rather than a register, so the register-only path below
+        // rejected it and the destination went undefined -- which is enough on
+        // its own to lose a function, since the constant usually feeds the
+        // instruction that computes the return value. Carry it as an input so
+        // the definition exists; the intrinsic name records that this is a
+        // float move, and no arithmetic identity is claimed for the value.
+        if stem == "vmov" && matches!(operand.kind, OperandKind::Immediate) {
+            if let Some(v) = operand_to_value(operand) {
+                sources.push(v);
+                continue;
+            }
+        }
         let source = operand_reg(operand)?;
         // Every operand of a scalar FP instruction is the same IEEE width as
         // its destination. An `fmov` reading a general register is a BIT

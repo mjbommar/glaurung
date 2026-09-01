@@ -345,6 +345,17 @@ impl Disassembler for CapstoneDisassembler {
             match self.arch {
                 Architecture::ARM64 => {
                     if let Some(ad) = detail.arch_detail().arm64() {
+                        // `s0`/`h0` are 32/16-bit lanes, `d0`/`q0` are wider.
+                        // Used only to pick the precision of an FP immediate.
+                        let ins_reg_width: Option<u32> = ad
+                            .operands()
+                            .find_map(|op| match op.op_type {
+                                Arm64OperandType::Reg(r) => cs
+                                    .reg_name(r)
+                                    .and_then(|n| n.chars().next())
+                                    .map(|c| if c == 's' { 32 } else { 64 }),
+                                _ => None,
+                            });
                         // Track writeback so pre-indexed forms (`[sp,
                         // #-0x30]!`) can be distinguished from non-
                         // writeback forms downstream. When writeback is
@@ -372,6 +383,26 @@ impl Disassembler for CapstoneDisassembler {
                                 }
                                 Arm64OperandType::Imm(i) => {
                                     operands.push(Operand::immediate(i, 0));
+                                }
+                                // A scalar FP immediate, e.g. `fmov d2, #2.0`.
+                                // This fell into the catch-all and was DROPPED,
+                                // so the instruction reached the lifter with one
+                                // operand, failed its arity check, and lifted to
+                                // nothing -- leaving the destination register
+                                // undefined. That is usually the constant feeding
+                                // the value a function returns, so the function
+                                // recovers as `void(void)`. Same shape as the
+                                // ARM32 VFP handling directly below; capstone
+                                // exposes the immediate as an `f64` regardless of
+                                // the encoded precision, so preserve the exact
+                                // IEEE payload and let the typed intrinsic supply
+                                // the interpretation.
+                                Arm64OperandType::Fp(value) => {
+                                    let (bits, width) = match ins_reg_width {
+                                        Some(32) => (i64::from((value as f32).to_bits()), 32),
+                                        _ => (value.to_bits() as i64, 64),
+                                    };
+                                    operands.push(Operand::immediate(bits, width));
                                 }
                                 Arm64OperandType::Mem(m) => {
                                     let base = if m.base().0 != 0 {

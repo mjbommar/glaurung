@@ -1,0 +1,13 @@
+{
+  "purpose": "Mach-O x86-64 / ARM64 thin lanes (test-estate phase 4, real-binary R4)",
+  "built_by": "tests/macho_lane/build.sh (zig cc -target {x86_64,aarch64}-macos -shared -O1)",
+  "why": "Mach-O was one tracked x86-64 sample with no ARM64 and no decompiler-semantic coverage. The same three functions at both architectures make the ABI the only variable, which is how `mix_float` was found: x86-64 recovers `double(double,float)` exactly while ARM64 recovered `void(void)`.",
+  "lib_aarch64.dylib": {
+    "sha256": "fe3093e524aff7022f03e4244f231ce6bb112e5e0722aa0d39a68ca4da1cb6d4",
+    "size": 50144
+  },
+  "lib_x86_64.dylib": {
+    "sha256": "843c8c8f452312d36ed7829160488d43c27cc339246271f113679db38c710111",
+    "size": 17097
+  }
+}

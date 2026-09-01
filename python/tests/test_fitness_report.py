@@ -248,6 +248,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01 (fifth, same day): `product_loc_above_1000` 33,334 -> 33,347,
+    +13, from handling `Arm64OperandType::Fp` in `src/disasm/capstone.rs`
+    (above 1,000 lines) -- mostly the comment recording that a dropped scalar
+    FP immediate leaves its destination undefined and costs the function.
+
     2026-09-01 (fourth, same day): `product_mean_loc` 407.802 -> 407.912,
     from `pe_export_entries` in `src/lib.rs` -- ~45 lines, most of it the
     comment explaining that shipped Windows binaries carry no COFF symbol table
@@ -490,11 +495,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": pytest.approx(404.0),
         "product_files_above_1000": 23,
         "product_files_above_2000": 3,
-        "product_loc_above_1000": 33334,
+        "product_loc_above_1000": 33347,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(407.91189427312776),
+        "product_mean_loc": pytest.approx(408.00881057268725),
         "product_median_loc": pytest.approx(302.0),
-        "product_pct_loc_above_1000": pytest.approx(17.99969761112791),
+        "product_pct_loc_above_1000": pytest.approx(18.002440130428212),
     }
 
 
