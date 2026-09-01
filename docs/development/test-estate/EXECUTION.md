@@ -56,6 +56,11 @@ missing-body ledger in
 | [x] Host-compiler test scoped to validated majors | (found by CI) | `09f4d511` |
 | [x] Canary set: default suite exercises the decompiler | estate 2 | `b4d23221` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
+| [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
+| [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |
+| [x] 12 test files anchored off CWD (21 silent skips) | estate 1.7 | `c26b2464` |
+| [x] conftest sample paths anchored (59 usages) | estate 1.7 | `62bda4cc` |
+| [x] Structural lane seam + the O2 measurement | estate 7.5 | `b02b5883` |
 
 ## Next
 
@@ -80,7 +85,7 @@ missing-body ledger in
 | [ ] Variadic / call-site arity | parity #3 | |
 | [ ] Inlined-body register threading | parity #4 | |
 | [ ] Go fixtures: manifest entries + 4 baselines | estate 7.1 | wiring landed; needs a quiet machine |
-| [ ] Structural baseline at O2 | estate 7.5 / parity #8 | |
+| [ ] Structural baseline at O2 | estate 7.5 / parity #8 | seam landed; needs the key format to grow a lane + a full regen |
 | [ ] Structural schema v2 + GCC/Clang O0/O2 populations | estate 7.5 / real-binary R3 | preserve lane denominators and binary hashes |
 | [ ] Optimized shape/readability predicates | estate 7.5 / real-binary R3 | loops, switches, conditions, casts, temporaries, output expansion |
 | [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | no baseline; missing/unit-mismatch/partial evidence currently exits zero |
@@ -117,6 +122,13 @@ match linker placeholders. That is the matcher's ceiling, not our corpus.
 patch): `FlirtLibrary::from_file` resolves ambiguous prologues
 last-insert-wins, and with `set_by=flirt` outranking `auto` the losing name
 lands in the KB above the correct one; `prologue_len` is unenforced input.
+
+**-O2 is where readability goes.** Measured through the new structural lane
+seam on `212_loop_with_returning_arm::fsm_returns_from_arm`: `gcc:O0` gives 5
+`goto` and 1 `switch`; `gcc:O2` gives 11 `goto` and **no** `switch`. The
+execution differential passes the fixture in both lanes, because the behaviour
+is correct. Nothing in the gate can currently see that the output stopped
+being readable — which is phase 7.5, now with a number attached.
 
 **Two things that were true in the working tree and false in the repository.**
 `git add` on the canary directory skipped all nine `.so` objects silently,

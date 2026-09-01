@@ -63,7 +63,13 @@ jobs:
   python:
     name: uv run pytest python/tests/
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90, not 60. Measured: the suite alone is 35 minutes on a developer box
+    # that was also running other work, and this job pays ~5 minutes of setup
+    # (LFS fetch, `uv sync`, a release `maturin develop`) before pytest starts.
+    # A two-core hosted runner is slower than that box, so 60 left almost no
+    # headroom -- and a timeout kill reads as a red suite rather than as "the
+    # budget was wrong", which is the worst way for this to fail.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
