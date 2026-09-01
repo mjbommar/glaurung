@@ -1,0 +1,13 @@
+{
+  "purpose": "PDB type/layout recovery lane (test-estate phase 4, real-binary R4)",
+  "built_by": "tests/pdb_types/build.sh (clang-cl /Z7 /Od + lld-link /debug /nodefaultlib)",
+  "state": "PDB NAMES are ingested and applied; PDB TYPES are not. src/symbols/pdb.rs parses the TPI stream (LF_PROCEDURE return type + arglist, struct field layouts) and src/ir/pdb_fields.rs applies FIELD hints only -- its own docstring says it 'does not infer the concrete struct type of a base register yet'. Nothing applies procedure prototypes to recovered signatures. The missing link is a VA -> TypeIndex mapping: prototypes are TPI records keyed by type_index with no address, and the reader parses PublicSymbol records (name + address, no type) but not S_GPROC32/S_LPROC32, which carry both.",
+  "types.dll": {
+    "sha256": "1f8eb9200a4d73381b1e805777fa052feab0ae926a79189c9162608cc41bad17",
+    "size": 2560
+  },
+  "types.pdb": {
+    "sha256": "0da674dbb2e87a1968f947494158fdf0c0d97ac3faecb4f715e1e025fa37b4ff",
+    "size": 73728
+  }
+}
