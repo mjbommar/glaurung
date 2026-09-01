@@ -248,3 +248,45 @@ def test_frame_list_empty_function(tmp_path: Path) -> None:
         )
     assert rc == 0
     assert "no stack vars" in buf.getvalue()
+
+
+def test_a_negative_hex_offset_parses_on_every_supported_python():
+    """`-0x20` must be a positional, not an unrecognized option.
+
+    argparse decides whether a leading `-` starts an option by matching the
+    token against `_negative_number_matcher`. Through Python 3.13 that pattern
+    is `^-\\d+$|^-\\d*\\.\\d+$` -- it accepts `-16` and REJECTS `-0x20`. So
+    `glaurung frame <db> <va> rename -0x20 <name>` exited 2 with "unrecognized
+    arguments" on 3.12 and 3.13, and worked only on 3.14 where the pattern was
+    relaxed. `requires-python` is ">=3.12", so the command was broken across
+    most of its own supported range.
+
+    Nothing caught it because the development machine runs 3.14. CI runs 3.12,
+    which is the only reason it was ever seen.
+
+    This asserts the parser's behaviour directly rather than through a CLI run,
+    so it fails for the right reason -- and it would fail today on 3.12 without
+    the widened matcher, on any interpreter that still ships the narrow one.
+    """
+    import argparse
+
+    from glaurung.cli.commands.frame import FrameCommand
+
+    parser = argparse.ArgumentParser(prog="glaurung-frame-test")
+    FrameCommand().add_arguments(parser)
+    args = parser.parse_args(["db.glaurung", "0x1000", "rename", "-0x20", "loop_index"])
+    assert args.rest == ["-0x20", "loop_index"], (
+        f"negative hex offset was not taken as a positional: {args.rest!r}"
+    )
+
+
+def test_a_negative_decimal_offset_still_parses():
+    """The widened matcher must not have broken the form that already worked."""
+    import argparse
+
+    from glaurung.cli.commands.frame import FrameCommand
+
+    parser = argparse.ArgumentParser(prog="glaurung-frame-test")
+    FrameCommand().add_arguments(parser)
+    args = parser.parse_args(["db.glaurung", "0x1000", "rename", "-16", "loop_index"])
+    assert args.rest == ["-16", "loop_index"]

@@ -7,6 +7,7 @@ analyst's typical edits without needing the REPL.
 """
 
 import argparse
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -53,6 +54,24 @@ class FrameCommand(BaseCommand):
         return "List or edit a function's stack frame (slots, types, names)"
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        # Frame offsets are negative far more often than not (`-0x20` is a
+        # local below the frame pointer), and argparse decides whether a
+        # leading `-` starts an option by matching the token against
+        # `_negative_number_matcher`. Through Python 3.13 that pattern is
+        # `^-\d+$|^-\d*\.\d+$`, which accepts `-16` and REJECTS `-0x20` --
+        # so `glaurung frame db 0x1000 rename -0x20 name` exited 2 with
+        # "unrecognized arguments" on every interpreter this project supports
+        # except the newest one. `requires-python` is ">=3.12"; the command
+        # worked only on 3.14, where the pattern was relaxed to `-\.?\d`.
+        #
+        # Widening the matcher here makes the hex form parse identically on
+        # every supported version. It is a private attribute, which is why this
+        # sets it defensively rather than assuming it exists.
+        matcher = getattr(parser, "_negative_number_matcher", None)
+        if matcher is not None:
+            parser._negative_number_matcher = re.compile(
+                r"^-\d+$|^-\d*\.\d+$|^-0[xX][0-9a-fA-F]+$"
+            )
         parser.add_argument("db", help="Path to .glaurung project file")
         parser.add_argument("fn_va", help="Function entry VA (hex with 0x or decimal)")
         parser.add_argument(
