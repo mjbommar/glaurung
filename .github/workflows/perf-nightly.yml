@@ -1,0 +1,89 @@
+# Does the performance gate still pass, and did it actually measure anything?
+#
+# Until 2026-09-01 NOTHING invoked `tools/perf_gate.py`. The suite CI runs
+# `cargo test`, the Python suite and lint; the fixture gate runs the semantic
+# matrix and structural lane. A performance regression could not turn any of
+# them red. That is R6 gap P9: a gate that exists, is correct, and is wired to
+# nothing is indistinguishable from one that does not exist.
+#
+# **Scheduling had to wait for the gate to fail closed.** Three states used to
+# `return 0` -- no baseline, incomparable units, and a baseline reference the
+# run did not measure -- so a scheduled job would have reported success from an
+# empty measurement. Those now exit 3 ("not evidence"), which is why this file
+# can exist at all. Scheduling a fail-open gate manufactures assurance.
+#
+# Nightly rather than per-push, deliberately: performance measurement on a
+# shared runner is noisy, and a ratchet that flaps gets disabled. Offset from
+# the hour for the same reason fuzz-nightly is.
+name: perf nightly
+
+on:
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  perf:
+    name: perf gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The three reference binaries are LFS objects. Without this the gate
+          # would measure 130-byte pointer files -- and, before the P2 fix,
+          # would have reported a pass for doing so.
+          lfs: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+      # --release, not debug: the shares in a debug profile are not the shares
+      # we ship, and the gate refuses a build older than src/ anyway.
+      - name: Build the extension
+        run: uv run maturin develop --release
+      # A hosted runner blocks instruction counting (kernel.perf_event_paranoid),
+      # so the gate falls back to wall-clock and its baseline is in
+      # instructions -- an incomparable-unit exit 3. That is the CORRECT result
+      # and this step reports it as such rather than as a pass or a failure.
+      # `--characterize` output is uploaded either way, so a regression is
+      # diagnosable without re-running on the machine that saw it.
+      - name: Perf gate
+        id: gate
+        run: |
+          set +e
+          uv run python tools/perf_gate.py --json > perf-report.json 2> perf-stderr.txt
+          status=$?
+          cat perf-stderr.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          case "$status" in
+            0) echo "::notice::perf gate passed with comparable evidence" ;;
+            3) echo "::warning::perf gate produced NO comparable evidence on this runner (exit 3). This is expected while hosted runners block instruction counting; it is reported, not silently passed." ;;
+            *) echo "::error::perf gate failed (exit $status)"; exit "$status" ;;
+          esac
+      # The invariant fuzz-nightly models: prove the job measured something.
+      # A report with zero measures is a failure however the gate exited --
+      # otherwise "nothing ran" and "nothing regressed" look identical.
+      - name: Prove the run measured something
+        run: |
+          uv run python - <<'PY'
+          import json, pathlib, sys
+          report = json.loads(pathlib.Path("perf-report.json").read_text() or "{}")
+          measures = report.get("measures") or {}
+          print(f"unit={report.get('unit')!r} references measured={len(measures)}")
+          if not measures:
+              sys.exit("NO MEASUREMENTS: the job produced an empty report, which "
+                       "is not the same as finding no regression.")
+          PY
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: |
+            perf-report.json
+            perf-stderr.txt
+          if-no-files-found: warn

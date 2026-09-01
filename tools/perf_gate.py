@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -55,7 +56,20 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-BASELINE = REPO / "bench" / "perf_baseline.json"
+#: Overridable so the gate's own failure states are testable without touching
+#: the committed baseline. Production never sets it.
+BASELINE = Path(
+    os.environ.get("GLAURUNG_PERF_BASELINE", REPO / "bench" / "perf_baseline.json")
+)
+
+#: Exit code meaning "this run is not evidence" -- distinct from 0 (compared,
+#: no regression) and 1 (compared, regression found).
+#:
+#: Three states used to return 0 and were therefore indistinguishable from a
+#: pass: no baseline, incomparable units, and a baseline reference this run did
+#: not measure. Scheduling a gate with those semantics manufactures assurance,
+#: which is why R6 increment A comes before increment G.
+NOT_EVIDENCE = 3
 PYTHON = REPO / ".venv" / "bin" / "python"
 
 #: Reference binaries, chosen so the decompile dominates the measurement.
@@ -291,19 +305,45 @@ def main() -> int:
 
     if not BASELINE.is_file():
         print(
-            f"no baseline at {BASELINE}; record one with --write-baseline",
+            f"NOT EVIDENCE: no baseline at {BASELINE}. Record one with\n"
+            "--write-baseline. This is exit 3, not 0: absence of evidence is\n"
+            "not evidence of no regression, and a caller cannot tell the two\n"
+            "apart from an exit status alone.",
             file=sys.stderr,
         )
-        return 0
+        return NOT_EVIDENCE
 
     baseline = json.loads(BASELINE.read_text())
     if baseline.get("unit") != unit:
         print(
-            f"baseline is in {baseline.get('unit')} and this run is in {unit}; "
-            "not comparable, skipping the gate",
+            f"NOT EVIDENCE: baseline is in {baseline.get('unit')} and this run\n"
+            f"is in {unit}; the two cannot be compared. This is the ordinary\n"
+            "state on a host without usable `perf` (every GitHub runner blocks\n"
+            "instruction counting via kernel.perf_event_paranoid), where the\n"
+            "gate falls back to wall-clock. Exit 3 so an unsupported runner is\n"
+            "visibly not evidence rather than a pass.",
             file=sys.stderr,
         )
-        return 0
+        return NOT_EVIDENCE
+
+    # P2: comparison iterates CURRENT results, so a reference that failed to
+    # measure silently leaves the comparison rather than failing it. Measure
+    # one of three and the gate would pass on a third of the evidence.
+    expected = {
+        name
+        for name, value in baseline.get("measures", {}).items()
+        if isinstance(value, (int, float)) and value > 0
+    }
+    unmeasured = sorted(expected - set(current))
+    if unmeasured:
+        print(
+            "NOT EVIDENCE: the baseline records references this run did not\n"
+            f"measure: {unmeasured}. A partial measurement is not a\n"
+            "measurement -- the missing rows would otherwise vanish from the\n"
+            "comparison and the gate would pass on the remainder.",
+            file=sys.stderr,
+        )
+        return NOT_EVIDENCE
 
     problems = compare(current, baseline, threshold)
     if problems:
