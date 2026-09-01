@@ -83,7 +83,9 @@ CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 # gotos hardest. Every published declaration number before 2026-08-21 carries it.
 _NOT_A_TYPE = r"(?!goto\b|return\b|break\b|continue\b|case\b|default\b|else\b|do\b)"
 DECL_RE = re.compile(
-    r"^\s{1,8}" + _NOT_A_TYPE + r"(?:const\s+|unsigned\s+|signed\s+|struct\s+|static\s+)*"
+    r"^\s{1,8}"
+    + _NOT_A_TYPE
+    + r"(?:const\s+|unsigned\s+|signed\s+|struct\s+|static\s+)*"
     r"[A-Za-z_]\w*(?:\s*\*)*\s+\**[A-Za-z_]\w*(?:\s*\[[^\]]*\])?\s*;\s*$",
     re.MULTILINE,
 )

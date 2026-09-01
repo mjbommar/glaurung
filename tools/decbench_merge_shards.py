@@ -87,7 +87,9 @@ def merge_shards(shards: Iterable[dict[str, Any]]) -> dict[str, Any]:
     # in their union; select it again using the benchmark's distance ordering.
     hardest_buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for entry in hardest.values():
-        hardest_buckets.setdefault((entry["metric"], entry["decompiler"]), []).append(entry)
+        hardest_buckets.setdefault((entry["metric"], entry["decompiler"]), []).append(
+            entry
+        )
     merged_hardest: list[dict[str, Any]] = []
     for bucket in sorted(hardest_buckets):
         entries = hardest_buckets[bucket]

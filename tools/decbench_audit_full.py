@@ -144,7 +144,9 @@ def _evaluated(
                 metric_values[metric] = float(value)
                 found += 1
         if not found:
-            raise AuditError(f"evaluated result has no function metrics for {column}: {path}")
+            raise AuditError(
+                f"evaluated result has no function metrics for {column}: {path}"
+            )
     return values
 
 
@@ -205,9 +207,7 @@ def audit(tree: Path, published_path: Path, column: str) -> dict[str, Any]:
     metric_denominators = {metric: 0 for metric in metrics}
     scores: dict[str, ScoreTally] = {
         name: {
-            "metrics": {
-                metric: {"perfect": 0, "denominator": 0} for metric in metrics
-            },
+            "metrics": {metric: {"perfect": 0, "denominator": 0} for metric in metrics},
             "union": {"perfect": 0, "denominator": 0},
         }
         for name in decompilers

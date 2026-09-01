@@ -976,7 +976,9 @@ def main(argv=None) -> int:
         )
         return 2
     try:
-        lanes = resolve(args.selectors or ["@smoke"], arches=args.arch, stripped=args.stripped)
+        lanes = resolve(
+            args.selectors or ["@smoke"], arches=args.arch, stripped=args.stripped
+        )
     except (NoMatch, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
