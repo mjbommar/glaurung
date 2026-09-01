@@ -41,6 +41,7 @@ Its missing-body ledger is
 | [x] Demangle corpus (2,115 pairs) + versioned-symbol fix | estate 5.1 | `4c0f2ffe` |
 | [x] Perf ratchet, instructions-based | estate 6 | `a5f47189` |
 | [x] Full Python suite green | — | `4c0f2ffe` |
+| [~] Go fixtures: toolchain + lanes wired, opt-in | estate 7.1 | `6660f1f7` |
 
 ## Next
 
@@ -53,14 +54,21 @@ Its missing-body ledger is
 | [ ] PE entry/TLS/import identity fixture | real-binary R1/R4 | write failing fixture first |
 | [ ] Cortex-M MRS/MSR body-recovery fixture | real-binary R1 / failure F2a | proven common cause of all 31 F2 rows |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
+| [ ] Promote realistic corpus beyond discovery-only evidence | real-binary R5 | body accounting, semantic subset, signal predicates, mandatory release lane |
+| [ ] Source-grounded PE hostile-shape family | real-binary R4/R5 | PE32/PE32+, identity/TLS/SEH/import oracles |
+| [ ] Source-grounded ARM64/Cortex-M hostile family | real-binary R1/R5 | ARM64 parity plus independent F2a guard |
 | [ ] Page-align fixture + symbol-snapping guard | parity #9 | needs 4 baselines |
 | [ ] Pointer/array render (`char **argv`) | parity #6 | |
 | [ ] Variadic / call-site arity | parity #3 | |
 | [ ] Inlined-body register threading | parity #4 | |
-| [ ] Wire Go fixtures 176-180 | estate 7.1 | needs a quiet machine |
+| [ ] Go fixtures: manifest entries + 4 baselines | estate 7.1 | wiring landed; needs a quiet machine |
+| [ ] Record the perf baseline | estate 6 | tool landed; needs a settled tree |
 | [ ] Structural baseline at O2 | estate 7.5 / parity #8 | |
 | [ ] Canary + determinism in the default suite | estate 2 | |
 | [~] Thin-module corpora: similarity, flirt, target | estate 5.2-5.4 | agent in flight |
+| [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | no baseline; missing/unit-mismatch/partial evidence currently exits zero |
+| [ ] Record provenance-complete release perf baseline | estate 6 / real-binary R6 | wait for clean committed Rust tree and exact release build |
+| [ ] Join perf with completeness, RSS, and determinism report | estate 2/6 / real-binary M7 | reuse profiler and existing determinism tests |
 | [ ] `samples/` 18.8 MB dedup | estate 9.2 | investigated, see below |
 
 ## Findings worth keeping
