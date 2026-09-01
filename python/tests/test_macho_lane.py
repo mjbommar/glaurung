@@ -142,34 +142,32 @@ def test_x86_64_recovers_the_float_prototype_exactly():
     ), "x86-64 used to recover this exactly; a change here is a real regression"
 
 
-def test_arm64_float_prototype_is_pinned_as_the_open_defect():
-    """ARM64 loses the signature of a function ending in `fmadd`.
-
-    `double mix_float(double d, float f)` lowers on ARM64 to
-    `fcvt d1,s1; fmov d2,#2.0; fmadd d0,d0,d2,d1`. The `fmov` immediate is
-    recovered (it used to be dropped by the operand decoder), but `fmadd`
-    is not lifted, so `d0` -- the return register -- has no definition and the
-    whole prototype collapses.
-
-    **Lifting `fmadd` is not on its own the fix, and this is the interesting
-    part.** Mapping it to an opaque intrinsic was tried and measured: it
-    recovered the full signature AND broke
-    `217_complex_arithmetic:aarch64:O2:complex_add_conj` from pass to fail,
-    because the emitted C then calls `__unknown(0)` and uses its result. A
-    definition the renderer cannot express is worse than no definition. FMA
-    needs a ternary form in `float_gate`'s operator table -- it is neither
-    `Binary` nor `Move` -- before it can be lifted.
-    """
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "OPEN DEFECT (AArch64 FMA): `double mix_float(double d, float f)` "
+        "lowers to `fcvt d1,s1; fmov d2,#2.0; fmadd d0,d0,d2,d1`. The `fmov` "
+        "immediate is recovered, but `fmadd` is not lifted, so d0 -- the "
+        "return register -- has no definition and the whole prototype "
+        "collapses to `void(void)`. x86-64 recovers the same source exactly, "
+        "so this is an AArch64 lifter gap, not a general float defect.\n\n"
+        "Lifting fmadd is NOT on its own the fix, and that is the trap: "
+        "mapping it to an opaque intrinsic was tried and measured. It "
+        "recovered the full signature AND broke "
+        "`217_complex_arithmetic:aarch64:O2:complex_add_conj` pass -> fail, "
+        "because the emitted C then calls `__unknown(0)` and uses its result. "
+        "A definition the renderer cannot express is worse than none. FMA is "
+        "ternary; `float_gate`'s operator table has Move, Negate and Binary "
+        "only, so it needs a form there FIRST. When this XPASSes, re-run "
+        "`dectest 217_complex_arithmetic --arch aarch64`."
+    ),
+)
+def test_arm64_recovers_the_float_prototype():
+    """ARM64 must recover what x86-64 already does from identical source."""
     p = dylib("aarch64")
     if not p.is_file():
         pytest.skip("fixture absent")
-    sig = signature(p, "_mix_float")
-    assert sig == "void _mix_float(void)", (
-        f"ARM64 float prototype changed: {sig!r}\n"
-        "If FMA rendering landed, update this pin -- and re-run "
-        "`dectest 217_complex_arithmetic --arch aarch64`, which is the cell "
-        "that caught the naive version."
-    )
+    assert signature(p, "_mix_float") == ("double _mix_float(double arg0, float arg1)")
 
 
 def test_the_float_constant_is_recovered_on_arm64():

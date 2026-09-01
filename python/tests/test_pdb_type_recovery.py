@@ -58,42 +58,74 @@ FIXTURE_DIR = ROOT / "tests" / "pdb_types"
 DLL = FIXTURE_DIR / "types.dll"
 PDB = FIXTURE_DIR / "types.pdb"
 
-#: (function, source declaration, recovered-today signature).
-#: `scale_pair` is the control: it has no struct or double, and ABI inference
-#: alone gets its arity and widths right. The other four are what PDB types
-#: would fix.
+#: `(function, source declaration, why the PDB is needed)`.
+#:
+#: These assert the SOURCE type, which is the answer a PDB makes available.
+#: Four are strict xfails: they document what PDB prototype wiring would fix,
+#: and go red the day it lands so the win cannot pass unnoticed. `scale_pair`
+#: is the control -- ABI inference alone gets it right, so it must pass today.
 PROTOTYPES = [
-    (
+    pytest.param(
         "point_sum",
-        "int point_sum(struct Point p)",
-        "unsigned int point_sum(long arg0)",
-        "a by-value struct is flattened to the register that carries it",
+        "unsigned int point_sum(struct Point arg0)",
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason=(
+                "OPEN DEFECT (PDB prototypes): a by-value struct is flattened "
+                "to the register that carries it -- `point_sum(long)`. The TPI "
+                "stream describes `struct Point` fully."
+            ),
+        ),
     ),
-    (
+    pytest.param(
         "record_value",
-        "int record_value(struct Record *r)",
-        "unsigned int record_value(int * arg0)",
-        "the pointee is guessed from the first access, not read from the PDB",
+        "unsigned int record_value(struct Record * arg0)",
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason=(
+                "OPEN DEFECT (PDB prototypes): the pointee is guessed from the "
+                "first access -- `record_value(int *)` -- not read from the PDB."
+            ),
+        ),
     ),
-    (
-        "scale_pair",
-        "int scale_pair(int a, short b, char c)",
-        "unsigned int scale_pair(int arg0, short arg1, signed char arg2)",
-        "CONTROL: arity and integer widths are right without the PDB",
-    ),
-    (
+    pytest.param(
         "mix_float",
-        "double mix_float(double d, float f)",
-        "double mix_float(float arg0, float arg1)",
-        "the double parameter is recovered as float -- both arrive in xmm",
+        "double mix_float(double arg0, float arg1)",
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason=(
+                "OPEN DEFECT (PDB prototypes): the `double` parameter is "
+                "recovered as `float` -- both arrive in xmm and the ABI cannot "
+                "distinguish them. Mach-O x86-64 gets this RIGHT from DWARF-less "
+                "inference, so the Windows path is the outlier."
+            ),
+        ),
     ),
-    (
+    pytest.param(
         "widen",
-        "unsigned long long widen(unsigned int v)",
-        "unsigned long widen(int arg0)",
-        "signedness and long-long width are not recoverable from the ABI alone",
+        "unsigned long long widen(unsigned int arg0)",
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason=(
+                "OPEN DEFECT (PDB prototypes): signedness and long-long width "
+                "are not recoverable from the ABI alone -- `widen(int)` returns "
+                "`unsigned long`."
+            ),
+        ),
+    ),
+    # The control. No struct, no double: ABI inference suffices, so this must
+    # pass. If it ever fails the problem is not the PDB.
+    pytest.param(
+        "scale_pair",
+        "unsigned int scale_pair(int arg0, short arg1, signed char arg2)",
     ),
 ]
+
+
+#: Just the function names, for the tests that do not care about types.
+#: `pytest.param` objects carry their values in `.values`, so indexing the
+#: list directly stopped working when these grew xfail marks.
+FUNCS = [param.values[0] for param in PROTOTYPES]
 
 
 def decompile(func: str) -> str:
@@ -155,7 +187,7 @@ def test_every_function_is_named_from_the_pdb():
     import glaurung
 
     m = glaurung.symbols.pdb_symbol_map(str(DLL), str(FIXTURE_DIR))
-    assert set(m.values()) >= {p[0] for p in PROTOTYPES}, sorted(m.values())
+    assert set(m.values()) >= set(FUNCS), sorted(m.values())
     # Addresses must be real VAs in the image, not RVAs or zero.
     assert all(va > 0x1000 for va in m), sorted(hex(v) for v in m)
 
@@ -163,38 +195,19 @@ def test_every_function_is_named_from_the_pdb():
 # --- what does not, pinned so a fix is visible ------------------------------
 
 
-@pytest.mark.parametrize(
-    ("func", "source", "today", "why"),
-    PROTOTYPES,
-    ids=[p[0] for p in PROTOTYPES],
-)
-def test_recovered_prototype_is_what_it_is_today(func, source, today, why):
-    """Pin the current signature against the source declaration.
+@pytest.mark.parametrize(("func", "expected"), PROTOTYPES)
+def test_recovered_prototype_matches_the_source_declaration(func, expected):
+    """The PDB describes these types exactly; the decompiler should use them.
 
-    When PDB procedure prototypes are wired up this SHOULD fail, and the
-    message carries the answer it should then produce.
+    Four of the five are strict xfails. When PDB procedure prototypes are
+    wired up they XPASS, which under `strict=True` turns the test RED -- so
+    the fix announces itself instead of silently changing output. That is the
+    opposite of pinning today's wrong answer, which this file did first and
+    which makes a fix indistinguishable from a regression.
+
+    A signature change moves the def-use census; re-run it alongside.
     """
-    got = signature(func)
-    assert got == today, (
-        f"{func}: recovered signature changed.\n"
-        f"  source declares : {source}\n"
-        f"  pinned as       : {today}\n"
-        f"  now produces    : {got}\n"
-        f"  ({why})\n"
-        "If this is the PDB prototype wiring landing, update the pin -- and "
-        "check the def-use census, because a signature change moves it."
-    )
-
-
-def test_the_control_case_needs_no_pdb():
-    """`scale_pair` proves the lane measures PDB types, not general breakage.
-
-    Its arity and integer widths are right from ABI inference alone. If this
-    one ever regresses, the problem is not the PDB.
-    """
-    assert signature("scale_pair") == (
-        "unsigned int scale_pair(int arg0, short arg1, signed char arg2)"
-    )
+    assert signature(func) == expected
 
 
 def test_no_struct_type_reaches_a_recovered_signature():
@@ -204,7 +217,7 @@ def test_no_struct_type_reaches_a_recovered_signature():
     TPI stream -- `find_struct_layout` returns their fields -- and neither name
     appears in any recovered prototype.
     """
-    sigs = " ".join(signature(f) for f, *_ in PROTOTYPES)
+    sigs = " ".join(signature(f) for f in FUNCS)
     assert not re.search(r"\bstruct\s+(Point|Record)\b", sigs), (
         "a PDB struct type reached a signature -- the prototype wiring may "
         f"have landed; update this lane:\n{sigs}"
