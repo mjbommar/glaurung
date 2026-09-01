@@ -26,10 +26,13 @@ it survives the session and is reviewable in a diff.
 | [x] UPX confidence calibration + dead config knob | (found by 1.2) | `6d865bc7` |
 | [x] `samples/adversarial/` fixtures repaired | (found by 1.2) | `6d865bc7` |
 | [x] CI runs `cargo test` and the Python suite | estate 1.5 | `f6ade219` |
-| [x] Named constants for syscall arguments | parity #5 | pending |
-| [x] Reachability ratchet (15 tests) | estate 1.1 | pending |
-| [x] Three CWD-dead Python files fixed | estate 1.4 | pending |
-| [x] `-ra` for visible skips | estate 1.6 | pending |
+| [x] Named constants for syscall arguments | parity #5 | `9b8be51b` |
+| [x] Fuzz crate in a gate lane (12 lanes now) | estate 3.1 | `78ad620e` |
+| [x] Three deeper fuzz targets + seed generator | estate 3.2, 3.3 | `f57014dc` |
+| [x] Inventory regenerated: 89 -> 77 unreachable | — | `c320b3f7` |
+| [x] Reachability ratchet (15 tests) | estate 1.1 | `95249c54` |
+| [x] Three CWD-dead Python files fixed | estate 1.4 | `95249c54` |
+| [x] `-ra` for visible skips | estate 1.6 | `95249c54` |
 
 ## Next
 
@@ -42,7 +45,6 @@ it survives the session and is reviewable in a diff.
 | [ ] Wire Go fixtures 176-180 | estate 7.1 | needs a quiet machine |
 | [ ] Structural baseline at O2 | estate 7.5 / parity #8 | |
 | [ ] Canary + determinism in the default suite | estate 2 | |
-| [ ] Fuzz crate in a gate lane | estate 3.1 | |
 | [ ] Thin-module corpora | estate 5 | |
 | [ ] Perf ratchet | estate 6 | |
 | [ ] `samples/` 18.8 MB dedup | estate 9.2 | investigated, see below |
