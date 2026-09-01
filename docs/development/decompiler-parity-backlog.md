@@ -275,6 +275,64 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
    > Ghidra makes the identical error on the real sample; angr keeps the
    > argument. Ranking unchanged, but the effort is now known to be a
    > one-condition change plus a corpus measurement, not dataflow work.
+   >
+   > ### Both candidate fixes were built and measured. Neither lands.
+   >
+   > **The principled one does not reach the case.** The contiguity guard is
+   > restricted to AArch64, and "argument registers form a contiguous prefix"
+   > is an ABI fact that holds for SysV and Win64 too, so widening it looked
+   > like the correct minimal change. It is inert here: contiguity proves a
+   > slot is an input only from a *higher* occupied slot, and in this shape
+   > `rdx` is the highest one set. Built, and the argument is still dropped.
+   >
+   > **The broad one works and costs far too much.** Keeping the slot rooted
+   > whenever a read intervenes recovers the argument on the minimal case and
+   > on the real binary:
+   >
+   > ```c
+   > printf("Static function called %d times\n", var17)   // beats Ghidra, and
+   >                                                      // angr's __TMC_END__
+   > ```
+   >
+   > The execution differential *endorsed* it -- 824 host lanes, **2
+   > improvements, zero regressions**, `132_cpp_vtable_layout` and
+   > `139_cpp_object_lifetime` going fail -> pass. The def-use census did not:
+   >
+   > | lane | undefined reads | unverified functions |
+   > |---|---|---|
+   > | clang:O0 | 140 -> **552** | 36 -> 242 |
+   > | clang:O2 | 256 -> **668** | 86 -> 292 |
+   > | gcc:O0 | 124 -> **536** | 20 -> 226 |
+   > | gcc:O2 | 136 -> **548** | 65 -> 271 |
+   > | rustc:O0 | 7658 -> 7764 | |
+   >
+   > About 1,600 new undefined reads across the host lanes -- roughly 4x --
+   > plus two brand-new violations in Rust fixtures. That is the invented-
+   > argument failure mode stated as a number: the gate is claiming slots that
+   > were never arguments, and the emitted call then reads a register nothing
+   > defined. Reverted; `fold_one_call.rs` is byte-restored and the census is
+   > green.
+   >
+   > ### What a landing fix needs
+   >
+   > Independent evidence that the slot **is** an argument, which
+   > `read_between` cannot supply because it answers a different question
+   > (*may this definition be moved?*). The contiguity rule is one such
+   > evidence source and is simply absent in this shape. The other, and the
+   > one that fits every motivating case here, is **format-string arity**:
+   > `"called %d times\n"` has one conversion, so `__printf_chk` takes
+   > exactly three arguments. `call_contracts.rs` already carries
+   > `is_variadic` and deliberately declines to cap variadic calls
+   > (`fixed_scalar_argument_registers` returns `None` for them); nothing
+   > parses format strings. That makes this item a dependent of #3 rather than
+   > an independent one-condition change -- **re-rank it below #3**, and note
+   > that #3 buys #4 for free once printf-family arity is derivable.
+   >
+   > Second time in this session that the execution differential blessed a
+   > change a census rejected (the other:
+   > `test-estate/10-ci-environment-gap.md`). Correctness gates and quality
+   > gates are answering different questions, and a change touching argument
+   > recovery must clear both.
 
 ### Triage value & polish
 
