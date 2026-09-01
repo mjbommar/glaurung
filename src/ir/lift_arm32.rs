@@ -32,6 +32,7 @@ use crate::ir::types::*;
 mod flags;
 mod predication;
 mod shifts;
+mod sysreg;
 #[path = "lift_arm32/wide_multiply.rs"]
 mod wide_multiply;
 use flags::{
@@ -389,59 +390,10 @@ fn lift_one_decoded(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
         }];
     }
 
-    // Cortex-M special registers (BASEPRI, IPSR, PSP, ...) are machine state,
-    // not memory. Model them as typed intrinsics so def-use stays honest: an
-    // `mrs` DEFINES its destination, so without an output the register reads as
-    // undefined everywhere downstream; an `msr` CONSUMES its source, so without
-    // an input a real dependency disappears and the producing computation looks
-    // dead. Claiming memory effects instead would make every surrounding load
-    // and store unorderable.
-    //
-    // The system register is part of the intrinsic name, which keeps
-    // `BASEPRI_MAX` distinct from `BASEPRI` -- their update semantics differ,
-    // `BASEPRI_MAX` only lowering the priority ceiling. An unrecognised SYSm
-    // encoding still yields a named intrinsic rather than nothing: an empty
-    // lift discards the enclosing function, which is the failure this whole
-    // path exists to prevent (DecBench F2a).
-    if (mnem == "mrs" || mnem == "msr") && ops.len() == 2 {
-        let is_mrs = mnem == "mrs";
-        // Capstone renders the special register as a bare name in the operand
-        // it cannot type as a GPR; `operand_reg` returns it either way, so the
-        // GPR side is identified by position rather than by shape.
-        let (gpr, sysreg) = if is_mrs { (&ops[0], &ops[1]) } else { (&ops[1], &ops[0]) };
-        let sys_name = operand_reg(sysreg)
-            .map(|r| match r {
-                VReg::Phys(n) => n.to_ascii_lowercase(),
-                other => format!("{other:?}").to_ascii_lowercase(),
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-        let name = format!("arm32.{mnem}.{sys_name}");
-        if let Some(reg) = operand_reg(gpr) {
-            return vec![if is_mrs {
-                Op::Intrinsic {
-                    name,
-                    ins: vec![],
-                    outs: vec![(reg, Width::W32)],
-                    reads_mem: false,
-                    writes_mem: false,
-                }
-            } else {
-                Op::Intrinsic {
-                    name,
-                    ins: vec![Value::Reg(reg)],
-                    outs: vec![],
-                    reads_mem: false,
-                    writes_mem: false,
-                }
-            }];
-        }
-        return vec![Op::Intrinsic {
-            name,
-            ins: vec![],
-            outs: vec![],
-            reads_mem: false,
-            writes_mem: false,
-        }];
+    // Cortex-M special registers: see `sysreg`. Reaching this at all depends
+    // on the MClass fallback decoder in `crate::disasm::capstone`.
+    if sysreg::is_system_register_transfer(mnem, ops) {
+        return sysreg::lift(mnem, ops, operand_reg);
     }
 
     // VFP register moves are bit-preserving operations even though the source

@@ -248,6 +248,16 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01 (third, same day): `product_loc_above_1000` 33,327 -> 33,334,
+    +7 lines, from the Cortex-M system-register work. The first cut of it put
+    ~55 lines directly in `ir/lift_arm32.rs` and took that file to 2,025 --
+    `product_files_above_2000` 3 -> 4, plus three other measures. The ratchet
+    was right to object, so the handling moved to `ir/lift_arm32/sysreg.rs`
+    beside the five submodules that already exist there, which returned three
+    of the four measures to baseline. What remains is the seven-line call site
+    in a file still above 1,000 lines. Accepted rather than chased: removing it
+    would mean not calling the module.
+
     2026-09-01 (second, same day): `product_mean_loc` 407.982 -> 408.342 and
     `product_pct_loc_above_1000` 18.033 -> 18.017, from the PE symbol-summary
     fixes -- `symbol_table_entries` in `src/lib.rs`, `codeview_payload_ranges`
@@ -475,11 +485,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": pytest.approx(404.0),
         "product_files_above_1000": 23,
         "product_files_above_2000": 3,
-        "product_loc_above_1000": 33327,
+        "product_loc_above_1000": 33334,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(408.3421633554084),
-        "product_median_loc": pytest.approx(303),
-        "product_pct_loc_above_1000": pytest.approx(18.016639726671677),
+        "product_mean_loc": pytest.approx(407.80176211453744),
+        "product_median_loc": pytest.approx(302.0),
+        "product_pct_loc_above_1000": pytest.approx(18.004558663080232),
     }
 
 
