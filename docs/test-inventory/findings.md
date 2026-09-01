@@ -1,5 +1,13 @@
 # What the survey found
 
+> **Status, 2026-08-31.** This is the original survey, kept as written. Much of
+> it has since been ACTED ON, and three of its claims turned out to be wrong
+> when checked. Corrections are marked inline as **[CORRECTED]** and fixes as
+> **[FIXED]**; the live position is in
+> [`../development/test-estate/EXECUTION.md`](../development/test-estate/EXECUTION.md).
+> Counts in `index.json` are regenerated and current: unreachable is now **77**,
+> down from 89.
+
 Five surveys walked disjoint territories: the Python suite, the Rust tests and
 targets, the binary assets, the fixture corpora, and the tooling. Counts below
 were obtained by counting. Where a claim contradicted `CLAUDE.md` or a project
@@ -20,6 +28,10 @@ check` and not `cargo test`. The only `cargo` CI actually runs is
 wheels. Across all workflows exactly **6 of 445** Python test files execute.
 The other **439 run only when a human types `uv run pytest`**.
 
+**[FIXED]** `f6ade219` adds `.github/workflows/test-suite.yml`: three jobs
+running `cargo test --features python-ext`, the full Python suite, and
+ruff.
+
 The estate is inverted: the expensive slow matrix runs on every push, and the
 cheap 439-file suite has no workflow at all.
 
@@ -36,6 +48,14 @@ suspicious_integration  symbols_elf  symbols_macho  symbols_pe  truncation_json
 **28 tests that never run**, including the whole UPX packer suite, entropy over
 real samples, and the adversarial suite whose stated purpose is that a truncated
 ELF/PE/gzip *must error rather than panic*.
+
+**[FIXED]** `6d865bc7` wires all ten. They found **five real product defects**:
+PE32+ optional headers parsed at PE32 offsets (every 64-bit PE reported
+imports=0), an integer-overflow panic in the IPv4 classifier, nondeterministic
+triage JSON, a `HashMap`-order leak in architecture ranking, and UPX confidence
+that could not clear 0.5 on ELF. A sixth defect was in the fixtures: four of
+five `samples/adversarial/` files contained the literal text `\xNN` rather than
+bytes, so the adversarial suite had no ELF in it.
 
 `tests/register_view_semantics.rs` is `#![cfg(feature = "exec")]` at line 24, so
 a plain `cargo test` compiles it to an empty target **and reports it passing**.
@@ -63,14 +83,20 @@ files and 21,459 LOC, not 21 and 14,649 — it has grown 46%; its gate is at
 * **Three permanently dead Python files.** `test_symbols_demangled.py`,
   `test_demangle_integration.py` and `test_view_function_tools.py` hardcode
   `"../samples/..."` **CWD-relative**, which resolves outside the repository from
-  every plausible working directory. Two of the three are duplicates of each
-  other.
+  every plausible working directory. ~~Two of the three are duplicates of each
+  other.~~ **[CORRECTED]** They are not duplicates: `test_symbols_demangled.py`
+  calls `list_symbols_demangled` directly, while `test_demangle_integration.py`
+  checks the same evidence surviving a full `analyze_path`. **[FIXED]** in
+  `95249c54` -- all three anchored from `Path(__file__)`, all three pass, none
+  deleted, and no product bug behind them.
 * **13 files / 142 tests** wait on `tests/fixtures/msvc-pdb/*.exe|dll`, which are
   gitignored and fetched on demand — and **nothing in the repository calls
   `fetch.sh`**. The fixture README's claim that "test invocations call fetch.sh
   first; CI caches the result" is not true of any file in the tree.
 * **176 Python files call `pytest.skip()` at runtime** and `addopts` has no
   `-ra`, so a run with 200 silent skips is visually identical to a clean one.
+  **[FIXED]** `-ra` added. The real number is **41 skips**, 21 of them waiting
+  on the gitignored msvc-pdb fixtures that nothing fetches.
 * `test_cli_explain*.py` gate on a path under `/tmp`, which this project is
   forbidden from writing to and which `TMPDIR` is exported away from. It can
   never exist.
@@ -93,7 +119,9 @@ succeeds having measured nothing.
 
 `fuzz/` is a separate crate, not a workspace member, so `cargo check
 --all-targets` never sees it in any gate lane; no CI calls `cargo fuzz` and no
-corpus is committed.
+corpus is committed. **[FIXED, partly]** `78ad620e` adds a twelfth
+feature-gate lane that checks `fuzz/Cargo.toml`, so the targets are now
+compile-verified. They still do not RUN -- no corpus, no CI invocation.
 
 ## 6. Only one ratchet runs by default, and it is not about behaviour
 
@@ -114,17 +142,25 @@ behavioural baseline is `slow`-marked.
 * `assets/` is **92% unreferenced** — 12.76 MB of 13.8 MB, including a 9.5 MB
   `glaurung-logo-full.png`. Only the README banner and `glaurung-original.png`
   are used, the latter as a genuine triage negative-case fixture at
-  `src/triage/api.rs:807`.
+  `src/triage/api.rs:807`. **[FIXED]** `937425d0`; `assets/` is now 1.1 MB.
 * `samples/binaries/metadata/` — **all 63 files fail `json.load`**, containing
   literal `\n` two-character sequences instead of newlines. They describe host
   binaries (bash, gcc, clang-20, initrd.img) absent from the corpus. Nothing
-  reads them. The other 339 metadata sidecars parse.
+  reads them. The other 339 metadata sidecars parse. **[FIXED]** `937425d0`
+  deletes the 63; a ratchet in `test_estate_reachability.py` now asserts every
+  remaining sidecar parses.
 * **18.8 MB of exact duplication** — 85 byte-identical pairs between
   `samples/binaries/linux/amd64/export/` and the legacy tree, md5-confirmed,
   including a 4.5 MB `hello-rust-debug`. Both sides are live, referenced by
-  different tests; the bytes simply exist twice.
+  different tests; the bytes simply exist twice. **Not yet acted on, and it is
+  not a straight delete**: same-relative-path is NOT proof of identical content
+  (`libraries/shared/mathlib.dll` exists at both paths and differs), and five
+  pairs are referenced from both sides. Any repoint-then-delete must verify
+  content per file.
 * `scripts/setup-references.sh` calls `git submodule add` against repositories
   that are no longer submodules — `.gitmodules` was removed. It cannot work.
+  **[FIXED]** deleted in `937425d0`, after being proven non-functional by
+  running it rather than by reading it.
 * `scripts/lint-rust.sh` runs `cargo clippy --all-targets --all-features` and
   would catch much of §3, but nothing calls it and it is currently red with
   ~260 pre-existing errors under `-D warnings`.
