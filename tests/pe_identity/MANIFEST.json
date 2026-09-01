@@ -1,0 +1,29 @@
+{
+  "purpose": "PE32/PE32+ identity lane (test-estate phase 4.1, real-binary R4)",
+  "built_by": "tests/pe_identity/build.sh (clang-cl + lld-link, /nodefaultlib)",
+  "why": "Shipped Windows binaries carry NO COFF symbol table -- win10-dismcore.dll has zero COFF symbols against 4 exports and 222 imports. lld-link produces the same shape, so these fixtures are the case a COFF-only resolver cannot answer at all. `imported_helper` is a real import resolved through helperN.dll's generated import library, so the IMPORT disposition is measured rather than synthesized.",
+  "helper32.dll": {
+    "sha256": "4780105ba974ea2de279069c789ab363505ff82785b102fc791424d7ff3f77d2",
+    "size": 2048
+  },
+  "helper64.dll": {
+    "sha256": "8b7d8ffc16213a6f25e2e30344981d357a1eb52deddb930cc01f6b0a0644cfcc",
+    "size": 2560
+  },
+  "ident32.dll": {
+    "sha256": "1372de8edf696daa7869e218ba33e02c5ce9ea654a9dc94f7850656ef4ce1ce5",
+    "size": 2560
+  },
+  "ident64.dll": {
+    "sha256": "152e193e61bc5257e2b7a5bf3f009ed62f3f3f719cfd6997b27c829f4130eedb",
+    "size": 2560
+  },
+  "ident32.pdb": {
+    "sha256": "d62330686f4f249e601474009da7df4f16a1d6bcad65cc59565f6e5f239e8443",
+    "size": 81920
+  },
+  "ident64.pdb": {
+    "sha256": "ffeaef979ec4d89b7d7c1467011bf920bd8020998a37d44de0fa3d5a8591cd2f",
+    "size": 77824
+  }
+}

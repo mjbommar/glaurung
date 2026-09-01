@@ -107,8 +107,58 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Top-level helper: symbol address map for a file
     m.add_function(wrap_pyfunction!(symbol_address_map_py, m)?)?;
     m.add_function(wrap_pyfunction!(symbol_table_entries_py, m)?)?;
+    m.add_function(wrap_pyfunction!(pe_export_entries_py, m)?)?;
 
     Ok(())
+}
+
+/// PE export-table entries: `(va, name, ordinal, forwarder)`.
+///
+/// Shipped Windows binaries carry **no COFF symbol table** -- `win10-dismcore.dll`
+/// has zero COFF symbols against 4 exports and 222 imports -- so a resolver that
+/// reads only `symbol_table_entries` finds nothing in them. Their function
+/// identities live in the export table and the PDB.
+///
+/// `forwarder` is `Some(target)` for a forwarded export (`"OTHERDLL.RealName"`),
+/// which is **not a local body**: the code lives in another module, so a
+/// local-body request must be refused rather than answered with the forwarder's
+/// address. That is the same distinction DecBench failure class F1b draws for
+/// imports.
+///
+/// `va` is `image_base + rva`, matching `symbol_table_entries`. It is 0 for a
+/// forwarded export, which has no code in this image.
+#[cfg(feature = "python-ext")]
+#[pyfunction]
+#[pyo3(name = "pe_export_entries")]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64))]
+fn pe_export_entries_py(
+    path: String,
+    max_read_bytes: u64,
+    max_file_size: u64,
+) -> PyResult<Vec<(u64, String, u32, Option<String>)>> {
+    let limit = std::cmp::min(max_read_bytes, max_file_size);
+    let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
+    let Ok(pe) = crate::formats::pe::PeParser::new(&data[..]) else {
+        return Ok(Vec::new());
+    };
+    let Ok(table) = pe.exports() else {
+        return Ok(Vec::new());
+    };
+    let base = pe.image_base();
+    let mut out = Vec::new();
+    for e in &table.exports {
+        let Some(name) = e.name else { continue };
+        let forwarder = e.forwarder.map(|f| f.to_string());
+        let va = if forwarder.is_some() {
+            0
+        } else {
+            base.saturating_add(e.rva as u64)
+        };
+        out.push((va, name.to_string(), e.ordinal, forwarder));
+    }
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(out)
 }
 
 /// Symbol table entries with kind and definedness, for a file.

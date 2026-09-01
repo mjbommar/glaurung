@@ -122,11 +122,11 @@ directory for such a DLL at all. Annotated in place.
 | [x] parity #4 both candidates measured and REVERTED | parity #4 | `e8dafd33` |
 | [x] Cortex-M sysregs undecodable (F2a, 31 rows) | real-binary R1 / F2a | `0031c3ee` |
 | [x] MClass fallback decoder + SysReg operand + MRS/MSR lift | real-binary R1 / F2a | `0031c3ee` |
+| [x] Cortex-M MRS/MSR body-recovery fixture | real-binary R1 / F2a | `0031c3ee` |
+| [x] Hermetic PDB type/layout lane | estate 4 / R4 | `c7200d2d` |
 | [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
-| [ ] Hermetic PDB type/layout lane | estate 4 / real-binary R4 | source declarations through recovered fields and prototypes |
 | [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
-| [ ] Cortex-M MRS/MSR body-recovery fixture | real-binary R1 / failure F2a | proven common cause of all 31 F2 rows |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
 | [ ] Promote realistic corpus beyond discovery-only evidence | real-binary R5 | body accounting, semantic subset, signal predicates, mandatory release lane |
 | [ ] Source-grounded PE hostile-shape family | real-binary R4/R5 | PE32/PE32+, identity/TLS/SEH/import oracles |

@@ -380,9 +380,14 @@ symbol_address_map = _native.symbol_address_map
 # claiming one name as an ambiguity. See tools/decbench_symbols.py.
 symbol_table_entries = _native.symbol_table_entries
 
+# PE export-table entries. Shipped Windows binaries carry no COFF symbol table
+# at all, so this is where their function identities actually live.
+pe_export_entries = _native.pe_export_entries
+
 __all__ += [
     "symbol_address_map",
     "symbol_table_entries",
+    "pe_export_entries",
 ]
 
 # Expose logging config from native and Python wrapper

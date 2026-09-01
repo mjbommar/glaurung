@@ -34,12 +34,24 @@ import decbench_symbols as S  # ty: ignore[unresolved-import]  # added above
 
 @pytest.fixture(scope="module")
 def entries() -> list[S.SymbolEntry]:
+    """COFF rows only -- every clause in this file is about that ladder.
+
+    The fixture DLL also has an export table, and export names are
+    UNDECORATED: `crc32_fn` and `worker_fn` match exactly there whether or not
+    the `_name` / `_name@N` ladder works. Testing the ladder against the merged
+    set would pass over a completely broken ladder, which is the opposite of
+    what these tests are for. The DecBench Windows projects are mingw-built and
+    do carry COFF tables -- that is the population these clauses describe.
+
+    Export- and import-sourced resolution is covered by
+    `test_pe_identity_lane.py`, where a binary with NO COFF table is the point.
+    """
     assert FIXTURE.is_file(), (
         f"{FIXTURE} is COMMITTED, not built. If it is missing the checkout is "
         "broken; rebuild with tests/decbench_adapter/build.sh."
     )
-    rows = S.load_entries(str(FIXTURE))
-    assert rows, "the object reader returned no symbols for the fixture"
+    rows = [e for e in S.load_entries(str(FIXTURE)) if e.source == "coff"]
+    assert rows, "the object reader returned no COFF symbols for the fixture"
     return rows
 
 

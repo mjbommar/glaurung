@@ -13,6 +13,7 @@
 # ...but the PDB type-recovery lane's fixture is COMMITTED: the lane must run
 # on a clone with no Windows toolchain. Same reason as the canary .so files.
 !tests/pdb_types/*.pdb
+!tests/pe_identity/*.pdb
 
 # Scratch output from local gate/benchmark runs (result maps, dumps, logs).
 # Never a source of truth: the committed artifacts are baseline.json and

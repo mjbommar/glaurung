@@ -248,6 +248,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     methodology itself (not the source tree) is caught too. Update this
     alongside the baseline file when it is deliberately regenerated.
 
+    2026-09-01 (fourth, same day): `product_mean_loc` 407.802 -> 407.912,
+    from `pe_export_entries` in `src/lib.rs` -- ~45 lines, most of it the
+    comment explaining that shipped Windows binaries carry no COFF symbol table
+    and that a forwarded export is not a local body. No file-count bucket moved.
+
     2026-09-01 (third, same day): `product_loc_above_1000` 33,327 -> 33,334,
     +7 lines, from the Cortex-M system-register work. The first cut of it put
     ~55 lines directly in `ir/lift_arm32.rs` and took that file to 2,025 --
@@ -487,9 +492,9 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "product_files_above_2000": 3,
         "product_loc_above_1000": 33334,
         "product_max_loc": 2268,
-        "product_mean_loc": pytest.approx(407.80176211453744),
+        "product_mean_loc": pytest.approx(407.91189427312776),
         "product_median_loc": pytest.approx(302.0),
-        "product_pct_loc_above_1000": pytest.approx(18.004558663080232),
+        "product_pct_loc_above_1000": pytest.approx(17.99969761112791),
     }
 
 

@@ -91,12 +91,19 @@ class Decoration(enum.StrEnum):
 
 @dataclass(frozen=True)
 class SymbolEntry:
-    """One row of a binary's symbol table."""
+    """One name-to-address fact, and where it came from."""
 
     address: int
     name: str
     kind: str
     defined: bool
+    #: `coff` | `export` | `import`. Kept because the three sources answer
+    #: different questions: only COFF carries i386 decoration (`_worker@4`),
+    #: only exports survive in a shipped Windows binary, and only imports can
+    #: prove a name is external. A test for the decoration ladder must be able
+    #: to look at COFF alone, or the export table's undecorated names rescue it
+    #: and it passes over a broken ladder.
+    source: str = "coff"
 
     @property
     def is_code(self) -> bool:
@@ -112,6 +119,8 @@ class Resolution:
     address: int | None = None
     decoration: Decoration = Decoration.NONE
     raw_symbol: str | None = None
+    #: Which table answered: `coff` | `export` | `import`.
+    source: str | None = None
     candidates: tuple[str, ...] = field(default=())
 
     @property
@@ -126,6 +135,7 @@ class Resolution:
             "address": self.address,
             "decoration": str(self.decoration),
             "raw_symbol": self.raw_symbol,
+            "source": self.source,
             "candidates": list(self.candidates),
         }
 
@@ -227,6 +237,7 @@ def resolve(
             address=hit.address,
             decoration=decoration,
             raw_symbol=hit.name,
+            source=hit.source,
         )
 
     # Clause 5: distinguish "it is an import" from "it is data" from "absent".
@@ -246,18 +257,56 @@ def resolve(
 
 
 def load_entries(binary: str) -> list[SymbolEntry]:
-    """Read a binary's symbol table via glaurung's own object reader.
+    """Every name-to-address fact the binary offers, from all three sources.
 
     `readelf` returns nothing for PE, which is why the 12 Windows binaries in
     the corpus were recorded `no-symbols` and never decompiled at all.
+
+    The COFF symbol table is not enough on its own. **Shipped Windows binaries
+    have none**: `win10-dismcore.dll` carries zero COFF symbols against 4
+    exports and 222 imports, so a resolver reading only that table reports
+    every function absent. mingw-built binaries (the DecBench Windows projects)
+    do carry one, which is why the stdcall work landed against it -- but it is
+    the exception, not the rule.
+
+    So exports are merged in as code definitions, and imports as undefined
+    symbols so they reach `Disposition.IMPORT` rather than `ABSENT`. COFF
+    entries are added first and win ties: they carry real decoration
+    (`_worker@4`), which the export table does not.
+
+    A **forwarded** export is deliberately NOT a definition. `A.dll` exporting
+    `Foo -> "B.RealFoo"` has no code for `Foo` in its own image, so answering a
+    local-body request with it would hand back an address in the wrong module.
+    It is recorded undefined, the same as an import, which is exactly the
+    distinction F1b draws.
     """
     import glaurung
 
+    out: list[SymbolEntry] = []
     try:
-        rows = glaurung.symbol_table_entries(binary)
+        out += [
+            SymbolEntry(a, n, k, d)
+            for a, n, k, d in glaurung.symbol_table_entries(binary)
+        ]
     except Exception:
-        return []
-    return [SymbolEntry(a, n, k, d) for a, n, k, d in rows]
+        pass
+
+    try:
+        for va, name, _ordinal, forwarder in glaurung.pe_export_entries(binary):
+            out.append(SymbolEntry(va, name, "text", forwarder is None, "export"))
+    except Exception:
+        pass
+
+    try:
+        summary = glaurung.symbols.list_symbols(binary)
+        for name in summary.import_names or []:
+            # Import names may be `dll.sym` or `sym`; record the bare name,
+            # which is what a source-level request asks for.
+            bare = name.rsplit(".", 1)[-1]
+            out.append(SymbolEntry(0, bare, "text", False, "import"))
+    except Exception:
+        pass
+    return out
 
 
 def is_i386_pe(binary: str) -> bool:
