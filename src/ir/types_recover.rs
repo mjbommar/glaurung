@@ -4748,7 +4748,6 @@ int never_returns(void) { for (;;) {} }
         );
     }
 
-    #[test]
     /// The `-O2` shape: the parameter is never spilled, only copied.
     ///
     /// Both existing producers of pointer evidence want a frame slot, so this
