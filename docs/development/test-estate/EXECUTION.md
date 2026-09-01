@@ -61,6 +61,8 @@ missing-body ledger in
 | [x] 12 test files anchored off CWD (21 silent skips) | estate 1.7 | `c26b2464` |
 | [x] conftest sample paths anchored (59 usages) | estate 1.7 | `62bda4cc` |
 | [x] Structural lane seam + the O2 measurement | estate 7.5 | `b02b5883` |
+| [x] Readability census at O2 (1,502 entries) | estate 7.5 | `225088fb` |
+| [x] Dispatch-loop defect located to one guard | parity/estate 10 | `294d2a2d` |
 | [x] CI cross-toolchain + compile-probe availability | estate 10 | `c5f7df15` |
 | [x] Concurrent session's 11 planning docs landed | — | `dbf4f5ca` |
 | [x] Fixture gallery regenerated + arch lanes rendered | — | glaurung.dev |
@@ -88,7 +90,9 @@ missing-body ledger in
 | [ ] Variadic / call-site arity | parity #3 | |
 | [ ] Inlined-body register threading | parity #4 | |
 | [ ] Go fixtures: manifest entries + 4 baselines | estate 7.1 | wiring landed; needs a quiet machine |
-| [ ] Structural baseline at O2 | estate 7.5 / parity #8 | seam landed; needs the key format to grow a lane + a full regen |
+| [~] Structural baseline at O2 | estate 7.5 / parity #8 | readability census landed; closure/effects map still needs a lane key |
+| [ ] Extend the census to `tests/decbench_corpus/` | estate 7.5 | blocks weighing the `detect_raw_dispatch_loop` fix |
+| [ ] Land the dispatch-loop fix | parity #8 | +4 fixture lanes; blocked on the census gap above |
 | [ ] Structural schema v2 + GCC/Clang O0/O2 populations | estate 7.5 / real-binary R3 | preserve lane denominators and binary hashes |
 | [ ] Optimized shape/readability predicates | estate 7.5 / real-binary R3 | loops, switches, conditions, casts, temporaries, output expansion |
 | [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | no baseline; missing/unit-mismatch/partial evidence currently exits zero |

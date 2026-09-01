@@ -78,7 +78,21 @@ not, the lane is decompile-only and says so).
 > function; the baseline is what would tell us how much of the corpus looks
 > like this.
 
-`structural_baseline.json` is gcc-O0-only. O0 structuring is nearly free;
+**Partly landed (`225088fb`).** A readability census now records `switch` /
+`goto` / `break` COUNTS per function over `gcc:O2` and `clang:O2` -- 1,502
+entries, and the baseline is itself a finding: **22 switches against 2,205
+gotos**. What remains of this phase is the full closure/effects map at O2,
+which needs the baseline key format to grow a lane component.
+
+The census has a **known coverage gap** and it is written into
+`structural.py` beside the constant: the population is
+`REQUIRED_FUNCTIONS` over `tests/decompiler_fixtures/src/` and excludes
+`tests/decbench_corpus/src/`. That gap already produced one wrong answer --
+the `detect_raw_dispatch_loop` fix measured free against this census and
+regresses `statemachine.c`, which lives in the excluded corpus. Extending the
+population is the next step.
+
+`structural_baseline.json` was gcc-O0-only. O0 structuring is nearly free;
 **O2 is where goto-soup happens** — and the execution differential is blind
 to it (memory: goto soup passes every fixture). Extend the structural
 predicates (`switch`, `goto_free`, loop kinds) to the `gcc:O2` and
