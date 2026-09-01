@@ -210,9 +210,27 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
    ahead of both reference tools -- Ghidra names the `ptrace` request but
    still reports `mprotect(_init, 0x1000, 5)`.
 
-6. **Render pointer/array types in their real C form.** `fix` · effort **L** ·
-   evidence: we recover the array but print `long *arg1` where it is
-   `char **argv`. Polish on an existing strength (#argv case).
+6. **Render pointer/array types in their real C form.** `fix` · effort **M-H**,
+   **re-scoped after reading the code** · evidence: we recover the array but
+   print `long *arg1` where it is `char **argv`.
+
+   This was written down as effort **L**, "polish on an existing strength".
+   It is not. `TypeHint::Pointer { pointee_width: u8 }`
+   (`src/ir/types_recover.rs:61`) is **width-only and not recursive**: the
+   model can say "pointer to eight bytes" and cannot say "pointer to pointer
+   to char" at all. So there are two different jobs hiding under one line:
+
+   * **The cheap one (M).** The evidence is already at the use site -- we
+     emit `strlen((const char *)(arg1[i]))`, so the load's destination type
+     is known there. A renderer-level rule could declare the parameter
+     `char **` when every load through it flows into a `T *` callee
+     parameter, without touching `TypeHint`. Narrow, and it fixes the
+     motivating case.
+   * **The real one (H).** Making the type model carry a recursive pointee
+     so any depth of indirection is expressible. That is a change to a
+     structure most of `types_recover/` reads.
+
+   Do the first, and do not let it be mistaken for the second.
 
 ### Measurement & lock-in (keeps the other eight honest)
 
