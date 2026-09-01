@@ -42,6 +42,11 @@ Its missing-body ledger is
 | [x] Perf ratchet, instructions-based | estate 6 | `a5f47189` |
 | [x] Full Python suite green | — | `4c0f2ffe` |
 | [~] Go fixtures: toolchain + lanes wired, opt-in | estate 7.1 | `6660f1f7` |
+| [x] target: 396-spec conformance table | estate 5.4 | `36d0e0f3` |
+| [x] similarity: measured retrieval ratchets | estate 5.2 | `36d0e0f3` |
+| [x] flirt: recall + false-positive + prologue sweep | estate 5.3 | `36d0e0f3` |
+| [x] CTPH panic reachable from Python, fixed | (found by 5.2) | `36d0e0f3` |
+| [x] Perf baseline recorded and verified both ways | estate 6 | `a938d897` |
 
 ## Next
 
@@ -52,6 +57,10 @@ Its missing-body ledger is
 | [ ] Dataset manifest/source-CFG/binary consistency validator | real-binary R1 / failure F1c | 88 manifest-only rows |
 | [ ] gzip `__printf__` source/build provenance trace | real-binary R1 / failure F1d | 2 source-CFG-only rows |
 | [ ] PE entry/TLS/import identity fixture | real-binary R1/R4 | write failing fixture first |
+| [ ] Minimal clang-cl PE32/PE32+ identity lane | estate 4 / real-binary R4 | O0/O2, map+PDB, local/import/thunk dispositions |
+| [ ] Hermetic PDB type/layout lane | estate 4 / real-binary R4 | source declarations through recovered fields and prototypes |
+| [ ] Mach-O x86-64/ARM64 thin and universal lanes | estate 4 / real-binary R4 | body/DWARF/stub/fixup/slice identity oracles |
+| [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] Cortex-M MRS/MSR body-recovery fixture | real-binary R1 / failure F2a | proven common cause of all 31 F2 rows |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
 | [ ] Promote realistic corpus beyond discovery-only evidence | real-binary R5 | body accounting, semantic subset, signal predicates, mandatory release lane |
@@ -62,10 +71,10 @@ Its missing-body ledger is
 | [ ] Variadic / call-site arity | parity #3 | |
 | [ ] Inlined-body register threading | parity #4 | |
 | [ ] Go fixtures: manifest entries + 4 baselines | estate 7.1 | wiring landed; needs a quiet machine |
-| [ ] Record the perf baseline | estate 6 | tool landed; needs a settled tree |
 | [ ] Structural baseline at O2 | estate 7.5 / parity #8 | |
+| [ ] Structural schema v2 + GCC/Clang O0/O2 populations | estate 7.5 / real-binary R3 | preserve lane denominators and binary hashes |
+| [ ] Optimized shape/readability predicates | estate 7.5 / real-binary R3 | loops, switches, conditions, casts, temporaries, output expansion |
 | [ ] Canary + determinism in the default suite | estate 2 | |
-| [~] Thin-module corpora: similarity, flirt, target | estate 5.2-5.4 | agent in flight |
 | [ ] Make current perf gate fail closed | estate 6 / real-binary R6 | no baseline; missing/unit-mismatch/partial evidence currently exits zero |
 | [ ] Record provenance-complete release perf baseline | estate 6 / real-binary R6 | wait for clean committed Rust tree and exact release build |
 | [ ] Join perf with completeness, RSS, and determinism report | estate 2/6 / real-binary M7 | reuse profiler and existing determinism tests |
@@ -83,6 +92,23 @@ says two of the three CWD-dead Python files are duplicates. They are not:
 but same-relative-path is *not* proof of identical content — `mathlib.dll`
 exists at both paths and differs. Five pairs are referenced from both sides
 and need repointing first. Do this per-file, verifying content, not by path.
+
+**CTPH does not work at function granularity.** Measured, not assumed: 0.32%
+top-1 against a global pool (chance 0.09%), 20% same-binary (chance 12%), and
+a sweep over ten parameter triples did not rescue it. Any KB feature ranking
+candidates by this score is ranking noise. The ratchets now pin the honest
+numbers so an improvement is visible and a regression is caught.
+
+**`src/flirt/` is not FLIRT.** It reads neither `.sig` nor `.pat` -- a bespoke
+JSON of prologue bytes, matched by exact equality over 32 bytes, no wildcard
+mask or CRC. And 19 of the 20 functions in the one committed static library
+have a relocation inside that window, so signatures built from static archives
+match linker placeholders. That is the matcher's ceiling, not our corpus.
+
+**Two FLIRT defects documented, not fixed** (both need a decision, not a
+patch): `FlirtLibrary::from_file` resolves ambiguous prologues
+last-insert-wins, and with `set_by=flirt` outranking `auto` the losing name
+lands in the KB above the correct one; `prologue_len` is unenforced input.
 
 **`scripts/lint-rust.sh` is red**: 255 clippy errors on the lib target, 296
 with tests, under `-D warnings`. Left alone deliberately; it is a decision to
