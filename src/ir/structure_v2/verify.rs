@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 
 use super::{
-    DuplicatedTail, LocalRegions, LoopForest, RegionCandidate, Terminal, Transfer,
-    MAX_TAIL_DUPLICATION_INSTRUCTIONS, MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
+    ConditionDag, ConditionNode, DuplicatedTail, LocalRegions, LoopForest, RegionCandidate,
+    StructuredRegion, StructuredTree, Terminal, Transfer, MAX_TAIL_DUPLICATION_INSTRUCTIONS,
+    MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
 };
 use crate::ir::structure::Cfg;
 
@@ -39,6 +40,118 @@ pub enum CandidateError {
         source_block: usize,
         cloned_at_predecessor: usize,
     },
+}
+
+/// A disagreement between a recovered tree and its verified flat candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreeError {
+    BlockMissing { block: usize },
+    BlockDuplicated { block: usize },
+    BlockOutOfRange { block: usize },
+    LeafMismatch { block: usize },
+    BranchConditionInvalid { block: usize },
+}
+
+pub(super) fn verify_tree(
+    candidate: &RegionCandidate,
+    conditions: &ConditionDag,
+    tree: &StructuredTree,
+) -> Vec<TreeError> {
+    let mut errors = Vec::new();
+    let mut leaves: Vec<Option<BlockRegionView<'_>>> = vec![None; candidate.blocks().len()];
+    visit_tree(&tree.root, candidate, conditions, &mut leaves, &mut errors);
+    for (block, leaf) in leaves.into_iter().enumerate() {
+        if leaf.is_none() {
+            errors.push(TreeError::BlockMissing { block });
+        }
+    }
+    errors
+}
+
+#[derive(Clone, Copy)]
+enum BlockRegionView<'a> {
+    Block(&'a super::BlockRegion),
+    Return,
+}
+
+fn visit_tree<'a>(
+    region: &'a StructuredRegion,
+    candidate: &'a RegionCandidate,
+    conditions: &ConditionDag,
+    leaves: &mut [Option<BlockRegionView<'a>>],
+    errors: &mut Vec<TreeError>,
+) {
+    match region {
+        StructuredRegion::Empty => {}
+        StructuredRegion::Block(actual) => {
+            record_leaf(
+                actual.block,
+                BlockRegionView::Block(actual),
+                candidate,
+                leaves,
+                errors,
+            );
+        }
+        StructuredRegion::Return { block } => {
+            record_leaf(*block, BlockRegionView::Return, candidate, leaves, errors);
+        }
+        StructuredRegion::Sequence(regions) => {
+            for region in regions {
+                visit_tree(region, candidate, conditions, leaves, errors);
+            }
+        }
+        StructuredRegion::If {
+            source_block,
+            condition,
+            then_region,
+            else_region,
+        } => {
+            if !matches!(
+                conditions.node(*condition),
+                Some(ConditionNode::Branch { block, .. }) if block == source_block
+            ) {
+                errors.push(TreeError::BranchConditionInvalid {
+                    block: *source_block,
+                });
+            }
+            visit_tree(then_region, candidate, conditions, leaves, errors);
+            if let Some(else_region) = else_region {
+                visit_tree(else_region, candidate, conditions, leaves, errors);
+            }
+        }
+    }
+}
+
+fn record_leaf<'a>(
+    block: usize,
+    leaf: BlockRegionView<'a>,
+    candidate: &'a RegionCandidate,
+    leaves: &mut [Option<BlockRegionView<'a>>],
+    errors: &mut Vec<TreeError>,
+) {
+    let Some(slot) = leaves.get_mut(block) else {
+        errors.push(TreeError::BlockOutOfRange { block });
+        return;
+    };
+    if slot.is_some() {
+        errors.push(TreeError::BlockDuplicated { block });
+        return;
+    }
+    let expected = candidate
+        .blocks()
+        .iter()
+        .find(|region| region.block == block);
+    let matches = match (leaf, expected) {
+        (BlockRegionView::Block(actual), Some(expected)) => actual == expected,
+        (BlockRegionView::Return, Some(expected)) => {
+            expected.terminal == Some(Terminal::Return) && expected.transfers.is_empty()
+        }
+        _ => false,
+    };
+    if !matches {
+        errors.push(TreeError::LeafMismatch { block });
+    }
+    *slot = Some(leaf);
 }
 
 pub(super) fn verify_candidate(
@@ -243,6 +356,74 @@ mod tests {
         assert!(errors.contains(&CandidateError::BlockMissing { block: 0 }));
         assert!(errors.contains(&CandidateError::BlockMissing { block: 1 }));
         assert!(errors.contains(&CandidateError::EdgeMissing { from: 0, to: 1 }));
+    }
+
+    #[test]
+    fn tree_verifier_rejects_duplicate_ownership_and_forged_branch_identity() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![LlirInstr {
+                        va: 0x1000,
+                        op: Op::CondJump {
+                            cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                            target: 0x1100,
+                            inverted: false,
+                        },
+                    }],
+                    succs: vec![0x1100, 0x1200],
+                },
+                LlirBlock {
+                    start_va: 0x1100,
+                    end_va: 0x1104,
+                    instrs: vec![LlirInstr {
+                        va: 0x1100,
+                        op: Op::Return,
+                    }],
+                    succs: vec![],
+                },
+                LlirBlock {
+                    start_va: 0x1200,
+                    end_va: 0x1204,
+                    instrs: vec![LlirInstr {
+                        va: 0x1200,
+                        op: Op::Return,
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let ssa = compute_ssa(&function);
+        let cfg = Cfg::from(&function, &ssa);
+        let loops = LoopForest::from_cfg(&cfg);
+        let locals = LocalRegions::from_cfg(&cfg, &loops);
+        let predicates = cfg.branch_predicates(&function, &ssa);
+        let conditions =
+            ConditionDag::from_cfg(&cfg, &loops, &locals, &predicates).expect("condition DAG");
+        let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
+        let branch = conditions.branch_condition(0).expect("branch atom");
+        let mut forged_leaf = candidate.blocks()[0].clone();
+        forged_leaf.transfers.clear();
+        let forged = StructuredTree {
+            root: StructuredRegion::Sequence(vec![
+                StructuredRegion::Block(forged_leaf),
+                StructuredRegion::If {
+                    source_block: 2,
+                    condition: branch,
+                    then_region: Box::new(StructuredRegion::Return { block: 1 }),
+                    else_region: Some(Box::new(StructuredRegion::Return { block: 1 })),
+                },
+            ]),
+        };
+
+        let errors = verify_tree(&candidate, &conditions, &forged);
+        assert!(errors.contains(&TreeError::LeafMismatch { block: 0 }));
+        assert!(errors.contains(&TreeError::BranchConditionInvalid { block: 2 }));
+        assert!(errors.contains(&TreeError::BlockDuplicated { block: 1 }));
+        assert!(errors.contains(&TreeError::BlockMissing { block: 2 }));
     }
 
     #[test]

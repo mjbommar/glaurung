@@ -105,6 +105,18 @@ impl ConditionDag {
     pub fn reaching_conditions(&self) -> &[ConditionId] {
         &self.reaching
     }
+
+    /// The canonical typed branch atom owned by `block`.
+    pub(super) fn branch_condition(&self, block: usize) -> Option<ConditionId> {
+        self.nodes.iter().enumerate().find_map(|(index, node)| {
+            matches!(node, ConditionNode::Branch { block: owner, .. } if *owner == block)
+                .then_some(ConditionId(index))
+        })
+    }
+
+    pub(super) fn node(&self, id: ConditionId) -> Option<&ConditionNode> {
+        self.nodes.get(id.0)
+    }
 }
 
 struct Builder {

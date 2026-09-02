@@ -380,16 +380,22 @@ that preserves honest local gotos when required.
   - `verify.rs`: block and edge accounting;
   - `cleanup.rs`: bounded tail duplication and else-after-terminal flattening.
   The boundary now has `mod.rs`, `cleanup.rs`, `conditions.rs`,
-  `dominators.rs`, `local.rs`, `region.rs`, and `verify.rs`, while reusing v1's
-  typed `Cfg` directly. Deterministic tree recovery, cleanup materialization,
-  and a separately normalized CFG view remain open.
+  `dominators.rs`, `local.rs`, `recover.rs`, `region.rs`, and `verify.rs`, while
+  reusing v1's typed `Cfg` directly. `recover.rs` now constructs a deterministic
+  `Sequence`/`If`/`Block`/`Return` tree for acyclic single-entry candidates,
+  including a real `early_return` binary, and an independent verifier checks
+  exact leaf ownership, retained typed transfers, and branch-source identity.
+  Loop/local-labelled tree recovery, cleanup materialization, and a separately
+  normalized CFG view remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
   pseudocode, execution, GED, and runtime.
   `structure-v2-shadow` now feeds the existing `Cfg` directly into a
   deterministic condition-DAG observer and records exact block/edge coverage;
-  region, health, pseudocode, execution, GED, and runtime comparisons remain.
+  verified flat regions and the first acyclic structured trees are also
+  recorded. Loop/local-labelled trees, health, pseudocode, execution, GED, and
+  runtime comparisons remain.
 
 ### RED fixtures
 

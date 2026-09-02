@@ -9,6 +9,7 @@ mod cleanup;
 mod conditions;
 mod dominators;
 mod local;
+mod recover;
 mod region;
 mod verify;
 
@@ -18,8 +19,9 @@ pub use cleanup::{
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
 pub use dominators::{LoopForest, LoopInfo, LoopKind};
 pub use local::{HonestGotoEvidence, LocalRegions};
+pub use recover::{StructuredRegion, StructuredTree};
 pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
-pub use verify::CandidateError;
+pub use verify::{CandidateError, TreeError};
 
 use crate::ir::ssa::SsaInfo;
 use crate::ir::types::LlirFunction;
@@ -43,9 +45,11 @@ pub struct ShadowReport {
     pub conditions: Option<ConditionDag>,
     pub loops: LoopForest,
     pub candidate: Option<RegionCandidate>,
+    pub tree: Option<StructuredTree>,
     pub honest_gotos: Vec<HonestGotoEvidence>,
     pub duplicated_tails: Vec<DuplicatedTail>,
     pub verification_errors: Vec<CandidateError>,
+    pub tree_verification_errors: Vec<TreeError>,
     pub refusal: Option<Refusal>,
 }
 
@@ -74,6 +78,21 @@ pub(crate) fn observe_cfg(
                 verify::verify_candidate(cfg, &loops, &local_regions, &duplicated_tails, candidate)
             });
             if verification_errors.is_empty() {
+                let tree = candidate
+                    .as_ref()
+                    .and_then(|candidate| recover::recover_acyclic(cfg, &conditions, candidate));
+                let tree_verification_errors = tree.as_ref().map_or_else(Vec::new, |tree| {
+                    verify::verify_tree(
+                        candidate.as_ref().expect("tree requires a candidate"),
+                        &conditions,
+                        tree,
+                    )
+                });
+                let tree = if tree_verification_errors.is_empty() {
+                    tree
+                } else {
+                    None
+                };
                 ShadowReport {
                     block_count,
                     edge_count,
@@ -81,10 +100,12 @@ pub(crate) fn observe_cfg(
                     represented_edges: edge_count,
                     conditions: Some(conditions),
                     candidate,
+                    tree,
                     honest_gotos: local_regions.evidence().to_vec(),
                     duplicated_tails,
                     loops,
                     verification_errors,
+                    tree_verification_errors,
                     refusal: None,
                 }
             } else {
@@ -95,10 +116,12 @@ pub(crate) fn observe_cfg(
                     represented_edges: 0,
                     conditions: Some(conditions),
                     candidate: None,
+                    tree: None,
                     honest_gotos: Vec::new(),
                     duplicated_tails: Vec::new(),
                     loops,
                     verification_errors,
+                    tree_verification_errors: Vec::new(),
                     refusal: Some(Refusal::CandidateInvalid),
                 }
             }
@@ -110,10 +133,12 @@ pub(crate) fn observe_cfg(
             represented_edges: 0,
             conditions: None,
             candidate: None,
+            tree: None,
             honest_gotos: Vec::new(),
             duplicated_tails: Vec::new(),
             loops,
             verification_errors: Vec::new(),
+            tree_verification_errors: Vec::new(),
             refusal: Some(refusal),
         },
     }
@@ -439,6 +464,17 @@ mod tests {
         let candidate = report.candidate.expect("acyclic candidate");
         assert_eq!(candidate.blocks().len(), report.block_count);
         assert_eq!(candidate.transfer_count(), report.edge_count);
+    }
+
+    #[test]
+    fn real_early_return_fixture_recovers_a_verified_acyclic_tree() {
+        let lifted = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "early_return");
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert!(report.loops.is_empty(), "fixture must stay acyclic");
+        assert!(report.tree.is_some(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 
     fn lift_real_fixture(binary_name: &str, function_name: &str) -> LlirFunction {

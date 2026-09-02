@@ -289,6 +289,12 @@ impl Cfg {
         predicates
     }
 
+    /// Nearest post-dominator, exposed to the shadow tree recoverer without
+    /// exposing the production structurer's storage representation.
+    pub(crate) fn immediate_postdominator(&self, block: usize) -> Option<usize> {
+        self.ipostdom.get(block).copied().flatten()
+    }
+
     /// The predecessors of `header` that `header` dominates — the back-edge
     /// tails, i.e. the latches of the natural loops headed there.
     pub(crate) fn dominating_tails(&self, header: usize) -> Vec<usize> {

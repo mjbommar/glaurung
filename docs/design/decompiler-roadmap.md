@@ -162,9 +162,11 @@ scheduled independently of the longer pipeline/SSA migrations.
   explicitly. Natural-loop facts and an independently verified typed region
   candidate now cover the real gcc-O0 `dowhile_atleastonce` and
   `loop_return_on_neg` fixtures, including post-test, `Break`, `Continue`, and
-  singly owned shared-terminal facts. Production remains on v1. Tree recovery,
-  local irreducible fallback, rendering, execution/GED/runtime comparison, and
-  promotion are still open.
+  singly owned shared-terminal facts. A deterministic, independently verified
+  `Sequence`/`If`/`Block`/`Return` tree now covers acyclic single-entry graphs
+  and the real gcc-O0 `early_return` fixture. Production remains on v1.
+  Loop/local-labelled tree recovery, rendering, execution/GED/runtime
+  comparison, and promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one
