@@ -425,9 +425,10 @@ that preserves honest local gotos when required.
   verified eight-way typed dispatch as `switch`/`case 0..7`, while locally
   degrading the suffix-entry irreducible loop to resolved labelled gotos; no
   indirect-jump placeholder survives. Repeated recovery produces the same tree
-  and text. The 208-case gcc-O2 `wide154_dense_effects` fixture now proves the
-  same typed-switch path scales beyond the small vertical slice without losing
-  a case, and emits deterministic parseable C. Multi-exit loops no longer
+  and text. The 208-case gcc-O2 and 256-slot clang-O2
+  `wide154_dense_effects` fixtures now prove the same typed-switch path scales
+  beyond the small vertical slice without losing a case, and both emit
+  deterministic parseable C. Multi-exit loops no longer
   require an invented common continuation: the gcc-O2
   `206_aarch64_wide_dispatch::dispatch_in_loop` shape independently owns its
   non-reconverging terminal exits. WP5 now preserves the guard's `al <= 6`
@@ -581,8 +582,10 @@ one authoritative set of case edges.
   deterministic C rendering. The clang-O2 `154::wide154_dense_effects` lane
   now treats `movzbl`'s 8-bit source width as an intrinsic `0..255` proof,
   resolves all 256 table slots at site `0x15d9`, and records no unresolved
-  decline for that site; this is discovery evidence, not yet a shadow-render or
-  execution-differential claim. The gcc-O2 `206::dispatch_in_loop` lane now
+  decline for that site. All 256 values reach the independently verified shadow
+  tree and deterministic parseable C without an indirect-jump placeholder;
+  execution-differential coverage remains open. The gcc-O2
+  `206::dispatch_in_loop` lane now
   preserves a guarded byte selector through register zero-extension, decodes
   exact cases `0..6`, and renders that typed switch inside its verified loop.
   Other compiler/optimization and named fixture lanes remain.

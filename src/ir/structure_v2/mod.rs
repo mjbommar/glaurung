@@ -948,62 +948,69 @@ mod tests {
     }
 
     #[test]
-    fn real_wide_effect_switch_reaches_shadow_without_losing_cases() {
-        let lifted = lift_real_fixture("154_wide_switch-gcc-O2.so", "wide154_dense_effects");
-        assert!(
-            lifted.blocks.len() > 128,
-            "fixture must remain a scale test"
-        );
-        let report = observe(&lifted, &compute_ssa(&lifted));
-        let candidate = report
-            .candidate
-            .as_ref()
-            .unwrap_or_else(|| panic!("wide switch should have a candidate: {report:#?}"));
-        let dispatch = candidate
-            .switches()
-            .iter()
-            .max_by_key(|dispatch| {
+    fn real_wide_effect_switches_reach_shadow_without_losing_cases() {
+        for (binary, case_count) in [
+            ("154_wide_switch-gcc-O2.so", 208usize),
+            ("154_wide_switch-clang-O2.so", 256usize),
+        ] {
+            let lifted = lift_real_fixture(binary, "wide154_dense_effects");
+            assert!(
+                lifted.blocks.len() > 128,
+                "fixture must remain a scale test"
+            );
+            let report = observe(&lifted, &compute_ssa(&lifted));
+            let candidate = report
+                .candidate
+                .as_ref()
+                .unwrap_or_else(|| panic!("wide switch should have a candidate: {report:#?}"));
+            let dispatch = candidate
+                .switches()
+                .iter()
+                .max_by_key(|dispatch| {
+                    dispatch
+                        .cases
+                        .iter()
+                        .map(|case| case.values.len())
+                        .sum::<usize>()
+                })
+                .unwrap_or_else(|| panic!("wide switch should have typed cases: {report:#?}"));
+            assert_eq!(
                 dispatch
                     .cases
                     .iter()
                     .map(|case| case.values.len())
-                    .sum::<usize>()
-            })
-            .unwrap_or_else(|| panic!("wide switch should have typed cases: {report:#?}"));
-        assert_eq!(
-            dispatch
-                .cases
-                .iter()
-                .map(|case| case.values.len())
-                .sum::<usize>(),
-            208,
-            "{dispatch:#?}"
-        );
-        let tree = report
-            .tree
-            .as_ref()
-            .unwrap_or_else(|| panic!("wide switch should recover a verified tree: {report:#?}"));
-        assert!(tree_has_region(&tree.root, |region| matches!(
-            region,
-            StructuredRegion::Switch { .. }
-        )));
-        let pseudocode = report
-            .raw_pseudocode
-            .as_deref()
-            .unwrap_or_else(|| panic!("wide switch should render: {report:#?}"));
-        assert!(pseudocode.contains("switch ("), "{pseudocode}");
-        assert!(pseudocode.contains("case 0:"), "{pseudocode}");
-        assert!(pseudocode.contains("case 207:"), "{pseudocode}");
-        assert!(
-            !pseudocode.contains("unrecovered indirect jump"),
-            "{pseudocode}"
-        );
-        let repeated = observe(&lifted, &compute_ssa(&lifted));
-        assert_eq!(report.tree, repeated.tree);
-        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
-        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
-        assert_prepared_c(&report);
-        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+                    .sum::<usize>(),
+                case_count,
+                "{dispatch:#?}"
+            );
+            let tree = report.tree.as_ref().unwrap_or_else(|| {
+                panic!("wide switch should recover a verified tree: {report:#?}")
+            });
+            assert!(tree_has_region(&tree.root, |region| matches!(
+                region,
+                StructuredRegion::Switch { .. }
+            )));
+            let pseudocode = report
+                .raw_pseudocode
+                .as_deref()
+                .unwrap_or_else(|| panic!("wide switch should render: {report:#?}"));
+            assert!(pseudocode.contains("switch ("), "{pseudocode}");
+            assert!(pseudocode.contains("case 0:"), "{pseudocode}");
+            assert!(
+                pseudocode.contains(&format!("case {}:", case_count - 1)),
+                "{pseudocode}"
+            );
+            assert!(
+                !pseudocode.contains("unrecovered indirect jump"),
+                "{pseudocode}"
+            );
+            let repeated = observe(&lifted, &compute_ssa(&lifted));
+            assert_eq!(report.tree, repeated.tree);
+            assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+            assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
+            assert_prepared_c(&report);
+            assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        }
     }
 
     #[test]
