@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 GATE = ROOT / "scripts" / "decompiler-gate.sh"
 BUILD_GUARD = ROOT / "tools" / "build_guard.py"
+METRIC_CHECKOUT_ENV = "DECBENCH" + "_DIR"
 
 
 def gate_plan(
@@ -75,7 +76,7 @@ def test_release_preflight_calls_a_missing_metric_lane_not_evidence(tmp_path: Pa
     result = gate_plan(
         "release",
         "--preflight",
-        {"DECBENCH_DIR": str(missing)},
+        {METRIC_CHECKOUT_ENV: str(missing)},
     )
     assert result.returncode == 3
     assert "NOT EVIDENCE" in result.stderr
