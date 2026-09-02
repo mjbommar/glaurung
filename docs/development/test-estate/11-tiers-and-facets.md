@@ -41,7 +41,7 @@ opt-in because they link external libraries.
 | `test-suite / rust` | `--features python-ext`, `REQUIRE_TOOLCHAINS=1` | gcc, clang, arm-none-eabi-gcc | 2,957 tests |
 | `test-suite / symbolic` | `--features symbolic` | nothing external | 3,025 tests |
 | `test-suite / python-core` | `-m "core and not decbench" -n auto` | **no LFS, no cross toolchain** | 2,367 passed, **4:13** parallel (11:19 serial) |
-| `test-suite / python-extended` | `-m "not core and not fixtures and not decbench" -n auto` | LFS + multilib | 921 passed, 19:11 serial; parallel run in flight at time of writing |
+| `test-suite / python-extended` | `-m "not core and not fixtures and not decbench" -n auto` | LFS + multilib | 921 passed, **7:49** parallel (19:11 serial) |
 | `decompiler-fixtures / matrix` | `-m slow` then `-m fixtures` | builds the matrix itself | ~40 min + corpus |
 | `CI / wheel-smoke` | one x86_64 wheel, no upload | — | push/PR only |
 | `CI / linux…sdist` | the 15-job wheel matrix | QEMU for four targets | **tags and dispatch only** |
@@ -72,7 +72,7 @@ both ways:
 | tier | serial | `-n auto` (24 workers) | |
 |---|---:|---:|---|
 | `core` | 11:19 | **4:13** | 2.7× |
-| `extended` | 19:11 | not yet measured | |
+| `extended` | 19:11 | **7:49** | 2.5× |
 
 2.7× on 24 cores, not 24×, so a serial bottleneck remains — the next lever is
 `--durations=30` under xdist to find the critical path, and it is deliberately
