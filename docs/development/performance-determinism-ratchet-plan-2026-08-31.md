@@ -4,6 +4,15 @@ This plan turns roadmap R6 and the determinism half of M7 into a release-grade
 contract. It starts from the performance tools already in the repository; it
 does not replace them with another benchmark framework.
 
+## Progress update — 2026-09-01
+
+Commit `a938d897` recorded a three-reference retired-instruction baseline with
+three runs per reference and observed spreads of 0.1–0.2%. An injected 10%
+regression was verified to fail. P1's missing-file condition is resolved, but
+P2–P8 remain substantially open: missing, partial, and incomparable evidence
+can still exit successfully, and provenance, RSS, output identity, and
+returned-body completeness remain absent.
+
 ## Evidence boundary
 
 The pinned full DecBench decompile processed 803 binaries and returned 94,358
@@ -31,11 +40,11 @@ This is useful substrate. It is not yet a fail-closed release ratchet.
 
 ## Proven gaps in the current gate
 
-### P1 — no performance baseline exists
+### P1 — baseline recorded; absence still fails open
 
-`tools/perf_gate.py` expects `bench/perf_baseline.json`, but that file is not
-present. A missing baseline prints instructions and exits zero. The local gate
-therefore labels the lane `ok` even though no comparison occurred.
+`bench/perf_baseline.json` is now present. However, if it is missing,
+`tools/perf_gate.py` still prints instructions and exits zero. The release
+contract must distinguish developer bootstrap from a passing gate.
 
 ### P2 — incomplete measurements can pass
 
@@ -94,6 +103,41 @@ bind output identity, performance samples, build identity, and corpus hashes
 into one retained report. Its ordinary sample rows may skip when files are
 absent; the generated Rust flipper cells require toolchains. Determinism also
 needs an explicit cold/warm and serial/concurrent distinction.
+
+### P9 — the gate is never run automatically
+
+P1–P8 are about a measurement that reports the wrong thing. P9 is about one
+that never happens. `tools/perf_gate.py --check` appears in no workflow: the
+suite CI added on 2026-08-31 runs `cargo test`, the Python suite and lint, and
+nothing invokes the perf gate, the determinism lane, or the six behavioural
+ratchets. All of them are `slow`-marked or manual, so the command a contributor
+actually types cannot go red on a performance regression.
+
+This is the same defect the estate has hit repeatedly, one level up: a gate
+that exists, is correct, and is not wired to anything is indistinguishable from
+one that does not exist. The fix is scheduling, not measurement — and it must
+come with an "is it run" invariant, the way `fuzz-nightly.yml` asserts that its
+targets execute rather than merely compile.
+
+### P10 — a vacuous measurement is reported as a passing one
+
+The Rust suite carries 20 sites shaped
+
+```rust
+Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+```
+
+where a test that cannot find its compiler returns `ok` having asserted
+nothing. The perf gate's `--characterize` path has the same exposure by
+construction: a reference that fails to build is dropped (P2), and a host
+without usable `perf` silently changes units (P3). Taken together, a perf run
+on an under-provisioned machine can produce a green result from an empty
+measurement.
+
+The typed-result contract below is what closes this, but it must extend to the
+*population*: not merely "each measurement is typed", but "the set of
+measurements attempted is recorded, and a run that measured nothing is a
+distinct result from a run that measured everything and found no regression".
 
 ## Contract: measurement is a typed result
 
@@ -285,6 +329,32 @@ Acceptance: `cargo bench --bench decompile_pipeline` cannot appear successful
 after silently running no fixture-backed cases, and its report remains labeled
 as a partial pipeline lower bound.
 
+### Increment G — run the gate, and prove that it ran
+
+Nothing above matters if the gate is only ever invoked by hand. This increment
+is about automation, and it is deliberately last because it should schedule a
+gate that already fails closed rather than one that fails open.
+
+* Add the perf gate and the determinism lane to a **scheduled** workflow, not
+  per-push: performance measurement on a shared runner is noisy, and a
+  ratchet that flaps gets disabled. Nightly, offset from the hour, alongside
+  `fuzz-nightly.yml`.
+* Emit a distinct non-pass status on a host that cannot measure instructions,
+  so an unsupported runner is visibly *not evidence* rather than a pass (P3).
+* Assert the invariant `fuzz-nightly.yml` already models: the job must prove
+  its measurements ran. A run whose reference set is empty fails (P9/P10).
+* Upload the typed result as an artifact, so a regression is diagnosable
+  without re-running on the machine that saw it.
+* Add the six behavioural ratchets — `baseline.json`,
+  `arch_baseline.json`, `structural_baseline.json`, `defuse_baseline.json`,
+  `stripped_divergences.json`, `tools/fitness_baseline.json` — to the same
+  scheduled lane. They are all `slow`-marked, so no ordinary run reaches them,
+  and on 2026-08-31 seven were red on pushed `master` for hours while every
+  command anyone typed stayed green.
+
+RED first: a test that asserts the workflow file names the gate, and a test
+that a zero-reference result is a failure rather than a pass.
+
 ## TDD command sequence
 
 Use focused pure tests for schema, comparison, `perf` parsing, and failure
@@ -296,6 +366,14 @@ uv run pytest python/tests/test_decompile_determinism.py -xvs
 uv run python tools/build_guard.py
 uv run python tools/perf_gate.py --characterize --json
 uv run python tools/perf_gate.py --check --json
+```
+
+Coverage-side commands, for the R8 work this plan now depends on:
+
+```bash
+cargo test                      # the DEFAULT suite: 2,829 passing, 4 ignored
+cargo test --features python-ext   # 2,951 — the 122 difference is python_bindings
+uv run pytest python/tests/ -m "" -k census   # the slow ratchets, opt-in
 ```
 
 After implementation, run the full project gates required by `CLAUDE.md`.
@@ -316,8 +394,9 @@ R6 is complete only when:
    have each been shown to turn it red;
 6. the scheduled lane records tail/phase/large-function evidence; and
 7. the retained internal report binds performance and determinism to the exact
-   Glaurung revision and asset hashes.
+   Glaurung revision and asset hashes; and
+8. the gate is **scheduled**, proves its own measurements ran, and a run that
+   measured nothing is red rather than green (P9/P10).
 
 Nothing in this plan publishes benchmark data, sends email, opens an issue, or
 submits a result.
-

@@ -14,6 +14,16 @@ binaries.
 The navigable R0–R7/M1–M7 evidence and plan map is the
 [roadmap planning package](decompiler-roadmap-package-2026-08-31.md).
 
+## Progress update — 2026-09-01
+
+F1a and the F1b product-side distinction landed; the readability census
+reached 3,580 GCC/Clang O0/O2 rows; and an initial performance baseline,
+determinism canaries, nightly fuzzing, and several thin-module ratchets landed.
+PE symbol/PDB/RSDS front-door defects were also repaired. These are substrate
+advances, not milestone exits: F1c/F1d/F2a, large-function telemetry,
+lane-keyed structural semantics, format matrices, hostile semantic oracles,
+and a fail-closed provenance-complete release report remain open.
+
 ## Evidence boundary
 
 The full run proves excellent DecBench-relative results on optimized and
@@ -65,13 +75,14 @@ contract, structured reachability, and roadmap queries are specified in the
 Why now: the full run found 217 missing bodies, but 186 are pre-decompiler
 identity failures and 31 are ARM body-recovery failures.
 
-The implementation order is:
+The implementation order, with current status, is:
 
-1. i386 stdcall decoration fixture and collision-safe normalization (proven
-   cause of 33 F1 rows);
+1. **landed:** i386 stdcall decoration fixture and collision-safe normalization
+   (proven cause of 33 F1 rows);
 2. ARM32 Cortex-M `MRS`/`MSR` fixture and lift semantics for `BASEPRI`,
    `BASEPRI_MAX`, `IPSR`, and `PSP` (proven cause of all 31 F2 rows);
-3. explicit external/import disposition for 63 F1b rows;
+3. **core landed; scoring contract open:** explicit external/import
+   disposition for 63 F1b rows;
 4. dataset consistency disposition for 88 manifest-only F1c rows;
 5. source/build provenance trace for the two gzip F1d rows;
 6. broader PE entry/TLS/import fixture;
@@ -241,20 +252,23 @@ large-function, PE, or O2 structural work.
 
 ## Immediate increments
 
-1. Add the collision-safe i386 stdcall identity fixture before changing the
-   resolver; the pinned data predicts 33 F1 recoveries.
-2. Add the Cortex-M MRS/MSR fixture before changing ARM32 lifting; the pinned
+Landed since the original list: the collision-safe i386 stdcall fixture and
+resolver, the import-versus-absent product distinction, the four-lane
+readability census, and the initial instruction baseline. Next:
+
+1. Add the Cortex-M MRS/MSR fixture before changing ARM32 lifting; the pinned
    data predicts all 31 F2 rows move or gain explicit refusal.
-3. Specify the external/import contract for the 63 F1b rows.
-4. Add a manifest/source-CFG/binary-identity consistency validator for the 88
+2. Complete the scoring/dataset external/import contract for the 63 F1b rows.
+3. Add a manifest/source-CFG/binary-identity consistency validator for the 88
    F1c rows.
-5. Trace gzip `__printf__` source/build provenance for the two F1d rows.
-6. Specify and land the smallest `@large` generated tier with phase telemetry.
-7. Make inventory generation atomic and add `--check`.
-8. Promote `tests/realistic_corpus/` from discovery-only evidence to classified
+4. Trace gzip `__printf__` source/build provenance for the two F1d rows.
+5. Specify and land the smallest `@large` generated tier with phase telemetry.
+6. Make inventory generation atomic and add `--check`.
+7. Promote `tests/realistic_corpus/` from discovery-only evidence to classified
    body accounting plus a small compile/execution and signal-preservation set.
-9. Make `tools/perf_gate.py` fail closed and record its first provenance-complete
-   release baseline after the concurrent Rust lane is clean.
+8. Make `tools/perf_gate.py` fail closed, then replace the initial baseline with
+   a provenance-complete release baseline joined to completeness, RSS, output,
+   and determinism evidence.
 
 Each increment updates the diary, the relevant checkbox, and the inventory
 entry naming its actual runner.

@@ -319,3 +319,24 @@ is marked implemented merely because its plan is detailed.
 
 Package index:
 [decompiler-roadmap-package-2026-08-31.md](../development/decompiler-roadmap-package-2026-08-31.md).
+
+## Entry 16 — Git history overtook the original plan
+
+The 2026-09-01 history review found several roadmap statements had become
+false. F1a landed with a real PE32 fixture and collision-safe resolver, and the
+F1b product core now distinguishes imports from absent symbols (`0d6b30d1`).
+The readability census expanded to 3,580 rows across both corpora and all four
+GCC/Clang O0/O2 lanes (`1329382d`). Its evidence rejected the dispatch
+relaxation: +162 gotos for -37 breaks. Closure/effect expectations remain
+lane-independent.
+
+R6 moved from no baseline to an initial three-reference instruction baseline
+that rejects an injected 10% regression (`a938d897`). It still fails open on
+missing, partial, and incomparable evidence and lacks release provenance,
+completeness, RSS, and output identity. PE reporting/PDB/RSDS fixes landed
+(`610d3afd`), while the clang-cl experiment documented `/nodefaultlib` and a
+TLS-fixture toolchain limit (`8fb47f62`) rather than completing R4.
+
+Decision: refresh current-state language and remove completed work from the
+immediate queues without weakening acceptance. No fresh full DecBench rerun
+exists, so predicted F1a row recovery is not yet submission evidence.

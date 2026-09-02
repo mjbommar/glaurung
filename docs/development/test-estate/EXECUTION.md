@@ -142,6 +142,10 @@ evidence depends on gates that actually run and actually assert.
 | [x] R8.2 `cargo test` decompiles a real binary end to end | R8.2 | `55246eff` |
 | [x] R8.3 per-module census: 271 tests no gate executes | R8.3 | `753bf1dd` |
 | [x] R6 A+G perf gate fails closed, and is finally scheduled | R6 P1/P2/P3/P9 | `4f4f88e3` |
+| [x] R8 correction: never-executed 271 -> 195 (exec already ran) | R8.3 | `18640412` |
+| [x] R8 symbolic CI lane: never-executed pool reaches 0 | R8.3 | `3fb3184c` |
+| [x] Known defects encoded as strict xfails, not pinned output | TDD | `1694bb06` |
+| [x] 1,162 measured failures across six axes | TDD | `7be914cf` |
 | [~] Mach-O universal (fat) lane | estate 4 / R4 | thin x86-64+ARM64 landed `ba2fe5c2`; fat slices still open |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
@@ -314,6 +318,46 @@ attached and gates behind them:
 * **The perf gate could report success from an empty measurement**, and
   nothing invoked it. Both fixed — and in that order, because scheduling a
   fail-open gate manufactures assurance.
+
+**The suite is not supposed to be all green.** A decompiler with known
+trade-offs whose suite passes 100% is not measuring the trade-offs. The estate
+now carries **1,210 `OPEN DEFECT` xfails across 9 files**, up from 41, each
+asserting the CORRECT behaviour under `strict=True` so that a FIX turns it red
+and announces itself.
+
+`tools/gen_known_failures.py` measures six axes against ground truth over all
+1,676 built objects (~23 min), writing `tests/open_defects/known_failures.json`:
+
+| axis | count | |
+|---|---:|---|
+| parameter type vs DWARF | 307 | 187 signedness, 120 width |
+| goto-free source recovers with `goto` | 715 | 6,791 goto statements |
+| return type vs DWARF | 92 | the shape that makes a function look `void` |
+| `unrecovered` construct emitted | 48 | the renderer conceding a hole |
+| pointer parameter -> scalar | **0** | pinned as an achievement |
+| DWARF function with no body | **0** | pinned as an achievement |
+
+DWARF is the ground truth, so a disagreement is a recovery gap rather than a
+style preference. The two zeros are asserted `== 0` rather than left as
+absences: recovered C never dereferences an integer, and every function DWARF
+names produces a body — losing either is a failure, not a number quietly
+appearing in a file.
+
+**Pinning current output is the wrong shape, and two lanes I added did it.**
+`test_pdb_type_recovery.py` and `test_macho_lane.py` first asserted
+`got == today`, which makes a fix indistinguishable from a regression — the
+test goes red either way and the message says "changed", not "fixed". Both were
+converted to strict xfails asserting the source-declared behaviour.
+
+**Three bugs in the harness, each found by the corpus disagreeing with
+itself.** Rust emits many functions named `{closure#0}`, so name-keyed lookup
+produced 41 spurious XPASSes (rows now carry VAs). The test re-implemented
+parameter splitting with a naive `split(",")` while the generator used a
+depth-aware one, so they disagreed about which parameter `arg2` is — 36 more
+(the test now imports the generator's splitter). And `ruff format` reflowed a
+dict so three of four `str.replace` edits silently no-opped, producing a
+byte-identical "regeneration" after 23 minutes; every edit now asserts its
+anchor count.
 
 **`scripts/lint-rust.sh` is red**: 255 clippy errors on the lib target, 296
 with tests, under `-D warnings`. Left alone deliberately; it is a decision to

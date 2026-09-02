@@ -4,6 +4,15 @@ This plan makes roadmap R3 measurable and actionable. It joins the source-
 grounded fixture matrix, the three-way parity findings, and the full-run
 optimized/large quality evidence without using DecBench bodies as fixtures.
 
+## Progress update — 2026-09-01
+
+The readability census now has 3,580 entries across both fixture corpora and
+GCC/Clang O0/O2 (`1329382d`), reporting 85 switches, 4,604 gotos, and 545
+breaks. A dispatch-loop relaxation was measured and reverted: it added 162
+gotos while removing only 37 breaks. Closure and effect expectations still
+contain 2,253 and 37 rows without lane keys; schema v2 and optimized shape
+predicates remain open.
+
 ## Current evidence
 
 The existing structural lane is real and fail-closed within its scope:
@@ -19,10 +28,9 @@ The existing structural lane is real and fail-closed within its scope:
   functions; and
 * the lane independently checks render closure and `--all`/`--vas` agreement.
 
-That baseline is built only with pinned GCC `-O0 -g`. Seven Rust fixtures are
-reported as skipped, and Clang/O2 are not baseline dimensions. Phase 7.5 is
-therefore still open even though several focused tests happen to compile an
-optimized fixture.
+The closure/effects portion is built only with pinned GCC `-O0 -g`. Seven Rust
+fixtures are reported as skipped. Clang/O2 are now readability dimensions, but
+not closure/effect dimensions; Phase 7.5 therefore remains open.
 
 The parity sample says Glaurung preserves types and important runtime address
 expressions well but renders more IR-like conditions, temporaries, casts, and
@@ -229,4 +237,3 @@ R3 is complete only when:
    and optional reference outputs.
 
 No DecBench body becomes a fixture, and no result is published by this work.
-

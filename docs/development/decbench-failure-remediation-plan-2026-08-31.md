@@ -5,6 +5,15 @@ This is the implementation plan for the proven classes in the
 It deliberately separates Glaurung product defects, Glaurung evaluation-harness
 defects, and DecBench dataset/evaluator inconsistencies.
 
+## Progress update — 2026-09-01
+
+Increment B's F1a core landed in `0d6b30d1`: a collision-safe resolver, real
+PE32 fixture, and six-clause contract cover the 33 predicted stdcall rows.
+Increment D's product-side core now distinguishes an import from an absent
+symbol. The scoring/dataset disposition for all 63 F1b rows remains open, as
+do F1c, F1d, and F2a. No fresh full DecBench rerun has confirmed row movement,
+so the predicted 33 recoveries are not yet observed submission data.
+
 ## Contracts and ownership
 
 | class | count | owner | desired terminal state |

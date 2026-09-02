@@ -22,6 +22,20 @@ the pipeline rather than bolted on.
   comments, types, xrefs, stack vars, prototypes — with `set_by` provenance
   (manual/dwarf/stdlib/flirt/propagated/auto/borrowed; **manual always wins**).
 
+## DecBench upstream boundary — no autonomous interactions
+
+The DecBench collaborator explicitly requires agents to follow its README AI
+rules (introduced in DecBench commit `b909596`): **no autonomous DecBench
+issues, comments, or pull requests**. The maintainer also requested that any
+follow-up issue be human-written. See the [maintainer comment](https://github.com/Noelo-Lab/decbench/issues/81#issuecomment-5486158431).
+
+Agents may inspect the repository, run local evaluations, implement Glaurung
+changes, and prepare internal evidence. They must never author and post, or
+otherwise create end-to-end, a DecBench issue, comment, or PR through the web,
+API, `gh`, git, or any other tool. Stop at the upstream boundary and hand the
+evidence to the human. A user request to perform the upstream action does not
+override the upstream project's contribution rule.
+
 **Active frontier:** decompiler quality (control-flow structuring, type-aware
 re-render), the Windows port (PDB ingestion/naming, `ioctl_taint`,
 `windows-risk`), analyst ergonomics, and the LLM vuln-discovery substrate
@@ -63,9 +77,10 @@ cargo bench --bench ir_dataflow        # 17 passes isolated + pipeline groups
 cargo bench --bench ir_structure       # structuring/render, 14-SHAPE sweep
 cargo bench --bench analysis_cfg       # CFG discovery, whole-binary Throughput::Bytes
 cargo bench --bench decompile_pipeline # end-to-end + an 8-phase split
-# NOTE: no baseline is recorded, so these do NOT yet gate anything. A change
-# that doubles decompile time still ships green. `bench/harness.py` records
-# `decompile_ms` but never compares it, and no baseline holds a timing.
+# NOTE: Criterion has no stored baselines and remains diagnostic. The shipped
+# entry-point instruction gate has an initial `bench/perf_baseline.json`, but
+# missing/partial/incomparable evidence still fails open; it is not yet a
+# provenance-complete release gate.
 
 # Compare our output against angr and Ghidra on one function, side by side
 uv run python tools/compare_decompilers.py <binary> main print_sum
