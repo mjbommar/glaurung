@@ -2,6 +2,14 @@
 
 > **Kind:** plan · **Status:** proposed
 
+**Phase status: landed, one target missed.** 5.1 landed at `4c0f2ffe` (plus a
+versioned-symbol fix it found), and 5.2/5.3/5.4 at `36d0e0f3` (plus a CTPH
+panic reachable from Python). The one acceptance bar not met is its own:
+`tests/fixtures/demangle/corpus.jsonl` holds **2,115** pairs against the
+"demangle ≥5,000" written below (`wc -l`, 2026-09-02). Either grow the corpus
+or lower the bar deliberately — it should not stay silently unmet. Live
+status: [`EXECUTION.md`](EXECUTION.md).
+
 ## The problem
 
 Four modules that turn analysis into *answers a human reads* are effectively
@@ -80,7 +88,8 @@ new target edit cannot silently flip an existing one.
 
 ## Acceptance
 
-* Each module ≥100 corpus-driven cases in the default suite (demangle ≥5,000).
+* Each module ≥100 corpus-driven cases in the default suite (demangle ≥5,000
+  — **not met**: 2,115 pairs shipped; see the status note at the top).
 * Similarity has a pinned, measured retrieval ratchet.
 * FLIRT has both a match and a no-false-positive assertion over a real
   static-linked binary.

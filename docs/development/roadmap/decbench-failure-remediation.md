@@ -1,4 +1,4 @@
-# DecBench failure remediation plan — 2026-08-31
+# DecBench failure remediation plan
 
 > **Kind:** plan · **Status:** proposed
 
@@ -7,14 +7,29 @@ This is the implementation plan for the proven classes in the
 It deliberately separates Glaurung product defects, Glaurung evaluation-harness
 defects, and DecBench dataset/evaluator inconsistencies.
 
-## Progress update — 2026-09-01
+## Progress
 
 Increment B's F1a core landed in `0d6b30d1`: a collision-safe resolver, real
 PE32 fixture, and six-clause contract cover the 33 predicted stdcall rows.
 Increment D's product-side core now distinguishes an import from an absent
-symbol. The scoring/dataset disposition for all 63 F1b rows remains open, as
-do F1c, F1d, and F2a. No fresh full DecBench rerun has confirmed row movement,
-so the predicted 33 recoveries are not yet observed submission data.
+symbol.
+
+Increment C (F2a, 31 rows) landed in `0031c3ee`, and it was not the increment
+this plan describes. This plan writes F2a as an ARM32 *lifter* gap; the lifter
+was never reached. Capstone rejected every Cortex-M system-register encoding —
+`mrs r1, BASEPRI` (`f3ef 8111`) returned `InvalidInstruction` — and a function
+whose first instruction cannot be decoded is abandoned whole, which is why the
+symptom was 31 rows with no body rather than 31 bodies full of opaque unknowns.
+Three defects were stacked, each hidden by the one above it: no Cortex-M
+decoder mode, `ArmOperandType::SysReg` discarded by the operand match's
+catch-all, and only then the lift this plan specifies. The generalisation for
+every later increment: **confirm the instruction decodes before specifying how
+it lifts.** The plan's "RED at three layers" structure is what found it — layer
+one failed for a reason layer one could not have predicted.
+
+The scoring/dataset disposition for all 63 F1b rows remains open, as do F1c and
+F1d. No fresh full DecBench rerun has confirmed row movement, so the predicted
+recoveries are not yet observed submission data.
 
 ## Contracts and ownership
 

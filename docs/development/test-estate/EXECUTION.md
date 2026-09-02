@@ -11,14 +11,11 @@ toolset, so the plan lives here instead — which is more durable anyway, since
 it survives the session and is reviewable in a diff.
 
 The full-corpus evidence update and cross-plan priority order live in
-`docs/development/real-binary-decompiler-roadmap-2026-08-31.md`, and its
-missing-body ledger in
-`docs/design/decbench-full-failure-taxonomy-2026-08-31.md`.
-
-> Both are written by a concurrent session and are **not committed yet**, so
-> they are named here as plain paths rather than links: a link to an untracked
-> file resolves in the author's working tree and is broken in every clone.
-> Turn these back into links when those documents land.
+[`../roadmap/real-binary-decompiler.md`](../roadmap/real-binary-decompiler.md),
+under [`../roadmap/README.md`](../roadmap/README.md); its missing-body ledger
+is the pinned
+[failure taxonomy](../../history/design/campaigns/decbench-full-failure-taxonomy-2026-08-31.md).
+Both have since landed, so they are links again.
 
 ## Landed
 

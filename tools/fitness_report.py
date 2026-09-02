@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure the "Code quality, composition, and file-size program" fitness
-metrics from `docs/design/decompiler-roadmap.md` and report them against the
-roadmap's end-state targets::
+metrics from `docs/development/testing-gates.md` and report them against the
+program's end-state targets::
 
     tools/fitness_report.py                  # human-readable table, exit 0
     tools/fitness_report.py --json            # machine-readable report

@@ -1,88 +1,63 @@
-# `docs/design/` — what to read, and what to write to
+# `docs/design/` — proposals for things that are not built
 
 > **Kind:** guide · **Status:** maintained
 
-This directory holds 30+ documents. Three of them are live; the rest are
-evidence. Without this file there is no way to tell which is which, and a reader
-who opens the wrong one gets a plan that was superseded weeks ago.
+Three directories hold the project's thinking, and the difference between them
+is tense:
 
-## Track work here
+* **[`architecture/`](../architecture/README.md) is what is built.** It
+  describes code you can read. If a claim there is wrong, the fix is to check
+  the code and correct the document.
+* **`design/` — this directory — is what is not built.** Every file here
+  proposes something, or records why something was not done. Nothing here
+  describes shipped behaviour, and nothing here is a work queue.
+* **[`history/`](../history/README.md) is what was.** Dated records: diaries,
+  superseded plans, defect registers, measurements pinned to a commit that has
+  moved.
 
-| file | role |
+The live plan — what is actually being worked on, in what order — is
+[`development/roadmap/`](../development/roadmap/README.md). A document in this
+directory is not scheduled by being here.
+
+## What is here
+
+| file | what it proposes |
 |---|---|
-| **[decompiler-roadmap.md](decompiler-roadmap.md)** | **The plan.** The single tracker. Every checkbox carries evidence: `[x]` done with a commit and a measurement, `[~]` partial with a stated boundary, `[ ]` open with a named blocker. |
-| **decompiler-roadmap-diary-YYYY-MM-DD.md** | **The log.** One entry per increment, RED → GREEN → VERIFY, with the command output that justifies each claim. Newest file is the active one. |
+| [open-questions.md](open-questions.md) | six unimplemented ideas and measured negative results — goto sinking, the two loop passes that never fire, the stack-bias affine index, the four-workstream structuring/dispatch redesign, KB schema migration, and `FunctionFacts` — each with the experiment that would decide it |
+| [function-facts-and-call-facts.md](function-facts-and-call-facts.md) | an interprocedural fact store keyed by stable function and call-site IDs. Nothing in it is implemented; its §6 is the measurement that rules out founding it on the existing `CallGraph` |
+| [signature-tiers.md](signature-tiers.md) | a three-tier signature system — compiled patterns, Aho-Corasick runtime patterns, sandboxed WASM script logic — balancing match cost against expressiveness. Unbuilt |
+| [execution-engine-research/](execution-engine-research/README.md) | four research syntheses gathered while designing the execution engine: IR design lessons, emulator engineering, an SMT backend survey, and a symbolic-execution survey. Background for decisions, not a proposal itself |
+| [agentic-source-recovery/](agentic-source-recovery/README.md) | a 20-document delivery plan for agent-driven source recovery: scope, runtime and control loop, tool surface, output validation, evaluation design, phased roadmap, and the operational policies (budgets, sandbox, provenance, checkpointing) it would need |
 
-Nothing else in this directory is a work queue. If a document here proposes work,
-it is either already reflected in the roadmap or it is history.
+## When a document leaves
 
-### Reading the roadmap
+A design does not stay here indefinitely. It leaves in one of two directions,
+and the move is part of finishing the work:
 
-Start with "How to use this roadmap". Four things there are load-bearing and easy
-to miss:
+* **It ships** → rewrite it as a description of what exists and move it to
+  `architecture/`, in the present tense, naming the code. A design document
+  left in place after the code lands is the most expensive kind of stale doc,
+  because it reads as a plan for work already done.
+* **It is abandoned, superseded, or answered** → move it to `history/` with a
+  `> **Kind:** record · **Date:** YYYY-MM-DD` banner and a row in
+  [`history/README.md`](../history/README.md) naming what superseded it and
+  which of its claims are now known false.
 
-- **Two tracks.** Correctness (fixture cells move) and architecture (a boundary
-  holds, zero cells expected) are judged by different standards. Mixing them is
-  what made the architecture work look stalled when it was simply losing every
-  scheduling contest.
-- **The Phase blocks are a VIEW of the EPIC blocks**, not additional work. The
-  193 checkboxes are roughly 70 distinct items. A percentage-complete figure over
-  them is bookkeeping, not evidence.
-- **`[x]` requires a production caller.** "Implemented" and "connected" are
-  different claims, and conflating them has cost real time here.
-- **Capability census before a modelling theory.** Check whether a capability
-  exists at all before attributing failures to a deep gap. Three whole missing
-  ISA categories were found this way in three days.
+The one thing not to do is leave a third document behind when two disagree.
+When a proposal here is contradicted by the code, the code wins and the
+document moves.
 
-Appendix A (DecBench and evaluation) is explicitly **on demand only**. An
-untouched box there is not a defect.
+## Writing one
 
-## Rolling the diary
+Follow [`development/contributing-docs.md`](../development/contributing-docs.md)
+for the kind/status banner and the generators. Two rules matter more here than
+anywhere else in the tree, because a proposal is unfalsifiable by
+construction:
 
-A diary file covers a working period, not all time. Roll it when it passes a few
-thousand lines: start `decompiler-roadmap-diary-<today>.md`, link back to the
-previous one, and keep entry numbering continuous across files so a reference to
-"Entry 34" stays unambiguous.
-
-## Everything else is evidence
-
-The roadmap cites these where a claim needs backing. They are historical records
-of what was measured and decided, not instructions. Treat any score, revision, or
-plan inside them as historical unless the roadmap says otherwise.
-
-Useful ones to know about:
-
-- `dormant-transforms-2026-08-12.md` — carries a correction worth reading before
-  trusting any table in this directory: its original attempt/fire counts were
-  never produced by any run, because the instrumentation did not exist at that
-  commit. Re-measured numbers are appended.
-- `function-facts-and-call-facts-2026-08-15.md` — the design note for the most
-  duplicated open item in the plan.
-- `defect-register-2026-08-05.md`, `armv7-real-defects-2026-08-05.md` — defect
-  archaeology with root causes.
-- `decbench-*` — evaluation-harness history. Pairs with Appendix A.
-- `fixture-expansion-2026-08-27.md` — the 14 fixtures added for those defects
-  (206-219) and the FIVE NEW defects they found on first run: `_Complex` helper
-  calls losing their whole signature, `double` arithmetic emitted as integer
-  arithmetic, an unsymbolized indirect-call target, a mixed tree-plus-table
-  dispatch folded into a ternary, and 64-bit SIMD lanes modelled as OR'd 32-bit
-  halves. Also records the two structural predicates (`switch`, `goto_free`)
-  the corpus needed before the largest defect class could be asserted at all.
-- `decbench-defect-reproductions-2026-08-27.md` — **read before acting on any
-  jump-table, structuring, or unmodelled-instruction item.** Reproduces all three
-  from compiled source and finds two of the three are described backwards in our
-  own docs: clang's relative jump table works (ARM A32 `ldr pc` does not, 321
-  sites), and gcc -O0 `statemachine` now recovers a correct switch. Carries a
-  corrections table and a four-workstream redesign plan.
-- `decbench-native-provenance-2026-08-27.md` — DecBench's upstream audit of our
-  AST ("we drop `ins.va` at lowering"), verified true against current master, with
-  the cost of each way of answering it and a measured census showing 85% of the
-  value sits in register-derived locals, not stack slots. Also records that the
-  audit lives only on an unmerged draft branch, and that the external eval-kit
-  format cannot carry provenance at all.
-
-## The habit that keeps this honest
-
-A number in a document is not a measurement. Two tables in this directory turned
-out never to have been produced by any run, and both shaped later decisions.
-Write the command next to the number.
+* **Write the command next to the number.** Two tables in this directory's
+  predecessor turned out never to have been produced by any run, and both
+  shaped later decisions. A number without the command that made it and the
+  commit it was made at does not go in.
+* **State what would decide it.** A proposal that cannot name the experiment,
+  fixture, or measurement that would settle whether to build it is not ready
+  to be written down; it is a preference.

@@ -1,4 +1,4 @@
-# Test-inventory authority plan — 2026-08-31
+# Test-inventory authority plan
 
 > **Kind:** plan · **Status:** proposed
 
@@ -6,6 +6,15 @@ This implements R0 of the
 [real-binary roadmap](real-binary-decompiler.md) and refines
 test-estate Phase 1. The current inventory is valuable but not reproducible or
 internally atomic enough to serve as live authority.
+
+## Progress
+
+Nothing in I0–I5 has landed. Two things around the inventory did: it was
+regenerated once (`c320b3f7`, 89 → 77 unreachable) and the residual 74
+unreachable entries were classified into five buckets (`1f819d63`,
+`docs/test-inventory/unreachable-triage.md`). Neither makes the inventory
+renewable — the survey fragments the generator requires are still not
+committed, which is exactly I0.
 
 ## Measured current state
 

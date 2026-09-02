@@ -13,7 +13,7 @@ evidence.
 **Status:** evidence, design, and the work that followed. §§0–9 are the
 investigation; §10 is what was measured, built, and reverted. If the remaining
 plan in §7 is adopted, it belongs in
-[`decompiler-roadmap.md`](../../../design/decompiler-roadmap.md).
+[`decompiler-roadmap.md`](../decompiler-roadmap-2026-08-13.md).
 
 **Delivered** (all gates green, all four baselines refreshed under the pinned
 toolchain and purely additive):

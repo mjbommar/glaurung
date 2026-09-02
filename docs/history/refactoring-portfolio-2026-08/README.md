@@ -75,6 +75,6 @@ stale extension, or running CI lane is not a pass.
 ## Existing design authority
 
 These projects execute rather than replace the semantic direction in
-[`../design/decompiler-roadmap.md`](../../design/decompiler-roadmap.md),
+[`../design/decompiler-roadmap.md`](../design/decompiler-roadmap-2026-08-13.md),
 [`../design/decompiler-middle-architecture.md`](../design/plans-superseded/decompiler-middle-architecture.md),
 and [`../design/glaurung-architecture-redesign-2026-08-05.md`](../design/plans-superseded/glaurung-architecture-redesign-2026-08-05.md).

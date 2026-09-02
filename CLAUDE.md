@@ -146,8 +146,8 @@ This is a **real, production** tool used for actual binary analysis.
   `tests/decompiler_fixtures/` is the corpus that proves a decompiler change
   sound; DecBench is an evaluation harness that costs tens of minutes and
   reports its own resource problems as cell failures. `pytest.ini` deselects
-  `-m decbench`. `docs/design/decompiler-roadmap.md` Appendix A holds the metric
-  plan and is explicitly not a work queue.
+  `-m decbench`. `docs/development/roadmap/README.md`'s DecBench section holds
+  the metric plan and is explicitly not a work queue.
 - **A module split touches SIX side files:** the four fixture baselines
   (`baseline`, `structural_baseline`, `arch_baseline`, `defuse_baseline`), plus
   `test_large_module_review.py`'s `REVIEWED_LARGE_MODULES`,
@@ -192,9 +192,8 @@ gate and baseline refresh command),
 [decompiler-testing.md](docs/development/decompiler-testing.md) (the iteration
 loop), [contributing-docs.md](docs/development/contributing-docs.md) (doc kinds,
 generators, evidence rules), and
-[roadmap/README.md](docs/development/roadmap/README.md) (the live plan set).
-[docs/design/decompiler-roadmap.md](docs/design/decompiler-roadmap.md) Appendix
-A holds the DecBench metric plan, on demand only.
+[roadmap/README.md](docs/development/roadmap/README.md) (the live plan set,
+whose DecBench section holds the metric plan, on demand only).
 [.claude/agents/rust-data-model-creator.md](.claude/agents/rust-data-model-creator.md)
 adds a Rust+PyO3 data model, following
 [docs/architecture/data-model.md](docs/architecture/data-model.md).

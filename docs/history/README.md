@@ -108,6 +108,12 @@ of 250 DecBench-compilable functions exists only here.
 | [2026-07-30-terminal-branch-kinds.md](decompiler-checkpoints-2026-07/2026-07-30-terminal-branch-kinds.md) | 2026-07-30 | a successor-ordering fix in `detect_if_shape` | `src/ir/structure/` has since been split into eight modules |
 | [2026-08-06-architecture-decbench-execution-diary.md](decompiler-checkpoints-2026-07/2026-08-06-architecture-decbench-execution-diary.md) | 2026-08-08 | a timestamped execution diary with an explicit evidence-rules preamble | its test and ratchet counts are an August snapshot; the five evidence rules in its preamble are the durable part |
 
+## `design/`
+
+| file | date | what it recorded | superseded by / known-false claims |
+|---|---|---|---|
+| [decompiler-roadmap-2026-08-13.md](design/decompiler-roadmap-2026-08-13.md) | 2026-08-13 | the single consolidated decompiler tracker — 193 checkboxes over five epics, nine phases, a file-size program, and a DecBench appendix, at planning baseline `fb4ee6ba` | superseded by [`development/roadmap/README.md`](../development/roadmap/README.md) (its meta-guidance and its on-demand DecBench appendix), [`development/roadmap/real-binary-decompiler.md`](../development/roadmap/real-binary-decompiler.md) ("Carried from the 2026-08-13 roadmap" holds every item of it that was still open), and [`development/testing-gates.md`](../development/testing-gates.md) (its fitness/file-size program, as a measured gate). Known false: every number in its file-size section (it says 314 product files / 166,455 LOC / mean 530.1 / `ir/ast.rs` at 11,628 lines / 5 of 7 targets missed; the baseline measured 455 / 185,318 / 407.3 / 1,711 / 6 of 9 met), and "MIR is not BUILT on a production decompile" — `5ab8e7d3` and `614cd661` made it reachable as `PreparedLlir::mir()`; what is still open is that nothing consumes it |
+
 ## `design/campaigns/`
 
 | file | date | what it recorded | superseded by / known-false claims |
@@ -178,14 +184,17 @@ LLIR and rendering. The architecture that came out of them is
 
 ## `development/test-estate/`
 
-The three test-estate phases whose work has landed. The open phases stay live
-under [`development/test-estate/`](../development/test-estate/).
+The test-estate phases that are finished or that were merged into a live
+roadmap plan. The open phases stay live under
+[`development/test-estate/`](../development/test-estate/).
 
 | file | date | what it recorded | superseded by / known-false claims |
 |---|---|---|---|
 | [01-reachability.md](development/test-estate/01-reachability.md) | 2026-08-31 | the plan to make every test file reachable and every skip accounted for | **landed**: `test_estate_reachability.py` exists, `pytest.ini` has `-ra`, all 14 `tests/triage/*.rs` are declared. Reads as an open plan; it is not. Five tests still cite it in docstrings |
 | [02-canary-determinism.md](development/test-estate/02-canary-determinism.md) | 2026-08-31 | the plan for committed canary objects and a determinism check | **landed** at `b4d23221`: `tests/decompiler_fixtures/canary/` plus `test_decompiler_canary.py` and `test_decompiler_determinism.py` |
 | [09-asset-hygiene.md](development/test-estate/09-asset-hygiene.md) | 2026-08-31 | 63 unparseable sample-metadata files and an asset-hygiene plan | **landed** at `937425d0`: 339 metadata files now parse, 0 fail; the flat path the doc names no longer exists |
+| [04-pe-macho.md](development/test-estate/04-pe-macho.md) | 2026-09-01 | the plan to make PE and Mach-O real fixture lanes with clang-cl and zig | **merged into** [`development/roadmap/pe-pdb-macho-parity.md`](../development/roadmap/pe-pdb-macho-parity.md), which carries its three `lld-link`/`libcmt` caveats and the `win10-dismcore.dll` TLS finding. The lanes it planned landed at `8c0a89f6`, `99113bc8`, `c7200d2d` and `ba2fe5c2`; its own text says the newer plan supersedes its rough counts |
+| [06-perf-ratchet.md](development/test-estate/06-perf-ratchet.md) | 2026-08-31 | the design for an instruction-count performance baseline and a gate that reads it | **merged into** [`development/roadmap/performance-determinism-ratchet.md`](../development/roadmap/performance-determinism-ratchet.md), which carries its instructions-not-seconds rationale and the RSS-canary argument. Built (`a5f47189`, `a938d897`) and then extended well past this design; its 6.3 asks for a `CLAUDE.md` bullet that now lives in `development/testing-gates.md` |
 
 ## `execution-engine-2026-06/`
 

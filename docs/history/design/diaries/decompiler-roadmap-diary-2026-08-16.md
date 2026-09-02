@@ -2,7 +2,7 @@
 
 > **Kind:** record · **Date:** 2026-08-17
 
-**Plan:** [decompiler-roadmap.md](../../../design/decompiler-roadmap.md)
+**Plan:** [decompiler-roadmap.md](../decompiler-roadmap-2026-08-13.md)
 **Previous volume:** [decompiler-roadmap-diary-2026-08-13.md](decompiler-roadmap-diary-2026-08-13.md) — Entries 1-48, 2026-08-13..16
 **Continues from:** `0acfe20`
 

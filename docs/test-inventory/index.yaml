@@ -327,7 +327,7 @@ entries:
   path: tools/fitness_baseline.json
   title: Source-tree code-fitness/file-size ratchet (ratchet 6 of 6, unrelated to decompiler behavior)
   subject: 'Physical-LOC statistics over src/*.rs (product code only -- test modules and #[cfg(test)]
-    blocks stripped, generated tables excluded) ratcheted against docs/design/decompiler-roadmap.md''s
+    blocks stripped, generated tables excluded) ratcheted against docs/development/testing-gates.md''s
     file-size/composition targets: largest_files, oversized_files, per-measure means/counts.'
   domain:
   - decompiler
@@ -5454,7 +5454,7 @@ entries:
   kind: python-test
   path: python/tests/test_fitness_report.py
   title: Fitness report
-  subject: 'Tests for `tools/fitness_report.py`: the file-size fitness measures from `docs/design/decompiler-roadmap.md`''s
+  subject: 'Tests for `tools/fitness_report.py`: the file-size fitness measures from `docs/development/testing-gates.md`''s
     "Code quality, composition, and file-size program", and the committed-baseline ratchet over them.'
   domain:
   - infra
@@ -20158,7 +20158,7 @@ entries:
   kind: tool
   path: tools/fitness_report.py
   title: Code-quality fitness ratchet
-  subject: Measures the 'code quality, composition, file-size' fitness metrics named in docs/design/decompiler-roadmap.md
+  subject: Measures the 'code quality, composition, file-size' fitness metrics named in docs/development/testing-gates.md
     and reports them against end-state targets, with a --check-ratchet mode.
   domain:
   - infra

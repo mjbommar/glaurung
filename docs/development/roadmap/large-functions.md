@@ -1,4 +1,4 @@
-# Large-function decompiler plan — 2026-08-31
+# Large-function decompiler plan
 
 > **Kind:** plan · **Status:** proposed
 
@@ -6,6 +6,13 @@ This plan implements R2 of the
 [real-binary roadmap](real-binary-decompiler.md). It is
 based on the pinned full-run function data, not on the favorable relative rank
 of a weak absolute leaderboard.
+
+## Progress
+
+Nothing in L0–L5 has landed. The `@large` source-grounded corpus and its
+phase/resource ratchets are still listed as not started in
+[`test-estate/EXECUTION.md`](../test-estate/EXECUTION.md); the candidate size
+curve below is measurement, not implementation.
 
 ## What the evidence says
 

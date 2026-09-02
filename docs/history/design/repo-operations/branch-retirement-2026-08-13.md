@@ -72,7 +72,7 @@ undone by reading the repository.
 | `agent/type-env` | `df425cb` | superseded: `src/ir/symbol_env.rs` is on master; 3 residual lines are call-site variants |
 | `agent/x86-flags` | `3b58b5e` | superseded: master already lifts `bsr`/`bsf`, and its zero-case is the LATER fix — writing the count unconditionally, because the branch's `Op::Ite` form made `dst` live-in and cost `shift_until_zero` three phantom parameters |
 | `agent/bool-guards` | `1c77782` | `src/ir/bool_guard.rs`, deliberately reverted on master by `c220be4` |
-| `agent/stack-bias` | `4ac7657` | **RETAINED, not merged** — see [stack-bias-affine-index-2026-08-13.md](../../../design/stack-bias-affine-index.md) |
+| `agent/stack-bias` | `4ac7657` | **RETAINED, not merged** — see [stack-bias-affine-index-2026-08-13.md](../../../design/open-questions.md) |
 | `archive/wt-audit-unresolved-merge-20260812-b` | `241e84a` | superseded: function-level parity with master in `src/ir/function_tables.rs` |
 | `integrate/session-onto-master` | `eb43aad` | duplicate of `codex/primary-dirty-worktree-20260811` |
 | `port/session-onto-master` | `781e62c` | an ancestor of master |

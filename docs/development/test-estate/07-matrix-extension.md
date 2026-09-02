@@ -2,13 +2,21 @@
 
 > **Kind:** plan · **Status:** proposed
 
+**Phase status: partial.** 7.1 landed **opt-in** at `6660f1f7` — the Go toolchain
+and lanes are wired behind `GLAURUNG_FIXTURE_GO`, and the manifest entries and
+four baseline refreshes they need are still outstanding. 7.5 landed across
+`b02b5883`, `225088fb` and `1329382d`: the readability census now covers both
+corpora and GCC/Clang O0/O2 at 3,580 entries. 7.2 (`O0strip`), 7.3 (LTO) and
+7.4 (musl) are not implemented, and the full closure/effects map at O2 still
+needs a lane key. Live status: [`EXECUTION.md`](EXECUTION.md).
+
 The matrix today: `{gcc, clang} × {O0, O2}` required on x86-64, `O2strip`
 variants, arch lanes `i386 / armv7 / aarch64 / x86_64_gcc15`, Rust via
 `rustc`. Each addition below is a **measured** one — the lane's cell-count
 cost is stated, and each lane lands separately with its own baseline refresh
 (all six side files, per the standing discipline).
 
-## 7.1 Wire Go (written work earning zero return)
+## 7.1 Wire Go (written work earning zero return) — **opt-in** (`6660f1f7`)
 
 Five fixtures (`176`–`180`) exist, are documented in
 `docs/development/decompiler-curriculum-corpus.md`, and are built by nothing:
@@ -62,7 +70,7 @@ regression test for that whole class). Static-link one variant for the Phase
 included (host can dlopen musl-linked `-shared` objects; verify early — if
 not, the lane is decompile-only and says so).
 
-## 7.5 Structural baseline at O2
+## 7.5 Structural baseline at O2 — **done** (`b02b5883`, `225088fb`, `1329382d`)
 
 > **Measured 2026-09-01, and it is worse than the plan assumed.** With the
 > lane seam now in `structural.py`, building `212_loop_with_returning_arm`

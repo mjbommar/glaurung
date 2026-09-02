@@ -1,6 +1,6 @@
 # Phase 4 — PE and Mach-O become real fixture lanes
 
-> **Kind:** plan · **Status:** proposed
+> **Kind:** record · **Date:** 2026-09-01
 
 ## The problem
 
@@ -14,7 +14,8 @@ ARM64, DWARF, chained-fixup, or universal-binary matrix.
 
 The current evidence and implementation contract superseding the rough counts
 in this phase are in
-[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../roadmap/pe-pdb-macho-parity.md).
+[`development/roadmap/pe-pdb-macho-parity.md`](../../../development/roadmap/pe-pdb-macho-parity.md),
+which has since absorbed this phase's unique measurements.
 
 Both are fixable on this Linux box with tools already installed and verified
 present:

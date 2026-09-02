@@ -1,6 +1,6 @@
 # Phase 6 — A performance number something compares against
 
-> **Kind:** plan · **Status:** proposed
+> **Kind:** record · **Date:** 2026-08-31
 
 ## The problem
 

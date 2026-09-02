@@ -5,7 +5,7 @@
  *
  * COVERAGE TARGET: `ir::loop_form::recover_sentinel_search_loops`, and more
  * generally every pass that has to keep a dependent-load walk distinct from an
- * affine walk. `dormant-transforms-2026-08-12.md` measured the sentinel pass at
+ * affine walk. `docs/design/open-questions.md` records the sentinel pass at
  * 0 fires over the whole corpus and then isolated its single trigger: "the list
  * head arrives as a PARAMETER, and the advance is a pointer chase through a
  * struct field, under clang -O1 or above". Three near-misses were recorded as
@@ -56,7 +56,7 @@ struct L192Node {
 };
 
 /* THE TRIGGER SHAPE, character for character the probe from
- * `dormant-transforms-2026-08-12.md`: parameter head, `p = p->next`, NULL
+ * `docs/design/open-questions.md`: parameter head, `p = p->next`, NULL
  * sentinel, no counter. Do not add a step bound here -- a second exit test is
  * one of the things measured NOT to trigger the recovery. Termination is a
  * property of the input instead: `link_chains` is validated acyclic (each

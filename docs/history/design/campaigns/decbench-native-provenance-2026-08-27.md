@@ -4,7 +4,7 @@
 
 **Date:** 2026-08-27
 **Status:** evidence and options. Nothing here is a work queue; see
-[`decompiler-roadmap.md`](../../../design/decompiler-roadmap.md) if any of it is adopted.
+[`decompiler-roadmap.md`](../decompiler-roadmap-2026-08-13.md) if any of it is adopted.
 
 **Pinned refs**
 

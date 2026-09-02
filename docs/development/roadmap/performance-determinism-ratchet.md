@@ -1,4 +1,4 @@
-# Performance and determinism ratchet plan — 2026-08-31
+# Performance and determinism ratchet plan
 
 > **Kind:** plan · **Status:** proposed
 
@@ -6,14 +6,45 @@ This plan turns roadmap R6 and the determinism half of M7 into a release-grade
 contract. It starts from the performance tools already in the repository; it
 does not replace them with another benchmark framework.
 
-## Progress update — 2026-09-01
+## Progress
 
 Commit `a938d897` recorded a three-reference retired-instruction baseline with
 three runs per reference and observed spreads of 0.1–0.2%. An injected 10%
-regression was verified to fail. P1's missing-file condition is resolved, but
-P2–P8 remain substantially open: missing, partial, and incomparable evidence
-can still exit successfully, and provenance, RSS, output identity, and
-returned-body completeness remain absent.
+regression was verified to fail.
+
+P9 landed in `4f4f88e3`: the gate now fails closed and is scheduled. Three
+states that previously returned 0 — including a baseline reference the run
+never measured — exit 3, "not evidence"; the scheduling came second on
+purpose, because scheduling a fail-open gate manufactures assurance. It runs
+from `.github/workflows/perf-nightly.yml`.
+
+P1's missing-file condition is resolved and P2/P3 are covered by the
+fail-closed states. P4–P8 remain open: provenance, RSS, output identity, and
+returned-body completeness are still absent from the baseline contract.
+
+## Why this gate counts instructions
+
+Carried from the earlier estate phase this plan supersedes, because the
+reasoning is what keeps the design small:
+
+* **Wall-clock on this box is noisy under load**, and the arch gate has
+  recorded false failures for exactly that reason. Retired-instruction counts
+  are stable to well under 1% across load, which is what justifies a tight
+  threshold; a wall-clock gate could not carry one.
+* **`perf` works here** once the sysctl is set — `kernel.perf_event_paranoid`
+  ships at `4` and passwordless sudo is available.
+* **The number must be measured on a release build.** `maturin develop` builds
+  debug, and the two profiles disagree completely (the allocator is 6.5% of a
+  debug profile and 26.2% of a release one). `tools/build_guard.py` runs
+  first, and the gate refuses a debug extension.
+* **RSS is the cheap canary, not a headline.** Allocation churn was this
+  codebase's largest real performance bug — 47.5% of a discovery profile in
+  libc `malloc`/`free`, and effectively invisible to sampling self-time — so
+  peak RSS per reference is recorded with a loose threshold rather than left
+  out.
+* **Criterion stays diagnostic.** Ten wall-clock targets across a multi-minute
+  run is exactly the check that gets skipped; they answer *where* a regression
+  lives once the shipped-entry gate has said *that* one exists.
 
 ## Evidence boundary
 

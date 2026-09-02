@@ -3569,7 +3569,7 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "mc193_scaled_constant",
     ],
     # A parameter-supplied, harness-relocated linked list walked by pointer
-    # chase — the shape `dormant-transforms-2026-08-12.md` isolated as the single
+    # chase — the shape `docs/design/open-questions.md` isolates as the single
     # trigger for `loop_form::recover_sentinel_search_loops` and recorded as
     # unbuildable at the time. `l192_find_key` is that probe verbatim;
     # `l192_chase_keys` and `l192_stamp_chain` put the visit ORDER and the visited

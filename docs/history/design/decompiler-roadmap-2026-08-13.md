@@ -1,10 +1,26 @@
 # Glaurung decompiler and binary-analysis roadmap
 
-> **Kind:** design · **Status:** proposed
+> **Kind:** record · **Date:** 2026-08-13
 
-**Status:** canonical consolidated roadmap  
-**Last updated:** 2026-08-13  
-**Planning baseline:** Glaurung `fb4ee6ba5966e0e4a7fe001b523231fc5fcd43f4`
+**Planning baseline:** Glaurung `fb4ee6ba5966e0e4a7fe001b523231fc5fcd43f4`.
+
+> **Archived.** This was the single consolidated tracker until it fell about
+> four hundred commits behind its own baseline. It is superseded by
+> [`development/roadmap/README.md`](../../development/roadmap/README.md) (which
+> carries its meta-guidance and its DecBench appendix),
+> [`development/roadmap/real-binary-decompiler.md`](../../development/roadmap/real-binary-decompiler.md)
+> (which carries every item of it that was still open), and
+> [`development/testing-gates.md`](../../development/testing-gates.md) (which
+> carries its file-size and composition program as a measured gate).
+>
+> Two claims below are known false. Its "Code quality, composition, and
+> file-size program" numbers — 314 product files, 166,455 LOC, mean 530.1,
+> `ir/ast.rs` at 11,628 lines, 5 of 7 targets missed — describe a tree that no
+> longer exists; `tools/fitness_baseline.json` measured 455 files, 185,318 LOC,
+> mean 407.3, `ir/ast.rs` at 1,711, and 6 of 9 targets met. And its statement
+> that "MIR is not BUILT on a production decompile" stopped being true when
+> `5ab8e7d3` and `614cd661` moved `lower_verified_with_image` behind
+> `PreparedLlir::mir()`; what remains open is that nothing consumes it.
 
 This file consolidates the architecture review, DecBench gap analysis, repair
 campaign, branch audit, IR redesign, ARM work, type and aggregate work, code-size
@@ -160,7 +176,7 @@ measured against; the ratio is bookkeeping, not evidence.
 ### Local product state ahead of the planning baseline
 
 Committed to `master` after `fb4ee6b` (see
-[the 2026-08-13 execution diary](../history/design/diaries/decompiler-roadmap-diary-2026-08-13.md)):
+[the 2026-08-13 execution diary](diaries/decompiler-roadmap-diary-2026-08-13.md)):
 
 - `4549aee` DWARF type import retains conflicting cross-unit layouts instead of
   a first-wins dedup that destroyed them, and stops inventing alignment.
@@ -3182,31 +3198,31 @@ releasable.
 
 This roadmap supersedes the ordering in the older plans but not their evidence:
 
-- [Architecture redesign](../history/design/plans-superseded/glaurung-architecture-redesign-2026-08-05.md)
-- [Execution diary, 2026-08-19](../history/design/diaries/decompiler-roadmap-diary-2026-08-19.md) —
+- [Architecture redesign](plans-superseded/glaurung-architecture-redesign-2026-08-05.md)
+- [Execution diary, 2026-08-19](diaries/decompiler-roadmap-diary-2026-08-19.md) —
   a formatter emitting syntax the project cannot run, a regression `cargo
   test` structurally could not see, and three causes where I had filed one
-- [Execution diary, 2026-08-18](../history/design/diaries/decompiler-roadmap-diary-2026-08-18.md) —
+- [Execution diary, 2026-08-18](diaries/decompiler-roadmap-diary-2026-08-18.md) —
   the feature blind spot (8.6% of the tree never compiled by the documented
   gate), byte/word division silently discarded, and a correctness bug traced
   correctly that measurement showed cannot occur
-- [Architecture review diary](../history/design/diaries/glaurung-architecture-review-diary-2026-08-05.md)
-- [DecBench remediation roadmap](../history/design/plans-superseded/decbench-remediation-roadmap-2026-08-08.md)
-- [DecBench gap-analysis diary](../history/design/diaries/decbench-gap-analysis-diary-2026-08-08.md)
-- [Decompiler middle architecture](../history/design/plans-superseded/decompiler-middle-architecture.md)
-- [Value-model root cause and plan](../history/design/plans-superseded/value-model-root-cause-and-plan.md)
-- [Register views and verifier boundary](../architecture/register-model.md)
-- [Semantic structuring](../history/design/plans-superseded/semantics-preserving-structuring.md)
-- [Typed SSA and HIR](../history/design/plans-superseded/typed-ssa-hlir.md)
-- [ARMv7 real defects](../history/design/campaigns/armv7-real-defects-2026-08-05.md)
-- [Table-dispatch arguments](../history/design/campaigns/table-dispatch-arguments-2026-08-12.md)
-- [Stack-bias affine-index record](stack-bias-affine-index.md)
-- [Dormant transform measurements](dormant-transforms.md)
-- [Goto-density measurement](goto-density.md)
-- [Measured GED trade](../history/design/campaigns/ged-recovery-measured-trade.md)
-- [Master integration record](../history/design/repo-operations/master-integration-2026-08-12.md)
-- [Branch retirement manifest](../history/design/repo-operations/branch-retirement-2026-08-13.md)
-- [DecBench submission readiness](../history/design/campaigns/decbench-submission-readiness.md)
+- [Architecture review diary](diaries/glaurung-architecture-review-diary-2026-08-05.md)
+- [DecBench remediation roadmap](plans-superseded/decbench-remediation-roadmap-2026-08-08.md)
+- [DecBench gap-analysis diary](diaries/decbench-gap-analysis-diary-2026-08-08.md)
+- [Decompiler middle architecture](plans-superseded/decompiler-middle-architecture.md)
+- [Value-model root cause and plan](plans-superseded/value-model-root-cause-and-plan.md)
+- [Register views and verifier boundary](../../architecture/register-model.md)
+- [Semantic structuring](plans-superseded/semantics-preserving-structuring.md)
+- [Typed SSA and HIR](plans-superseded/typed-ssa-hlir.md)
+- [ARMv7 real defects](campaigns/armv7-real-defects-2026-08-05.md)
+- [Table-dispatch arguments](campaigns/table-dispatch-arguments-2026-08-12.md)
+- [Stack-bias affine-index record](../../design/open-questions.md)
+- [Dormant transform measurements](../../design/open-questions.md)
+- [Goto-density measurement](../../design/open-questions.md)
+- [Measured GED trade](campaigns/ged-recovery-measured-trade.md)
+- [Master integration record](repo-operations/master-integration-2026-08-12.md)
+- [Branch retirement manifest](repo-operations/branch-retirement-2026-08-13.md)
+- [DecBench submission readiness](campaigns/decbench-submission-readiness.md)
 
 ## Appendix A — DecBench and evaluation (ON DEMAND ONLY)
 

@@ -3,7 +3,7 @@
 > **Kind:** record · **Date:** 2026-08-16
 
 **Started:** 2026-08-13
-**Plan:** [decompiler-roadmap.md](../../../design/decompiler-roadmap.md)
+**Plan:** [decompiler-roadmap.md](../decompiler-roadmap-2026-08-13.md)
 **Baseline:** `fb4ee6b` (`master`), plus the uncommitted session-owned DWARF slice.
 
 This is the running evidence log for working the roadmap's *Immediate

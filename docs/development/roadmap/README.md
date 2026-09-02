@@ -1,16 +1,72 @@
-# Decompiler roadmap planning package — 2026-08-31
+# Decompiler roadmap
 
 > **Kind:** plan · **Status:** proposed
 
-This is the entry point for the evidence-driven roadmap research completed
-after the pinned 94,575-function DecBench run. It maps each roadmap workstream
-and milestone to its authoritative evidence, detailed implementation plan, and
-next bounded increment.
+This is the one live plan set for the decompiler and the estate around it. It
+maps each workstream (R0–R8) and milestone (M1–M8) to its authoritative
+evidence, its detailed implementation plan, and its next bounded increment.
+The evidence baseline is the pinned 94,575-function DecBench run described
+under [Pinned evidence](#pinned-evidence).
 
 This package is internal. It does not authorize publication, submission,
 email, issues, pull requests, commits, or pushes.
 
-## Progress update — 2026-09-01
+## How to read this
+
+Four rules govern how work here is chosen and how a box is allowed to be
+ticked. They were paid for by the roadmap this one replaces (archived as
+[`history/design/decompiler-roadmap-2026-08-13.md`](../../history/design/decompiler-roadmap-2026-08-13.md)),
+and every one of them was learned by getting it wrong first.
+
+- **Two tracks, judged differently.** CORRECTNESS succeeds when fixture cells
+  move `fail` → `pass` or a defect census goes down; feedback is days.
+  ARCHITECTURE succeeds when a boundary holds — a narrower API, one reason to
+  change, a capability something else can be built on — and is *expected* to
+  move zero cells. Judge each by its own standard. An architecture item that
+  has to promise cell movement to get scheduled will be over-sold, and a
+  correctness item asked to justify itself architecturally gets blocked on a
+  refactor it does not need.
+- **`[x]` requires a production caller.** "Implemented" and "connected" are
+  different claims and conflating them has cost real time here: `SymbolStore`
+  was ticked while every caller lived in `session_tests.rs`, and a whole
+  width-propagation cluster in `ast.rs` was reachable only from its own tests.
+  A box does not tick until something in the shipping pipeline asks it a
+  question. `[~]` is partial or diagnostic-only; `[ ]` is open; `[!]` is
+  blocked; `[r]` is measured and rejected — do not revive it unchanged.
+- **Phases and workstreams are views, not additional work.** The same item
+  routinely appears in a workstream row, a milestone, and a plan document.
+  Landing it and ticking one of the three leaves the plan claiming it is
+  undone. Record progress in every view, and never quote a
+  percentage-complete over the boxes: closing one real item moves one, two or
+  three of them depending only on how many views mention it.
+- **Capability census before a modelling theory.** Before attributing a
+  cluster of failures to a deep modelling gap, check whether the capability
+  exists at all. Three whole missing ISA categories (AArch64 scalar FP, i386
+  x87, ARM32 modified immediates) were found in three days by grepping the
+  lifters for an ISA's mnemonic families and diffing that against what the
+  corpus emits, and each looked like scattered unrelated fixture failures
+  beforehand.
+
+## The plan set
+
+The documents in this directory are the detailed authorities. The live status
+of everything they depend on is
+[`test-estate/EXECUTION.md`](../test-estate/EXECUTION.md) — the todo list of
+record, carrying the commit for every landed item.
+
+| plan | workstream |
+|---|---|
+| [test-inventory-authority.md](test-inventory-authority.md) | R0 — make the generated inventory reproducible and atomic |
+| [decbench-failure-remediation.md](decbench-failure-remediation.md) | R1 — the 217-row missing-body taxonomy, class by class |
+| [large-functions.md](large-functions.md) | R2 — size/shape ladder and phase telemetry |
+| [optimized-structural-quality.md](optimized-structural-quality.md) | R3 — GCC/Clang O0/O2 structural populations and readability |
+| [pe-pdb-macho-parity.md](pe-pdb-macho-parity.md) | R4 — hermetic PE32/PE32+/PDB and Mach-O lanes |
+| [real-world-malware-assets.md](real-world-malware-assets.md) | R5 — hostile shapes with real oracles |
+| [performance-determinism-ratchet.md](performance-determinism-ratchet.md) | R6 — fail-closed performance and determinism evidence |
+| [real-binary-decompiler.md](real-binary-decompiler.md) | the product-facing ordering, non-goals, and the items carried from the 2026-08-13 roadmap |
+| [../test-estate/README.md](../test-estate/README.md) | R7 — the estate-hygiene layer these sit on top of |
+
+## Progress
 
 Recent history materially advanced R1, R3, R4, R6, and R7. F1a now has a
 collision-safe resolver and real PE32 fixture (`0d6b30d1`), and the F1b core
@@ -19,13 +75,31 @@ distinguishes imports from absent symbols. The readability census now contains
 relaxation was reverted after adding 162 gotos while removing only 37 breaks.
 Closure and effect expectations remain lane-independent.
 
-An instruction-count baseline over three large references now exists and was
-proved to reject an injected 10% regression (`a938d897`). It is not yet a
-release baseline: missing, partial, and incomparable evidence still fails open,
-and provenance, RSS, output, and body completeness are absent. PE field
-reporting, PDB-path exposure, and RSDS scanning were repaired (`610d3afd`);
-the clang-cl lane then established a `/nodefaultlib` requirement and this local
-toolchain's inability to emit the planned TLS fixture (`8fb47f62`).
+Two of the five missing-body classes are now closed at the product end. F2a
+turned out not to be a lifter gap at all: Capstone rejected every Cortex-M
+system-register encoding, so the function was abandoned before any lift ran
+(`0031c3ee` — decoder mode, `SysReg` operand, and the `MRS`/`MSR` lift, with a
+body-recovery fixture). R4 gained hermetic lanes rather than plans: a PE
+entry/TLS/import identity fixture (`99113bc8`), a clang-cl PE32/PE32+ identity
+lane (`8c0a89f6`), a PDB type/layout lane (`c7200d2d`), and Mach-O x86-64 and
+ARM64 thin lanes (`ba2fe5c2`). Each of the four found a real defect in the
+code it was pointed at. Mach-O fat slices, the F1c dataset validator, and the
+F1d provenance trace stay open.
+
+An instruction-count baseline over three large references exists and was proved
+to reject an injected 10% regression (`a938d897`), and the gate now **fails
+closed** and is scheduled (`4f4f88e3`): three states that used to exit 0 —
+including a baseline reference the run never measured — now exit 3, "not
+evidence". It is still not a release baseline: provenance, RSS, output health,
+and body completeness are absent. PE field reporting, PDB-path exposure, and
+RSDS scanning were repaired (`610d3afd`); the clang-cl lane established a
+`/nodefaultlib` requirement and this local toolchain's inability to emit the
+planned TLS fixture (`8fb47f62`).
+
+R7's Go lanes are wired and **opt-in** behind `GLAURUNG_FIXTURE_GO`
+(`6660f1f7`); the manifest entries and four baseline refreshes they need are
+still open. R8 landed in five parts — see [R8 status](#r8-status) — and the
+never-executed-test pool reached zero (`3fb3184c`).
 
 ## Pinned evidence
 
@@ -48,7 +122,7 @@ fixtures for implementation and keep DecBench held out.
 | workstream | demonstrated problem | detailed authority | first implementation increment |
 |---|---|---|---|
 | R0 measurement/inventory | generated inventory cannot reproduce itself; JSON and Markdown snapshots disagree | [inventory-authority plan](test-inventory-authority.md) | recover committed canonical records, schema v2, atomic generation, `--check` |
-| R1 missing-body accounting | 217 rows span identity, dataset, and ARM lift causes rather than one generic decompiler failure | [failure taxonomy](../../history/design/campaigns/decbench-full-failure-taxonomy-2026-08-31.md), [remediation plan](decbench-failure-remediation.md) | F1a landed and F1b core landed; next F2a, then F1c/F1d validation |
+| R1 missing-body accounting | 217 rows span identity, dataset, and ARM lift causes rather than one generic decompiler failure | [failure taxonomy](../../history/design/campaigns/decbench-full-failure-taxonomy-2026-08-31.md), [remediation plan](decbench-failure-remediation.md) | F1a, F1b core and F2a landed; next F1c/F1d dataset validation |
 | R2 large functions | compile and structural perfection collapse as recovered output grows | [large-function plan](large-functions.md) | smallest source-grounded size/shape ladder with phase telemetry |
 | R3 optimized structure | readability covers GCC/Clang O0/O2, but closure/effects remain lane-independent | [optimized structural-quality plan](optimized-structural-quality.md) | lane-key closure/effects, then add optimized shape predicates |
 | R4 PE/PDB/Mach-O | many PE samples but no coherent source/PDB matrix; one Mach-O sample only | [format-parity plan](pe-pdb-macho-parity.md) | four-cell clang-cl PE32/PE32+ identity lane |
@@ -105,8 +179,9 @@ Required proof:
 * import/alias/runtime identities are not scored as local bodies; and
 * a fresh pinned run has no unexplained missing body.
 
-Current state: taxonomy complete; F1a and the F1b product core are implemented.
-F1c, F1d, F2a, scoring-contract work, and a fresh pinned full run remain open.
+Current state: taxonomy complete; F1a, the F1b product core, and F2a are
+implemented (`0d6b30d1`, `0031c3ee`). F1c, F1d, scoring-contract work, and a
+fresh pinned full run remain open.
 
 ### M3 — bounded large functions
 
@@ -141,8 +216,10 @@ Required proof:
 * PE runtime/loader and Mach-O bind/fixup/fat-slice coverage; and
 * provisioned fetched-fixture lane cannot pass with zero inputs.
 
-Current state: broad PE parsing assets and one tested Mach-O stub sample;
-semantic parity open.
+Current state: hermetic PE32/PE32+ identity, PE entry/TLS/import, PDB
+type/layout, and Mach-O x86-64/ARM64 thin lanes all exist (`8c0a89f6`,
+`99113bc8`, `c7200d2d`, `ba2fe5c2`). Mach-O fat slices, the fetched-fixture
+zero-input guard, and full semantic parity are open.
 
 ### M6 — real-world confidence
 
@@ -165,9 +242,9 @@ Required proof:
 * all prior milestone denominators and build/asset hashes bound together; and
 * held-out evaluation reported internally without leakage into fixtures.
 
-Current state: an initial instruction baseline and determinism tests exist;
-fail-closed completeness, provenance, resource/output evidence, and the unified
-release artifact remain open.
+Current state: an instruction baseline and determinism tests exist and the
+gate fails closed and is scheduled (`4f4f88e3`). Provenance, RSS, output and
+body-completeness evidence, and the unified release artifact remain open.
 
 ### M8 — the suite measures what it claims
 
@@ -230,7 +307,7 @@ vacuous, and the total does not move. This is the same defect class as the
 Python-side skips that phase 1.6 made visible with `-ra`, and it is worse:
 there is no equivalent flag, because these are not skips.
 
-### R8 status — landed 2026-09-01
+### R8 status
 
 1. **Silent toolchain gates** (`1b9f19c9`). 21 sites returned `ok` having
    asserted nothing. Measured both ways: 0 skips on a provisioned machine
@@ -327,16 +404,80 @@ Every implementation increment:
 * refreshes every affected baseline and inventory view deliberately;
 * reports local focused, full local, committed/pushed, and remote CI states
   separately; and
-* updates the [research diary](../../history/design/diaries/decompiler-roadmap-diary-2026-08-31.md)
-  with evidence that changed the next decision.
+* records the outcome in [`test-estate/EXECUTION.md`](../test-estate/EXECUTION.md)
+  — including evidence that changed the next decision, and any finding that
+  falsifies a premise of one of these plans.
 
 This planning work itself remains documentation-only and internal.
+
+## DecBench evaluation (on demand only)
+
+**Read this section only when refreshing published metrics.** It is not a work
+queue, and none of its open boxes appears in the workstream map, the milestone
+map, or the bounded increments above. A box here going unticked for a year is
+not a defect.
+
+The project's correctness ground truth is `tests/decompiler_fixtures/`, which
+compiles the corpus, executes the recompiled decompiler output, and diffs it
+against the original. GED / TypeMatch / ByteMatch measure something else, on a
+harness that costs tens of minutes per run and reports its own resource
+contention as cell failures. Reach for this section when refreshing the paper
+or preparing a submission artifact — never to decide what to work on next.
+
+**The boundary.** The running gate is `scripts/decbench-local-gate.sh` lanes
+1–3, which are our own fixture corpus. Lanes 4–5 are this section and require
+`--decbench` or `GLAURUNG_RUN_DECBENCH=1`. In pytest the same boundary is the
+`decbench` marker, which `pytest.ini` deselects by default. Separately and
+absolutely: the DecBench upstream contribution rule in `CLAUDE.md` stands —
+no agent authors or posts a DecBench issue, comment, or pull request. Stop at
+the boundary and hand the evidence to a human.
+
+**Audit trail (closed).** Three submissions were merged upstream and are the
+reason the backend is now part of DecBench rather than a pending submission:
+PR #61 (empty-disassembly ByteMatch correctness fix) as `af02672db6dd`, PR #62
+(reproducibility/efficiency follow-up) as `3db5d557a6ae`, and PR #56 (the
+deterministic Glaurung backend, pinned to its evaluated commit) as
+`08f891581e6b`. The `-marm` A32 lane and the GCC-15 x86-64 control were added
+and are ratcheted in `arch_baseline.json`.
+
+**Open, if and only if a metric refresh is being prepared.**
+
+- [ ] Obtain a fresh official-evaluator score. With #56 merged this is a
+  question of running the current upstream evaluator against a pinned image,
+  not of getting a backend accepted. The last artifact pins `fb4ee6ba`; decide
+  deliberately whether the next score describes that commit or a fresh package.
+- [ ] Score the exact current artifact and compute union from exact row-level
+  joins, never adjusted aggregate arithmetic.
+- [ ] Keep raw outputs, package hashes, evaluator revision, metric schema,
+  compiler versions, target triples, and exact function joins in every ledger.
+- [ ] Keep public publication separate from local evaluation, and require
+  explicit authorization for any result or site change.
+- [ ] Explain the historical `linkedlist:clang:O0` ByteMatch drop from 0.47 to
+  0.10. GED was already 0.0, so "structurally closer" is not an explanation.
+- [ ] Diagnose the AArch64-only failures at the first wrong semantic stage.
+- [ ] Preserve the ILP32-versus-ARM distinction, the missing-lane caveat, and
+  the control-compiler caveat in the evidence register.
+
+**Acceptance policy for any score-campaign change.** Reproduce on a real binary
+and name the first wrong semantic stage; add a failing test before implementing;
+advance the intended owner rather than add a duplicate heuristic path; include
+near-miss controls; rerun affected cells plus every current perfect and canary
+cell; report coverage, mean, median, perfect count, union and regressions;
+compare exact function identities; use fresh no-cache evaluation where cache
+identity is in doubt; and delete superseded workaround code when the
+foundational owner replaces it.
+
+Note on the historical metric-attack order (TypeMatch/GED first, textual
+normalization last): it is recorded in the archived roadmap as the explanation
+of how the campaign chose work when the metrics were the scoreboard. It no
+longer selects work — execution ground truth does — and the changes that
+actually moved fixture cells were missing capabilities it does not mention.
 
 ## Package validation
 
 The package is structurally complete when:
 
-* R0–R7 and M1–M7 each map to an authority and completion evidence;
+* R0–R8 and M1–M8 each map to an authority and completion evidence;
 * the failure counts reconcile to 217 plus the separate thirteen E1 rows;
 * local Markdown links resolve;
 * no plan claims an unimplemented selector, baseline, runner, or matrix exists;

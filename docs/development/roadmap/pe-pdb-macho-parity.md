@@ -1,4 +1,4 @@
-# PE/PDB and Mach-O parity plan — 2026-08-31
+# PE/PDB and Mach-O parity plan
 
 > **Kind:** plan · **Status:** proposed
 
@@ -6,6 +6,30 @@ This plan turns roadmap R4 into source-grounded fixture lanes with explicit
 format, identity, body, type, structure, and refusal contracts. It updates the
 older test-estate Phase 4 against the live repository rather than repeating its
 stale assumptions.
+
+## Progress
+
+Four hermetic lanes landed, and each of the four found a real defect in the
+code it was pointed at:
+
+* PE entry/TLS/import identity fixture (`99113bc8`) — and TLS callbacks were
+  being read from `SizeOfZeroFill`, so every PE reported none.
+* clang-cl PE32/PE32+ identity lane (`8c0a89f6`) — and the resolver was
+  COFF-only, blind to every shipped Windows binary.
+* Hermetic PDB type/layout lane (`c7200d2d`), which also records the precise
+  reason PDB types do not yet reach recovered prototypes.
+* Mach-O x86-64 and ARM64 **thin** lanes (`ba2fe5c2`) — and an AArch64 scalar
+  floating-point immediate was being dropped by the decoder. An FMA lifting
+  change was measured in the same pass and reverted.
+
+Earlier, `610d3afd` repaired three front-door defects this plan depends on:
+`list_symbols` reported six fields as hardcoded `False`, the `pdb_path` PyO3
+getter did not exist for a field that did, and the RSDS scan read 199,416
+bytes short of the record.
+
+Open: Mach-O universal (fat) slices, rescoping the fetched Microsoft PE/PDB
+tests so a provisioned lane cannot pass with zero pairs, and the semantic
+parity contracts below.
 
 ## Current evidence
 
@@ -20,6 +44,36 @@ The current host has:
 
 Static source-grounded lanes are therefore immediately feasible. Windows
 execution is not a current contract and must not be represented as one.
+
+**Three caveats on the clang-cl lane, measured on this host.** `clang-cl /c`
+compiles PE/COFF happily, but the link step does not work as first written:
+`lld-link` fails with `could not open 'libcmt.lib'` / `'oldnames.lib'` because
+the MSVC runtime import libraries are not present.
+
+1. **`/nodefaultlib` is required**, which makes every fixture in this lane
+   freestanding — no CRT, so no `printf`/`malloc`/string functions. Most
+   decompiler fixtures are self-contained arithmetic and control flow and are
+   fine; any fixture that calls the CRT needs the skip list, alongside the
+   gcc-asm ones. (`xwin` could fetch the SDK import libraries and lift this,
+   at the cost of a network dependency and an EULA acceptance in the build.)
+2. **`__declspec(thread)` does not link** without the CRT — it references
+   `_tls_index`. Defining `unsigned long _tls_index = 0;` in the fixture
+   resolves it.
+3. **lld-link emits no TLS data directory** for such a DLL even then
+   (`TLSTableRVA: 0x0`), so this lane cannot produce a TLS-identity fixture at
+   all.
+
+Verified working: a PE32+ DLL plus a real PDB, with a valid CodeView debug
+directory entry (GUID, age, PDB path) that `llvm-readobj` reads back.
+
+**For entry/TLS/import identity, prefer the committed real samples.**
+`samples/binaries/platforms/windows/vendor/realworld/win10-dismcore.dll`
+carries all three structures at once — no COFF symbol table (stripped), a
+CodeView entry naming `DismCore.pdb`, and a TLS directory at RVA `0x30088` —
+and five other vendor DLLs have TLS directories too. They are already in the
+tree, they are real MSVC output rather than clang-cl's, and they cost no
+build. `python/tests/test_symbol_summary_fields.py` uses them, and the two
+defects found that way are the argument for it.
 
 ### PE/PDB estate
 

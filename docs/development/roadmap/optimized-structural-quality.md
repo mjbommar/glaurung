@@ -1,4 +1,4 @@
-# Optimized structural-quality plan — 2026-08-31
+# Optimized structural-quality plan
 
 > **Kind:** plan · **Status:** proposed
 
@@ -6,14 +6,15 @@ This plan makes roadmap R3 measurable and actionable. It joins the source-
 grounded fixture matrix, the three-way parity findings, and the full-run
 optimized/large quality evidence without using DecBench bodies as fixtures.
 
-## Progress update — 2026-09-01
+## Progress
 
 The readability census now has 3,580 entries across both fixture corpora and
 GCC/Clang O0/O2 (`1329382d`), reporting 85 switches, 4,604 gotos, and 545
 breaks. A dispatch-loop relaxation was measured and reverted: it added 162
-gotos while removing only 37 breaks. Closure and effect expectations still
-contain 2,253 and 37 rows without lane keys; schema v2 and optimized shape
-predicates remain open.
+gotos while removing only 37 breaks, and all seven of its readability
+regressions were at **-O0**, not at the O2 lane the census was scoped to
+assume. Closure and effect expectations still contain 2,253 and 37 rows
+without lane keys; schema v2 and optimized shape predicates remain open.
 
 ## Current evidence
 

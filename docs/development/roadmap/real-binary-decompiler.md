@@ -1,4 +1,4 @@
-# Real-binary decompiler roadmap — evidence update 2026-08-31
+# Real-binary decompiler roadmap
 
 > **Kind:** plan · **Status:** proposed
 
@@ -16,15 +16,23 @@ binaries.
 The navigable R0–R7/M1–M7 evidence and plan map is the
 [roadmap planning package](README.md).
 
-## Progress update — 2026-09-01
+## Progress
 
-F1a and the F1b product-side distinction landed; the readability census
-reached 3,580 GCC/Clang O0/O2 rows; and an initial performance baseline,
-determinism canaries, nightly fuzzing, and several thin-module ratchets landed.
-PE symbol/PDB/RSDS front-door defects were also repaired. These are substrate
-advances, not milestone exits: F1c/F1d/F2a, large-function telemetry,
-lane-keyed structural semantics, format matrices, hostile semantic oracles,
-and a fail-closed provenance-complete release report remain open.
+F1a, the F1b product-side distinction (`0d6b30d1`) and F2a (`0031c3ee`)
+landed; the readability census reached 3,580 GCC/Clang O0/O2 rows
+(`1329382d`); the performance gate now fails closed and is scheduled
+(`4f4f88e3`); determinism canaries, nightly fuzzing, and several thin-module
+ratchets landed. R4 gained four hermetic lanes — PE entry/TLS/import
+(`99113bc8`), clang-cl PE32/PE32+ identity (`8c0a89f6`), PDB type/layout
+(`c7200d2d`), Mach-O x86-64/ARM64 thin (`ba2fe5c2`) — each of which found a
+real defect in the code it was pointed at. Go fixture lanes are wired but
+**opt-in** behind `GLAURUNG_FIXTURE_GO` (`6660f1f7`); their manifest entries
+and four baseline refreshes are still outstanding.
+
+These are substrate advances, not milestone exits: F1c/F1d, large-function
+telemetry, lane-keyed structural semantics, the rest of the format matrix,
+hostile semantic oracles, and a provenance-complete release report remain
+open.
 
 ## Evidence boundary
 
@@ -242,6 +250,94 @@ large-function, PE, or O2 structural work.
 | M6 — real-world confidence | Matched production and malware-shaped families run with provenance and signal-preservation predicates. |
 | M7 — release gate | Performance, determinism, failure taxonomy, fixture matrices, and held-out evaluation produce one pinned internal report. |
 
+## Carried from the 2026-08-13 roadmap
+
+The roadmap that preceded this plan set is archived as
+[`history/design/decompiler-roadmap-2026-08-13.md`](../../history/design/decompiler-roadmap-2026-08-13.md).
+Its structure was sound and its contents fell about four hundred commits
+behind; its meta-guidance is now in [`README.md`](README.md) and its file-size
+program in [`development/testing-gates.md`](../testing-gates.md). What follows
+is every item of it that was still genuinely open when it was archived,
+re-checked against the tree on 2026-09-02. Each line names the check that
+proves it and links the original statement.
+
+* **The physical decomposition it planned never happened.** `src/ir/hir/`,
+  `src/lift/`, `src/ir/lifted/` and `src/render/` do not exist (`ls` each). Any
+  future ownership map has to be written against `src/ir/` as it is.
+  ([foundations](../../history/design/decompiler-roadmap-2026-08-13.md#foundations-still-incomplete))
+* **`FunctionFacts` / `CallFactStore` is unbuilt.**
+  `rg 'FunctionFacts|CallFactStore' src/` returns nothing. It was the most
+  duplicated open item in the old plan and it has one design, kept live at
+  [`design/function-facts-and-call-facts.md`](../../design/function-facts-and-call-facts.md),
+  whose §6 records the measurement that rules out founding it on the existing
+  `CallGraph`.
+  ([EPIC 1](../../history/design/decompiler-roadmap-2026-08-13.md#epic-1--program-level-symbol-and-type-environment))
+* **Verified MIR is built but has no consumer.** The old blocker — "MIR is not
+  built on a production decompile" — is gone: `PreparedLlir::mir()` lives at
+  `src/python_bindings/ir/pipeline.rs:402` and is reachable for every
+  decompilation. The item that remains is the one behind it: its only caller
+  is a `#[cfg(test)]` assertion, `DefinitionOracle` appears only under
+  `src/ir/mir/`, and none of the seven named definition-sensitive consumers has
+  migrated. Four AST-level substitutes (`copy_prop`, `expr_reconstruct`,
+  `stack_locals`, `structured_reaching`) still carry the load and say so in
+  their own doc comments.
+  ([foundations](../../history/design/decompiler-roadmap-2026-08-13.md#foundations-still-incomplete))
+* **The aggregate/object model still runs on the AST-era adapter.**
+  `src/ir/memory_objects/ast.rs::infer_from_ast` is the only object-model
+  producer with a production caller (`src/ir/high_variables.rs:36`);
+  `shape.rs` and `partition.rs` exist on the MIR side with nothing in the
+  render path reading them.
+  ([EPIC 3](../../history/design/decompiler-roadmap-2026-08-13.md#epic-3--aggregate-and-memory-object-recovery))
+* **The canonical type store is still write-only.**
+  `ProgramEnvironment::types()` (`src/program/environment.rs:59`) has no
+  production reader, PDB facts go to a Python SQLite table and to AST string
+  hints in `src/ir/pdb_fields.rs`, and inferred types live in
+  `types_recover.rs`'s own lattice. The first step is a reader path, not
+  another writer.
+  ([foundations](../../history/design/decompiler-roadmap-2026-08-13.md#foundations-still-incomplete))
+* **Rendering is not a pure projection.**
+  `render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types`
+  (`src/ir/ast/decbench_render.rs:130`) is the production entry, ten `DEC_*`
+  thread-local cells remain in `src/ir/ast.rs`, and `remap_type_map`
+  (`src/python_bindings/ir/type_maps.rs:56`) is still live. Two of the analyses
+  it calls run *after* the verification boundary, so the thing verified is not
+  the thing rendered.
+  ([HIR and rendering](../../history/design/decompiler-roadmap-2026-08-13.md#semantic-hir-and-pure-rendering))
+* **Typed completeness does not travel through every stage.** The sharp end is
+  that the batch entry points drop `LiftError` rather than recording it, so a
+  function that failed to lift is indistinguishable from one that does not
+  exist. R1's missing-body accounting is the same defect measured from the
+  outside.
+  ([foundations](../../history/design/decompiler-roadmap-2026-08-13.md#foundations-still-incomplete))
+* **`ProgramSession` is not yet the sole owner of every parse.** Object parses
+  per session were bounded to a constant (19 for `decompile_at`, 20 for
+  `decompile_all`) rather than reduced to one; reaching one needs a
+  relocation/symbol index on `ProgramImage`.
+  ([foundations](../../history/design/decompiler-roadmap-2026-08-13.md#foundations-still-incomplete))
+* **The ARM32 machine model is still incomplete**, though less so than when
+  the list was written: RRX and register-shifted-register are handled
+  (`src/ir/lift_arm32/shifts.rs`) and Cortex-M system registers landed with
+  F2a. NEON has no ARM32 lifting at all (`rg -li neon src/ir/lift_arm32*`
+  finds nothing), and VFP s/d/q register overlap, `d0`–`d7` argument slots and
+  64-bit integer argument pairing remain unmodelled. ARM32 is a conformance
+  architecture here, not an optional afterthought.
+  ([EPIC 4](../../history/design/decompiler-roadmap-2026-08-13.md#epic-4--architecture-parametric-machine-model))
+* **The fourteen non-negotiable design rules stand**, and are the part of the
+  old document most worth re-reading before a structural change — in
+  particular rule 8 (a failed proof keeps an honest goto, it does not guess),
+  rule 12 (serial and parallel analysis must produce identical facts), and
+  rule 14 (a split counts only if it creates a narrower API and one reason to
+  change).
+  ([design rules](../../history/design/decompiler-roadmap-2026-08-13.md#non-negotiable-design-rules))
+
+Three further open items from the old plan live elsewhere now rather than
+here: its file-size and ownership targets are the measured program in
+[`development/testing-gates.md`](../testing-gates.md); its DecBench and
+evaluation appendix is [`README.md`'s on-demand section](README.md#decbench-evaluation-on-demand-only);
+and the unimplemented ideas it pointed at — goto sinking, the two dormant loop
+passes, and the stack-bias affine index — are in
+[`design/open-questions.md`](../../design/open-questions.md).
+
 ## Explicit non-goals
 
 * Do not add LLM inference to improve a deterministic benchmark column.
@@ -255,22 +351,22 @@ large-function, PE, or O2 structural work.
 ## Immediate increments
 
 Landed since the original list: the collision-safe i386 stdcall fixture and
-resolver, the import-versus-absent product distinction, the four-lane
-readability census, and the initial instruction baseline. Next:
+resolver, the import-versus-absent product distinction, the Cortex-M decode
+and `MRS`/`MSR` lift with its body-recovery fixture, the four-lane readability
+census, four hermetic PE/PDB/Mach-O lanes, and a perf gate that fails closed.
+Next:
 
-1. Add the Cortex-M MRS/MSR fixture before changing ARM32 lifting; the pinned
-   data predicts all 31 F2 rows move or gain explicit refusal.
-2. Complete the scoring/dataset external/import contract for the 63 F1b rows.
-3. Add a manifest/source-CFG/binary-identity consistency validator for the 88
+1. Complete the scoring/dataset external/import contract for the 63 F1b rows.
+2. Add a manifest/source-CFG/binary-identity consistency validator for the 88
    F1c rows.
-4. Trace gzip `__printf__` source/build provenance for the two F1d rows.
-5. Specify and land the smallest `@large` generated tier with phase telemetry.
-6. Make inventory generation atomic and add `--check`.
-7. Promote `tests/realistic_corpus/` from discovery-only evidence to classified
+3. Trace gzip `__printf__` source/build provenance for the two F1d rows.
+4. Specify and land the smallest `@large` generated tier with phase telemetry.
+5. Make inventory generation atomic and add `--check`.
+6. Promote `tests/realistic_corpus/` from discovery-only evidence to classified
    body accounting plus a small compile/execution and signal-preservation set.
-8. Make `tools/perf_gate.py` fail closed, then replace the initial baseline with
-   a provenance-complete release baseline joined to completeness, RSS, output,
-   and determinism evidence.
+7. Replace the initial perf baseline with a provenance-complete release
+   baseline joined to completeness, RSS, output, and determinism evidence.
+8. Add the Mach-O universal (fat) slice lane; the thin lanes are the template.
 
 Each increment updates the diary, the relevant checkbox, and the inventory
 entry naming its actual runner.

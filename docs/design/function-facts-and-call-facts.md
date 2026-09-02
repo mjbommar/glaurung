@@ -2,11 +2,14 @@
 
 > **Kind:** design · **Status:** proposed
 
-This box appears three times in `docs/design/decompiler-roadmap.md` — EPIC 1
-(`Add FunctionFacts and CallFactStore keyed by stable function/call IDs`), Phase 4
-(`Implement stable FunctionFacts/CallFactStore and SCC propagation`), and by
-reference in Phase 5 (`call facts`). It is the most duplicated open item in the
-plan, and it has never had a design. That is most of why it has not moved: it
+This box appeared three times in the archived roadmap
+([`history/design/decompiler-roadmap-2026-08-13.md`](../history/design/decompiler-roadmap-2026-08-13.md))
+— EPIC 1 (`Add FunctionFacts and CallFactStore keyed by stable function/call
+IDs`), Phase 4 (`Implement stable FunctionFacts/CallFactStore and SCC
+propagation`), and by reference in Phase 5 (`call facts`). It carries forward
+into [`development/roadmap/real-binary-decompiler.md`](../development/roadmap/real-binary-decompiler.md)
+under "Carried from the 2026-08-13 roadmap". It was the most duplicated open
+item in that plan, and it has never had a design. That is most of why it has not moved: it
 reads as "build an interprocedural analysis framework", which nobody starts on a
 Tuesday.
 

@@ -1,11 +1,13 @@
-"""Layering and environment-variable-dependence checks from the roadmap's
-"Code quality, composition, and file-size program":
+"""Layering and environment-variable-dependence checks from
+`docs/development/testing-gates.md`'s "Code quality, composition, and
+file-size program":
 
     Add dependency checks: renderers cannot import lifters, HIR cannot parse
     images, targets cannot import renderers, and correctness cannot depend on
     environment variables.
 
-`docs/design/decompiler-roadmap.md`'s ownership map describes a target
+The archived roadmap's ownership map
+(`docs/history/design/decompiler-roadmap-2026-08-13.md`) describes a target
 layout with dedicated `src/render/`, `src/lift/`, and `src/target/`
 directories; only `src/target/` exists as a separate directory today. The
 renderer and HIR live together in `src/ir/ast.rs` (documented in the
