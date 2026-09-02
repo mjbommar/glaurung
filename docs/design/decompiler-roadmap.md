@@ -198,8 +198,19 @@ scheduled independently of the longer pipeline/SSA migrations.
   adapted AST; each passes a real host `cc -fsyntax-only` test. Full-pipeline
   and execution/GED/runtime comparison, output measurement, and promotion are
   still open.
-- [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
-  after WP0 and feeds typed cases to the shadow structurer when ready.
+- [~] **WP5 typed indirect targets.** The current discovery pipeline already
+  implements bounded comparison, memory/stack, power-of-two-mask, PIC-relative,
+  absolute, Thumb table-branch, and ARM word-table recovery across
+  `analysis/dispatch.rs`, `analysis/cfg/dispatch_resolution.rs`, and
+  `analysis/jump_table.rs`; `ir/indirect_targets.rs` remains the separate
+  relocation-backed single-slot resolver. The first discovery-to-shadow
+  vertical slice is now explicit: the real gcc-O2 `duff_copy` mask resolves
+  exactly eight ordered targets, lifting retains its normalized index, and the
+  verified WP4 candidate records case values `0..7` plus the linked bypass
+  edge. The independent verifier rejects forged case labels. Production v1
+  still falls back honestly on Duff's shared suffix-entry loop, and the strict
+  constant-false-latch xfail remains open; switch-tree recovery, the other
+  named fixture lanes, and a fresh corpus census remain.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one
   width-proved range-check fusion are independent of the SSA-native idiom lane.
 

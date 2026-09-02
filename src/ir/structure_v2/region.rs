@@ -44,10 +44,36 @@ pub struct BlockRegion {
     pub terminal: Option<Terminal>,
 }
 
+/// One destination of a CFG-proven indirect dispatch and the raw table slots
+/// that select it. Multiple values may share one target after case folding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchCaseEvidence {
+    pub target: usize,
+    pub values: Vec<i64>,
+}
+
+/// Typed case ownership for one resolved indirect dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchEvidence {
+    pub dispatch: usize,
+    pub cases: Vec<SwitchCaseEvidence>,
+}
+
+/// A range-guard edge bypassing a resolved dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchDefaultEvidence {
+    pub guard: usize,
+    pub target: usize,
+    pub dispatch: Option<usize>,
+    pub taken: bool,
+}
+
 /// Initial region algebra: exact block ownership and typed local transfers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionCandidate {
     pub(super) blocks: Vec<BlockRegion>,
+    pub(super) switches: Vec<SwitchEvidence>,
+    pub(super) switch_defaults: Vec<SwitchDefaultEvidence>,
 }
 
 impl RegionCandidate {
@@ -95,7 +121,51 @@ impl RegionCandidate {
                 }
             })
             .collect();
-        Some(Self { blocks })
+        let switches = cfg
+            .edges
+            .iter()
+            .enumerate()
+            .filter_map(|(dispatch, edges)| {
+                let cases = edges
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, edge)| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+                    .map(|(position, edge)| SwitchCaseEvidence {
+                        target: edge.to,
+                        values: cfg.case_labels[dispatch][position].clone(),
+                    })
+                    .collect::<Vec<_>>();
+                (!cases.is_empty()).then_some(SwitchEvidence { dispatch, cases })
+            })
+            .collect();
+        let switch_defaults = cfg
+            .edges
+            .iter()
+            .enumerate()
+            .flat_map(|(guard, edges)| {
+                edges.iter().filter_map(move |edge| {
+                    (edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault).then(|| {
+                        let dispatch = cfg.succs[guard].iter().copied().find(|successor| {
+                            *successor != edge.to
+                                && cfg.edges[*successor].iter().any(|candidate| {
+                                    candidate.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase
+                                })
+                        });
+                        SwitchDefaultEvidence {
+                            guard,
+                            target: edge.to,
+                            dispatch,
+                            taken: cfg.cond_taken[guard] == Some(edge.to),
+                        }
+                    })
+                })
+            })
+            .collect();
+        Some(Self {
+            blocks,
+            switches,
+            switch_defaults,
+        })
     }
 
     pub fn blocks(&self) -> &[BlockRegion] {
@@ -108,5 +178,13 @@ impl RegionCandidate {
 
     pub fn transfer_count(&self) -> usize {
         self.transfers().count()
+    }
+
+    pub fn switches(&self) -> &[SwitchEvidence] {
+        &self.switches
+    }
+
+    pub fn switch_defaults(&self) -> &[SwitchDefaultEvidence] {
+        &self.switch_defaults
     }
 }

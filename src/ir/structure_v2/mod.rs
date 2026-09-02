@@ -23,7 +23,10 @@ pub use local::{HonestGotoEvidence, LocalRegions};
 pub use recover::{
     LocalExitRegion, LocalLabelRegion, LoopExitRegion, StructuredRegion, StructuredTree,
 };
-pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
+pub use region::{
+    BlockRegion, RegionCandidate, SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence,
+    Terminal, Transfer,
+};
 pub use verify::{CandidateError, TreeError};
 
 use crate::ir::ssa::SsaInfo;
@@ -867,5 +870,35 @@ mod tests {
         assert_prepared_c(&report);
         assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+    }
+
+    #[test]
+    fn real_duff_dispatch_reaches_shadow_as_typed_cases() {
+        let lifted = lift_real_fixture("102_duffs_device-gcc-O2.so", "duff_copy");
+        let report = observe(&lifted, &compute_ssa(&lifted));
+        let candidate = report
+            .candidate
+            .as_ref()
+            .unwrap_or_else(|| panic!("Duff CFG should have a verified candidate: {report:#?}"));
+        let dispatches = candidate.switches();
+
+        assert_eq!(dispatches.len(), 1, "{dispatches:#?}");
+        let dispatch = &dispatches[0];
+        assert_eq!(lifted.blocks[dispatch.dispatch].succs.len(), 8);
+        assert_eq!(dispatch.cases.len(), 8, "{dispatch:#?}");
+        assert_eq!(
+            dispatch
+                .cases
+                .iter()
+                .flat_map(|case| case.values.iter().copied())
+                .collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
+        assert_eq!(candidate.switch_defaults().len(), 1, "{candidate:#?}");
+        assert_eq!(
+            candidate.switch_defaults()[0].dispatch,
+            Some(dispatch.dispatch)
+        );
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
     }
 }

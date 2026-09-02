@@ -40,6 +40,13 @@ pub enum CandidateError {
         source_block: usize,
         cloned_at_predecessor: usize,
     },
+    SwitchEvidenceMismatch {
+        dispatch: usize,
+    },
+    SwitchDefaultEvidenceMismatch {
+        guard: usize,
+        target: usize,
+    },
 }
 
 /// A disagreement between a recovered tree and its verified flat candidate.
@@ -521,8 +528,85 @@ pub(super) fn verify_candidate(
             errors.push(CandidateError::EdgeInvented { from, to });
         }
     }
+    verify_switch_evidence(cfg, candidate, &mut errors);
     verify_duplicated_tails(cfg, duplicated_tails, &mut errors);
     errors
+}
+
+fn verify_switch_evidence(
+    cfg: &Cfg,
+    candidate: &RegionCandidate,
+    errors: &mut Vec<CandidateError>,
+) {
+    let expected_switches = cfg
+        .edges
+        .iter()
+        .enumerate()
+        .filter_map(|(dispatch, edges)| {
+            let cases = edges
+                .iter()
+                .enumerate()
+                .filter(|(_, edge)| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+                .map(|(position, edge)| super::SwitchCaseEvidence {
+                    target: edge.to,
+                    values: cfg.case_labels[dispatch][position].clone(),
+                })
+                .collect::<Vec<_>>();
+            (!cases.is_empty()).then_some(super::SwitchEvidence { dispatch, cases })
+        })
+        .collect::<Vec<_>>();
+    if candidate.switches != expected_switches {
+        let dispatches = candidate
+            .switches
+            .iter()
+            .map(|switch| switch.dispatch)
+            .chain(expected_switches.iter().map(|switch| switch.dispatch))
+            .collect::<BTreeSet<_>>();
+        errors.extend(
+            dispatches
+                .into_iter()
+                .map(|dispatch| CandidateError::SwitchEvidenceMismatch { dispatch }),
+        );
+    }
+
+    let expected_defaults = cfg
+        .edges
+        .iter()
+        .enumerate()
+        .flat_map(|(guard, edges)| {
+            edges.iter().filter_map(move |edge| {
+                (edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault).then(|| {
+                    let dispatch = cfg.succs[guard].iter().copied().find(|successor| {
+                        *successor != edge.to
+                            && cfg.edges[*successor].iter().any(|candidate| {
+                                candidate.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase
+                            })
+                    });
+                    super::SwitchDefaultEvidence {
+                        guard,
+                        target: edge.to,
+                        dispatch,
+                        taken: cfg.cond_taken[guard] == Some(edge.to),
+                    }
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    if candidate.switch_defaults != expected_defaults {
+        let defaults = candidate
+            .switch_defaults
+            .iter()
+            .map(|default| (default.guard, default.target))
+            .chain(
+                expected_defaults
+                    .iter()
+                    .map(|default| (default.guard, default.target)),
+            )
+            .collect::<BTreeSet<_>>();
+        errors.extend(defaults.into_iter().map(|(guard, target)| {
+            CandidateError::SwitchDefaultEvidenceMismatch { guard, target }
+        }));
+    }
 }
 
 fn verify_duplicated_tails(
@@ -618,7 +702,7 @@ fn transfer_kind_is_valid(
 mod tests {
     use super::*;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op};
+    use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
     #[test]
     fn verifier_rejects_a_missing_block_and_edge() {
@@ -654,11 +738,71 @@ mod tests {
             &loops,
             &locals,
             &duplicated_tails,
-            &RegionCandidate { blocks: vec![] },
+            &RegionCandidate {
+                blocks: vec![],
+                switches: vec![],
+                switch_defaults: vec![],
+            },
         );
         assert!(errors.contains(&CandidateError::BlockMissing { block: 0 }));
         assert!(errors.contains(&CandidateError::BlockMissing { block: 1 }));
         assert!(errors.contains(&CandidateError::EdgeMissing { from: 0, to: 1 }));
+    }
+
+    #[test]
+    fn verifier_rejects_forged_switch_case_values() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![LlirInstr {
+                        va: 0x1000,
+                        op: Op::IndirectJump {
+                            target: Value::Reg(VReg::phys("target")),
+                            index: Some(Value::Reg(VReg::phys("index"))),
+                        },
+                    }],
+                    succs: vec![0x1100, 0x1200, 0x1300],
+                },
+                LlirBlock {
+                    start_va: 0x1100,
+                    end_va: 0x1104,
+                    instrs: vec![LlirInstr {
+                        va: 0x1100,
+                        op: Op::Return,
+                    }],
+                    succs: vec![],
+                },
+                LlirBlock {
+                    start_va: 0x1200,
+                    end_va: 0x1204,
+                    instrs: vec![LlirInstr {
+                        va: 0x1200,
+                        op: Op::Return,
+                    }],
+                    succs: vec![],
+                },
+                LlirBlock {
+                    start_va: 0x1300,
+                    end_va: 0x1304,
+                    instrs: vec![LlirInstr {
+                        va: 0x1300,
+                        op: Op::Return,
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let cfg = Cfg::from(&function, &compute_ssa(&function));
+        let loops = LoopForest::from_cfg(&cfg);
+        let locals = LocalRegions::from_cfg(&cfg, &loops);
+        let mut candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
+        candidate.switches[0].cases[0].values = vec![99];
+
+        let errors = verify_candidate(&cfg, &loops, &locals, &[], &candidate);
+        assert!(errors.contains(&CandidateError::SwitchEvidenceMismatch { dispatch: 0 }));
     }
 
     #[test]

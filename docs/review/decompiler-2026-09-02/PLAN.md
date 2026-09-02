@@ -522,13 +522,31 @@ one authoritative set of case edges.
 
 ### Production changes
 
-- [ ] Extend `src/ir/indirect_targets.rs` with bounded value-set analysis for:
+- [~] Extend indirect-target analysis with bounded value-set analysis for:
   comparison guards, masks, subtract-and-unsigned-compare ranges,
   PIC-relative tables, and absolute tables.
-- [ ] Add target-specific decoding for ARM `tbb`/`tbh` and
+  The current implementation already lives primarily in
+  `src/analysis/dispatch.rs`, `src/analysis/cfg/dispatch_resolution.rs`, and
+  `src/analysis/jump_table.rs`, rather than the relocation-only
+  `src/ir/indirect_targets.rs`. It carries comparison, stack/memory, mask, and
+  rebased bounds into bounded PIC-relative and absolute decoders. The live
+  gcc-O2 Duff fixture proves that `arg2 & 7` resolves exactly eight ordered
+  targets. The remaining encodings and measured declines still need a fresh
+  census.
+- [~] Add target-specific decoding for ARM `tbb`/`tbh` and
   `ldr pc, [pc, r0, lsl #2]` through the relevant lifter/machine-model layer.
-- [ ] Represent resolved case values, targets, default edge, provenance,
+  Both forms already decode through `dispatch_resolution.rs`; the remaining
+  work is to complete the architecture lanes and consolidate the evidence
+  contract.
+- [~] Represent resolved case values, targets, default edge, provenance,
   bounds, and completeness as typed evidence attached to `Op::IndirectJump`.
+  `Op::IndirectJump.index`, typed CFG `SwitchCase`/`SwitchDefault` edges, and
+  ordered `Cfg::case_labels` already carry the first production facts. WP4's
+  independently verified `RegionCandidate` now receives explicit
+  `SwitchEvidence` and `SwitchDefaultEvidence` without re-recognising output:
+  the real `102_duffs_device-gcc-O2.so::duff_copy` fixture records one dispatch,
+  eight ordered values `0..7`, and its linked bypass edge. A forged-label test
+  proves that block/edge coverage alone cannot validate this metadata.
 - [ ] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
   rendering consume the same evidence object.
 - [ ] Add `Op::Switch` only if it becomes the sole semantic owner of those
@@ -538,12 +556,16 @@ one authoritative set of case edges.
 
 - [ ] Keep WP0's strict xfail for the constant-false Duff's-device latch RED
   until the semantic fix lands here.
-- [ ] Focused fixture coverage for `102`, `103`, `145`, `154`, `206`, and
+- [~] Focused fixture coverage for `102`, `103`, `145`, `154`, `206`, and
   `215`, across applicable O0/O2 and architecture lanes.
+  The first real `102` gcc-O2 discovery-to-shadow vertical slice is green;
+  other compiler/optimization and named fixture lanes remain.
 - [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [ ] Execution differential for every newly recovered switch.
-- [ ] Structural census assertion that typed cases reach the structurer.
+- [~] Structural census assertion that typed cases reach the structurer.
+  One real per-function assertion now proves the exact ordered cases and
+  default reach the shadow structurer. Corpus-wide census coverage remains.
 
 ### Exit criteria
 
@@ -813,7 +835,9 @@ relevant ratchet's accepted-regression record.
 
 - [x] WP4 is running in shadow mode on the first three RED fixtures, with v1
   still the sole production authority.
-- [ ] WP5 has a host jump-table vertical slice or a measured decline.
+- [x] WP5 has a host jump-table vertical slice: the real gcc-O2 Duff dispatch
+  resolves eight ordered targets in discovery and carries values `0..7` plus
+  its typed bypass edge into the independently verified WP4 candidate.
 - [ ] WP7A has landed or been rejected with width-aware evidence.
 
 ### M2 — Dormant architecture decision made
