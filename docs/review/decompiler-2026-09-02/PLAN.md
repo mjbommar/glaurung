@@ -369,6 +369,10 @@ that preserves honest local gotos when required.
   allowlist. The acceptance must name WP4, its expected removal/replacement
   target, and an expiry condition at v2 promotion; do not let the fitness gate
   fail merely because the approved shadow implementation exists.
+  The approval now permits nine files (still capped at 4,000 total lines) so
+  the first rendering adapter remains an explicit `render.rs` boundary rather
+  than being hidden in recovery or orchestration code; the same promotion or
+  abandonment expiry still applies.
 - [~] Suggested modules:
   - `mod.rs`: feature flag, public contract, and shadow comparison;
   - `cfg.rs`: normalized typed CFG input;
@@ -381,7 +385,9 @@ that preserves honest local gotos when required.
   - `cleanup.rs`: bounded tail duplication and else-after-terminal flattening.
   The boundary now has `mod.rs`, `cleanup.rs`, `conditions.rs`,
   `dominators.rs`, `local.rs`, `recover.rs`, `region.rs`, and `verify.rs`, while
-  reusing v1's typed `Cfg` directly. `recover.rs` now constructs a deterministic
+  reusing v1's typed `Cfg` directly. `render.rs` conservatively adapts verified
+  acyclic trees into the existing AST lowerer and C-like printer. `recover.rs`
+  now constructs a deterministic
   `Sequence`/`If`/`Block`/`Return` tree for acyclic single-entry candidates and
   `Loop`/`Break`/`Continue` nodes for reducible loops. The real `early_return`,
   `dowhile_atleastonce`, and multi-exit `loop_return_on_neg` binaries are green;
@@ -393,8 +399,10 @@ that preserves honest local gotos when required.
   verifier checks exact leaf ownership, retained typed transfers,
   branch-source identity, natural-loop identity, loop and local exit targets,
   local-region evidence, and every explicit loop-control or local-goto
-  transfer. Cleanup materialization and a separately normalized CFG view
-  remain open.
+  transfer. The real `early_return` tree now produces deterministic raw
+  pre-pass pseudocode with a structured `if/else` and no goto. Loop and
+  local-labelled rendering, post-pass comparison, and a separately normalized
+  CFG view remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -403,7 +411,10 @@ that preserves honest local gotos when required.
   deterministic condition-DAG observer and records exact block/edge coverage;
   verified flat regions and the first acyclic structured trees are also
   recorded, including reducible single- and multi-exit loops and locally
-  labelled irreducible children. Health, pseudocode, execution, GED, and
+  labelled irreducible children. Verified acyclic trees additionally record
+  deterministic raw pseudocode through the existing AST/printer pipeline;
+  unsupported tree vocabularies retain `None` rather than speculative text.
+  Loop/local rendering, health, post-pass pseudocode, execution, GED, and
   runtime comparisons remain.
 
 ### RED fixtures

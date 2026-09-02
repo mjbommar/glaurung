@@ -175,8 +175,11 @@ scheduled independently of the longer pipeline/SSA migrations.
   surrounding natural loop. Bounded shared-return cleanup is also materialized
   in the tree as independently verified `DuplicatedReturn` nodes; the real
   `loop_return_on_neg` fixture contains every planned clone. Production remains
-  on v1. Rendering, execution/GED/runtime comparison, output measurement, and
-  promotion are still open.
+  on v1. Verified acyclic v2 trees now pass through a conservative adapter into
+  the existing AST/printer: the real `early_return` fixture emits deterministic
+  raw pre-pass pseudocode with a structured `if/else` and no goto. Loop and
+  local-labelled rendering, post-pass execution/GED/runtime comparison, output
+  measurement, and promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one

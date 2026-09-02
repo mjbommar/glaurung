@@ -11,6 +11,7 @@ mod dominators;
 mod local;
 mod recover;
 mod region;
+mod render;
 mod verify;
 
 pub use cleanup::{
@@ -48,6 +49,8 @@ pub struct ShadowReport {
     pub loops: LoopForest,
     pub candidate: Option<RegionCandidate>,
     pub tree: Option<StructuredTree>,
+    /// Deterministic pre-pass C-like text for faithfully adaptable tree shapes.
+    pub raw_pseudocode: Option<String>,
     pub honest_gotos: Vec<HonestGotoEvidence>,
     pub duplicated_tails: Vec<DuplicatedTail>,
     pub verification_errors: Vec<CandidateError>,
@@ -105,6 +108,9 @@ pub(crate) fn observe_cfg(
                 } else {
                     None
                 };
+                let raw_pseudocode = tree
+                    .as_ref()
+                    .and_then(|tree| render::render_raw_pseudocode(lf, tree));
                 ShadowReport {
                     block_count,
                     edge_count,
@@ -113,6 +119,7 @@ pub(crate) fn observe_cfg(
                     conditions: Some(conditions),
                     candidate,
                     tree,
+                    raw_pseudocode,
                     honest_gotos: local_regions.evidence().to_vec(),
                     duplicated_tails,
                     loops,
@@ -129,6 +136,7 @@ pub(crate) fn observe_cfg(
                     conditions: Some(conditions),
                     candidate: None,
                     tree: None,
+                    raw_pseudocode: None,
                     honest_gotos: Vec::new(),
                     duplicated_tails: Vec::new(),
                     loops,
@@ -146,6 +154,7 @@ pub(crate) fn observe_cfg(
             conditions: None,
             candidate: None,
             tree: None,
+            raw_pseudocode: None,
             honest_gotos: Vec::new(),
             duplicated_tails: Vec::new(),
             loops,
@@ -487,6 +496,16 @@ mod tests {
         assert!(report.loops.is_empty(), "fixture must stay acyclic");
         assert!(report.tree.is_some(), "{report:#?}");
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified acyclic tree should render: {report:#?}"));
+        assert!(pseudocode.contains("if ("), "{pseudocode}");
+        assert!(!pseudocode.contains("goto "), "{pseudocode}");
+        assert_eq!(
+            report.raw_pseudocode,
+            observe(&lifted, &compute_ssa(&lifted)).raw_pseudocode
+        );
     }
 
     fn lift_real_fixture(binary_name: &str, function_name: &str) -> LlirFunction {

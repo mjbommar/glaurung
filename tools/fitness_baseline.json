@@ -2,7 +2,7 @@
   "architecture_growth_approvals": [
     {
       "expires_when": "structure_v2 becomes the production structurer or WP4 is abandoned",
-      "max_files": 8,
+      "max_files": 9,
       "max_total_loc": 4000,
       "owner": "WP4",
       "path": "ir/structure_v2/",
