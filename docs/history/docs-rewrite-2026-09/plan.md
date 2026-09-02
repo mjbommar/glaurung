@@ -1,7 +1,7 @@
 # Documentation rewrite plan
 
-> **Kind:** plan. **Status:** proposed 2026-09-02, not yet executed.
-> Evidence: nine per-file audit ledgers in [`docs-audit-2026-09-02/`](docs-audit-2026-09-02/),
+> **Kind:** record · **Date:** 2026-09-02
+> Evidence: nine per-file audit ledgers in [`audit/`](audit/),
 > produced against `master` @ `b8884687` by reading code and git, not other docs.
 > This file is the work order. The ledgers are the per-file verdicts. Both move to
 > `docs/history/docs-rewrite-2026-09/` when the last phase closes.

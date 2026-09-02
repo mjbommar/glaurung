@@ -1,6 +1,6 @@
 # Execution brief for docs-rewrite agents
 
-> **Kind:** plan · **Status:** proposed
+> **Kind:** record · **Date:** 2026-09-02
 
 Read first: `docs/development/docs-rewrite-plan.md` (the work order) and the
 ledger for your area under this directory. Ledger 02 is the code ground-truth

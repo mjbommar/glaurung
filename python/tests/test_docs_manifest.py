@@ -44,8 +44,8 @@ TUTORIAL_FIXTURES = DOCS / "tutorial" / "_fixtures"
 #: Documents this rewrite has already produced. They are asserted compliant
 #: by name so the rule is proven to have teeth even while the transitional
 #: exemption above is wide.
-AUDIT_DIR = DOCS / "development" / "docs-audit-2026-09-02"
-REWRITE_PLAN = DOCS / "development" / "docs-rewrite-plan.md"
+AUDIT_DIR = DOCS / "history" / "docs-rewrite-2026-09" / "audit"
+REWRITE_PLAN = DOCS / "history" / "docs-rewrite-2026-09" / "plan.md"
 
 KINDS = frozenset(
     {"guide", "reference", "architecture", "decision", "design", "plan", "record"}

@@ -4,7 +4,7 @@
 
 Why this needs a generator and not prose: CLAUDE.md's own history is a
 record of this exact table going stale. Ledger 02 §1.1
-(`docs/development/docs-audit-2026-09-02/02-code-ground-truth.md`) found the
+(`docs/history/docs-rewrite-2026-09/audit/02-code-ground-truth.md`) found the
 feature list, the gate lane count, and the "what does `cargo test` actually
 build" claims all drifting independently -- most consequentially, `cargo
 test --features python-ext` does NOT build `src/symbolic/` (`symbolic` is in

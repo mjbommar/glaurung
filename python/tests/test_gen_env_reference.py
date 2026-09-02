@@ -1,7 +1,7 @@
 """`docs/reference/environment-variables.md` must match the tree it scans.
 
 There used to be no single index of the environment variables this
-repository reads. `docs/development/docs-audit-2026-09-02/01-claude-agents-readme.md`
+repository reads. `docs/history/docs-rewrite-2026-09/audit/01-claude-agents-readme.md`
 ledger #85 found `CLAUDE.md` naming one, `GLAURUNG_AGENT_ROUTE`, that appears
 nowhere in code -- a reference that cannot be checked drifts exactly that
 way. `tools/gen_env_reference.py` walks the tree itself instead of copying a

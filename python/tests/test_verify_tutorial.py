@@ -18,7 +18,7 @@ keep saying a build was failing after the build was fixed. Structure is now
 checked by `test_docs_manifest.py` (every file declares its kind) and
 `test_docs_links.py` (every path resolves); the behavioral claims worth
 keeping were written down in
-`docs/development/docs-audit-2026-09-02/contract-assertions.md`.
+`docs/history/docs-rewrite-2026-09/audit/contract-assertions.md`.
 
 Document paths are module-level constants so the documentation reorganization
 can re-point them in one place.

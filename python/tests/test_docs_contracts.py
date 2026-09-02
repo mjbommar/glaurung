@@ -1,6 +1,6 @@
 """Behavioral contracts that Phase 5b reference docs depend on.
 
-`docs/development/docs-audit-2026-09-02/contract-assertions.md` rescued a
+`docs/history/docs-rewrite-2026-09/audit/contract-assertions.md` rescued a
 minority of genuinely behavioral claims from ten tests deleted from
 `test_verify_tutorial.py` in Phase 1. Those old tests pinned literal prose
 (banner text, refresh dates, commit SHAs); the point of the rewrite is that a

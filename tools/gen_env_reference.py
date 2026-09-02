@@ -4,7 +4,7 @@
 `docs/reference/environment-variables.md` used to not exist at all: the
 ~40 `GLAURUNG_*`/`DECBENCH_*`/`AXEYUM_*`/`IOCTLANCE_*`/`BITWUZLA_*` vars this
 codebase reads were scattered across Python, Rust, shell scripts and CI YAML
-with no single index, and (per `docs/development/docs-audit-2026-09-02/`
+with no single index, and (per `docs/history/docs-rewrite-2026-09/audit/`
 ledger 01 #85) `CLAUDE.md` named one, `GLAURUNG_AGENT_ROUTE`, that appears
 nowhere in code. This generator walks the tree itself -- no `rg` subprocess,
 so it works offline and its result is exactly what the regexes below say it
@@ -287,7 +287,7 @@ def collect() -> Findings:
 
 # --- Hand-maintained purposes -------------------------------------------------
 #
-# Seeded from docs/development/docs-audit-2026-09-02/ ledger 01 §5.4 (the 18
+# Seeded from docs/history/docs-rewrite-2026-09/audit/ ledger 01 §5.4 (the 18
 # GLAURUNG_* Python vars) and ledger 04 (the solver/axeyum ground truth), then
 # checked against the actual read sites `collect()` finds. A name `collect()`
 # finds that is NOT a key here renders as undocumented -- that gap is the

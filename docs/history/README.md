@@ -335,3 +335,24 @@ and [`reference/windows-api-type-sync.md`](../reference/windows-api-type-sync.md
 | [co-investment-policy.md](windows-port-2026-05/co-investment-policy.md) | 2026-05-16 | the collaboration policy with the external agentic-security-bot repo | governs a relationship outside this repository and is unverifiable from here; unrelated to the DecBench upstream boundary |
 | [glaurung-vs-ghidra-regression-review.md](windows-port-2026-05/glaurung-vs-ghidra-regression-review.md) | 2026-05-20 | a 10-fixture regression dashboard narrative, 2026-05-19 | a dated comparison snapshot |
 | [glaurung-vs-ghidra-full-debug-review.md](windows-port-2026-05/glaurung-vs-ghidra-full-debug-review.md) | 2026-05-20 | a 30-fixture debug narrative, 2026-05-19 | as above |
+
+## docs-rewrite-2026-09/
+
+The plan and evidence for the September 2026 documentation rewrite that produced the current tree.
+
+| file | date | what it recorded | superseded by / known-false claims |
+|---|---|---|---|
+| [plan.md](docs-rewrite-2026-09/plan.md) | 2026-09-02 | the eight-phase work order for the 2026-09 docs rewrite (audit findings, target tree, generators, phases, decisions) | executed 2026-09-02 on branch docs/rewrite-2026-09; the live tree is its outcome |
+| [audit/00-brief.md](docs-rewrite-2026-09/audit/00-brief.md) | 2026-09-02 | the shared brief the nine audit agents worked from | — |
+| [audit/01-claude-agents-readme.md](docs-rewrite-2026-09/audit/01-claude-agents-readme.md) | 2026-09-02 | claim-by-claim ledger of CLAUDE.md, AGENTS.md, README.md | the rewritten top-level files |
+| [audit/02-code-ground-truth.md](docs-rewrite-2026-09/audit/02-code-ground-truth.md) | 2026-09-02 | the code as it was at b8884687: crate map, pipeline, package, CLI, LLM, env vars, gates, git themes | architecture/ and reference/ (generated) |
+| [audit/03-design.md](docs-rewrite-2026-09/audit/03-design.md) | 2026-09-02 | per-file verdicts for docs/design/ (48 files) | history/design/, architecture/decompiler-pipeline.md |
+| [audit/04-execution-engine-axeyum-misc.md](docs-rewrite-2026-09/audit/04-execution-engine-axeyum-misc.md) | 2026-09-02 | per-file verdicts for execution-engine, axeyum, research, benchmarks, IOC doc | architecture/execution-engine.md, solver-backends.md, decisions/ |
+| [audit/05-analysis-architecture-refactoring.md](docs-rewrite-2026-09/audit/05-analysis-architecture-refactoring.md) | 2026-09-02 | per-file verdicts for analysis/, architecture/, refactoring/ | architecture/, history/refactoring-portfolio-2026-08/OUTCOMES.md |
+| [audit/06-parsers-formats-syscalls-triage.md](docs-rewrite-2026-09/audit/06-parsers-formats-syscalls-triage.md) | 2026-09-02 | per-file verdicts for parsers, formats, syscalls, triage | guides/, reference/formats/, reference/syscalls/ |
+| [audit/07-development-cli-campaigns-demos.md](docs-rewrite-2026-09/audit/07-development-cli-campaigns-demos.md) | 2026-09-02 | per-file verdicts for development, test-inventory, cli, campaigns, sessions, demos | development/, guides/ |
+| [audit/08-windows-llm-agentic.md](docs-rewrite-2026-09/audit/08-windows-llm-agentic.md) | 2026-09-02 | per-file verdicts for windows-port, llm, agentic-glaurung | guides/windows-analysis.md, architecture/{windows-port,llm-subsystem}.md, design/agentic-source-recovery/ |
+| [audit/09-tutorial.md](docs-rewrite-2026-09/audit/09-tutorial.md) | 2026-09-02 | per-chapter verdicts and the verifier mechanism | tutorial/ fixes; development/contributing-docs.md |
+| [audit/EXECUTION-BRIEF.md](docs-rewrite-2026-09/audit/EXECUTION-BRIEF.md) | 2026-09-02 | ground rules and the seven decisions the executing agents worked under | — |
+| [audit/MOVE-MANIFEST.md](docs-rewrite-2026-09/audit/MOVE-MANIFEST.md) | 2026-09-02 | the old→new path for every file moved in Phase 2 | — |
+| [audit/contract-assertions.md](docs-rewrite-2026-09/audit/contract-assertions.md) | 2026-09-02 | behavioral doc contracts rescued from the deleted classification tests | python/tests/test_docs_contracts.py |

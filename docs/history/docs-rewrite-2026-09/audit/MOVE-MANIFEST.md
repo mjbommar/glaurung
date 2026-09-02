@@ -1,6 +1,6 @@
 # Phase 2 move manifest
 
-> **Kind:** plan · **Status:** proposed
+> **Kind:** record · **Date:** 2026-09-02
 
 Every tracked `.md` under `docs/` (excluding `tutorial/_fixtures/` and this
 audit directory) with its Phase 2 destination. Phase 2 moves content
