@@ -83,6 +83,19 @@ fn adapt_loop(
             continuation,
         });
     }
+    if kind == LoopKind::PreTested {
+        let continuation = continuation?;
+        let mut saw_break = false;
+        if !all_loop_breaks_target(body, header, continuation, &mut saw_break) || !saw_break {
+            return None;
+        }
+        return Some(Region::MultiExitLoop {
+            header,
+            body: Box::new(adapt_loop_body(body, header)?),
+            exits: vec![(continuation, Region::Seq(Vec::new()))],
+            continuation: Some(continuation),
+        });
+    }
     if kind != LoopKind::PostTested {
         return None;
     }
@@ -104,6 +117,45 @@ fn adapt_loop(
         cond: latch,
         exit: Some(exit),
     })
+}
+
+/// Confirm that a single-exit loop's typed breaks all reach the lexical
+/// continuation before spelling those transfers as C `break` statements.
+fn all_loop_breaks_target(
+    region: &StructuredRegion,
+    header: usize,
+    continuation: usize,
+    saw_break: &mut bool,
+) -> bool {
+    match region {
+        StructuredRegion::Empty
+        | StructuredRegion::Block(_)
+        | StructuredRegion::Return { .. }
+        | StructuredRegion::DuplicatedReturn { .. }
+        | StructuredRegion::LocalGoto { .. }
+        | StructuredRegion::SharedGoto { .. } => true,
+        StructuredRegion::Sequence(regions) => regions
+            .iter()
+            .all(|region| all_loop_breaks_target(region, header, continuation, saw_break)),
+        StructuredRegion::If {
+            then_region,
+            else_region,
+            ..
+        } => {
+            all_loop_breaks_target(then_region, header, continuation, saw_break)
+                && else_region.as_deref().is_none_or(|region| {
+                    all_loop_breaks_target(region, header, continuation, saw_break)
+                })
+        }
+        StructuredRegion::Break {
+            header: seen, to, ..
+        } => {
+            *saw_break = true;
+            *seen == header && *to == continuation
+        }
+        StructuredRegion::Continue { header: seen, .. } => *seen == header,
+        StructuredRegion::Loop { .. } => false,
+    }
 }
 
 fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
@@ -395,6 +447,56 @@ mod tests {
                 join: None,
                 invert: false,
             }]))
+        );
+    }
+
+    #[test]
+    fn pretested_loop_adapter_requires_every_break_to_reach_the_continuation() {
+        let body = StructuredRegion::Sequence(vec![
+            StructuredRegion::Break {
+                from: 0,
+                header: 0,
+                to: 2,
+                taken: Some(false),
+            },
+            StructuredRegion::Break {
+                from: 1,
+                header: 0,
+                to: 3,
+                taken: Some(true),
+            },
+        ]);
+
+        assert_eq!(
+            adapt_loop(0, LoopKind::PreTested, &body, &[], Some(2)),
+            None
+        );
+    }
+
+    #[test]
+    fn pretested_loop_adapter_retains_a_verified_single_exit() {
+        let body = StructuredRegion::Sequence(vec![
+            StructuredRegion::Break {
+                from: 0,
+                header: 0,
+                to: 2,
+                taken: Some(false),
+            },
+            StructuredRegion::Continue {
+                from: 1,
+                header: 0,
+                taken: None,
+            },
+        ]);
+
+        assert_eq!(
+            adapt_loop(0, LoopKind::PreTested, &body, &[], Some(2)),
+            Some(Region::MultiExitLoop {
+                header: 0,
+                body: Box::new(Region::Seq(vec![Region::Goto(2), Region::Goto(0)])),
+                exits: vec![(2, Region::Seq(Vec::new()))],
+                continuation: Some(2),
+            })
         );
     }
 }

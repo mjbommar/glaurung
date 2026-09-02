@@ -847,10 +847,25 @@ mod tests {
             region,
             StructuredRegion::LocalGoto { .. }
         )));
-        assert!(
-            report.prepared_pseudocode.is_none(),
-            "nested local regions remain an explicit render decline: {report:#?}"
-        );
+        let pseudocode = report.raw_pseudocode.as_deref().unwrap_or_else(|| {
+            panic!("outer loop with nested local region should render: {report:#?}")
+        });
+        assert!(pseudocode.contains("while ("), "{pseudocode}");
+        assert!(pseudocode.contains("goto L_"), "{pseudocode}");
+        for target in pseudocode.lines().filter_map(|line| {
+            line.trim()
+                .strip_prefix("goto ")
+                .and_then(|line| line.strip_suffix(';'))
+        }) {
+            assert!(
+                pseudocode.contains(&format!("{target}:")),
+                "unresolved {target} in:\n{pseudocode}"
+            );
+        }
+        let repeated = observe(&lifted, &compute_ssa(&lifted));
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        assert_prepared_c(&report);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 }

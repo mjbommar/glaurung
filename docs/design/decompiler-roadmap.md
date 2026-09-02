@@ -188,11 +188,16 @@ scheduled independently of the longer pipeline/SSA migrations.
   region/AST node now retains those typed transfers and materializes each
   independently verified exit region at its exact branch; the real fixture
   emits deterministic `while (1)` pseudocode with both returns and no goto.
-  The four currently renderable real WP4 fixtures now also record deterministic
+  The nested `irreducible_inside_reducible` fixture now renders its verified
+  pre-tested outer loop while retaining closed, honest labelled transfers for
+  the inner multi-entry SCC. This adapter path requires at least one typed
+  break and proves that every break reaches the lexical continuation before
+  lowering it to C `break`; otherwise it declines. The five currently
+  renderable real WP4 fixtures now also record deterministic
   parseable C after the shared source-level preparation pass, all from the same
-  adapted AST; each passes a real host `cc -fsyntax-only` test. Nested-local
-  rendering, full-pipeline and execution/GED/runtime comparison, output
-  measurement, and promotion are still open.
+  adapted AST; each passes a real host `cc -fsyntax-only` test. Full-pipeline
+  and execution/GED/runtime comparison, output measurement, and promotion are
+  still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one
