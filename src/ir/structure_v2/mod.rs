@@ -81,7 +81,14 @@ pub(crate) fn observe_cfg(
             });
             if verification_errors.is_empty() {
                 let tree = candidate.as_ref().and_then(|candidate| {
-                    recover::recover_tree(cfg, &conditions, candidate, &loops, &local_regions)
+                    recover::recover_tree(
+                        cfg,
+                        &conditions,
+                        candidate,
+                        &loops,
+                        &local_regions,
+                        &duplicated_tails,
+                    )
                 });
                 let tree_verification_errors = tree.as_ref().map_or_else(Vec::new, |tree| {
                     verify::verify_tree(
@@ -89,6 +96,7 @@ pub(crate) fn observe_cfg(
                         &conditions,
                         &loops,
                         &local_regions,
+                        &duplicated_tails,
                         tree,
                     )
                 });
@@ -624,6 +632,19 @@ mod tests {
             region,
             StructuredRegion::Break { .. }
         )));
+        for tail in &report.duplicated_tails {
+            assert!(
+                tree_has_region(&tree.root, |region| matches!(
+                    region,
+                    StructuredRegion::DuplicatedReturn {
+                        source_block,
+                        cloned_at_predecessor,
+                    } if source_block == &tail.source_block
+                        && cloned_at_predecessor == &tail.cloned_at_predecessor
+                )),
+                "planned terminal clone must be materialized: {tail:?}\n{tree:#?}"
+            );
+        }
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
         assert_eq!(report.tree, observe(&lifted, &ssa).tree);
     }
@@ -661,7 +682,8 @@ mod tests {
             | StructuredRegion::Break { .. }
             | StructuredRegion::Continue { .. }
             | StructuredRegion::LocalGoto { .. }
-            | StructuredRegion::SharedGoto { .. } => false,
+            | StructuredRegion::SharedGoto { .. }
+            | StructuredRegion::DuplicatedReturn { .. } => false,
         }
     }
 

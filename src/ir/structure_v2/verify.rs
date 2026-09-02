@@ -45,17 +45,51 @@ pub enum CandidateError {
 /// A disagreement between a recovered tree and its verified flat candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeError {
-    BlockMissing { block: usize },
-    BlockDuplicated { block: usize },
-    BlockOutOfRange { block: usize },
-    LeafMismatch { block: usize },
-    BranchConditionInvalid { block: usize },
-    LoopInvalid { header: usize },
-    LoopExitInvalid { header: usize, target: usize },
-    LocalRegionInvalid { region: usize },
-    LocalExitInvalid { region: usize, target: usize },
-    ControlTransferMissing { from: usize, to: usize },
-    ControlTransferInvented { from: usize, to: usize },
+    BlockMissing {
+        block: usize,
+    },
+    BlockDuplicated {
+        block: usize,
+    },
+    BlockOutOfRange {
+        block: usize,
+    },
+    LeafMismatch {
+        block: usize,
+    },
+    BranchConditionInvalid {
+        block: usize,
+    },
+    LoopInvalid {
+        header: usize,
+    },
+    LoopExitInvalid {
+        header: usize,
+        target: usize,
+    },
+    LocalRegionInvalid {
+        region: usize,
+    },
+    LocalExitInvalid {
+        region: usize,
+        target: usize,
+    },
+    DuplicatedTailMissing {
+        source_block: usize,
+        cloned_at_predecessor: usize,
+    },
+    DuplicatedTailInvented {
+        source_block: usize,
+        cloned_at_predecessor: usize,
+    },
+    ControlTransferMissing {
+        from: usize,
+        to: usize,
+    },
+    ControlTransferInvented {
+        from: usize,
+        to: usize,
+    },
 }
 
 pub(super) fn verify_tree(
@@ -63,11 +97,13 @@ pub(super) fn verify_tree(
     conditions: &ConditionDag,
     loops: &LoopForest,
     locals: &LocalRegions,
+    duplicated_tails: &[DuplicatedTail],
     tree: &StructuredTree,
 ) -> Vec<TreeError> {
     let mut errors = Vec::new();
     let mut leaves: Vec<Option<BlockRegionView<'_>>> = vec![None; candidate.blocks().len()];
     let mut controls = Vec::new();
+    let mut materialized_tails = Vec::new();
     visit_tree(
         &tree.root,
         candidate,
@@ -75,6 +111,7 @@ pub(super) fn verify_tree(
         loops,
         &mut leaves,
         &mut controls,
+        &mut materialized_tails,
         &mut errors,
     );
     let mut seen_local_regions = BTreeSet::new();
@@ -128,6 +165,7 @@ pub(super) fn verify_tree(
                 loops,
                 &mut leaves,
                 &mut controls,
+                &mut materialized_tails,
                 &mut errors,
             );
         }
@@ -138,6 +176,25 @@ pub(super) fn verify_tree(
                 region: evidence.region,
             });
         }
+    }
+    let mut expected_tails = duplicated_tails.to_vec();
+    for (source_block, cloned_at_predecessor) in materialized_tails {
+        if let Some(position) = expected_tails.iter().position(|tail| {
+            tail.source_block == source_block && tail.cloned_at_predecessor == cloned_at_predecessor
+        }) {
+            expected_tails.remove(position);
+        } else {
+            errors.push(TreeError::DuplicatedTailInvented {
+                source_block,
+                cloned_at_predecessor,
+            });
+        }
+    }
+    for tail in expected_tails {
+        errors.push(TreeError::DuplicatedTailMissing {
+            source_block: tail.source_block,
+            cloned_at_predecessor: tail.cloned_at_predecessor,
+        });
     }
     for (block, leaf) in leaves.into_iter().enumerate() {
         if leaf.is_none() {
@@ -192,6 +249,7 @@ fn visit_tree<'a>(
     loops: &LoopForest,
     leaves: &mut [Option<BlockRegionView<'a>>],
     controls: &mut Vec<(usize, Transfer)>,
+    materialized_tails: &mut Vec<(usize, usize)>,
     errors: &mut Vec<TreeError>,
 ) {
     match region {
@@ -208,10 +266,21 @@ fn visit_tree<'a>(
         StructuredRegion::Return { block } => {
             record_leaf(*block, BlockRegionView::Return, candidate, leaves, errors);
         }
+        StructuredRegion::DuplicatedReturn {
+            source_block,
+            cloned_at_predecessor,
+        } => materialized_tails.push((*source_block, *cloned_at_predecessor)),
         StructuredRegion::Sequence(regions) => {
             for region in regions {
                 visit_tree(
-                    region, candidate, conditions, loops, leaves, controls, errors,
+                    region,
+                    candidate,
+                    conditions,
+                    loops,
+                    leaves,
+                    controls,
+                    materialized_tails,
+                    errors,
                 );
             }
         }
@@ -236,6 +305,7 @@ fn visit_tree<'a>(
                 loops,
                 leaves,
                 controls,
+                materialized_tails,
                 errors,
             );
             if let Some(else_region) = else_region {
@@ -246,6 +316,7 @@ fn visit_tree<'a>(
                     loops,
                     leaves,
                     controls,
+                    materialized_tails,
                     errors,
                 );
             }
@@ -263,7 +334,16 @@ fn visit_tree<'a>(
             if loop_info.kind != *kind {
                 errors.push(TreeError::LoopInvalid { header: *header });
             }
-            visit_tree(body, candidate, conditions, loops, leaves, controls, errors);
+            visit_tree(
+                body,
+                candidate,
+                conditions,
+                loops,
+                leaves,
+                controls,
+                materialized_tails,
+                errors,
+            );
             let mut seen_targets = std::collections::BTreeSet::new();
             for exit in exits {
                 if !seen_targets.insert(exit.target)
@@ -281,6 +361,7 @@ fn visit_tree<'a>(
                     loops,
                     leaves,
                     controls,
+                    materialized_tails,
                     errors,
                 );
             }
@@ -644,16 +725,24 @@ mod tests {
                     to: 1,
                     taken: Some(true),
                 },
+                StructuredRegion::DuplicatedReturn {
+                    source_block: 1,
+                    cloned_at_predecessor: 0,
+                },
             ]),
             local_regions: Vec::new(),
         };
 
-        let errors = verify_tree(&candidate, &conditions, &loops, &locals, &forged);
+        let errors = verify_tree(&candidate, &conditions, &loops, &locals, &[], &forged);
         assert!(errors.contains(&TreeError::LeafMismatch { block: 0 }));
         assert!(errors.contains(&TreeError::BranchConditionInvalid { block: 2 }));
         assert!(errors.contains(&TreeError::BlockDuplicated { block: 1 }));
         assert!(errors.contains(&TreeError::BlockMissing { block: 2 }));
         assert!(errors.contains(&TreeError::ControlTransferInvented { from: 0, to: 1 }));
+        assert!(errors.contains(&TreeError::DuplicatedTailInvented {
+            source_block: 1,
+            cloned_at_predecessor: 0,
+        }));
     }
 
     #[test]
@@ -718,7 +807,7 @@ mod tests {
             local_regions: Vec::new(),
         };
 
-        let errors = verify_tree(&candidate, &conditions, &loops, &locals, &tree);
+        let errors = verify_tree(&candidate, &conditions, &loops, &locals, &[], &tree);
         assert!(errors.contains(&TreeError::LocalRegionInvalid { region: 0 }));
         assert!(errors.contains(&TreeError::BlockMissing { block: 1 }));
         assert!(errors.contains(&TreeError::BlockMissing { block: 2 }));

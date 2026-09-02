@@ -172,9 +172,11 @@ scheduled independently of the longer pipeline/SSA migrations.
   explicit entry gotos and structured exit paths. The real two-entry and
   nested-irreducible fixtures pass independent ownership, evidence,
   local-exit, and local-goto verification, while the nested case retains its
-  surrounding natural loop. Production remains on v1. Rendering,
-  execution/GED/runtime comparison, cleanup materialization, and promotion are
-  still open.
+  surrounding natural loop. Bounded shared-return cleanup is also materialized
+  in the tree as independently verified `DuplicatedReturn` nodes; the real
+  `loop_return_on_neg` fixture contains every planned clone. Production remains
+  on v1. Rendering, execution/GED/runtime comparison, output measurement, and
+  promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one

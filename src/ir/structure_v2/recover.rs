@@ -1,8 +1,8 @@
 //! Deterministic structured-tree recovery for shadow candidates.
 
 use super::{
-    BlockRegion, ConditionDag, ConditionId, LocalRegions, LoopForest, LoopInfo, LoopKind,
-    RegionCandidate, Terminal, Transfer,
+    BlockRegion, ConditionDag, ConditionId, DuplicatedTail, LocalRegions, LoopForest, LoopInfo,
+    LoopKind, RegionCandidate, Terminal, Transfer,
 };
 use crate::ir::structure::Cfg;
 
@@ -13,6 +13,10 @@ pub enum StructuredRegion {
     Block(BlockRegion),
     Return {
         block: usize,
+    },
+    DuplicatedReturn {
+        source_block: usize,
+        cloned_at_predecessor: usize,
     },
     Sequence(Vec<StructuredRegion>),
     If {
@@ -86,6 +90,7 @@ pub(super) fn recover_tree(
     candidate: &RegionCandidate,
     loops: &LoopForest,
     locals: &LocalRegions,
+    duplicated_tails: &[DuplicatedTail],
 ) -> Option<StructuredTree> {
     if cfg.succs.is_empty() {
         return Some(StructuredTree {
@@ -99,6 +104,7 @@ pub(super) fn recover_tree(
         candidate,
         loops,
         locals,
+        duplicated_tails,
         active_loops: Vec::new(),
         owned: vec![false; cfg.succs.len()],
         active: vec![false; cfg.succs.len()],
@@ -124,6 +130,7 @@ struct TreeBuilder<'a> {
     candidate: &'a RegionCandidate,
     loops: &'a LoopForest,
     locals: &'a LocalRegions,
+    duplicated_tails: &'a [DuplicatedTail],
     active_loops: Vec<usize>,
     owned: Vec<bool>,
     active: Vec<bool>,
@@ -234,7 +241,16 @@ impl TreeBuilder<'_> {
     ) -> Option<StructuredRegion> {
         match transfer {
             Transfer::Flow { to } | Transfer::Branch { to, .. } => {
-                if Some(*to) == stop {
+                if self
+                    .duplicated_tails
+                    .iter()
+                    .any(|tail| tail.source_block == *to && tail.cloned_at_predecessor == from)
+                {
+                    Some(StructuredRegion::DuplicatedReturn {
+                        source_block: *to,
+                        cloned_at_predecessor: from,
+                    })
+                } else if Some(*to) == stop {
                     Some(StructuredRegion::Empty)
                 } else if self.owned.get(*to).copied().unwrap_or(false) {
                     Some(StructuredRegion::SharedGoto {
@@ -564,11 +580,11 @@ mod tests {
             .expect("diamond condition DAG");
         let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
 
-        let tree = recover_tree(&cfg, &conditions, &candidate, &loops, &locals)
+        let tree = recover_tree(&cfg, &conditions, &candidate, &loops, &locals, &[])
             .expect("structured diamond");
         assert_eq!(
             tree,
-            recover_tree(&cfg, &conditions, &candidate, &loops, &locals)
+            recover_tree(&cfg, &conditions, &candidate, &loops, &locals, &[])
                 .expect("deterministic second recovery")
         );
         let StructuredRegion::Sequence(parts) = tree.root else {

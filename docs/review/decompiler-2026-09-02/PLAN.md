@@ -451,8 +451,11 @@ that preserves honest local gotos when required.
   provenance, and is independently verified against the typed CFG. The initial
   ceilings are eight lifted instructions per tail and 64 cloned instructions
   per function. Synthetic boundary tests, a forged-provenance rejection test,
-  and the real `loop_return_on_neg` shared return are green. Materializing the
-  plan into the future structured tree and measuring its output remain open.
+  and the real `loop_return_on_neg` shared return are green. Each planned clone
+  is now materialized as an explicit `DuplicatedReturn` in the recovered tree;
+  the tree verifier rejects missing or invented materializations one-for-one
+  against the independently checked plan. Rendering the clones and measuring
+  their output remain open.
 - [x] Condition simplification preserves machine-width predicate semantics.
   Each shadow condition atom now carries the SSA producer's exact `CmpOp`,
   recoverable operand width, and `CondJump` inversion; unavailable producer or
