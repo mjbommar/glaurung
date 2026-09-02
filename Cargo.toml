@@ -78,6 +78,9 @@ triage-core = []
 triage-heuristics = []
 triage-containers = []
 triage-parsers-extra = ["goblin", "pelite"]
+# Compile the WP4 observer beside the production structurer. It records typed
+# shadow evidence only; v1 remains the sole source of rendered output.
+structure-v2-shadow = []
 # The Python extension bundles the (pure-Rust) emulator (`exec`). The symbolic
 # engine / native solver stay opt-in (build the wheel with `--features symbolic`
 # or `solver-z3` to include them).

@@ -55,7 +55,7 @@ mod region;
 mod switch_shape;
 mod verify;
 
-use cfg::Cfg;
+pub(crate) use cfg::Cfg;
 use fallback::{
     contains_structured_loop, contains_switch, has_inner_loop_exit_that_reenters_via_outer_cycle,
     has_loop_conditional_with_join_beyond_loop, has_multi_latch_loop_with_distinct_exits,
@@ -142,6 +142,19 @@ pub fn recover_verified_with_health_and_destinations(
     >,
 ) -> (Region, crate::ir::health::CfgHealth) {
     let cfg = Cfg::from(lf, ssa);
+    #[cfg(feature = "structure-v2-shadow")]
+    {
+        let shadow = crate::ir::structure_v2::observe_cfg(&cfg);
+        tracing::debug!(
+            entry_va = format_args!("{:#x}", lf.entry_va),
+            blocks = shadow.block_count,
+            edges = shadow.edge_count,
+            covered_blocks = shadow.covered_blocks,
+            represented_edges = shadow.represented_edges,
+            refusal = ?shadow.refusal,
+            "structure v2 shadow observation"
+        );
+    }
     let region = build_full(lf, &cfg);
     let errors = verify_region(&cfg.succs, 0, &region);
     if !errors.is_empty() {

@@ -26,17 +26,17 @@ use crate::ir::types::LlirFunction;
 pub(super) type BlockSet = Rc<HashSet<usize>>;
 
 /// Lookup helpers built once per call to [`super::recover`].
-pub(super) struct Cfg {
+pub(crate) struct Cfg {
     /// Block index → list of successor block indices.
-    pub(super) succs: Vec<Vec<usize>>,
+    pub(crate) succs: Vec<Vec<usize>>,
     /// Block index → distinct successor position → jump-table labels.
     ///
     /// Graph algorithms need unique successor nodes, but switch recovery also
     /// needs every raw table slot. Keeping both views prevents equal targets
     /// from renumbering all later cases.
-    pub(super) case_labels: Vec<Vec<Vec<i64>>>,
+    pub(crate) case_labels: Vec<Vec<Vec<i64>>>,
     /// Block index → list of predecessor block indices.
-    pub(super) preds: Vec<Vec<usize>>,
+    pub(crate) preds: Vec<Vec<usize>>,
     /// Cached: true iff block `a` dominates block `b`.
     /// We precompute a dense bitset because functions are small.
     dom: Vec<Vec<bool>>,
@@ -51,14 +51,14 @@ pub(super) struct Cfg {
     /// that don't end in a conditional branch. Lets conditional structuring put
     /// the taken arm in the `then` slot so the rendered condition polarity is
     /// correct regardless of block address ordering.
-    pub(super) cond_taken: Vec<Option<usize>>,
+    pub(crate) cond_taken: Vec<Option<usize>>,
     /// Whether a block ends in an explicit machine return.
     ///
     /// A successor-free block can instead end in a non-returning call, trap, or
     /// tail transfer. Keeping that distinction prevents the structurer from
     /// treating two ordinary return arms like a cold non-returning guard merely
     /// because both have zero CFG successors.
-    pub(super) ends_in_return: Vec<bool>,
+    pub(crate) ends_in_return: Vec<bool>,
     /// Whether the block ends in a resolved, index-bearing indirect transfer.
     /// Raw-loop lowering needs this stronger fact than the structural
     /// multi-successor switch fallback used for imported/synthetic CFGs.
@@ -69,7 +69,7 @@ pub(super) struct Cfg {
     /// rather than letting each consumer re-derive edge meaning from block order.
     /// Re-deriving is what inverted rotated-loop conditions: "successor 0 is the
     /// fallthrough" is a guess, and the branch's own target is a fact.
-    pub(super) edges: Vec<Vec<crate::ir::cfg_edges::Edge>>,
+    pub(crate) edges: Vec<Vec<crate::ir::cfg_edges::Edge>>,
     /// Lazily-built reflexive-transitive reachability closure, one dense bitset
     /// row of `⌈n/64⌉` words per block: bit `t` of row `s` is set iff `t` is
     /// reachable from `s` (with `s` reachable from itself).
@@ -106,7 +106,7 @@ pub(super) struct Cfg {
 }
 
 impl Cfg {
-    pub(super) fn from(lf: &LlirFunction, ssa: &SsaInfo) -> Self {
+    pub(crate) fn from(lf: &LlirFunction, ssa: &SsaInfo) -> Self {
         let n = lf.blocks.len();
         let va_to_idx: HashMap<u64, usize> = lf
             .blocks

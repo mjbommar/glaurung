@@ -225,6 +225,35 @@ def test_baseline_file_is_committed_and_well_formed(fr):
         assert isinstance(baseline["measures"][key], (int, float))
 
 
+def test_wp4_shadow_architecture_growth_is_bounded_and_expires(fr):
+    """WP4 may coexist with v1 only inside its pre-registered budget."""
+    baseline = fr.load_baseline(BASELINE)
+    approvals = baseline.get("architecture_growth_approvals", [])
+    wp4 = next(row for row in approvals if row.get("owner") == "WP4")
+
+    assert wp4 == {
+        "expires_when": (
+            "structure_v2 becomes the production structurer or WP4 is abandoned"
+        ),
+        "max_files": 8,
+        "max_total_loc": 4000,
+        "owner": "WP4",
+        "path": "ir/structure_v2/",
+        "reason": (
+            "bounded shadow implementation beside production v1; delete v1 or "
+            "this directory at the promotion decision"
+        ),
+    }
+
+    shadow_root = SRC / wp4["path"]
+    files = sorted(shadow_root.glob("*.rs")) if shadow_root.is_dir() else []
+    assert len(files) <= wp4["max_files"]
+    assert (
+        sum(fr.product_loc(path.read_text(encoding="utf-8")) for path in files)
+        <= wp4["max_total_loc"]
+    )
+
+
 def test_the_real_src_tree_has_not_regressed_against_the_committed_baseline(fr):
     """The ratchet. This must NOT require the targets to be met -- only that
     no measure got worse than the committed baseline.

@@ -154,8 +154,13 @@ scheduled independently of the longer pipeline/SSA migrations.
   fresh evidence.
 - [ ] **WP1 bounded MIR trial.** Two-day hard cap; no competing goto-aware
   definedness implementation until the trial records a keep/delete verdict.
-- [ ] **WP4 total structurer in shadow mode.** Starts after WP0 rather than
-  waiting for the shared-pipeline or authoritative-SSA migrations.
+- [~] **WP4 total structurer in shadow mode.** The bounded `structure_v2/`
+  boundary and `structure-v2-shadow` feature now observe the exact typed CFG
+  used by production v1. The first condition-DAG slice is deterministic,
+  truth-table checked, and runs with total block/edge coverage on the real
+  `01_conditional_polarity-gcc-O0.so::sc_mixed` fixture; cyclic graphs decline
+  explicitly. Production remains on v1. Region construction, loop support,
+  rendering, execution/GED/runtime comparison, and promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one

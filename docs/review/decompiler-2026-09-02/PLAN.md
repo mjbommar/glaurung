@@ -362,9 +362,9 @@ that preserves honest local gotos when required.
 
 ### New implementation boundary
 
-- [ ] Create `src/ir/structure_v2/` rather than mutating the current structurer
+- [x] Create `src/ir/structure_v2/` rather than mutating the current structurer
   in place during development.
-- [ ] Before adding the directory, record its temporary, bounded architecture
+- [x] Before adding the directory, record its temporary, bounded architecture
   growth in `tools/fitness_baseline.json` and the relevant reviewed-large-module
   allowlist. The acceptance must name WP4, its expected removal/replacement
   target, and an expiry condition at v2 promotion; do not let the fitness gate
@@ -379,14 +379,20 @@ that preserves honest local gotos when required.
   - `recover.rs`: deterministic region construction;
   - `verify.rs`: block and edge accounting;
   - `cleanup.rs`: bounded tail duplication and else-after-terminal flattening.
-- [ ] Keep `src/ir/structure/` as production authority until shadow evidence
+- [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
-- [ ] Feed both structurers the same typed CFG and compare coverage, health,
+- [~] Feed both structurers the same typed CFG and compare coverage, health,
   pseudocode, execution, GED, and runtime.
+  `structure-v2-shadow` now feeds the existing `Cfg` directly into a
+  deterministic condition-DAG observer and records exact block/edge coverage;
+  region, health, pseudocode, execution, GED, and runtime comparisons remain.
 
 ### RED fixtures
 
-- [ ] `01_conditional_polarity.c::sc_mixed`: condition DAG.
+- [x] `01_conditional_polarity.c::sc_mixed`: condition DAG. The checked-in
+  gcc-O0 binary is discovered, lifted, converted to SSA, and observed with
+  total block/edge coverage; the synthetic equivalent is also checked against
+  all eight Boolean valuations of `(a && b) || c`.
 - [ ] `03_loop_shapes.c::dowhile_atleastonce`: rotated multi-exit loop.
 - [ ] `03_loop_shapes.c::loop_return_on_neg`: shared terminal tail.
 - [ ] Existing irreducible/dispatch fixtures for honest local goto behavior.
