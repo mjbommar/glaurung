@@ -349,6 +349,17 @@ filter set and its denominator is not a number.
 - **PE and Mach-O external names are resolved but unmeasured.** ELF PLT
   resolution is exercised by the corpus; the PE import-thunk and Mach-O stub
   paths are wired and untested.
+- **A trampoline block still changes CFR-C.** `Op::Jump` gets no CFR-G node
+  because it is layout, but the block that contains it keeps its degree seed and
+  its two edges. A compiler that routes a branch through an extra empty block
+  therefore produces a different control-flow feature set for the same program.
+  Collapsing such blocks is a normalisation this does not do.
+- **A truncated discovery is not reported through the signature.** The block and
+  instruction ceilings in `Budgets` still apply, and a function above them gets a
+  partial graph. `analysis::cfg::FunctionDiscoveryStats` knows this happened;
+  `FunctionCfr` does not carry it, so a caller cannot tell a small function from
+  a large one that was cut off. The wall-clock ceiling was removed for exactly
+  this reason and these two remain.
 
 ## Using it
 
