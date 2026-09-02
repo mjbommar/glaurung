@@ -369,7 +369,7 @@ that preserves honest local gotos when required.
   allowlist. The acceptance must name WP4, its expected removal/replacement
   target, and an expiry condition at v2 promotion; do not let the fitness gate
   fail merely because the approved shadow implementation exists.
-- [ ] Suggested modules:
+- [~] Suggested modules:
   - `mod.rs`: feature flag, public contract, and shadow comparison;
   - `cfg.rs`: normalized typed CFG input;
   - `dominators.rs`: dominance/post-dominance and loop forest;
@@ -379,6 +379,9 @@ that preserves honest local gotos when required.
   - `recover.rs`: deterministic region construction;
   - `verify.rs`: block and edge accounting;
   - `cleanup.rs`: bounded tail duplication and else-after-terminal flattening.
+  The boundary now has `mod.rs`, `conditions.rs`, `dominators.rs`, `region.rs`,
+  and `verify.rs`, while reusing v1's typed `Cfg` directly. Deterministic tree
+  recovery, cleanup, and a separately normalized CFG view remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -393,8 +396,12 @@ that preserves honest local gotos when required.
   gcc-O0 binary is discovered, lifted, converted to SSA, and observed with
   total block/edge coverage; the synthetic equivalent is also checked against
   all eight Boolean valuations of `(a && b) || c`.
-- [ ] `03_loop_shapes.c::dowhile_atleastonce`: rotated multi-exit loop.
-- [ ] `03_loop_shapes.c::loop_return_on_neg`: shared terminal tail.
+- [x] `03_loop_shapes.c::dowhile_atleastonce`: rotated multi-exit loop. The
+  real gcc-O0 fixture yields a post-tested natural loop with explicit latch,
+  `Continue`, and exit `Break` facts.
+- [x] `03_loop_shapes.c::loop_return_on_neg`: shared terminal tail. The real
+  gcc-O0 fixture preserves distinct loop exits converging on one return block,
+  which remains singly owned.
 - [ ] Existing irreducible/dispatch fixtures for honest local goto behavior.
 - [ ] A synthetic irreducible CFG whose correct result necessarily retains a
   goto, recorded as `accepted_honest_goto`.
@@ -405,10 +412,14 @@ that preserves honest local gotos when required.
 
 ### Safety properties
 
-- [ ] Every input block appears exactly once or has an explicit duplicated-tail
+- [x] Every emitted-candidate input block appears exactly once or has an explicit duplicated-tail
   provenance record.
-- [ ] Every CFG edge is represented by structured control, a local goto, or a
+- [x] Every emitted-candidate CFG edge is represented by structured control, a local goto, or a
   typed refusal.
+  `verify.rs` independently compares candidate ownership, terminals, edge
+  multiplicity, polarity, and `Break`/`Continue` classification with the typed
+  CFG; irreducible residual cycles return `CyclicGraph` with zero claimed
+  coverage.
 - [ ] Local failure cannot collapse an otherwise structured function.
 - [ ] Tail duplication is size-bounded and terminal-block-only initially.
 - [ ] Condition simplification preserves machine-width predicate semantics.
@@ -718,7 +729,8 @@ relevant ratchet's accepted-regression record.
 
 ### M1 — Capability work is producing evidence
 
-- [ ] WP4 is running in shadow mode on at least the first RED fixture.
+- [x] WP4 is running in shadow mode on the first three RED fixtures, with v1
+  still the sole production authority.
 - [ ] WP5 has a host jump-table vertical slice or a measured decline.
 - [ ] WP7A has landed or been rejected with width-aware evidence.
 

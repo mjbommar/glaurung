@@ -6,8 +6,14 @@
 //! coverage. Production authority remains [`crate::ir::structure`].
 
 mod conditions;
+mod dominators;
+mod region;
+mod verify;
 
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
+pub use dominators::{LoopForest, LoopInfo, LoopKind};
+pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
+pub use verify::CandidateError;
 
 use crate::ir::ssa::SsaInfo;
 use crate::ir::types::LlirFunction;
@@ -15,8 +21,10 @@ use crate::ir::types::LlirFunction;
 /// Why the shadow structurer deliberately declined a graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// The first vertical slice supports acyclic condition graphs only.
+    /// A cycle remains after removing every dominance-proved natural back edge.
     CyclicGraph,
+    /// The independently verified candidate did not preserve the typed CFG.
+    CandidateInvalid,
 }
 
 /// Result of observing one function without changing production output.
@@ -27,6 +35,9 @@ pub struct ShadowReport {
     pub covered_blocks: usize,
     pub represented_edges: usize,
     pub conditions: Option<ConditionDag>,
+    pub loops: LoopForest,
+    pub candidate: Option<RegionCandidate>,
+    pub verification_errors: Vec<CandidateError>,
     pub refusal: Option<Refusal>,
 }
 
@@ -40,21 +51,48 @@ pub fn observe(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
 pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
     let block_count = cfg.succs.len();
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
-    match ConditionDag::from_cfg(cfg) {
-        Ok(conditions) => ShadowReport {
-            block_count,
-            edge_count,
-            covered_blocks: block_count,
-            represented_edges: edge_count,
-            conditions: Some(conditions),
-            refusal: None,
-        },
+    let loops = LoopForest::from_cfg(cfg);
+    match ConditionDag::from_cfg(cfg, &loops) {
+        Ok(conditions) => {
+            let candidate = RegionCandidate::from_cfg(cfg, &loops);
+            let verification_errors = candidate.as_ref().map_or_else(Vec::new, |candidate| {
+                verify::verify_candidate(cfg, &loops, candidate)
+            });
+            if verification_errors.is_empty() {
+                ShadowReport {
+                    block_count,
+                    edge_count,
+                    covered_blocks: block_count,
+                    represented_edges: edge_count,
+                    conditions: Some(conditions),
+                    candidate,
+                    loops,
+                    verification_errors,
+                    refusal: None,
+                }
+            } else {
+                ShadowReport {
+                    block_count,
+                    edge_count,
+                    covered_blocks: 0,
+                    represented_edges: 0,
+                    conditions: Some(conditions),
+                    candidate: None,
+                    loops,
+                    verification_errors,
+                    refusal: Some(Refusal::CandidateInvalid),
+                }
+            }
+        }
         Err(refusal) => ShadowReport {
             block_count,
             edge_count,
             covered_blocks: 0,
             represented_edges: 0,
             conditions: None,
+            candidate: None,
+            loops,
+            verification_errors: Vec::new(),
             refusal: Some(refusal),
         },
     }
@@ -113,6 +151,7 @@ mod tests {
         assert_eq!(first.covered_blocks, first.block_count);
         assert_eq!(first.edge_count, 6);
         assert_eq!(first.represented_edges, first.edge_count);
+        assert!(first.verification_errors.is_empty());
         let dag = first.conditions.expect("acyclic CFG has a condition DAG");
         assert_eq!(dag.reaching_conditions().len(), first.block_count);
         assert!(dag.node_count() < 32, "shared conditions must be interned");
@@ -147,12 +186,13 @@ mod tests {
     }
 
     #[test]
-    fn a_cycle_is_a_typed_refusal_not_partial_coverage() {
+    fn an_irreducible_two_entry_cycle_is_a_typed_refusal_not_partial_coverage() {
         let function = LlirFunction {
             entry_va: 0x1000,
             blocks: vec![
-                block(0x1000, Op::Nop, vec![0x1100]),
-                block(0x1100, Op::Nop, vec![0x1000]),
+                block(0x1000, condition(0x1200), vec![0x1200, 0x1100]),
+                block(0x1100, Op::Nop, vec![0x1200]),
+                block(0x1200, Op::Nop, vec![0x1100]),
             ],
         };
         let report = observe(&function, &compute_ssa(&function));
@@ -161,18 +201,38 @@ mod tests {
         assert_eq!(report.covered_blocks, 0);
         assert_eq!(report.represented_edges, 0);
         assert_eq!(report.conditions, None);
+        assert!(report.verification_errors.is_empty());
     }
 
     #[test]
     fn real_sc_mixed_fixture_runs_in_shadow_mode_with_total_coverage() {
+        let lifted = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "sc_mixed");
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(report.covered_blocks, report.block_count);
+        assert_eq!(report.represented_edges, report.edge_count);
+        assert!(
+            report.block_count >= 5,
+            "real short-circuit CFG is nontrivial"
+        );
+        assert!(report.conditions.is_some());
+        assert!(report.loops.is_empty());
+        let candidate = report.candidate.expect("acyclic candidate");
+        assert_eq!(candidate.blocks().len(), report.block_count);
+        assert_eq!(candidate.transfer_count(), report.edge_count);
+    }
+
+    fn lift_real_fixture(binary_name: &str, function_name: &str) -> LlirFunction {
         let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/decompiler_fixtures/build/01_conditional_polarity-gcc-O0.so");
+            .join("tests/decompiler_fixtures/build")
+            .join(binary_name);
         let session = crate::program::session::ProgramSession::from_path(&binary)
-            .expect("checked-in conditional-polarity fixture parses");
+            .expect("checked-in decompiler fixture parses");
         let image = session.image();
         let entry = image
-            .defined_text_symbol_address("sc_mixed")
-            .expect("fixture exports sc_mixed");
+            .defined_text_symbol_address(function_name)
+            .unwrap_or_else(|| panic!("fixture exports {function_name}"));
         let discovered = session.discover_functions(
             &crate::analysis::cfg::Budgets {
                 max_functions: 1,
@@ -186,18 +246,74 @@ mod tests {
         let function = discovered
             .iter()
             .find(|function| function.entry_point.value == entry)
-            .expect("sc_mixed is discovered");
-        let lifted = crate::ir::lift_function::lift_function_from_image(image, function)
-            .expect("sc_mixed lifts");
+            .unwrap_or_else(|| panic!("{function_name} is discovered"));
+        crate::ir::lift_function::lift_function_from_image(image, function)
+            .unwrap_or_else(|error| panic!("{function_name} lifts: {error}"))
+    }
+
+    #[test]
+    fn real_dowhile_fixture_has_a_post_tested_loop_with_explicit_exits() {
+        let lifted = lift_real_fixture("03_loop_shapes-gcc-O0.so", "dowhile_atleastonce");
         let report = observe(&lifted, &compute_ssa(&lifted));
 
-        assert_eq!(report.refusal, None, "{report:#?}");
-        assert_eq!(report.covered_blocks, report.block_count);
-        assert_eq!(report.represented_edges, report.edge_count);
+        assert_eq!(report.loops.len(), 1, "{report:#?}");
+        let loop_info = &report.loops.loops()[0];
+        assert_eq!(loop_info.kind, LoopKind::PostTested);
+        assert!(!loop_info.latches.is_empty());
+        assert!(!loop_info.exits.is_empty());
+        assert!(loop_info.blocks.len() >= 2);
+        let candidate = report.candidate.expect("reducible loop candidate");
+        assert_eq!(candidate.blocks().len(), report.block_count);
+        assert_eq!(candidate.transfer_count(), report.edge_count);
+        assert!(candidate
+            .transfers()
+            .any(|edge| matches!(edge, Transfer::Continue { .. })));
+        assert!(candidate
+            .transfers()
+            .any(|edge| matches!(edge, Transfer::Break { .. })));
+    }
+
+    #[test]
+    fn real_loop_return_fixture_records_loop_exits_without_losing_blocks() {
+        let lifted = lift_real_fixture("03_loop_shapes-gcc-O0.so", "loop_return_on_neg");
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert!(!report.loops.is_empty(), "{report:#?}");
         assert!(
-            report.block_count >= 5,
-            "real short-circuit CFG is nontrivial"
+            report
+                .loops
+                .loops()
+                .iter()
+                .any(|loop_info| loop_info.exits.len() >= 2),
+            "early-return and normal-exit paths must remain distinct: {report:#?}"
         );
-        assert!(report.conditions.is_some());
+        let candidate = report.candidate.expect("reducible loop candidate");
+        assert_eq!(candidate.blocks().len(), report.block_count);
+        assert_eq!(candidate.transfer_count(), report.edge_count);
+        let return_blocks: Vec<_> = candidate
+            .blocks()
+            .iter()
+            .filter(|block| block.terminal == Some(Terminal::Return))
+            .map(|block| block.block)
+            .collect();
+        assert_eq!(
+            return_blocks.len(),
+            1,
+            "the shared terminal tail is owned once: {candidate:#?}"
+        );
+        let shared_return = return_blocks[0];
+        let incoming = candidate
+            .transfers()
+            .filter(|transfer| match transfer {
+                Transfer::Flow { to }
+                | Transfer::Branch { to, .. }
+                | Transfer::Break { to, .. } => *to == shared_return,
+                Transfer::Continue { .. } => false,
+            })
+            .count();
+        assert!(
+            incoming >= 2,
+            "early and normal exits must both reach the shared terminal: {candidate:#?}"
+        );
     }
 }

@@ -225,7 +225,7 @@ impl Cfg {
 
     /// The predecessors of `header` that `header` dominates — the back-edge
     /// tails, i.e. the latches of the natural loops headed there.
-    pub(super) fn dominating_tails(&self, header: usize) -> Vec<usize> {
+    pub(crate) fn dominating_tails(&self, header: usize) -> Vec<usize> {
         self.preds[header]
             .iter()
             .copied()
@@ -239,7 +239,7 @@ impl Cfg {
     /// thing the open-coded `if tails.is_empty() { continue; }` guard tested
     /// for; callers that need to distinguish "no loop" still consult
     /// [`Cfg::dominating_tails`] themselves.
-    pub(super) fn natural_loop_body_of(&self, header: usize) -> BlockSet {
+    pub(crate) fn natural_loop_body_of(&self, header: usize) -> BlockSet {
         // The borrow is scoped to this statement on purpose: the miss path
         // below calls `natural_loop_body`, which borrows the sibling memo, and
         // `borrow_mut()`s this one at the end. Holding a read guard across
@@ -278,7 +278,7 @@ impl Cfg {
         body
     }
 
-    pub(super) fn dominates(&self, a: usize, b: usize) -> bool {
+    pub(crate) fn dominates(&self, a: usize, b: usize) -> bool {
         self.dom[a][b]
     }
 

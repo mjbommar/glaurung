@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::Refusal;
+use super::{LoopForest, Refusal};
 use crate::ir::structure::Cfg;
 
 /// Stable index into a [`ConditionDag`].
@@ -28,8 +28,8 @@ pub struct ConditionDag {
 }
 
 impl ConditionDag {
-    pub(super) fn from_cfg(cfg: &Cfg) -> Result<Self, Refusal> {
-        let order = topological_order(&cfg.succs).ok_or(Refusal::CyclicGraph)?;
+    pub(super) fn from_cfg(cfg: &Cfg, loops: &LoopForest) -> Result<Self, Refusal> {
+        let order = topological_order(&cfg.succs, loops).ok_or(Refusal::CyclicGraph)?;
         let mut builder = Builder::new();
         let mut reaching = vec![builder.false_id; cfg.succs.len()];
         if !reaching.is_empty() {
@@ -39,6 +39,9 @@ impl ConditionDag {
         for block in order {
             let source_condition = reaching[block];
             for &successor in &cfg.succs[block] {
+                if loops.is_back_edge(block, successor) {
+                    continue;
+                }
                 let edge_condition = match cfg.cond_taken[block] {
                     Some(taken) if cfg.succs[block].len() == 2 => {
                         let branch = builder.intern(ConditionNode::Branch { block });
@@ -166,10 +169,13 @@ impl Builder {
     }
 }
 
-fn topological_order(successors: &[Vec<usize>]) -> Option<Vec<usize>> {
+fn topological_order(successors: &[Vec<usize>], loops: &LoopForest) -> Option<Vec<usize>> {
     let mut indegree = vec![0usize; successors.len()];
-    for targets in successors {
+    for (block, targets) in successors.iter().enumerate() {
         for &target in targets {
+            if loops.is_back_edge(block, target) {
+                continue;
+            }
             indegree[target] += 1;
         }
     }
@@ -182,6 +188,9 @@ fn topological_order(successors: &[Vec<usize>]) -> Option<Vec<usize>> {
     while let Some(block) = ready.pop_first() {
         order.push(block);
         for &target in &successors[block] {
+            if loops.is_back_edge(block, target) {
+                continue;
+            }
             indegree[target] -= 1;
             if indegree[target] == 0 {
                 ready.insert(target);

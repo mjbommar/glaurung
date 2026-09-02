@@ -159,8 +159,12 @@ scheduled independently of the longer pipeline/SSA migrations.
   used by production v1. The first condition-DAG slice is deterministic,
   truth-table checked, and runs with total block/edge coverage on the real
   `01_conditional_polarity-gcc-O0.so::sc_mixed` fixture; cyclic graphs decline
-  explicitly. Production remains on v1. Region construction, loop support,
-  rendering, execution/GED/runtime comparison, and promotion are still open.
+  explicitly. Natural-loop facts and an independently verified typed region
+  candidate now cover the real gcc-O0 `dowhile_atleastonce` and
+  `loop_return_on_neg` fixtures, including post-test, `Break`, `Continue`, and
+  singly owned shared-terminal facts. Production remains on v1. Tree recovery,
+  local irreducible fallback, rendering, execution/GED/runtime comparison, and
+  promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one
