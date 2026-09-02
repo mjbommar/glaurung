@@ -52,7 +52,7 @@ use dwarf_contracts::dwarf_return_hint;
 // `callee_contracts` reaches it through `super::`, which is how it was already
 // wired before the split.
 use dwarf_contracts::{
-    calling_convention_pointer_width, dwarf_output_contracts, dwarf_render_prototype,
+    calling_convention_pointer_width, debug_output_contracts, dwarf_render_prototype,
     dwarf_return_hint_with_env, dwarf_stack_object_hints, merge_dwarf_register_local_facts,
     DwarfPrototypeContract,
 };
@@ -215,8 +215,17 @@ pub(super) fn decompile_at_session(
     // parameters at all. See `arm32_mode::normalise_entry`.
     let func_va = image.normalize_function_entry(func_va);
     let exception_sites = image.exception_call_sites();
-    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&image));
-    let dwarf_types = (style == "decbench" && types).then(|| session.debug_types());
+    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" && types {
+        let (contracts, pdb_addresses, pdb_types) = debug_output_contracts(&image, path, pdb_cache);
+        (Some(contracts), pdb_addresses, pdb_types)
+    } else {
+        (None, std::collections::HashSet::new(), Vec::new())
+    };
+    let dwarf_types = (style == "decbench" && types).then(|| {
+        let mut types = session.debug_types().to_vec();
+        types.extend(pdb_types);
+        types
+    });
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -533,6 +542,8 @@ pub(super) fn decompile_at_session(
             func_va,
             if analyst_prototype.is_some() {
                 "analyst"
+            } else if pdb_contract_vas.contains(&func_va) {
+                "pdb"
             } else {
                 "dwarf"
             },
@@ -627,8 +638,18 @@ fn decompile_range_at_py(
     let image = session.image().clone();
     let data = image.bytes();
     let exception_sites = image.exception_call_sites();
-    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&image));
-    let dwarf_types = (style == "decbench" && types).then(|| session.debug_types());
+    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" && types {
+        let (contracts, pdb_addresses, pdb_types) =
+            debug_output_contracts(&image, &path, pdb_cache);
+        (Some(contracts), pdb_addresses, pdb_types)
+    } else {
+        (None, std::collections::HashSet::new(), Vec::new())
+    };
+    let dwarf_types = (style == "decbench" && types).then(|| {
+        let mut types = session.debug_types().to_vec();
+        types.extend(pdb_types);
+        types
+    });
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -821,7 +842,11 @@ fn decompile_range_at_py(
         record_recovered_prototype_conflict(
             &f.name,
             func_va,
-            "dwarf",
+            if pdb_contract_vas.contains(&func_va) {
+                "pdb"
+            } else {
+                "dwarf"
+            },
             declared_render.as_ref(),
             inferred_prototype.as_ref(),
             cc,
@@ -1127,8 +1152,18 @@ fn decompile_all_py(
     let image = session.image().clone();
     let data = image.bytes();
     let exception_sites = image.exception_call_sites();
-    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&image));
-    let dwarf_types = (style == "decbench").then(|| session.debug_types());
+    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" {
+        let (contracts, pdb_addresses, pdb_types) =
+            debug_output_contracts(&image, &path, pdb_cache);
+        (Some(contracts), pdb_addresses, pdb_types)
+    } else {
+        (None, std::collections::HashSet::new(), Vec::new())
+    };
+    let dwarf_types = (style == "decbench").then(|| {
+        let mut types = session.debug_types().to_vec();
+        types.extend(pdb_types);
+        types
+    });
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -1348,7 +1383,11 @@ fn decompile_all_py(
             record_recovered_prototype_conflict(
                 &f.name,
                 func.entry_point.value,
-                "dwarf",
+                if pdb_contract_vas.contains(&func.entry_point.value) {
+                    "pdb"
+                } else {
+                    "dwarf"
+                },
                 declared_render.as_ref(),
                 inferred_prototype.as_ref(),
                 cc,
@@ -1438,8 +1477,18 @@ fn decompile_many_py(
         .map(|va| image.normalize_function_entry(va))
         .collect();
     let exception_sites = image.exception_call_sites();
-    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&image));
-    let dwarf_types = (style == "decbench").then(|| session.debug_types());
+    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" {
+        let (contracts, pdb_addresses, pdb_types) =
+            debug_output_contracts(&image, &path, pdb_cache);
+        (Some(contracts), pdb_addresses, pdb_types)
+    } else {
+        (None, std::collections::HashSet::new(), Vec::new())
+    };
+    let dwarf_types = (style == "decbench").then(|| {
+        let mut types = session.debug_types().to_vec();
+        types.extend(pdb_types);
+        types
+    });
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -1701,7 +1750,11 @@ fn decompile_many_py(
             record_recovered_prototype_conflict(
                 &f.name,
                 func_va,
-                "dwarf",
+                if pdb_contract_vas.contains(&func_va) {
+                    "pdb"
+                } else {
+                    "dwarf"
+                },
                 declared_render.as_ref(),
                 inferred_prototype.as_ref(),
                 cc,

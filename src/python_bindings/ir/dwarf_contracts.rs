@@ -56,6 +56,165 @@ pub(super) fn dwarf_output_contracts(
         .collect()
 }
 
+/// Index authoritative PDB module-procedure declarations by PE virtual address.
+///
+/// Unlike public symbols, `S_GPROC32`/`S_LPROC32` records carry both the code
+/// address and the TPI index of the complete function type. Cache misses and
+/// malformed optional debug data remain best-effort and yield no contracts.
+pub(super) fn pdb_output_contracts(
+    pe_path: &str,
+    cache_dir: &std::path::Path,
+) -> std::collections::HashMap<u64, DwarfPrototypeContract> {
+    use crate::debug::dwarf::{DwarfParameterType, DwarfReturnType};
+
+    let Ok(Some(source)) = crate::symbols::pdb::PdbIngestor::from_pe_cache(pe_path, cache_dir)
+    else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(declarations) = source.function_declarations() else {
+        return std::collections::HashMap::new();
+    };
+
+    declarations
+        .into_iter()
+        .filter_map(|declaration| {
+            let va = declaration.va?;
+            let return_type = match declaration.prototype.return_type_name.as_deref() {
+                Some("void") => DwarfReturnType::Void,
+                Some(c_type) => DwarfReturnType::Type(c_type.to_string()),
+                None => DwarfReturnType::Unknown,
+            };
+            let parameter_types = declaration
+                .prototype
+                .argument_type_names
+                .into_iter()
+                .map(|c_type| match c_type {
+                    Some(c_type) => DwarfParameterType::Type(c_type),
+                    None => DwarfParameterType::Unknown,
+                })
+                .collect::<Vec<_>>();
+            let parameter_names = vec![None; parameter_types.len()];
+            Some((
+                va,
+                DwarfPrototypeContract {
+                    function_name: Some(declaration.name),
+                    prototyped: true,
+                    parameter_types,
+                    parameter_names,
+                    return_type,
+                    stack_objects: Vec::new(),
+                    register_locals: Vec::new(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Merge compiler declarations with deterministic authority ordering.
+/// DWARF wins if a binary unusually carries both formats at the same address.
+pub(super) fn debug_output_contracts(
+    image: &crate::program::image::ProgramImage,
+    binary_path: &str,
+    pdb_cache: &str,
+) -> (
+    std::collections::HashMap<u64, DwarfPrototypeContract>,
+    std::collections::HashSet<u64>,
+    Vec<crate::debug::dwarf::DwarfType>,
+) {
+    let mut contracts = dwarf_output_contracts(image);
+    let mut pdb_addresses = std::collections::HashSet::new();
+    let mut pdb_types = Vec::new();
+    if let Some(cache_dir) = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache)) {
+        let pdb_contracts = pdb_output_contracts(binary_path, cache_dir);
+        pdb_types = pdb_type_layouts(binary_path, cache_dir, pdb_contracts.values());
+        for (va, contract) in pdb_contracts {
+            if let std::collections::hash_map::Entry::Vacant(entry) = contracts.entry(va) {
+                entry.insert(contract);
+                pdb_addresses.insert(va);
+            }
+        }
+    }
+    (contracts, pdb_addresses, pdb_types)
+}
+
+fn pdb_type_layouts<'a>(
+    binary_path: &str,
+    cache_dir: &std::path::Path,
+    contracts: impl Iterator<Item = &'a DwarfPrototypeContract>,
+) -> Vec<crate::debug::dwarf::DwarfType> {
+    use crate::debug::dwarf::{DwarfField, DwarfParameterType, DwarfReturnType, DwarfType};
+
+    let mut names = std::collections::BTreeMap::new();
+    for contract in contracts {
+        if let DwarfReturnType::Type(c_type) = &contract.return_type {
+            if let Some((name, kind)) = tagged_pdb_type_name(c_type) {
+                names.insert(name, kind);
+            }
+        }
+        for parameter in &contract.parameter_types {
+            if let DwarfParameterType::Type(c_type) = parameter {
+                if let Some((name, kind)) = tagged_pdb_type_name(c_type) {
+                    names.insert(name, kind);
+                }
+            }
+        }
+    }
+    let Ok(Some(source)) = crate::symbols::pdb::PdbIngestor::from_pe_cache(binary_path, cache_dir)
+    else {
+        return Vec::new();
+    };
+
+    let requested = names
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let Ok(layouts) = source.find_struct_layouts(&requested) else {
+        return Vec::new();
+    };
+    layouts
+        .into_iter()
+        .filter_map(|layout| {
+            let kind = *names.get(&layout.name)?;
+            Some(DwarfType {
+                kind,
+                name: layout.name,
+                byte_size: layout.byte_size,
+                fields: layout
+                    .fields
+                    .into_iter()
+                    .filter_map(|field| {
+                        Some(DwarfField {
+                            offset: field.byte_offset,
+                            name: field.name,
+                            c_type: field.type_name?,
+                            size: 0,
+                        })
+                    })
+                    .collect(),
+                variants: Vec::new(),
+                typedef_target: None,
+                source_file: None,
+            })
+        })
+        .collect()
+}
+
+fn tagged_pdb_type_name(c_type: &str) -> Option<(String, crate::debug::dwarf::DwarfTypeKind)> {
+    use crate::debug::dwarf::DwarfTypeKind;
+
+    let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    let base = normalized.trim_end_matches('*').trim();
+    let mut words = base.split_whitespace();
+    let kind = match words.next()? {
+        "struct" | "class" => DwarfTypeKind::Struct,
+        "union" => DwarfTypeKind::Union,
+        "enum" => DwarfTypeKind::Enum,
+        _ => return None,
+    };
+    let name = words.next()?;
+    (words.next().is_none()).then(|| (name.to_string(), kind))
+}
+
 pub(super) fn dwarf_stack_object_hints(
     contract: Option<&DwarfPrototypeContract>,
     cc: crate::ir::call_args::CallConv,

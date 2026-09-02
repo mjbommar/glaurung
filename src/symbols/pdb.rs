@@ -124,6 +124,32 @@ impl PdbFunctionPrototype {
     }
 }
 
+/// A module procedure symbol joined to its PDB type record and code address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbFunctionDeclaration {
+    /// Function name stored in the module procedure record.
+    pub name: String,
+    /// Relative virtual address translated through the PDB address map.
+    pub rva: u32,
+    /// Virtual address when the declaration came from a PE/PDB cache hit.
+    pub va: Option<u64>,
+    /// Length of the procedure's code range in bytes.
+    pub code_size: u32,
+    /// Type information referenced directly by the procedure record.
+    pub prototype: PdbFunctionPrototype,
+    /// Build identity for PE-originated PDB rows.
+    pub provenance: Option<PdbBuildProvenance>,
+}
+
+impl PdbFunctionDeclaration {
+    fn with_pe_context(mut self, image_base: u64, provenance: &PdbBuildProvenance) -> Self {
+        self.va = Some(image_base + u64::from(self.rva));
+        self.prototype = self.prototype.with_provenance(provenance);
+        self.provenance = Some(provenance.clone());
+        self
+    }
+}
+
 /// Public PDB symbol resolved to an RVA, optionally PE rebased.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbPublicSymbol {
@@ -251,6 +277,19 @@ impl PePdbSource {
             .map(|layout| layout.with_provenance(&self.provenance)))
     }
 
+    /// Locate several complete aggregate layouts in one TPI scan.
+    pub fn find_struct_layouts(
+        &self,
+        names: &std::collections::BTreeSet<String>,
+    ) -> ::pdb::Result<Vec<PdbStructLayout>> {
+        Ok(self
+            .ingestor
+            .find_struct_layouts(names)?
+            .into_iter()
+            .map(|layout| layout.with_provenance(&self.provenance))
+            .collect())
+    }
+
     /// Enumerate procedure and member-function type records.
     pub fn function_prototypes(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
         Ok(self
@@ -258,6 +297,16 @@ impl PePdbSource {
             .function_prototypes()?
             .into_iter()
             .map(|prototype| prototype.with_provenance(&self.provenance))
+            .collect())
+    }
+
+    /// Enumerate addressed module procedures joined to their declared types.
+    pub fn function_declarations(&self) -> ::pdb::Result<Vec<PdbFunctionDeclaration>> {
+        Ok(self
+            .ingestor
+            .function_declarations()?
+            .into_iter()
+            .map(|declaration| declaration.with_pe_context(self.image_base, &self.provenance))
             .collect())
     }
 
@@ -354,10 +403,27 @@ impl PdbIngestor {
         }
     }
 
+    /// Locate several complete aggregate layouts in one TPI scan.
+    pub fn find_struct_layouts(
+        &self,
+        names: &std::collections::BTreeSet<String>,
+    ) -> ::pdb::Result<Vec<PdbStructLayout>> {
+        match self.backend {
+            PdbBackend::Native => self.find_struct_layouts_native(names),
+        }
+    }
+
     /// Enumerate procedure and member-function type records.
     pub fn function_prototypes(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
         match self.backend {
             PdbBackend::Native => self.function_prototypes_native(),
+        }
+    }
+
+    /// Enumerate addressed module procedures joined to their declared types.
+    pub fn function_declarations(&self) -> ::pdb::Result<Vec<PdbFunctionDeclaration>> {
+        match self.backend {
+            PdbBackend::Native => self.function_declarations_native(),
         }
     }
 
@@ -456,10 +522,22 @@ impl PdbIngestor {
     }
 
     fn find_struct_layout_native(&self, name: &str) -> ::pdb::Result<Option<PdbStructLayout>> {
+        let names = std::collections::BTreeSet::from([name.to_string()]);
+        Ok(self.find_struct_layouts_native(&names)?.into_iter().next())
+    }
+
+    fn find_struct_layouts_native(
+        &self,
+        names: &std::collections::BTreeSet<String>,
+    ) -> ::pdb::Result<Vec<PdbStructLayout>> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut pdb = self.open_native()?;
         let type_information = pdb.type_information()?;
         let mut type_finder = type_information.finder();
         let mut iter = type_information.iter();
+        let mut layouts = std::collections::BTreeMap::new();
 
         while let Some(typ) = iter.next()? {
             type_finder.update(&iter);
@@ -472,7 +550,7 @@ impl PdbIngestor {
 
             match parsed {
                 TypeData::Class(class)
-                    if class.name.as_bytes() == name.as_bytes()
+                    if names.contains(class.name.to_string().as_ref())
                         && !class.properties.forward_reference() =>
                 {
                     let fields = match class.fields {
@@ -482,35 +560,37 @@ impl PdbIngestor {
                         None => Vec::new(),
                     };
 
-                    return Ok(Some(PdbStructLayout {
+                    let layout = PdbStructLayout {
                         name: class.name.to_string().into_owned(),
                         kind: pdb_class_kind_name(class.kind).to_string(),
                         byte_size: class.size,
                         field_count: usize::from(class.count),
                         provenance: None,
                         fields,
-                    }));
+                    };
+                    layouts.entry(layout.name.clone()).or_insert(layout);
                 }
                 TypeData::Union(union)
-                    if union.name.as_bytes() == name.as_bytes()
+                    if names.contains(union.name.to_string().as_ref())
                         && !union.properties.forward_reference() =>
                 {
                     let fields = collect_field_list_members(&type_finder, union.fields)?;
 
-                    return Ok(Some(PdbStructLayout {
+                    let layout = PdbStructLayout {
                         name: union.name.to_string().into_owned(),
                         kind: "union".to_string(),
                         byte_size: union.size,
                         field_count: usize::from(union.count),
                         provenance: None,
                         fields,
-                    }));
+                    };
+                    layouts.entry(layout.name.clone()).or_insert(layout);
                 }
                 _ => {}
             }
         }
 
-        Ok(None)
+        Ok(layouts.into_values().collect())
     }
 
     fn function_prototypes_native(&self) -> ::pdb::Result<Vec<PdbFunctionPrototype>> {
@@ -550,6 +630,58 @@ impl PdbIngestor {
         }
 
         Ok(prototypes)
+    }
+
+    fn function_declarations_native(&self) -> ::pdb::Result<Vec<PdbFunctionDeclaration>> {
+        let prototypes = self
+            .function_prototypes_native()?
+            .into_iter()
+            .map(|prototype| (prototype.type_index, prototype))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let mut pdb = self.open_native()?;
+        let address_map = pdb.address_map()?;
+        let debug_information = pdb.debug_information()?;
+        let mut modules = debug_information.modules()?;
+        let mut declarations = std::collections::BTreeMap::new();
+
+        while let Some(module) = modules.next()? {
+            let Some(module_info) = pdb.module_info(&module)? else {
+                continue;
+            };
+            let mut symbols = module_info.symbols()?;
+            while let Some(symbol) = symbols.next()? {
+                let parsed = match symbol.parse() {
+                    Ok(parsed) => parsed,
+                    Err(::pdb::Error::UnimplementedSymbolKind(_)) => continue,
+                    Err(error) => return Err(error),
+                };
+                let ::pdb::SymbolData::Procedure(procedure) = parsed else {
+                    continue;
+                };
+                let Some(rva) = procedure.offset.to_rva(&address_map) else {
+                    continue;
+                };
+                let Some(prototype) = prototypes.get(&procedure.type_index.0) else {
+                    // ID-stream procedure records are intentionally excluded: their
+                    // indexes cannot be resolved against the TPI prototype table.
+                    continue;
+                };
+                let name = procedure.name.to_string().into_owned();
+                declarations
+                    .entry((rva.0, name.clone()))
+                    .or_insert_with(|| PdbFunctionDeclaration {
+                        name,
+                        rva: rva.0,
+                        va: None,
+                        code_size: procedure.len,
+                        prototype: prototype.clone(),
+                        provenance: None,
+                    });
+            }
+        }
+
+        Ok(declarations.into_values().collect())
     }
 
     fn public_symbols_native(&self) -> ::pdb::Result<Vec<PdbPublicSymbol>> {
@@ -712,9 +844,9 @@ fn build_procedure_prototype(
     procedure: ::pdb::ProcedureType,
 ) -> ::pdb::Result<PdbFunctionPrototype> {
     let argument_types = collect_argument_types(type_finder, procedure.argument_list)?;
-    let argument_type_names = describe_type_names(type_finder, &argument_types)?;
+    let argument_type_names = describe_declaration_type_names(type_finder, &argument_types)?;
     let return_type_name = match procedure.return_type {
-        Some(return_type) => describe_type_name(type_finder, return_type)?,
+        Some(return_type) => describe_declaration_type_name(type_finder, return_type)?,
         None => None,
     };
 
@@ -742,13 +874,13 @@ fn build_member_function_prototype(
     member_function: ::pdb::MemberFunctionType,
 ) -> ::pdb::Result<PdbFunctionPrototype> {
     let argument_types = collect_argument_types(type_finder, member_function.argument_list)?;
-    let argument_type_names = describe_type_names(type_finder, &argument_types)?;
+    let argument_type_names = describe_declaration_type_names(type_finder, &argument_types)?;
 
     Ok(PdbFunctionPrototype {
         type_index: type_index.0,
         kind: "member_function".to_string(),
         return_type_index: Some(member_function.return_type.0),
-        return_type_name: describe_type_name(type_finder, member_function.return_type)?,
+        return_type_name: describe_declaration_type_name(type_finder, member_function.return_type)?,
         argument_count: member_function.parameter_count,
         argument_type_indices: argument_types
             .iter()
@@ -804,13 +936,76 @@ fn describe_type_name(
     Ok(describe_type(type_finder, type_index)?.map(|descriptor| descriptor.name))
 }
 
-fn describe_type_names(
+fn describe_declaration_type_name(
+    type_finder: &TypeFinder<'_>,
+    type_index: TypeIndex,
+) -> ::pdb::Result<Option<String>> {
+    let typ = match type_finder.find(type_index) {
+        Ok(typ) => typ,
+        Err(::pdb::Error::TypeNotFound(_)) | Err(::pdb::Error::TypeNotIndexed(_, _)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    let parsed = match typ.parse() {
+        Ok(parsed) => parsed,
+        Err(::pdb::Error::UnimplementedTypeKind(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match parsed {
+        TypeData::Pointer(pointer) => {
+            let base = describe_declaration_type_name(type_finder, pointer.underlying_type)?
+                .unwrap_or_else(|| "unknown".to_string());
+            Ok(Some(pointer_type_name(
+                &base,
+                pointer.attributes.pointer_mode(),
+            )))
+        }
+        TypeData::Modifier(modifier) => {
+            let Some(base) = describe_declaration_type_name(type_finder, modifier.underlying_type)?
+            else {
+                return Ok(None);
+            };
+            let mut qualifiers = Vec::new();
+            if modifier.constant {
+                qualifiers.push("const");
+            }
+            if modifier.volatile {
+                qualifiers.push("volatile");
+            }
+            if modifier.unaligned {
+                qualifiers.push("unaligned");
+            }
+            Ok(Some(if qualifiers.is_empty() {
+                base
+            } else {
+                format!("{} {base}", qualifiers.join(" "))
+            }))
+        }
+        TypeData::Class(class) => Ok(Some(format!(
+            "{} {}",
+            match class.kind {
+                ClassKind::Struct => "struct",
+                ClassKind::Class => "class",
+                ClassKind::Interface => "interface",
+            },
+            class.name.to_string()
+        ))),
+        TypeData::Union(union) => Ok(Some(format!("union {}", union.name.to_string()))),
+        TypeData::Enumeration(enumeration) => {
+            Ok(Some(format!("enum {}", enumeration.name.to_string())))
+        }
+        _ => describe_type_name(type_finder, type_index),
+    }
+}
+
+fn describe_declaration_type_names(
     type_finder: &TypeFinder<'_>,
     type_indices: &[TypeIndex],
 ) -> ::pdb::Result<Vec<Option<String>>> {
     let mut names = Vec::with_capacity(type_indices.len());
     for type_index in type_indices {
-        names.push(describe_type_name(type_finder, *type_index)?);
+        names.push(describe_declaration_type_name(type_finder, *type_index)?);
     }
     Ok(names)
 }
@@ -1022,10 +1217,14 @@ fn primitive_kind_name(kind: PrimitiveKind) -> &'static str {
         PrimitiveKind::U8 => "uint8",
         PrimitiveKind::Short | PrimitiveKind::I16 => "short",
         PrimitiveKind::UShort | PrimitiveKind::U16 => "ushort",
-        PrimitiveKind::Long | PrimitiveKind::I32 => "long",
-        PrimitiveKind::ULong | PrimitiveKind::U32 => "ulong",
-        PrimitiveKind::Quad | PrimitiveKind::I64 => "long64",
-        PrimitiveKind::UQuad | PrimitiveKind::U64 => "ulong64",
+        PrimitiveKind::Long => "long",
+        PrimitiveKind::ULong => "unsigned long",
+        PrimitiveKind::I32 => "int",
+        PrimitiveKind::U32 => "unsigned int",
+        PrimitiveKind::Quad => "long long",
+        PrimitiveKind::UQuad => "unsigned long long",
+        PrimitiveKind::I64 => "int64_t",
+        PrimitiveKind::U64 => "uint64_t",
         PrimitiveKind::Octa | PrimitiveKind::I128 => "int128",
         PrimitiveKind::UOcta | PrimitiveKind::U128 => "uint128",
         PrimitiveKind::F16 => "float16",
@@ -1413,6 +1612,63 @@ mod tests {
             prototype.argument_type_names.len(),
             prototype.argument_type_indices.len(),
             "argument type names should align with raw argument indexes"
+        );
+    }
+
+    #[test]
+    fn pdb_module_procedures_link_function_addresses_to_type_records() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/pdb_types");
+        let path = root.join("types.pdb");
+        if !path.is_file() {
+            eprintln!(
+                "skipping PDB fixture test: {} is not present",
+                path.display()
+            );
+            return;
+        }
+
+        let declarations = PdbIngestor::open(path)
+            .function_declarations()
+            .expect("extract addressed function declarations");
+        let point_sum = declarations
+            .iter()
+            .find(|declaration| declaration.name == "point_sum")
+            .expect("point_sum procedure record should be linked to its type");
+
+        assert_eq!(point_sum.rva, 0x1000);
+        assert_eq!(point_sum.prototype.return_type_name.as_deref(), Some("int"));
+        assert_eq!(
+            point_sum.prototype.argument_type_names,
+            vec![Some("struct Point".to_string())]
+        );
+    }
+
+    #[test]
+    fn pdb_bulk_layout_lookup_returns_all_requested_fixture_structs() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/pdb_types");
+        let path = root.join("types.pdb");
+        if !path.is_file() {
+            eprintln!(
+                "skipping PDB fixture test: {} is not present",
+                path.display()
+            );
+            return;
+        }
+
+        let names = std::collections::BTreeSet::from([
+            "Point".to_string(),
+            "Record".to_string(),
+            "Missing".to_string(),
+        ]);
+        let layouts = PdbIngestor::open(path)
+            .find_struct_layouts(&names)
+            .expect("bulk layout lookup");
+        assert_eq!(
+            layouts
+                .iter()
+                .map(|layout| layout.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Point", "Record"]
         );
     }
 

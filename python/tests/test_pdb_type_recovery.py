@@ -14,39 +14,21 @@ recent: `pdb_path` was never exposed to Python and its underlying scan read the
 debug *directory* rather than following the pointer inside it, so the PDB could
 not be located from the binary at all.
 
-What does not
--------------
+What now works
+--------------
 
-**Types.** `src/symbols/pdb.rs` parses the TPI stream in detail --
-`LF_PROCEDURE` return types and arglists, struct field layouts, bitfield
-storage -- and `src/ir/pdb_fields.rs` applies FIELD displacement hints only.
-Its own docstring is explicit: it "does not infer the concrete struct type of a
-base register yet". Nothing applies procedure prototypes to recovered
-signatures, so every parameter type below comes from ABI/dataflow inference
-with the PDB sitting unread beside it.
-
-The missing link is specific and worth stating, because "wire the prototypes
-up" sounds like an afternoon and is not. `PdbFunctionPrototype` is a TPI record
-keyed by `type_index` and carries **no address**. `PdbPublicSymbol` carries a
-name and an address but **no type index**. The records that carry both are
-`S_GPROC32`/`S_LPROC32` in the DBI module streams, and the reader does not
-parse them. Until it does there is no VA -> prototype mapping to apply.
-
-Why these assertions are written as they are
---------------------------------------------
-
-The recovered types are pinned as *what they are today*, each with the source
-declaration beside it. A test that asserted the correct types would fail on day
-one and be deleted; a test that asserts nothing would let the gap widen
-silently. When prototypes are wired up these assertions SHOULD fail, and the
-failure message says what the right answer is.
+**Types.** `src/symbols/pdb.rs` joins `S_GPROC32`/`S_LPROC32` module symbols
+to their `LF_PROCEDURE` records by TypeIndex and translates their section
+offsets to PE VAs. The decompiler applies those declarations through the same
+authoritative contract path used by DWARF, while retaining conflicting machine
+inference as health metadata. The assertions below are the literal source
+declarations from `tests/pdb_types/types.c`.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -61,64 +43,14 @@ PDB = FIXTURE_DIR / "types.pdb"
 #: `(function, source declaration, why the PDB is needed)`.
 #:
 #: These assert the SOURCE type, which is the answer a PDB makes available.
-#: Four are strict xfails: they document what PDB prototype wiring would fix,
-#: and go red the day it lands so the win cannot pass unnoticed. `scale_pair`
-#: is the control -- ABI inference alone gets it right, so it must pass today.
 PROTOTYPES = [
-    pytest.param(
-        "point_sum",
-        "unsigned int point_sum(struct Point arg0)",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "OPEN DEFECT (PDB prototypes): a by-value struct is flattened "
-                "to the register that carries it -- `point_sum(long)`. The TPI "
-                "stream describes `struct Point` fully."
-            ),
-        ),
-    ),
-    pytest.param(
-        "record_value",
-        "unsigned int record_value(struct Record * arg0)",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "OPEN DEFECT (PDB prototypes): the pointee is guessed from the "
-                "first access -- `record_value(int *)` -- not read from the PDB."
-            ),
-        ),
-    ),
-    pytest.param(
-        "mix_float",
-        "double mix_float(double arg0, float arg1)",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "OPEN DEFECT (PDB prototypes): the `double` parameter is "
-                "recovered as `float` -- both arrive in xmm and the ABI cannot "
-                "distinguish them. Mach-O x86-64 gets this RIGHT from DWARF-less "
-                "inference, so the Windows path is the outlier."
-            ),
-        ),
-    ),
-    pytest.param(
-        "widen",
-        "unsigned long long widen(unsigned int arg0)",
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "OPEN DEFECT (PDB prototypes): signedness and long-long width "
-                "are not recoverable from the ABI alone -- `widen(int)` returns "
-                "`unsigned long`."
-            ),
-        ),
-    ),
-    # The control. No struct, no double: ABI inference suffices, so this must
-    # pass. If it ever fails the problem is not the PDB.
-    pytest.param(
-        "scale_pair",
-        "unsigned int scale_pair(int arg0, short arg1, signed char arg2)",
-    ),
+    pytest.param("point_sum", "int point_sum(struct Point arg0)"),
+    # The renderer emits `typedef struct Record Record;` before this definition,
+    # so the alias is the same authoritative PDB type in valid standalone C.
+    pytest.param("record_value", "int record_value(Record * arg0)"),
+    pytest.param("mix_float", "double mix_float(double arg0, float arg1)"),
+    pytest.param("widen", "unsigned long long widen(unsigned int arg0)"),
+    pytest.param("scale_pair", "int scale_pair(int arg0, short arg1, char arg2)"),
 ]
 
 
@@ -161,6 +93,13 @@ def signature(func: str) -> str:
     raise AssertionError(f"no signature line for {func}")
 
 
+def signature_from(body: str, func: str) -> str:
+    for line in body.splitlines():
+        if func + "(" in line and "//" not in line:
+            return line.split("{")[0].strip()
+    raise AssertionError(f"no signature line for {func}:\n{body}")
+
+
 def test_the_fixture_matches_its_manifest():
     m = json.loads((FIXTURE_DIR / "MANIFEST.json").read_text())
     for name in ("types.dll", "types.pdb"):
@@ -192,33 +131,82 @@ def test_every_function_is_named_from_the_pdb():
     assert all(va > 0x1000 for va in m), sorted(hex(v) for v in m)
 
 
-# --- what does not, pinned so a fix is visible ------------------------------
+# --- authoritative declaration recovery ------------------------------------
 
 
 @pytest.mark.parametrize(("func", "expected"), PROTOTYPES)
 def test_recovered_prototype_matches_the_source_declaration(func, expected):
     """The PDB describes these types exactly; the decompiler should use them.
 
-    Four of the five are strict xfails. When PDB procedure prototypes are
-    wired up they XPASS, which under `strict=True` turns the test RED -- so
-    the fix announces itself instead of silently changing output. That is the
-    opposite of pinning today's wrong answer, which this file did first and
-    which makes a fix indistinguishable from a regression.
-
     A signature change moves the def-use census; re-run it alongside.
     """
     assert signature(func) == expected
 
 
-def test_no_struct_type_reaches_a_recovered_signature():
-    """The gap, stated once as a property rather than five pins.
+def test_all_four_entry_points_apply_the_same_pdb_declaration() -> None:
+    """Address, range, batch, and whole-image paths must not drift."""
+    import glaurung as g
 
-    Both `struct Point` and `struct Record` are fully described in the PDB's
-    TPI stream -- `find_struct_layout` returns their fields -- and neither name
-    appears in any recovered prototype.
-    """
-    sigs = " ".join(signature(f) for f in FUNCS)
-    assert not re.search(r"\bstruct\s+(Point|Record)\b", sigs), (
-        "a PDB struct type reached a signature -- the prototype wiring may "
-        f"have landed; update this lane:\n{sigs}"
+    path = str(DLL)
+    cache = str(FIXTURE_DIR)
+    va = next(
+        address
+        for address, name in g.symbols.pdb_symbol_map(path, cache).items()
+        if name == "point_sum"
     )
+    by_address = g.ir.decompile_at(path, va, style="decbench", pdb_cache=cache)
+    by_range = g.ir.decompile_range_at(
+        path, va, va, va + 14, style="decbench", pdb_cache=cache
+    )
+    [(_name, _va, by_batch, *_extra)] = g.ir.decompile_many(
+        path, [va], style="decbench", pdb_cache=cache
+    )
+    [by_all] = [
+        row[2]
+        for row in g.ir.decompile_all(path, style="decbench", pdb_cache=cache)
+        if row[0] == "point_sum"
+    ]
+
+    assert {
+        signature_from(body, "point_sum")
+        for body in (by_address, by_range, by_batch, by_all)
+    } == {"int point_sum(struct Point arg0)"}
+
+
+def test_pdb_conflict_metadata_retains_machine_inference() -> None:
+    """PDB wins rendering without deleting a contradictory inferred fact."""
+    import glaurung as g
+
+    path = str(DLL)
+    cache = str(FIXTURE_DIR)
+    va = next(
+        address
+        for address, name in g.symbols.pdb_symbol_map(path, cache).items()
+        if name == "point_sum"
+    )
+    g.ir.take_render_verification()
+    g.ir.decompile_at(path, va, style="decbench", pdb_cache=cache)
+    report = g.ir.take_render_verification()
+    conflicts = [
+        conflict
+        for conflict in report["prototype_conflicts"]
+        if conflict["function"] == "point_sum"
+    ]
+    assert conflicts, report
+    assert conflicts[0]["authoritative_source"] == "pdb"
+    assert conflicts[0]["candidate_source"] == "inferred"
+
+
+def test_without_a_pdb_cache_machine_recovery_remains_available() -> None:
+    """Optional PDB evidence must not become a requirement to decompile PE."""
+    import glaurung as g
+
+    path = str(DLL)
+    va = next(
+        address
+        for address, name in g.symbols.pdb_symbol_map(path, str(FIXTURE_DIR)).items()
+        if name == "point_sum"
+    )
+    body = g.ir.decompile_at(path, va, style="decbench")
+    assert "point_sum(" in body
+    assert signature_from(body, "point_sum") != "int point_sum(struct Point arg0)"

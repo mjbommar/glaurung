@@ -409,6 +409,11 @@ not gating.** Diary Entries 55-62.
   joined to `stack_locals`' promoted-local names.
 - [ ] PDB and inferred type facts do not yet populate the same canonical store.
   Audited 2026-08-15: 1 of 3 sources populates it, and the store has no reader.
+  **Update 2026-09-02:** addressed PDB procedure declarations now reach the
+  shared DWARF declaration/render contract and structured conflict reporting,
+  with four-entry-point tests. This improves output but deliberately does not
+  close this item: the join still occurs at the binding boundary and neither
+  PDB nor inferred facts populate the session-owned `TypeStore`.
   `TypeStore` has exactly one production insert site — `program/types/dwarf.rs`
   under `TypeAuthority::Debug` — reached from `ProgramSession`. PDB facts go to a
   Python SQLite table and to AST string hints in `ir/pdb_fields.rs`. Inferred
@@ -2235,9 +2240,12 @@ identity and provenance.
   after every earlier one lived in `session_tests.rs`. Its reach is one
   `InterpretationKind` (`StringLiteral`) over pointer-width slots in
   relocation-fixed sections; `ir/symbol_env.rs` and `ir/name_resolve.rs` are
-  still the real symbol path. **PDB import: open** — `symbols/pdb.rs` and the
-  Windows tooling exist and are real, but nothing in them touches
-  `crate::program::symbols`; `SymbolSource::Debug` is declared and never emitted.
+  still the real symbol path. **PDB import: partially connected** — addressed
+  `S_GPROC32`/`S_LPROC32` declarations now feed authoritative decompiler
+  signatures and conflict metadata through the shared debug-contract path, but
+  nothing in `symbols/pdb.rs` yet touches `crate::program::symbols`;
+  `SymbolSource::Debug` is declared and never emitted, so canonical-store import
+  remains open.
   **Call facts: started 2026-08-15, and the identity half is done** — the
   stable function identity (`FunctionId`) and the call structure it keys
   (`ProgramCallGraph`, with a deterministic SCC condensation) landed in

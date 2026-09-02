@@ -57,6 +57,7 @@ pub(crate) fn dwarf_prototype_type_is_renderable(
 ) -> bool {
     source_prototype_type_is_renderable(c_type, allow_void)
         || dwarf_type_env.aggregate_pointer(c_type).is_some()
+        || dwarf_type_env.aggregate_layout(c_type).is_some()
         || dwarf_type_env.typedef_declaration(c_type).is_some()
 }
 
@@ -137,9 +138,18 @@ pub(super) fn renderable_dwarf_structs<'a>(
     };
     let referenced = std::iter::once(&prototype.return_type)
         .chain(&prototype.parameter_types)
-        .filter_map(|c_type| dwarf_type_env.aggregate_pointer(c_type))
-        .filter(|pointer| pointer.kind == crate::debug::dwarf::DwarfTypeKind::Struct)
-        .map(|pointer| pointer.tag_name)
+        .filter_map(|c_type| {
+            dwarf_type_env
+                .aggregate_pointer(c_type)
+                .filter(|pointer| pointer.kind == crate::debug::dwarf::DwarfTypeKind::Struct)
+                .map(|pointer| pointer.tag_name)
+                .or_else(|| {
+                    dwarf_type_env
+                        .aggregate_layout(c_type)
+                        .filter(|layout| layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct)
+                        .map(|layout| layout.name.as_str())
+                })
+        })
         .collect::<std::collections::BTreeSet<_>>();
     let mut selected =
         std::collections::BTreeMap::<String, &'a crate::debug::dwarf::DwarfType>::new();

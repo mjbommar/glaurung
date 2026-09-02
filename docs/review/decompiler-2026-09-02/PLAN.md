@@ -768,23 +768,22 @@ without concealing inference disagreement.
   `src/ir/ast/decbench_render.rs`.
 - [ ] Define authority order once in the program/session fact layer: analyst,
   trusted debug declaration, inferred recovery.
-- [ ] Preserve all candidates with provenance and record a typed
+- [x] Preserve all candidates with provenance and record a typed
   `PrototypeConflict` health finding when they disagree.
 - [x] Render the authoritative declaration's types, names, and variadic tail
   when representable.
 - [ ] Keep conflict diagnostics out of scored pseudocode by default. Expose
   them through structured Python results and an explicitly annotated analyst
   render mode.
-- [ ] Apply the same contract to all four entry points and propagated call
+- [x] Apply the same contract to all four entry points and propagated call
   sites.
 
 ### Tests
 
 - [x] RED `tail_dispatch` exact prototype and parameter names.
 - [x] Analyst-over-DWARF and DWARF-over-inference authority tests.
-- [x] Stale/conflicting DWARF fixture with both facts retained. PDB remains
-  separately open below.
-- [ ] Variadic and aggregate declaration cases.
+- [x] Stale/conflicting DWARF and PDB fixtures with both facts retained.
+- [x] Variadic and aggregate declaration cases.
 - [x] Scored-style determinism test proving metadata does not change text.
 - [x] Stripped-lane recovery tests remain independent of declarations.
 
@@ -825,13 +824,51 @@ Validation at this increment:
 - native stub freshness and focused Ruff/ty checks passed. Whole-tree `ty`
   remains independently red with 335 pre-existing diagnostics.
 
-Still open in WP8: PDB procedure declarations. The PDB reader currently parses
-`LF_PROCEDURE`/`LF_MFUNCTION` type records and public-symbol addresses, but not
-the `S_GPROC32`/`S_LPROC32` module records that connect a function VA to its
-type index. Consequently the strict PDB prototype xfails in
-`python/tests/test_pdb_type_recovery.py` remain valid and must not be removed or
-called covered. Aggregate declaration coverage and the explicitly annotated
-analyst render mode also remain open.
+### Implementation evidence — 2026-09-02 PDB declaration increment
+
+Implemented locally in `src/symbols/pdb.rs`,
+`src/python_bindings/ir/dwarf_contracts.rs`,
+`src/ir/ast/dwarf_render_types.rs`, and `src/python_bindings/ir.rs`:
+
+- module `S_GPROC32`/`S_LPROC32` procedure records now join exact code RVAs to
+  `LF_PROCEDURE`/`LF_MFUNCTION` type records by TypeIndex; ID-stream records
+  that cannot be resolved against TPI are rejected rather than guessed;
+- PE image-base rebasing and CodeView build provenance travel with each joined
+  declaration, and DWARF retains priority if a binary unusually supplies both
+  trusted debug formats at one address;
+- PDB scalar spellings distinguish CodeView `int`/`unsigned int`, `long`, and
+  64-bit integer families, while tagged aggregate spelling is retained;
+- complete PDB layouts referenced by declarations enter the existing debug
+  type environment, allowing a real by-value `struct Point` parameter to be
+  rendered and defined rather than flattened to `long`; requested layouts are
+  collected in one bulk TPI scan rather than rescanning a large PDB per type;
+  and
+- all four decompile entry points consume the same map. PDB-versus-inference
+  disagreements are reported as structured `PrototypeConflict` records with
+  `authoritative_source = "pdb"`, outside scored text.
+
+`python/tests/test_pdb_type_recovery.py` now has no prototype xfails. Its real
+PE32+/PDB fixture proves five source signatures: by-value aggregate,
+pointer-to-aggregate, mixed double/float, unsigned 64-bit return, and narrow
+integer parameters. It also proves four-entry-point parity, metadata
+provenance, and no-cache best-effort fallback. During conversion, the old
+expected strings were corrected against `tests/pdb_types/types.c`: three
+functions return `int`, not `unsigned int`, and `scale_pair` declares `char`,
+not `signed char`.
+
+Validation at this increment:
+
+- `cargo test --features python-ext`: 2,839 passed, 3 ignored, plus all
+  integration targets and doc tests;
+- 12 focused Rust PDB tests, including real module-procedure joining and bulk
+  layout lookup: passed;
+- `python/tests/test_pdb_type_recovery.py`: 11 passed;
+- declaration-authority and def-use census gates: 10 passed, with no baseline
+  edit;
+- native stub freshness and focused Ruff checks: passed.
+
+Still open in WP8: defining authority in the session fact layer rather than at
+the binding boundary, and the explicitly annotated analyst render mode.
 
 ### Exit criteria
 
