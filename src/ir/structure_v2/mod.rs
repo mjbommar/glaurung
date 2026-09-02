@@ -576,6 +576,14 @@ mod tests {
             region,
             StructuredRegion::Break { .. }
         )));
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified post-tested loop should render: {report:#?}"));
+        assert!(pseudocode.contains("do {"), "{pseudocode}");
+        assert!(pseudocode.contains("} while ("), "{pseudocode}");
+        assert!(pseudocode.contains("break;"), "{pseudocode}");
+        assert!(!pseudocode.contains("goto "), "{pseudocode}");
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
         assert_eq!(report.tree, observe(&lifted, &ssa).tree);
     }

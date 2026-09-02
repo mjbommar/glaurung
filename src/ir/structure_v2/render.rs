@@ -1,6 +1,6 @@
 //! Conservative shadow-tree adapter into the existing AST and printer.
 
-use super::{StructuredRegion, StructuredTree};
+use super::{LoopKind, StructuredRegion, StructuredTree};
 use crate::ir::structure::Region;
 use crate::ir::types::LlirFunction;
 
@@ -30,11 +30,122 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
             else_region,
             ..
         } => adapt_if(*source_block, then_region, else_region.as_deref(), None),
+        StructuredRegion::Loop {
+            header,
+            kind,
+            body,
+            exits,
+        } => adapt_loop(*header, *kind, body, exits),
         StructuredRegion::SharedGoto { to, .. } => Some(Region::Goto(*to)),
-        StructuredRegion::Loop { .. }
-        | StructuredRegion::Break { .. }
+        StructuredRegion::Break { .. }
         | StructuredRegion::Continue { .. }
         | StructuredRegion::LocalGoto { .. } => None,
+    }
+}
+
+fn adapt_loop(
+    header: usize,
+    kind: LoopKind,
+    body: &StructuredRegion,
+    exits: &[super::LoopExitRegion],
+) -> Option<Region> {
+    if kind != LoopKind::PostTested || !exits.is_empty() {
+        return None;
+    }
+    let mut facts = PostTestedFacts::default();
+    collect_post_tested_facts(body, header, &mut facts)?;
+    let latch = facts.latch?;
+    let exit = facts.exit?;
+    if facts.break_targets.iter().any(|target| *target != exit) {
+        return None;
+    }
+    facts.blocks.retain(|block| *block != latch);
+    if facts.blocks.is_empty() {
+        return None;
+    }
+    Some(Region::DoWhile {
+        body: Box::new(Region::Seq(
+            facts.blocks.into_iter().map(Region::Block).collect(),
+        )),
+        cond: latch,
+        exit: Some(exit),
+    })
+}
+
+#[derive(Default)]
+struct PostTestedFacts {
+    blocks: Vec<usize>,
+    latch: Option<usize>,
+    exit: Option<usize>,
+    break_targets: Vec<usize>,
+}
+
+fn collect_post_tested_facts(
+    region: &StructuredRegion,
+    header: usize,
+    facts: &mut PostTestedFacts,
+) -> Option<()> {
+    match region {
+        StructuredRegion::Empty => Some(()),
+        StructuredRegion::Block(block) => {
+            facts.blocks.push(block.block);
+            Some(())
+        }
+        StructuredRegion::Sequence(regions) => {
+            for region in regions {
+                collect_post_tested_facts(region, header, facts)?;
+            }
+            Some(())
+        }
+        StructuredRegion::If {
+            source_block,
+            then_region,
+            else_region: Some(else_region),
+            ..
+        } if latch_exit(then_region, else_region, header).is_some() => {
+            let exit = latch_exit(then_region, else_region, header)?;
+            if facts.latch.replace(*source_block).is_some() || facts.exit.replace(exit).is_some() {
+                return None;
+            }
+            Some(())
+        }
+        StructuredRegion::If {
+            then_region,
+            else_region,
+            ..
+        } => {
+            collect_post_tested_facts(then_region, header, facts)?;
+            if let Some(else_region) = else_region {
+                collect_post_tested_facts(else_region, header, facts)?;
+            }
+            Some(())
+        }
+        StructuredRegion::Break { to, .. } => {
+            facts.break_targets.push(*to);
+            Some(())
+        }
+        StructuredRegion::Return { .. }
+        | StructuredRegion::DuplicatedReturn { .. }
+        | StructuredRegion::Loop { .. }
+        | StructuredRegion::Continue { .. }
+        | StructuredRegion::LocalGoto { .. }
+        | StructuredRegion::SharedGoto { .. } => None,
+    }
+}
+
+fn latch_exit(
+    then_region: &StructuredRegion,
+    else_region: &StructuredRegion,
+    header: usize,
+) -> Option<usize> {
+    match (then_region, else_region) {
+        (StructuredRegion::Continue { header: seen, .. }, StructuredRegion::Break { to, .. })
+        | (StructuredRegion::Break { to, .. }, StructuredRegion::Continue { header: seen, .. })
+            if *seen == header =>
+        {
+            Some(*to)
+        }
+        _ => None,
     }
 }
 

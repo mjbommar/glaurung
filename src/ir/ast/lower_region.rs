@@ -379,6 +379,9 @@ fn lower_region_inner(
         }
         Region::DoWhile { body, cond, exit } => {
             let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            if let Some(exit) = exit {
+                recover_direct_loop_breaks(&mut body_stmts, lf.blocks[*exit].start_va);
+            }
             let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
             let (cond_expr, mut latch_stmts) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);

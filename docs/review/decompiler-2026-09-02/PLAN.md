@@ -400,7 +400,10 @@ that preserves honest local gotos when required.
   branch-source identity, natural-loop identity, loop and local exit targets,
   local-region evidence, and every explicit loop-control or local-goto
   transfer. The real `early_return` tree now produces deterministic raw
-  pre-pass pseudocode with a structured `if/else` and no goto. Loop and
+  pre-pass pseudocode with a structured `if/else` and no goto. The real
+  single-exit `dowhile_atleastonce` tree also renders as `do`/`while`, with its
+  body exit recovered as `break` and no goto; the adapter requires a unique
+  typed latch and exit before accepting that spelling. Multi-exit loop and
   local-labelled rendering, post-pass comparison, and a separately normalized
   CFG view remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
@@ -414,8 +417,9 @@ that preserves honest local gotos when required.
   labelled irreducible children. Verified acyclic trees additionally record
   deterministic raw pseudocode through the existing AST/printer pipeline;
   unsupported tree vocabularies retain `None` rather than speculative text.
-  Loop/local rendering, health, post-pass pseudocode, execution, GED, and
-  runtime comparisons remain.
+  The first proven post-tested single-exit loop now renders through the same
+  path. Multi-exit/local rendering, health, post-pass pseudocode, execution,
+  GED, and runtime comparisons remain.
 
 ### RED fixtures
 
