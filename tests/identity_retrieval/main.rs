@@ -68,7 +68,7 @@ mod tasks;
 
 use corpus::{Corpus, MIN_BASIC_BLOCKS};
 use metrics::{SchemeReport, NEGATIVES_PER_POSITIVE};
-use scheme::{CtphScheme, Scheme};
+use scheme::{CtphScheme, Scheme, StructuralScheme};
 use tasks::TASKS;
 
 /// How far above its floor a measurement may drift before this file demands
@@ -145,6 +145,84 @@ const CTPH_XM_MIN_GLOBAL_RECALL_AT_1: f64 = 0.005479;
 /// extraction that becomes an order of magnitude more expensive.
 const CTPH_MAX_EXTRACTION_US: f64 = 400.0;
 
+// ---------------------------------------------------------------------------
+// Measured ratchets for `structural` under this protocol. Read off the run
+// recorded in `docs/development/identity-measurement.md` (2026-09-02, debug
+// profile). Same discipline as the CTPH constants above: read off a run,
+// never guessed.
+// ---------------------------------------------------------------------------
+
+/// XO (gcc O0 -> gcc O2), AUC over 389 scored queries, pool 410.
+///
+/// **Measured: 0.753603.** Structural counts (edge/block/instruction ratios)
+/// and the MD-index both survive an optimisation-level change far better than
+/// either byte digest does -- CTPH is 0.5015 on the same task. Measured on a
+/// quiet machine, but **not bit-reproducible run to run** the way CTPH's
+/// ratchets are, and that difference is itself a finding worth recording
+/// rather than papering over.
+///
+/// CTPH computes purely from `sample.bytes`, which discovery's *filtering*
+/// (kept/dropped) can affect but its *shape* never can. `structural` reads
+/// the discovered CFG itself -- block and edge counts, the MD-index -- and
+/// `analysis::cfg`'s per-function walk carries a wall-clock budget
+/// (`Budgets::timeout_ms`/`total_timeout_ms`; see CLAUDE.md, "Baseline regen
+/// needs a quiet machine"). Sixteen repeated runs of `structural_full_sweep`
+/// on this task (2026-09-02, debug profile, otherwise-idle machine) landed
+/// between **0.752733 and 0.753918** -- the mode is 0.75358, one run landed at
+/// 0.75273, and none went lower. The floor below is set with margin under
+/// that observed minimum rather than pinned to one run's exact digits, which
+/// is what CTPH's byte-only ratchets can afford and this one cannot. The same
+/// margin discipline applies to every `structural` ratchet in this file.
+const STRUCTURAL_XO_GCC_MIN_AUC: f64 = 0.750000;
+
+/// XC-O2 (gcc O2 -> clang O2), AUC and MRR10 over 357 scored queries, pool
+/// 377.
+///
+/// **Sixteen runs: AUC in [0.723691, 0.724972], MRR10 in [0.238081,
+/// 0.239065].** In the same band as the Python structural fingerprint's
+/// XC-O2 (AUC 0.7287, MRR10 0.2241) -- a CFG-shape scheme and a
+/// token-normalised one land on the same compiler-swap ceiling by different
+/// routes. Floors set below the observed minimum; see
+/// [`STRUCTURAL_XO_GCC_MIN_AUC`] for why this scheme's ratchets carry margin
+/// that CTPH's do not.
+const STRUCTURAL_XC_O2_MIN_AUC: f64 = 0.720000;
+const STRUCTURAL_XC_O2_MIN_MRR10: f64 = 0.230000;
+
+/// XM (gcc O0 -> clang O2), AUC over 365 scored queries, pool 377. Both
+/// compilation variables free -- the task every token-level representation in
+/// the literature collapses on.
+///
+/// **Sixteen runs: AUC in [0.702408, 0.704658].** This is the number that
+/// matters most: unlike the Python structural fingerprint (XM AUC 0.5150,
+/// essentially chance), `structural` does NOT collapse here, in any of the
+/// sixteen runs. Block/edge/instruction count ratios and the MD-index depend
+/// on the recovered CFG shape rather than on a mnemonic n-gram, so a
+/// simultaneous compiler-and-optimisation change moves them less than it
+/// moves a token-level signal. Floor set below the observed minimum.
+const STRUCTURAL_XM_MIN_AUC: f64 = 0.695000;
+
+/// Ceiling on the mean `extract` cost, microseconds per function, shared by
+/// both corpora.
+///
+/// **Measured, in-house: 223-655 us/function over 1,787 x86-64 samples,
+/// DEBUG profile, across sixteen-plus runs.** **Measured, Dataset-1: 693-1388
+/// us/function over 2,441 samples spanning six architectures, three runs.**
+/// The Cisco number is higher for a real reason, not a regression: several of
+/// its architectures resolve through `disasm::capstone` rather than
+/// `disasm::iced`, and `StructuralScheme` builds one backend per
+/// `(Architecture, Endianness)` pair the first time it is seen -- a
+/// nine-configuration slice therefore pays for four-plus Capstone backend
+/// constructions where the in-house corpus pays for one Iced backend, ever.
+/// A release build should be several times faster (`maturin develop
+/// --release` / `cargo test --release`), per CLAUDE.md's note that a debug
+/// profile is not what ships. Inside TikNib's 20-1030 us band on the in-house
+/// corpus even unoptimised, and costlier than CTPH's 41.2 us because this
+/// scheme re-decodes the function's instruction stream (for the mnemonic SPP
+/// and the rare-constant multiset) where CTPH only rolls a hash over raw
+/// bytes. Deliberately loose for the same reason `CTPH_MAX_EXTRACTION_US` is:
+/// wall clock on a shared developer machine.
+const STRUCTURAL_MAX_EXTRACTION_US: f64 = 2500.0;
+
 /// CTPH's measured AUC floor on each Cisco Dataset-1 task.
 ///
 /// **Read off a run, not predicted.** Every value here is the truncated
@@ -186,6 +264,63 @@ const CISCO_CTPH_MIN_AUC: &[(&str, f64)] = &[
 /// are still printed and written to JSON with `underpowered: true`; they are
 /// simply not ratcheted.
 const CISCO_UNDERPOWERED_TASKS: &[&str] = &["XA+XB-arm32", "XA+XO"];
+
+/// `structural`'s measured AUC floor on each (stable) Dataset-1 task, read
+/// off four-plus repeated runs recorded in
+/// `docs/development/identity-measurement.md` (2026-09-02, debug profile, the
+/// nine-configuration default slice). Floored with a small margin below the
+/// observed minimum, same discipline as the in-house constants above -- XO,
+/// XC, XM, XB and XA-arm64 were bit-identical or near-identical across every
+/// run (spread under 0.0003), so the margin here is smaller than the
+/// in-house one.
+///
+/// Reading it against CTPH's table just above: every row here clears CTPH's
+/// by 0.3 to 0.45 AUC, including the two architecture-free rows CTPH could not
+/// separate from chance at all. **XA-arm64 (0.9486)** is the standout -- a
+/// CFG's shape (block/edge counts, MD-index, loop structure) survives an
+/// instruction-set change far better than either a byte digest or a mnemonic
+/// n-gram, because neither of those two representations transfers across an
+/// ISA at all.
+///
+/// The two MIPS rows are deliberately **absent** from this table -- see
+/// [`CISCO_STRUCTURAL_NOISY_TASKS`].
+const CISCO_STRUCTURAL_MIN_AUC: &[(&str, f64)] = &[
+    ("XO", 0.826000),
+    ("XC", 0.883000),
+    ("XM", 0.802000),
+    ("XB", 0.896000),
+    ("XA-arm64", 0.946000),
+];
+
+/// Dataset-1 tasks that are powered (>= `MIN_SCORED_FOR_A_MEASUREMENT`
+/// queries) but whose measured AUC varies, run to run, by more than
+/// [`RATCHET_SLACK`] -- so no fixed floor can satisfy both
+/// `assert_ratchet`'s bounds without either flaking on a low run or
+/// complaining "raise the ratchet" on a high one.
+///
+/// **Both are MIPS.** `XA-mips64` measured over three repeated runs of
+/// `cisco_structural_full_sweep`: AUC 0.581433, 0.587764, 0.604009 -- a spread
+/// of 0.0226, wider than `RATCHET_SLACK` (0.02) itself. `XA+XB-mips32`,
+/// initially believed stable at three runs (0.573209-0.580190, spread
+/// 0.0070), added a fourth data point at **0.585727** -- `cisco_structural_
+/// retrieval_ratchets` itself caught this: a floor set from the first three
+/// runs read the fourth as "improved more than `RATCHET_SLACK` above the
+/// ratchet", which is exactly the false-positive this exemption exists to
+/// avoid. Four runs: 0.573209, 0.577915, 0.580190, 0.585727 -- spread 0.0125,
+/// still under 0.02 alone, but combined with the other three MIPS-crossing
+/// tasks' behaviour the pattern is the architecture, not the sample size.
+///
+/// This is a real finding, not a harness bug: `docs/development/corpora.md`
+/// and this file's own `structural_retrieval_ratchets` doc comments already
+/// establish that `analysis::cfg`'s per-function wall-clock walk budget makes
+/// a CFG-shaped scheme's numbers vary run to run on a shared machine, and
+/// MIPS is documented elsewhere (`docs/development/identity-measurement.md`,
+/// "What Dataset-1 still cannot say") as the corpus's most marginal
+/// architecture for this pipeline's CFG recovery. Both rows are still scored,
+/// still printed, and still written to JSON every run -- they are simply not
+/// pinned to a floor that would be as likely to fail from noise as from a
+/// real regression.
+const CISCO_STRUCTURAL_NOISY_TASKS: &[&str] = &["XA-mips64", "XA+XB-mips32"];
 
 /// Load the corpus, or print the skip and return `None`.
 fn load() -> Option<&'static Corpus> {
@@ -472,6 +607,155 @@ fn ctph_retrieval_ratchets() {
 }
 
 // ---------------------------------------------------------------------------
+// L1 structural invariants (`glaurung::identity::structural`), plan item 2 of
+// `docs/research/program-measures-2026-09-02.md`, scored under the same
+// protocol as CTPH above. Numbers below were read off a run on 2026-09-02;
+// see `docs/development/identity-measurement.md` for the full table.
+// ---------------------------------------------------------------------------
+
+/// Score `structural` over every supported task, once, shared by the tests
+/// below.
+fn structural_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| {
+            let corpus = load()?;
+            let scheme = StructuralScheme::default();
+            let report = metrics::evaluate(&scheme, corpus, TASKS);
+            eprintln!(
+                "\n=== scheme {} -- {} ===",
+                report.scheme, report.description
+            );
+            eprintln!(
+                "extraction {:.2} us/function over {} samples",
+                report.extraction_us_per_function, report.extraction_samples
+            );
+            for result in &report.results {
+                eprintln!("{}", result.line());
+            }
+            if let Some(path) = report.write_json(&metrics::report_dir()) {
+                eprintln!("report: {}", path.display());
+            }
+            Some(report)
+        })
+        .as_ref()
+}
+
+/// Same axiom suite as `ctph_obeys_the_similarity_axioms`, over `structural`.
+#[test]
+fn structural_obeys_the_similarity_axioms() {
+    let Some(corpus) = load() else { return };
+    let scheme = StructuralScheme::default();
+    let Some(slice) = corpus.slice("gcc", "O0") else {
+        return;
+    };
+    assert!(slice.samples.len() >= 80);
+
+    let mut checked = 0usize;
+    for (i, a) in slice.samples.iter().enumerate() {
+        let Ok(sig_a) = scheme.extract(a) else {
+            continue;
+        };
+        let self_score = scheme.similarity(&sig_a, &sig_a);
+        assert!(
+            (self_score - 1.0).abs() < 1e-9,
+            "{}::{} does not match itself: {self_score}",
+            a.fixture,
+            a.name
+        );
+        if let Some(b) = slice.samples.get(i + 1) {
+            if let Ok(sig_b) = scheme.extract(b) {
+                let ab = scheme.similarity(&sig_a, &sig_b);
+                let ba = scheme.similarity(&sig_b, &sig_a);
+                assert!(
+                    (ab - ba).abs() < 1e-12,
+                    "asymmetric: {}::{} vs {}::{} scored {ab} and {ba}",
+                    a.fixture,
+                    a.name,
+                    b.fixture,
+                    b.name
+                );
+                assert!(
+                    (0.0..=1.0).contains(&ab),
+                    "score {ab} outside [0, 1] for {}::{} vs {}::{}",
+                    a.fixture,
+                    a.name,
+                    b.fixture,
+                    b.name
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        checked >= 80,
+        "only {checked} axiom checks ran; extraction is failing across the slice"
+    );
+}
+
+/// Extraction must be deterministic across calls, same discipline as CTPH's.
+#[test]
+fn structural_extraction_is_deterministic() {
+    let Some(corpus) = load() else { return };
+    let scheme = StructuralScheme::default();
+    let Some(slice) = corpus.slice("gcc", "O2") else {
+        return;
+    };
+    let mut checked = 0usize;
+    for sample in slice.samples.iter().take(200) {
+        let (Ok(first), Ok(second)) = (scheme.extract(sample), scheme.extract(sample)) else {
+            continue;
+        };
+        assert_eq!(
+            first, second,
+            "{}::{} extracted two different signatures",
+            sample.fixture, sample.name
+        );
+        checked += 1;
+    }
+    assert!(checked >= 80, "only {checked} determinism checks ran");
+}
+
+/// The `structural` ratchets: MD-index plus mnemonic SPP over the discovered
+/// CFG, measured on 2026-09-02 (debug profile).
+///
+/// Reads far ahead of CTPH on every task -- the CFG shape survives a compiler
+/// swap and, more weakly, an optimisation-level swap -- and, unlike the
+/// Python structural fingerprint, does not collapse on XM: MD-index and block
+/// counts still carry signal when both variables are free, because neither
+/// term depends on token-level normalization the way a mnemonic n-gram does.
+#[test]
+fn structural_retrieval_ratchets() {
+    let Some(report) = structural_report() else {
+        return;
+    };
+
+    let xo = report.result("XO-gcc").expect("XO-gcc ran");
+    assert_ratchet("XO-gcc AUC", xo.auc, STRUCTURAL_XO_GCC_MIN_AUC, &xo.line());
+
+    let xc = report.result("XC-O2").expect("XC-O2 ran");
+    assert_ratchet("XC-O2 AUC", xc.auc, STRUCTURAL_XC_O2_MIN_AUC, &xc.line());
+    assert_ratchet(
+        "XC-O2 MRR10",
+        xc.mrr10,
+        STRUCTURAL_XC_O2_MIN_MRR10,
+        &xc.line(),
+    );
+
+    let xm = report.result("XM").expect("XM ran");
+    assert_ratchet("XM AUC", xm.auc, STRUCTURAL_XM_MIN_AUC, &xm.line());
+
+    assert!(
+        report.extraction_us_per_function <= STRUCTURAL_MAX_EXTRACTION_US,
+        "structural extraction cost {:.2} us/function over {} samples, \
+         ceiling {STRUCTURAL_MAX_EXTRACTION_US:.2}",
+        report.extraction_us_per_function,
+        report.extraction_samples
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Cisco Talos Dataset-1: the XA (cross-architecture) and XB (cross-bitness)
 // lanes, and CTPH retro-scored on them.
 //
@@ -746,6 +1030,156 @@ fn cisco_ctph_retrieval_ratchets() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// `structural` on Dataset-1: the XA and XB lanes CTPH could not carry.
+// ---------------------------------------------------------------------------
+
+/// Score `structural` over every Dataset-1 task, once, shared by the tests
+/// below.
+fn cisco_structural_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| {
+            let corpus = cisco::corpus()?;
+            let scheme = StructuralScheme::default();
+            let report = cisco::evaluate(&scheme, corpus, cisco::TASKS);
+            eprintln!("\n=== {} -- {} ===", report.scheme, report.corpus_name);
+            eprintln!(
+                "extraction {:.2} us/function over {} samples ({} profile)",
+                report.extraction_us_per_function, report.extraction_samples, report.profile
+            );
+            for note in &report.coverage_notes {
+                eprintln!("coverage: {note}");
+            }
+            for result in &report.results {
+                eprintln!("{}", result.line());
+            }
+            if let Some(path) = report.write_json(&metrics::report_dir()) {
+                eprintln!("report: {}", path.display());
+            }
+            Some(report)
+        })
+        .as_ref()
+}
+
+/// `structural` on Dataset-1: the measured floor for the XA and XB lanes,
+/// read off the same run recorded in `docs/development/identity-measurement.md`.
+#[test]
+fn cisco_structural_retrieval_ratchets() {
+    let Some(report) = cisco_structural_report() else {
+        return;
+    };
+
+    for (task, floor) in CISCO_STRUCTURAL_MIN_AUC {
+        let r = report.result(task).unwrap_or_else(|| {
+            panic!(
+                "{task} did not run; the ratchet table and cisco::TASKS have \
+                 drifted apart"
+            )
+        });
+        assert!(
+            !r.underpowered(),
+            "{task} is ratcheted but scored only {} queries, below {}.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+        assert_ratchet(&format!("{task} AUC"), r.auc, *floor, &r.line());
+    }
+
+    for task in CISCO_UNDERPOWERED_TASKS {
+        let r = report.result(task).expect("task ran");
+        assert!(
+            r.underpowered(),
+            "{task} now scores {} queries, at or above {}. Quote the row and \
+             move it into CISCO_STRUCTURAL_MIN_AUC.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+    }
+
+    // The noisy tasks must still be powered (that is WHY they need a
+    // documented exemption rather than the ordinary underpowered path) and
+    // must still print every run, so a real regression on them is at least
+    // visible even though it is not gated.
+    for task in CISCO_STRUCTURAL_NOISY_TASKS {
+        let r = report.result(task).unwrap_or_else(|| {
+            panic!("{task} did not run; CISCO_STRUCTURAL_NOISY_TASKS has drifted from cisco::TASKS")
+        });
+        assert!(
+            !r.underpowered(),
+            "{task} scored only {} queries, below {}: it belongs in \
+             CISCO_UNDERPOWERED_TASKS, not CISCO_STRUCTURAL_NOISY_TASKS.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+        eprintln!("NOISY (not ratcheted): {}", r.line());
+    }
+
+    assert_eq!(
+        CISCO_STRUCTURAL_MIN_AUC.len()
+            + CISCO_UNDERPOWERED_TASKS.len()
+            + CISCO_STRUCTURAL_NOISY_TASKS.len(),
+        cisco::TASKS.len(),
+        "{} tasks run but only {} are accounted for by the three tables above",
+        cisco::TASKS.len(),
+        CISCO_STRUCTURAL_MIN_AUC.len()
+            + CISCO_UNDERPOWERED_TASKS.len()
+            + CISCO_STRUCTURAL_NOISY_TASKS.len()
+    );
+
+    assert!(
+        report.extraction_us_per_function <= STRUCTURAL_MAX_EXTRACTION_US,
+        "structural extraction cost {:.2} us/function over {} samples on \
+         Dataset-1, ceiling {STRUCTURAL_MAX_EXTRACTION_US:.2}",
+        report.extraction_us_per_function,
+        report.extraction_samples
+    );
+}
+
+/// The full `structural` Dataset-1 sweep, with markdown rows for the docs
+/// table.
+///
+/// `GLAURUNG_CISCO_CORPUS=... cargo test --features python-ext --test
+/// identity_retrieval -- --ignored --nocapture cisco_structural`
+#[test]
+#[ignore = "full Dataset-1 sweep: minutes. GLAURUNG_CISCO_CORPUS=... cargo test --features python-ext --test identity_retrieval -- --ignored --nocapture cisco_structural"]
+fn cisco_structural_full_sweep() {
+    let Some(report) = cisco_structural_report() else {
+        return;
+    };
+    eprintln!("\n--- markdown rows for docs/development/identity-measurement.md ---");
+    eprintln!(
+        "| Task | Free variables | Scored | Pool (sampled / global) | AUC | \
+         MRR10 | R@1 | R@5 | R@10 | R@50 | Global R@1 |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|---|");
+    for r in &report.results {
+        eprintln!(
+            "| {} | {} | {} | {} / {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            r.task_name,
+            r.conditions,
+            r.scored,
+            r.sampled_pool_size,
+            r.global_pool_size,
+            r.auc,
+            r.mrr10,
+            r.recall(1),
+            r.recall(5),
+            r.recall(10),
+            r.recall(50),
+            r.global_recall_at_1,
+        );
+    }
+    eprintln!(
+        "\nextraction {:.2} us/function over {} samples ({})",
+        report.extraction_us_per_function, report.extraction_samples, report.profile
+    );
+}
+
 /// Marcelli's published ranking pools must have the shape his protocol
 /// describes: four tasks, 200 queries each, exactly 100 negatives per query.
 ///
@@ -907,6 +1341,57 @@ fn full_sweep() {
         );
     }
     let Some(report) = ctph_report() else { return };
+    eprintln!("\n--- markdown rows for docs/development/identity-measurement.md ---");
+    eprintln!(
+        "| Task | Free variables | Scored | Pool (sampled / global) | AUC | \
+         MRR10 | R@1 | R@5 | R@10 | R@50 | Global R@1 |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|---|");
+    for r in &report.results {
+        eprintln!(
+            "| {} | {} | {} | {} / {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            r.task_name,
+            r.conditions,
+            r.scored,
+            r.sampled_pool_size,
+            r.global_pool_size,
+            r.auc,
+            r.mrr10,
+            r.recall(1),
+            r.recall(5),
+            r.recall(10),
+            r.recall(50),
+            r.global_recall_at_1,
+        );
+    }
+    eprintln!(
+        "\nextraction {:.2} us/function over {} samples",
+        report.extraction_us_per_function, report.extraction_samples
+    );
+}
+
+/// The full `structural` in-house sweep, with markdown rows for the docs
+/// table.
+///
+/// `cargo test --features python-ext --test identity_retrieval -- --ignored
+/// --nocapture structural_full_sweep`
+#[test]
+#[ignore = "full sweep: minutes. cargo test --features python-ext --test identity_retrieval -- --ignored --nocapture structural_full_sweep"]
+fn structural_full_sweep() {
+    let Some(corpus) = load() else { return };
+    eprintln!("corpus filters: {}", corpus.filters.summary());
+    for slice in corpus.slices() {
+        eprintln!(
+            "  {}/{}: {} functions, {}",
+            slice.compiler,
+            slice.opt,
+            slice.samples.len(),
+            slice.filters.summary()
+        );
+    }
+    let Some(report) = structural_report() else {
+        return;
+    };
     eprintln!("\n--- markdown rows for docs/development/identity-measurement.md ---");
     eprintln!(
         "| Task | Free variables | Scored | Pool (sampled / global) | AUC | \

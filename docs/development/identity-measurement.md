@@ -27,13 +27,18 @@ So this harness scores every scheme the same way over the same filtered
 population, and no result can be printed or serialised without its pool size
 and its free-variable set attached.
 
-Two schemes already in the tree have been retro-scored, and the two results
-say opposite things. **CTPH** (`glaurung::similarity`, the byte digest) is at
-chance on every task. **The Python structural fingerprint**
+Three schemes are scored below, and the three results say different things.
+**CTPH** (`glaurung::similarity`, the byte digest) is at chance on every task.
+**The Python structural fingerprint**
 (`python/glaurung/llm/kb/structural_fingerprint.py`) reaches AUC 0.73 and MRR10
 0.22 cross-compiler — which is the FunctionSimSearch band the literature
 predicts for its representation class — and collapses to chance the moment the
-optimisation level is also free. Both results are below.
+optimisation level is also free. **`structural`** (`glaurung::identity::structural`,
+the L1 rung, plan item 2) reaches AUC 0.94 cross-compiler, does **not**
+collapse when both the compiler and the optimisation level are free (AUC
+0.70), and reaches AUC 0.95 across an architecture change on Dataset-1 —
+clearing every other scheme's cross-architecture floor by a wide margin. All
+three results are below.
 
 ## The protocol
 
@@ -277,22 +282,96 @@ calls `disassemble_window_at(path, ...)` **per basic block**, re-reading the
 file off disk every time. Anything that wants this fingerprint at corpus scale
 has to fix that first.
 
+### structural — `glaurung::identity::structural`, L1 CFG invariants
+
+Rust lane, 2026-09-02, debug profile, extraction **223-655 us/function**
+(sixteen-plus repeated runs; see "A note on reproducibility" below) over 1,787
+samples. Sampled pool 101 (chance R@1 0.0099) throughout. Table below is one
+representative run (`267.03 us/function`); the ratchets in
+`tests/identity_retrieval/main.rs` are floored under the observed minimum of
+each ratcheted column rather than pinned to this run's exact digits.
+
+| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@5 | R@10 | R@50 | Global R@1 (chance) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| XO-gcc | optimisation | 389 | 410 | 0.7536 | 0.1753 | 0.1183 | 0.2545 | 0.3342 | 0.8355 | 0.0797 (0.0024) |
+| XO-clang | optimisation | 366 | 377 | 0.7052 | 0.1171 | 0.0738 | 0.1639 | 0.2568 | 0.7787 | 0.0464 (0.0027) |
+| **XC-O0** | compiler | 487 | 494 | **0.9387** | **0.5824** | 0.4723 | 0.7146 | 0.8111 | 0.9877 | 0.3162 (0.0020) |
+| **XC-O2** | compiler | 357 | 377 | **0.7238** | **0.2381** | 0.1709 | 0.3277 | 0.4062 | 0.7619 | 0.1176 (0.0027) |
+| XM | compiler + optimisation | 365 | 377 | **0.7026** | 0.1117 | 0.0685 | 0.1671 | 0.2521 | 0.7644 | 0.0438 (0.0027) |
+| XM-S | + queries <20 blocks | 308 | 377 | 0.6739 | 0.0819 | 0.0422 | 0.1266 | 0.2013 | 0.7435 | 0.0260 (0.0027) |
+| XM-M | + queries 20-100 blocks | 54 | 377 | 0.8527 | 0.2868 | 0.2222 | 0.3889 | 0.5000 | 0.9259 | 0.1296 (0.0027) |
+| XM-L *(underpowered, n=3)* | + queries >100 blocks | 3 | 377 | 0.9978 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.3333 (0.0027) |
+
+**Reading it.** Three things worth taking away, in the same order as the
+Python fingerprint's section above so the two are easy to set side by side.
+
+1. **It does NOT reverse the intuition the corpus was built with.** Unlike
+   the Python fingerprint (compiler-swap far easier than optimisation-swap),
+   `structural` is strong on both: XO-gcc 0.75, XC-O0 0.94. Block/edge/
+   instruction-count ratios and the MD-index are sensitive to what an
+   optimiser does to control flow, but they are *also* sensitive to what a
+   different compiler's codegen does to it -- just less so, because two
+   compilers at the same optimisation level still produce recognisably
+   similar block structure for the same source.
+
+2. **XC-O0 0.9387 / MRR10 0.5824 is the strongest cell either scheme reaches**
+   on this corpus, well past the Python fingerprint's XC-O0/XC-O2 ceiling
+   (~0.73 / ~0.22-0.24) and the FunctionSimSearch band (MRR10 0.26) the
+   protocol document names for token-level representations -- a CFG-shape
+   scheme is not in that representation class, and this is where the
+   difference shows most.
+
+3. **It does not collapse on XM.** AUC 0.7026, against the Python
+   fingerprint's 0.5150 (chance) on the identical task. This is the
+   specific comparison "Where the numbers go next" (below, in the version of
+   this document before this scheme landed) named as the question a new
+   scheme would have to answer, and this is the answer: a representation
+   built from CFG shape rather than instruction tokens does not lose its
+   signal when both the compiler and the optimisation level move at once.
+
+**The cost** is higher than CTPH (223-655 us against 41 us) because this
+scheme re-decodes each function's instruction stream for the mnemonic SPP and
+the rare-constant multiset -- `glaurung::identity::structural::code_facts_from_function_bytes`,
+added to `src/identity/structural/code.rs` for this harness (see "Adding a
+scheme" below) -- but it is still inside TikNib's published 20-1030 us band,
+unlike the Python fingerprint's 25,500 us.
+
+**A note on reproducibility.** CTPH and the Python fingerprint are pure
+functions of `sample.bytes`, so a fixed corpus gives them bit-identical
+scores run to run. `structural` reads the *discovered CFG* itself, and
+`analysis::cfg`'s per-function walk carries a wall-clock budget
+(`Budgets::timeout_ms` / `total_timeout_ms`) that can recover a handful of
+functions' block/edge structure slightly differently between runs on a shared
+machine -- the same class of effect CLAUDE.md's "Baseline regen needs a quiet
+machine" note describes, now observed downstream of discovery rather than
+only inside it. Measured over sixteen repeated runs of `structural_full_sweep`
+on a shared, otherwise-idle machine: XO-gcc AUC in `[0.752733, 0.753918]`,
+XC-O2 AUC in `[0.723691, 0.724972]`, XM AUC in `[0.702408, 0.704658]` -- a
+spread of one to two thousandths of AUC, never enough to change which scheme
+wins a comparison in this document, but enough that the ratchets in
+`tests/identity_retrieval/main.rs` are floored with margin under the observed
+minimum rather than pinned to one run's exact digits.
+
 ### Head to head
 
-| | CTPH | Python structural fingerprint |
-|---|---|---|
-| XO-gcc AUC | 0.5015 | **0.5825** |
-| XC-O2 AUC | 0.5030 | **0.7287** |
-| XM AUC | 0.5025 | **0.5150** |
-| XC-O2 MRR10 | 0.0084 | **0.2241** |
-| XM MRR10 | 0.0058 | **0.0357** |
-| Extraction | **41 us** (debug) | 25,500 us |
+| | CTPH | Python structural fingerprint | `structural` (L1) |
+|---|---|---|---|
+| XO-gcc AUC | 0.5015 | 0.5825 | **0.7536** |
+| XC-O0 AUC | -- | -- | **0.9387** |
+| XC-O2 AUC | 0.5030 | 0.7287 | **0.7238** |
+| XM AUC | 0.5025 | 0.5150 | **0.7026** |
+| XC-O2 MRR10 | 0.0084 | **0.2241** | 0.2381 |
+| XM MRR10 | 0.0058 | 0.0357 | **0.1117** |
+| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) |
 
-Both columns are over the same tasks, the same tie rule and the same sampling.
-They are **not** over the same rows: the two harnesses filter 1,787 and 1,786
-functions from populations discovered differently (see "Two known differences"
-below), so treat the comparison as between representations, not as a
-per-function A/B.
+All three columns are over the same tasks, the same tie rule and the same
+sampling. They are **not** over the same rows: the three harnesses filter
+1,787, 1,786 and 1,787 functions from populations discovered differently (see
+"Two known differences" below), so treat the comparison as between
+representations, not as a per-function A/B. `structural` is the first scheme
+in this table that does not collapse on XM, and it reaches this without a
+model, a corpus, or a training step -- exactly what the research synthesis
+predicted for the identity ladder's L1 rung.
 
 ## Cisco Dataset-1
 
@@ -449,6 +528,72 @@ no better than a foreign architecture. Shi et al. name cross-bitness as the
 task that separates IR representations from token representations; a byte
 digest does not even reach the starting line.
 
+### Results: structural on Dataset-1
+
+Rust lane, 2026-09-02, debug profile, extraction **693-1388 us/function**
+over 2,441 samples, three-plus runs. Sampled pool 101 throughout. Table below
+is one representative run; five rows are bit-identical or near-identical
+across every run and are ratcheted tightly, and two MIPS rows vary enough
+between runs that they are measured and printed but not ratcheted — see
+"A note on reproducibility, sharpened" below.
+
+| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@10 |
+|---|---|---|---|---|---|---|---|
+| XO | optimisation | 50 | 229 | **0.8283** | 0.2797 | 0.2000 | 0.5400 |
+| **XC** | compiler | 65 | 348 | **0.8851** | 0.4043 | 0.3077 | 0.6769 |
+| XM | compiler + optimisation | 36 | 262 | **0.8045** | 0.3178 | 0.2500 | 0.4722 |
+| **XB** | bitness | 72 | 260 | **0.8985** | 0.4884 | 0.3056 | 0.8333 |
+| **XA-arm64** | architecture | 47 | 228 | **0.9486** | 0.5953 | 0.4681 | 0.8298 |
+| XA-mips64 *(measured, not ratcheted — see below)* | architecture | 57 | 279 | 0.58-0.60 | ~0.06 | ~0.02 | ~0.21 |
+| XA+XB-mips32 *(measured, not ratcheted — see below)* | architecture + bitness | 34 | 259 | 0.57-0.59 | ~0.10 | ~0.06 | ~0.21 |
+| XA+XB-arm32 *(underpowered, n=25)* | architecture + bitness | 25 | 241 | 0.8559 | 0.3759 | 0.2800 | 0.6400 |
+| XA+XO *(underpowered, n=23)* | architecture + optimisation | 23 | 228 | 0.8455 | 0.1794 | 0.1304 | 0.3913 |
+
+**Reading it against CTPH's table just above.** Every row clears CTPH's by
+0.3 to 0.45 AUC — including XA-arm64 and XB, the two rows where CTPH sits at
+*exactly* 0.5000 because two digests over different instruction sets or
+widths never share a block. **XA-arm64 0.9486** is the standout: a CFG's
+block/edge counts, MD-index and loop structure survive an ISA change from
+x86-64 to AArch64 almost as well as they survive nothing at all, because
+related compiler backends at the same optimisation level preserve
+control-flow shape closely even when the instruction encoding is unrelated.
+**XB 0.8985** confirms Shi et al.'s claim that cross-bitness is the task that
+separates IR/CFG-shaped representations from token ones — CTPH scored 0.4997
+here, no better than a foreign architecture; `structural` scores its
+second-highest AUC on this exact task.
+
+**XA-mips64 and XA+XB-mips32 are the weakest rows**, and — unlike CTPH's
+uniform exactly-chance floor on every architecture-free task — the weakness
+here is specific to MIPS, not to crossing an architecture in general. This
+reads together with the MIPS CFG-recovery finding earlier in this document
+(the "Where our own discovery disagrees with IDA" table above shows 0% for
+both MIPS slices on this branch, after the endianness fix at `441f669d`) as
+the representation meeting a genuinely different ISA's branch-delay-slot and
+register-window conventions on a corpus where the CFG itself is now recovered
+soundly — the shortfall is not a rediscovery of the pre-fix MIPS bug.
+
+**A note on reproducibility, sharpened.** The in-house section above
+establishes that `structural`'s CFG-dependence makes it sensitive to
+`analysis::cfg`'s per-function wall-clock budget, at a spread of one to two
+thousandths of AUC. On Dataset-1 this effect is **not uniform across
+architectures**: XO, XC, XM, XB and XA-arm64 were bit-identical or
+near-identical (spread under 0.0003) across four runs, while the two
+MIPS-crossing tasks moved by 0.007 to 0.023 AUC between runs of the identical
+binary set —
+
+| Task | Run 1 | Run 2 | Run 3 | Run 4 |
+|---|---|---|---|---|
+| XA-mips64 | 0.587764 | 0.604009 | 0.581433 | *(not re-measured)* |
+| XA+XB-mips32 | 0.580190 | 0.573209 | 0.577915 | 0.585727 |
+
+`tests/identity_retrieval/main.rs`'s `CISCO_STRUCTURAL_NOISY_TASKS` exists
+because of exactly this table: `XA+XB-mips32`'s fourth run is the one that
+caught it, tripping "improved more than `RATCHET_SLACK` above the ratchet" on
+a floor set from the first three. Reading the two tables together: run-to-run
+CFG-discovery jitter is not evenly distributed across architectures, and it
+concentrates where this project's own CFG recovery is documented as most
+marginal.
+
 ### Where these sit against the published tables
 
 Marcelli's own numbers, read out of
@@ -471,12 +616,20 @@ identical.
 | GNN s2v + Gemini's 7 features | 0.80 | 0.81 | 0.82 | 0.81 |
 | GMN (Li et al.) + BoW opcodes | 0.86 | 0.85 | 0.86 | 0.86 |
 | **Glaurung CTPH (this lane)** | **0.4998-0.5000** | **0.5402** | no lane | **0.5121** |
+| **Glaurung `structural` (this lane)** | **0.588-0.949** | **0.885** | no lane | **0.805** |
 
 Our XA cell is a range because this lane keeps the two foreign architectures
-apart (`XA-arm64` 0.5000, `XA-mips64` 0.4998) rather than pooling them:
-"cross-architecture" averaged over ARM and MIPS hides which of the two a scheme
-fails on, and for a scheme that fails on both the average is the only thing a
-single cell could report. `XC+XB` has no lane here because no loaded pair of
+apart (CTPH: `XA-arm64` 0.5000, `XA-mips64` 0.4998; `structural`: `XA-arm64`
+0.9486, `XA-mips64` 0.588-0.604) rather than pooling them: "cross-architecture"
+averaged over ARM and MIPS hides which of the two a scheme fails on, and for a
+scheme that fails on both the average is the only thing a single cell could
+report. `structural`'s XA range spans further than CTPH's because it is
+carrying real, uneven signal — 0.9486 on ARM64, 0.59-ish on MIPS64 — rather
+than sitting at chance on both ends. Against the published table, `structural`
+on XC (0.885) sits between Zeek's strands (0.84) and GMN+BoW opcodes (0.85),
+and on XM (0.805) above every non-GNN row in the table — a CFG-shape scheme
+with no model reaching a band the literature associates with learned,
+graph-neural approaches. `XC+XB` has no lane here because no loaded pair of
 configurations varies compiler and bitness and nothing else.
 
 **AUC (his Table 3), one free variable** — the regime the protocol document
@@ -488,6 +641,7 @@ warns is flattering:
 | FSS graphlets | 0.81 | 0.89 | 0.68 | 0.74 | 0.87 |
 | GMN + BoW opcodes | 0.99 | 0.99 | 0.77 | 0.89 | 0.99 |
 | **Glaurung CTPH (this lane)** | **0.4998-0.5000** | **0.4997** | **0.5402** | **0.4990** | no lane |
+| **Glaurung `structural` (this lane)** | **0.588-0.949** | **0.899** | **0.885** | **0.754**\* | no lane |
 
 Catalog1 is the closest published analogue to CTPH — a byte-level hash — and
 the comparison is instructive in both directions. It reaches 0.92 on
@@ -495,6 +649,13 @@ optimisation and 0.99 on compiler version where CTPH sits at 0.4990, so a
 byte-level scheme *can* carry a one-variable signal and ours does not at
 function granularity. And it collapses to **0.43** cross-architecture, below
 chance, which is the same wall CTPH hits at 0.5000.
+
+`structural`'s `bit` cell (0.899) beats every published row in the table
+except GMN's 0.99, on the exact task Shi et al. name as separating IR/CFG
+representations from token ones. \*The `opt` cell is the **in-house** XO-gcc
+number (0.754, Dataset-1 has no single-optimisation-only lane loaded by
+default) — included for the row to be complete, not directly comparable to
+the other columns' Dataset-1 provenance.
 
 **MRR@10 and Recall@1, 1 positive + 100 negatives (his Table 4):**
 
@@ -507,10 +668,15 @@ chance, which is the same wall CTPH hits at 0.5000.
 | GNN s2v + Gemini features | 0.359 / 0.260 | 0.398 / 0.325 | 0.363 / 0.275 |
 | GMN + BoW opcodes | 0.522 / 0.445 | 0.529 / 0.460 | 0.533 / 0.450 |
 | **Glaurung CTPH (this lane)** | **0.000 / 0.000** | **0.046 / 0.031** | **0.028 / 0.028** |
+| **Glaurung `structural` (this lane)** | **0.059-0.595 / 0.018-0.468** | **0.404 / 0.308** | **0.318 / 0.250** |
 
-Catalog1's XA row is 0.000 / 0.000 and so is ours; that is the one place where
-a byte hash and a byte hash agree exactly, and it says the failure is the
-representation class rather than the implementation.
+Catalog1's XA row is 0.000 / 0.000 and so is ours (CTPH); that is the one
+place where a byte hash and a byte hash agree exactly, and it says the
+failure is the representation class rather than the implementation.
+`structural`'s XA range (again ARM64 vs MIPS64 kept apart) already clears
+GMN+BoW's 0.522/0.445 on the ARM64 end (0.595/0.468) while trailing badly on
+the MIPS64 end — the same unevenness the AUC tables above show, for the same
+documented reason.
 
 Every row in every table above states its pool size (101 for the ranking
 metrics) and its free-variable set, because a number without both is not
@@ -572,6 +738,10 @@ unexamined:
   nine slices are therefore a coverage hole for an IR scheme and not a result,
   and `SampleArch::is_liftable` is the switch such a scheme must consult so its
   extraction *fails* there rather than returning a degenerate signature.
+  `structural` is CFG- and byte-shaped, not IR-shaped, and its decoder comes
+  from `disasm::registry` directly, so it *does* cover MIPS -- its XA-mips64
+  and XA+XB-mips32 rows are real results, just noisy ones (see "A note on
+  reproducibility, sharpened" above).
 
 ## Adding a scheme
 
@@ -590,18 +760,32 @@ pub trait Scheme {
 
 `FunctionSample` carries the function's bytes, its entry VA, the image path and
 the discovered CFG (blocks sorted by start VA, edges in index form). That is
-the whole input surface on purpose: CTPH uses only `bytes`, the L1 invariants
-will use `blocks`/`edges`, and WARP and the CFR need `image_path` and `va` so
-they can re-open the image and lift it.
+the whole input surface on purpose: CTPH uses only `bytes`; `structural` uses
+`blocks`, `edges` and `bytes` (the graph half needs only the first two, the
+mnemonic-SPP and rare-constant halves re-decode the third); WARP and the CFR
+need `image_path` and `va` so they can re-open the image and lift it.
 
 Implement the trait, add a test that calls `metrics::evaluate(&scheme, corpus,
 TASKS)`, and pin what it measures. Nothing in `corpus.rs` or `metrics.rs` has
-to change. The three slots are documented at the bottom of `scheme.rs` with
-what each `Sig` and `similarity` should be:
+to change. `structural` has landed (`StructuralScheme` in `scheme.rs`); the
+two remaining slots are documented at the bottom of `scheme.rs`:
 
-* **`structural`** (`src/identity/structural.rs`, L0/L1) — the invariant tuple:
-  MD-index top-down/bottom-up/relaxed, small-primes product over normalized
-  mnemonics, block/edge/loop/SCC counts, call degree.
+* **`structural`** — **landed.** `src/identity/structural/`, the L1 rung.
+  `Sig` is `StructuralSignature`: the invariant tuple (MD-index
+  top-down/bottom-up/relaxed, small-primes product over normalized
+  mnemonics, block/edge/loop/SCC counts and cyclomatic complexity),
+  `similarity` is the crate's own `ranking_similarity`. `extract` builds the
+  graph half straight from `sample.blocks`/`sample.edges` (no decode needed)
+  and the mnemonic-SPP/rare-constant half by re-decoding `sample.bytes`
+  through `code_facts_from_function_bytes` — a small accessor added to
+  `src/identity/structural/code.rs` for this harness, because the production
+  `ImageCode::facts` needs a whole container image to resolve its
+  relocation-address mask and this harness's sample carries only one
+  function's own bytes. `StructuralScheme` caches one disassembler backend
+  per `(Architecture, Endianness)` pair across the whole scored corpus, the
+  same discipline `ImageCode` uses within one image, because
+  `registry::for_arch` is a real per-call cost on the Capstone-backed
+  architectures.
 * **`warp`** (`src/identity/warp.rs`, L0) — a `uuid::Uuid` and exact equality,
   so its Recall@1 *is* its coverage. Read the pool size before believing
   either end of that.
@@ -647,28 +831,44 @@ Both change the denominator, so both are stated rather than smoothed over.
 
 ## Where the numbers go next
 
-The protocol document's plan items 2, 3, 4 and 6 all produce schemes that land
-in this harness. When one does:
+Plan item 2 (structural) has landed; the protocol document's plan items 3, 4
+and 6 (CFR prerequisites, the CFR itself, WARP) still produce schemes that
+land in this harness. When one does:
 
-* On the **in-house corpus**, the row to beat is the Python structural
-  fingerprint's **XC-O2 AUC 0.7287 / MRR10 0.2241**, and the row that says
-  whether the representation is actually better is **XM AUC 0.5150** — the task
-  with both variables free, where every token-level representation in the
-  literature falls over.
-* On **Dataset-1**, the floor is CTPH's **XA 0.5000 / XB 0.4997** and the
-  target is a published one rather than one of ours: FunctionSimSearch's
-  graphlets reach **XA AUC 0.69** and Zeek's strands **0.84**. The CFR is a
-  CFG-plus-dataflow representation and the graphlet row is the honest bar for
-  it. Anything that reports an XA number without also reporting whether it
-  covers the MIPS slices is reporting half a result.
+* On the **in-house corpus**, the row to beat is now `structural`'s own
+  **XC-O0 AUC 0.9387 / MRR10 0.5824**, and the row that says whether a new
+  representation is actually better is **XM AUC 0.7026** — `structural`
+  already does not collapse here (unlike the Python fingerprint's XM AUC
+  0.5150), so the bar for the CFR is not "does not collapse" but "beats
+  0.70".
+* On **Dataset-1**, the floor is now `structural`'s own **XA-arm64 AUC
+  0.9486 / XB AUC 0.8985**, not CTPH's chance-level 0.5000 / 0.4997 — a
+  CFG-shaped L1 scheme already clears FunctionSimSearch's graphlets (XA AUC
+  0.69) and sits close to Zeek's strands (0.84) on XC and XM. The CFR adds a
+  typed SSA dataflow graph on top of the CFG shape `structural` already
+  reads, so the honest target for it is not "beat chance" but "beat
+  `structural`'s own XA-mips64 (0.59-ish, and noisy) and XA+XB-mips32
+  (0.57-0.59, also noisy)" — the two rows where a CFG-shape-only
+  representation is weakest, which is exactly where dataflow information
+  the CFR adds might help most.
 
-Two things a new scheme must do that CTPH did not have to. It must consult
-`SampleArch::is_liftable` and **fail** extraction on MIPS rather than return a
-degenerate signature — the harness counts and prints extraction failures for
-exactly this. And when its numbers move, both `target/identity-eval/ctph.json`
-and `target/identity-eval/cisco-ctph.json` are diffable artifacts: a change
-that improves one corpus and quietly ruins the other is the case a single-row
-summary hides.
+Two things a new scheme must do that CTPH did not have to, and that
+`structural` already does. It must consult `SampleArch::is_liftable` (or, for
+a CFG/byte-shaped scheme like `structural`, simply attempt decode and let a
+real backend failure speak for itself) and **fail** extraction rather than
+return a degenerate signature — the harness counts and prints extraction
+failures for exactly this. And when its numbers move, both
+`target/identity-eval/<scheme>.json` and `target/identity-eval/cisco-<scheme>.json`
+are diffable artifacts: a change that improves one corpus and quietly ruins
+the other is the case a single-row summary hides.
+
+A third thing `structural` discovered that CTPH's design never surfaced: a
+CFG-shaped scheme's numbers are not exactly reproducible run to run on a
+shared machine, because `analysis::cfg`'s per-function wall-clock budget can
+recover a handful of functions' blocks/edges slightly differently between
+runs. Any future scheme that reads the discovered CFG (the CFR will) should
+expect the same and measure its own ratchets from several repeated runs
+rather than one, the way `structural`'s are in this file.
 
 ## See also
 

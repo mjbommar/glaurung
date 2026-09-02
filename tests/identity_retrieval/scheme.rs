@@ -20,6 +20,8 @@
 
 use std::fmt;
 
+use glaurung::identity::structural::code_facts_from_function_bytes;
+
 use crate::corpus::FunctionSample;
 
 /// Why a scheme could not produce a signature for one sample.
@@ -132,8 +134,128 @@ impl Scheme for CtphScheme {
     }
 }
 
+/// L1 structural invariants (`glaurung::identity::structural`): MD-index
+/// (top-down, bottom-up, relaxed), mnemonic small-primes product,
+/// block/edge/loop/SCC counts and cyclomatic complexity, over the CFG
+/// `glaurung::analysis::cfg` already discovered.
+///
+/// # What this scheme sees, and what it does not
+///
+/// `FunctionSample` carries exactly what discovery returns for one function:
+/// its own byte range, plus blocks and index-form edges. That is enough for
+/// the graph half of a [`StructuralSignature`] outright --
+/// [`glaurung::identity::structural::CfgShape`] is built from block start
+/// addresses and edge pairs, nothing else -- and for the instruction-count
+/// term, already summed by discovery into each block's `instruction_count`.
+/// Two terms need a re-decode of the function's own bytes: mnemonic SPP and
+/// the rare-constant multiset. [`code_facts_from_function_bytes`] is the
+/// accessor added to `src/identity/structural/code.rs` for exactly this --
+/// see its doc comment for what it cannot do without a surrounding image
+/// (mask a constant that is really a pointer, detect string references).
+/// [`ranking_similarity`] never reads `string_refs`, `calls_out_direct`,
+/// `calls_out_indirect` or `callers_in`, so none of that costs the score
+/// anything; `callers_in` is fixed at 0 because this harness scores one
+/// function at a time with no call graph in view -- the field's own
+/// documented reading of a zero.
+///
+/// A sample with no discovered blocks is refused rather than scored as an
+/// empty shape: an empty [`StructuralSignature`] would compare as "similar to
+/// every other empty one", which is exactly the degenerate-signature failure
+/// [`SchemeError`] exists to make visible instead of silent.
+///
+/// # Backend cache
+///
+/// `code_facts_from_function_bytes` takes a caller-built `&mut
+/// registry::Backend` rather than building one itself, because
+/// `registry::for_arch` is a real cost on the Capstone-backed architectures
+/// and `extract` is called once per function -- thousands of times per corpus
+/// slice. `StructuralScheme` holds one backend per `(Architecture,
+/// Endianness)` pair, built the first time that combination is seen and
+/// reused for every function after, the same discipline `ImageCode` uses
+/// within one image. Measured effect on Cisco Dataset-1 (six architectures,
+/// 2,441 samples): rebuilding a backend on every call reads ~1.4 ms/function;
+/// this brings a single-architecture slice back down to the same tens of
+/// microseconds `mnemonic_spp` and `rare_constants` alone would cost.
+#[derive(Default)]
+pub struct StructuralScheme {
+    backends: std::cell::RefCell<
+        std::collections::HashMap<
+            (
+                glaurung::core::disassembler::Architecture,
+                glaurung::core::binary::Endianness,
+            ),
+            glaurung::disasm::registry::Backend,
+        >,
+    >,
+}
+
+impl Scheme for StructuralScheme {
+    type Sig = glaurung::identity::structural::StructuralSignature;
+
+    fn name(&self) -> &str {
+        "structural"
+    }
+
+    fn description(&self) -> &str {
+        "L1 structural invariants: MD-index (top-down/bottom-up/relaxed), \
+         mnemonic small-primes product, block/edge/loop/SCC counts, over the \
+         discovered CFG (glaurung::identity::structural)"
+    }
+
+    fn extract(&self, sample: &FunctionSample) -> Result<Self::Sig, SchemeError> {
+        if sample.blocks.is_empty() {
+            return Err(SchemeError::new("no basic blocks in this sample"));
+        }
+        let block_vas: Vec<u64> = sample.blocks.iter().map(|b| b.start_va).collect();
+        let edges: Vec<(u64, u64)> = sample
+            .edges
+            .iter()
+            .filter_map(|&(from, to)| {
+                let f = *block_vas.get(from)?;
+                let t = *block_vas.get(to)?;
+                Some((f, t))
+            })
+            .collect();
+        let shape = glaurung::identity::structural::CfgShape::new(&block_vas, &edges, sample.va);
+
+        let ranges: Vec<(u64, u64)> = sample
+            .blocks
+            .iter()
+            .map(|b| (b.start_va, b.end_va))
+            .collect();
+
+        let key = (sample.arch.architecture, sample.arch.endianness);
+        let mut backends = self.backends.borrow_mut();
+        if !backends.contains_key(&key) {
+            let Some(backend) = glaurung::disasm::registry::for_arch(key.0, key.1) else {
+                return Err(SchemeError::new(format!(
+                    "no disassembler backend for {:?}/{:?}",
+                    key.0, key.1
+                )));
+            };
+            backends.insert(key, backend);
+        }
+        let backend = backends.get_mut(&key).expect("just inserted above");
+        let facts = code_facts_from_function_bytes(&sample.bytes, sample.va, &ranges, backend);
+
+        Ok(
+            glaurung::identity::structural::StructuralSignature::from_parts(
+                sample.va,
+                sample.name.clone(),
+                &shape,
+                &facts,
+                0,
+            ),
+        )
+    }
+
+    fn similarity(&self, a: &Self::Sig, b: &Self::Sig) -> f64 {
+        glaurung::identity::structural::ranking_similarity(a, b)
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Slots for the three schemes being built in parallel with this harness.
+// Slots for the two schemes still to come.
 //
 // Each is a `Scheme` impl of maybe twenty lines plus a test that calls
 // `crate::metrics::evaluate(&scheme, corpus, &tasks)`. Nothing else in this
@@ -141,12 +263,6 @@ impl Scheme for CtphScheme {
 // `todo!()` types: an empty impl that compiles is an impl that can be
 // forgotten, and a scheme that extracts nothing would score 0.0 across the
 // board and look like a measurement rather than an absence.
-//
-// * `structural` -- `src/identity/structural.rs`, the L1 rung. `Sig` is the
-//   invariant tuple (MD-index top-down/bottom-up/relaxed, small-primes product
-//   over normalized mnemonics, block/edge/loop/SCC counts, call degree).
-//   `similarity` is a normalized distance over that tuple. Everything it needs
-//   is already on `FunctionSample`: `blocks`, `edges`, `bytes`.
 //
 // * `warp` -- `src/identity/warp.rs`, the L0 rung. `Sig` is a `uuid::Uuid`
 //   (UUIDv5 over relocation-masked basic-block bytes). `similarity` is exact

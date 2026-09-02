@@ -375,11 +375,80 @@ an unchanged control-flow shape -- which this sample pair does not contain.
 
 Measured 2026-09-02, debug build.
 
-**Not measured**, and therefore not claimed anywhere: retrieval quality
-(Recall@1, MRR10) at any pool size, cross-architecture behaviour, and
-behaviour under differential inlining. Those need the measurement harness and
-the protocol in the research synthesis -- pool size and free-variable set next
-to every number -- and belong to that lane, not this one.
+Retrieval quality (Recall@1, MRR10) at any pool size, cross-architecture
+behaviour, and behaviour under differential inlining are now measured -- see
+[Retrieval](#retrieval) below. Still not measured, and therefore not claimed
+anywhere: obfuscation lanes and pools above the low hundreds, both of which
+need a corpus this project does not ingest (see
+[`docs/development/identity-measurement.md`](../development/identity-measurement.md)).
+
+---
+
+## Retrieval
+
+`docs/research/program-measures-2026-09-02.md`'s plan item 2, scored by the
+harness in `tests/identity_retrieval/` under the protocol in
+[`docs/development/identity-measurement.md`](../development/identity-measurement.md):
+AUC, MRR10 and Recall@k over a 101-candidate sampled pool (1 twin + 100
+negatives), on both the in-house fixture matrix and Cisco Talos Dataset-1.
+Full tables, pool sizes and free-variable sets are in that document; this
+section is what the plan predicted against what was found.
+
+**The prediction, from the research synthesis:** structural invariants "answer
+the question the identity ladder assigns to L1 -- which functions changed
+between two builds? -- essentially outright," on the strength of MD-index and
+block/edge counts carrying real signal within one toolchain, while explicitly
+not crossing an optimisation level or an architecture (the SPP is a
+per-ISA mnemonic multiset; the MD-index moves whenever the optimiser changes
+the edge set).
+
+**What retrieval found, on the in-house corpus (gcc/clang, O0/O2, x86-64):**
+same-toolchain retrieval is strong, cross-toolchain retrieval is real but
+weaker, and -- the one place the measurement disagrees with a naive reading of
+the prediction -- it does **not** collapse when both the compiler and the
+optimisation level are free (XM AUC in the low 0.70s across sixteen repeated
+runs), unlike the Python token-normalised structural fingerprint scored
+against the same protocol (XM AUC 0.5150, chance). The reason is the same one
+this page states throughout: block/edge/instruction count *ratios* and the
+MD-index depend on the recovered CFG's shape, not on a mnemonic n-gram, so a
+compiler-and-optimisation change moves them less than it moves a token-level
+signal built to survive register reallocation rather than block splitting.
+
+**What retrieval found, on Cisco Talos Dataset-1 (adds architecture and
+bitness as free variables):** this is where the "does not cross an
+architecture" half of the prediction is sharply, unevenly true. **XA-arm64
+AUC 0.9486** -- a CFG's shape survives an ISA change from x86-64 to AArch64
+better than either a byte digest (CTPH: exactly 0.5000, chance) or the
+Python fingerprint (not measured cross-architecture, but token-level
+representations are the class the literature reports collapsing here) --
+because ARM64 and x86-64 code generated from the same optimisation level by
+related compiler backends preserves block and edge structure quite closely.
+**XA-mips64 (0.59-0.60 across repeated runs) and XA+XB-mips32 (0.57-0.58)**
+are markedly weaker, and not for a reason internal to the representation:
+`docs/development/corpora.md` and
+[`docs/development/identity-measurement.md`](../development/identity-measurement.md#cisco-dataset-1)
+record `glaurung::analysis::cfg` disagreeing with IDA's block counts on MIPS
+before the endianness fix at `441f669d`; on this branch the disagreement
+measures at 0% for both MIPS slices, so the residual MIPS shortfall is the
+representation meeting a genuinely different ISA's branch-delay-slot and
+register-window conventions, not a rediscovery of the pre-fix bug.
+
+**What retrieval cannot do, confirmed rather than assumed.** No pool above the
+low hundreds (Marcelli's 10k/100k rungs need z3, which is not ingested), no
+obfuscation lane, and no measurement of the differential-inlining failure mode
+the literature names as dominant (both corpora disable inlining or are
+single-translation-unit builds where it barely applies). And a finding the
+plan did not anticipate: unlike CTPH, whose signature is a pure function of
+`sample.bytes` and therefore bit-reproducible run to run, `structural`'s AUC on
+a fixed corpus **is not exactly reproducible** -- `analysis::cfg`'s
+per-function wall-clock walk budget can recover a handful of functions'
+control-flow graphs slightly differently between runs (CLAUDE.md's own
+"Baseline regen needs a quiet machine" note, now observed downstream of
+discovery rather than only in it). Measured spread over sixteen repeated runs
+of the in-house XO-gcc task: AUC in `[0.7527, 0.7539]`. The ratchets in
+`tests/identity_retrieval/main.rs` are floored with margin under the observed
+minimum for exactly this reason, rather than pinned to one run's exact digits
+the way CTPH's are.
 
 ---
 

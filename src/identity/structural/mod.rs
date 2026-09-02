@@ -60,7 +60,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::call_graph::CallGraph;
 use crate::core::function::Function;
 
-pub use code::{CodeFacts, ImageCode};
+pub use code::{code_facts_from_function_bytes, CodeFacts, ImageCode};
 pub use graph::CfgShape;
 pub use mdindex::{md_index_agreement, md_index_bottom_up, md_index_relaxed, md_index_top_down};
 pub use spp::{mnemonic_spp, normalize_mnemonic};

@@ -369,6 +369,114 @@ fn is_control_transfer(m: &str) -> bool {
     )
 }
 
+/// Compute code facts directly from a function's own byte range, without a
+/// surrounding container image to mask constants against.
+///
+/// [`ImageCode::facts`] needs the whole image because it excludes any
+/// immediate that resolves to an address inside it and detects string
+/// references by reading bytes at that address. A caller holding only a
+/// function's own bytes -- `tests/identity_retrieval`'s `FunctionSample`,
+/// which carries a discovered CFG and a byte slice but not the surrounding
+/// container -- cannot do either, so this keeps every non-branch immediate at
+/// or above [`RARE_CONSTANT_MIN`] and always reports zero string references.
+/// Call and branch targets are still excluded, via the same mnemonic table
+/// [`ImageCode::facts`] uses, so cross-build address churn does not pollute
+/// the constant multiset; the only cost is [`CodeFacts::string_refs`], which
+/// [`super::ranking_similarity`] does not read.
+///
+/// `blocks` is a list of `(start_va, end_va)` pairs; `base_va` is the address
+/// `bytes[0]` corresponds to. A decode failure or an out-of-range block ends
+/// that block's walk early -- the same recovery `ImageCode::facts` uses -- so
+/// the return is always a real (if partial) answer, never a failure.
+///
+/// `backend` is a caller-supplied, already-built decoder rather than an
+/// `(Architecture, Endianness)` pair this function would build one from:
+/// [`registry::for_arch`] constructs a fresh `Backend` (a real cost on the
+/// Capstone-backed architectures), and a caller scoring a corpus of many
+/// functions in the same architecture -- the identity-retrieval harness's use
+/// case -- should build it once and reuse it, the same discipline
+/// [`ImageCode`] uses within one image.
+pub fn code_facts_from_function_bytes(
+    bytes: &[u8],
+    base_va: u64,
+    blocks: &[(u64, u64)],
+    backend: &mut registry::Backend,
+) -> CodeFacts {
+    let mut mnemonics: Vec<String> = Vec::new();
+    let mut facts = CodeFacts::empty();
+    let mut constants: Vec<u64> = Vec::new();
+
+    let mut ranges: Vec<(u64, u64)> = blocks.to_vec();
+    ranges.sort_unstable();
+    ranges.dedup();
+
+    let addr_bits = backend.architecture().address_bits();
+
+    for (start, end) in ranges {
+        if end <= start || start < base_va {
+            continue;
+        }
+        let mut pc = start;
+        while pc < end {
+            let off = (pc - base_va) as usize;
+            if off >= bytes.len() {
+                break;
+            }
+            let window_end = (off + 16).min(bytes.len());
+            let Ok(addr) = crate::core::address::Address::new(
+                crate::core::address::AddressKind::VA,
+                pc,
+                addr_bits,
+                None,
+                None,
+            ) else {
+                break;
+            };
+            let Ok(insn) = backend.disassemble_instruction(&addr, &bytes[off..window_end]) else {
+                break;
+            };
+            let len = insn.length as usize;
+            if len == 0 {
+                break;
+            }
+            facts.instructions = facts.instructions.saturating_add(1);
+
+            let normalized = spp::normalize_mnemonic(&insn.mnemonic);
+            let control = is_control_transfer(&normalized);
+            if is_call(&normalized) {
+                let direct = insn
+                    .operands
+                    .iter()
+                    .any(|o| o.kind == OperandKind::Immediate);
+                if direct {
+                    facts.calls_out_direct = facts.calls_out_direct.saturating_add(1);
+                } else {
+                    facts.calls_out_indirect = facts.calls_out_indirect.saturating_add(1);
+                }
+            }
+            if !control {
+                for op in &insn.operands {
+                    if op.kind == OperandKind::Immediate {
+                        if let Some(v) = op.immediate {
+                            if v.unsigned_abs() >= RARE_CONSTANT_MIN {
+                                constants.push(v as u64);
+                            }
+                        }
+                    }
+                }
+            }
+            mnemonics.push(normalized);
+            pc += len as u64;
+        }
+    }
+
+    constants.sort_unstable();
+    constants.truncate(RARE_CONSTANT_CAP);
+    facts.rare_constants = constants;
+    facts.mnemonic_spp = spp::mnemonic_spp(mnemonics.iter().map(|s| s.as_str()));
+    facts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +507,64 @@ mod tests {
         assert_eq!(f.mnemonic_spp, 1);
         assert_eq!(f.instructions, 0);
         assert!(f.rare_constants.is_empty());
+    }
+
+    /// `code_facts_from_function_bytes` decodes `mov eax, 0x12345678; ret`
+    /// (`b8 78 56 34 12 c3`) with no image and no `Function` -- the exact
+    /// surface the identity-retrieval harness's `FunctionSample` offers.
+    #[test]
+    fn facts_from_function_bytes_decode_without_an_image() {
+        let mut backend = registry::for_arch(
+            Architecture::X86_64,
+            crate::core::binary::Endianness::Little,
+        )
+        .expect("x86-64 always has a backend");
+        let bytes = [0xb8, 0x78, 0x56, 0x34, 0x12, 0xc3];
+        let facts =
+            code_facts_from_function_bytes(&bytes, 0x1000, &[(0x1000, 0x1006)], &mut backend);
+        assert_eq!(facts.instructions, 2);
+        assert_eq!(facts.calls_out_direct, 0);
+        assert_eq!(facts.calls_out_indirect, 0);
+        assert_eq!(facts.rare_constants, vec![0x1234_5678]);
+        assert_ne!(
+            facts.mnemonic_spp, 1,
+            "two real mnemonics, not the empty product"
+        );
+    }
+
+    /// The whole point of taking `&mut Backend` rather than building one
+    /// internally: the same backend, reused across two different functions'
+    /// worth of bytes, must not leak state between the calls (a stale Thumb
+    /// bit, a half-finished decode) and must decode the second call exactly
+    /// as if it had a fresh backend.
+    #[test]
+    fn a_shared_backend_decodes_two_functions_independently() {
+        let mut backend = registry::for_arch(
+            Architecture::X86_64,
+            crate::core::binary::Endianness::Little,
+        )
+        .expect("x86-64 always has a backend");
+
+        let mov_ret = [0xb8, 0x78, 0x56, 0x34, 0x12, 0xc3];
+        let first =
+            code_facts_from_function_bytes(&mov_ret, 0x1000, &[(0x1000, 0x1006)], &mut backend);
+
+        let nop_ret = [0x90, 0xc3];
+        let second =
+            code_facts_from_function_bytes(&nop_ret, 0x2000, &[(0x2000, 0x2002)], &mut backend);
+
+        assert_eq!(first.instructions, 2);
+        assert_eq!(second.instructions, 2);
+        assert!(second.rare_constants.is_empty());
+        assert_ne!(
+            first.mnemonic_spp, second.mnemonic_spp,
+            "different instruction streams must not share a product"
+        );
+
+        // Re-running the first bytes through the same, now-reused backend
+        // must reproduce the first call exactly.
+        let first_again =
+            code_facts_from_function_bytes(&mov_ret, 0x1000, &[(0x1000, 0x1006)], &mut backend);
+        assert_eq!(first, first_again);
     }
 }
