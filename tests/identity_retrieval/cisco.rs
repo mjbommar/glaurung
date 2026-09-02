@@ -80,13 +80,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use glaurung::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
+use glaurung::analysis::cfg::analyze_functions_bytes_with_seeds;
 use glaurung::core::function::Function;
 use object::{Object, ObjectSection};
 
 use crate::corpus::{
-    cfg_facts, is_plt_or_thunk, normalized_instruction_hash, FilterCounts, FunctionSample,
-    SampleArch, Slice, MIN_BASIC_BLOCKS,
+    cfg_facts, harness_budgets, is_plt_or_thunk, normalized_instruction_hash, FilterCounts,
+    FunctionSample, SampleArch, Slice, MIN_BASIC_BLOCKS,
 };
 
 /// The environment variable that points at an unpacked Dataset-1.
@@ -704,7 +704,7 @@ fn load_image(
     };
 
     let seeds: Vec<u64> = rows.iter().map(|r| r.fva).collect();
-    let (functions, _cg) = analyze_functions_bytes_with_seeds(&data, &Budgets::default(), &seeds);
+    let (functions, _cg) = analyze_functions_bytes_with_seeds(&data, &harness_budgets(), &seeds);
     let by_va: BTreeMap<u64, &Function> =
         functions.iter().map(|f| (f.entry_point.value, f)).collect();
 
