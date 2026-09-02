@@ -188,7 +188,10 @@ scheduled independently of the longer pipeline/SSA migrations.
   region/AST node now retains those typed transfers and materializes each
   independently verified exit region at its exact branch; the real fixture
   emits deterministic `while (1)` pseudocode with both returns and no goto.
-  Nested-local rendering, post-pass execution/GED/runtime comparison, output
+  The four currently renderable real WP4 fixtures now also record deterministic
+  parseable C after the shared source-level preparation pass, all from the same
+  adapted AST; each passes a real host `cc -fsyntax-only` test. Nested-local
+  rendering, full-pipeline and execution/GED/runtime comparison, output
   measurement, and promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.

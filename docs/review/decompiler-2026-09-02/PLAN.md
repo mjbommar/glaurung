@@ -407,16 +407,21 @@ that preserves honest local gotos when required.
   `two_entry_loop` local-labelled tree now renders through the existing
   labelled-CFG fallback: every retained local goto resolves to an emitted
   label, exit paths and their verified terminal clones remain present, and no
-  irreducible edge is hidden behind speculative structure. Nested local regions
-  and nested local-region rendering remains open. A RED experiment on
+  irreducible edge is hidden behind speculative structure. Nested local-region
+  rendering remains open. A RED experiment on
   `loop_return_on_neg` confirmed that v1's one-distinguished-exit `While` could
   not encode its two exit-specific paths without reversing a branch or moving a
   verified terminal clone. The region/AST boundary now has an explicit
   `MultiExitLoop`: its body retains typed exit transfers, lowering materializes
   each independently verified exit region at that exact transfer, and the real
   fixture emits deterministic `while (1)` pseudocode with both return paths and
-  no goto. Post-pass comparison and a separately normalized CFG view remain
-  open.
+  no goto. Every currently renderable real WP4 tree (`early_return`,
+  `dowhile_atleastonce`, `loop_return_on_neg`, and top-level `two_entry_loop`)
+  now also records deterministic parseable C derived from that same adapted AST
+  by the shared source-level preparation pass; all four texts pass a real host
+  `cc -fsyntax-only` test. This is not yet the full production pass stack:
+  pipeline-context comparison, execution, and a separately normalized CFG view
+  remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -432,8 +437,10 @@ that preserves honest local gotos when required.
   path. Verified top-level local-labelled trees now render honest, resolved
   gotos plus separately owned labelled definitions and exit paths. Verified
   multi-exit loops now render through the explicit region/AST node rather than
-  selecting one distinguished exit. Nested-local rendering, health, post-pass
-  pseudocode, execution, GED, and runtime comparisons remain.
+  selecting one distinguished exit. Each renderable RED fixture additionally
+  records deterministic post-preparation parseable C and compiles under the host
+  syntax gate. Nested-local rendering, health, full-pipeline pseudocode,
+  execution, GED, and runtime comparisons remain.
 
 ### RED fixtures
 

@@ -4,9 +4,19 @@ use super::{LoopKind, StructuredRegion, StructuredTree};
 use crate::ir::structure::Region;
 use crate::ir::types::LlirFunction;
 
-/// Render a verified tree through the production AST lowerer when every shape
-/// has a faithful v1-region spelling.
-pub(super) fn render_raw_pseudocode(lf: &LlirFunction, tree: &StructuredTree) -> Option<String> {
+/// Two deterministic views derived from one faithfully adapted shadow AST.
+pub(super) struct RenderedPseudocode {
+    pub raw: String,
+    pub prepared: String,
+}
+
+/// Render a verified tree through the production AST lowerer and the shared
+/// source-level preparation pass when every shape has a faithful region
+/// spelling.
+pub(super) fn render_pseudocode(
+    lf: &LlirFunction,
+    tree: &StructuredTree,
+) -> Option<RenderedPseudocode> {
     let mut regions = vec![adapt_region(&tree.root)?];
     for local in &tree.local_regions {
         regions.push(Region::Unstructured(
@@ -18,7 +28,12 @@ pub(super) fn render_raw_pseudocode(lf: &LlirFunction, tree: &StructuredTree) ->
     }
     let region = Region::Seq(regions);
     let function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
-    Some(crate::ir::ast::render_c(&function))
+    let raw = crate::ir::ast::render_c(&function);
+    let prepared = crate::ir::ast::prepare_for_decbench(&function);
+    Some(RenderedPseudocode {
+        raw,
+        prepared: crate::ir::ast::render_decbench(&prepared),
+    })
 }
 
 fn adapt_region(region: &StructuredRegion) -> Option<Region> {

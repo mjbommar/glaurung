@@ -51,6 +51,8 @@ pub struct ShadowReport {
     pub tree: Option<StructuredTree>,
     /// Deterministic pre-pass C-like text for faithfully adaptable tree shapes.
     pub raw_pseudocode: Option<String>,
+    /// Deterministic parseable C after the shared source-level preparation pass.
+    pub prepared_pseudocode: Option<String>,
     pub honest_gotos: Vec<HonestGotoEvidence>,
     pub duplicated_tails: Vec<DuplicatedTail>,
     pub verification_errors: Vec<CandidateError>,
@@ -108,9 +110,11 @@ pub(crate) fn observe_cfg(
                 } else {
                     None
                 };
-                let raw_pseudocode = tree
+                let rendered = tree
                     .as_ref()
-                    .and_then(|tree| render::render_raw_pseudocode(lf, tree));
+                    .and_then(|tree| render::render_pseudocode(lf, tree));
+                let raw_pseudocode = rendered.as_ref().map(|rendered| rendered.raw.clone());
+                let prepared_pseudocode = rendered.map(|rendered| rendered.prepared);
                 ShadowReport {
                     block_count,
                     edge_count,
@@ -120,6 +124,7 @@ pub(crate) fn observe_cfg(
                     candidate,
                     tree,
                     raw_pseudocode,
+                    prepared_pseudocode,
                     honest_gotos: local_regions.evidence().to_vec(),
                     duplicated_tails,
                     loops,
@@ -137,6 +142,7 @@ pub(crate) fn observe_cfg(
                     candidate: None,
                     tree: None,
                     raw_pseudocode: None,
+                    prepared_pseudocode: None,
                     honest_gotos: Vec::new(),
                     duplicated_tails: Vec::new(),
                     loops,
@@ -155,6 +161,7 @@ pub(crate) fn observe_cfg(
             candidate: None,
             tree: None,
             raw_pseudocode: None,
+            prepared_pseudocode: None,
             honest_gotos: Vec::new(),
             duplicated_tails: Vec::new(),
             loops,
@@ -502,10 +509,10 @@ mod tests {
             .unwrap_or_else(|| panic!("verified acyclic tree should render: {report:#?}"));
         assert!(pseudocode.contains("if ("), "{pseudocode}");
         assert!(!pseudocode.contains("goto "), "{pseudocode}");
-        assert_eq!(
-            report.raw_pseudocode,
-            observe(&lifted, &compute_ssa(&lifted)).raw_pseudocode
-        );
+        let repeated = observe(&lifted, &compute_ssa(&lifted));
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
+        assert_prepared_c(&report);
     }
 
     fn lift_real_fixture(binary_name: &str, function_name: &str) -> LlirFunction {
@@ -534,6 +541,26 @@ mod tests {
             .unwrap_or_else(|| panic!("{function_name} is discovered"));
         crate::ir::lift_function::lift_function_from_image(image, function)
             .unwrap_or_else(|error| panic!("{function_name} lifts: {error}"))
+    }
+
+    fn assert_prepared_c(report: &ShadowReport) {
+        let text = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified tree should have prepared C: {report:#?}"));
+        let directory = tempfile::tempdir().expect("temporary C syntax directory");
+        let source = directory.path().join("shadow.c");
+        std::fs::write(&source, text).expect("write prepared shadow C");
+        let output = std::process::Command::new("cc")
+            .args(["-fsyntax-only", "-std=gnu89", "-w", "-fno-builtin"])
+            .arg(&source)
+            .output()
+            .expect("host C compiler is available");
+        assert!(
+            output.status.success(),
+            "prepared shadow output must parse:\n{}\n{text}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -584,8 +611,11 @@ mod tests {
         assert!(pseudocode.contains("} while ("), "{pseudocode}");
         assert!(pseudocode.contains("break;"), "{pseudocode}");
         assert!(!pseudocode.contains("goto "), "{pseudocode}");
+        assert_prepared_c(&report);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
-        assert_eq!(report.tree, observe(&lifted, &ssa).tree);
+        let repeated = observe(&lifted, &ssa);
+        assert_eq!(report.tree, repeated.tree);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
     }
 
     #[test]
@@ -679,9 +709,18 @@ mod tests {
         assert!(pseudocode.contains("while (1)"), "{pseudocode}");
         assert!(pseudocode.matches("return").count() >= 2, "{pseudocode}");
         assert!(!pseudocode.contains("goto "), "{pseudocode}");
-        assert_eq!(report.raw_pseudocode, observe(&lifted, &ssa).raw_pseudocode);
+        let repeated = observe(&lifted, &ssa);
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        let prepared = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified multi-exit loop should prepare as C: {report:#?}"));
+        assert!(prepared.contains("while (1)"), "{prepared}");
+        assert!(!prepared.contains("goto "), "{prepared}");
+        assert_prepared_c(&report);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
-        assert_eq!(report.tree, observe(&lifted, &ssa).tree);
+        assert_eq!(report.tree, repeated.tree);
     }
 
     fn tree_has_region(
@@ -761,7 +800,10 @@ mod tests {
                 "unresolved {target} in:\n{pseudocode}"
             );
         }
-        assert_eq!(report.raw_pseudocode, observe(&lifted, &ssa).raw_pseudocode);
+        let repeated = observe(&lifted, &ssa);
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        assert_prepared_c(&report);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 
@@ -805,6 +847,10 @@ mod tests {
             region,
             StructuredRegion::LocalGoto { .. }
         )));
+        assert!(
+            report.prepared_pseudocode.is_none(),
+            "nested local regions remain an explicit render decline: {report:#?}"
+        );
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 }
