@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::build;
 use super::cfg::{natural_loop_body, Cfg};
+use super::loop_shape::terminal_path_stays_outside_loop;
 use super::path_predicates::can_reach;
 use super::region::Region;
 
@@ -106,7 +107,12 @@ pub(super) fn detect_switch_shape(
             // it at function scope. Case-local blocks dominated by the
             // dispatch are uniquely owned even when they sit outside the
             // natural-loop body.
-            let mut arm_visited = visited.clone();
+            let mut arm_visited =
+                if !loop_body.contains(&a) && terminal_path_stays_outside_loop(a, loop_body, cfg) {
+                    HashSet::from([dispatch])
+                } else {
+                    visited.clone()
+                };
             let arm = build(a, cfg, &mut arm_visited, arm_stop);
             commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             arm
@@ -162,9 +168,23 @@ pub(super) fn detect_guarded_switch_shape(
     let all_arms = cfg.succs[dispatch].clone();
     let mut arms = all_arms.clone();
     let mut case_labels = cfg.case_labels[dispatch].clone();
-    let default_position = arms.iter().position(|arm| *arm == default_entry)?;
-    arms.remove(default_position);
-    case_labels.remove(default_position);
+    // A sparse table can encode holes by pointing table slots at the range
+    // guard's default target. A dense table has no such slot: the guard alone
+    // owns its out-of-range edge. Both are the same source-level switch. Remove
+    // the default-labelled table destination when present, but do not require
+    // one merely to prove the guarded shape.
+    match arms.iter().position(|arm| *arm == default_entry) {
+        Some(default_position) => {
+            arms.remove(default_position);
+            case_labels.remove(default_position);
+        }
+        // A dense dispatch nested in a loop can bypass directly to the
+        // enclosing latch. That boundary is already proven by the loop
+        // detector; without it, accepting an arbitrary non-table default
+        // mistakes ordinary nested conditionals for range guards.
+        None if Some(default_entry) == enclosing_stop => {}
+        None => return None,
+    }
     if arms.is_empty() {
         return None;
     }
@@ -190,7 +210,13 @@ pub(super) fn detect_guarded_switch_shape(
             // once after the switch instead of being duplicated in the case.
             Region::Seq(Vec::new())
         } else if let Some((_, loop_body)) = &enclosing_loop {
-            let mut arm_visited = visited.clone();
+            let mut arm_visited = if !loop_body.contains(&arm)
+                && terminal_path_stays_outside_loop(arm, loop_body, cfg)
+            {
+                HashSet::from([guard, dispatch])
+            } else {
+                visited.clone()
+            };
             let region = build(arm, cfg, &mut arm_visited, join);
             commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             region
@@ -244,11 +270,15 @@ fn switch_arm_build_order(
         .enumerate()
         .map(|(position, arm)| (arm, position))
         .collect();
+    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
     if arms.iter().any(|arm| {
-        Some(*arm) != shared_join
-            && cfg.preds[*arm]
-                .iter()
-                .any(|pred| *pred != dispatch && !positions.contains_key(pred))
+        let has_external_predecessor = cfg.preds[*arm]
+            .iter()
+            .any(|pred| *pred != dispatch && !positions.contains_key(pred));
+        let borrowed_terminal_exit = enclosing_loop.as_ref().is_some_and(|(_, body)| {
+            !body.contains(arm) && terminal_path_stays_outside_loop(*arm, body, cfg)
+        });
+        Some(*arm) != shared_join && has_external_predecessor && !borrowed_terminal_exit
     }) {
         return None;
     }

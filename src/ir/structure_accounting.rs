@@ -443,7 +443,14 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             }
             if let Some(default) = formal_default {
                 if let Some(entry) = structural_entry(default) {
-                    out.insert((*dispatch, entry));
+                    // Sparse tables can send explicit hole slots to the same
+                    // target as the range guard. Dense tables cannot: their
+                    // default is owned solely by the guard and is represented
+                    // as C `default` only after the two machine decisions are
+                    // fused. Do not invent a dispatch edge in that dense case.
+                    if edges[*dispatch].iter().any(|edge| edge.to == entry) {
+                        out.insert((*dispatch, entry));
+                    }
                 }
             }
             if let Some(j) = *join {

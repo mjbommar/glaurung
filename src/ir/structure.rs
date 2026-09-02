@@ -64,7 +64,7 @@ use fallback::{
 use if_shape::detect_if_shape;
 use loop_shape::{
     detect_bottom_tested_loop, detect_natural_loop, detect_raw_dispatch_loop,
-    detect_raw_multi_latch_loop, loop_break_shape,
+    detect_raw_multi_latch_loop, has_dispatch_natural_loop, loop_break_shape,
 };
 pub use region::{entry_block, Region};
 use switch_shape::{detect_guarded_switch_shape, detect_switch_shape};
@@ -225,12 +225,13 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
     // the other return (clang -O2 binary search was the real canary).  Preserve
     // the complete labelled CFG until the region algebra grows owned multi-
     // exits; `Unstructured` is explicitly the lossless fallback contract.
-    let has_dispatch_loop_fallback = (0..cfg.succs.len())
-        .any(|header| detect_raw_dispatch_loop(header, cfg, &mut HashSet::new()).is_some());
+    let has_dispatch_loop_fallback =
+        (0..cfg.succs.len()).any(|header| has_dispatch_natural_loop(header, cfg));
+    let has_multi_latch_distinct_exits = has_multi_latch_loop_with_distinct_exits(cfg);
+    let has_conditional_join_beyond_loop = has_loop_conditional_with_join_beyond_loop(cfg);
+    let has_inner_reentry = has_inner_loop_exit_that_reenters_via_outer_cycle(cfg);
     if !has_dispatch_loop_fallback
-        && (has_multi_latch_loop_with_distinct_exits(cfg)
-            || has_loop_conditional_with_join_beyond_loop(cfg)
-            || has_inner_loop_exit_that_reenters_via_outer_cycle(cfg))
+        && (has_multi_latch_distinct_exits || has_conditional_join_beyond_loop || has_inner_reentry)
     {
         return Region::Unstructured((0..lf.blocks.len()).collect());
     }

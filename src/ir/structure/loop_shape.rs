@@ -28,20 +28,18 @@ pub(super) struct LoopRegion {
     pub(super) exit: Option<usize>,
 }
 
-/// Recognise a natural loop that contains exactly one resolved indirect dispatch.
+/// Whether `header` owns a reducible natural loop containing one typed dispatch.
 ///
-/// A state-machine loop has no binary header condition that can be represented
-/// as `While`: the table cases either update state and return to the dispatch,
-/// or leave through one of several terminal paths. The ordinary switch builder
-/// treats the dispatch as a one-shot choice and strands its back-edge. Own the
-/// dominator-proven natural-loop body as labelled CFG instead. Every transfer
-/// remains explicit during AST lowering, including all dispatch cases and all
-/// exits.
-pub(super) fn detect_raw_dispatch_loop(
-    header: usize,
-    cfg: &Cfg,
-    visited: &mut HashSet<usize>,
-) -> Option<LoopRegion> {
+/// This is deliberately broader than [`detect_raw_dispatch_loop`]. A one-exit
+/// dispatch loop can remain an ordinary `DoWhile` containing a `Switch`, so it
+/// should not become a raw labelled loop. It must still suppress the
+/// function-wide distinct-exit fallback long enough for that ordinary builder
+/// to run.
+pub(super) fn has_dispatch_natural_loop(header: usize, cfg: &Cfg) -> bool {
+    dispatch_natural_loop_parts(header, cfg).is_some()
+}
+
+fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usize>, Vec<usize>)> {
     let tails: Vec<usize> = cfg.preds[header]
         .iter()
         .copied()
@@ -62,14 +60,14 @@ pub(super) fn detect_raw_dispatch_loop(
         return None;
     }
 
-    let dispatches: Vec<usize> = body
+    let dispatch_count = body
         .iter()
         .copied()
         .filter(|block| cfg.is_explicit_switch_dispatch(*block))
-        .collect();
-    let [_dispatch] = dispatches.as_slice() else {
+        .count();
+    if dispatch_count != 1 {
         return None;
-    };
+    }
     let mut exits: Vec<usize> = body
         .iter()
         .copied()
@@ -79,6 +77,24 @@ pub(super) fn detect_raw_dispatch_loop(
         .into_iter()
         .collect();
     exits.sort_unstable();
+    Some((body, exits))
+}
+
+/// Recognise a natural loop that contains exactly one resolved indirect dispatch.
+///
+/// A state-machine loop has no binary header condition that can be represented
+/// as `While`: the table cases either update state and return to the dispatch,
+/// or leave through one of several terminal paths. The ordinary switch builder
+/// treats the dispatch as a one-shot choice and strands its back-edge. Own the
+/// dominator-proven natural-loop body as labelled CFG instead. Every transfer
+/// remains explicit during AST lowering, including all dispatch cases and all
+/// exits.
+pub(super) fn detect_raw_dispatch_loop(
+    header: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+) -> Option<LoopRegion> {
+    let (body, exits) = dispatch_natural_loop_parts(header, cfg)?;
     // One normal-exhaustion path plus one terminal case is representable by
     // the ordinary structured loop/switch builder. Raw labelled CFG is needed
     // only once the dispatch has additional distinct exits that the current
@@ -344,7 +360,11 @@ pub(super) fn detect_bottom_tested_loop(
 /// entering any loop block, cycling outside it, or ending without an explicit
 /// machine return is not.  This is the ownership proof used by the narrow
 /// bottom-tested-loop switch exception above.
-fn terminal_path_stays_outside_loop(start: usize, loop_body: &HashSet<usize>, cfg: &Cfg) -> bool {
+pub(super) fn terminal_path_stays_outside_loop(
+    start: usize,
+    loop_body: &HashSet<usize>,
+    cfg: &Cfg,
+) -> bool {
     fn visit(
         block: usize,
         loop_body: &HashSet<usize>,

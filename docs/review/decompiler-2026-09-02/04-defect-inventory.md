@@ -119,6 +119,11 @@ By compiler: clang 29, gcc 13, rustc 6. Fixtures: `102_duffs_device` 6,
 Pinned without xfail: `test_decompiler_curriculum_corpus.py:304` hard-codes
 `33_knapsack:clang:O2:knapsack_best_value = "fail"` (vectorised 0/1 knapsack).
 
+Post-review status (2026-09-02): the clang-14 `fsm` row above is resolved. The
+test is no longer an xfail; it proves a four-case switch inside `do ... while`,
+recompilation, and a 64-input execution differential. The table remains the
+review-time inventory rather than silently rewriting its historical count.
+
 Rust: 3 `#[ignore]` (`src/ir/effect_census_tests.rs:246` prints a histogram;
 `src/ir/memory_objects/partition_tests.rs:845`;
 `src/ir/memory_objects/shape_tests.rs:461`) and 0 `#[should_panic]`.

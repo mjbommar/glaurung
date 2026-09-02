@@ -204,27 +204,6 @@ def test_gcc_o0_state_dispatch_recovers_switch_and_round_trips(tmp_path: Path) -
     assert results["fsm"]["status"] == "pass", results
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN DEFECT (clang 14 -O2): `fsm` recovers no `switch` -- it emits "
-        "`goto L_1153` / `goto L_113b`. Located precisely, and the fix is "
-        "known but NOT SAFE to land yet; see "
-        "docs/development/test-estate/10-ci-environment-gap.md.\n\n"
-        "It is not jump-table recognition: `analyze_functions_path_with_stats` "
-        "reports `resolved_dispatches: [{va: 0x1166, arms: 4}]`, so the table "
-        "base is followed across the block boundary and all four arms become "
-        "CFG edges. The CFG is `body {2,3,4,5,6,7}`, `exits {9}`, back edge "
-        "3->4, dispatch at block 5 with one arm leaving to the exit.\n\n"
-        "`loop_shape::detect_raw_dispatch_loop` declines it on "
-        "`exits.len() < 3`, whose comment says a lower count is "
-        "'representable by the ordinary structured loop/switch builder'. For "
-        "this shape no structured builder takes it either, so the back edge "
-        "ends up owned by nothing, `structure_accounting` reports "
-        "`BackEdgeUnowned{from:3,to:4}`, and the whole function falls back to "
-        "`Unstructured`."
-    ),
-)
 def test_cross_block_table_base_recovers_clang_o2_switch(tmp_path: Path) -> None:
     """A table base materialized in the loop preheader must reach its dispatch."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "statemachine.c"

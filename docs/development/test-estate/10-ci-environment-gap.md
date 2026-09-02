@@ -139,11 +139,11 @@ to find the assumptions that a single machine cannot see. Fixing them
 individually and hastily would reproduce the thing this whole estate plan
 exists to stop: tests that report a state nobody has checked.
 
-## Appendix — the `Unstructured` dispatch loop, located and measured
+## Appendix — the `Unstructured` dispatch loop, resolved after measurement
 
-The clang-14 `fsm` failure was traced to a single guard, and a candidate fix
-was tried and **deliberately not landed**. Recording both, because the
-measurement is the useful part.
+The clang-14 `fsm` failure was traced to a single guard. The original broad
+candidate was correctly rejected; the narrow structured fix landed later.
+Both are recorded because the measurement explains the required distinction.
 
 ### Where it is
 
@@ -261,3 +261,21 @@ The generalisation is in `structural.py` beside the constants: a readability
 census answers only for the population it covers, and "no regressions" from a
 partial population is indistinguishable from "no regressions". The execution
 differential was green at every step of this -- all three times.
+
+### Narrow resolution — 2026-09-02
+
+The landed approach does not relax `detect_raw_dispatch_loop`. Instead it
+separates “this is a typed dispatch natural loop” from “this loop requires raw
+labelled-CFG rendering,” allowing the ordinary `DoWhile` builder to run for the
+single-exit shape. Guarded-switch recovery now accepts a dense table whose
+out-of-range edge goes directly to the proven enclosing latch, while continuing
+to require a table-backed default everywhere else. A terminating case that
+shares the function epilogue is built through borrowed ownership, and typed-edge
+accounting distinguishes a guard-only dense default from a sparse table slot.
+
+The former strict xfail is now a permanent real-binary regression. Under the
+pinned clang-14 toolchain it renders all four cases inside `do ... while`, emits
+no computed-jump placeholder or label goto, recompiles, and matches the original
+on 64 deterministic fuzz inputs. The 57 focused structuring tests also remain
+green, including the negative nested-conditional controls that rejected the
+initial broad version.

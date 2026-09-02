@@ -632,6 +632,12 @@ one authoritative set of case edges.
   `206::dispatch_in_loop` lane now
   preserves a guarded byte selector through register zero-extension, decodes
   exact cases `0..6`, and renders that typed switch inside its verified loop.
+  The pinned clang-14 `statemachine::fsm` lane now carries the already-resolved
+  four-way dispatch through the ordinary structurer as a dense guarded switch
+  inside `do ... while`. Its guard-only default goes to the proven latch, and
+  its terminating case borrows the shared return epilogue without taking global
+  ownership. The former strict xfail is green with no goto or indirect-jump
+  placeholder.
   Other compiler/optimization and named fixture lanes remain.
 - [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
@@ -641,7 +647,9 @@ one authoritative set of case edges.
   The clang-O2 `154::wide154_dense_effects` cell passes all 34 deterministic
   cases with zero pre-render undefined reads. The default v1 path remains its
   committed `fail`, and every other newly recovered switch cell still needs
-  the same explicit execution evidence before WP5 can complete.
+  the same explicit execution evidence before WP5 can complete. The pinned
+  clang-14 `statemachine::fsm` default-v1 path now also recompiles and matches
+  the original across 64 deterministic fuzz inputs.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
