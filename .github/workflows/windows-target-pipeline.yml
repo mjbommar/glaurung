@@ -6,7 +6,7 @@ on:
       - ".github/workflows/windows-target-pipeline.yml"
       - "Cargo.lock"
       - "Cargo.toml"
-      - "docs/windows-port/**"
+      - "docs/history/windows-port-2026-05/**"
       - "pyproject.toml"
       - "python/glaurung/cli/commands/windows.py"
       - "python/glaurung/llm/agents/windows_evidence_review.py"

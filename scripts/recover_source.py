@@ -2,7 +2,7 @@
 """End-to-end source recovery pipeline driver (v2).
 
 Walks a binary through the 25-tool Layer 0→Layer 4 ladder defined in
-docs/llm/SOURCE_RECOVERY_TOOLS.md and writes a recovered source tree
+docs/reference/llm-source-recovery-tools.md and writes a recovered source tree
 to the chosen output directory.
 
 Changes in v2:

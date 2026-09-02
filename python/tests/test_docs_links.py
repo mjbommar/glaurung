@@ -44,13 +44,7 @@ EXTRA_CODE_FILES = ("pytest.ini", *TOP_LEVEL)
 #: Paths that do not resolve today, with the reason each is tolerated. Phase 2
 #: of the documentation rewrite clears this list; an entry that stops matching
 #: anything is simply unused, so a fix never has to touch this file.
-KNOWN_BROKEN: dict[str, str] = {
-    # `CLAUDE.md` documents the data-model patterns at a path that has not
-    # existed for some time; the real directory is `docs/architecture/
-    # data-model/`. `CLAUDE.md` is rewritten wholesale in a later phase of the
-    # documentation rewrite, so it is not patched piecemeal here.
-    "docs/data-model/": "CLAUDE.md; corrected when CLAUDE.md is rewritten",
-}
+KNOWN_BROKEN: dict[str, str] = {}
 
 MARKDOWN_LINK = re.compile(r"\[[^\]\n]*\]\(([^)\s]+)\)")
 FENCE = re.compile(r"^\s*(```|~~~)")

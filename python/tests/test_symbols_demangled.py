@@ -5,7 +5,7 @@ pattern the rest of the suite uses. They used to be written CWD-relative as
 `"../samples/..."`, which resolves *outside* the repository from every
 plausible working directory, so both parameters skipped on "sample not
 present" and this file had never run (see
-`docs/development/test-estate/01-reachability.md` 1.4).
+`docs/history/development/test-estate/01-reachability.md` 1.4).
 """
 
 from pathlib import Path

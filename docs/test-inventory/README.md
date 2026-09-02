@@ -1,5 +1,7 @@
 # Test inventory
 
+> **Kind:** reference · **Status:** generated
+
 A machine-readable index of every test, fixture, asset and harness in this
 repository, with the field that matters most: **what actually runs it.**
 

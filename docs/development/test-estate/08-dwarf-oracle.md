@@ -1,5 +1,7 @@
 # Phase 8 — Ground truth at scale: the DWARF twin oracle
 
+> **Kind:** plan · **Status:** proposed
+
 ## The problem this solves
 
 The execution differential is the strongest evidence we have, and it has a

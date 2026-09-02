@@ -1,5 +1,7 @@
 # Phase 3 — Fuzz the code that eats hostile bytes
 
+> **Kind:** plan · **Status:** proposed
+
 ## The problem
 
 Glaurung's threat model is *malicious binaries designed to break the

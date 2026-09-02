@@ -11,4 +11,4 @@ timeout-ms: 600000
 pdb-cache-dir: tests/fixtures/msvc-pdb
 symbol-cache-dir: .glaurung/symbol-cache
 symbol-server: https://msdl.microsoft.com/download/symbols
-corpus-manifest: docs/windows-port/pe-project-facts.yaml
+corpus-manifest: docs/history/windows-port-2026-05/pe-project-facts.yaml

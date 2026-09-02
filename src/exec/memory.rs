@@ -8,7 +8,7 @@
 //! a per-byte slow path.
 //!
 //! Permissions, dirty-page COW snapshots, and MMIO/hook regions arrive in later
-//! increments (`docs/design/execution-engine/02-architecture/machine-state.md`).
+//! increments (`docs/history/execution-engine-2026-06/architecture/machine-state.md`).
 
 use std::collections::HashMap;
 

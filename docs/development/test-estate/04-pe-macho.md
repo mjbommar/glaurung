@@ -1,5 +1,7 @@
 # Phase 4 — PE and Mach-O become real fixture lanes
 
+> **Kind:** plan · **Status:** proposed
+
 ## The problem
 
 Windows is the project's **active frontier** (`CLAUDE.md`), with a broad PE
@@ -12,7 +14,7 @@ ARM64, DWARF, chained-fixup, or universal-binary matrix.
 
 The current evidence and implementation contract superseding the rough counts
 in this phase are in
-[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../pe-pdb-macho-parity-plan-2026-08-31.md).
+[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../roadmap/pe-pdb-macho-parity.md).
 
 Both are fixable on this Linux box with tools already installed and verified
 present:

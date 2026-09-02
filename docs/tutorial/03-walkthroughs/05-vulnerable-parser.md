@@ -1,5 +1,7 @@
 # §Q — Vulnerable parser
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: use Glaurung to navigate a deliberately unsafe parser while keeping the
 vulnerability claim grounded in shipped source and instruction-level evidence,
 not pseudocode appearance alone.

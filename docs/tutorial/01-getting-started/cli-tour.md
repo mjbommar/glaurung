@@ -1,10 +1,12 @@
 # §C — CLI tour
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: learn the main command families and when they read a binary directly
 versus when they use a persistent `.glaurung` project.
 
 This is an orientation, not a promise that every top-level command fits one
-workflow. Use the [CLI cheatsheet](../reference/cli-cheatsheet.md) and
+workflow. Use the [CLI cheatsheet](../../reference/cli.md) and
 `uv run glaurung <command> --help` for the complete current surface.
 
 ## Set up one binary and project

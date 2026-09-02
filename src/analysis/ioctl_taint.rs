@@ -14,7 +14,7 @@
 //! they care about (NULL-deref of SystemBuffer, double-fetch on
 //! Type3InputBuffer, etc.).
 //!
-//! See `docs/design/ioctl-taint.md` for the broader design.
+//! See `docs/architecture/ioctl-taint.md` for the broader design.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 

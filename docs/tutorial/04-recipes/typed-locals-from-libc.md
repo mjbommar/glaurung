@@ -1,5 +1,7 @@
 # §V — Typed locals from call prototypes
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: inspect stack types propagated from known call prototypes and distinguish
 automated refinement from a manual type assertion.
 

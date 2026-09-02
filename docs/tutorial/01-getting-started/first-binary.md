@@ -1,5 +1,7 @@
 # §B — Analyze your first binary
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: turn a shipped ELF into a persistent `.glaurung` project, locate useful
 functions, and inspect one address without mistaking pseudocode for proof.
 
@@ -55,7 +57,7 @@ sqlite3 tutorial.glaurung -cmd ".mode column" \
 The `set_by` column records who supplied a name. In this sample both landmarks
 are currently analyzer-provided; do not silently treat them as manual or debug
 facts. See [`sqlite-fnames.out`](../_fixtures/01-first-binary/sqlite-fnames.out)
-and the [`set_by` reference](../reference/set-by-precedence.md).
+and the [`set_by` reference](../../reference/provenance.md).
 
 Use the CLI for normal navigation and SQLite for audits or automation. Avoid
 editing the database directly: CLI and REPL writes preserve provenance and undo

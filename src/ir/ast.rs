@@ -800,7 +800,7 @@ fn cmpop_sym_c(op: CmpOp) -> &'static str {
 //     pushes/pops, nops — into comments or elisions rather than invalid tokens.
 // Recovered types are used where the middle layer proves them; unresolved
 // values retain the conservative `long` ABI-word fallback. See
-// `docs/analysis/decompiler/pipeline.md`.
+// `docs/reference/decompiler-passes.md`.
 
 /// The C integer type for a `(signed, byte-width)` pair — used to render
 /// `Expr::Cast` (`(int)`, `(unsigned char)`, …).

@@ -968,7 +968,7 @@
    "consumes": [
     "samples/binaries/**"
    ],
-   "gated_by": "not part of pytest/cargo test; consumed by .github/workflows/samples-docker.yml (jq validation of file count) and referenced in docs/tutorial/reference/sample-corpus.md",
+   "gated_by": "not part of pytest/cargo test; consumed by .github/workflows/samples-docker.yml (jq validation of file count) and referenced in docs/reference/sample-corpus.md",
    "size_bytes": 156572,
    "notes": "Not read by any test or Rust/Python source file - its only consumers found are the samples-docker.yml CI workflow (a shallow jq '.files | length' sanity check) and a doc reference. samples/README.md instructs maintainers to regenerate and review it after any corpus change, but nothing programmatically verifies it stays in sync with the tree (e.g. it is not diffed against a fresh `find` of samples/binaries/ in CI).",
    "territory": "assets",
@@ -1834,7 +1834,7 @@
    "consumes": [],
    "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
    "size_bytes": 10923,
-   "notes": "needs BOTH solver features, so it builds only in the feature-build-gate's ninth lane; referenced from docs/axeyum-integration/",
+   "notes": "needs BOTH solver features, so it builds only in the feature-build-gate's ninth lane; referenced from docs/history/axeyum-integration-2026-07/",
    "territory": "rust-tests",
    "reach": "unreachable"
   },
@@ -1929,7 +1929,7 @@
    "consumes": [],
    "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
    "size_bytes": 6906,
-   "notes": "declared with required-features = [\"solver-axeyum\"]; referenced from docs/axeyum-integration/03-architecture.md",
+   "notes": "declared with required-features = [\"solver-axeyum\"]; referenced from docs/history/axeyum-integration-2026-07/03-architecture.md",
    "territory": "rust-tests",
    "reach": "unreachable"
   },
@@ -2325,7 +2325,7 @@
    "consumes": [],
    "gated_by": "nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks it via cargo check --all-targets)",
    "size_bytes": 684,
-   "notes": "declared with required-features = [\"solver-axeyum\"]; referenced from docs/axeyum-integration/capture/README.md",
+   "notes": "declared with required-features = [\"solver-axeyum\"]; referenced from docs/history/axeyum-integration-2026-07/capture-README.md",
    "territory": "rust-tests",
    "reach": "unreachable"
   },
@@ -10948,8 +10948,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_candidate_start_worklist_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 5068,
@@ -11216,7 +11216,7 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_corpus_curator_agent.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
     "samples/binaries/platforms/windows/vendor/realworld",
     "tests/fixtures/msvc-pdb/MANIFEST.json (or the realworld corpus MANIFEST.json)"
    ],
@@ -11244,8 +11244,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_data_ref_confidence_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 2902,
@@ -11466,8 +11466,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_function_body_split_candidates_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 2943,
@@ -11493,7 +11493,7 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_function_boundary_diff_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 2884,
@@ -11597,8 +11597,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_function_start_explain_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 6317,
@@ -11624,8 +11624,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_functionization_review_agent.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 3905,
@@ -11708,7 +11708,7 @@
    ],
    "gated_by": "default suite",
    "size_bytes": 6706,
-   "notes": "no CI workflow runs this; local `uv run pytest` only; reads docs/windows-port/glaurung_vs_ghidra_vendor_windows.json plus the realworld MANIFEST.json; the sibling test_windows_ghidra_parity_regression.py needs the /nas4 corpus instead",
+   "notes": "no CI workflow runs this; local `uv run pytest` only; reads docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows.json plus the realworld MANIFEST.json; the sibling test_windows_ghidra_parity_regression.py needs the /nas4 corpus instead",
    "territory": "python-tests",
    "reach": "default-suite"
   },
@@ -11807,8 +11807,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_import_thunk_catalog_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 2647,
@@ -11858,8 +11858,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_interactive_analyst_agent.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2",
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
    ],
@@ -13201,7 +13201,7 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_rule_authoring_agent.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
     "python/tests/fixtures/windows/functionization_rule_fixtures.yaml",
     "tests/fixtures/windows/functionization_rule_fixtures.yaml"
    ],
@@ -13358,8 +13358,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_simd_start_classifier_tool.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
    ],
    "gated_by": "default suite",
    "size_bytes": 3334,
@@ -13676,8 +13676,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_target_pipeline_agent.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2",
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
    ],
@@ -13777,8 +13777,8 @@
    ],
    "runs_by": "uv run pytest python/tests/test_windows_triage_worklist_agent.py",
    "consumes": [
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+    "docs/history/windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2",
     "samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2"
    ],
@@ -13999,8 +13999,8 @@
    "count": 5,
    "count_of": "@Test methods",
    "size_bytes": 7611,
-   "runs_by": "mvn test  (or `mvn -q test package` per docs/parsers/java/JVM_AGENTIC_ANALYSIS_PLAN.md)",
-   "gated_by": "nothing runs it: the runtime auto-build path uses -DskipTests explicitly, and no CI workflow invokes Maven at all -- only documented manually in docs/parsers/java/JVM_AGENTIC_ANALYSIS_PLAN.md",
+   "runs_by": "mvn test  (or `mvn -q test package` per docs/history/java-jvm-2026-05/jvm-agentic-analysis-plan.md)",
+   "gated_by": "nothing runs it: the runtime auto-build path uses -DskipTests explicitly, and no CI workflow invokes Maven at all -- only documented manually in docs/history/java-jvm-2026-05/jvm-agentic-analysis-plan.md",
    "notes": "Same shape as the cargo-test-skipped-by-CI finding, one layer further: even the one place that DOES build this module (the Python lazy-builder) explicitly skips its tests. kind is mismapped to the schema's rust-integration-test bucket for lack of a java-test kind; this is a JUnit 5 test class, not Rust.",
    "markers": [],
    "features": [],
@@ -22377,7 +22377,7 @@
    ],
    "size_bytes": 5395,
    "runs_by": "scripts/ioctlance_parity.py <driver.sys> [--ioctlance-root DIR] [--glaurung-root DIR]",
-   "gated_by": "manual only, documented in docs/architecture/2026-07-13-architecture-quality-review.md",
+   "gated_by": "manual only, documented in docs/history/architecture-reviews/2026-07-13-architecture-quality-review.md",
    "notes": "Reads target/release/examples/ioctl_surface_scan, one of the six example .rs files NOT registered as a Cargo.toml [[example]] stanza (auto-discovered instead).",
    "markers": [],
    "features": [],
@@ -22434,7 +22434,7 @@
    "kind": "script",
    "path": "scripts/recover_source.py",
    "title": "End-to-end source recovery pipeline (v2)",
-   "subject": "Walks a binary through the 25-tool Layer 0->Layer 4 ladder in docs/llm/SOURCE_RECOVERY_TOOLS.md and writes a recovered source tree.",
+   "subject": "Walks a binary through the 25-tool Layer 0->Layer 4 ladder in docs/reference/llm-source-recovery-tools.md and writes a recovered source tree.",
    "domain": [
     "llm",
     "decompiler"
@@ -22485,7 +22485,7 @@
    "size_bytes": 54259,
    "runs_by": "uv run python scripts/verify_tutorial.py [--check | --capture] [--chapter 01-install]",
    "gated_by": "unit-tested via python/tests/test_verify_tutorial.py (default suite); CLAUDE.md documents manual refresh after any CLI registry change; no CI workflow runs it directly",
-   "notes": "Referenced from examples/README.md's Python examples and docs/demos/README.md; also has the tutorial fixture-drift trap CLAUDE.md calls out for new CLI subcommands.",
+   "notes": "Referenced from examples/README.md's Python examples and docs/guides/demos/README.md; also has the tutorial fixture-drift trap CLAUDE.md calls out for new CLI subcommands.",
    "markers": [],
    "features": [],
    "consumes": [],
@@ -22850,7 +22850,7 @@
    "size_bytes": 25710,
    "runs_by": "tools/decbench_external_agentic.py ...",
    "gated_by": "opt-in DecBench harness; parametrized unit coverage in python/tests/test_decbench_external_agentic.py (default suite)",
-   "notes": "Referenced from docs/agentic-glaurung/ as part of the agentic-substrate plan.",
+   "notes": "Referenced from docs/design/agentic-source-recovery/ as part of the agentic-substrate plan.",
    "markers": [],
    "features": [],
    "consumes": [],
@@ -22912,7 +22912,7 @@
    ],
    "size_bytes": 8650,
    "runs_by": "tools/decbench_holdout.py ...",
-   "gated_by": "manual, documented in docs/design/decbench-submission-readiness.md",
+   "gated_by": "manual, documented in docs/history/design/campaigns/decbench-submission-readiness.md",
    "notes": "Calls tools/recompile_fidelity.py and tools/decbench_matrix.py.",
    "markers": [],
    "features": [],
@@ -23663,7 +23663,7 @@
    ],
    "size_bytes": 10389,
    "runs_by": "tools/recompile_fidelity.py ...",
-   "gated_by": "manual, documented in docs/design/multi-decompiler-roundtrip-2026-08-04.md and decompiler-gap-plan-2026-08-01.md",
+   "gated_by": "manual, documented in docs/history/design/campaigns/multi-decompiler-roundtrip-2026-08-04.md and decompiler-gap-plan-2026-08-01.md",
    "notes": "Called by tools/decbench_holdout.py. Imports tools/diff_decompile.py and tools/scratch.py.",
    "markers": [],
    "features": [],
@@ -23705,7 +23705,7 @@
    ],
    "size_bytes": 10196,
    "runs_by": "tools/roundtrip_review.py ...",
-   "gated_by": "manual, documented in docs/design/decbench-submission-readiness.md and docs/design/roundtrip/gcc-O0.md",
+   "gated_by": "manual, documented in docs/history/design/campaigns/decbench-submission-readiness.md and docs/history/design/campaigns/decbench-submission-readiness.md",
    "notes": "Calls tools/decbench_compare.py and tools/dectest.py.",
    "markers": [],
    "features": [],

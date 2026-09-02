@@ -1,5 +1,7 @@
 # §M — Native C with debug information
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: walk a small ELF from file identity through function search, pseudocode,
 and exact callsite xrefs without treating decompiler text as source truth.
 

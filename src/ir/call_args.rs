@@ -784,7 +784,7 @@ fn table_call_target_vas(statement: &Stmt) -> Option<Vec<u64>> {
 /// reads fewer of them is unaffected by the extra ones being live, while
 /// passing fewer than some entry reads deletes an argument that entry consumes,
 /// which is a silent wrong-code bug of exactly the kind
-/// `docs/design/table-dispatch-arguments-2026-08-12.md` records.
+/// `docs/history/design/campaigns/table-dispatch-arguments-2026-08-12.md` records.
 ///
 /// It fails closed on everything it cannot prove:
 ///

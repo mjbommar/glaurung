@@ -1,5 +1,7 @@
 # §T — Diff two binaries
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: identify changed recovered functions between two related binaries and
 interpret the command's shell status correctly.
 

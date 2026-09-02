@@ -1,5 +1,7 @@
 # Execution log
 
+> **Kind:** plan · **Status:** proposed
+
 Live status for [`README.md`](README.md) (the estate plan) and
 [`../decompiler-parity-backlog.md`](../decompiler-parity-backlog.md) (the
 parity backlog). `[x]` landed and verified, `[~]` in flight, `[ ]` not started.
@@ -281,7 +283,7 @@ Not skipped, not reported, indistinguishable from a pass. On a machine without
 cross-compilers an unknown fraction of the 2,829 is vacuous and the total does
 not move. This is the `-ra` problem of phase 1.6 one layer down, and worse:
 these are not skips, so no flag reveals them. Tracked as R8 in the
-[roadmap package](../decompiler-roadmap-package-2026-08-31.md).
+[roadmap package](../roadmap/README.md).
 
 **R8, measured and closed.** The coverage findings above now have numbers
 attached and gates behind them:

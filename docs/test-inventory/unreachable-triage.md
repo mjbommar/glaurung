@@ -1,5 +1,7 @@
 # The 74 unreachable entries, classified
 
+> **Kind:** reference · **Status:** maintained
+
 `unreachable` in `index.json` means one thing: **nothing runs it without a
 human deciding to.** That is the right question for the field to ask, and the
 wrong number to act on directly, because it puts a criterion bench with no

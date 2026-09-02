@@ -1,5 +1,7 @@
 # `docs/design/` — what to read, and what to write to
 
+> **Kind:** guide · **Status:** maintained
+
 This directory holds 30+ documents. Three of them are live; the rest are
 evidence. Without this file there is no way to tell which is which, and a reader
 who opens the wrong one gets a plan that was superseded weeks ago.

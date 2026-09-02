@@ -1,5 +1,7 @@
 # §P — JVM classfile and JAR
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: inspect JVM metadata directly and understand the difference between a
 single classfile and an archive containing class entries.
 

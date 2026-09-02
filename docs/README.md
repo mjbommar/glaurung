@@ -1,5 +1,7 @@
 # Glaurung documentation
 
+> **Kind:** guide · **Status:** maintained
+
 Glaurung is a pre-1.0 reverse-engineering framework with a Rust analysis core,
 Python bindings, a command-line interface, persistent project databases, and
 optional LLM-assisted workflows. Start with the task-oriented material below;
@@ -26,19 +28,19 @@ configuration, and troubleshooting live in the
 
 | Goal | Read this |
 | --- | --- |
-| Inspect an unfamiliar binary quickly | [Triage overview](triage/README.md) and [first binary](tutorial/01-getting-started/first-binary.md) |
-| Learn the CLI command surface | [CLI tour](tutorial/01-getting-started/cli-tour.md) and [CLI cheat sheet](tutorial/reference/cli-cheatsheet.md) |
-| Navigate or annotate a project database | [REPL tour](tutorial/01-getting-started/repl-tour.md) and [analyst workflows](cli/analyst-ergonomics.md) |
-| Make an annotation show up in the decompiled output | [The annotation loop](cli/analyst-annotation-loop.md) — `rename`/`comment`/`label`/`proto` and what `--db` changes on each surface |
+| Inspect an unfamiliar binary quickly | [Triage overview](guides/triage.md) and [first binary](tutorial/01-getting-started/first-binary.md) |
+| Learn the CLI command surface | [CLI tour](tutorial/01-getting-started/cli-tour.md) and [CLI cheat sheet](reference/cli.md) |
+| Navigate or annotate a project database | [REPL tour](tutorial/01-getting-started/repl-tour.md) and [analyst workflows](guides/analyst-workflows.md) |
+| Make an annotation show up in the decompiled output | [The annotation loop](guides/annotation-loop.md) — `rename`/`comment`/`label`/`proto` and what `--db` changes on each surface |
 | Work with names, types, xrefs, stack frames, or patches | [Daily basics](tutorial/02-daily-basics/) |
-| Understand project data and provenance | [Persistent projects](architecture/PERSISTENT_PROJECT.md), [data model](architecture/data-model/README.md), and [`set_by` precedence](tutorial/reference/set-by-precedence.md) |
-| See where we stand against IDA Pro, Ghidra, and angr | [Decompiler UX competitive ranking](design/decompiler-ux-competitive-ranking.md) — 18 capabilities ranked, with our column measured rather than recalled |
-| Understand analysis architecture | [Analysis index](analysis/README.md), [disassembly](analysis/disassembly/README.md), and [decompiler overview](analysis/decompiler/README.md) |
-| Read or test pseudocode output | [Decompiler overview](analysis/decompiler/README.md) and [decompiler testing](development/decompiler-testing.md) |
-| Analyze PE files or Windows software | [Windows analysis](windows-port/README.md) and [Windows configuration](windows-port/windows-analysis-config.md) |
-| Detect packers or compare binaries | [Packer configuration](triage/packer-config.md) and [similarity analysis](triage/similarity.md) |
-| Use an LLM-backed command | [`ask` command](cli/ASK_COMMAND.md), [LLM subsystem](llm/README.md), and [runtime configuration](development/setup.md#runtime-configuration) |
-| Reproduce a guided investigation | [Walkthroughs](tutorial/03-walkthroughs/) and [demos](demos/README.md) |
+| Understand project data and provenance | [Persistent projects](architecture/persistent-project.md), [data model](architecture/data-model.md), and [`set_by` precedence](reference/provenance.md) |
+| See where we stand against IDA Pro, Ghidra, and angr | [Decompiler UX competitive ranking](architecture/competitive-position.md) — 18 capabilities ranked, with our column measured rather than recalled |
+| Understand analysis architecture | [Analysis index](README.md), [disassembly](reference/disassembly.md), and [decompiler overview](reference/decompiler-output-format.md) |
+| Read or test pseudocode output | [Decompiler overview](reference/decompiler-output-format.md) and [decompiler testing](development/decompiler-testing.md) |
+| Analyze PE files or Windows software | [Windows analysis](guides/windows-analysis.md) and [Windows configuration](reference/windows-analysis-config.md) |
+| Detect packers or compare binaries | [Packer configuration](reference/packer-config.md) and [similarity analysis](reference/similarity.md) |
+| Use an LLM-backed command | [`ask` command](guides/ask.md), [LLM subsystem](reference/llm-tool-contract.md), and [runtime configuration](development/setup.md#runtime-configuration) |
+| Reproduce a guided investigation | [Walkthroughs](tutorial/03-walkthroughs/) and [demos](guides/demos/README.md) |
 | Run source examples | [Executable examples](../examples/README.md) |
 | Use or rebuild the sample corpus | [Sample corpus guide](../samples/README.md) |
 | Contribute code or documentation | [Contributor policy](../CLAUDE.md), [agent policy](../AGENTS.md), and [development guidelines](development/guidelines.md) |
@@ -49,35 +51,35 @@ configuration, and troubleshooting live in the
 
 - [`tutorial/`](tutorial/README.md): progressive, real-sample exercises from
   installation through analyst and agent workflows.
-- [`cli/`](cli/): focused command and analyst-workflow guides.
-- [`triage/`](triage/README.md): first-pass analysis, resource bounds, strings,
+- [`cli/`](guides): focused command and analyst-workflow guides.
+- [`triage/`](guides/triage.md): first-pass analysis, resource bounds, strings,
   packer signals, containers, and similarity.
-- [`windows-port/`](windows-port/README.md): PE/PDB workflows, configuration,
+- [`windows-port/`](guides/windows-analysis.md): PE/PDB workflows, configuration,
   hardening, and Windows-specific analysis.
-- [`demos/`](demos/README.md): longer malware, vulnerability, and patch-analysis
+- [`demos/`](guides/demos/README.md): longer malware, vulnerability, and patch-analysis
   scenarios.
 
 ### Core analysis and data model
 
-- [`analysis/`](analysis/README.md): current analysis entry points plus clearly
+- [`analysis/`](README.md): current analysis entry points plus clearly
   separated research checkpoints and historical proposals.
 - [`architecture/`](architecture/README.md): current persistent-project and
   data-model boundaries plus dated reviews and proposals.
-- [`parsers/`](parsers/README.md): native, bytecode, archive, Android, and
+- [`parsers/`](guides/parsers-and-formats.md): native, bytecode, archive, Android, and
   managed-runtime parser documentation.
-- [`formats/`](formats/README.md): format and compiler-artifact reference material.
-- [`syscalls/`](syscalls/README.md): Linux and Windows syscall references used by
+- [`formats/`](reference/formats/README.md): format and compiler-artifact reference material.
+- [`syscalls/`](reference/syscalls/README.md): Linux and Windows syscall references used by
   analysis.
 
 ### AI-assisted and symbolic workflows
 
-- [`llm/`](llm/README.md): maintained operator/contributor guides plus clearly
+- [`llm/`](reference/llm-tool-contract.md): maintained operator/contributor guides plus clearly
   labeled historical design and roadmap records.
-- [`agentic-glaurung/`](agentic-glaurung/README.md): architecture, safety,
+- [`agentic-glaurung/`](design/agentic-source-recovery/README.md): architecture, safety,
   evaluation, and delivery plan for autonomous source recovery. Its
-  [status page](agentic-glaurung/STATUS.md) is the authority on what is actually
+  [status page](design/agentic-source-recovery/STATUS.md) is the authority on what is actually
   implemented.
-- [`axeyum-integration/`](axeyum-integration/README.md): symbolic execution and
+- [`axeyum-integration/`](architecture/solver-backends.md): symbolic execution and
   solver integration design, evidence, and validation material.
 
 ### Engineering records
@@ -86,9 +88,9 @@ configuration, and troubleshooting live in the
   describe behavior that is not implemented yet.
 - [`development/`](development/): setup, repository structure, contributor
   guidance, testing, and roadmaps.
-- [`campaigns/`](campaigns/): dated multi-change effort records.
-- [`research/`](research/): exploratory designs and investigations.
-- [`sessions/`](sessions/): dated verification or development-session notes.
+- [`campaigns/`](history/campaigns): dated multi-change effort records.
+- [`research/`](history): exploratory designs and investigations.
+- [`sessions/`](history/sessions): dated verification or development-session notes.
 
 ## How to interpret status
 

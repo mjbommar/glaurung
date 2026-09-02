@@ -10,7 +10,7 @@ labelled CFG with an explicit backward `goto` is also safe: it preserves the mac
 header in place instead of hoisting its condition.
 
 The cost is real and measured, which is why this file exists. On branch
-`recover-ged-cells` (docs/design/ged-recovery-measured-trade.md), always-hoisting recovers
+`recover-ged-cells` (docs/history/design/campaigns/ged-recovery-measured-trade.md), always-hoisting recovers
 **50.32 GED points — 46% of a regression** — and breaks exactly these four functions
 across six lanes. Somebody will eventually notice the verbose form, "fix" it, and see the
 metric improve. This test is the thing that tells them what it cost.
@@ -168,7 +168,7 @@ def test_loop_keeps_its_loop_carried_condition(fixture, cc, opt, func):
         f"That can freeze a loop-carried value: constant propagation substitutes the "
         f"initial value dominating the hoist position. Always-hoisting is worth 50.32 "
         f"GED points (46% of a regression) and breaks exactly this function plus three "
-        f"others — see docs/design/ged-recovery-measured-trade.md. If you are making "
+        f"others — see docs/history/design/campaigns/ged-recovery-measured-trade.md. If you are making "
         f"this trade deliberately, update that document and this test together.\n\n"
         f"--- emitted ---\n{text}"
     )

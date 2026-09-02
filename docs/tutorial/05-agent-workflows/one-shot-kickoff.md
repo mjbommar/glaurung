@@ -1,5 +1,7 @@
 # §X — One-shot kickoff
 
+> **Kind:** guide · **Status:** maintained
+
 `kickoff` is Glaurung's bounded, deterministic first pass. It does not call an
 LLM and does not require an API key. It does create or update a SQLite project,
 so give `--db` an explicit path when you want to keep the result.

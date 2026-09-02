@@ -1,5 +1,7 @@
 # §L — Patch and verify
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: inspect an exact instruction, write a size-preserving patch to a separate
 file, and understand the limit of byte-level verification.
 

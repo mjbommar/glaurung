@@ -6,7 +6,7 @@ Real QF_BV queries that Glaurung's symbolic engine issued while analyzing
 Windows drivers, plus the committed lineage-gate artifacts the axeyum/z3
 comparison is scored against. These are inputs to `tools/axeyum/`, not
 documentation; the capture protocol and the analysis of each artifact live in
-[`docs/axeyum-integration/capture/README.md`](../../../docs/axeyum-integration/capture/README.md).
+[`docs/history/axeyum-integration-2026-07/capture-README.md`](../../../docs/history/axeyum-integration-2026-07/capture-README.md).
 
 ## Contents
 
@@ -48,4 +48,4 @@ capture-index pack. The shadow-split captures use the sibling hook
 `tools/axeyum/validate_shadow_splits.py`. Never append a new experiment to an
 existing capture directory. The exact driver list, environment variables, and
 per-artifact acceptance criteria are in
-[`docs/axeyum-integration/capture/README.md`](../../../docs/axeyum-integration/capture/README.md).
+[`docs/history/axeyum-integration-2026-07/capture-README.md`](../../../docs/history/axeyum-integration-2026-07/capture-README.md).

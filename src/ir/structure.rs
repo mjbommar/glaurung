@@ -686,7 +686,7 @@ mod tests {
     /// That is the third local fix to this function to be reverted after
     /// measurement, and the third for the same reason: widening one predicate
     /// trades one shape for another. The answer is the region analysis
-    /// `docs/design/decbench-defect-reproductions-2026-08-27.md` §7 P3
+    /// `docs/history/design/campaigns/decbench-defect-reproductions-2026-08-27.md` §7 P3
     /// specifies — a loop forest computed once, a region context replacing
     /// `stop_at`, and a loop-relative join oracle — not a fourth predicate.
     #[test]

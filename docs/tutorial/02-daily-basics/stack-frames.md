@@ -1,5 +1,7 @@
 # §G — Stack frames
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: inspect recovered stack slots, refine one supported name and type, and
 verify the manual provenance.
 

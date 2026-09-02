@@ -1,5 +1,7 @@
 # Phase 7 — Extend the fixture matrix where reality lives
 
+> **Kind:** plan · **Status:** proposed
+
 The matrix today: `{gcc, clang} × {O0, O2}` required on x86-64, `O2strip`
 variants, arch lanes `i386 / armv7 / aarch64 / x86_64_gcc15`, Rust via
 `rustc`. Each addition below is a **measured** one — the lane's cell-count

@@ -1,5 +1,7 @@
 # §H — Strings and data
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: separate “string exists in the file” from “the current xref index records
 a use,” then add a type-correct label to a global pointer.
 

@@ -1,5 +1,7 @@
 # Phase 10 — The gap between "passes here" and "passes anywhere"
 
+> **Kind:** plan · **Status:** proposed
+
 Opened 2026-09-01 by the first Python CI run in this repository's history that
 ran to completion. It is not in the original plan because nothing could see it
 before: with no workflow running the suite, "the tests pass" had only ever

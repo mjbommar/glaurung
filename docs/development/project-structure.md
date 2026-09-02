@@ -1,7 +1,6 @@
 # Project structure
 
-> **Status: maintained repository map.** The map describes the current source
-> tree; `src/lib.rs`, `pyproject.toml`, and the filesystem remain authoritative.
+> **Kind:** guide · **Status:** maintained
 
 Glaurung is a mixed Rust/Python project. Rust implements the native analysis
 engine; Python exposes the scripting, CLI, knowledge-base, and LLM surfaces.
@@ -86,7 +85,7 @@ for the corpus-specific contracts.
 ## Getting started
 
 The repository-wide modularization work is organized as independently gated
-mini-projects in the [architecture refactoring portfolio](../refactoring/README.md).
+mini-projects in the [architecture refactoring portfolio](../history/refactoring-portfolio-2026-08/README.md).
 Those plans supplement the source-tree map; they do not describe already
 completed moves.
 

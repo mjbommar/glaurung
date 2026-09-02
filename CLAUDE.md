@@ -374,10 +374,10 @@ Env overrides: `GLAURUNG_LLM_MODEL`, `GLAURUNG_OPENAI_SERVICE_TIER`
 ## Custom agents
 
 `.claude/agents/rust-data-model-creator.md` — subagent for adding a new
-Rust+PyO3 data model following `docs/data-model/` patterns.
+Rust+PyO3 data model following `docs/architecture/data-model.md` patterns.
 
 ## Map of the docs
 
-`docs/` holds the detailed reference: `cli/`, `llm/`, `architecture/`, `design/`,
-`windows-port/`, `campaigns/` (worklog of analysis efforts), `tutorial/`,
-`development/project-structure.md`. Check there before reinventing context.
+`docs/` holds the detailed reference: `guides/`, `reference/`, `architecture/`,
+`decisions/`, `design/`, `tutorial/`, `development/`, and `history/` (dated
+record, not current guidance). Check there before reinventing context.

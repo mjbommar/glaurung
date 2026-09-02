@@ -13,7 +13,7 @@
 //!
 //! Determinism (a house rule): `rdtsc`/`rdtscp` read a **virtual** monotonic
 //! counter and `cpuid` returns a **fixed** feature set — never host time/CPU
-//! state. See `docs/design/execution-engine/02-architecture/determinism.md`.
+//! state. See `docs/history/execution-engine-2026-06/architecture/determinism.md`.
 
 use std::collections::HashMap;
 

@@ -1,4 +1,4 @@
-"""The reachability ratchet from `docs/development/test-estate/01-reachability.md`.
+"""The reachability ratchet from `docs/history/development/test-estate/01-reachability.md`.
 
     Everything else in the plan lands into the estate this phase repairs. The
     failure mode being closed: a test that exists, is tracked, reads as
@@ -125,7 +125,7 @@ def test_no_mod_declaration_names_a_missing_triage_file():
 # runs it. The registry is the answer to "what types this file into a
 # terminal, and does anything call that?".
 #
-# `docs/development/test-estate/01-reachability.md` 1.3 adds the command
+# `docs/history/development/test-estate/01-reachability.md` 1.3 adds the command
 # below to `scripts/decbench-local-gate.sh` lane 1; until it lands, the entry
 # records that the only runner is a human typing it.
 FEATURE_GATED_TEST_RUNNERS: dict[str, tuple[str, str]] = {

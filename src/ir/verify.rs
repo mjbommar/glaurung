@@ -4,7 +4,7 @@
 //! executable* IR. This module is the machine-checkable safety net for that
 //! contract: it walks an [`LlirFunction`] and reports structural problems that
 //! would make execution unsound. See
-//! `docs/design/execution-engine/02-architecture/executable-llir.md`.
+//! `docs/history/execution-engine-2026-06/architecture/executable-llir.md`.
 //!
 //! Checks (v1):
 //! 1. **Width-change invariants** — `ZExt`/`SExt` widen (`to >= from`), `Trunc`

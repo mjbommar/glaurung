@@ -2419,7 +2419,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // The flags architecture (docs/design/x86-flags.md).
+    // The flags architecture (docs/architecture/x86-flags.md).
     //
     // These two encode the STOP CONDITION for that work and are expected to be RED
     // until it lands. They are deliberately about the SHAPE of the model rather than

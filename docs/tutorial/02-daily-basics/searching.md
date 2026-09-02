@@ -1,5 +1,7 @@
 # §I — Searching
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: use `find` to produce an address or project object that a more specific
 view can inspect.
 

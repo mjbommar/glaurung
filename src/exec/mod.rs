@@ -1,6 +1,6 @@
 //! Native execution engine over the LLIR.
 //!
-//! This is the implementation of the plan in `docs/design/execution-engine/`.
+//! This is the implementation of the plan in `docs/history/execution-engine-2026-06/`.
 //! The keystone is [`Domain`]: a single abstract value domain over which the
 //! interpreter is written **once**. The concrete emulator ([`Concrete`]) and the
 //! (future) symbolic executor are two implementations of the same trait, so they

@@ -1,5 +1,7 @@
 # §F — Cross-references
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: distinguish references *to* an address from references *from* an exact
 source address, and pivot from a callsite into deeper analysis.
 

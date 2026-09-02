@@ -180,11 +180,11 @@ for the decompiler-specific gates.
 - [Installation and development setup](docs/development/setup.md)
 - [Tutorial](docs/tutorial/README.md)
 - [Executable examples](examples/README.md)
-- [CLI workflows](docs/cli/analyst-ergonomics.md)
+- [CLI workflows](docs/guides/analyst-workflows.md)
 - [Architecture and data model](docs/architecture/)
-- [Decompiler documentation](docs/analysis/decompiler/README.md)
-- [Windows analysis](docs/windows-port/README.md)
-- [Agentic workflow design and operations](docs/agentic-glaurung/README.md)
+- [Decompiler documentation](docs/reference/decompiler-output-format.md)
+- [Windows analysis](docs/guides/windows-analysis.md)
+- [Agentic workflow design and operations](docs/design/agentic-source-recovery/README.md)
 
 ## License
 

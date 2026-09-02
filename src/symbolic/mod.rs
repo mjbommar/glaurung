@@ -4,7 +4,7 @@
 //! domain implements the same [`Domain`](crate::exec::Domain) trait the concrete
 //! emulator does, so the **one** interpreter (`crate::exec::interp`) produces
 //! symbolic bit-vector expressions when run over it — no duplicated semantics.
-//! See `docs/design/execution-engine/02-architecture/symbolic-engine.md`.
+//! See `docs/history/execution-engine-2026-06/architecture/symbolic-engine.md`.
 //!
 //! Phase-4 status: the hash-consed bit-vector [`Expr`] IR and the [`Symbolic`]
 //! domain (expression building + SMT-LIB2 rendering) are implemented. The solver

@@ -60,7 +60,7 @@ pub(super) fn translate_path(
 /// on `ExprId` so shared subterms are built once (preserving glaurung's
 /// interning into axeyum's arena). Every `Expr` node maps to an axeyum
 /// `BitVec` term; Bool is touched only at the three boundaries described in
-/// `docs/axeyum-integration/02-interface-mapping.md` (Cmp lift, Ite cond,
+/// `docs/architecture/solver/interface-mapping.md` (Cmp lift, Ite cond,
 /// assert truthiness).
 pub(super) struct Translator<'a> {
     pool: &'a ExprPool,

@@ -1,5 +1,7 @@
 # Glaurung tutorial
 
+> **Kind:** guide · **Status:** maintained
+
 This track starts with a source checkout and builds toward a repeatable binary-
 analysis workflow: inspect a file, create a persistent `.glaurung` project,
 navigate evidence, add analyst knowledge, and export or verify the result.
@@ -68,12 +70,12 @@ analysis and project file remain the evidence backbone.
 
 ## Reference
 
-- [CLI cheatsheet](reference/cli-cheatsheet.md) — the current top-level command
+- [CLI cheatsheet](../reference/cli.md) — the current top-level command
   inventory and safe invocation shapes
-- [REPL keymap](reference/repl-keymap.md) — interactive commands
-- [`set_by` precedence](reference/set-by-precedence.md) — where recovered and
+- [REPL keymap](../reference/repl-keymap.md) — interactive commands
+- [`set_by` precedence](../reference/provenance.md) — where recovered and
   analyst-provided names and types came from
-- [Sample corpus](reference/sample-corpus.md) — representative shipped inputs
+- [Sample corpus](../reference/sample-corpus.md) — representative shipped inputs
   and how to regenerate the full inventory
 
 ## Verify the tutorial evidence
@@ -93,6 +95,6 @@ uv run python scripts/verify_tutorial.py --capture --chapter 01-first-binary
 git diff -- docs/tutorial/_fixtures/01-first-binary
 ```
 
-See [`PLAN.md`](PLAN.md) for the tutorial's coverage plan and
+See [`PLAN.md`](../history/tutorial-plan-2026-04.md) for the tutorial's coverage plan and
 [`../development/setup.md`](../development/setup.md) for the complete build and
 development setup.

@@ -1,5 +1,7 @@
 # §A — Install
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: build Glaurung from source and verify the native extension with a real
 sample binary.
 

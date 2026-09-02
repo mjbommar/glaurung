@@ -1,5 +1,7 @@
 # §U — Export a project
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: export persisted knowledge as documentation, structured data, or an
 import script without confusing export success with successful execution in a
 third-party reverse-engineering tool.

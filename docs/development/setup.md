@@ -1,8 +1,6 @@
 # Installation, development setup, and configuration
 
-> **Status: maintained setup reference.** The source-install and clean-room
-> commands below are the supported development path. Revalidate platform-specific
-> details when changing the toolchain or lockfiles.
+> **Kind:** guide · **Status:** maintained
 
 This is the supported setup reference for a source checkout of Glaurung.
 Commands are written for a POSIX shell and should be run from the repository
@@ -112,8 +110,8 @@ addition to it.
 
 Some solver and differential-oracle features require additional native
 libraries. Their authoritative feature definitions are in `Cargo.toml`; see
-[the execution-engine decisions](../design/execution-engine/05-decisions/)
-and [Axeyum integration documentation](../axeyum-integration/README.md) before
+[the execution-engine decisions](../decisions)
+and [Axeyum integration documentation](../architecture/solver-backends.md) before
 enabling them.
 
 ## Tests and quality gates
@@ -243,7 +241,7 @@ overrides `GLAURUNG_LLM_MODEL`. Invalid numeric budget values are ignored with
 a warning; provider errors remain runtime errors.
 
 Detailed agent-run reproducibility and budget policy is in
-[Model configuration and budgets](../agentic-glaurung/operations/01-model-configuration-and-budgets.md).
+[Model configuration and budgets](../design/agentic-source-recovery/operations/01-model-configuration-and-budgets.md).
 
 ### Analysis limits and caches
 
@@ -272,13 +270,13 @@ The shared PE/PDB configuration resolves in this order:
 4. built-in defaults.
 
 Unknown keys fail closed with `ValueError`. See
-[Windows Analysis Config](../windows-port/windows-analysis-config.md) for the
+[Windows Analysis Config](../reference/windows-analysis-config.md) for the
 schema and current Windows workflow.
 
 ### Triage and advanced execution settings
 
 Packer weights are configured through the Python API; see
-[Packer Configuration](../triage/packer-config.md). Symbolic solver, Axeyum,
+[Packer Configuration](../reference/packer-config.md). Symbolic solver, Axeyum,
 decompiler-debug, and benchmark-only environment variables are specialized
 developer controls and are documented with their owning subsystem rather than
 treated as general user configuration.

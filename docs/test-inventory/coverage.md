@@ -1,5 +1,7 @@
 # Coverage tables
 
+> **Kind:** reference · **Status:** generated
+
 Generated at `2ce51f9d` from `docs/test-inventory/index.json`.
 
 **986 entries, 6,282 test functions.**

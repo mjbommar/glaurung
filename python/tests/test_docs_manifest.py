@@ -20,15 +20,15 @@ build was fixed.
 Transitional mode
 -----------------
 
-`LEGACY_BANNER_ALLOWED` is `True` while the documentation reorganization is in
-flight. A mass banner pass on 2026-08-07 gave many files a
+`LEGACY_BANNER_ALLOWED` was `True` while the documentation reorganization was
+in flight. A mass banner pass on 2026-08-07 gave many files a
 `> **Status: historical design record.**`-style banner, and most other files
-carry no declaration at all; converting all of them is a separate, mechanical
-phase. While the flag is `True` a file is exempt if it has not been converted
-yet -- which is *computed* from the file, never listed here -- so a file that
-declares a `Kind:` is held to the full rule immediately and the exemption
-shrinks on its own as files are converted. Flipping the flag to `False` is
-what makes the rule total; nothing else needs to change.
+carried no declaration at all; converting all of them was a separate,
+mechanical phase. While the flag is `True` a file is exempt if it has not been
+converted yet -- which is *computed* from the file, never listed here -- so a
+file that declares a `Kind:` is held to the full rule immediately and the
+exemption shrinks on its own as files are converted. The flag is now `False`:
+the rule is total, and the exemption is gone.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ DATE_RE = re.compile(r"\*\*Date:\*\*\s*(\d{4}-\d{2}-\d{2})")
 #: the bold before the value: `**Status:** maintained`.
 LEGACY_STATUS_RE = re.compile(r"^\s*>?\s*\**Status:(?!\*\*)", re.MULTILINE)
 
-LEGACY_BANNER_ALLOWED = True
+LEGACY_BANNER_ALLOWED = False
 
 
 def _markdown_under(directory: Path) -> list[Path]:

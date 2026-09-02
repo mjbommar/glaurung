@@ -1,5 +1,7 @@
 # §K — Undo and redo
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: inspect the analyst-write history, revert a specific newest change, and
 understand what undo does not cover.
 

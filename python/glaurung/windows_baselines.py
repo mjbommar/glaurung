@@ -5,7 +5,7 @@ runtime defaults for the ``glaurung windows`` CLI, for eleven LLM agent and
 tool modules, and for the parity refresh workflow. They live under
 ``data/baselines/windows-ghidra-parity/`` alongside the other checked-in data
 sets (``data/types/``, ``data/sigs/``); the human-readable ``.md`` tables that
-accompany them stay under ``docs/windows-port/``.
+accompany them stay under ``docs/history/windows-port-2026-05/``.
 
 Every consumer spells the path once, here. The constants are repository-relative
 strings because that is how they are consumed -- as argparse defaults and as

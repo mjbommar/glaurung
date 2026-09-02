@@ -1,5 +1,7 @@
 # What the survey found
 
+> **Kind:** reference · **Status:** maintained
+
 > **Status, 2026-08-31.** This is the original survey, kept as written. Much of
 > it has since been ACTED ON, and three of its claims turned out to be wrong
 > when checked. Corrections are marked inline as **[CORRECTED]** and fixes as

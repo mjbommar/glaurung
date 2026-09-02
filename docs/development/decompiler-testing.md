@@ -1,8 +1,6 @@
 # Testing the decompiler locally
 
-> **Status: maintained developer guide.** The commands and gate boundaries are
-> current. Lane counts and timings are measured snapshots, not performance
-> guarantees; remeasure them before making a current performance claim.
+> **Kind:** guide · **Status:** maintained
 
 Which command answers which question, and how much it costs. The gate is not the
 only tool, and using it as one is why iteration was slow: it compiles and

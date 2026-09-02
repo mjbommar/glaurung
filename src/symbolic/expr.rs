@@ -5,7 +5,7 @@
 //! solver/constraint caches can key on ids. Every node carries an explicit
 //! [`Width`] — the same discipline as the executable LLIR — so lowering to SMT
 //! QF_BV is total. See
-//! `docs/design/execution-engine/02-architecture/symbolic-engine.md`.
+//! `docs/history/execution-engine-2026-06/architecture/symbolic-engine.md`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;

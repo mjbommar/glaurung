@@ -1,5 +1,7 @@
 # §Z — Evidence and citations
 
+> **Kind:** guide · **Status:** maintained
+
 `evidence_log` is an append-only record of selected tool observations in a
 persistent `.glaurung` project. It stores the tool name, serialized inputs,
 summary, optional address range, serialized output, and timestamp.
@@ -168,6 +170,6 @@ responses add another nondeterministic layer. Preserve those inputs if another
 analyst must reproduce the conclusion.
 
 This completes the tutorial track. Continue with the
-[CLI cheatsheet](../reference/cli-cheatsheet.md),
-[sample corpus](../reference/sample-corpus.md), or the broader
+[CLI cheatsheet](../../reference/cli.md),
+[sample corpus](../../reference/sample-corpus.md), or the broader
 [documentation index](../../README.md).

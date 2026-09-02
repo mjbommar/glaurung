@@ -1,5 +1,7 @@
 # Test estate plan
 
+> **Kind:** plan · **Status:** proposed
+
 A phased plan to improve and extend the tests and assets, written against the
 inventory at `docs/test-inventory/` (986 entries, 6,282 test functions,
 commit `2ce51f9d`). Every number in these files was counted, not estimated;
@@ -29,15 +31,15 @@ that makes every later phase land somewhere that stays alive.
 
 | # | file | what | depends on |
 |---|------|------|------------|
-| 1 | [01-reachability.md](01-reachability.md) | Wire the dead tests, invert the CI split, make unreachability impossible to reintroduce | — |
-| 2 | [02-canary-determinism.md](02-canary-determinism.md) | A behavioural canary in the default suite; a determinism gate | 1 |
+| 1 | [01-reachability.md](../../history/development/test-estate/01-reachability.md) | Wire the dead tests, invert the CI split, make unreachability impossible to reintroduce | — |
+| 2 | [02-canary-determinism.md](../../history/development/test-estate/02-canary-determinism.md) | A behavioural canary in the default suite; a determinism gate | 1 |
 | 3 | [03-fuzzing.md](03-fuzzing.md) | Fuzz the disasm/lift/structure path, not just triage | 1 |
 | 4 | [04-pe-macho.md](04-pe-macho.md) | PE+PDB fixtures via clang-cl on Linux; Mach-O via zig | 1 |
 | 5 | [05-thin-modules.md](05-thin-modules.md) | Corpus-driven tests for demangle, similarity, flirt, target | — |
 | 6 | [06-perf-ratchet.md](06-perf-ratchet.md) | A performance baseline something actually compares against | — |
 | 7 | [07-matrix-extension.md](07-matrix-extension.md) | Wire Go; add stripped-O0, LTO, musl lanes; structural baseline at O2 | 1 |
 | 8 | [08-dwarf-oracle.md](08-dwarf-oracle.md) | Ground truth at scale from DWARF twins | 2, 7 |
-| 9 | [09-asset-hygiene.md](09-asset-hygiene.md) | Delete the broken, dedupe the doubled, retire the dead | — |
+| 9 | [09-asset-hygiene.md](../../history/development/test-estate/09-asset-hygiene.md) | Delete the broken, dedupe the doubled, retire the dead | — |
 | 10 | [10-ci-environment-gap.md](10-ci-environment-gap.md) | 25 CI-only failures the first completed run exposed: tests that crash rather than skip on a machine without every toolchain | 1 |
 | 11 | [11-tiers-and-facets.md](11-tiers-and-facets.md) | Tier by what a test NEEDS, not its subject: seven facets applied as markers; `core` (no LFS, 11 min) and `extended` both required per push; wheel matrix gated on tags; fixture cache measured and deferred | 1 |
 
@@ -47,7 +49,7 @@ last because it consumes 7's lanes and 2's canary harness.
 
 ## Related
 
-[`../decompiler-roadmap-package-2026-08-31.md`](../decompiler-roadmap-package-2026-08-31.md)
+[`../decompiler-roadmap-package-2026-08-31.md`](../roadmap/README.md)
 — the entry point mapping R0–R7 and M1–M7 to evidence, detailed authorities,
 dependencies, first increments, and completion proof.
 
@@ -57,36 +59,36 @@ own samples, and the 10-item build/fix backlog it produced. Several items
 there (structural baseline at O2, the differential harness) are phases of this
 plan; the parity doc is the evidence for why they matter.
 
-[`../real-binary-decompiler-roadmap-2026-08-31.md`](../real-binary-decompiler-roadmap-2026-08-31.md)
+[`../real-binary-decompiler-roadmap-2026-08-31.md`](../roadmap/real-binary-decompiler.md)
 — the product-facing order after the complete 94,575-function run. It promotes
 missing-body identity, large-function coverage, optimized structural quality,
 and PE/PDB ahead of lower-signal breadth work while retaining this plan's
 reachability and fixture discipline.
 
-[`../decbench-failure-remediation-plan-2026-08-31.md`](../decbench-failure-remediation-plan-2026-08-31.md)
+[`../decbench-failure-remediation-plan-2026-08-31.md`](../roadmap/decbench-failure-remediation.md)
 — the TDD-level implementation plan for the complete failure taxonomy,
 including ownership boundaries between product, adapter, dataset, and evaluator.
 
-[`../test-inventory-authority-plan-2026-08-31.md`](../test-inventory-authority-plan-2026-08-31.md)
+[`../test-inventory-authority-plan-2026-08-31.md`](../roadmap/test-inventory-authority.md)
 — makes the inventory renewable: committed canonical inputs, a versioned
 schema, atomic generated views, `--check`, explicit runners, and roadmap queries.
 
-[`../real-world-malware-asset-plan-2026-08-31.md`](../real-world-malware-asset-plan-2026-08-31.md)
+[`../real-world-malware-asset-plan-2026-08-31.md`](../roadmap/real-world-malware-assets.md)
 — audits the existing realistic, packed, adversarial, and Windows assets and
 turns them into a source-grounded hostile-shape program with explicit body,
 structure, compile, execution, resource, and refusal oracles.
 
-[`../performance-determinism-ratchet-plan-2026-08-31.md`](../performance-determinism-ratchet-plan-2026-08-31.md)
+[`../performance-determinism-ratchet-plan-2026-08-31.md`](../roadmap/performance-determinism-ratchet.md)
 — audits the newly wired instruction-count gate and existing determinism tests,
 then specifies fail-closed measurement states, provenance, completeness/RSS
 ratchets, a reference ladder, and retained release evidence.
 
-[`../optimized-structural-quality-plan-2026-08-31.md`](../optimized-structural-quality-plan-2026-08-31.md)
+[`../optimized-structural-quality-plan-2026-08-31.md`](../roadmap/optimized-structural-quality.md)
 — expands the current GCC-O0 structural baseline into separate GCC/Clang O0/O2
 populations with optimized shape predicates, readability distributions, and
 semantic/performance safety ratchets.
 
-[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../pe-pdb-macho-parity-plan-2026-08-31.md)
+[`../pe-pdb-macho-parity-plan-2026-08-31.md`](../roadmap/pe-pdb-macho-parity.md)
 — updates Phase 4 against the live estate and specifies hermetic PE32/PE32+,
 PDB, Mach-O x86-64/ARM64, fixup, and universal-slice contracts.
 

@@ -1,16 +1,18 @@
 # Architecture documentation
 
+> **Kind:** guide · **Status:** maintained
+
 This directory distinguishes current storage and data boundaries from dated
 reviews, parity snapshots, and earlier design proposals.
 
 ## Current contracts
 
-- [Persistent project databases](PERSISTENT_PROJECT.md) describes the SQLite
+- [Persistent project databases](persistent-project.md) describes the SQLite
   `.glaurung` file, sessions, lifecycle, schema compatibility, and supported
   Python entry points.
-- [Core data model](data-model/README.md) maps the current Rust core, triage
+- [Core data model](data-model.md) maps the current Rust core, triage
   artifacts, decompiler IR, Python bindings, and persistent knowledge base.
-- [Analysis documentation](../analysis/README.md) covers current operator and
+- [Analysis documentation](../README.md) covers current operator and
   implementation entry points for disassembly, decompilation, and related
   analysis.
 

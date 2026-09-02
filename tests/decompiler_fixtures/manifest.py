@@ -2400,7 +2400,7 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     },
     # The guard ladders recover goto-free at gcc:O0 -- the shape matcher handles
     # THIS lane. The corpus instance that fails has its handlers further out of
-    # line; see `docs/design/fixture-expansion-2026-08-27.md`.
+    # line; see `docs/history/design/campaigns/fixture-expansion-2026-08-27.md`.
     ("209_out_of_line_guard_handlers", "guard_chain_rejoins"): {
         "goto_free": True,
         "switch": False,

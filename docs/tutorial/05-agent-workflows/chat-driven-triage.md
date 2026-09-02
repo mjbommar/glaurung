@@ -1,5 +1,7 @@
 # §Y — Chat-driven triage
 
+> **Kind:** guide · **Status:** maintained
+
 The `ask` command lets a model choose deterministic analysis tools and
 synthesize their results. It is optional: Tiers 1–4 and `kickoff` work without
 model credentials.

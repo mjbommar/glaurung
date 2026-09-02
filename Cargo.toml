@@ -87,7 +87,7 @@ triage-parsers-extra = ["goblin", "pelite"]
 # or `solver-z3` to include them).
 python-ext = ["pyo3", "pyo3/extension-module", "exec"]
 # Native execution engine (concrete emulator). Pure Rust, no new C dependency —
-# see docs/design/execution-engine/. Off by default; opt in with --features exec.
+# see docs/history/execution-engine-2026-06/. Off by default; opt in with --features exec.
 exec = []
 # Symbolic / concolic execution over the same engine. Builds a bitvector
 # expression IR (pure Rust). The solver is pluggable behind a trait.

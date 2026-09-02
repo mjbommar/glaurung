@@ -1,5 +1,7 @@
 # §J — Bookmarks and journal
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: keep address-specific follow-ups separate from project-level notes and
 retrieve both deterministically.
 

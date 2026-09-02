@@ -44,7 +44,7 @@ parity with ``ANALYSIS`` instead. Parity is the defensible default.
 This answers "which fact wins", not "may the analysis re-derive this at all".
 Ghidra needs both ``SourceType`` *and* separate ``namelock``/``typelock`` bits
 because they are different questions. We currently only have the first; see
-``docs/architecture/IDA_GHIDRA_PARITY.md``.
+``docs/history/architecture-reviews/ida-ghidra-parity-2026-08.md``.
 """
 
 from __future__ import annotations

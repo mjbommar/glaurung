@@ -1,5 +1,5 @@
 //! SSA value numbering for the LLIR (Stage 2 of the value-model refactor —
-//! docs/design/decompiler-refactors.md #1).
+//! docs/history/design/plans-superseded/decompiler-refactors.md #1).
 //!
 //! Naming and typing key on the *physical register*, so a register reused for
 //! two purposes (an argument spilled then reused as a scratch integer; the

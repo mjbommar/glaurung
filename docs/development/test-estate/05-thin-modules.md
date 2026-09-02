@@ -1,5 +1,7 @@
 # Phase 5 — Corpora for the modules with almost no tests
 
+> **Kind:** plan · **Status:** proposed
+
 ## The problem
 
 Four modules that turn analysis into *answers a human reads* are effectively

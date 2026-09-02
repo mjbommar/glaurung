@@ -241,7 +241,7 @@ def _destination_for(
 
     JSON dashboards are data and land under `baseline_root`
     (`data/baselines/windows-ghidra-parity/`); the rendered Markdown tables are
-    prose and stay under `docs_root` (`docs/windows-port/`).
+    prose and stay under `docs_root` (`docs/history/windows-port-2026-05/`).
     """
     if mode == "ghidra_parity":
         if artifact.endswith("_refresh.json"):

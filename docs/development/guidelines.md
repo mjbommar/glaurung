@@ -1,8 +1,6 @@
 # Errors and logging
 
-> **Status: maintained developer guide.** This page describes the APIs that
-> exist today. Proposed error types and logging controls are called out as gaps,
-> not documented as shipped behavior.
+> **Kind:** guide · **Status:** maintained
 
 Use typed errors to preserve failure semantics, and use structured logging to
 explain execution without exposing target contents. The live definitions are

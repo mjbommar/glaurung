@@ -1,5 +1,7 @@
 # Glaurung decompiler and binary-analysis roadmap
 
+> **Kind:** design · **Status:** proposed
+
 **Status:** canonical consolidated roadmap  
 **Last updated:** 2026-08-13  
 **Planning baseline:** Glaurung `fb4ee6ba5966e0e4a7fe001b523231fc5fcd43f4`
@@ -158,7 +160,7 @@ measured against; the ratio is bookkeeping, not evidence.
 ### Local product state ahead of the planning baseline
 
 Committed to `master` after `fb4ee6b` (see
-[the 2026-08-13 execution diary](decompiler-roadmap-diary-2026-08-13.md)):
+[the 2026-08-13 execution diary](../history/design/diaries/decompiler-roadmap-diary-2026-08-13.md)):
 
 - `4549aee` DWARF type import retains conflicting cross-unit layouts instead of
   a first-wins dedup that destroyed them, and stops inventing alignment.
@@ -3180,31 +3182,31 @@ releasable.
 
 This roadmap supersedes the ordering in the older plans but not their evidence:
 
-- [Architecture redesign](glaurung-architecture-redesign-2026-08-05.md)
-- [Execution diary, 2026-08-19](decompiler-roadmap-diary-2026-08-19.md) —
+- [Architecture redesign](../history/design/plans-superseded/glaurung-architecture-redesign-2026-08-05.md)
+- [Execution diary, 2026-08-19](../history/design/diaries/decompiler-roadmap-diary-2026-08-19.md) —
   a formatter emitting syntax the project cannot run, a regression `cargo
   test` structurally could not see, and three causes where I had filed one
-- [Execution diary, 2026-08-18](decompiler-roadmap-diary-2026-08-18.md) —
+- [Execution diary, 2026-08-18](../history/design/diaries/decompiler-roadmap-diary-2026-08-18.md) —
   the feature blind spot (8.6% of the tree never compiled by the documented
   gate), byte/word division silently discarded, and a correctness bug traced
   correctly that measurement showed cannot occur
-- [Architecture review diary](glaurung-architecture-review-diary-2026-08-05.md)
-- [DecBench remediation roadmap](decbench-remediation-roadmap-2026-08-08.md)
-- [DecBench gap-analysis diary](decbench-gap-analysis-diary-2026-08-08.md)
-- [Decompiler middle architecture](decompiler-middle-architecture.md)
-- [Value-model root cause and plan](value-model-root-cause-and-plan.md)
-- [Register views and verifier boundary](register-views-and-the-verifier-boundary.md)
-- [Semantic structuring](semantics-preserving-structuring.md)
-- [Typed SSA and HIR](typed-ssa-hlir.md)
-- [ARMv7 real defects](armv7-real-defects-2026-08-05.md)
-- [Table-dispatch arguments](table-dispatch-arguments-2026-08-12.md)
-- [Stack-bias affine-index record](stack-bias-affine-index-2026-08-13.md)
-- [Dormant transform measurements](dormant-transforms-2026-08-12.md)
-- [Goto-density measurement](goto-density-measurement-2026-08-12.md)
-- [Measured GED trade](ged-recovery-measured-trade.md)
-- [Master integration record](master-integration-2026-08-12.md)
-- [Branch retirement manifest](branch-retirement-2026-08-13.md)
-- [DecBench submission readiness](decbench-submission-readiness.md)
+- [Architecture review diary](../history/design/diaries/glaurung-architecture-review-diary-2026-08-05.md)
+- [DecBench remediation roadmap](../history/design/plans-superseded/decbench-remediation-roadmap-2026-08-08.md)
+- [DecBench gap-analysis diary](../history/design/diaries/decbench-gap-analysis-diary-2026-08-08.md)
+- [Decompiler middle architecture](../history/design/plans-superseded/decompiler-middle-architecture.md)
+- [Value-model root cause and plan](../history/design/plans-superseded/value-model-root-cause-and-plan.md)
+- [Register views and verifier boundary](../architecture/register-model.md)
+- [Semantic structuring](../history/design/plans-superseded/semantics-preserving-structuring.md)
+- [Typed SSA and HIR](../history/design/plans-superseded/typed-ssa-hlir.md)
+- [ARMv7 real defects](../history/design/campaigns/armv7-real-defects-2026-08-05.md)
+- [Table-dispatch arguments](../history/design/campaigns/table-dispatch-arguments-2026-08-12.md)
+- [Stack-bias affine-index record](stack-bias-affine-index.md)
+- [Dormant transform measurements](dormant-transforms.md)
+- [Goto-density measurement](goto-density.md)
+- [Measured GED trade](../history/design/campaigns/ged-recovery-measured-trade.md)
+- [Master integration record](../history/design/repo-operations/master-integration-2026-08-12.md)
+- [Branch retirement manifest](../history/design/repo-operations/branch-retirement-2026-08-13.md)
+- [DecBench submission readiness](../history/design/campaigns/decbench-submission-readiness.md)
 
 ## Appendix A — DecBench and evaluation (ON DEMAND ONLY)
 

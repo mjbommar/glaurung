@@ -1,5 +1,7 @@
 # §N — Stripped Go binary
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: recover useful Go names from runtime metadata and distinguish recovered
 name coverage from functions selected for deeper native analysis.
 

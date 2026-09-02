@@ -35,9 +35,9 @@ from scripts import verify_tutorial
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL_FIXTURES = ROOT / "docs" / "tutorial" / "_fixtures" / "01-install"
 TIER5 = ROOT / "docs" / "tutorial" / "05-agent-workflows"
-ASK_DOC = ROOT / "docs" / "cli" / "ASK_COMMAND.md"
-ERGONOMICS_DOC = ROOT / "docs" / "cli" / "analyst-ergonomics.md"
-DEMOS = ROOT / "docs" / "demos"
+ASK_DOC = ROOT / "docs" / "guides" / "ask.md"
+ERGONOMICS_DOC = ROOT / "docs" / "guides" / "analyst-workflows.md"
+DEMOS = ROOT / "docs" / "guides" / "demos"
 DOCS_INDEX = ROOT / "docs" / "README.md"
 REPOSITORY_INDEX = ROOT / "README.md"
 EXAMPLES = ROOT / "examples"

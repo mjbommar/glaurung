@@ -1,5 +1,7 @@
 # Phase 11 — Tiers and facets: what runs where, and why
 
+> **Kind:** plan · **Status:** proposed
+
 The suite is tiered by what each test **needs**, not by what it is about. That
 axis is the one a CI job can act on: a runner either has the built fixture
 matrix or it does not, has a cross compiler or does not, fetched LFS or did

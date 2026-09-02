@@ -5,7 +5,7 @@
 # Bottom-up: Tier 0 (solver primitives) -> Tier 1 (formula families) ->
 # Tier 1b (width x count mechanism) -> Tier 2 (warm vs one-shot) ->
 # Tier 3 (real ioctlance driver query streams). See
-# docs/axeyum-integration/benchmark/README.md for the design.
+# bench/axeyum/README.md for the design.
 #
 # Usage:
 #   bench/axeyum/run_benchmark.sh [--fast] [--full-drivers]
