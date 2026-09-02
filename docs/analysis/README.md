@@ -12,6 +12,10 @@ implementation, not to infer that a command or backend exists.
 - [Decompiler architecture](decompiler/) covers the native LLIR, SSA, AST, and
   pseudocode pipeline. Dated files in that directory are evidence checkpoints,
   not evergreen command references.
+- [Function identity: the CFR](function-identity-cfr.md) documents the
+  canonical function representation behind `glaurung.analysis.cfr_signatures_path`
+  -- the mask/keep table, the version discipline, and the measured retrieval
+  numbers with their denominators.
 - [Compiler and source-language detection](language-detection/) documents the
   internal Rust heuristic and explains that it is not a standalone CLI command.
 - [Binary triage](../triage/) is the first deterministic pass for format,

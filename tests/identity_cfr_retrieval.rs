@@ -71,6 +71,26 @@ const MIN_BLOCKS: usize = 5;
 /// Negatives offered against each positive.
 const NEGATIVES: usize = 100;
 
+/// Discovery budgets for a *measurement*, which are not the shipped defaults.
+///
+/// `Budgets::default()` carries `timeout_ms: 100` -- a wall clock on one
+/// function's block walk. On an idle machine no fixture function comes close to
+/// it; under a full `cargo test` run with twenty-four test binaries in flight it
+/// fires, discovery is truncated for whichever functions lost the race, and the
+/// measured Recall@1 moves. That is not a hypothetical: this lane passed alone
+/// and failed inside the full suite until the ceiling was lifted here.
+///
+/// A measurement harness must not carry a wall-clock ceiling at all. The
+/// instruction and block ceilings stay, because they are deterministic
+/// functions of the input.
+fn measurement_budgets() -> Budgets {
+    Budgets {
+        timeout_ms: u64::MAX,
+        total_timeout_ms: 0,
+        ..Budgets::default()
+    }
+}
+
 /// How far above its floor a measurement may drift before this file demands the
 /// floor be raised.
 const RATCHET_SLACK: f64 = 0.05;
@@ -178,7 +198,7 @@ struct Census {
 fn load_slice(compiler: &str, opt: &str, settings: CfrSettings) -> Option<(Vec<Func>, Census)> {
     let directory = build_dir();
     let suffix = format!("-{compiler}-{opt}.so");
-    let budgets = Budgets::default();
+    let budgets = measurement_budgets();
     let mut out: Vec<Func> = Vec::new();
     let mut census = Census::default();
 

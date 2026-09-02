@@ -149,10 +149,16 @@ impl From<crate::identity::cfr::FunctionCfr> for CfrSignature {
 /// signatures computed without it.
 ///
 /// The remaining arguments are the ordinary function-discovery budgets, spelled
-/// the same way `analyze_functions_path` spells them.
+/// the same way `analyze_functions_path` spells them -- with one deliberate
+/// difference. `timeout_ms` is a *wall clock* on one function's block walk, and
+/// `analyze_functions_path` defaults it to 100. A wall clock inside an identity
+/// function means the digest of a binary depends on how busy the machine was:
+/// a truncated discovery is a different graph, and the failure is silent. So the
+/// default here is effectively no ceiling. A caller who would rather have a
+/// bounded answer than a reproducible one passes a real number and gets one.
 #[pyfunction]
 #[pyo3(name = "cfr_signatures_path")]
-#[pyo3(signature = (path, nosize=false, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
+#[pyo3(signature = (path, nosize=false, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=3_600_000u64, total_timeout_ms=0u64))]
 fn cfr_signatures_path(
     path: String,
     nosize: bool,
