@@ -59,6 +59,11 @@ pub(crate) struct Cfg {
     /// treating two ordinary return arms like a cold non-returning guard merely
     /// because both have zero CFG successors.
     pub(crate) ends_in_return: Vec<bool>,
+    /// Number of lifted instructions owned by each source block.
+    ///
+    /// Shadow cleanup uses this exact source measure to keep tail duplication
+    /// bounded; rendered statement counts are a later, less stable view.
+    pub(crate) block_instruction_counts: Vec<usize>,
     /// Whether the block ends in a resolved, index-bearing indirect transfer.
     /// Raw-loop lowering needs this stronger fact than the structural
     /// multi-successor switch fallback used for imported/synthetic CFGs.
@@ -178,6 +183,7 @@ impl Cfg {
                     .is_some_and(|instr| instr.op.is_unconditional_return())
             })
             .collect();
+        let block_instruction_counts = lf.blocks.iter().map(|block| block.instrs.len()).collect();
         let explicit_dispatch = lf
             .blocks
             .iter()
@@ -215,6 +221,7 @@ impl Cfg {
             ipostdom,
             cond_taken,
             ends_in_return,
+            block_instruction_counts,
             explicit_dispatch,
             edges,
             reaches: std::cell::OnceCell::new(),

@@ -5,12 +5,16 @@
 //! returns a deterministic candidate or a typed refusal, plus exact graph
 //! coverage. Production authority remains [`crate::ir::structure`].
 
+mod cleanup;
 mod conditions;
 mod dominators;
 mod local;
 mod region;
 mod verify;
 
+pub use cleanup::{
+    DuplicatedTail, MAX_TAIL_DUPLICATION_INSTRUCTIONS, MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
+};
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
 pub use dominators::{LoopForest, LoopInfo, LoopKind};
 pub use local::{HonestGotoEvidence, LocalRegions};
@@ -40,6 +44,7 @@ pub struct ShadowReport {
     pub loops: LoopForest,
     pub candidate: Option<RegionCandidate>,
     pub honest_gotos: Vec<HonestGotoEvidence>,
+    pub duplicated_tails: Vec<DuplicatedTail>,
     pub verification_errors: Vec<CandidateError>,
     pub refusal: Option<Refusal>,
 }
@@ -56,11 +61,12 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
     let loops = LoopForest::from_cfg(cfg);
     let local_regions = LocalRegions::from_cfg(cfg, &loops);
+    let duplicated_tails = cleanup::plan_tail_duplication(cfg);
     match ConditionDag::from_cfg(cfg, &loops, &local_regions) {
         Ok(conditions) => {
             let candidate = RegionCandidate::from_cfg(cfg, &loops, &local_regions);
             let verification_errors = candidate.as_ref().map_or_else(Vec::new, |candidate| {
-                verify::verify_candidate(cfg, &loops, &local_regions, candidate)
+                verify::verify_candidate(cfg, &loops, &local_regions, &duplicated_tails, candidate)
             });
             if verification_errors.is_empty() {
                 ShadowReport {
@@ -71,6 +77,7 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
                     conditions: Some(conditions),
                     candidate,
                     honest_gotos: local_regions.evidence().to_vec(),
+                    duplicated_tails,
                     loops,
                     verification_errors,
                     refusal: None,
@@ -84,6 +91,7 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
                     conditions: Some(conditions),
                     candidate: None,
                     honest_gotos: Vec::new(),
+                    duplicated_tails: Vec::new(),
                     loops,
                     verification_errors,
                     refusal: Some(Refusal::CandidateInvalid),
@@ -98,6 +106,7 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
             conditions: None,
             candidate: None,
             honest_gotos: Vec::new(),
+            duplicated_tails: Vec::new(),
             loops,
             verification_errors: Vec::new(),
             refusal: Some(refusal),
@@ -140,6 +149,33 @@ mod tests {
                 block(0x1200, condition(0x1300), vec![0x1300, 0x1400]),
                 block(0x1300, Op::Return, vec![]),
                 block(0x1400, Op::Return, vec![]),
+            ],
+        }
+    }
+
+    fn shared_return_cfg(return_instruction_count: usize) -> LlirFunction {
+        let mut tail_instrs = (0..return_instruction_count.saturating_sub(1))
+            .map(|offset| LlirInstr {
+                va: 0x1300 + offset as u64,
+                op: Op::Nop,
+            })
+            .collect::<Vec<_>>();
+        tail_instrs.push(LlirInstr {
+            va: 0x1300 + return_instruction_count.saturating_sub(1) as u64,
+            op: Op::Return,
+        });
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(0x1000, condition(0x1100), vec![0x1100, 0x1200]),
+                block(0x1100, Op::Nop, vec![0x1300]),
+                block(0x1200, Op::Nop, vec![0x1300]),
+                LlirBlock {
+                    start_va: 0x1300,
+                    end_va: 0x1300 + return_instruction_count as u64,
+                    instrs: tail_instrs,
+                    succs: vec![],
+                },
             ],
         }
     }
@@ -226,6 +262,73 @@ mod tests {
     }
 
     #[test]
+    fn a_small_shared_return_gets_deterministic_clone_provenance() {
+        let function = shared_return_cfg(MAX_TAIL_DUPLICATION_INSTRUCTIONS);
+        let report = observe(&function, &compute_ssa(&function));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(report.duplicated_tails.len(), 1, "{report:#?}");
+        assert_eq!(
+            report.duplicated_tails[0],
+            DuplicatedTail {
+                source_block: 3,
+                canonical_predecessor: 1,
+                cloned_at_predecessor: 2,
+                instruction_count: MAX_TAIL_DUPLICATION_INSTRUCTIONS,
+            }
+        );
+        assert!(report.verification_errors.is_empty());
+    }
+
+    #[test]
+    fn an_oversized_shared_return_is_not_duplicated() {
+        let function = shared_return_cfg(MAX_TAIL_DUPLICATION_INSTRUCTIONS + 1);
+        let report = observe(&function, &compute_ssa(&function));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert!(report.duplicated_tails.is_empty(), "{report:#?}");
+    }
+
+    #[test]
+    fn total_tail_duplication_growth_is_bounded_per_function() {
+        let predecessor_vas: Vec<_> = (0..10).map(|index| 0x1100 + index * 0x100).collect();
+        let mut blocks = vec![block(0x1000, Op::Nop, predecessor_vas.clone())];
+        blocks.extend(
+            predecessor_vas
+                .iter()
+                .copied()
+                .map(|va| block(va, Op::Nop, vec![0x2000])),
+        );
+        let mut tail = shared_return_cfg(MAX_TAIL_DUPLICATION_INSTRUCTIONS)
+            .blocks
+            .pop()
+            .expect("helper has a return tail");
+        tail.start_va = 0x2000;
+        tail.end_va = 0x2000 + MAX_TAIL_DUPLICATION_INSTRUCTIONS as u64;
+        for (offset, instruction) in tail.instrs.iter_mut().enumerate() {
+            instruction.va = 0x2000 + offset as u64;
+        }
+        blocks.push(tail);
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks,
+        };
+
+        let report = observe(&function, &compute_ssa(&function));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(
+            report
+                .duplicated_tails
+                .iter()
+                .map(|tail| tail.instruction_count)
+                .sum::<usize>(),
+            MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS
+        );
+        assert!(report.verification_errors.is_empty());
+    }
+
+    #[test]
     fn real_sc_mixed_fixture_runs_in_shadow_mode_with_total_coverage() {
         let lifted = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "sc_mixed");
         let report = observe(&lifted, &compute_ssa(&lifted));
@@ -283,7 +386,7 @@ mod tests {
         assert!(!loop_info.latches.is_empty());
         assert!(!loop_info.exits.is_empty());
         assert!(loop_info.blocks.len() >= 2);
-        let candidate = report.candidate.expect("reducible loop candidate");
+        let candidate = report.candidate.as_ref().expect("reducible loop candidate");
         assert_eq!(candidate.blocks().len(), report.block_count);
         assert_eq!(candidate.transfer_count(), report.edge_count);
         assert!(candidate
@@ -308,7 +411,7 @@ mod tests {
                 .any(|loop_info| loop_info.exits.len() >= 2),
             "early-return and normal-exit paths must remain distinct: {report:#?}"
         );
-        let candidate = report.candidate.expect("reducible loop candidate");
+        let candidate = report.candidate.as_ref().expect("reducible loop candidate");
         assert_eq!(candidate.blocks().len(), report.block_count);
         assert_eq!(candidate.transfer_count(), report.edge_count);
         let return_blocks: Vec<_> = candidate
@@ -336,6 +439,17 @@ mod tests {
         assert!(
             incoming >= 2,
             "early and normal exits must both reach the shared terminal: {candidate:#?}"
+        );
+        assert!(
+            !report.duplicated_tails.is_empty(),
+            "the real shared return should produce clone provenance: {report:#?}"
+        );
+        assert!(
+            report
+                .duplicated_tails
+                .iter()
+                .all(|tail| tail.source_block == shared_return),
+            "only the shared return may be selected for duplication: {report:#?}"
         );
     }
 

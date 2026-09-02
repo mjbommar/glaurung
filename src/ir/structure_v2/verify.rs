@@ -2,25 +2,50 @@
 
 use std::collections::BTreeMap;
 
-use super::{LocalRegions, LoopForest, RegionCandidate, Terminal, Transfer};
+use super::{
+    DuplicatedTail, LocalRegions, LoopForest, RegionCandidate, Terminal, Transfer,
+    MAX_TAIL_DUPLICATION_INSTRUCTIONS, MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
+};
 use crate::ir::structure::Cfg;
 
 /// A concrete disagreement between a candidate and its source CFG.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CandidateError {
-    BlockMissing { block: usize },
-    BlockDuplicated { block: usize },
-    BlockOutOfRange { block: usize },
-    EdgeMissing { from: usize, to: usize },
-    EdgeInvented { from: usize, to: usize },
-    TransferKindInvalid { from: usize, to: usize },
-    TerminalMismatch { block: usize },
+    BlockMissing {
+        block: usize,
+    },
+    BlockDuplicated {
+        block: usize,
+    },
+    BlockOutOfRange {
+        block: usize,
+    },
+    EdgeMissing {
+        from: usize,
+        to: usize,
+    },
+    EdgeInvented {
+        from: usize,
+        to: usize,
+    },
+    TransferKindInvalid {
+        from: usize,
+        to: usize,
+    },
+    TerminalMismatch {
+        block: usize,
+    },
+    DuplicatedTailInvalid {
+        source_block: usize,
+        cloned_at_predecessor: usize,
+    },
 }
 
 pub(super) fn verify_candidate(
     cfg: &Cfg,
     loops: &LoopForest,
     locals: &LocalRegions,
+    duplicated_tails: &[DuplicatedTail],
     candidate: &RegionCandidate,
 ) -> Vec<CandidateError> {
     let mut errors = Vec::new();
@@ -80,7 +105,41 @@ pub(super) fn verify_candidate(
             errors.push(CandidateError::EdgeInvented { from, to });
         }
     }
+    verify_duplicated_tails(cfg, duplicated_tails, &mut errors);
     errors
+}
+
+fn verify_duplicated_tails(
+    cfg: &Cfg,
+    duplicated_tails: &[DuplicatedTail],
+    errors: &mut Vec<CandidateError>,
+) {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total_instructions = 0usize;
+    for tail in duplicated_tails {
+        total_instructions = total_instructions.saturating_add(tail.instruction_count);
+        let valid = tail.source_block < cfg.succs.len()
+            && tail.canonical_predecessor < cfg.succs.len()
+            && tail.cloned_at_predecessor < cfg.succs.len()
+            && cfg.succs[tail.source_block].is_empty()
+            && cfg.ends_in_return[tail.source_block]
+            && cfg.block_instruction_counts[tail.source_block] == tail.instruction_count
+            && tail.instruction_count <= MAX_TAIL_DUPLICATION_INSTRUCTIONS
+            && total_instructions <= MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS
+            && cfg.preds[tail.source_block].len() >= 2
+            && cfg.preds[tail.source_block].first() == Some(&tail.canonical_predecessor)
+            && cfg.preds[tail.source_block]
+                .binary_search(&tail.cloned_at_predecessor)
+                .is_ok()
+            && tail.cloned_at_predecessor != tail.canonical_predecessor
+            && seen.insert((tail.source_block, tail.cloned_at_predecessor));
+        if !valid {
+            errors.push(CandidateError::DuplicatedTailInvalid {
+                source_block: tail.source_block,
+                cloned_at_predecessor: tail.cloned_at_predecessor,
+            });
+        }
+    }
 }
 
 fn transfer_target(transfer: &Transfer) -> usize {
@@ -173,9 +232,78 @@ mod tests {
         let cfg = Cfg::from(&function, &compute_ssa(&function));
         let loops = LoopForest::from_cfg(&cfg);
         let locals = LocalRegions::from_cfg(&cfg, &loops);
-        let errors = verify_candidate(&cfg, &loops, &locals, &RegionCandidate { blocks: vec![] });
+        let duplicated_tails = super::super::cleanup::plan_tail_duplication(&cfg);
+        let errors = verify_candidate(
+            &cfg,
+            &loops,
+            &locals,
+            &duplicated_tails,
+            &RegionCandidate { blocks: vec![] },
+        );
         assert!(errors.contains(&CandidateError::BlockMissing { block: 0 }));
         assert!(errors.contains(&CandidateError::BlockMissing { block: 1 }));
         assert!(errors.contains(&CandidateError::EdgeMissing { from: 0, to: 1 }));
+    }
+
+    #[test]
+    fn verifier_rejects_forged_nonterminal_tail_provenance() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![LlirInstr {
+                        va: 0x1000,
+                        op: Op::Nop,
+                    }],
+                    succs: vec![0x1100, 0x1200],
+                },
+                LlirBlock {
+                    start_va: 0x1100,
+                    end_va: 0x1104,
+                    instrs: vec![LlirInstr {
+                        va: 0x1100,
+                        op: Op::Nop,
+                    }],
+                    succs: vec![0x1300],
+                },
+                LlirBlock {
+                    start_va: 0x1200,
+                    end_va: 0x1204,
+                    instrs: vec![LlirInstr {
+                        va: 0x1200,
+                        op: Op::Nop,
+                    }],
+                    succs: vec![0x1300],
+                },
+                LlirBlock {
+                    start_va: 0x1300,
+                    end_va: 0x1304,
+                    instrs: vec![LlirInstr {
+                        va: 0x1300,
+                        op: Op::Return,
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let cfg = Cfg::from(&function, &compute_ssa(&function));
+        let loops = LoopForest::from_cfg(&cfg);
+        let locals = LocalRegions::from_cfg(&cfg, &loops);
+        let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
+        let forged = [DuplicatedTail {
+            source_block: 1,
+            canonical_predecessor: 0,
+            cloned_at_predecessor: 2,
+            instruction_count: 1,
+        }];
+
+        let errors = verify_candidate(&cfg, &loops, &locals, &forged, &candidate);
+
+        assert!(errors.contains(&CandidateError::DuplicatedTailInvalid {
+            source_block: 1,
+            cloned_at_predecessor: 2,
+        }));
     }
 }

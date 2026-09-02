@@ -379,10 +379,10 @@ that preserves honest local gotos when required.
   - `recover.rs`: deterministic region construction;
   - `verify.rs`: block and edge accounting;
   - `cleanup.rs`: bounded tail duplication and else-after-terminal flattening.
-  The boundary now has `mod.rs`, `conditions.rs`, `dominators.rs`, `local.rs`,
-  `region.rs`, and `verify.rs`, while reusing v1's typed `Cfg` directly.
-  Deterministic tree recovery, cleanup, and a separately normalized CFG view
-  remain open.
+  The boundary now has `mod.rs`, `cleanup.rs`, `conditions.rs`,
+  `dominators.rs`, `local.rs`, `region.rs`, and `verify.rs`, while reusing v1's
+  typed `Cfg` directly. Deterministic tree recovery, cleanup materialization,
+  and a separately normalized CFG view remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -430,7 +430,14 @@ that preserves honest local gotos when required.
 - [x] Local failure cannot collapse an otherwise structured function. The real
   nested-irreducible fixture retains its outer natural loop while only the
   inner multi-entry SCC degrades to local gotos.
-- [ ] Tail duplication is size-bounded and terminal-block-only initially.
+- [~] Tail duplication is size-bounded and terminal-block-only initially.
+  Shadow cleanup now plans clones only for explicit shared return blocks, keeps
+  one deterministic canonical predecessor, records source/predecessor/count
+  provenance, and is independently verified against the typed CFG. The initial
+  ceilings are eight lifted instructions per tail and 64 cloned instructions
+  per function. Synthetic boundary tests, a forged-provenance rejection test,
+  and the real `loop_return_on_neg` shared return are green. Materializing the
+  plan into the future structured tree and measuring its output remain open.
 - [ ] Condition simplification preserves machine-width predicate semantics.
 
 ### Promotion criteria
