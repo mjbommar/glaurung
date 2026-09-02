@@ -1252,6 +1252,30 @@ mod gcc_dispatch_corpus_tests {
     }
 
     #[test]
+    fn clang_o2_real_wide_effect_switch_uses_the_zero_extended_byte_bound() {
+        let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/decompiler_fixtures/build/154_wide_switch-clang-O2.so");
+        let data = std::fs::read(binary).expect("read checked-in wide-switch fixture");
+        let (_functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+
+        assert!(
+            stats.resolved_dispatches.contains(&(0x15d9, 256)),
+            "the byte-indexed table must retain all 256 proven slots: resolved={:?} unresolved={:?}",
+            stats.resolved_dispatches,
+            stats.unresolved_indirect
+        );
+        assert!(
+            stats
+                .unresolved_indirect
+                .iter()
+                .all(|(site, _)| *site != 0x15d9),
+            "the resolved site must not also be declined: {:?}",
+            stats.unresolved_indirect
+        );
+    }
+
+    #[test]
     fn clang_o2_real_dense_compute_keeps_labels_for_a_shared_case_body() {
         let tmp = tempfile::tempdir().expect("temporary Clang dense-switch build directory");
         let source = tmp.path().join("dense_compute.c");

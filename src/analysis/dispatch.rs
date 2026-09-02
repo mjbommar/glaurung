@@ -709,10 +709,19 @@ impl DispatchTracker {
             let zero_extended_bound = m
                 .starts_with("movz")
                 .then(|| {
-                    ins.operands
-                        .get(1)
-                        .and_then(|operand| operand.register.as_deref())
-                        .and_then(|source| self.bounded.get(canon_ref(source).as_ref()).copied())
+                    let source = ins.operands.get(1)?;
+                    let source_register = source.register.as_deref()?;
+                    let intrinsic = match source.size {
+                        1..=63 => Some((1u64 << source.size) - 1),
+                        64 => Some(u64::MAX),
+                        _ => None,
+                    }?;
+                    let proven = self
+                        .bounded
+                        .get(canon_ref(source_register).as_ref())
+                        .copied()
+                        .unwrap_or(intrinsic);
+                    Some(proven.min(intrinsic))
                 })
                 .flatten();
             // Synthetic instruction adapters may mark `cmp`'s first operand as
@@ -1417,6 +1426,12 @@ mod tests {
         operand
     }
 
+    fn reg_read_sized(name: &str, size: u8) -> Operand {
+        let mut operand = reg_op_access(name, Access::Read);
+        operand.size = size;
+        operand
+    }
+
     fn imm_sized(value: i64, size: u8) -> Operand {
         let mut operand = imm_op(value);
         operand.size = size;
@@ -1761,6 +1776,17 @@ mod tests {
             dispatch.resolve(&ins("jmp", vec![reg_read("rax")]), &tables()),
             Some(Resolution::Table { ref targets, .. }) if targets.len() == 4
         ));
+    }
+
+    #[test]
+    fn zero_extension_intrinsically_bounds_an_unguarded_index() {
+        let mut tracker = DispatchTracker::new();
+        tracker.observe(&ins(
+            "movzx",
+            vec![reg_write_sized("eax", 32), reg_read_sized("al", 8)],
+        ));
+
+        assert_eq!(tracker.export_bounds().regs.get("rax"), Some(&255));
     }
 
     #[test]

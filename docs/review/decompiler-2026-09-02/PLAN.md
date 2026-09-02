@@ -578,7 +578,11 @@ one authoritative set of case edges.
   `215`, across applicable O0/O2 and architecture lanes.
   The real `102` gcc-O2 discovery-to-shadow vertical slice is green. The gcc-O2
   `154` side-effect switch preserves all 208 typed case values through verified
-  deterministic C rendering. The gcc-O2 `206::dispatch_in_loop` lane now
+  deterministic C rendering. The clang-O2 `154::wide154_dense_effects` lane
+  now treats `movzbl`'s 8-bit source width as an intrinsic `0..255` proof,
+  resolves all 256 table slots at site `0x15d9`, and records no unresolved
+  decline for that site; this is discovery evidence, not yet a shadow-render or
+  execution-differential claim. The gcc-O2 `206::dispatch_in_loop` lane now
   preserves a guarded byte selector through register zero-extension, decodes
   exact cases `0..6`, and renders that typed switch inside its verified loop.
   Other compiler/optimization and named fixture lanes remain.
