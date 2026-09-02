@@ -101,32 +101,6 @@ def test_the_fixture_still_reproduces_the_shape(inlined_printf_object):
     assert len(calls) == 2, f"expected two inlined printf call sites: {calls}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        'OPEN DEFECT (call_args intervening read): `printf("called %d '
-        'times\\n", static_var)` loses its argument at -O2 on BOTH gcc and '
-        "clang. Ghidra makes the identical error; angr keeps the argument "
-        "(with the wrong name).\n\n"
-        "It is NOT an inlining defect, which is what the parity backlog "
-        "originally recorded. Two minimal candidates with the same inlining "
-        "did not reproduce; what reproduces is the argument register being "
-        "defined by `lea` and then READ by the store to the static before the "
-        "call. `call_args.rs` requires that the register 'is not read between "
-        "the assignment and the call', so the fold is refused and the slot is "
-        "dropped entirely.\n\n"
-        "The conflation is the bug: `read_between` answers *may this "
-        "definition be MOVED into the call?* and is used to answer *is this "
-        "slot an argument at all?* A read does not disturb the register.\n\n"
-        "Relaxing the gate was built and measured: it fixes this and costs "
-        "~1,600 undefined reads (clang:O0 140 -> 552) because it then claims "
-        "slots that were never arguments. The execution differential ENDORSED "
-        "that change -- 824 lanes, 2 improvements, 0 regressions -- and the "
-        "def-use census rejected it. A landing fix needs independent evidence "
-        "that the slot is an argument; format-string arity is the candidate, "
-        "which makes this a dependent of parity #3."
-    ),
-)
 def test_an_inlined_printf_keeps_its_argument(inlined_printf_object):
     """Both call sites must pass the counter they format."""
     calls = printf_calls(inlined_printf_object)

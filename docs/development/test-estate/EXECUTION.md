@@ -157,8 +157,8 @@ evidence depends on gates that actually run and actually assert.
 | [ ] Source-grounded ARM64/Cortex-M hostile family | real-binary R1/R5 | ARM64 parity plus independent F2a guard |
 | [ ] Page-align fixture + symbol-snapping guard | parity #9 | needs 4 baselines |
 | [ ] Pointer/array render (`char **argv`) | parity #6 | |
-| [ ] Variadic / call-site arity | parity #3 | |
-| [ ] Inlined-body register threading | parity #4 | |
+| [~] Variadic / call-site arity | parity #3 | literal `printf`-family arity landed; generic `ptrace`-like recovery remains |
+| [x] Inlined-body register threading | parity #4 | format-proved real GCC/Clang O2 fixture; this commit |
 | [ ] Go fixtures: manifest entries + 4 baselines | estate 7.1 | wiring landed; needs a quiet machine |
 | [~] Structural baseline at O2 | estate 7.5 / parity #8 | readability census landed; closure/effects map still needs a lane key |
 | [ ] Structural schema v2 + GCC/Clang O0/O2 populations | estate 7.5 / real-binary R3 | preserve lane denominators and binary hashes |

@@ -177,12 +177,13 @@ pub(super) fn run_ast_passes(
         crate::ir::call_args::recover_resolved_tail_calls(f, cc);
     });
     pass!("reconstruct_args", {
-        crate::ir::call_args::reconstruct_args_with_layouts(
+        crate::ir::call_args::reconstruct_args_with_layouts_and_strings(
             f,
             cc,
             param_slots,
             &reconstruction_layouts,
             &callee_facts.table_entry_layouts,
+            str_pool,
         );
     });
     // ABI liveness supplies candidate call inputs/outputs; an authoritative

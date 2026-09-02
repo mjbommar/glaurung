@@ -42,8 +42,10 @@ pub(super) fn fold_one_call(
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
+    string_pool: &std::collections::HashMap<u64, String>,
 ) {
     let incoming_overrides = enclosing.overrides.as_slice();
+    let format_proven_arity = format_proven_arity(body, call_idx, arch, string_pool);
     if arch == CallConv::Cdecl32 {
         fold_one_cdecl32_call(body, call_idx);
         return;
@@ -291,7 +293,8 @@ pub(super) fn fold_one_call(
                         if read_between[slot]
                             && (proven_aapcs_stack
                                 || (arch == CallConv::Aarch64
-                                    && later_slot_proves_contiguous_prefix))
+                                    && later_slot_proves_contiguous_prefix)
+                                || format_proven_arity.is_some_and(|arity| slot < arity))
                         {
                             // A locked stack layout or an already recovered
                             // higher register slot proves this slot is a call
@@ -697,4 +700,74 @@ pub(super) fn fold_one_call(
     for idx in used_stmt_indices {
         body.remove(idx);
     }
+}
+
+/// Prove the number of register arguments consumed by a recognized
+/// `printf`-family call from a literal format string.
+///
+/// This is deliberately narrower than general variadic recovery. The target
+/// must be named, the format slot's nearest reaching definition must be a
+/// literal address in `string_pool`, and the shared parser must understand the
+/// complete format. Any control-flow boundary, call, indirection, or unsupported
+/// conversion declines the proof.
+fn format_proven_arity(
+    body: &[Stmt],
+    call_idx: usize,
+    arch: CallConv,
+    string_pool: &std::collections::HashMap<u64, String>,
+) -> Option<usize> {
+    if !matches!(arch, CallConv::SysVAmd64 | CallConv::Win64) {
+        return None;
+    }
+    let Stmt::Call {
+        target: Expr::Named { name, .. },
+        ..
+    } = body.get(call_idx)?
+    else {
+        return None;
+    };
+    let clean = name.split('@').next().unwrap_or(name);
+    let clean = clean
+        .strip_prefix('_')
+        .filter(|_| !clean.starts_with("__"))
+        .unwrap_or(clean);
+    let (format_slot, variadic_start): (usize, usize) = match clean {
+        "printf" => (0, 1),
+        "fprintf" => (1, 2),
+        "__printf_chk" => (1, 2),
+        "__fprintf_chk" => (2, 3),
+        "error" => (2, 3),
+        _ => return None,
+    };
+    for statement in body[..call_idx].iter().rev() {
+        match statement {
+            Stmt::Assign {
+                dst: VReg::Phys(register),
+                src,
+            } if super::slot_of(arch, register) == Some(format_slot) => {
+                let address = match src {
+                    Expr::Addr(address) => *address,
+                    Expr::Cast { expr, .. } => match expr.as_ref() {
+                        Expr::Addr(address) => *address,
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                let conversions = crate::ir::printf_format::parse_printf_hints(
+                    string_pool.get(&address)?,
+                    crate::ir::abi::machine_word_bytes(arch),
+                )?;
+                let arity = variadic_start.checked_add(conversions.len())?;
+                return (arity <= super::arg_slots(arch).len()).then_some(arity);
+            }
+            Stmt::Call { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Return { .. }
+            | Stmt::Break => return None,
+            _ => {}
+        }
+    }
+    None
 }

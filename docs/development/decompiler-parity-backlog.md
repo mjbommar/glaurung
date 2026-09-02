@@ -192,7 +192,13 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
    argument-register liveness, not just the callee prototype. Moves
    `type_match` and the def-use census directly.
 
-4. **Thread register values across inlined bodies.** `fix` · effort **L** ·
+   > **Partially landed 2026-09-02.** Recognized `printf`-family calls on
+   > SysV/Win64 now derive a register-argument bound from a literal format
+   > string only when the shared parser understands the complete format. This
+   > deliberately does not solve generic fixed-arity recovery such as
+   > `ptrace`; dynamic, positional, `*`, and unsupported formats fail closed.
+
+4. **~~Thread register values across inlined bodies.~~ LANDED** ·
    evidence: O2 dropped-arg. Add the fixture first (it is a clean, minimal
    reproduction), then fix the dataflow that loses the inlined static-var
    read. Target: match angr (arg present) with the correct name (which #1
@@ -335,6 +341,14 @@ new capability. Effort L/M/H is a rough half-day / few-days / week+.
    > `test-estate/10-ci-environment-gap.md`). Correctness gates and quality
    > gates are answering different questions, and a change touching argument
    > recovery must clear both.
+
+   > **Landed 2026-09-02 with the missing proof.** The pipeline now supplies
+   > the real string pool to call-argument recovery; a recognized literal
+   > format proves the exact register prefix, allowing an interveningly read
+   > definition to remain rooted and appear as the call's SSA argument. The
+   > GCC and Clang O2 real fixture passes, an unsupported `%*d` negative
+   > control declines recovery, and the full six-cell def-use census is
+   > unchanged.
 
 ### Triage value & polish
 

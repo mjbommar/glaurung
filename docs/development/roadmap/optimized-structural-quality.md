@@ -15,6 +15,11 @@ gotos while removing only 37 breaks, and all seven of its readability
 regressions were at **-O0**, not at the O2 lane the census was scoped to
 assume. Closure and effect expectations still contain 2,253 and 37 rows
 without lane keys; schema v2 and optimized shape predicates remain open.
+The first semantic parity slice has also landed: literal, fully parsed
+`printf`-family formats now prove the call prefix needed to preserve an
+interveningly read argument on the real GCC/Clang O2 inlined-body fixture.
+Unsupported formats fail closed, and the six-cell def-use census is unchanged;
+generic variadic arity remains open.
 
 ## Current evidence
 

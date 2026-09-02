@@ -77,6 +77,7 @@ pub mod named_constants;
 pub mod naming;
 pub mod pass_stats;
 pub mod pdb_fields;
+pub(crate) mod printf_format;
 pub(crate) mod prototype_width;
 pub mod readonly_fold;
 pub mod recovered_variables;

@@ -387,6 +387,26 @@ pub fn reconstruct_args_with_layouts(
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
     table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
+    reconstruct_args_with_layouts_and_strings(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        table_entry_layouts,
+        &std::collections::HashMap::new(),
+    );
+}
+
+/// As [`reconstruct_args_with_layouts`], with literal string evidence available
+/// to prove the arity of recognized variadic format consumers.
+pub fn reconstruct_args_with_layouts_and_strings(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    string_pool: &std::collections::HashMap<u64, String>,
+) {
     // The spelling this function uses for each live-in argument register is a
     // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
     // contain the call makes an untouched incoming parameter invisible to every
@@ -403,6 +423,7 @@ pub fn reconstruct_args_with_layouts(
             table_entry: table_entry_layouts,
         },
         &function_live_ins,
+        string_pool,
     );
     attribute_call_results(&mut f.body, arch);
 }
@@ -585,10 +606,11 @@ fn fold_body(
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: CalleeLayouts<'_>,
     function_live_ins: &[Option<Expr>],
+    string_pool: &std::collections::HashMap<u64, String>,
 ) {
     let entry_constant = entry_constant_slots(body, arch);
     let entry = EnclosingSlots::entry(arch, function_live_ins, entry_constant);
-    fold_body_with_context(body, arch, param_slots, callee_layouts, &entry);
+    fold_body_with_context(body, arch, param_slots, callee_layouts, &entry, string_pool);
 }
 
 fn fold_body_with_context(
@@ -597,6 +619,7 @@ fn fold_body_with_context(
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
+    string_pool: &std::collections::HashMap<u64, String>,
 ) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
     // `running` is the enclosing clobber mask at each position, accumulated in
@@ -616,9 +639,23 @@ fn fold_body_with_context(
                 else_body,
                 ..
             } => {
-                fold_body_with_context(then_body, arch, param_slots, callee_layouts, &nested);
+                fold_body_with_context(
+                    then_body,
+                    arch,
+                    param_slots,
+                    callee_layouts,
+                    &nested,
+                    string_pool,
+                );
                 if let Some(eb) = else_body {
-                    fold_body_with_context(eb, arch, param_slots, callee_layouts, &nested);
+                    fold_body_with_context(
+                        eb,
+                        arch,
+                        param_slots,
+                        callee_layouts,
+                        &nested,
+                        string_pool,
+                    );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
@@ -628,19 +665,47 @@ fn fold_body_with_context(
                 let nested = enclosing
                     .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch))
                     .with_overrides(loop_inputs);
-                fold_body_with_context(body, arch, param_slots, callee_layouts, &nested)
+                fold_body_with_context(
+                    body,
+                    arch,
+                    param_slots,
+                    callee_layouts,
+                    &nested,
+                    string_pool,
+                )
             }
             Stmt::For { body, .. } => {
                 let nested = enclosing
                     .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch));
-                fold_body_with_context(body, arch, param_slots, callee_layouts, &nested)
+                fold_body_with_context(
+                    body,
+                    arch,
+                    param_slots,
+                    callee_layouts,
+                    &nested,
+                    string_pool,
+                )
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    fold_body_with_context(case, arch, param_slots, callee_layouts, &nested);
+                    fold_body_with_context(
+                        case,
+                        arch,
+                        param_slots,
+                        callee_layouts,
+                        &nested,
+                        string_pool,
+                    );
                 }
                 if let Some(default) = default {
-                    fold_body_with_context(default, arch, param_slots, callee_layouts, &nested);
+                    fold_body_with_context(
+                        default,
+                        arch,
+                        param_slots,
+                        callee_layouts,
+                        &nested,
+                        string_pool,
+                    );
                 }
             }
             _ => {}
@@ -666,7 +731,15 @@ fn fold_body_with_context(
     // preceding arg assignments for a later call first.
     call_positions.reverse();
     for call_idx in call_positions {
-        fold_one_call(body, call_idx, arch, param_slots, callee_layouts, enclosing);
+        fold_one_call(
+            body,
+            call_idx,
+            arch,
+            param_slots,
+            callee_layouts,
+            enclosing,
+            string_pool,
+        );
     }
 }
 
@@ -4731,6 +4804,130 @@ mod tests {
             "body was:\n{:#?}",
             f.body
         );
+    }
+
+    /// A fully understood literal format proves that the third SysV slot is
+    /// consumed even when an inlined body reads its reaching definition before
+    /// the call. Keep that definition rooted and name its exact SSA value at
+    /// the call rather than silently truncating the variadic argument list.
+    #[test]
+    fn literal_printf_format_keeps_an_interveningly_read_argument() {
+        let mut f = Function {
+            name: "inlined_printf_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Const(2),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Addr(0x3000),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#1"),
+                    src: Expr::Const(42),
+                },
+                Stmt::Store {
+                    addr: Expr::Addr(0x4000),
+                    src: Expr::Reg(reg("rdx#1")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "__printf_chk".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let strings = std::collections::HashMap::from([(0x3000, "called %d times\n".to_string())]);
+
+        reconstruct_args_with_layouts_and_strings(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &strings,
+        );
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(
+            args,
+            &[Expr::Const(2), Expr::Addr(0x3000), Expr::Reg(reg("rdx#1")),],
+            "body was:\n{:#?}",
+            f.body
+        );
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Assign { dst, .. } if dst == &reg("rdx#1")
+        )));
+    }
+
+    /// Unsupported format constructs must not relax the read barrier. This is
+    /// the fail-closed control for the positive proof above: `%*d` consumes a
+    /// dynamic width, which the shared parser deliberately declines.
+    #[test]
+    fn unsupported_printf_format_does_not_invent_an_argument() {
+        let mut f = Function {
+            name: "unsupported_printf_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Addr(0x3000),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(42),
+                },
+                Stmt::Store {
+                    addr: Expr::Addr(0x4000),
+                    src: Expr::Reg(reg("rsi#1")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "printf".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let strings = std::collections::HashMap::from([(0x3000, "value %*d\n".to_string())]);
+
+        reconstruct_args_with_layouts_and_strings(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &strings,
+        );
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(args, &[Expr::Addr(0x3000)], "body was:\n{:#?}", f.body);
     }
 
     /// A different SSA version is not, by itself, permission to keep scanning.

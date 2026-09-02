@@ -74,6 +74,9 @@ distinguishes imports from absent symbols. The readability census now contains
 3,580 rows across both corpora and GCC/Clang O0/O2 (`1329382d`); a dispatch
 relaxation was reverted after adding 162 gotos while removing only 37 breaks.
 Closure and effect expectations remain lane-independent.
+R3's dropped inlined-`printf` argument is now fixed using fail-closed literal
+format-string arity, with GCC/Clang O2 real-fixture and six-cell def-use-census
+coverage. This is a bounded parity gain; generic variadic arity remains open.
 
 Two of the five missing-body classes are now closed at the product end. F2a
 turned out not to be a lifter gap at all: Capstone rejected every Cortex-M
