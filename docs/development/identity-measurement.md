@@ -354,6 +354,30 @@ wins a comparison in this document, but enough that the ratchets in
 `tests/identity_retrieval/main.rs` are floored with margin under the observed
 minimum rather than pinned to one run's exact digits.
 
+**Fixed, 2026-09-02.** `docs/design/cfg-discovery-determinism-2026-09-02.md`
+traced the spread above to `Budgets::default().timeout_ms` (100ms): a
+*per-function* wall clock, restarted at every seed, whose firing point
+depends on CPU contention rather than on the bytes analysed -- on a loaded
+machine the same binary produced 6/6 distinct discovery digests, one
+function's block count moving between a 148-block timeout truncation and the
+full, deterministic 2048-block `max_blocks` cap run to run. `timeout_ms: 0`
+does **not** disable the check (unlike `total_timeout_ms`, where `0` means
+unbounded), so the harness now builds its own budget --
+`tests/identity_retrieval/corpus.rs`'s `harness_budgets()`, used everywhere
+the harness discovers, both corpora -- with `timeout_ms: u64::MAX` and the
+deterministic step budgets (`max_blocks`, `max_instructions`, `max_functions`)
+left at their defaults. No `src/` change was needed. Three repeated runs of
+`structural_full_sweep` afterward reproduced **0.753603** (XO-gcc), and every
+other in-house `structural` task, bit for bit -- not merely within the bands
+above. `tests/identity_retrieval/corpus.rs::tests::
+discovery_is_deterministic_with_harness_budgets` now asserts this directly: it
+discovers one fixture binary twice and requires an identical `(entry, blocks,
+edges)` digest with no function carrying `FunctionFlags::CFG_WALK_TIMEOUT`.
+The ratchet floors above are unchanged (the margin they carry is now a
+cushion against legitimate future scheme changes rather than against
+measurement noise), but the exemption described in "A note on reproducibility,
+sharpened" below no longer applies -- see there for the Dataset-1 numbers.
+
 ### Head to head
 
 | | CTPH | Python structural fingerprint | `structural` (L1) |
@@ -533,11 +557,12 @@ digest does not even reach the starting line.
 ### Results: structural on Dataset-1
 
 Rust lane, 2026-09-02, debug profile, extraction **693-1388 us/function**
-over 2,441 samples, three-plus runs. Sampled pool 101 throughout. Table below
-is one representative run; five rows are bit-identical or near-identical
-across every run and are ratcheted tightly, and two MIPS rows vary enough
-between runs that they are measured and printed but not ratcheted — see
-"A note on reproducibility, sharpened" below.
+over 2,441 samples, three-plus runs under `Budgets::default()`, three
+further runs under `harness_budgets()` (see "A note on reproducibility,
+sharpened" below). Sampled pool 101 throughout. Table below is one
+representative run; as of the `harness_budgets()` fix all nine scored rows
+are bit-identical across repeated runs, including the two MIPS rows that
+used to vary.
 
 | Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@10 |
 |---|---|---|---|---|---|---|---|
@@ -546,8 +571,8 @@ between runs that they are measured and printed but not ratcheted — see
 | XM | compiler + optimisation | 36 | 262 | **0.8045** | 0.3178 | 0.2500 | 0.4722 |
 | **XB** | bitness | 72 | 260 | **0.8985** | 0.4884 | 0.3056 | 0.8333 |
 | **XA-arm64** | architecture | 47 | 228 | **0.9486** | 0.5953 | 0.4681 | 0.8298 |
-| XA-mips64 *(measured, not ratcheted — see below)* | architecture | 57 | 279 | 0.58-0.60 | ~0.06 | ~0.02 | ~0.21 |
-| XA+XB-mips32 *(measured, not ratcheted — see below)* | architecture + bitness | 34 | 259 | 0.57-0.59 | ~0.10 | ~0.06 | ~0.21 |
+| XA-mips64 | architecture | 57 | 279 | **0.5742** | 0.0592 | 0.0175 | 0.2105 |
+| XA+XB-mips32 | architecture + bitness | 34 | 259 | **0.5524** | 0.1005 | 0.0588 | 0.2059 |
 | XA+XB-arm32 *(underpowered, n=25)* | architecture + bitness | 25 | 241 | 0.8559 | 0.3759 | 0.2800 | 0.6400 |
 | XA+XO *(underpowered, n=23)* | architecture + optimisation | 23 | 228 | 0.8455 | 0.1794 | 0.1304 | 0.3913 |
 
@@ -577,7 +602,7 @@ soundly — the shortfall is not a rediscovery of the pre-fix MIPS bug.
 **A note on reproducibility, sharpened.** The in-house section above
 establishes that `structural`'s CFG-dependence makes it sensitive to
 `analysis::cfg`'s per-function wall-clock budget, at a spread of one to two
-thousandths of AUC. On Dataset-1 this effect is **not uniform across
+thousandths of AUC. On Dataset-1 this effect was **not uniform across
 architectures**: XO, XC, XM, XB and XA-arm64 were bit-identical or
 near-identical (spread under 0.0003) across four runs, while the two
 MIPS-crossing tasks moved by 0.007 to 0.023 AUC between runs of the identical
@@ -588,13 +613,33 @@ binary set —
 | XA-mips64 | 0.587764 | 0.604009 | 0.581433 | *(not re-measured)* |
 | XA+XB-mips32 | 0.580190 | 0.573209 | 0.577915 | 0.585727 |
 
-`tests/identity_retrieval/main.rs`'s `CISCO_STRUCTURAL_NOISY_TASKS` exists
-because of exactly this table: `XA+XB-mips32`'s fourth run is the one that
-caught it, tripping "improved more than `RATCHET_SLACK` above the ratchet" on
-a floor set from the first three. Reading the two tables together: run-to-run
-CFG-discovery jitter is not evenly distributed across architectures, and it
-concentrates where this project's own CFG recovery is documented as most
-marginal.
+`tests/identity_retrieval/main.rs`'s `CISCO_STRUCTURAL_NOISY_TASKS` used to
+exist because of exactly this table: `XA+XB-mips32`'s fourth run is the one
+that caught it, tripping "improved more than `RATCHET_SLACK` above the
+ratchet" on a floor set from the first three. Reading the two tables
+together: run-to-run CFG-discovery jitter was not evenly distributed across
+architectures, and it concentrated where this project's own CFG recovery is
+documented as most marginal — which fits the mechanism identified below,
+since a truncated MIPS function's walk has more block/edge structure at
+stake per timeout than a small x86-64 one.
+
+**Fixed, 2026-09-02.** Same root cause and same fix as the in-house section
+above: `Budgets::default().timeout_ms` (100ms) is a per-function wall clock
+whose firing point depends on CPU contention, and MIPS discovery apparently
+sits closest to that clock on this corpus, which is why its jitter was larger
+than the other seven tasks' rather than a MIPS-specific correctness issue.
+`docs/design/cfg-discovery-determinism-2026-09-02.md` traces the mechanism;
+`tests/identity_retrieval/corpus.rs`'s `harness_budgets()` (`timeout_ms:
+u64::MAX`, step budgets left at their defaults) is now used for both corpora.
+Three repeated runs of `cisco_structural_full_sweep` afterward reproduced the
+exact same `f64` for both previously noisy tasks — `0.5741782086795937`
+(XA-mips64) and `0.5524480968858132` (XA+XB-mips32) — not merely within a
+band. Both moved from `CISCO_STRUCTURAL_NOISY_TASKS` into
+`CISCO_STRUCTURAL_MIN_AUC` with floors read off that run (0.572000 and
+0.550000, the same small-margin discipline as every other row).
+`CISCO_STRUCTURAL_NOISY_TASKS` is kept as an empty constant rather than
+deleted, so a future scheme that reintroduces genuine run-to-run noise on some
+other task has a named place to land.
 
 ### Where these sit against the published tables
 
@@ -618,15 +663,15 @@ identical.
 | GNN s2v + Gemini's 7 features | 0.80 | 0.81 | 0.82 | 0.81 |
 | GMN (Li et al.) + BoW opcodes | 0.86 | 0.85 | 0.86 | 0.86 |
 | **Glaurung CTPH (this lane)** | **0.4998-0.5000** | **0.5402** | no lane | **0.5121** |
-| **Glaurung `structural` (this lane)** | **0.588-0.949** | **0.885** | no lane | **0.805** |
+| **Glaurung `structural` (this lane)** | **0.5742-0.9486** | **0.885** | no lane | **0.805** |
 
 Our XA cell is a range because this lane keeps the two foreign architectures
 apart (CTPH: `XA-arm64` 0.5000, `XA-mips64` 0.4998; `structural`: `XA-arm64`
-0.9486, `XA-mips64` 0.588-0.604) rather than pooling them: "cross-architecture"
+0.9486, `XA-mips64` 0.5742) rather than pooling them: "cross-architecture"
 averaged over ARM and MIPS hides which of the two a scheme fails on, and for a
 scheme that fails on both the average is the only thing a single cell could
 report. `structural`'s XA range spans further than CTPH's because it is
-carrying real, uneven signal — 0.9486 on ARM64, 0.59-ish on MIPS64 — rather
+carrying real, uneven signal — 0.9486 on ARM64, 0.5742 on MIPS64 — rather
 than sitting at chance on both ends. Against the published table, `structural`
 on XC (0.885) sits between Zeek's strands (0.84) and GMN+BoW opcodes (0.85),
 and on XM (0.805) above every non-GNN row in the table — a CFG-shape scheme
@@ -643,7 +688,7 @@ warns is flattering:
 | FSS graphlets | 0.81 | 0.89 | 0.68 | 0.74 | 0.87 |
 | GMN + BoW opcodes | 0.99 | 0.99 | 0.77 | 0.89 | 0.99 |
 | **Glaurung CTPH (this lane)** | **0.4998-0.5000** | **0.4997** | **0.5402** | **0.4990** | no lane |
-| **Glaurung `structural` (this lane)** | **0.588-0.949** | **0.899** | **0.885** | **0.754**\* | no lane |
+| **Glaurung `structural` (this lane)** | **0.5742-0.9486** | **0.899** | **0.885** | **0.754**\* | no lane |
 
 Catalog1 is the closest published analogue to CTPH — a byte-level hash — and
 the comparison is instructive in both directions. It reaches 0.92 on
@@ -742,7 +787,7 @@ unexamined:
   extraction *fails* there rather than returning a degenerate signature.
   `structural` is CFG- and byte-shaped, not IR-shaped, and its decoder comes
   from `disasm::registry` directly, so it *does* cover MIPS -- its XA-mips64
-  and XA+XB-mips32 rows are real results, just noisy ones (see "A note on
+  and XA+XB-mips32 rows are real, and now ratcheted, results (see "A note on
   reproducibility, sharpened" above).
 
 ## Adding a scheme
@@ -849,10 +894,9 @@ land in this harness. When one does:
   0.69) and sits close to Zeek's strands (0.84) on XC and XM. The CFR adds a
   typed SSA dataflow graph on top of the CFG shape `structural` already
   reads, so the honest target for it is not "beat chance" but "beat
-  `structural`'s own XA-mips64 (0.59-ish, and noisy) and XA+XB-mips32
-  (0.57-0.59, also noisy)" — the two rows where a CFG-shape-only
-  representation is weakest, which is exactly where dataflow information
-  the CFR adds might help most.
+  `structural`'s own XA-mips64 (0.5742) and XA+XB-mips32 (0.5524)" — the two
+  rows where a CFG-shape-only representation is weakest, which is exactly
+  where dataflow information the CFR adds might help most.
 
 Two things a new scheme must do that CTPH did not have to, and that
 `structural` already does. It must consult `SampleArch::is_liftable` (or, for
@@ -865,12 +909,19 @@ are diffable artifacts: a change that improves one corpus and quietly ruins
 the other is the case a single-row summary hides.
 
 A third thing `structural` discovered that CTPH's design never surfaced: a
-CFG-shaped scheme's numbers are not exactly reproducible run to run on a
-shared machine, because `analysis::cfg`'s per-function wall-clock budget can
+CFG-shaped scheme's numbers were not exactly reproducible run to run on a
+shared machine, because `analysis::cfg`'s per-function wall-clock budget could
 recover a handful of functions' blocks/edges slightly differently between
-runs. Any future scheme that reads the discovered CFG (the CFR will) should
-expect the same and measure its own ratchets from several repeated runs
-rather than one, the way `structural`'s are in this file.
+runs. Fixed 2026-09-02 (`docs/design/cfg-discovery-determinism-2026-09-02.md`):
+every discovery call in this harness now goes through
+`tests/identity_retrieval/corpus.rs`'s `harness_budgets()`, which sets
+`timeout_ms: u64::MAX` so that clock can never fire. Any future scheme that
+reads the discovered CFG (the CFR will) should call `harness_budgets()` too,
+rather than `Budgets::default()` or a bespoke budget of its own -- see
+`corpus::tests::discovery_is_deterministic_with_harness_budgets` for the test
+that guards this directly. There should no longer be a need to measure
+ratchets from several repeated runs to find a stable floor; a single run
+under `harness_budgets()` is expected to reproduce bit for bit.
 
 ## See also
 

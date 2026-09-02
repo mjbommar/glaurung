@@ -41,10 +41,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use glaurung::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
+use glaurung::analysis::cfg::{
+    analyze_functions_bytes, analyze_functions_bytes_with_seeds, Budgets,
+};
 use glaurung::core::binary::Endianness;
 use glaurung::core::disassembler::{Architecture, Disassembler};
-use glaurung::core::function::{Function, FunctionKind};
+use glaurung::core::function::{Function, FunctionFlags, FunctionKind};
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 
 /// The two compilers the corpus was built with.
@@ -64,6 +66,29 @@ pub const OPT_LEVELS: [&str; 2] = ["O0", "O2"];
 /// metric that counts them. See `docs/history/program-measures-2026-09-02.md`,
 /// "Measurement protocol".
 pub const MIN_BASIC_BLOCKS: usize = 5;
+
+/// The CFG discovery budget every harness call site uses -- never
+/// `Budgets::default()` directly.
+///
+/// `docs/design/cfg-discovery-determinism-2026-09-02.md` traces the harness's
+/// run-to-run digest instability to `Budgets::default().timeout_ms` (100ms):
+/// it is a *per-function* wall clock, restarted at every seed, so its firing
+/// point depends on CPU contention rather than on the bytes analysed -- on a
+/// loaded machine the same curl binary produced 6/6 distinct digests, one
+/// function's block count moving between 148 (timeout) and 2048 (the
+/// deterministic `max_blocks` cap) run to run. `timeout_ms: 0` does **not**
+/// disable the check (`elapsed > timeout_ms` fires on the first nonzero
+/// tick, unlike `total_timeout_ms` where `0` means unbounded), so this uses
+/// `u64::MAX` instead: the wall clock can now never fire, and the step
+/// budgets (`max_blocks`, `max_instructions`, `max_functions`, left at their
+/// `Budgets::default()` values) are what bound worst-case work, exactly as
+/// option (b) in that document recommends. `src/` is unchanged.
+pub fn harness_budgets() -> Budgets {
+    Budgets {
+        timeout_ms: u64::MAX,
+        ..Budgets::default()
+    }
+}
 
 /// Symbols that are CRT / compiler boilerplate rather than program code.
 ///
@@ -589,7 +614,7 @@ fn load_image(
     // care about. One call per image rather than one per function: discovery
     // is the expensive step and it amortises over the whole object.
     let seeds: Vec<u64> = raw.values().filter(|s| s.in_text).map(|s| s.va).collect();
-    let budgets = Budgets::default();
+    let budgets = harness_budgets();
     let (functions, _cg) = analyze_functions_bytes_with_seeds(&data, &budgets, &seeds);
     let by_va: BTreeMap<u64, &Function> =
         functions.iter().map(|f| (f.entry_point.value, f)).collect();
@@ -779,5 +804,77 @@ mod tests {
         // A name that merely CONTAINS a CRT name is not one.
         assert!(!is_plt_or_thunk("my_init", None));
         assert!(!is_plt_or_thunk("_initialise", None));
+    }
+
+    /// `harness_budgets()` fixes the run-to-run digest instability traced in
+    /// `docs/design/cfg-discovery-determinism-2026-09-02.md`: discover the
+    /// same fixture bytes twice and the recovered `(entry, blocks, edges)`
+    /// set must match exactly, with no function carrying
+    /// `FunctionFlags::CFG_WALK_TIMEOUT` (the per-function wall clock that
+    /// document identifies as the source of the jitter). Skips loudly, like
+    /// every other corpus-backed test here, when the gitignored fixture
+    /// build directory is absent.
+    #[test]
+    fn discovery_is_deterministic_with_harness_budgets() {
+        let Some(root) = corpus_root() else {
+            return;
+        };
+        let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&root)
+            .expect("corpus_root() already checked this directory is readable")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "so"))
+            .collect();
+        fixtures.sort();
+        let Some(path) = fixtures.first() else {
+            eprintln!(
+                "SKIP: identity corpus at {} has no .so fixtures",
+                root.display()
+            );
+            return;
+        };
+        let data = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let budgets = harness_budgets();
+
+        let discover = |data: &[u8]| -> (Vec<(u64, usize, usize)>, usize) {
+            let (functions, _cg) = analyze_functions_bytes(data, &budgets);
+            let mut timed_out = 0usize;
+            let mut digest: Vec<(u64, usize, usize)> = functions
+                .iter()
+                .map(|f| {
+                    if f.has_flag(FunctionFlags::CFG_WALK_TIMEOUT) {
+                        timed_out += 1;
+                    }
+                    let (blocks, edges) = cfg_facts(f);
+                    (f.entry_point.value, blocks.len(), edges.len())
+                })
+                .collect();
+            digest.sort();
+            (digest, timed_out)
+        };
+
+        let (run0, timeouts0) = discover(&data);
+        let (run1, timeouts1) = discover(&data);
+        assert_eq!(
+            timeouts0,
+            0,
+            "{}: {timeouts0} function(s) hit CFG_WALK_TIMEOUT under harness_budgets() -- \
+             the per-function wall clock must never fire",
+            path.display()
+        );
+        assert_eq!(
+            timeouts1,
+            0,
+            "{}: {timeouts1} function(s) hit CFG_WALK_TIMEOUT under harness_budgets() -- \
+             the per-function wall clock must never fire",
+            path.display()
+        );
+        assert_eq!(
+            run0,
+            run1,
+            "{}: CFG discovery under harness_budgets() must be bit-reproducible run to \
+             run; see docs/design/cfg-discovery-determinism-2026-09-02.md",
+            path.display()
+        );
     }
 }

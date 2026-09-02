@@ -156,23 +156,25 @@ const CTPH_MAX_EXTRACTION_US: f64 = 400.0;
 ///
 /// **Measured: 0.753603.** Structural counts (edge/block/instruction ratios)
 /// and the MD-index both survive an optimisation-level change far better than
-/// either byte digest does -- CTPH is 0.5015 on the same task. Measured on a
-/// quiet machine, but **not bit-reproducible run to run** the way CTPH's
-/// ratchets are, and that difference is itself a finding worth recording
-/// rather than papering over.
+/// either byte digest does -- CTPH is 0.5015 on the same task.
 ///
 /// CTPH computes purely from `sample.bytes`, which discovery's *filtering*
 /// (kept/dropped) can affect but its *shape* never can. `structural` reads
 /// the discovered CFG itself -- block and edge counts, the MD-index -- and
 /// `analysis::cfg`'s per-function walk carries a wall-clock budget
 /// (`Budgets::timeout_ms`/`total_timeout_ms`; see CLAUDE.md, "Baseline regen
-/// needs a quiet machine"). Sixteen repeated runs of `structural_full_sweep`
-/// on this task (2026-09-02, debug profile, otherwise-idle machine) landed
-/// between **0.752733 and 0.753918** -- the mode is 0.75358, one run landed at
-/// 0.75273, and none went lower. The floor below is set with margin under
-/// that observed minimum rather than pinned to one run's exact digits, which
-/// is what CTPH's byte-only ratchets can afford and this one cannot. The same
-/// margin discipline applies to every `structural` ratchet in this file.
+/// needs a quiet machine"), which used to make this scheme **not
+/// bit-reproducible run to run** the way CTPH's ratchets are (sixteen repeated
+/// runs of `structural_full_sweep`, 2026-09-02, debug profile,
+/// otherwise-idle machine, landed between **0.752733 and 0.753918**). That
+/// was traced to `Budgets::default().timeout_ms` (100ms), a *per-function*
+/// clock whose firing point depends on CPU contention rather than on the
+/// bytes analysed (`docs/design/cfg-discovery-determinism-2026-09-02.md`).
+/// The harness now calls [`crate::corpus::harness_budgets`], which sets
+/// `timeout_ms` to `u64::MAX` so the clock can never fire; three repeated
+/// runs afterward reproduced **0.753603** bit for bit on every task in this
+/// file, and the margin discipline below is kept only as a cushion against
+/// legitimate future scheme changes, not against measurement noise.
 const STRUCTURAL_XO_GCC_MIN_AUC: f64 = 0.750000;
 
 /// XC-O2 (gcc O2 -> clang O2), AUC and MRR10 over 357 scored queries, pool
@@ -282,14 +284,25 @@ const CISCO_UNDERPOWERED_TASKS: &[&str] = &["XA+XB-arm32", "XA+XO"];
 /// n-gram, because neither of those two representations transfers across an
 /// ISA at all.
 ///
-/// The two MIPS rows are deliberately **absent** from this table -- see
-/// [`CISCO_STRUCTURAL_NOISY_TASKS`].
+/// **XA-mips64 and XA+XB-mips32 were un-exempted on 2026-09-02** (see
+/// `docs/design/cfg-discovery-determinism-2026-09-02.md` and
+/// [`crate::corpus::harness_budgets`]): the run-to-run spread that put them in
+/// [`CISCO_STRUCTURAL_NOISY_TASKS`] was `analysis::cfg`'s per-function
+/// wall-clock budget, not a property of MIPS discovery itself. With the
+/// harness's `timeout_ms` fixed at `u64::MAX`, three repeated runs of
+/// `cisco_structural_full_sweep` landed on the exact same `f64` --
+/// `0.5741782086795937` (XA-mips64) and `0.5524480968858132`
+/// (XA+XB-mips32) -- bit for bit, not just to four decimals. Floors below are
+/// truncated with the same small margin as every other row now that there is
+/// a real minimum to floor, not a noise band to dodge.
 const CISCO_STRUCTURAL_MIN_AUC: &[(&str, f64)] = &[
     ("XO", 0.826000),
     ("XC", 0.883000),
     ("XM", 0.802000),
     ("XB", 0.896000),
     ("XA-arm64", 0.946000),
+    ("XA-mips64", 0.572000),
+    ("XA+XB-mips32", 0.550000),
 ];
 
 /// Dataset-1 tasks that are powered (>= `MIN_SCORED_FOR_A_MEASUREMENT`
@@ -298,29 +311,25 @@ const CISCO_STRUCTURAL_MIN_AUC: &[(&str, f64)] = &[
 /// `assert_ratchet`'s bounds without either flaking on a low run or
 /// complaining "raise the ratchet" on a high one.
 ///
-/// **Both are MIPS.** `XA-mips64` measured over three repeated runs of
-/// `cisco_structural_full_sweep`: AUC 0.581433, 0.587764, 0.604009 -- a spread
-/// of 0.0226, wider than `RATCHET_SLACK` (0.02) itself. `XA+XB-mips32`,
-/// initially believed stable at three runs (0.573209-0.580190, spread
-/// 0.0070), added a fourth data point at **0.585727** -- `cisco_structural_
-/// retrieval_ratchets` itself caught this: a floor set from the first three
-/// runs read the fourth as "improved more than `RATCHET_SLACK` above the
-/// ratchet", which is exactly the false-positive this exemption exists to
-/// avoid. Four runs: 0.573209, 0.577915, 0.580190, 0.585727 -- spread 0.0125,
-/// still under 0.02 alone, but combined with the other three MIPS-crossing
-/// tasks' behaviour the pattern is the architecture, not the sample size.
-///
-/// This is a real finding, not a harness bug: `docs/development/corpora.md`
-/// and this file's own `structural_retrieval_ratchets` doc comments already
-/// establish that `analysis::cfg`'s per-function wall-clock walk budget makes
-/// a CFG-shaped scheme's numbers vary run to run on a shared machine, and
-/// MIPS is documented elsewhere (`docs/development/identity-measurement.md`,
-/// "What Dataset-1 still cannot say") as the corpus's most marginal
-/// architecture for this pipeline's CFG recovery. Both rows are still scored,
-/// still printed, and still written to JSON every run -- they are simply not
-/// pinned to a floor that would be as likely to fail from noise as from a
-/// real regression.
-const CISCO_STRUCTURAL_NOISY_TASKS: &[&str] = &["XA-mips64", "XA+XB-mips32"];
+/// **Empty as of 2026-09-02.** Previously `["XA-mips64", "XA+XB-mips32"]`:
+/// `XA-mips64` measured over three repeated runs of `cisco_structural_
+/// full_sweep` at AUC 0.581433, 0.587764, 0.604009 -- a spread of 0.0226,
+/// wider than `RATCHET_SLACK` (0.02) itself; `XA+XB-mips32` similarly spread
+/// 0.573209-0.585727 across four runs. That was never a property of MIPS
+/// discovery -- it was `analysis::cfg`'s per-function wall-clock budget
+/// (`Budgets::timeout_ms`, restarted at every seed) racing CPU contention on
+/// a shared machine, diagnosed in
+/// `docs/design/cfg-discovery-determinism-2026-09-02.md`. The harness now
+/// calls [`crate::corpus::harness_budgets`] instead of `Budgets::default()`,
+/// which sets `timeout_ms` to `u64::MAX` so the clock can never fire; three
+/// repeated runs of `cisco_structural_full_sweep` afterwards produced the
+/// exact same `f64` for both tasks, not merely the same four decimals. They
+/// moved to [`CISCO_STRUCTURAL_MIN_AUC`] with floors read off that run. This
+/// constant is kept (empty) rather than deleted, and the loop below over it
+/// with the length-accounting `assert_eq!` after it, so a future scheme that
+/// reintroduces genuine run-to-run noise on some other task has a named place
+/// to land instead of a silently unratcheted task.
+const CISCO_STRUCTURAL_NOISY_TASKS: &[&str] = &[];
 
 /// Load the corpus, or print the skip and return `None`.
 fn load() -> Option<&'static Corpus> {
