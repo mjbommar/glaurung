@@ -5,6 +5,11 @@
 > denominator it was measured over. The TF-IDF corpus table, the rare-feature
 > inverted index and the peephole normaliser are separate, later lanes; the
 > numbers here are what the representation does without any of them.
+>
+> The research synthesis this implements,
+> `docs/research/program-measures-2026-09-02.md` and its four source reports,
+> was not committed when this page was written, so the links to it below resolve
+> only in a checkout that has them.
 
 ## The question, and the shape of the answer
 
