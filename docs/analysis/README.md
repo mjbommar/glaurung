@@ -17,6 +17,11 @@ implementation, not to infer that a command or backend exists.
 - [Binary triage](../triage/) is the first deterministic pass for format,
   architecture, strings, symbols, packer signals, and containers.
 - [Parsers](../parsers/) maps current owned parsers and format-specific commands.
+- [Structural function identity (L1)](function-identity-structural.md)
+  documents the per-function control-flow invariants (BinDiff MD-index,
+  small-primes product over mnemonics, block/edge/loop/SCC counts), the
+  `function_structural` KB table, and how `glaurung diff` ranks changed
+  functions by them.
 
 Other user-facing analysis commands include:
 

@@ -122,3 +122,19 @@ Commands used: `cargo test --test identity_retrieval -- --nocapture cisco`
 python3 -c ...` for the endianness cross-check; `objdump -i` / `objdump -d`
 to confirm no local MIPS binutils target; `file` on the two nmap-project
 mips32/mips64 binaries to confirm MSB byte order.
+
+## Fix
+
+Fixed in `441f669da739a7cb6fb7648e7b8f6cacb476fd32` (branch
+`fix/cfg-byte-path-endianness`): `parse_exec_regions`
+(`src/analysis/cfg/image_view.rs`) now reads `obj.is_little_endian()`
+instead of guessing endianness by architecture family. Re-running the
+reproduction (`GLAURUNG_CISCO_CORPUS=... cargo test --features python-ext
+--test identity_retrieval -- --nocapture cisco`) over the same 9-slice,
+3-binary lane: `mips32-gcc-9-O2` went from 259 functions/223 (86%) <5
+blocks to 259/0 (0%); `mips64-gcc-9-O2` went from 279/159 (57%) to
+279/0 (0%). Both slices are now flagged `[disassembled, not liftable]`
+(discovery/CFG recovery succeeds; `src/ir/lift/` still has no MIPS
+lifter, which is a separate, pre-existing gap). The residual
+delay-slot/`jr`-classification issue noted above in "Fix estimate and
+blast radius" is unchanged and remains a follow-up.

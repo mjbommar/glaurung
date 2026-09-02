@@ -6,7 +6,7 @@ patch-analysis demo conversation in the Phase 3 plan: agent says
 "v1.1 changed `validate_token` to add a length check before
 `memcmp` — likely fixing a CVE-class OOB read."
 
-v3 (current) implementation:
+v4 (current) implementation:
   - Run analyze_functions_path on both binaries.
   - For each function compute *both* a raw byte ``body_hash`` AND a
     ``structural_hash`` (see ``structural_fingerprint.py``). The
@@ -34,16 +34,33 @@ v3 (current) implementation:
     when no PDB is available — the bulk of dnsapi's ~485 added /
     ~482 removed ``sub_<hex>`` rows collapse into legitimate
     ``changed`` rows for the same underlying function.
-  - Functions present in only one side (after both passes) become
+  - v4 L1 structural pass (see
+    ``docs/analysis/function-identity-structural.md``): after the two
+    passes above, each two-sided row gets a ``structural_delta``
+    (``1 - structural_ranking_similarity`` over the BinDiff MD-index,
+    the block/edge/instruction counts, the mnemonic small-primes
+    product and the rare-constant multiset), and the changed table is
+    ranked by it. Then the residual ``added``/``removed`` rows are
+    re-paired on MD-index equality, gated by Diaphora's rule that a
+    feature is an identity only when globally rare -- ``count(*) <= 2``
+    on both sides plus ``nodes > 5``, and exactly one residual
+    candidate per side. This catches the case the Jaccard pass cannot:
+    a function whose body the compiler rewrote while leaving its
+    control-flow shape alone. The whole pass costs one extra discovery
+    run per binary and is skipped when the earlier passes left nothing
+    changed, added or removed, so a self-diff pays nothing.
+  - Functions present in only one side (after every pass) become
     added/removed and are reported as such.
 
 v1 hash scheme (preserved on rows for diagnostics): sha256 of the
 function's primary chunk bytes, truncated to 16 hex chars.
 
-What this still does NOT do (filed for v4):
+What this still does NOT do:
   - Per-instruction diff (which instruction lines changed); we report
     whole-function status only.
-  - Cross-architecture diff.
+  - Cross-architecture diff. Neither the token hashes nor the L1
+    invariants cross an architecture: the mnemonic vocabulary is
+    per-ISA by construction.
 """
 
 from __future__ import annotations
@@ -53,6 +70,11 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from .function_structural import (
+    RARE_MAX_OCCURRENCES as FS_RARE_MAX_OCCURRENCES,
+    RARE_MIN_BLOCKS as FS_RARE_MIN_BLOCKS,
+)
 
 
 @dataclass(frozen=True)
@@ -109,6 +131,20 @@ class FunctionDiff:
     # The relocation-target masking itself lives in structural_fingerprint;
     # this flag just surfaces "structurally identical modulo relocation".
     relocation_only: bool = False
+    # v4: how far apart the two sides are on the L1 structural invariants,
+    # in [0, 1], as ``1 - structural_ranking_similarity``. 0.0 means the
+    # MD-indices, counts, mnemonic product and constants all agree; 1.0
+    # means nothing did. ``None`` for a one-sided row, or when the native
+    # L1 binding produced no signature for one of the two entry VAs.
+    # This is what ``render_diff_markdown`` sorts the changed table by.
+    structural_delta: Optional[float] = None
+    # v4: the top-down MD-index of each side, carried so a consumer can
+    # see the number the ranking was derived from without recomputing.
+    md_index_pre: Optional[float] = None
+    md_index_post: Optional[float] = None
+    # v4: True when the two sides were paired by the rarity-gated
+    # MD-index rematch rather than by name or by the Jaccard pass.
+    md_index_matched: bool = False
 
 
 @dataclass
@@ -127,6 +163,14 @@ class BinaryDiff:
     # for ``cross_name_threshold`` means the pass was disabled.
     cross_name_matched: int = 0
     cross_name_threshold: float = -1.0
+    # v4: how many (added, removed) pairs the rarity-gated MD-index pass
+    # collapsed into ``changed`` rows, and whether the pass ran at all.
+    # ``md_index_matched`` counts only pairs that pass BOTH of Diaphora's
+    # gates (globally rare on each side, and more than five blocks), so a
+    # zero here is "nothing was rare enough", not "the pass found nothing
+    # similar".
+    md_index_matched: int = 0
+    structural_rematch_ran: bool = False
     rows: List[FunctionDiff] = field(default_factory=list)
 
     def summary_line(self) -> str:
@@ -138,6 +182,27 @@ class BinaryDiff:
 
     def changed_rows(self) -> List[FunctionDiff]:
         return [r for r in self.rows if r.status == "changed"]
+
+    def changed_by_structural_delta(self) -> List[FunctionDiff]:
+        """Changed functions, biggest structural change first.
+
+        This is the ranking the L1 invariants exist to produce. Rows that
+        have a ``structural_delta`` sort ahead of rows that do not, on
+        descending delta; the rest fall back to the v3 order (ascending
+        Jaccard similarity, then name), so a build where the native L1
+        binding is unavailable still gets the old, useful ordering rather
+        than an arbitrary one.
+        """
+        rows = self.changed_rows()
+        return sorted(
+            rows,
+            key=lambda r: (
+                0 if r.structural_delta is not None else 1,
+                -(r.structural_delta or 0.0),
+                r.similarity if r.similarity is not None else -1.0,
+                r.name,
+            ),
+        )
 
 
 def fingerprint_function(raw: bytes, func) -> Optional[FunctionFingerprint]:
@@ -294,6 +359,175 @@ def is_relocation_only(status: str, similarity: Optional[float]) -> bool:
     )
 
 
+#: L1 structural signatures for one binary, as
+#: ``({entry_va: StructuralSignatureRow}, {entry_va: native signature})``.
+#: Both halves come from a single ``structural_signatures_path`` call: the
+#: rows carry the rarity gate and the MD-index key, the native objects are
+#: what ``structural_ranking_similarity`` accepts.
+def _structural_index(binary_path: str) -> Tuple[Dict[int, object], Dict[int, object]]:
+    """Compute L1 structural signatures for one binary.
+
+    Returns ``({}, {})`` -- never raises -- when the native binding is
+    missing or discovery fails. The diff must still produce its v3
+    answer on a build without the L1 rung, so every consumer below
+    treats an empty index as "not measured" rather than as "no match".
+    """
+    try:
+        import glaurung as g
+
+        from .function_structural import row_from_signature
+
+        signatures = g.analysis.structural_signatures_path(str(binary_path))
+    except Exception:  # pragma: no cover - depends on the built extension
+        return {}, {}
+
+    rows: Dict[int, object] = {}
+    natives: Dict[int, object] = {}
+    for sig in signatures:
+        va = int(sig.entry_va)
+        natives[va] = sig
+        rows[va] = row_from_signature(sig)
+    return rows, natives
+
+
+def _structural_delta(natives_a, natives_b, va_a: int, va_b: int) -> Optional[float]:
+    """``1 - structural_ranking_similarity`` for one pair of entry VAs.
+
+    ``None`` when either side has no signature, which is the honest
+    answer: a delta of 1.0 would claim "these are maximally different"
+    for a function we simply did not measure.
+    """
+    a = natives_a.get(va_a)
+    b = natives_b.get(va_b)
+    if a is None or b is None:
+        return None
+    try:
+        import glaurung as g
+
+        return 1.0 - float(g.analysis.structural_ranking_similarity(a, b))
+    except Exception:  # pragma: no cover - depends on the built extension
+        return None
+
+
+def _annotate_structural_deltas(diff: BinaryDiff, natives_a, natives_b) -> None:
+    """Attach ``structural_delta`` and both MD-indices to every two-sided row.
+
+    Runs over ``same`` rows too. A ``same`` row with a non-zero delta is
+    worth seeing: it means the byte or token hash matched while the L1
+    invariants did not, which is either a hash collision or a bug, and
+    silently not computing it would hide both.
+    """
+    for row in diff.rows:
+        if row.a is None or row.b is None:
+            continue
+        va_a, va_b = int(row.a.entry_va), int(row.b.entry_va)
+        sig_a, sig_b = natives_a.get(va_a), natives_b.get(va_b)
+        if sig_a is not None:
+            row.md_index_pre = float(sig_a.md_index_top_down)
+        if sig_b is not None:
+            row.md_index_post = float(sig_b.md_index_top_down)
+        row.structural_delta = _structural_delta(natives_a, natives_b, va_a, va_b)
+
+
+def _rematch_by_rare_md_index(
+    diff: BinaryDiff,
+    rows_a,
+    rows_b,
+    natives_a,
+    natives_b,
+) -> None:
+    """Diaphora's rarity-gated MD-index rematch over the residual rows.
+
+    The v3 Jaccard pass pairs functions whose *token multisets* still
+    overlap. It cannot pair a function whose body the compiler rewrote
+    while leaving its control flow alone -- register allocation changed,
+    a constant folded, an instruction was scheduled elsewhere -- and
+    those are exactly the rows a patch diff most wants collapsed,
+    because a shape that survived unchanged is strong evidence of the
+    same function.
+
+    The MD-index pairs them, and the gate that makes it safe is
+    Diaphora's: **a feature is usable as an identity only when it is
+    globally rare**. ``HAVING count(*) <= 2`` on *both* sides, plus
+    ``nodes > 5``, both implemented in
+    :func:`~.function_structural.rare_by_md_index`. The counts are taken
+    over the whole binary, not over the residual set -- a three-block
+    thunk shape that occurs 400 times is not made rare by 398 of those
+    having already matched by name.
+
+    On top of the rarity gate this pass pairs only when exactly one
+    residual candidate remains on each side. Two survivors sharing one
+    rare key is a genuine ambiguity, and picking one would be a guess
+    dressed as a match; those rows stay added/removed and are visible as
+    such.
+    """
+    from .function_structural import rare_by_md_index
+
+    diff.structural_rematch_ran = True
+    if not rows_a or not rows_b:
+        return
+
+    residual_removed: Dict[int, int] = {}
+    residual_added: Dict[int, int] = {}
+    for i, row in enumerate(diff.rows):
+        if row.status == "removed" and row.a is not None:
+            residual_removed[int(row.a.entry_va)] = i
+        elif row.status == "added" and row.b is not None:
+            residual_added[int(row.b.entry_va)] = i
+    if not residual_removed or not residual_added:
+        return
+
+    rare_a = rare_by_md_index(list(rows_a.values()))
+    rare_b = rare_by_md_index(list(rows_b.values()))
+
+    drop: List[int] = []
+    matched = 0
+    # Sorted so the pass is deterministic regardless of dict ordering.
+    for key in sorted(set(rare_a) & set(rare_b)):
+        cands_a = [r for r in rare_a[key] if r.entry_va in residual_removed]
+        cands_b = [r for r in rare_b[key] if r.entry_va in residual_added]
+        if len(cands_a) != 1 or len(cands_b) != 1:
+            continue
+        va_a, va_b = cands_a[0].entry_va, cands_b[0].entry_va
+        removed_idx = residual_removed[va_a]
+        added_idx = residual_added[va_b]
+        removed_row = diff.rows[removed_idx]
+        added_row = diff.rows[added_idx]
+
+        delta = _structural_delta(natives_a, natives_b, va_a, va_b)
+        merged = FunctionDiff(
+            name=added_row.name,
+            status="changed",
+            a=removed_row.a,
+            b=added_row.b,
+            public_name_pre=removed_row.public_name_pre,
+            public_name_post=added_row.public_name_post,
+            # The Jaccard score is genuinely unknown for this pair -- the
+            # v3 pass declined it or never saw it -- and inventing one
+            # would make `relocation_only` fire on a guess.
+            similarity=None,
+            relocation_only=False,
+            structural_delta=delta,
+            md_index_pre=key[0],
+            md_index_post=key[0],
+            md_index_matched=True,
+        )
+        diff.rows[added_idx] = merged
+        drop.append(removed_idx)
+        # Consume both sides so a second key cannot re-pair them.
+        residual_removed.pop(va_a, None)
+        residual_added.pop(va_b, None)
+        matched += 1
+
+    for idx in sorted(set(drop), reverse=True):
+        del diff.rows[idx]
+
+    diff.md_index_matched = matched
+    diff.added -= matched
+    diff.removed -= matched
+    diff.changed += matched
+
+
 def diff_binaries(
     binary_a: str,
     binary_b: str,
@@ -301,6 +535,7 @@ def diff_binaries(
     skip_anonymous: bool = True,
     pdb_cache: Optional[str] = None,
     cross_name_threshold: Optional[float] = CROSS_NAME_THRESHOLD_DEFAULT,
+    structural_rematch: bool = True,
 ) -> BinaryDiff:
     """Pair every function in `binary_a` with the same-named function
     in `binary_b` and report per-function status.
@@ -321,6 +556,12 @@ def diff_binaries(
     using their per-block token multisets. Pairs scoring at or above
     the threshold are collapsed into one ``changed`` row each. Set to
     ``None`` to skip the rematch pass entirely (restores v2 behavior).
+
+    `structural_rematch` (v4) runs the L1 rarity-weighted MD-index pass
+    after the Jaccard one and annotates every two-sided row with a
+    ``structural_delta``. It costs one extra discovery pass per binary,
+    so it is skipped entirely when the first two passes left nothing
+    changed, added or removed -- a self-diff pays nothing for it.
     """
     import glaurung as g
     from .structural_fingerprint import (
@@ -552,6 +793,16 @@ def diff_binaries(
             pdb_map_b=pdb_map_b,
             threshold=float(cross_name_threshold),
         )
+
+    # v4: the L1 rarity-gated MD-index pass, then the delta annotation the
+    # changed-function ranking sorts on. Skipped when the earlier passes
+    # left nothing to rank or re-pair, so a self-diff does not pay for a
+    # second discovery run.
+    if structural_rematch and (diff.changed or diff.added or diff.removed):
+        rows_a, natives_a = _structural_index(binary_a)
+        rows_b, natives_b = _structural_index(binary_b)
+        _rematch_by_rare_md_index(diff, rows_a, rows_b, natives_a, natives_b)
+        _annotate_structural_deltas(diff, natives_a, natives_b)
     return diff
 
 
@@ -724,10 +975,13 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
     safe to drop into the chat UI verbatim. ``max_rows=0`` (the default)
     emits every changed row; set a positive value to truncate.
 
-    Changed rows are sorted by ``similarity`` ascending (smallest score
-    first) so the most invasive patches surface at the top of the
-    table. Single-block patches (similarity ≈ 1 - 1/blocks) bubble up
-    just below whole-function rewrites (similarity ≈ 0)."""
+    Changed rows are sorted by ``structural_delta`` descending -- the
+    biggest change to the L1 invariants first -- falling back to
+    ``similarity`` ascending for rows the L1 pass could not measure. Both
+    orderings put the most invasive patches at the top of the table;
+    the structural one additionally ranks a control-flow edit above a
+    same-shape instruction swap, which the token-Jaccard score cannot
+    tell apart. See :meth:`BinaryDiff.changed_by_structural_delta`."""
     lines: List[str] = []
     lines.append(
         f"# Binary diff — {Path(diff.binary_a).name} ↔ {Path(diff.binary_b).name}"
@@ -742,20 +996,29 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
             f"rows at Jaccard threshold {diff.cross_name_threshold:.2f}._"
         )
     lines.append("")
+    if diff.md_index_matched:
+        lines.append("")
+        lines.append(
+            f"_Rarity-gated MD-index rematch collapsed "
+            f"{diff.md_index_matched} (added, removed) pairs into changed rows "
+            f"(Diaphora's rule: the shape occurs at most "
+            f"{FS_RARE_MAX_OCCURRENCES} times on each side, and the function "
+            f"has at least {FS_RARE_MIN_BLOCKS} blocks)._"
+        )
     if diff.changed:
         lines.append("## Changed functions")
         lines.append("")
         lines.append(
-            "| similarity | function | a struct | b struct | a size | b size |"
+            "| Δstruct | similarity | function | a struct | b struct | a size | b size |"
         )
-        lines.append("|---:|---|---|---|---:|---:|")
-        rows = sorted(
-            diff.changed_rows(),
-            key=lambda r: (r.similarity if r.similarity is not None else -1.0, r.name),
-        )
+        lines.append("|---:|---:|---|---|---|---:|---:|")
+        rows = diff.changed_by_structural_delta()
         shown = rows if max_rows <= 0 else rows[:max_rows]
         for r in shown:
             sim_str = "—" if r.similarity is None else f"{r.similarity:.3f}"
+            delta_str = (
+                "—" if r.structural_delta is None else f"{r.structural_delta:.3f}"
+            )
             sa = (r.a.structural_hash or "—") if r.a else "—"
             sb = (r.b.structural_hash or "—") if r.b else "—"
             # Cross-name match: show both source names so the reader sees
@@ -765,7 +1028,8 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
             else:
                 label = f"`{r.name}`"
             lines.append(
-                f"| {sim_str} | {label} | `{sa}` | `{sb}` | {r.a.size} | {r.b.size} |"
+                f"| {delta_str} | {sim_str} | {label} | `{sa}` | `{sb}` "
+                f"| {r.a.size} | {r.b.size} |"
             )
         if max_rows > 0 and diff.changed > max_rows:
             lines.append(f"_… {diff.changed - max_rows} more_")
@@ -784,6 +1048,15 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
 
 def to_json(diff: BinaryDiff) -> str:
     """JSON serialization. Stable schema; never remove fields.
+
+    Schema 4 (L1 structural invariants): adds top-level
+    ``md_index_matched`` and ``structural_rematch_ran``, and per-row
+    ``structural_delta`` (``1 - structural_ranking_similarity``, the key
+    the changed table is now ranked by), ``md_index_pre`` /
+    ``md_index_post`` (each side's top-down MD-index) and
+    ``md_index_matched`` (True when the rarity-gated MD-index pass is
+    what paired the two sides). All five are ``null`` / ``false`` when
+    the pass did not run.
 
     Schema 3 (Phase F6): adds top-level ``cross_name_matched`` and
     ``cross_name_threshold`` so consumers can tell whether the v3
@@ -804,7 +1077,7 @@ def to_json(diff: BinaryDiff) -> str:
     ``public_name_pre`` and ``public_name_post`` (Phase F2 / A3) are
     still present on every row, ``null`` when no PDB cache is wired."""
     payload = {
-        "schema_version": "3",
+        "schema_version": "4",
         "binary_a": diff.binary_a,
         "binary_b": diff.binary_b,
         "functions_a": diff.functions_a,
@@ -817,6 +1090,8 @@ def to_json(diff: BinaryDiff) -> str:
         },
         "cross_name_matched": diff.cross_name_matched,
         "cross_name_threshold": diff.cross_name_threshold,
+        "md_index_matched": diff.md_index_matched,
+        "structural_rematch_ran": diff.structural_rematch_ran,
         "rows": [
             {
                 "name": r.name,
@@ -827,6 +1102,10 @@ def to_json(diff: BinaryDiff) -> str:
                 "public_name_post": r.public_name_post,
                 "similarity": r.similarity,
                 "relocation_only": r.relocation_only,
+                "structural_delta": r.structural_delta,
+                "md_index_pre": r.md_index_pre,
+                "md_index_post": r.md_index_post,
+                "md_index_matched": r.md_index_matched,
             }
             for r in diff.rows
         ],

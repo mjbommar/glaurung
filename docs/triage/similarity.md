@@ -82,3 +82,15 @@ coverage beyond that budget.
 Treat a high score as a lead for deeper function-, import-, or behavior-level
 comparison. Treat a low score as inconclusive when packing, relinking,
 architecture, compiler, or large resource changes can dominate byte structure.
+
+## Function-level identity is a different tool
+
+CTPH is a **file**-level near-duplicate measure and is deliberately not
+extended to function granularity: at that size it scores near chance, which is
+the published behaviour of the byte-hash representation class, not a defect in
+this implementation. For "which functions changed between two builds", use the
+L1 structural invariants -- MD-index, small-primes product over mnemonics, and
+the block/edge/loop/SCC counts -- documented in
+[Structural function identity (L1)](../analysis/function-identity-structural.md)
+and exposed as `glaurung.analysis.structural_signatures_path`. They are what
+`glaurung diff` ranks its changed-function list by.

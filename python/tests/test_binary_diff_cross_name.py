@@ -293,12 +293,21 @@ def test_rematch_propagates_pdb_names_into_merged_row() -> None:
 
 def test_switchy_stripped_cross_name_collapses_at_least_one_pair() -> None:
     a, b = _need(_SWITCHY_V1), _need(_SWITCHY_STRIPPED)
-    with_pass = diff_binaries(str(a), str(b), skip_anonymous=False)
+    # The L1 structural pass is disabled on BOTH sides. It also collapses
+    # (added, removed) pairs, and it sees a different residual set
+    # depending on what the cross-name pass already took -- so leaving it
+    # on would make the conservation identity below an accounting
+    # statement about two passes at once, which is not what this test is
+    # for. `test_rare_md_index_rematch_*` covers the other pass.
+    with_pass = diff_binaries(
+        str(a), str(b), skip_anonymous=False, structural_rematch=False
+    )
     without_pass = diff_binaries(
         str(a),
         str(b),
         skip_anonymous=False,
         cross_name_threshold=None,
+        structural_rematch=False,
     )
     # The pass MUST find at least one rename.
     assert with_pass.cross_name_matched >= 1
@@ -325,10 +334,16 @@ def test_switchy_self_diff_no_cross_name_matches() -> None:
 
 def test_schema_3_json_carries_cross_name_diagnostics() -> None:
     """The new JSON schema must expose ``cross_name_matched`` and
-    ``cross_name_threshold`` at the top level."""
+    ``cross_name_threshold`` at the top level.
+
+    The version literal moved to "4" when the L1 structural fields were
+    added; the two keys this test is about are unchanged, and every
+    schema-3 reader that ignores unknown keys still parses a schema-4
+    payload.
+    """
     a, b = _need(_SWITCHY_V1), _need(_SWITCHY_STRIPPED)
     diff = diff_binaries(str(a), str(b), skip_anonymous=False)
     parsed = json.loads(to_json(diff))
-    assert parsed["schema_version"] == "3"
+    assert parsed["schema_version"] == "4"
     assert parsed["cross_name_matched"] == diff.cross_name_matched
     assert parsed["cross_name_threshold"] == diff.cross_name_threshold
