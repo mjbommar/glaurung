@@ -17,6 +17,18 @@ pub(super) fn render_pseudocode(
     lf: &LlirFunction,
     tree: &StructuredTree,
 ) -> Option<RenderedPseudocode> {
+    let region = adapt_tree(tree)?;
+    let function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
+    let raw = crate::ir::ast::render_c(&function);
+    let prepared = crate::ir::ast::prepare_for_decbench(&function);
+    Some(RenderedPseudocode {
+        raw,
+        prepared: crate::ir::ast::render_decbench(&prepared),
+    })
+}
+
+/// Adapt an independently verified v2 tree into the production AST boundary.
+pub(crate) fn adapt_tree(tree: &StructuredTree) -> Option<Region> {
     let mut regions = vec![adapt_region(&tree.root)?];
     for local in &tree.local_regions {
         regions.push(Region::Unstructured(
@@ -26,14 +38,7 @@ pub(super) fn render_pseudocode(
             regions.push(adapt_region(&exit.region)?);
         }
     }
-    let region = Region::Seq(regions);
-    let function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
-    let raw = crate::ir::ast::render_c(&function);
-    let prepared = crate::ir::ast::prepare_for_decbench(&function);
-    Some(RenderedPseudocode {
-        raw,
-        prepared: crate::ir::ast::render_decbench(&prepared),
-    })
+    Some(Region::Seq(regions))
 }
 
 fn adapt_region(region: &StructuredRegion) -> Option<Region> {

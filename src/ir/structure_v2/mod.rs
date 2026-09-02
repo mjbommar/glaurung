@@ -11,7 +11,7 @@ mod dominators;
 mod local;
 mod recover;
 mod region;
-mod render;
+pub(crate) mod render;
 mod verify;
 
 pub use cleanup::{

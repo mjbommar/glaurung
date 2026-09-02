@@ -469,6 +469,13 @@ that preserves honest local gotos when required.
   `fail`: v1 emits an unrecovered indirect jump even though the v2 shadow tree
   renders all 256 values. The harness does not yet execute shadow output, so a
   baseline-stable v1 failure is not promotion evidence.
+  `prepare_llir_for_lowering_with_shadow` now closes the first pipeline-context
+  gap without changing default selection: on explicit opt-in it adapts only an
+  independently verified v2 tree into the same production `Region` boundary
+  used by lowering. A real clang-O2 `wide154_dense_effects` test proves the
+  production-prepared LLIR retains `case 0..255` and no indirect-jump
+  placeholder. Applying the normal prototype, AST-pass, render, and execution
+  stages to that optional region remains the next step.
 
 ### RED fixtures
 

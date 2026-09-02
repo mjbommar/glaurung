@@ -1772,6 +1772,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn production_preparation_exposes_the_verified_clang_wide_switch_region() {
+        let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/decompiler_fixtures/build/154_wide_switch-clang-O2.so");
+        let session = crate::program::session::ProgramSession::from_path(&binary)
+            .expect("checked-in wide-switch fixture parses");
+        let image = session.image();
+        let entry = image
+            .defined_text_symbol_address("wide154_dense_effects")
+            .expect("fixture exports wide154_dense_effects");
+        let discovered = session.discover_functions(
+            &crate::analysis::cfg::Budgets {
+                max_functions: 1,
+                max_blocks: 1024,
+                max_instructions: 4096,
+                timeout_ms: 5000,
+                total_timeout_ms: 0,
+            },
+            &[entry],
+        );
+        let target = discovered
+            .iter()
+            .find(|candidate| candidate.entry_point.value == entry)
+            .expect("wide effect switch is discovered");
+        let mut function = crate::ir::lift_function::lift_function_from_image(image, target)
+            .expect("wide effect switch lifts");
+        let prepared = super::pipeline::prepare_llir_for_lowering_with_shadow(
+            &mut function,
+            image,
+            &[],
+            CallConv::SysVAmd64,
+            true,
+            false,
+            None,
+            None,
+            None,
+            true,
+        );
+
+        let region = prepared
+            .shadow_v2_region
+            .as_ref()
+            .expect("production-prepared LLIR must retain a verified v2 region");
+        let ast = crate::ir::ast::lower(
+            &prepared.numbered,
+            region,
+            "wide154_dense_effects".to_string(),
+        );
+        let text = crate::ir::ast::render_c(&ast);
+        assert!(text.contains("switch ("), "{text}");
+        assert!(text.contains("case 0:"), "{text}");
+        assert!(text.contains("case 255:"), "{text}");
+        assert!(!text.contains("unrecovered indirect jump"), "{text}");
+    }
+
     use super::{
         dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
         merge_dwarf_register_local_facts, select_renderable_dwarf_local_facts,

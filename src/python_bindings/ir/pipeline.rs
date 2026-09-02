@@ -374,6 +374,7 @@ fn normalize_definedness_and_compute_ssa(
 /// address/range decompilation from observing different return identities.
 pub(super) struct PreparedLlir {
     pub(super) region: crate::ir::structure::Region,
+    pub(super) shadow_v2_region: Option<crate::ir::structure::Region>,
     pub(super) cfg_health: crate::ir::health::CfgHealth,
     pub(super) numbered: crate::ir::types::LlirFunction,
     pub(super) definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
@@ -417,6 +418,32 @@ pub(super) fn prepare_llir_for_lowering(
     declared: Option<&DwarfPrototypeContract>,
     program_fact: Option<&crate::program::environment::FunctionPrototypeFact>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+) -> PreparedLlir {
+    prepare_llir_for_lowering_with_shadow(
+        function,
+        image,
+        exception_sites,
+        cc,
+        recover_semantic_prototype,
+        arm_vfp_args,
+        declared,
+        program_fact,
+        type_env,
+        false,
+    )
+}
+
+pub(super) fn prepare_llir_for_lowering_with_shadow(
+    function: &mut crate::ir::types::LlirFunction,
+    image: &crate::program::image::ProgramImage,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
+    cc: crate::ir::call_args::CallConv,
+    recover_semantic_prototype: bool,
+    arm_vfp_args: bool,
+    declared: Option<&DwarfPrototypeContract>,
+    program_fact: Option<&crate::program::environment::FunctionPrototypeFact>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+    prepare_shadow_v2: bool,
 ) -> PreparedLlir {
     let mut ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
     let provisional_slots = if recover_semantic_prototype {
@@ -481,6 +508,12 @@ pub(super) fn prepare_llir_for_lowering(
         &ssa,
         &indirect_destinations,
     );
+    let shadow_v2_region = prepare_shadow_v2
+        .then(|| {
+            let report = crate::ir::structure_v2::observe(function, &ssa);
+            crate::ir::structure_v2::render::adapt_tree(report.tree.as_ref()?)
+        })
+        .flatten();
     let (numbered, definition_widths, mut parameter_slots) = if recover_semantic_prototype {
         let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
         crate::ir::value_number::value_number_with_parameter_slots_and_lifetimes(
@@ -523,6 +556,7 @@ pub(super) fn prepare_llir_for_lowering(
     lock_parameter_slots_from_prototype(prototype.as_ref(), &mut parameter_slots);
     PreparedLlir {
         region,
+        shadow_v2_region,
         cfg_health,
         numbered,
         definition_widths,
