@@ -369,10 +369,12 @@ that preserves honest local gotos when required.
   allowlist. The acceptance must name WP4, its expected removal/replacement
   target, and an expiry condition at v2 promotion; do not let the fitness gate
   fail merely because the approved shadow implementation exists.
-  The approval now permits nine files (still capped at 4,000 total lines) so
-  the first rendering adapter remains an explicit `render.rs` boundary rather
-  than being hidden in recovery or orchestration code; the same promotion or
-  abandonment expiry still applies.
+  The approval now permits nine files capped at 4,400 total lines. The first
+  increase to 4,000 kept the rendering adapter as an explicit `render.rs`
+  boundary; the additional 400-line allowance is pre-registered for the first
+  typed-switch recovery, independent verification, and rendering slice rather
+  than allowing those concerns to leak into CFG discovery. The same promotion
+  or abandonment expiry still applies.
 - [~] Suggested modules:
   - `mod.rs`: feature flag, public contract, and shadow comparison;
   - `cfg.rs`: normalized typed CFG input;
@@ -419,11 +421,15 @@ that preserves honest local gotos when required.
   `MultiExitLoop`: its body retains typed exit transfers, lowering materializes
   each independently verified exit region at that exact transfer, and the real
   fixture emits deterministic `while (1)` pseudocode with both return paths and
-  no goto. Every currently renderable real WP4 tree (`early_return`,
-  `dowhile_atleastonce`, `loop_return_on_neg`, top-level `two_entry_loop`, and
-  nested `irreducible_inside_reducible`)
+  no goto. The real gcc-O2 `duff_copy` tree now also renders its independently
+  verified eight-way typed dispatch as `switch`/`case 0..7`, while locally
+  degrading the suffix-entry irreducible loop to resolved labelled gotos; no
+  indirect-jump placeholder survives. Repeated recovery produces the same tree
+  and text. Every currently renderable real WP4 tree (`early_return`,
+  `dowhile_atleastonce`, `loop_return_on_neg`, top-level `two_entry_loop`,
+  nested `irreducible_inside_reducible`, and `duff_copy`)
   now also records deterministic parseable C derived from that same adapted AST
-  by the shared source-level preparation pass; all five texts pass a real host
+  by the shared source-level preparation pass; all six texts pass a real host
   `cc -fsyntax-only` test. This is not yet the full production pass stack:
   pipeline-context comparison, execution, and a separately normalized CFG view
   remain open.
@@ -545,7 +551,9 @@ one authoritative set of case edges.
   independently verified `RegionCandidate` now receives explicit
   `SwitchEvidence` and `SwitchDefaultEvidence` without re-recognising output:
   the real `102_duffs_device-gcc-O2.so::duff_copy` fixture records one dispatch,
-  eight ordered values `0..7`, and its linked bypass edge. A forged-label test
+  eight ordered values `0..7`, and its linked bypass edge. The verified WP4
+  tree now consumes that same evidence and renders an eight-arm switch with
+  honest labelled transfers into the suffix-entry region. A forged-label test
   proves that block/edge coverage alone cannot validate this metadata.
 - [ ] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
   rendering consume the same evidence object.
@@ -565,7 +573,8 @@ one authoritative set of case edges.
 - [ ] Execution differential for every newly recovered switch.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
-  default reach the shadow structurer. Corpus-wide census coverage remains.
+  default reach the shadow tree, its independent verifier, and deterministic
+  parseable C rendering. Corpus-wide census coverage remains.
 
 ### Exit criteria
 
@@ -837,7 +846,9 @@ relevant ratchet's accepted-regression record.
   still the sole production authority.
 - [x] WP5 has a host jump-table vertical slice: the real gcc-O2 Duff dispatch
   resolves eight ordered targets in discovery and carries values `0..7` plus
-  its typed bypass edge into the independently verified WP4 candidate.
+  its typed bypass edge through the independently verified WP4 tree and into
+  deterministic parseable switch output. The v1 production path remains
+  unchanged until WP4 promotion evidence is complete.
 - [ ] WP7A has landed or been rejected with width-aware evidence.
 
 ### M2 — Dormant architecture decision made

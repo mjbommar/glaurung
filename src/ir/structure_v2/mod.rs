@@ -22,6 +22,7 @@ pub use dominators::{LoopForest, LoopInfo, LoopKind};
 pub use local::{HonestGotoEvidence, LocalRegions};
 pub use recover::{
     LocalExitRegion, LocalLabelRegion, LoopExitRegion, StructuredRegion, StructuredTree,
+    SwitchCaseRegion, SwitchDefaultRegion,
 };
 pub use region::{
     BlockRegion, RegionCandidate, SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence,
@@ -753,6 +754,14 @@ mod tests {
                         .iter()
                         .any(|exit| tree_has_region(&exit.region, predicate))
             }
+            StructuredRegion::Switch { cases, default, .. } => {
+                cases
+                    .iter()
+                    .any(|case| tree_has_region(&case.region, predicate))
+                    || default
+                        .as_ref()
+                        .is_some_and(|default| tree_has_region(&default.region, predicate))
+            }
             StructuredRegion::Empty
             | StructuredRegion::Block(_)
             | StructuredRegion::Return { .. }
@@ -899,6 +908,42 @@ mod tests {
             candidate.switch_defaults()[0].dispatch,
             Some(dispatch.dispatch)
         );
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("typed Duff switch should recover locally: {report:#?}"));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Switch { .. }
+        )));
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified Duff tree should render: {report:#?}"));
+        assert!(pseudocode.contains("switch ("), "{pseudocode}");
+        assert!(pseudocode.contains("case 0:"), "{pseudocode}");
+        assert!(pseudocode.contains("case 7:"), "{pseudocode}");
+        assert!(pseudocode.contains("goto L_"), "{pseudocode}");
+        assert!(
+            !pseudocode.contains("unrecovered indirect jump"),
+            "{pseudocode}"
+        );
+        for target in pseudocode.lines().filter_map(|line| {
+            line.trim()
+                .strip_prefix("goto ")
+                .and_then(|line| line.strip_suffix(';'))
+        }) {
+            assert!(
+                pseudocode.contains(&format!("{target}:")),
+                "unresolved {target} in:\n{pseudocode}"
+            );
+        }
+        let repeated = observe(&lifted, &compute_ssa(&lifted));
+        assert_eq!(report.tree, repeated.tree);
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
+        assert_prepared_c(&report);
         assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 }

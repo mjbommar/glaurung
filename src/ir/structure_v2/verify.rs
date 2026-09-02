@@ -67,6 +67,9 @@ pub enum TreeError {
     BranchConditionInvalid {
         block: usize,
     },
+    SwitchInvalid {
+        dispatch: usize,
+    },
     LoopInvalid {
         header: usize,
     },
@@ -318,6 +321,80 @@ fn visit_tree<'a>(
             if let Some(else_region) = else_region {
                 visit_tree(
                     else_region,
+                    candidate,
+                    conditions,
+                    loops,
+                    leaves,
+                    controls,
+                    materialized_tails,
+                    errors,
+                );
+            }
+        }
+        StructuredRegion::Switch {
+            guard,
+            dispatch,
+            cases,
+            default,
+        } => {
+            if let Some(block) = candidate
+                .blocks()
+                .iter()
+                .find(|block| block.block == *dispatch)
+            {
+                record_leaf(
+                    *dispatch,
+                    BlockRegionView::Block(block),
+                    candidate,
+                    leaves,
+                    errors,
+                );
+            } else {
+                errors.push(TreeError::SwitchInvalid {
+                    dispatch: *dispatch,
+                });
+            }
+            let evidence = candidate
+                .switches()
+                .iter()
+                .find(|evidence| evidence.dispatch == *dispatch);
+            if evidence.is_none_or(|evidence| {
+                evidence.cases.len() != cases.len()
+                    || evidence.cases.iter().zip(cases).any(|(expected, actual)| {
+                        expected.target != actual.target || expected.values != actual.values
+                    })
+            }) {
+                errors.push(TreeError::SwitchInvalid {
+                    dispatch: *dispatch,
+                });
+            }
+            if default.as_ref().is_some_and(|actual| {
+                candidate.switch_defaults().iter().all(|expected| {
+                    expected.guard != guard.unwrap_or(*dispatch)
+                        || expected.dispatch != Some(*dispatch)
+                        || expected.target != actual.target
+                        || expected.taken != actual.taken
+                })
+            }) {
+                errors.push(TreeError::SwitchInvalid {
+                    dispatch: *dispatch,
+                });
+            }
+            for case in cases {
+                visit_tree(
+                    &case.region,
+                    candidate,
+                    conditions,
+                    loops,
+                    leaves,
+                    controls,
+                    materialized_tails,
+                    errors,
+                );
+            }
+            if let Some(default) = default {
+                visit_tree(
+                    &default.region,
                     candidate,
                     conditions,
                     loops,

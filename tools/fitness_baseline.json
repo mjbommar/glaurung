@@ -3,7 +3,7 @@
     {
       "expires_when": "structure_v2 becomes the production structurer or WP4 is abandoned",
       "max_files": 9,
-      "max_total_loc": 4000,
+      "max_total_loc": 4400,
       "owner": "WP4",
       "path": "ir/structure_v2/",
       "reason": "bounded shadow implementation beside production v1; delete v1 or this directory at the promotion decision"

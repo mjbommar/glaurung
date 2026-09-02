@@ -236,7 +236,7 @@ def test_wp4_shadow_architecture_growth_is_bounded_and_expires(fr):
             "structure_v2 becomes the production structurer or WP4 is abandoned"
         ),
         "max_files": 9,
-        "max_total_loc": 4000,
+        "max_total_loc": 4400,
         "owner": "WP4",
         "path": "ir/structure_v2/",
         "reason": (

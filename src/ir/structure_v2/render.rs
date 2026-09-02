@@ -51,6 +51,29 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
             else_region,
             ..
         } => adapt_if(*source_block, then_region, else_region.as_deref(), None),
+        StructuredRegion::Switch {
+            guard,
+            dispatch,
+            cases,
+            default,
+        } => {
+            let formal_default = if let Some(default) = default {
+                Some(Box::new(adapt_region(&default.region)?))
+            } else {
+                None
+            };
+            Some(Region::Switch {
+                guard: *guard,
+                dispatch: *dispatch,
+                case_labels: cases.iter().map(|case| case.values.clone()).collect(),
+                arms: cases
+                    .iter()
+                    .map(|case| adapt_region(&case.region))
+                    .collect::<Option<Vec<_>>>()?,
+                formal_default,
+                join: None,
+            })
+        }
         StructuredRegion::Loop {
             header,
             kind,
@@ -154,7 +177,7 @@ fn all_loop_breaks_target(
             *seen == header && *to == continuation
         }
         StructuredRegion::Continue { header: seen, .. } => *seen == header,
-        StructuredRegion::Loop { .. } => false,
+        StructuredRegion::Loop { .. } | StructuredRegion::Switch { .. } => false,
     }
 }
 
@@ -189,6 +212,7 @@ fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
             Some(Region::Goto(*to))
         }
         StructuredRegion::Loop { .. }
+        | StructuredRegion::Switch { .. }
         | StructuredRegion::Break { .. }
         | StructuredRegion::Continue { .. } => None,
     }
@@ -308,6 +332,7 @@ fn collect_post_tested_facts(
         StructuredRegion::Return { .. }
         | StructuredRegion::DuplicatedReturn { .. }
         | StructuredRegion::Loop { .. }
+        | StructuredRegion::Switch { .. }
         | StructuredRegion::Continue { .. }
         | StructuredRegion::LocalGoto { .. }
         | StructuredRegion::SharedGoto { .. } => None,
@@ -410,6 +435,9 @@ fn entry_block(region: &StructuredRegion) -> Option<usize> {
         StructuredRegion::Sequence(regions) => regions.iter().find_map(entry_block),
         StructuredRegion::If { source_block, .. } => Some(*source_block),
         StructuredRegion::Loop { header, .. } => Some(*header),
+        StructuredRegion::Switch {
+            guard, dispatch, ..
+        } => Some(guard.unwrap_or(*dispatch)),
         StructuredRegion::Break { to, .. }
         | StructuredRegion::LocalGoto { to, .. }
         | StructuredRegion::SharedGoto { to, .. } => Some(*to),

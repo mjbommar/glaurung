@@ -25,6 +25,12 @@ pub enum StructuredRegion {
         then_region: Box<StructuredRegion>,
         else_region: Option<Box<StructuredRegion>>,
     },
+    Switch {
+        guard: Option<usize>,
+        dispatch: usize,
+        cases: Vec<SwitchCaseRegion>,
+        default: Option<SwitchDefaultRegion>,
+    },
     Loop {
         header: usize,
         kind: LoopKind,
@@ -53,6 +59,20 @@ pub enum StructuredRegion {
         to: usize,
         taken: Option<bool>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchCaseRegion {
+    pub target: usize,
+    pub values: Vec<i64>,
+    pub region: Box<StructuredRegion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchDefaultRegion {
+    pub target: usize,
+    pub taken: bool,
+    pub region: Box<StructuredRegion>,
 }
 
 /// A path selected by one typed `break` target before exits reconverge.
@@ -154,6 +174,21 @@ impl TreeBuilder<'_> {
 
         let leaf = self.leaf(block)?;
         if self
+            .candidate
+            .switches()
+            .iter()
+            .any(|switch| switch.dispatch == block)
+            || self
+                .candidate
+                .switch_defaults()
+                .iter()
+                .any(|default| default.guard == block && default.dispatch.is_some())
+        {
+            let result = self.build_switch(block, stop, leaf);
+            self.active[block] = false;
+            return result;
+        }
+        if self
             .candidate_block(block)?
             .transfers
             .iter()
@@ -193,6 +228,79 @@ impl TreeBuilder<'_> {
         };
         self.active[block] = false;
         result
+    }
+
+    fn build_switch(
+        &mut self,
+        block: usize,
+        stop: Option<usize>,
+        guard_leaf: StructuredRegion,
+    ) -> Option<StructuredRegion> {
+        let default_evidence = self
+            .candidate
+            .switch_defaults()
+            .iter()
+            .find(|default| default.guard == block && default.dispatch.is_some());
+        let dispatch = default_evidence
+            .and_then(|default| default.dispatch)
+            .unwrap_or(block);
+        let evidence = self
+            .candidate
+            .switches()
+            .iter()
+            .find(|switch| switch.dispatch == dispatch)?
+            .clone();
+        if dispatch != block {
+            if self.owned[dispatch] || self.active[dispatch] {
+                return None;
+            }
+            self.owned[dispatch] = true;
+        }
+        let mut cases = Vec::with_capacity(evidence.cases.len());
+        for case in evidence.cases {
+            let region = if Some(case.target) == stop {
+                StructuredRegion::Empty
+            } else if self.owned[case.target] {
+                StructuredRegion::SharedGoto {
+                    from: dispatch,
+                    to: case.target,
+                    taken: None,
+                }
+            } else {
+                self.build(case.target, stop)?
+            };
+            cases.push(SwitchCaseRegion {
+                target: case.target,
+                values: case.values,
+                region: Box::new(region),
+            });
+        }
+        let default = if let Some(default) = default_evidence {
+            let transfer = self
+                .candidate_block(block)?
+                .transfers
+                .iter()
+                .find(|transfer| transfer_target(transfer) == default.target)?
+                .to_owned();
+            Some(SwitchDefaultRegion {
+                target: default.target,
+                taken: default.taken,
+                region: Box::new(self.build_tree_transfer(block, &transfer, stop)?),
+            })
+        } else {
+            None
+        };
+        let switch = StructuredRegion::Switch {
+            guard: (dispatch != block).then_some(block),
+            dispatch,
+            cases,
+            default,
+        };
+        Some(if dispatch == block {
+            switch
+        } else {
+            sequence([guard_leaf, switch])
+        })
     }
 
     fn build_local_entry_block(
