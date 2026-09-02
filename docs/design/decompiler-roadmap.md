@@ -168,8 +168,13 @@ scheduled independently of the longer pipeline/SSA migrations.
   `Loop`/`Break`/`Continue` control and exit-specific regions; both
   `dowhile_atleastonce` and the multi-exit `loop_return_on_neg` fixture pass
   independent ownership, loop-identity, and control-transfer verification.
-  Production remains on v1. Local-labelled tree recovery, rendering,
-  execution/GED/runtime comparison, and promotion are still open.
+  Irreducible SCCs now become separately owned local-labelled definitions with
+  explicit entry gotos and structured exit paths. The real two-entry and
+  nested-irreducible fixtures pass independent ownership, evidence,
+  local-exit, and local-goto verification, while the nested case retains its
+  surrounding natural loop. Production remains on v1. Rendering,
+  execution/GED/runtime comparison, cleanup materialization, and promotion are
+  still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one

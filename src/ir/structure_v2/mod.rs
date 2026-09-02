@@ -19,7 +19,9 @@ pub use cleanup::{
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
 pub use dominators::{LoopForest, LoopInfo, LoopKind};
 pub use local::{HonestGotoEvidence, LocalRegions};
-pub use recover::{LoopExitRegion, StructuredRegion, StructuredTree};
+pub use recover::{
+    LocalExitRegion, LocalLabelRegion, LoopExitRegion, StructuredRegion, StructuredTree,
+};
 pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
 pub use verify::{CandidateError, TreeError};
 
@@ -79,13 +81,14 @@ pub(crate) fn observe_cfg(
             });
             if verification_errors.is_empty() {
                 let tree = candidate.as_ref().and_then(|candidate| {
-                    recover::recover_tree(cfg, &conditions, candidate, &loops)
+                    recover::recover_tree(cfg, &conditions, candidate, &loops, &local_regions)
                 });
                 let tree_verification_errors = tree.as_ref().map_or_else(Vec::new, |tree| {
                     verify::verify_tree(
                         candidate.as_ref().expect("tree requires a candidate"),
                         &conditions,
                         &loops,
+                        &local_regions,
                         tree,
                     )
                 });
@@ -656,7 +659,9 @@ mod tests {
             | StructuredRegion::Block(_)
             | StructuredRegion::Return { .. }
             | StructuredRegion::Break { .. }
-            | StructuredRegion::Continue { .. } => false,
+            | StructuredRegion::Continue { .. }
+            | StructuredRegion::LocalGoto { .. }
+            | StructuredRegion::SharedGoto { .. } => false,
         }
     }
 
@@ -674,6 +679,16 @@ mod tests {
         assert!(report.honest_gotos[0].entry_targets.len() >= 2);
         assert_eq!(report.covered_blocks, report.block_count);
         assert_eq!(report.represented_edges, report.edge_count);
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("local-labelled tree: {report:#?}"));
+        assert_eq!(tree.local_regions.len(), 1, "{tree:#?}");
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::LocalGoto { .. }
+        )));
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 
     #[test]
@@ -690,7 +705,10 @@ mod tests {
             !report.honest_gotos.is_empty(),
             "inner irreducible SCC is named"
         );
-        let candidate = report.candidate.expect("locally degraded candidate");
+        let candidate = report
+            .candidate
+            .as_ref()
+            .expect("locally degraded candidate");
         assert!(candidate.transfers().any(|transfer| matches!(
             transfer,
             Transfer::Continue { .. } | Transfer::Break { .. }
@@ -700,5 +718,19 @@ mod tests {
             .any(|transfer| matches!(transfer, Transfer::LocalGoto { .. })));
         assert_eq!(candidate.blocks().len(), report.block_count);
         assert_eq!(candidate.transfer_count(), report.edge_count);
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("outer loop with local-labelled child: {report:#?}"));
+        assert!(!tree.local_regions.is_empty(), "{tree:#?}");
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Loop { .. }
+        )));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::LocalGoto { .. }
+        )));
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 }

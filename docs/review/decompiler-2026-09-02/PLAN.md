@@ -386,10 +386,15 @@ that preserves honest local gotos when required.
   `Loop`/`Break`/`Continue` nodes for reducible loops. The real `early_return`,
   `dowhile_atleastonce`, and multi-exit `loop_return_on_neg` binaries are green;
   the latter keeps distinct exit regions before their singly owned shared
-  return. An independent verifier checks exact leaf ownership, retained typed
-  transfers, branch-source identity, natural-loop identity, exit targets, and
-  every explicit loop-control transfer. Local-labelled tree recovery, cleanup
-  materialization, and a separately normalized CFG view remain open.
+  return. Irreducible SCCs now become separately owned local-labelled
+  definitions with explicit entry gotos and structured exit paths; the real
+  two-entry fixture and the nested irreducible fixture both produce verified
+  trees, and the latter retains its surrounding natural loop. An independent
+  verifier checks exact leaf ownership, retained typed transfers,
+  branch-source identity, natural-loop identity, loop and local exit targets,
+  local-region evidence, and every explicit loop-control or local-goto
+  transfer. Cleanup materialization and a separately normalized CFG view
+  remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -397,8 +402,9 @@ that preserves honest local gotos when required.
   `structure-v2-shadow` now feeds the existing `Cfg` directly into a
   deterministic condition-DAG observer and records exact block/edge coverage;
   verified flat regions and the first acyclic structured trees are also
-  recorded, including reducible single- and multi-exit loops. Local-labelled
-  trees, health, pseudocode, execution, GED, and runtime comparisons remain.
+  recorded, including reducible single- and multi-exit loops and locally
+  labelled irreducible children. Health, pseudocode, execution, GED, and
+  runtime comparisons remain.
 
 ### RED fixtures
 

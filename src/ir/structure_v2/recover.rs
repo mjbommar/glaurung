@@ -1,8 +1,8 @@
 //! Deterministic structured-tree recovery for shadow candidates.
 
 use super::{
-    BlockRegion, ConditionDag, ConditionId, LoopForest, LoopInfo, LoopKind, RegionCandidate,
-    Terminal, Transfer,
+    BlockRegion, ConditionDag, ConditionId, LocalRegions, LoopForest, LoopInfo, LoopKind,
+    RegionCandidate, Terminal, Transfer,
 };
 use crate::ir::structure::Cfg;
 
@@ -38,6 +38,17 @@ pub enum StructuredRegion {
         header: usize,
         taken: Option<bool>,
     },
+    LocalGoto {
+        from: usize,
+        to: usize,
+        taken: Option<bool>,
+        region: usize,
+    },
+    SharedGoto {
+        from: usize,
+        to: usize,
+        taken: Option<bool>,
+    },
 }
 
 /// A path selected by one typed `break` target before exits reconverge.
@@ -47,10 +58,26 @@ pub struct LoopExitRegion {
     pub region: Box<StructuredRegion>,
 }
 
+/// One intentionally flat irreducible region retained inside the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalLabelRegion {
+    pub region: usize,
+    pub blocks: Vec<BlockRegion>,
+    pub exits: Vec<LocalExitRegion>,
+}
+
+/// One structured path leaving a local-labelled region.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalExitRegion {
+    pub target: usize,
+    pub region: Box<StructuredRegion>,
+}
+
 /// One verified structured tree rooted at the function entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructuredTree {
     pub root: StructuredRegion,
+    pub local_regions: Vec<LocalLabelRegion>,
 }
 
 pub(super) fn recover_tree(
@@ -58,10 +85,12 @@ pub(super) fn recover_tree(
     conditions: &ConditionDag,
     candidate: &RegionCandidate,
     loops: &LoopForest,
+    locals: &LocalRegions,
 ) -> Option<StructuredTree> {
     if cfg.succs.is_empty() {
         return Some(StructuredTree {
             root: StructuredRegion::Empty,
+            local_regions: Vec::new(),
         });
     }
     let mut builder = TreeBuilder {
@@ -69,16 +98,24 @@ pub(super) fn recover_tree(
         conditions,
         candidate,
         loops,
+        locals,
         active_loops: Vec::new(),
         owned: vec![false; cfg.succs.len()],
         active: vec![false; cfg.succs.len()],
     };
-    let root = builder.build(0, None)?;
+    let mut root = builder.build(0, None)?;
+    let local_regions = builder.build_local_regions()?;
+    if let Some(continuation) = builder.first_unowned_block() {
+        root = sequence([root, builder.build(continuation, None)?]);
+    }
     builder
         .owned
         .iter()
         .all(|owned| *owned)
-        .then_some(StructuredTree { root })
+        .then_some(StructuredTree {
+            root,
+            local_regions,
+        })
 }
 
 struct TreeBuilder<'a> {
@@ -86,6 +123,7 @@ struct TreeBuilder<'a> {
     conditions: &'a ConditionDag,
     candidate: &'a RegionCandidate,
     loops: &'a LoopForest,
+    locals: &'a LocalRegions,
     active_loops: Vec<usize>,
     owned: Vec<bool>,
     active: Vec<bool>,
@@ -108,6 +146,16 @@ impl TreeBuilder<'_> {
         self.owned[block] = true;
 
         let leaf = self.leaf(block)?;
+        if self
+            .candidate_block(block)?
+            .transfers
+            .iter()
+            .any(|transfer| matches!(transfer, Transfer::LocalGoto { .. }))
+        {
+            let result = self.build_local_entry_block(block, stop, leaf);
+            self.active[block] = false;
+            return result;
+        }
         if let Some(loop_header) = self.active_loops.last().copied() {
             let has_loop_control = self
                 .candidate_block(block)?
@@ -128,15 +176,142 @@ impl TreeBuilder<'_> {
         }
         let result = match self.cfg.succs[block].as_slice() {
             [] => Some(leaf),
-            [successor] => {
-                let continuation = self.build(*successor, stop)?;
+            [_] => {
+                let transfer = self.candidate_block(block)?.transfers.first()?.to_owned();
+                let continuation = self.build_tree_transfer(block, &transfer, stop)?;
                 Some(sequence([leaf, continuation]))
             }
-            [first, second] => self.build_conditional(block, *first, *second, stop, leaf),
+            [_, _] => self.build_conditional(block, stop, leaf),
             _ => None,
         };
         self.active[block] = false;
         result
+    }
+
+    fn build_local_entry_block(
+        &mut self,
+        block: usize,
+        stop: Option<usize>,
+        leaf: StructuredRegion,
+    ) -> Option<StructuredRegion> {
+        let transfers = self.candidate_block(block)?.transfers.clone();
+        match transfers.as_slice() {
+            [transfer] => Some(sequence([
+                leaf,
+                self.build_tree_transfer(block, transfer, stop)?,
+            ])),
+            [first, second] => {
+                let (taken, other) = match (transfer_taken(first), transfer_taken(second)) {
+                    (Some(true), Some(false)) => (first, second),
+                    (Some(false), Some(true)) => (second, first),
+                    _ => return None,
+                };
+                let join = self
+                    .cfg
+                    .immediate_postdominator(block)
+                    .filter(|join| Some(*join) != stop);
+                let conditional = StructuredRegion::If {
+                    source_block: block,
+                    condition: self.conditions.branch_condition(block)?,
+                    then_region: Box::new(self.build_tree_transfer(block, taken, join)?),
+                    else_region: Some(Box::new(self.build_tree_transfer(block, other, join)?)),
+                };
+                let mut regions = vec![leaf, conditional];
+                if let Some(join) = join {
+                    regions.push(self.build(join, stop)?);
+                }
+                Some(sequence(regions))
+            }
+            _ => None,
+        }
+    }
+
+    fn build_tree_transfer(
+        &mut self,
+        from: usize,
+        transfer: &Transfer,
+        stop: Option<usize>,
+    ) -> Option<StructuredRegion> {
+        match transfer {
+            Transfer::Flow { to } | Transfer::Branch { to, .. } => {
+                if Some(*to) == stop {
+                    Some(StructuredRegion::Empty)
+                } else if self.owned.get(*to).copied().unwrap_or(false) {
+                    Some(StructuredRegion::SharedGoto {
+                        from,
+                        to: *to,
+                        taken: transfer_taken(transfer),
+                    })
+                } else {
+                    self.build(*to, stop)
+                }
+            }
+            Transfer::Break { header, to, taken } => Some(StructuredRegion::Break {
+                from,
+                header: *header,
+                to: *to,
+                taken: *taken,
+            }),
+            Transfer::Continue { header, taken } => Some(StructuredRegion::Continue {
+                from,
+                header: *header,
+                taken: *taken,
+            }),
+            Transfer::LocalGoto { to, taken, region } => Some(StructuredRegion::LocalGoto {
+                from,
+                to: *to,
+                taken: *taken,
+                region: *region,
+            }),
+        }
+    }
+
+    fn build_local_regions(&mut self) -> Option<Vec<LocalLabelRegion>> {
+        let mut definitions = Vec::new();
+        for evidence in self.locals.evidence() {
+            let mut blocks = Vec::with_capacity(evidence.blocks.len());
+            for &block in &evidence.blocks {
+                if *self.owned.get(block)? {
+                    return None;
+                }
+                self.owned[block] = true;
+                blocks.push(self.candidate_block(block)?.clone());
+            }
+
+            let mut targets = Vec::new();
+            for block in &blocks {
+                for transfer in &block.transfers {
+                    if !matches!(transfer, Transfer::LocalGoto { .. }) {
+                        targets.push(transfer_target(transfer));
+                    }
+                }
+            }
+            targets.sort_unstable();
+            targets.dedup();
+            let join = (targets.len() > 1)
+                .then(|| self.cfg.immediate_postdominator(evidence.blocks[0]))
+                .flatten();
+            let mut exits = Vec::new();
+            for target in targets {
+                if Some(target) == join || self.owned.get(target).copied().unwrap_or(false) {
+                    continue;
+                }
+                exits.push(LocalExitRegion {
+                    target,
+                    region: Box::new(self.build(target, join)?),
+                });
+            }
+            definitions.push(LocalLabelRegion {
+                region: evidence.region,
+                blocks,
+                exits,
+            });
+        }
+        Some(definitions)
+    }
+
+    fn first_unowned_block(&self) -> Option<usize> {
+        self.owned.iter().position(|owned| !owned)
     }
 
     fn build_loop(
@@ -254,18 +429,17 @@ impl TreeBuilder<'_> {
     fn build_conditional(
         &mut self,
         block: usize,
-        first: usize,
-        second: usize,
         stop: Option<usize>,
         leaf: StructuredRegion,
     ) -> Option<StructuredRegion> {
-        let taken = self.cfg.cond_taken[block]?;
-        let other = if first == taken {
-            second
-        } else if second == taken {
-            first
-        } else {
+        let transfers = self.candidate_block(block)?.transfers.clone();
+        let [first, second] = transfers.as_slice() else {
             return None;
+        };
+        let (taken, other) = match (transfer_taken(first), transfer_taken(second)) {
+            (Some(true), Some(false)) => (first, second),
+            (Some(false), Some(true)) => (second, first),
+            _ => return None,
         };
         let condition = self.conditions.branch_condition(block)?;
         let join = self
@@ -273,8 +447,8 @@ impl TreeBuilder<'_> {
             .immediate_postdominator(block)
             .filter(|join| Some(*join) != stop);
         let snapshot = self.owned.clone();
-        let then_region = self.build(taken, join);
-        let else_region = self.build(other, join);
+        let then_region = self.build_tree_transfer(block, taken, join);
+        let else_region = self.build_tree_transfer(block, other, join);
         let (Some(then_region), Some(else_region)) = (then_region, else_region) else {
             self.owned = snapshot;
             return None;
@@ -287,7 +461,7 @@ impl TreeBuilder<'_> {
                 .then_some(Box::new(else_region)),
         };
         let mut parts = vec![leaf, conditional];
-        if let Some(join) = join {
+        if let Some(join) = join.filter(|join| !self.owned[*join]) {
             parts.push(self.build(join, stop)?);
         }
         Some(sequence(parts))
@@ -317,6 +491,16 @@ fn transfer_taken(transfer: &Transfer) -> Option<bool> {
         | Transfer::Continue { taken, .. }
         | Transfer::LocalGoto { taken, .. } => *taken,
         Transfer::Flow { .. } => None,
+    }
+}
+
+fn transfer_target(transfer: &Transfer) -> usize {
+    match transfer {
+        Transfer::Flow { to }
+        | Transfer::Branch { to, .. }
+        | Transfer::Break { to, .. }
+        | Transfer::LocalGoto { to, .. } => *to,
+        Transfer::Continue { header, .. } => *header,
     }
 }
 
@@ -380,10 +564,11 @@ mod tests {
             .expect("diamond condition DAG");
         let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
 
-        let tree = recover_tree(&cfg, &conditions, &candidate, &loops).expect("structured diamond");
+        let tree = recover_tree(&cfg, &conditions, &candidate, &loops, &locals)
+            .expect("structured diamond");
         assert_eq!(
             tree,
-            recover_tree(&cfg, &conditions, &candidate, &loops)
+            recover_tree(&cfg, &conditions, &candidate, &loops, &locals)
                 .expect("deterministic second recovery")
         );
         let StructuredRegion::Sequence(parts) = tree.root else {

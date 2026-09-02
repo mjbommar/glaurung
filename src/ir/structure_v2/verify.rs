@@ -1,6 +1,6 @@
 //! Independent fidelity checks for a shadow region candidate.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     ConditionDag, ConditionNode, DuplicatedTail, LocalRegions, LoopForest, RegionCandidate,
@@ -52,6 +52,8 @@ pub enum TreeError {
     BranchConditionInvalid { block: usize },
     LoopInvalid { header: usize },
     LoopExitInvalid { header: usize, target: usize },
+    LocalRegionInvalid { region: usize },
+    LocalExitInvalid { region: usize, target: usize },
     ControlTransferMissing { from: usize, to: usize },
     ControlTransferInvented { from: usize, to: usize },
 }
@@ -60,6 +62,7 @@ pub(super) fn verify_tree(
     candidate: &RegionCandidate,
     conditions: &ConditionDag,
     loops: &LoopForest,
+    locals: &LocalRegions,
     tree: &StructuredTree,
 ) -> Vec<TreeError> {
     let mut errors = Vec::new();
@@ -74,6 +77,68 @@ pub(super) fn verify_tree(
         &mut controls,
         &mut errors,
     );
+    let mut seen_local_regions = BTreeSet::new();
+    for definition in &tree.local_regions {
+        let evidence = locals
+            .evidence()
+            .iter()
+            .find(|evidence| evidence.region == definition.region);
+        let block_ids: Vec<_> = definition.blocks.iter().map(|block| block.block).collect();
+        if !seen_local_regions.insert(definition.region)
+            || evidence.is_none_or(|evidence| evidence.blocks != block_ids)
+        {
+            errors.push(TreeError::LocalRegionInvalid {
+                region: definition.region,
+            });
+        }
+        for block in &definition.blocks {
+            record_leaf(
+                block.block,
+                BlockRegionView::Block(block),
+                candidate,
+                &mut leaves,
+                &mut errors,
+            );
+            controls.extend(block.transfers.iter().filter_map(|transfer| {
+                matches!(
+                    transfer,
+                    Transfer::Break { .. } | Transfer::Continue { .. } | Transfer::LocalGoto { .. }
+                )
+                .then_some((block.block, *transfer))
+            }));
+        }
+        let mut seen_targets = BTreeSet::new();
+        for exit in &definition.exits {
+            let is_direct_exit = definition.blocks.iter().any(|block| {
+                block.transfers.iter().any(|transfer| {
+                    transfer_target(transfer) == exit.target
+                        && !matches!(transfer, Transfer::LocalGoto { .. })
+                })
+            });
+            if !seen_targets.insert(exit.target) || !is_direct_exit {
+                errors.push(TreeError::LocalExitInvalid {
+                    region: definition.region,
+                    target: exit.target,
+                });
+            }
+            visit_tree(
+                &exit.region,
+                candidate,
+                conditions,
+                loops,
+                &mut leaves,
+                &mut controls,
+                &mut errors,
+            );
+        }
+    }
+    for evidence in locals.evidence() {
+        if !seen_local_regions.contains(&evidence.region) {
+            errors.push(TreeError::LocalRegionInvalid {
+                region: evidence.region,
+            });
+        }
+    }
     for (block, leaf) in leaves.into_iter().enumerate() {
         if leaf.is_none() {
             errors.push(TreeError::BlockMissing { block });
@@ -84,8 +149,11 @@ pub(super) fn verify_tree(
         .iter()
         .flat_map(|block| {
             block.transfers.iter().filter_map(|transfer| {
-                matches!(transfer, Transfer::Break { .. } | Transfer::Continue { .. })
-                    .then_some((block.block, *transfer))
+                matches!(
+                    transfer,
+                    Transfer::Break { .. } | Transfer::Continue { .. } | Transfer::LocalGoto { .. }
+                )
+                .then_some((block.block, *transfer))
             })
         })
         .collect();
@@ -241,6 +309,38 @@ fn visit_tree<'a>(
                 taken: *taken,
             },
         )),
+        StructuredRegion::LocalGoto {
+            from,
+            to,
+            taken,
+            region,
+        } => controls.push((
+            *from,
+            Transfer::LocalGoto {
+                to: *to,
+                taken: *taken,
+                region: *region,
+            },
+        )),
+        StructuredRegion::SharedGoto { from, to, taken } => {
+            let expected = match taken {
+                Some(taken) => Transfer::Branch {
+                    to: *to,
+                    taken: *taken,
+                },
+                None => Transfer::Flow { to: *to },
+            };
+            if !candidate
+                .blocks()
+                .iter()
+                .any(|block| block.block == *from && block.transfers.contains(&expected))
+            {
+                errors.push(TreeError::ControlTransferInvented {
+                    from: *from,
+                    to: *to,
+                });
+            }
+        }
     }
 }
 
@@ -545,14 +645,83 @@ mod tests {
                     taken: Some(true),
                 },
             ]),
+            local_regions: Vec::new(),
         };
 
-        let errors = verify_tree(&candidate, &conditions, &loops, &forged);
+        let errors = verify_tree(&candidate, &conditions, &loops, &locals, &forged);
         assert!(errors.contains(&TreeError::LeafMismatch { block: 0 }));
         assert!(errors.contains(&TreeError::BranchConditionInvalid { block: 2 }));
         assert!(errors.contains(&TreeError::BlockDuplicated { block: 1 }));
         assert!(errors.contains(&TreeError::BlockMissing { block: 2 }));
         assert!(errors.contains(&TreeError::ControlTransferInvented { from: 0, to: 1 }));
+    }
+
+    #[test]
+    fn tree_verifier_rejects_a_missing_local_region_definition() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![LlirInstr {
+                        va: 0x1000,
+                        op: Op::CondJump {
+                            cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                            target: 0x1200,
+                            inverted: false,
+                        },
+                    }],
+                    succs: vec![0x1200, 0x1100],
+                },
+                LlirBlock {
+                    start_va: 0x1100,
+                    end_va: 0x1104,
+                    instrs: vec![LlirInstr {
+                        va: 0x1100,
+                        op: Op::Nop,
+                    }],
+                    succs: vec![0x1200],
+                },
+                LlirBlock {
+                    start_va: 0x1200,
+                    end_va: 0x1204,
+                    instrs: vec![LlirInstr {
+                        va: 0x1200,
+                        op: Op::Nop,
+                    }],
+                    succs: vec![0x1100],
+                },
+            ],
+        };
+        let ssa = compute_ssa(&function);
+        let cfg = Cfg::from(&function, &ssa);
+        let loops = LoopForest::from_cfg(&cfg);
+        let locals = LocalRegions::from_cfg(&cfg, &loops);
+        let predicates = cfg.branch_predicates(&function, &ssa);
+        let conditions =
+            ConditionDag::from_cfg(&cfg, &loops, &locals, &predicates).expect("condition DAG");
+        let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
+        let entry = candidate.blocks()[0].clone();
+        let mut root = vec![StructuredRegion::Block(entry.clone())];
+        root.extend(entry.transfers.iter().map(|transfer| match transfer {
+            Transfer::LocalGoto { to, taken, region } => StructuredRegion::LocalGoto {
+                from: entry.block,
+                to: *to,
+                taken: *taken,
+                region: *region,
+            },
+            other => panic!("entry transfer should enter the local region: {other:?}"),
+        }));
+        let tree = StructuredTree {
+            root: StructuredRegion::Sequence(root),
+            local_regions: Vec::new(),
+        };
+
+        let errors = verify_tree(&candidate, &conditions, &loops, &locals, &tree);
+        assert!(errors.contains(&TreeError::LocalRegionInvalid { region: 0 }));
+        assert!(errors.contains(&TreeError::BlockMissing { block: 1 }));
+        assert!(errors.contains(&TreeError::BlockMissing { block: 2 }));
     }
 
     #[test]
