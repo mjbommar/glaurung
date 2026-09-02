@@ -275,7 +275,7 @@ impl CalleeClass {
     /// Stable token used in the label's byte encoding.
     pub fn write_token(&self, out: &mut String) {
         match self {
-            CalleeClass::NotACall => out.push_str("-"),
+            CalleeClass::NotACall => out.push('-'),
             CalleeClass::External(name) => {
                 out.push_str("ext:");
                 out.push_str(name);

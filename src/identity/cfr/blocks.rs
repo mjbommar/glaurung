@@ -124,9 +124,9 @@ pub fn classify(function: &LlirFunction) -> BlockGraph {
         .collect();
 
     let mut edges = Vec::new();
-    for from in 0..count {
-        let kinds = edge_kinds(&function.blocks[from], &successors[from], function);
-        for (index, to) in successors[from].iter().copied().enumerate() {
+    for (from, outgoing) in successors.iter().enumerate().take(count) {
+        let kinds = edge_kinds(&function.blocks[from], outgoing, function);
+        for (index, to) in outgoing.iter().copied().enumerate() {
             edges.push(CfgEdge {
                 from,
                 to,
