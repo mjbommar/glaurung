@@ -164,9 +164,12 @@ scheduled independently of the longer pipeline/SSA migrations.
   `loop_return_on_neg` fixtures, including post-test, `Break`, `Continue`, and
   singly owned shared-terminal facts. A deterministic, independently verified
   `Sequence`/`If`/`Block`/`Return` tree now covers acyclic single-entry graphs
-  and the real gcc-O0 `early_return` fixture. Production remains on v1.
-  Loop/local-labelled tree recovery, rendering, execution/GED/runtime
-  comparison, and promotion are still open.
+  and the real gcc-O0 `early_return` fixture. Reducible trees now add explicit
+  `Loop`/`Break`/`Continue` control and exit-specific regions; both
+  `dowhile_atleastonce` and the multi-exit `loop_return_on_neg` fixture pass
+  independent ownership, loop-identity, and control-transfer verification.
+  Production remains on v1. Local-labelled tree recovery, rendering,
+  execution/GED/runtime comparison, and promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one

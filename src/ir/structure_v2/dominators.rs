@@ -128,4 +128,10 @@ impl LoopForest {
             .filter(|loop_info| loop_info.blocks.binary_search(&block).is_ok())
             .min_by_key(|loop_info| loop_info.blocks.len())
     }
+
+    pub(super) fn by_header(&self, header: usize) -> Option<&LoopInfo> {
+        self.loops
+            .iter()
+            .find(|loop_info| loop_info.header == header)
+    }
 }

@@ -1,9 +1,12 @@
 //! Deterministic structured-tree recovery for shadow candidates.
 
-use super::{BlockRegion, ConditionDag, ConditionId, RegionCandidate, Terminal};
+use super::{
+    BlockRegion, ConditionDag, ConditionId, LoopForest, LoopInfo, LoopKind, RegionCandidate,
+    Terminal, Transfer,
+};
 use crate::ir::structure::Cfg;
 
-/// A structured, non-rendering view of one acyclic CFG region.
+/// A structured, non-rendering view of one verified CFG region.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructuredRegion {
     Empty,
@@ -18,6 +21,30 @@ pub enum StructuredRegion {
         then_region: Box<StructuredRegion>,
         else_region: Option<Box<StructuredRegion>>,
     },
+    Loop {
+        header: usize,
+        kind: LoopKind,
+        body: Box<StructuredRegion>,
+        exits: Vec<LoopExitRegion>,
+    },
+    Break {
+        from: usize,
+        header: usize,
+        to: usize,
+        taken: Option<bool>,
+    },
+    Continue {
+        from: usize,
+        header: usize,
+        taken: Option<bool>,
+    },
+}
+
+/// A path selected by one typed `break` target before exits reconverge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoopExitRegion {
+    pub target: usize,
+    pub region: Box<StructuredRegion>,
 }
 
 /// One verified structured tree rooted at the function entry.
@@ -26,10 +53,11 @@ pub struct StructuredTree {
     pub root: StructuredRegion,
 }
 
-pub(super) fn recover_acyclic(
+pub(super) fn recover_tree(
     cfg: &Cfg,
     conditions: &ConditionDag,
     candidate: &RegionCandidate,
+    loops: &LoopForest,
 ) -> Option<StructuredTree> {
     if cfg.succs.is_empty() {
         return Some(StructuredTree {
@@ -40,6 +68,8 @@ pub(super) fn recover_acyclic(
         cfg,
         conditions,
         candidate,
+        loops,
+        active_loops: Vec::new(),
         owned: vec![false; cfg.succs.len()],
         active: vec![false; cfg.succs.len()],
     };
@@ -55,6 +85,8 @@ struct TreeBuilder<'a> {
     cfg: &'a Cfg,
     conditions: &'a ConditionDag,
     candidate: &'a RegionCandidate,
+    loops: &'a LoopForest,
+    active_loops: Vec<usize>,
     owned: Vec<bool>,
     active: Vec<bool>,
 }
@@ -67,10 +99,33 @@ impl TreeBuilder<'_> {
         if block >= self.cfg.succs.len() || self.owned[block] || self.active[block] {
             return None;
         }
+        if !self.active_loops.contains(&block) {
+            if let Some(loop_info) = self.loops.by_header(block).cloned() {
+                return self.build_loop(&loop_info, stop);
+            }
+        }
         self.active[block] = true;
         self.owned[block] = true;
 
         let leaf = self.leaf(block)?;
+        if let Some(loop_header) = self.active_loops.last().copied() {
+            let has_loop_control = self
+                .candidate_block(block)?
+                .transfers
+                .iter()
+                .any(|transfer| {
+                    matches!(
+                        transfer,
+                        Transfer::Break { header, .. } | Transfer::Continue { header, .. }
+                            if *header == loop_header
+                    )
+                });
+            if has_loop_control {
+                let result = self.build_loop_block(block, loop_header, leaf);
+                self.active[block] = false;
+                return result;
+            }
+        }
         let result = match self.cfg.succs[block].as_slice() {
             [] => Some(leaf),
             [successor] => {
@@ -82,6 +137,118 @@ impl TreeBuilder<'_> {
         };
         self.active[block] = false;
         result
+    }
+
+    fn build_loop(
+        &mut self,
+        loop_info: &LoopInfo,
+        stop: Option<usize>,
+    ) -> Option<StructuredRegion> {
+        self.active_loops.push(loop_info.header);
+        let body = self.build(loop_info.header, None);
+        self.active_loops.pop();
+        let body = body?;
+
+        let mut exits: Vec<usize> = loop_info.exits.iter().map(|(_, to)| *to).collect();
+        exits.sort_unstable();
+        exits.dedup();
+        let (exit_regions, continuation) = match exits.as_slice() {
+            [] => (Vec::new(), None),
+            [continuation] => (Vec::new(), Some(*continuation)),
+            _ => {
+                let join = self.cfg.immediate_postdominator(loop_info.header)?;
+                let mut regions = Vec::with_capacity(exits.len());
+                for target in exits {
+                    if target != join {
+                        regions.push(LoopExitRegion {
+                            target,
+                            region: Box::new(self.build(target, Some(join))?),
+                        });
+                    }
+                }
+                (regions, Some(join))
+            }
+        };
+        let loop_region = StructuredRegion::Loop {
+            header: loop_info.header,
+            kind: loop_info.kind,
+            body: Box::new(body),
+            exits: exit_regions,
+        };
+        if let Some(continuation) = continuation {
+            Some(sequence([loop_region, self.build(continuation, stop)?]))
+        } else {
+            Some(loop_region)
+        }
+    }
+
+    fn build_loop_block(
+        &mut self,
+        block: usize,
+        loop_header: usize,
+        leaf: StructuredRegion,
+    ) -> Option<StructuredRegion> {
+        let transfers = self.candidate_block(block)?.transfers.clone();
+        match transfers.as_slice() {
+            [transfer] => Some(sequence([
+                leaf,
+                self.build_loop_transfer(block, loop_header, transfer)?,
+            ])),
+            [first, second] => {
+                let (taken, other) = match (transfer_taken(first), transfer_taken(second)) {
+                    (Some(true), Some(false)) => (first, second),
+                    (Some(false), Some(true)) => (second, first),
+                    _ => return None,
+                };
+                Some(sequence([
+                    leaf,
+                    StructuredRegion::If {
+                        source_block: block,
+                        condition: self.conditions.branch_condition(block)?,
+                        then_region: Box::new(self.build_loop_transfer(
+                            block,
+                            loop_header,
+                            taken,
+                        )?),
+                        else_region: Some(Box::new(self.build_loop_transfer(
+                            block,
+                            loop_header,
+                            other,
+                        )?)),
+                    },
+                ]))
+            }
+            _ => None,
+        }
+    }
+
+    fn build_loop_transfer(
+        &mut self,
+        from: usize,
+        loop_header: usize,
+        transfer: &Transfer,
+    ) -> Option<StructuredRegion> {
+        match transfer {
+            Transfer::Break { header, to, taken } if *header == loop_header => {
+                Some(StructuredRegion::Break {
+                    from,
+                    header: *header,
+                    to: *to,
+                    taken: *taken,
+                })
+            }
+            Transfer::Continue { header, taken } if *header == loop_header => {
+                Some(StructuredRegion::Continue {
+                    from,
+                    header: *header,
+                    taken: *taken,
+                })
+            }
+            Transfer::Flow { to }
+            | Transfer::Branch { to, .. }
+            | Transfer::LocalGoto { to, .. } => self.build(*to, None),
+            Transfer::Break { .. } | Transfer::Continue { .. } => None,
+        }
     }
 
     fn build_conditional(
@@ -127,16 +294,29 @@ impl TreeBuilder<'_> {
     }
 
     fn leaf(&self, block: usize) -> Option<StructuredRegion> {
-        let region = self
-            .candidate
-            .blocks()
-            .iter()
-            .find(|region| region.block == block)?;
+        let region = self.candidate_block(block)?;
         if region.terminal == Some(Terminal::Return) {
             Some(StructuredRegion::Return { block })
         } else {
             Some(StructuredRegion::Block(region.clone()))
         }
+    }
+
+    fn candidate_block(&self, block: usize) -> Option<&BlockRegion> {
+        self.candidate
+            .blocks()
+            .iter()
+            .find(|region| region.block == block)
+    }
+}
+
+fn transfer_taken(transfer: &Transfer) -> Option<bool> {
+    match transfer {
+        Transfer::Branch { taken, .. } => Some(*taken),
+        Transfer::Break { taken, .. }
+        | Transfer::Continue { taken, .. }
+        | Transfer::LocalGoto { taken, .. } => *taken,
+        Transfer::Flow { .. } => None,
     }
 }
 
@@ -200,10 +380,11 @@ mod tests {
             .expect("diamond condition DAG");
         let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
 
-        let tree = recover_acyclic(&cfg, &conditions, &candidate).expect("structured diamond");
+        let tree = recover_tree(&cfg, &conditions, &candidate, &loops).expect("structured diamond");
         assert_eq!(
             tree,
-            recover_acyclic(&cfg, &conditions, &candidate).expect("deterministic second recovery")
+            recover_tree(&cfg, &conditions, &candidate, &loops)
+                .expect("deterministic second recovery")
         );
         let StructuredRegion::Sequence(parts) = tree.root else {
             panic!("diamond root must be a sequence");

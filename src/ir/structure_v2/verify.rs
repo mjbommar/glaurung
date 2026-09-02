@@ -50,20 +50,63 @@ pub enum TreeError {
     BlockOutOfRange { block: usize },
     LeafMismatch { block: usize },
     BranchConditionInvalid { block: usize },
+    LoopInvalid { header: usize },
+    LoopExitInvalid { header: usize, target: usize },
+    ControlTransferMissing { from: usize, to: usize },
+    ControlTransferInvented { from: usize, to: usize },
 }
 
 pub(super) fn verify_tree(
     candidate: &RegionCandidate,
     conditions: &ConditionDag,
+    loops: &LoopForest,
     tree: &StructuredTree,
 ) -> Vec<TreeError> {
     let mut errors = Vec::new();
     let mut leaves: Vec<Option<BlockRegionView<'_>>> = vec![None; candidate.blocks().len()];
-    visit_tree(&tree.root, candidate, conditions, &mut leaves, &mut errors);
+    let mut controls = Vec::new();
+    visit_tree(
+        &tree.root,
+        candidate,
+        conditions,
+        loops,
+        &mut leaves,
+        &mut controls,
+        &mut errors,
+    );
     for (block, leaf) in leaves.into_iter().enumerate() {
         if leaf.is_none() {
             errors.push(TreeError::BlockMissing { block });
         }
+    }
+    let mut expected_controls: Vec<(usize, Transfer)> = candidate
+        .blocks()
+        .iter()
+        .flat_map(|block| {
+            block.transfers.iter().filter_map(|transfer| {
+                matches!(transfer, Transfer::Break { .. } | Transfer::Continue { .. })
+                    .then_some((block.block, *transfer))
+            })
+        })
+        .collect();
+    for (from, transfer) in controls {
+        if let Some(position) = expected_controls
+            .iter()
+            .position(|expected| *expected == (from, transfer))
+        {
+            expected_controls.remove(position);
+        } else {
+            errors.push(TreeError::ControlTransferInvented {
+                from,
+                to: transfer_target(&transfer),
+            });
+        }
+    }
+    for (from, transfer) in expected_controls {
+        errors.push(TreeError::ControlTransferMissing {
+            from,
+            to: transfer_target(&transfer),
+        });
     }
     errors
 }
@@ -78,7 +121,9 @@ fn visit_tree<'a>(
     region: &'a StructuredRegion,
     candidate: &'a RegionCandidate,
     conditions: &ConditionDag,
+    loops: &LoopForest,
     leaves: &mut [Option<BlockRegionView<'a>>],
+    controls: &mut Vec<(usize, Transfer)>,
     errors: &mut Vec<TreeError>,
 ) {
     match region {
@@ -97,7 +142,9 @@ fn visit_tree<'a>(
         }
         StructuredRegion::Sequence(regions) => {
             for region in regions {
-                visit_tree(region, candidate, conditions, leaves, errors);
+                visit_tree(
+                    region, candidate, conditions, loops, leaves, controls, errors,
+                );
             }
         }
         StructuredRegion::If {
@@ -114,11 +161,86 @@ fn visit_tree<'a>(
                     block: *source_block,
                 });
             }
-            visit_tree(then_region, candidate, conditions, leaves, errors);
+            visit_tree(
+                then_region,
+                candidate,
+                conditions,
+                loops,
+                leaves,
+                controls,
+                errors,
+            );
             if let Some(else_region) = else_region {
-                visit_tree(else_region, candidate, conditions, leaves, errors);
+                visit_tree(
+                    else_region,
+                    candidate,
+                    conditions,
+                    loops,
+                    leaves,
+                    controls,
+                    errors,
+                );
             }
         }
+        StructuredRegion::Loop {
+            header,
+            kind,
+            body,
+            exits,
+        } => {
+            let Some(loop_info) = loops.by_header(*header) else {
+                errors.push(TreeError::LoopInvalid { header: *header });
+                return;
+            };
+            if loop_info.kind != *kind {
+                errors.push(TreeError::LoopInvalid { header: *header });
+            }
+            visit_tree(body, candidate, conditions, loops, leaves, controls, errors);
+            let mut seen_targets = std::collections::BTreeSet::new();
+            for exit in exits {
+                if !seen_targets.insert(exit.target)
+                    || !loop_info.exits.iter().any(|(_, to)| *to == exit.target)
+                {
+                    errors.push(TreeError::LoopExitInvalid {
+                        header: *header,
+                        target: exit.target,
+                    });
+                }
+                visit_tree(
+                    &exit.region,
+                    candidate,
+                    conditions,
+                    loops,
+                    leaves,
+                    controls,
+                    errors,
+                );
+            }
+        }
+        StructuredRegion::Break {
+            from,
+            header,
+            to,
+            taken,
+        } => controls.push((
+            *from,
+            Transfer::Break {
+                header: *header,
+                to: *to,
+                taken: *taken,
+            },
+        )),
+        StructuredRegion::Continue {
+            from,
+            header,
+            taken,
+        } => controls.push((
+            *from,
+            Transfer::Continue {
+                header: *header,
+                taken: *taken,
+            },
+        )),
     }
 }
 
@@ -416,14 +538,21 @@ mod tests {
                     then_region: Box::new(StructuredRegion::Return { block: 1 }),
                     else_region: Some(Box::new(StructuredRegion::Return { block: 1 })),
                 },
+                StructuredRegion::Break {
+                    from: 0,
+                    header: 0,
+                    to: 1,
+                    taken: Some(true),
+                },
             ]),
         };
 
-        let errors = verify_tree(&candidate, &conditions, &forged);
+        let errors = verify_tree(&candidate, &conditions, &loops, &forged);
         assert!(errors.contains(&TreeError::LeafMismatch { block: 0 }));
         assert!(errors.contains(&TreeError::BranchConditionInvalid { block: 2 }));
         assert!(errors.contains(&TreeError::BlockDuplicated { block: 1 }));
         assert!(errors.contains(&TreeError::BlockMissing { block: 2 }));
+        assert!(errors.contains(&TreeError::ControlTransferInvented { from: 0, to: 1 }));
     }
 
     #[test]

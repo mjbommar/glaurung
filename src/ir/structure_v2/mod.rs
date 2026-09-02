@@ -19,7 +19,7 @@ pub use cleanup::{
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
 pub use dominators::{LoopForest, LoopInfo, LoopKind};
 pub use local::{HonestGotoEvidence, LocalRegions};
-pub use recover::{StructuredRegion, StructuredTree};
+pub use recover::{LoopExitRegion, StructuredRegion, StructuredTree};
 pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
 pub use verify::{CandidateError, TreeError};
 
@@ -78,13 +78,14 @@ pub(crate) fn observe_cfg(
                 verify::verify_candidate(cfg, &loops, &local_regions, &duplicated_tails, candidate)
             });
             if verification_errors.is_empty() {
-                let tree = candidate
-                    .as_ref()
-                    .and_then(|candidate| recover::recover_acyclic(cfg, &conditions, candidate));
+                let tree = candidate.as_ref().and_then(|candidate| {
+                    recover::recover_tree(cfg, &conditions, candidate, &loops)
+                });
                 let tree_verification_errors = tree.as_ref().map_or_else(Vec::new, |tree| {
                     verify::verify_tree(
                         candidate.as_ref().expect("tree requires a candidate"),
                         &conditions,
+                        &loops,
                         tree,
                     )
                 });
@@ -508,7 +509,8 @@ mod tests {
     #[test]
     fn real_dowhile_fixture_has_a_post_tested_loop_with_explicit_exits() {
         let lifted = lift_real_fixture("03_loop_shapes-gcc-O0.so", "dowhile_atleastonce");
-        let report = observe(&lifted, &compute_ssa(&lifted));
+        let ssa = compute_ssa(&lifted);
+        let report = observe(&lifted, &ssa);
 
         assert_eq!(report.loops.len(), 1, "{report:#?}");
         let loop_info = &report.loops.loops()[0];
@@ -525,12 +527,34 @@ mod tests {
         assert!(candidate
             .transfers()
             .any(|edge| matches!(edge, Transfer::Break { .. })));
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("reducible loop tree: {report:#?}"));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Loop {
+                kind: LoopKind::PostTested,
+                ..
+            }
+        )));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Continue { .. }
+        )));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Break { .. }
+        )));
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_eq!(report.tree, observe(&lifted, &ssa).tree);
     }
 
     #[test]
     fn real_loop_return_fixture_records_loop_exits_without_losing_blocks() {
         let lifted = lift_real_fixture("03_loop_shapes-gcc-O0.so", "loop_return_on_neg");
-        let report = observe(&lifted, &compute_ssa(&lifted));
+        let ssa = compute_ssa(&lifted);
+        let report = observe(&lifted, &ssa);
 
         assert!(!report.loops.is_empty(), "{report:#?}");
         assert!(
@@ -581,6 +605,59 @@ mod tests {
                 .all(|tail| tail.source_block == shared_return),
             "only the shared return may be selected for duplication: {report:#?}"
         );
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("multi-exit reducible loop tree: {report:#?}"));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Loop { .. }
+        )));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Loop { exits, .. } if exits.len() == 2
+        )));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Break { .. }
+        )));
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_eq!(report.tree, observe(&lifted, &ssa).tree);
+    }
+
+    fn tree_has_region(
+        region: &StructuredRegion,
+        predicate: impl Copy + Fn(&StructuredRegion) -> bool,
+    ) -> bool {
+        if predicate(region) {
+            return true;
+        }
+        match region {
+            StructuredRegion::Sequence(regions) => regions
+                .iter()
+                .any(|region| tree_has_region(region, predicate)),
+            StructuredRegion::If {
+                then_region,
+                else_region,
+                ..
+            } => {
+                tree_has_region(then_region, predicate)
+                    || else_region
+                        .as_deref()
+                        .is_some_and(|region| tree_has_region(region, predicate))
+            }
+            StructuredRegion::Loop { body, exits, .. } => {
+                tree_has_region(body, predicate)
+                    || exits
+                        .iter()
+                        .any(|exit| tree_has_region(&exit.region, predicate))
+            }
+            StructuredRegion::Empty
+            | StructuredRegion::Block(_)
+            | StructuredRegion::Return { .. }
+            | StructuredRegion::Break { .. }
+            | StructuredRegion::Continue { .. } => false,
+        }
     }
 
     #[test]
