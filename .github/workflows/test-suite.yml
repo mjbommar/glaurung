@@ -123,49 +123,74 @@ jobs:
             exit 1
           fi
 
-  python:
-    name: uv run pytest python/tests/
+  # ---------------------------------------------------------------------------
+  # The Python suite is TIERED by what each test needs (tests/test_facets.json,
+  # applied as markers by conftest.py). Two jobs, both required on every push
+  # and PR -- tiering is how coverage silently degrades, and this repository
+  # has the receipts, so nothing here is "nightly only".
+  #
+  #   python-core      -m core       needs nothing: no LFS fetch, no cross
+  #                                  toolchain. 2,363 tests, ~11 min on a
+  #                                  24-core box. The fast signal.
+  #   python-extended  everything    lfs + toolchain + docker/llm self-skips.
+  #                    else          The slow signal, with its own timeout, so
+  #                                  a timeout there cannot mask core.
+  #
+  # `fixtures` and `decbench` are deselected from both: this runner never has
+  # the built matrix (decompiler-fixtures.yml owns it and runs that facet), and
+  # DecBench is opt-in by construction.
+  # ---------------------------------------------------------------------------
+  python-core:
+    name: pytest -m core
     runs-on: ubuntu-latest
-    # 90, not 60. Measured: the suite alone is 35 minutes on a developer box
-    # that was also running other work, and this job pays ~5 minutes of setup
-    # (LFS fetch, `uv sync`, a release `maturin develop`) before pytest starts.
-    # A two-core hosted runner is slower than that box, so 60 left almost no
-    # headroom -- and a timeout kill reads as a red suite rather than as "the
-    # budget was wrong", which is the worst way for this to fail.
+    timeout-minutes: 45
+    steps:
+      # NO `lfs: true`. `core` is defined as needing no sample binaries, so
+      # this job skips the ~663 MB LFS fetch entirely. If a core test ever
+      # reads samples/, test_test_facets.py reclassifies it and it leaves this
+      # job -- the facet, not the checkout, is what guarantees that.
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+      - name: Build the extension
+        run: uv run maturin develop --release
+      - name: Python tests (core)
+        run: uv run pytest python/tests/ -m "core and not decbench"
+
+  python-extended:
+    name: pytest (lfs, toolchain)
+    runs-on: ubuntu-latest
+    # 90, not 60. Measured: the whole suite is 48 minutes on a 24-core
+    # developer box; this job carries the LFS/toolchain half of it on a
+    # 4-core runner plus ~5 minutes of setup. A timeout kill reads as a red
+    # suite rather than as "the budget was wrong", which is the worst way for
+    # this to fail. Re-measure from the job's own duration, not from a guess.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
+          # 1,214 sample binaries are LFS objects; without this every `lfs`
+          # test reads a 130-byte pointer file. See the rust job's note.
           lfs: true
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Five test files cross-compile their own fixtures -- i386 via `-m32`,
-      # plus aarch64 and armv7 cross-gcc -- to cover three lifter families
-      # that an x86-64-only run cannot see at all. Without these packages the
-      # runner's linker fails with "cannot find crti.o" and those tests ERROR
-      # rather than skip, which is how the first completed Python run went red
-      # after 55 minutes for a reason that had nothing to do with the code.
+      # 32-bit multilib for the i386 lane. `gcc` is present on the runner so
+      # `shutil.which` says the lane is available, and then `gcc -m32` fails at
+      # link time with "cannot find crti.o" -- the lane ERRORS instead of
+      # skipping. aarch64/armv7 cross compilers are deliberately NOT installed:
+      # `gcc-aarch64-linux-gnu` depends on an uninstallable `gcc-13-*` and the
+      # whole step exited 100. Those lanes skip visibly.
       #
-      # Installing them rather than skipping them, deliberately: a skip here
-      # would hide exactly the cross-architecture coverage the tests exist for.
-      # 32-bit multilib only. The i386 lane is the one that NEEDS this: `gcc`
-      # is present on the runner, so `shutil.which` said the lane was
-      # available, and then `gcc -m32` failed at link time with "cannot find
-      # crti.o" and the lane ERRORED instead of skipping.
-      #
-      # The aarch64 and armv7 cross compilers are deliberately NOT installed
-      # here. `gcc-aarch64-linux-gnu` depends on `gcc-13-aarch64-linux-gnu`,
-      # which is not installable on this runner image, and the whole step
-      # exited 100 -- turning a coverage improvement into a red job that never
-      # reached pytest. Those two lanes skip visibly instead, which is the
-      # honest state until someone pins a runner image that carries them.
-      #
-      # `|| true` because a coverage lane must never be able to fail the suite
-      # by not installing; the tests decide availability by probing a real
-      # compile, so an absent toolchain is a skip either way.
+      # `|| true` because a coverage lane must never fail the suite by not
+      # installing; the tests probe with a real compile and skip if absent.
       - name: Install 32-bit multilib (for the i386 lane)
         run: |
           sudo apt-get update
@@ -173,30 +198,14 @@ jobs:
             gcc-multilib libc6-dev-i386 || true
       - name: Sync dependencies
         run: uv sync --locked --dev
-      # --release, not the default debug build. The debug extension is 276 MB
-      # against 974 KB and runs unoptimized code; a suite that takes minutes
-      # locally can take much longer here, and the profile shares are not the
-      # ones we ship either.
       - name: Build the extension
         run: uv run maturin develop --release
-      # `-m "not fixtures"`: this runner never has tests/decompiler_fixtures/
-      # build/ (gitignored; built only by decompiler-fixtures.yml, which owns
-      # the expensive matrix and runs the `fixtures` facet itself). Before the
-      # facet system those tests SKIPPED at runtime -- 1,162 of them from the
-      # known-failure corpus alone -- and the -ra summary that exists to make
-      # real skips visible was buried under skips that were certain in
-      # advance. Deselecting by facet keeps -ra for the skips that carry
-      # information. The facet assignments live in tests/test_facets.json and
-      # test_test_facets.py fails if a file that needs the matrix is missing
-      # the marker.
-      #
-      # `docker`, `llm` and `decbench` are NOT deselected here: those tests
-      # detect their own prerequisites and skip with a reason, and that
-      # runtime skip is the honest signal for facilities this runner might or
-      # might not have (Docker is present on ubuntu-latest; the pinned image
-      # is not).
-      - name: Python tests
-        run: uv run pytest python/tests/ -m "not fixtures and not decbench"
+      # `docker`, `llm` and `decbench` tests are NOT deselected: the first two
+      # detect their own prerequisites and skip with a reason, which is the
+      # honest signal for facilities this runner may or may not have. The
+      # `-ra` in pytest.ini keeps those skips visible.
+      - name: Python tests (extended)
+        run: uv run pytest python/tests/ -m "not core and not fixtures and not decbench"
 
   lint:
     name: ruff and ty

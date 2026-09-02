@@ -93,3 +93,41 @@ def test_every_facet_that_can_run_on_a_hosted_runner_has_a_job():
     # and `decbench` are opt-in by construction and are NOT expected here.
     assert "--features symbolic" in texts, "no workflow runs the symbolic engine tests"
     assert "-m fixtures" in texts, "no workflow runs the fixtures facet"
+
+
+def test_the_python_suite_is_tiered_into_core_and_extended():
+    """Two required jobs, partitioning the non-fixture suite exactly.
+
+    `core` is the fast signal and needs no LFS; `extended` carries the
+    lfs/toolchain half with its own timeout so a budget overrun there cannot
+    mask a core failure. Both run on every push -- a tier that runs only
+    nightly is how coverage silently degrades.
+    """
+    jobs = load("test-suite.yml")["jobs"]
+    assert "python-core" in jobs and "python-extended" in jobs, list(jobs)
+    core_run = " ".join(str(s.get("run", "")) for s in jobs["python-core"]["steps"])
+    ext_run = " ".join(str(s.get("run", "")) for s in jobs["python-extended"]["steps"])
+    assert '-m "core and not decbench"' in core_run, core_run
+    assert '-m "not core and not fixtures and not decbench"' in ext_run, ext_run
+    # Neither job may run the fixtures facet: this runner never has the matrix.
+    assert "-m fixtures" not in core_run + ext_run
+
+
+def test_the_core_job_does_not_fetch_lfs():
+    """`core` is defined as needing no sample binaries, so the ~663 MB LFS
+    fetch is pure cost there. The facet guarantees it, not the checkout: if a
+    core test ever reads samples/, test_test_facets.py reclassifies it."""
+    jobs = load("test-suite.yml")["jobs"]
+    for step in jobs["python-core"]["steps"]:
+        if "checkout" in str(step.get("uses", "")):
+            assert not (step.get("with") or {}).get("lfs"), (
+                "python-core fetches LFS; that is the extended job's cost"
+            )
+    ext_checkout = [
+        s
+        for s in jobs["python-extended"]["steps"]
+        if "checkout" in str(s.get("uses", ""))
+    ]
+    assert ext_checkout and ext_checkout[0]["with"]["lfs"] is True, (
+        "python-extended must fetch LFS or every `lfs` test reads a pointer file"
+    )

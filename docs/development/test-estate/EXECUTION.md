@@ -146,6 +146,9 @@ evidence depends on gates that actually run and actually assert.
 | [x] R8 symbolic CI lane: never-executed pool reaches 0 | R8.3 | `3fb3184c` |
 | [x] Known defects encoded as strict xfails, not pinned output | TDD | `1694bb06` |
 | [x] 1,162 measured failures across six axes | TDD | `7be914cf` |
+| [x] Facets by requirement, applied as markers; 7 facets over 461 files | phase 11 | `65ff0a24` |
+| [x] Wheel matrix gated on tags; corpus runs where fixtures exist | phase 11 | `b8884687` |
+| [x] Python CI split into `core` (no LFS, 11 min) and `extended` | phase 11 | this commit |
 | [~] Mach-O universal (fat) lane | estate 4 / R4 | thin x86-64+ARM64 landed `ba2fe5c2`; fat slices still open |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
