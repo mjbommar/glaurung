@@ -39,6 +39,7 @@ that makes every later phase land somewhere that stays alive.
 | 8 | [08-dwarf-oracle.md](08-dwarf-oracle.md) | Ground truth at scale from DWARF twins | 2, 7 |
 | 9 | [09-asset-hygiene.md](09-asset-hygiene.md) | Delete the broken, dedupe the doubled, retire the dead | — |
 | 10 | [10-ci-environment-gap.md](10-ci-environment-gap.md) | 25 CI-only failures the first completed run exposed: tests that crash rather than skip on a machine without every toolchain | 1 |
+| 11 | [11-tiers-and-facets.md](11-tiers-and-facets.md) | Tier by what a test NEEDS, not its subject: seven facets applied as markers; `core` (no LFS, 11 min) and `extended` both required per push; wheel matrix gated on tags; fixture cache measured and deferred | 1 |
 
 Phases 3, 4, 5, 6 and 9 are independent of each other and can run in
 parallel once 1 has landed. 7 needs 1's baseline-refresh discipline; 8 is

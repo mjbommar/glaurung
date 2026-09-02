@@ -146,6 +146,10 @@ evidence depends on gates that actually run and actually assert.
 | [x] R8 symbolic CI lane: never-executed pool reaches 0 | R8.3 | `3fb3184c` |
 | [x] Known defects encoded as strict xfails, not pinned output | TDD | `1694bb06` |
 | [x] 1,162 measured failures across six axes | TDD | `7be914cf` |
+| [x] Facets by requirement, applied as markers; 7 facets over 461 files | phase 11 | `65ff0a24` |
+| [x] Wheel matrix gated on tags; corpus runs where fixtures exist | phase 11 | `b8884687` |
+| [x] Python CI split into `core` (no LFS) and `extended` | phase 11 | `6085e525` |
+| [x] The suite was SERIAL on 24 cores; xdist added, `-n auto` in CI: core 11:19 -> 4:13 | phase 11 | this commit |
 | [~] Mach-O universal (fat) lane | estate 4 / R4 | thin x86-64+ARM64 landed `ba2fe5c2`; fat slices still open |
 | [ ] Rescope fetched Microsoft PE/PDB tests | estate 4 / real-binary R4 | migrate generic assertions; fail provisioned lane on zero pairs |
 | [ ] `@large` source-grounded corpus + phase/resource ratchets | real-binary R2 | specify smallest tier first |
@@ -171,7 +175,8 @@ evidence depends on gates that actually run and actually assert.
 |---|---|
 | `cargo test` (**default**, no features) | **2,829 passed, 0 failed, 4 ignored** |
 | `cargo test --features python-ext` (local) | **2,951 passing** |
-| `uv run pytest python/tests/` (local) | **3,724 passed, 0 failed** |
+| `uv run pytest python/tests/` (local, serial) | **3,735 passed, 0 failed, 1,210 xfailed** — 48 min |
+| `-m core -n auto` (local, 24 workers) | **2,367 passed, 0 failed — 4:13** (11:19 serial) |
 | `uv run pytest python/tests/` (**CI**) | 25 environment-only failures — see [phase 10](10-ci-environment-gap.md) |
 | `dectest @o0 @o2` + 4 arch lanes | 1,644 of 3,304 lanes, no regressions |
 | def-use census / structural / fitness | 6 / 24 / 40 passed |
