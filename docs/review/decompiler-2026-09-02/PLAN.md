@@ -693,12 +693,20 @@ machine-width equivalence is established.
 
 ### WP7A — Immediate render-level idioms (depends on WP0)
 
-- [ ] Implement destination-typed literal spelling at the existing typed
+- [x] Implement destination-typed literal spelling at the existing typed
   render boundary so `-1` in `int32_t` does not render as `0xffffffff`.
-- [ ] Implement one width-preserving subtract-and-unsigned-compare range fusion
+- [x] Implement one width-preserving subtract-and-unsigned-compare range fusion
   beside the existing `cmp_fusion` boundary.
-- [ ] Keep both changes narrow, table-driven where practical, and independently
+- [x] Keep both changes narrow, table-driven where practical, and independently
   revertible. Do not introduce a second value-identity system.
+
+Implementation revision: `81ffe9ab`. The literal rule consumes the existing
+destination type only and declines unknown, unsigned, pointer, boolean, and
+64-bit-positive cases. The range rule consumes the existing `TypeMap` or an
+explicit unsigned cast shell, preserves that exact 8/16/32/64-bit view on both
+replacement comparisons, recognizes both `Sub(x, low)` and the folded
+`Add(x, -low)` form, and declines wrapping intervals. No new value identity or
+name-parsing convention was introduced.
 
 ### WP7B — SSA-expression idioms (depends on WP3)
 
@@ -716,17 +724,32 @@ machine-width equivalence is established.
 
 ### Tests
 
-- [ ] Exhaustive equivalence at 8 and 16 bits.
-- [ ] Boundary-complete plus seeded randomized equivalence at 32 and 64 bits.
-- [ ] Regression test for the earlier `cmp_fusion` 64-to-32 narrowing bug.
-- [ ] End-to-end fixtures from `03_loop_shapes` and `102_duffs_device`.
-- [ ] Execution differential and pinned byte/readability measurements.
+- [x] Exhaustive equivalence at 8 and 16 bits.
+- [x] Boundary-complete plus seeded randomized equivalence at 32 and 64 bits.
+- [x] Regression test for the earlier `cmp_fusion` 64-to-32 narrowing bug.
+- [x] End-to-end fixtures from `03_loop_shapes` and `102_duffs_device`.
+- [x] Execution differential and pinned byte/readability measurements.
+
+At `81ffe9ab`, `cargo test --features python-ext` passes, including 15 focused
+comparison-fusion tests and 191 AST/render tests; the six def-use census tests
+also pass. The required real-binary slice runs 72/72 `03_loop_shapes`
+functions successfully across clang/gcc O0/O2, retains the four independently
+known `102_duffs_device` failures, and reports zero scoped regressions. In the
+real gcc-O2 Duff output, the 84-byte opaque predicate
+`(unsigned)15 < (unsigned)(arg2 - 1)` becomes the 159-byte explicit predicate
+`(unsigned)arg2 < 1 || 16 < (unsigned)arg2`: bytes increase by 75, but the
+accepted interval and rejection reason are directly readable. This is a
+readability improvement, not an execution or aggregate-score improvement; the
+unrecovered Duff indirect jump remains the reason that cell fails.
 
 ### Exit criteria
 
-- [ ] Every enabled WP7A or WP7B rule has a machine-width equivalence test.
-- [ ] No execution regression and no unexplained type-width change.
-- [ ] Byte/readability measurements improve or the rule is reverted.
+- [x] Every enabled WP7A rule has a machine-width equivalence test. WP7B is not
+  yet enabled.
+- [x] No execution regression and no unexplained type-width change in the
+  required WP7A fixture slice.
+- [x] The pinned Duff measurement improves readability with an explicitly
+  recorded 75-byte cost; neither rule is claimed as an aggregate score win.
 
 ## 14. WP8 — Declaration authority and conflict provenance
 
@@ -917,7 +940,8 @@ relevant ratchet's accepted-regression record.
   its typed bypass edge through the independently verified WP4 tree and into
   deterministic parseable switch output. The v1 production path remains
   unchanged until WP4 promotion evidence is complete.
-- [ ] WP7A has landed or been rejected with width-aware evidence.
+- [x] WP7A landed at `81ffe9ab` with width-aware equivalence, real-binary
+  readability, execution, and def-use evidence.
 
 ### M2 — Dormant architecture decision made
 

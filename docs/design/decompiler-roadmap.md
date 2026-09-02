@@ -229,8 +229,17 @@ scheduled independently of the longer pipeline/SSA migrations.
   carries all 256 typed cases through the optional production pipeline and its
   first exact 34-case execution differential; the other named fixture lanes
   and a fresh corpus census remain.
-- [ ] **WP7A immediate render idioms.** Destination-typed literals and one
-  width-proved range-check fusion are independent of the SSA-native idiom lane.
+- [x] **WP7A immediate render idioms.** `81ffe9ab` adds destination-typed
+  literal spelling and one width-proved subtract/unsigned-compare range fusion
+  without adding value identity or parsing display names. Exhaustive 8/16-bit
+  and boundary-plus-seeded 32/64-bit equivalence tests preserve the observed
+  width and reject wrapping intervals. A fresh exact-revision run keeps all 72
+  `03_loop_shapes` functions passing, retains the four known Duff failures,
+  passes the def-use census, and reports zero scoped regressions. On the real
+  gcc-O2 Duff binary, the opaque 84-byte `(unsigned)(count - 1)` predicate is
+  rendered as an explicit 159-byte `count < 1 || 16 < count` range: a measured
+  readability gain at a 75-byte cost, not an execution or aggregate-score win.
+  See [review WP7A](../review/decompiler-2026-09-02/PLAN.md#wp7a--immediate-render-level-idioms-depends-on-wp0).
 
 ### Product and submission snapshot
 
