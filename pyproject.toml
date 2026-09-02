@@ -70,6 +70,7 @@ dev = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
     "pytest-benchmark>=5.1.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 # NOTE: pytest configuration lives in pytest.ini (its presence makes pytest

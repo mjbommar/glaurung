@@ -40,8 +40,8 @@ opt-in because they link external libraries.
 |---|---|---|---|
 | `test-suite / rust` | `--features python-ext`, `REQUIRE_TOOLCHAINS=1` | gcc, clang, arm-none-eabi-gcc | 2,957 tests |
 | `test-suite / symbolic` | `--features symbolic` | nothing external | 3,025 tests |
-| `test-suite / python-core` | `-m "core and not decbench"` | **no LFS, no cross toolchain** | 2,363 passed, **11:19** on 24 cores |
-| `test-suite / python-extended` | `-m "not core and not fixtures and not decbench"` | LFS + multilib | 940 tests |
+| `test-suite / python-core` | `-m "core and not decbench" -n auto` | **no LFS, no cross toolchain** | 2,367 passed, **4:13** parallel (11:19 serial) |
+| `test-suite / python-extended` | `-m "not core and not fixtures and not decbench" -n auto` | LFS + multilib | 921 passed, 19:11 serial; parallel run in flight at time of writing |
 | `decompiler-fixtures / matrix` | `-m slow` then `-m fixtures` | builds the matrix itself | ~40 min + corpus |
 | `CI / wheel-smoke` | one x86_64 wheel, no upload | — | push/PR only |
 | `CI / linux…sdist` | the 15-job wheel matrix | QEMU for four targets | **tags and dispatch only** |
@@ -56,6 +56,65 @@ by any workflow until 2026-08-31, 195 symbolic tests type-checked forever and
 executed never, seven structural tests red on `master` for hours while every
 command anyone typed stayed green. Splitting buys a faster *signal* and an
 isolated timeout; it does not buy the right to stop running anything.
+
+## The suite was serial, and that was the actual problem
+
+Everything above reorganises *what* runs where. None of it addressed why a
+`core` tier that "needs nothing" took **11 minutes on a 24-core machine using
+one of them**. The suite had no `pytest-xdist`: strictly one process, 23 cores
+idle by construction — and the one process was not even CPU-bound, because the
+time is thousands of 0.3–3 s tests doing real work (compiling fixtures,
+spawning the CLI, decompiling) back to back.
+
+Measured 2026-09-02, same box, same selection, `2,367 passed / 0 failed`
+both ways:
+
+| tier | serial | `-n auto` (24 workers) | |
+|---|---:|---:|---|
+| `core` | 11:19 | **4:13** | 2.7× |
+| `extended` | 19:11 | not yet measured | |
+
+2.7× on 24 cores, not 24×, so a serial bottleneck remains — the next lever is
+`--durations=30` under xdist to find the critical path, and it is deliberately
+not chased in this phase. The first parallel run reported 110 failures and 95
+errors; every one was `FileNotFoundError: 'glaurung'`, because it was launched
+with `.venv/bin/python -m pytest` instead of `uv run pytest`, and only the
+latter puts the console script on `PATH`. The tests are parallel-safe; the
+launch was wrong. Worth recording because it looked exactly like the tests not
+being independent.
+
+`-p xdist` is now in `addopts` — under `--disable-plugin-autoload` that is the
+only way the plugin loads at all — and `-n auto` stays **opt-in**, because a
+24-core box and a 4-core runner want different worker counts and a single
+failing test reads better serially. Both CI tier jobs pass `-n auto`; on a
+4-core runner expect ~3×, not 2.7×, since the serial run there is slower.
+
+### The inner loop
+
+`-m core -n auto` at four minutes is a pre-commit check, not a development
+loop. The loop is narrower than any tier:
+
+```bash
+uv run pytest python/tests/test_the_thing_you_touched.py   # seconds
+uv run pytest python/tests/ -m core -n auto                  # ~4 min, before a commit
+uv run pytest python/tests/ -n auto                          # the full non-fixture suite
+```
+
+The Rust loop is `cargo check --features python-ext --lib` (seconds) and
+`cargo test --features python-ext <filter>`; `maturin develop --release` only
+when Python needs the new `.so`, and `tools/build_guard.py` says whether it
+does.
+
+### One product defect found on the way, not fixed here
+
+`glaurung --version` costs **1.6 s**; `glaurung decompile <canary>` costs
+0.09 s. With no subcommand the CLI builds every subparser, and `ask`'s pulls in
+`glaurung.llm.agents.factory` → `pydantic_ai` → `mcp` → `logfire` — 1.2 s of
+imports to print a version string. `test_cli_startup_is_lazy.py` asserts that
+`decompile` and `triage` stay lazy, and they do; it never asserts `--version`
+or `--help`, and those are exactly the paths that are not. That is the TDD gap
+in one sentence. It does not affect test speed — tests spawn subcommands — so
+it stays a note here rather than a fix in a phase about tiers.
 
 ## What changed, and why each was wrong before
 
