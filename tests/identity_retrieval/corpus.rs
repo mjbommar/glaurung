@@ -42,7 +42,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use glaurung::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
-use glaurung::core::disassembler::Disassembler;
+use glaurung::core::binary::Endianness;
+use glaurung::core::disassembler::{Architecture, Disassembler};
 use glaurung::core::function::{Function, FunctionKind};
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 
@@ -83,6 +84,111 @@ const CRT_SYMBOLS: [&str; 10] = [
     "call_weak_fn",
 ];
 
+/// The instruction set a sample's bytes are in.
+///
+/// Threaded through [`FunctionSample`] rather than pinned at the top of this
+/// file, because the second corpus this harness loads (Cisco Talos Dataset-1,
+/// see `cisco.rs`) spans six of them. Anything that decodes a sample's bytes
+/// -- the dedupe hash below, a lifting scheme later -- must ask the sample what
+/// it is holding instead of assuming x86-64. The doc comment on
+/// [`normalized_instruction_hash`] used to say this change was owed; this is it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SampleArch {
+    /// The corpus's own spelling: `x86`, `x64`, `arm32`, `arm64`, `mips32`,
+    /// `mips64`. Used in slice labels and printed with every task, so it is
+    /// Marcelli's name rather than ours -- a reader comparing our rows against
+    /// the published tables should not have to translate.
+    pub name: &'static str,
+    pub architecture: Architecture,
+    pub endianness: Endianness,
+    /// 32 or 64. The free variable the XB (cross-bitness) task varies.
+    pub bits: u8,
+}
+
+/// Ordered by [`SampleArch::name`], which is unique across the constants
+/// below.
+///
+/// Hand-written rather than derived because `Architecture` and `Endianness`
+/// are product enums that implement neither `Ord` nor `PartialOrd`. Ordering
+/// on the name keeps a `BTreeMap` keyed by a configuration stable and
+/// human-readable (`arm32 < arm64 < mips32 < ...`), which is what makes a
+/// printed slice list and a JSON report diffable run to run.
+impl Ord for SampleArch {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(other.name)
+    }
+}
+
+impl PartialOrd for SampleArch {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl SampleArch {
+    pub const X86: Self = Self {
+        name: "x86",
+        architecture: Architecture::X86,
+        endianness: Endianness::Little,
+        bits: 32,
+    };
+    pub const X86_64: Self = Self {
+        name: "x64",
+        architecture: Architecture::X86_64,
+        endianness: Endianness::Little,
+        bits: 64,
+    };
+    pub const ARM32: Self = Self {
+        name: "arm32",
+        architecture: Architecture::ARM,
+        endianness: Endianness::Little,
+        bits: 32,
+    };
+    pub const ARM64: Self = Self {
+        name: "arm64",
+        architecture: Architecture::ARM64,
+        endianness: Endianness::Little,
+        bits: 64,
+    };
+    pub const MIPS32: Self = Self {
+        name: "mips32",
+        architecture: Architecture::MIPS,
+        endianness: Endianness::Little,
+        bits: 32,
+    };
+    pub const MIPS64: Self = Self {
+        name: "mips64",
+        architecture: Architecture::MIPS64,
+        endianness: Endianness::Little,
+        bits: 64,
+    };
+
+    /// The instruction-set family, ignoring width.
+    ///
+    /// XB (cross-bitness) is "same family, different width", so a task
+    /// constraint needs this and not the name.
+    pub fn family(self) -> &'static str {
+        match self.architecture {
+            Architecture::X86 | Architecture::X86_64 => "x86",
+            Architecture::ARM | Architecture::ARM64 => "arm",
+            Architecture::MIPS | Architecture::MIPS64 => "mips",
+            _ => "other",
+        }
+    }
+
+    /// Whether Glaurung can **lift** this architecture to LLIR, as opposed to
+    /// merely disassembling it.
+    ///
+    /// `false` for MIPS: `src/ir/lift/` covers x86, x86-64, ARM and AArch64
+    /// only, while `disasm::registry` reaches MIPS through Capstone. CFG-shaped
+    /// and byte-shaped schemes therefore run on a MIPS slice; an IR scheme must
+    /// fail extraction there so the harness reports a coverage hole instead of
+    /// scoring a degenerate signature.
+    pub fn is_liftable(self) -> bool {
+        !matches!(self.architecture, Architecture::MIPS | Architecture::MIPS64)
+    }
+}
+
 /// One labelled function, and the entire input surface a scheme may look at.
 ///
 /// A scheme sees the bytes, the entry VA, the image on disk and the discovered
@@ -99,6 +205,9 @@ pub struct FunctionSample {
     pub compiler: &'static str,
     /// `O0` or `O2`.
     pub opt: &'static str,
+    /// The instruction set `bytes` holds. Always [`SampleArch::X86_64`] for
+    /// this corpus; the Cisco corpus in `cisco.rs` sets all six.
+    pub arch: SampleArch,
     /// The image this function was read out of.
     pub image_path: PathBuf,
     /// Entry virtual address inside that image.
@@ -136,17 +245,43 @@ pub struct BlockFacts {
     pub instruction_count: u32,
 }
 
-/// A `(compiler, opt)` slice of the corpus, filtered and sorted.
+/// One compilation configuration's slice of a corpus, filtered and sorted.
+///
+/// The in-house corpus varies `(compiler, opt)` only, so `arch` is x86-64 and
+/// `version` is empty there. The Cisco corpus varies all five, and its slice
+/// key is the whole tuple; `label` is what gets printed either way.
 #[derive(Debug)]
 pub struct Slice {
     pub compiler: &'static str,
     pub opt: &'static str,
+    /// The instruction set every sample in this slice was compiled for.
+    pub arch: SampleArch,
+    /// Compiler version, e.g. `9` or `3.5`. Empty when the corpus does not
+    /// vary it -- and empty is honest rather than a fabricated `"unknown"`,
+    /// because a slice label that names a version the corpus never fixed would
+    /// read as a free variable that was actually held constant.
+    pub version: &'static str,
     /// Sorted by `(fixture, name)`. The sort is load-bearing, not cosmetic:
     /// schemes at this input size produce heavy ties, and `read_dir` order
     /// varies between machines, so an unsorted pool would make every measured
     /// accuracy wander run to run.
     pub samples: Vec<FunctionSample>,
     pub filters: FilterCounts,
+}
+
+impl Slice {
+    /// The slice's printed name: `x64-gcc-9-O2`, or `gcc/O0` when the corpus
+    /// fixes architecture and version.
+    pub fn label(&self) -> String {
+        if self.version.is_empty() {
+            format!("{}/{}", self.compiler, self.opt)
+        } else {
+            format!(
+                "{}-{}-{}-{}",
+                self.arch.name, self.compiler, self.version, self.opt
+            )
+        }
+    }
 }
 
 /// How many candidate functions each published filter removed.
@@ -182,7 +317,7 @@ pub struct FilterCounts {
 }
 
 impl FilterCounts {
-    fn add(&mut self, other: &FilterCounts) {
+    pub(crate) fn add(&mut self, other: &FilterCounts) {
         self.skipped_unsized += other.skipped_unsized;
         self.considered += other.considered;
         self.dropped_non_text += other.dropped_non_text;
@@ -379,6 +514,10 @@ fn load_slice(root: &Path, compiler: &'static str, opt: &'static str) -> Slice {
     Slice {
         compiler,
         opt,
+        // The fixture build directory is x86-64 ELF throughout; the `--arch`
+        // matrix that would vary this writes elsewhere.
+        arch: SampleArch::X86_64,
+        version: "",
         samples,
         filters,
     }
@@ -480,6 +619,7 @@ fn load_image(
             name: symbol.name,
             compiler,
             opt,
+            arch: SampleArch::X86_64,
             image_path: path.to_path_buf(),
             va: symbol.va,
             bytes: symbol.bytes,
@@ -498,7 +638,7 @@ fn load_image(
 /// ordering and sorted. An edge to a block outside the function is a tail
 /// call; it keeps a sentinel index rather than being dropped, so the block's
 /// out-degree stays honest.
-fn cfg_facts(func: &Function) -> (Vec<BlockFacts>, Vec<(usize, usize)>) {
+pub(crate) fn cfg_facts(func: &Function) -> (Vec<BlockFacts>, Vec<(usize, usize)>) {
     let mut blocks: Vec<BlockFacts> = func
         .basic_blocks
         .iter()
@@ -569,14 +709,12 @@ pub(crate) fn is_plt_or_thunk(name: &str, func: Option<&Function>) -> bool {
 /// affected function simply fails to dedupe against its twin, which costs the
 /// filter a little recall and cannot manufacture a false merge.
 ///
-/// The corpus is x86-64 ELF throughout, so the decoder is pinned rather than
-/// sniffed. A future multi-architecture corpus needs the arch threaded through
-/// [`FunctionSample`]; the fallback branch below keeps that change honest by
-/// hashing into a separate domain instead of silently agreeing.
-fn normalized_instruction_hash(sample: &FunctionSample) -> u64 {
+/// The decoder comes from [`FunctionSample::arch`], so the same rule applies
+/// unchanged to the six architectures of the Cisco corpus. The fallback branch
+/// (no backend for the architecture) hashes into a separate domain rather than
+/// silently agreeing with a decoded stream.
+pub(crate) fn normalized_instruction_hash(sample: &FunctionSample) -> u64 {
     use glaurung::core::address::{Address, AddressKind};
-    use glaurung::core::binary::Endianness;
-    use glaurung::core::disassembler::Architecture;
 
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mix = |hash: &mut u64, bytes: &[u8]| {
@@ -587,7 +725,7 @@ fn normalized_instruction_hash(sample: &FunctionSample) -> u64 {
     };
 
     let Some(backend) =
-        glaurung::disasm::registry::for_arch(Architecture::X86_64, Endianness::Little)
+        glaurung::disasm::registry::for_arch(sample.arch.architecture, sample.arch.endianness)
     else {
         mix(&mut hash, b"raw-bytes:");
         mix(&mut hash, &sample.bytes);
@@ -599,7 +737,7 @@ fn normalized_instruction_hash(sample: &FunctionSample) -> u64 {
         let Ok(addr) = Address::new(
             AddressKind::VA,
             sample.va.wrapping_add(offset as u64),
-            64,
+            sample.arch.bits,
             None,
             None,
         ) else {

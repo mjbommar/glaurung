@@ -164,28 +164,43 @@ pub const TASKS: &[Task] = &[
 /// gap rather than an unexamined one.
 ///
 /// Written into every JSON report next to the tasks that did run.
+/// **These lanes now exist elsewhere.** `cisco.rs` runs XA, XB, XA+XB and
+/// XA+XO over Cisco Talos Dataset-1, which varies architecture, bitness,
+/// compiler, compiler version and optimisation. What follows is what *this*
+/// corpus cannot express, which is still worth recording next to every result
+/// computed over it: a reader of a fixture-corpus report should not have to
+/// know that a second corpus exists to know that this one is x86-64 only.
 pub const UNSUPPORTED_TASKS: &[(&str, &str)] = &[
     (
         "XA",
-        "cross-architecture: the build directory is x86-64 only. The \
-         `dectest --arch` matrix (i386, armv7, aarch64) builds the same 206 \
-         sources for other targets and is the cheapest route to this lane.",
+        "cross-architecture: the build directory is x86-64 only. Run over \
+         Cisco Talos Dataset-1 instead (tests/identity_retrieval/cisco.rs, \
+         GLAURUNG_CISCO_CORPUS), which has six architecture/bitness \
+         combinations. The `dectest --arch` matrix (i386, armv7, aarch64) is \
+         the route to an in-house lane if one is wanted.",
     ),
     (
         "XB",
         "cross-bitness: needs the i386 lane of the same matrix. Shi et al. \
          name this as the task that separates IR representations from token \
-         representations, so it is the highest-value missing lane.",
+         representations. Runs on Dataset-1 as the `XB` task \
+         (x64-gcc-9-O2 -> x86-gcc-9-O2).",
     ),
-    ("XC+XB", "compiler and bitness both free: implied by XB."),
+    (
+        "XC+XB",
+        "compiler and bitness both free. Dataset-1 ships published pair files \
+         for exactly this task; see cisco::PublishedPairPool.",
+    ),
     (
         "XA+XO",
-        "architecture and optimisation both free: implied by XA.",
+        "architecture and optimisation both free: runs on Dataset-1 as \
+         `XA+XO`.",
     ),
     (
         "NoInline",
         "BinKit's -fno-inline lane. Inlining is the field's unsolved failure \
-         (82-84% of failures in the best tools), and this corpus cannot \
-         isolate it. Plan item 9.",
+         (82-84% of failures in the best tools), and neither this corpus nor \
+         Dataset-1 can isolate it -- Dataset-1 disables inlining throughout. \
+         BinKit 2.0 is hundreds of GB and is deliberately not ingested.",
     ),
 ];

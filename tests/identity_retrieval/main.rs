@@ -1,4 +1,4 @@
-//! Function-identity retrieval harness: the measurement plan item 1 of
+//! Function-identity retrieval harness: plan items 1 and 9 of
 //! `docs/research/program-measures-2026-09-02.md`.
 //!
 //! # What this is for
@@ -21,10 +21,25 @@
 //! GLAURUNG_IDENTITY_CORPUS=/path/to/tests/decompiler_fixtures/build \
 //!   cargo test --test identity_retrieval
 //!
+//! # The cross-architecture and cross-bitness lanes, over Marcelli's
+//! # Dataset-1 (docs/development/corpora.md says how to fetch it):
+//! GLAURUNG_CISCO_CORPUS=~/.cache/glaurung/corpora/cisco-talos-dataset1 \
+//!   cargo test --test identity_retrieval
+//!
 //! # The full sweep: every task against the whole corpus, plus the metric
 //! # axiom suite over sampled triples. Minutes, not seconds.
 //! cargo test --test identity_retrieval -- --ignored --nocapture
 //! ```
+//!
+//! # Two corpora
+//!
+//! The in-house fixture matrix (`corpus.rs`) varies compiler and optimisation
+//! and nothing else. **Cisco Talos Dataset-1** (`cisco.rs`, plan item 9) varies
+//! architecture, bitness, compiler, compiler version and optimisation, which is
+//! where the XA and XB lanes come from -- and it is the corpus whose published
+//! tables our numbers are meant to sit beside. Both are scored by the same
+//! driver in `metrics.rs`, deliberately: two harnesses that reimplement the
+//! protocol are two harnesses that will disagree about a denominator.
 //!
 //! Add `-- --nocapture` to see the per-task lines; every measured number is
 //! printed with its pool size and its free-variable set whether or not the
@@ -45,6 +60,7 @@
 //! about; retrieval has none of that problem and is the question an analyst
 //! actually asks.
 
+mod cisco;
 mod corpus;
 mod metrics;
 mod scheme;
@@ -128,6 +144,48 @@ const CTPH_XM_MIN_GLOBAL_RECALL_AT_1: f64 = 0.005479;
 /// do with the code. It still catches the class of change that matters -- an
 /// extraction that becomes an order of magnitude more expensive.
 const CTPH_MAX_EXTRACTION_US: f64 = 400.0;
+
+/// CTPH's measured AUC floor on each Cisco Dataset-1 task.
+///
+/// **Read off a run, not predicted.** Every value here is the truncated
+/// measurement from the run recorded in
+/// `docs/development/identity-measurement.md`, over the nine-configuration,
+/// three-library default slice of the `testing` split. Sampled pool is 101
+/// throughout, so chance Recall@1 is 0.0099 and chance AUC is 0.5000.
+///
+/// A table rather than one constant per task because there are nine of them
+/// and a per-task constant would be nine near-identical doc comments; the task
+/// names are checked against `cisco::TASKS` by the test that reads this, so a
+/// task renamed on one side fails rather than silently stops being ratcheted.
+/// Reading them: **only XC (0.5402) is meaningfully off chance**, and it is
+/// the single-free-variable case Marcelli's Table 3 shows byte hashes doing
+/// best on (Catalog1-128 scores 0.86 on the compiler axis). Everything with an
+/// architecture free is 0.5000 to four decimals -- CTPH is not near chance
+/// there, it is *exactly* chance, because two digests over two instruction
+/// sets never share a block and the pessimistic tie rule then ranks every
+/// candidate ahead of the twin. That is the shape of the result the protocol
+/// document predicts, now measured on the corpus the prediction came from.
+const CISCO_CTPH_MIN_AUC: &[(&str, f64)] = &[
+    // Marginally BELOW chance: mean negative 0.0001 against mean positive
+    // 0.0000. Worth seeing rather than clamping.
+    ("XO", 0.499),
+    ("XC", 0.540220),
+    ("XM", 0.512110),
+    ("XB", 0.499722),
+    ("XA-arm64", 0.5),
+    ("XA-mips64", 0.499824),
+    ("XA+XB-mips32", 0.5),
+];
+
+/// Dataset-1 tasks whose twin join is too small for the row to be quoted.
+///
+/// The selection CSV samples each binary independently, so how many queries a
+/// task scores is a property of Marcelli's sampling and not of the scheme. The
+/// two here are the tasks that cross an architecture *and* a second variable,
+/// where the surviving overlap is smallest. They still run, and their numbers
+/// are still printed and written to JSON with `underpowered: true`; they are
+/// simply not ratcheted.
+const CISCO_UNDERPOWERED_TASKS: &[&str] = &["XA+XB-arm32", "XA+XO"];
 
 /// Load the corpus, or print the skip and return `None`.
 fn load() -> Option<&'static Corpus> {
@@ -410,6 +468,399 @@ fn ctph_retrieval_ratchets() {
          {CTPH_MAX_EXTRACTION_US:.2}",
         report.extraction_us_per_function,
         report.extraction_samples
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cisco Talos Dataset-1: the XA (cross-architecture) and XB (cross-bitness)
+// lanes, and CTPH retro-scored on them.
+//
+// Every constant below was read off the run recorded in
+// `docs/development/identity-measurement.md`, on the corpus described in
+// `docs/development/corpora.md`. They are floors on a scheme the protocol
+// document says should be at chance, and they are: the point of pinning them
+// is that the LANE exists and cannot silently stop running, not that the
+// numbers are good.
+// ---------------------------------------------------------------------------
+
+/// Score CTPH over every Dataset-1 task, once, shared by the tests below.
+fn cisco_ctph_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| {
+            let corpus = cisco::corpus()?;
+            let scheme = CtphScheme::default();
+            let report = cisco::evaluate(&scheme, corpus, cisco::TASKS);
+            eprintln!("\n=== {} -- {} ===", report.scheme, report.corpus_name);
+            eprintln!(
+                "extraction {:.2} us/function over {} samples ({} profile)",
+                report.extraction_us_per_function, report.extraction_samples, report.profile
+            );
+            for note in &report.coverage_notes {
+                eprintln!("coverage: {note}");
+            }
+            for result in &report.results {
+                eprintln!("{}", result.line());
+            }
+            if let Some(path) = report.write_json(&metrics::report_dir()) {
+                eprintln!("report: {}", path.display());
+            }
+            Some(report)
+        })
+        .as_ref()
+}
+
+/// The Dataset-1 corpus must load the shape it claims: nine configurations,
+/// three instruction-set families, both bitnesses, and pools big enough to
+/// rank in.
+#[test]
+fn cisco_corpus_loads_all_six_architectures_it_claims() {
+    let Some(corpus) = cisco::corpus() else {
+        return;
+    };
+
+    let loaded: Vec<&cisco::Config> = corpus.slices().map(|(c, _)| c).collect();
+    assert_eq!(
+        loaded.len(),
+        cisco::DEFAULT_CONFIGS.len(),
+        "asked for {} configurations, loaded {}: a configuration that matched \
+         no selection row produces no slice, and every task that names it is \
+         then silently skipped",
+        cisco::DEFAULT_CONFIGS.len(),
+        loaded.len()
+    );
+
+    let families: std::collections::BTreeSet<&str> =
+        loaded.iter().map(|c| c.arch.family()).collect();
+    assert_eq!(
+        families,
+        std::collections::BTreeSet::from(["arm", "mips", "x86"]),
+        "the point of this corpus is the architectures the in-house one lacks; \
+         it loaded {families:?}"
+    );
+    let bitnesses: std::collections::BTreeSet<u8> = loaded.iter().map(|c| c.arch.bits).collect();
+    assert_eq!(
+        bitnesses,
+        std::collections::BTreeSet::from([32, 64]),
+        "no cross-bitness lane is possible without both widths"
+    );
+
+    // The published filters must have removed something, and the survivors
+    // must be enough to draw a 100-negative pool from.
+    let f = corpus.filters;
+    assert!(
+        f.considered >= 1_000,
+        "only {} selection rows reached the filters across {} images; the \
+         corpus is truncated, not filtered",
+        f.considered,
+        corpus.images
+    );
+    // The <5-block filter MUST remove nothing here, and that zero is a
+    // positive result rather than a suspicious one: upstream's
+    // `flowchart_Dataset-1.csv` is defined as the functions with at least five
+    // basic blocks and the selection CSV is drawn from it, so a nonzero count
+    // would mean this loader is reading a population that is not Marcelli's.
+    assert_eq!(
+        f.dropped_small,
+        0,
+        "the <{MIN_BASIC_BLOCKS}-block filter removed {} rows. Every row of \
+         the selection CSV comes from a flowchart file upstream already \
+         filtered at that threshold, so a nonzero count means the loader is \
+         not reading the published population: {}",
+        f.dropped_small,
+        f.summary()
+    );
+    assert!(
+        f.dropped_duplicate > 0,
+        "the (name, normalized instruction hash) dedupe removed nothing out \
+         of {} rows. Three binaries of one project share helpers, so zero here \
+         means the hash is not decoding -- which is exactly what a wrong \
+         SampleArch would look like: {}",
+        f.considered,
+        f.summary()
+    );
+
+    // Our own CFG recovery against IDA's, on the same functions. This is not a
+    // filter and moves no denominator; it is asserted because it is the most
+    // interesting number the lane produces and it must not silently become
+    // zero (which would mean the comparison stopped running) or total.
+    let worst = corpus
+        .cfg_disagreements
+        .iter()
+        .map(|(c, n)| (c.label(), *n))
+        .max_by_key(|(_, n)| *n);
+    let (worst_label, worst_n) = worst.expect("at least one slice loaded");
+    assert!(
+        worst_n > 0,
+        "no slice disagrees with IDA on block count at all. On the recorded \
+         run MIPS32 disagreed on 86% of its functions; a flat zero means the \
+         comparison is not being computed."
+    );
+    assert!(
+        corpus
+            .cfg_disagreements
+            .iter()
+            .any(|(c, n)| c.arch.family() == "x86" && *n * 10 < f.kept),
+        "every x86 slice disagrees with IDA on more than a tenth of its \
+         functions; on the recorded run x86-64 disagreed on 0-3%. Worst slice \
+         overall is {worst_label} at {worst_n}."
+    );
+    for (config, slice) in corpus.slices() {
+        assert!(
+            slice.samples.len() > NEGATIVES_PER_POSITIVE,
+            "{} kept only {} functions, so it cannot supply {} distinct \
+             negatives and every ranking number over it would be a fiction: {}",
+            config.label(),
+            slice.samples.len(),
+            NEGATIVES_PER_POSITIVE,
+            slice.filters.summary()
+        );
+    }
+}
+
+/// Every Dataset-1 task must have a real twin join and a real negative pool,
+/// and the negatives must obey the task's constraint.
+#[test]
+fn cisco_tasks_have_sound_ground_truth_and_constrained_negatives() {
+    let Some(report) = cisco_ctph_report() else {
+        return;
+    };
+    let Some(corpus) = cisco::corpus() else {
+        return;
+    };
+
+    assert_eq!(
+        report.results.len(),
+        cisco::TASKS.len(),
+        "{} of {} tasks produced a result; a task whose slice is missing is \
+         skipped silently by `evaluate`",
+        report.results.len(),
+        cisco::TASKS.len()
+    );
+
+    for result in &report.results {
+        assert!(
+            result.scored > 0,
+            "{}: no query had a twin in the pool. The (library, func_name) \
+             join is broken, not the scheme. Conditions: {}",
+            result.task_name,
+            result.conditions
+        );
+        assert!(
+            result.global_pool_size > NEGATIVES_PER_POSITIVE,
+            "{}: pool of {} cannot supply {} distinct negatives",
+            result.task_name,
+            result.global_pool_size,
+            NEGATIVES_PER_POSITIVE
+        );
+    }
+
+    // Negative-sampling discipline, checked structurally rather than trusted:
+    // every candidate in a task's pool slice shares that slice's whole
+    // configuration, so a negative cannot differ from the positive in a
+    // variable the task holds fixed. This is the "in XO, the negative shares
+    // the architecture" rule Marcelli names as a frequent source of inflated
+    // published results.
+    for task in cisco::TASKS {
+        let pool = corpus.slice(&task.pool).expect("task pool loaded");
+        for sample in &pool.samples {
+            assert_eq!(
+                (sample.arch, sample.compiler, sample.opt),
+                (task.pool.arch, task.pool.compiler, task.pool.opt),
+                "{}: a candidate in the pool slice does not share the pool's \
+                 configuration, so a negative drawn from it could vary a \
+                 variable the task holds fixed",
+                task.name
+            );
+        }
+    }
+}
+
+/// CTPH on Dataset-1: the measured floor for the XA and XB lanes.
+///
+/// These are the first numbers this repository has for either task. They are
+/// at chance, which is what the protocol document predicts for a byte digest
+/// with several free variables -- and what makes them useful is that a scheme
+/// arriving later has a lane to be better on, in the same units, over the same
+/// pools.
+#[test]
+fn cisco_ctph_retrieval_ratchets() {
+    let Some(report) = cisco_ctph_report() else {
+        return;
+    };
+
+    for (task, floor) in CISCO_CTPH_MIN_AUC {
+        let r = report.result(task).unwrap_or_else(|| {
+            panic!(
+                "{task} did not run; the ratchet table and cisco::TASKS have \
+                 drifted apart"
+            )
+        });
+        assert!(
+            !r.underpowered(),
+            "{task} is ratcheted but scored only {} queries, below {}. A \
+             ratchet on a row that may not be quoted is a ratchet on noise: \
+             either the corpus shrank, or the row belongs in \
+             CISCO_UNDERPOWERED_TASKS.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+        assert_ratchet(&format!("{task} AUC"), r.auc, *floor, &r.line());
+    }
+
+    // The complement, checked rather than assumed: every task NOT ratcheted
+    // must still be under the measurement threshold. When one of them gains
+    // enough twins to cross it, this fires and says to promote it -- which is
+    // the only mechanism that stops the ratchet table quietly covering less
+    // and less of the lane.
+    for task in CISCO_UNDERPOWERED_TASKS {
+        let r = report.result(task).expect("task ran");
+        assert!(
+            r.underpowered(),
+            "{task} now scores {} queries, at or above {}. That is a real \
+             improvement in corpus coverage: quote the row, move it into \
+             CISCO_CTPH_MIN_AUC with its measured floor, and drop it from \
+             CISCO_UNDERPOWERED_TASKS.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+    }
+    assert_eq!(
+        CISCO_CTPH_MIN_AUC.len() + CISCO_UNDERPOWERED_TASKS.len(),
+        cisco::TASKS.len(),
+        "{} tasks run but only {} are accounted for by the two tables above; \
+         a task in neither is a lane nothing checks",
+        cisco::TASKS.len(),
+        CISCO_CTPH_MIN_AUC.len() + CISCO_UNDERPOWERED_TASKS.len()
+    );
+
+    assert!(
+        report.extraction_us_per_function <= CTPH_MAX_EXTRACTION_US,
+        "CTPH extraction cost {:.2} us/function over {} samples on Dataset-1, \
+         ceiling {CTPH_MAX_EXTRACTION_US:.2}",
+        report.extraction_us_per_function,
+        report.extraction_samples
+    );
+}
+
+/// Marcelli's published ranking pools must have the shape his protocol
+/// describes: four tasks, 200 queries each, exactly 100 negatives per query.
+///
+/// This is a check on the GROUND TRUTH, not on any scheme, and it is cheap
+/// (the two CSVs are 192 KB and 19 MB). It matters because
+/// `docs/development/identity-measurement.md` quotes Marcelli's Tables 3 and 4
+/// next to our own rows, and that comparison is only legitimate if his pool
+/// discipline is what we think it is -- 100 negatives per positive is the
+/// number our own sampler was set to match.
+#[test]
+fn published_ranking_pools_hold_one_hundred_negatives_per_positive() {
+    let Some(pool) = cisco::published_pairs() else {
+        return;
+    };
+
+    let sizes = pool.task_sizes();
+    assert_eq!(
+        sizes.keys().cloned().collect::<Vec<String>>(),
+        vec![
+            "XA".to_string(),
+            "XC".to_string(),
+            "XC+XB".to_string(),
+            "XM".to_string()
+        ],
+        "the published ranking pools name tasks {:?}",
+        sizes.keys().collect::<Vec<_>>()
+    );
+    for (task, count) in &sizes {
+        assert_eq!(
+            *count, 200,
+            "published pool {task} holds {count} queries, not the 200 the \
+             paper's ranking protocol describes"
+        );
+    }
+
+    for query in &pool.queries {
+        assert_eq!(
+            query.negatives.len(),
+            NEGATIVES_PER_POSITIVE,
+            "published query {}@{:#x} in task {} has {} negatives; our own \
+             sampler is set to {} to match this",
+            query.query_name,
+            query.query_fva,
+            query.task,
+            query.negatives.len(),
+            NEGATIVES_PER_POSITIVE
+        );
+    }
+
+    // The reachability statement that keeps the docs honest: these pools are
+    // measured over binaries this repository does not load by default.
+    let loaded: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let (full, total) = pool.coverage(&loaded);
+    assert_eq!(
+        full, 0,
+        "coverage against an empty loaded set must be zero, or the coverage \
+         computation is not looking at the loaded set at all"
+    );
+    eprintln!(
+        "published ranking pools: {total} queries over {} distinct binaries; \
+         scoring them verbatim means loading all of those, which is why the \
+         default lane samples its own negatives under the same 100:1 rule \
+         instead.",
+        pool.referenced_idbs().len()
+    );
+}
+
+/// The full Dataset-1 sweep, with the markdown rows for the docs table.
+///
+/// `GLAURUNG_CISCO_CORPUS=... cargo test --test identity_retrieval -- --ignored
+/// --nocapture cisco`
+#[test]
+#[ignore = "full Dataset-1 sweep: minutes. GLAURUNG_CISCO_CORPUS=... cargo test --test identity_retrieval -- --ignored --nocapture"]
+fn cisco_full_sweep() {
+    let Some(corpus) = cisco::corpus() else {
+        return;
+    };
+    eprintln!("cisco filters: {}", corpus.filters.summary());
+    for (config, slice) in corpus.slices() {
+        eprintln!(
+            "  {}: {} functions, {}",
+            config.label(),
+            slice.samples.len(),
+            slice.filters.summary()
+        );
+    }
+    let Some(report) = cisco_ctph_report() else {
+        return;
+    };
+    eprintln!("\n--- markdown rows for docs/development/identity-measurement.md ---");
+    eprintln!(
+        "| Task | Free variables | Scored | Pool (sampled / global) | AUC | \
+         MRR10 | R@1 | R@5 | R@10 | R@50 | Global R@1 |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|---|");
+    for r in &report.results {
+        eprintln!(
+            "| {} | {} | {} | {} / {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            r.task_name,
+            r.conditions,
+            r.scored,
+            r.sampled_pool_size,
+            r.global_pool_size,
+            r.auc,
+            r.mrr10,
+            r.recall(1),
+            r.recall(5),
+            r.recall(10),
+            r.recall(50),
+            r.global_recall_at_1,
+        );
+    }
+    eprintln!(
+        "\nextraction {:.2} us/function over {} samples ({})",
+        report.extraction_us_per_function, report.extraction_samples, report.profile
     );
 }
 

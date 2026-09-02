@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use crate::corpus::{Corpus, FunctionSample, Slice};
 use crate::scheme::Scheme;
-use crate::tasks::{Task, UNSUPPORTED_TASKS};
+use crate::tasks::{Stratum, Task, UNSUPPORTED_TASKS};
 
 /// Negatives sampled per positive for the ranking metrics.
 ///
@@ -209,8 +209,20 @@ pub struct SchemeReport {
     /// The published filters and what they removed, so a reader of the JSON
     /// can tell whether two reports share a denominator.
     pub corpus_filters: crate::corpus::FilterCounts,
-    /// `(compiler, opt, kept)` per slice.
+    /// `(slice label, opt, kept)` per slice. The label is `gcc/O0` for the
+    /// in-house corpus and `x64-gcc-9-O2` for the Cisco one.
     pub slice_sizes: Vec<(String, String, usize)>,
+    /// Which corpus produced this report. Two reports over different corpora
+    /// are not comparable row for row, and the filename alone does not say so.
+    pub corpus_name: String,
+    /// Tasks the corpus cannot express, and why. Written into the JSON next to
+    /// the tasks that ran, so an absent lane is a stated gap rather than an
+    /// unexamined one.
+    pub unsupported_tasks: Vec<(String, String)>,
+    /// Per-scheme coverage notes: what the scheme could not reach on this
+    /// corpus and why, e.g. an IR scheme on the MIPS slices. Distinct from
+    /// `extraction_failures`, which counts; this says what the count means.
+    pub coverage_notes: Vec<String>,
     /// `"debug"` or `"release"`.
     ///
     /// The extraction cost is meaningless without it. `cargo test` builds
@@ -234,7 +246,8 @@ impl SchemeReport {
             eprintln!("could not create {}: {e}", dir.display());
             return None;
         }
-        let unsupported: Vec<serde_json::Value> = UNSUPPORTED_TASKS
+        let unsupported: Vec<serde_json::Value> = self
+            .unsupported_tasks
             .iter()
             .map(|(name, why)| serde_json::json!({ "task": name, "why": why }))
             .collect();
@@ -242,6 +255,8 @@ impl SchemeReport {
             "scheme": self.scheme,
             "description": self.description,
             "protocol": "docs/development/identity-measurement.md",
+            "corpus": self.corpus_name,
+            "coverage_notes": self.coverage_notes,
             "corpus_root": self.corpus_root.display().to_string(),
             "corpus_load_seconds": self.corpus_load_seconds,
             "corpus_filters": self.corpus_filters.to_json(),
@@ -309,13 +324,28 @@ pub fn evaluate<S: Scheme>(scheme: &S, corpus: &Corpus, tasks: &[Task]) -> Schem
         corpus_filters: corpus.filters,
         slice_sizes: corpus
             .slices()
-            .map(|s| (s.compiler.to_string(), s.opt.to_string(), s.samples.len()))
+            .map(|s| (s.label(), s.opt.to_string(), s.samples.len()))
             .collect(),
-        profile: if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        },
+        corpus_name: "glaurung fixture matrix (tests/decompiler_fixtures/build)".to_string(),
+        unsupported_tasks: UNSUPPORTED_TASKS
+            .iter()
+            .map(|(n, w)| (n.to_string(), w.to_string()))
+            .collect(),
+        coverage_notes: Vec::new(),
+        profile: build_profile(),
+    }
+}
+
+/// `"debug"` or `"release"`, from the compile-time flag.
+///
+/// Not a cosmetic label: CLAUDE.md records the two profiles of this codebase
+/// disagreeing about where time goes by a factor of fifty, and every extraction
+/// cost in a report is meaningless without it.
+pub fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
     }
 }
 
@@ -345,6 +375,34 @@ fn measure_extraction_cost<S: Scheme>(scheme: &S, corpus: &Corpus) -> (f64, usiz
 }
 
 fn evaluate_task<S: Scheme>(scheme: &S, task: &Task, queries: &Slice, pool: &Slice) -> TaskResult {
+    evaluate_slices(
+        scheme,
+        task.name,
+        &task.conditions(),
+        task.stratum,
+        queries,
+        pool,
+    )
+}
+
+/// Score one query slice against one pool slice.
+///
+/// The whole of the protocol lives here -- the twin join, the seeded negative
+/// draw, pessimistic ties, the sampled and global lanes -- and it takes the
+/// task's identity as three plain values rather than a [`Task`]. That is what
+/// lets `cisco.rs` express tasks over a five-dimensional configuration key
+/// (architecture, bitness, compiler, version, optimisation) without a second
+/// copy of the scoring code: two harnesses that reimplement the protocol are
+/// two harnesses that will disagree about a denominator, which is the exact
+/// comparability failure this file exists to prevent.
+pub fn evaluate_slices<S: Scheme>(
+    scheme: &S,
+    task_name: &str,
+    conditions: &str,
+    stratum: Option<Stratum>,
+    queries: &Slice,
+    pool: &Slice,
+) -> TaskResult {
     let mut extraction_failures = 0usize;
 
     // Signatures for the whole pool once, not once per query.
@@ -366,8 +424,11 @@ fn evaluate_task<S: Scheme>(scheme: &S, task: &Task, queries: &Slice, pool: &Sli
         .map(|i| (pool.samples[*i].label(), *i))
         .collect();
 
-    let in_scope: Vec<&FunctionSample> =
-        queries.samples.iter().filter(|s| task.accepts(s)).collect();
+    let in_scope: Vec<&FunctionSample> = queries
+        .samples
+        .iter()
+        .filter(|s| stratum.is_none_or(|st| st.contains(s)))
+        .collect();
 
     let mut positive_scores: Vec<f64> = Vec::new();
     let mut negative_scores: Vec<f64> = Vec::new();
@@ -392,7 +453,7 @@ fn evaluate_task<S: Scheme>(scheme: &S, task: &Task, queries: &Slice, pool: &Sli
             .expect("usable_pool only holds extractable indices");
         let positive = scheme.similarity(&query_sig, twin_sig);
 
-        let negatives = sample_negatives(task.name, query_index, query, &usable_pool, pool);
+        let negatives = sample_negatives(task_name, query_index, query, &usable_pool, pool);
         let mut ahead = 0usize;
         for &neg_index in &negatives {
             let neg_sig = pool_sigs[neg_index]
@@ -431,8 +492,8 @@ fn evaluate_task<S: Scheme>(scheme: &S, task: &Task, queries: &Slice, pool: &Sli
     }
 
     TaskResult {
-        task_name: task.name.to_string(),
-        conditions: task.conditions(),
+        task_name: task_name.to_string(),
+        conditions: conditions.to_string(),
         queries_in_scope: in_scope.len(),
         scored,
         global_pool_size: usable_pool.len(),
