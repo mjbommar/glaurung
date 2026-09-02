@@ -1,10 +1,20 @@
 # Coverage tables
 
-> **Kind:** reference · **Status:** generated
+> **Kind:** reference · **Status:** maintained
 
-Generated at `2ce51f9d` from `docs/test-inventory/index.json`.
+**This file is a frozen snapshot, not a live view.** It was written by hand at
+commit `2ce51f9d` from that commit's `docs/test-inventory/index.json` and has
+not been regenerated since. `tools/build_test_inventory.py` — the only tool
+that writes into `docs/test-inventory/` — produces `index.json`, `index.yaml`,
+and `unreachable.json` only; it does not write this file, and its own five
+`*.jsonl` survey-fragment inputs are not committed (see the
+[test-inventory authority plan](../development/roadmap/test-inventory-authority.md)).
+`index.json` has since moved past the counts below — check its own `commit`
+and `counts` fields for the current numbers. Do not quote the tables here as
+current; read `index.json` directly, or `unreachable.json` for the reachability
+detail.
 
-**986 entries, 6,282 test functions.**
+**986 entries, 6,282 test functions, at `2ce51f9d`.**
 
 ## Reach — what runs each thing
 

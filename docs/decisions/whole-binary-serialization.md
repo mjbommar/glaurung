@@ -30,9 +30,13 @@ they generate a `.py`/`.java` to run inside another tool, at three different and
 undocumented fidelities from one flag (IDA carries prototypes and stack vars,
 Binja neither, Ghidra neither plus no types).
 
-Underneath sits the enabling defect: **`src/analysis/`, `src/program/` and
-`src/ir/` have zero serde derives.** `LlirFunction`, the C AST, `ProgramSession`
-and the analysis CFG cannot be serialized at all. The SQLite KB is a
+Underneath sits the enabling defect: **the program model itself has no serde
+derives.** `LlirFunction`, the C AST, `ProgramSession` and the analysis CFG
+cannot be serialized at all. Three `src/ir/` files do derive `Serialize`
+(`health.rs`, `call_contracts.rs`, `winapi_prototypes.rs`) — a report struct, a
+contract table and a prototype table — and none of them is the program model;
+`src/program/` and `src/analysis/` have none.
+(`rg -l 'derive.*Serialize' src/analysis src/program src/ir`.) The SQLite KB is a
 hand-maintained shadow of a fraction of the program model, written in SQL from
 Python, and the export is a fraction of that fraction.
 
@@ -53,15 +57,18 @@ cannot even be renormalised after the fact.
 - **Rebase** with identical bytes → `binary_id` unchanged, every stored VA now
   wrong, and nothing detects it.
 
-The Rust core says so itself at `src/program/call_graph.rs:51`: *"Not stable
-across a re-link, and it does not pretend to be."*
+The Rust core says so itself, in the doc comment on the call-graph function key
+(`rg -n 'does not pretend to be' src/program/call_graph.rs`): *"Not stable across
+a re-link, and it does not pretend to be. Anything that must survive a rebuild
+belongs to `SymbolStore`, which is keyed on linkage spelling for exactly that
+reason."*
 
 **A stable identifier already exists and is thrown away.**
-`python/glaurung/llm/kb/structural_fingerprint.py` (492 lines) computes a
+`python/glaurung/llm/kb/structural_fingerprint.py` computes a
 BinDiff-style per-function digest that masks call targets, IAT displacements,
 register identity and stack displacements. Its only consumer is `binary_diff.py`,
-which recomputes it on every run and discards it. **Zero hash columns exist
-across all 34 tables.**
+which recomputes it on every run and discards it. **No hash column exists in any
+KB table** (`rg -n 'CREATE TABLE' python/glaurung/llm/kb` lists 35).
 
 ---
 

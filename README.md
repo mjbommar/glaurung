@@ -33,7 +33,7 @@ Run `uv run glaurung --help` for the authoritative command list.
 Glaurung is not currently published on PyPI. A source build requires:
 
 - Git;
-- CPython 3.11 or newer;
+- CPython 3.12 or newer;
 - Rust 1.88 or newer; and
 - a native C compiler and linker.
 
@@ -42,9 +42,14 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 ```bash
 git clone https://github.com/mjbommar/glaurung.git
 cd glaurung
+git lfs install && git lfs pull
 uv sync --locked --dev
 uv run glaurung --version
 ```
+
+The `git lfs` step is not optional: the checked-in sample binaries are Git LFS
+objects, so without it every path under `samples/` is a small text pointer file
+rather than a binary, and the first-analysis commands below fail.
 
 `uv sync` creates `.venv`, resolves the checked-in lockfile, builds the Rust
 extension, and installs the Python package. Use `uv run ...` from the repository
@@ -163,16 +168,22 @@ uv run maturin develop
 The standard checks are:
 
 ```bash
-cargo test
+cargo test --features python-ext
 uv run pytest python/tests/
 uvx ruff format --check python/
 uvx ruff check python/
 uvx ty check python/
 ```
 
-See [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md) for contributor policy,
-and [docs/development/decompiler-testing.md](docs/development/decompiler-testing.md)
-for the decompiler-specific gates.
+`--features python-ext` is required rather than optional: a bare `cargo test`
+does not compile `src/python_bindings/` at all.
+
+[CLAUDE.md](CLAUDE.md) is the contributor policy — commands, gates, conventions,
+and working style; [AGENTS.md](AGENTS.md) points other agent tooling at it.
+[docs/development/testing-gates.md](docs/development/testing-gates.md) lists
+every gate and which ones CI runs, and
+[docs/development/decompiler-testing.md](docs/development/decompiler-testing.md)
+covers the decompiler-specific loop.
 
 ## Documentation map
 
@@ -180,11 +191,11 @@ for the decompiler-specific gates.
 - [Installation and development setup](docs/development/setup.md)
 - [Tutorial](docs/tutorial/README.md)
 - [Executable examples](examples/README.md)
-- [CLI workflows](docs/guides/analyst-workflows.md)
-- [Architecture and data model](docs/architecture/)
-- [Decompiler documentation](docs/reference/decompiler-output-format.md)
+- [Analyst workflows](docs/guides/analyst-workflows.md)
+- [Architecture](docs/architecture/README.md)
+- [Decompiler output format](docs/reference/decompiler-output-format.md)
 - [Windows analysis](docs/guides/windows-analysis.md)
-- [Agentic workflow design and operations](docs/design/agentic-source-recovery/README.md)
+- [Agentic source recovery](docs/design/agentic-source-recovery/README.md)
 
 ## License
 

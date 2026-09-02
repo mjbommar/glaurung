@@ -71,8 +71,9 @@ API.
   dedicated deep parser in the current tree.
 - **CPython bytecode:** header and signature detection in triage. There is no
   dedicated marshal or code-object parser in the current tree.
-- **Archives and compression:** signature detection and bounded metadata. Java
-  JAR indexing is a separate analysis path. Use `triage --tree`.
+- **Archives and compression:** signature detection and bounded metadata via
+  `triage`. Java JAR indexing is a separate analysis path — `classfile` walks
+  every class entry in a `.jar`/`.war`/`.ear` directly; see below.
 
 This table describes the current source layout, not a promise of complete
 coverage for every variant of a format. Consult command help and focused tests

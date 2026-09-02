@@ -18,6 +18,11 @@ Post-processing constructs each `ValidatedIOC` by copying `value`, `ioc_type`,
 offset, and context from the original candidate at that index. Consequently,
 every returned value originates in the caller-supplied candidate list.
 
+V1 (`python/glaurung/llm/agents/ioc_validator.py`, `create_ioc_validator`,
+`create_contextual_ioc_validator`) still exists and is covered by
+`python/tests/test_ioc_validator.py`, but no production code path calls it —
+every current caller uses the V2 API below.
+
 This is the guaranteed invariant:
 
 ```text
@@ -44,9 +49,9 @@ claim.
   avoid this compatibility limitation by selecting supported IOC kinds before
   applying their cap; it is not a security guarantee of the helper.
 - Empty input returns an empty list and zero counts without invoking a model.
-- The returned `tp_count` and `fp_count` names are compatibility terminology.
-  They count model-accepted and model-rejected candidates, not independently
-  established ground truth.
+- `validate_iocs_v2` returns a `(validated, tp, fp)` tuple. `tp`/`fp` are
+  compatibility terminology: they count model-accepted and model-rejected
+  candidates, not independently established ground truth.
 - `confidence` is currently a plain float. The schema does not constrain it to
   `[0, 1]`; callers must not assume that bound until the model adds validation.
 

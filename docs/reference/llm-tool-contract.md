@@ -3,7 +3,9 @@
 > **Kind:** reference · **Status:** maintained
 
 This page documents the implemented tool architecture. It is a contributor
-guide, not a generic pydantic-ai tutorial.
+guide, not a generic pydantic-ai tutorial. For the broader subsystem — agents,
+the knowledge base, and L1–L5 routing/cost guards — see
+[`architecture/llm-subsystem.md`](../architecture/llm-subsystem.md).
 
 The core rule is simple: analysis logic lives in typed `MemoryTool` objects that
 can be called directly and tested without a model. `tool_to_pyd_ai` adapts those
@@ -260,8 +262,13 @@ Before completion:
 2. test registration and routing by exact name;
 3. test persistent evidence if promised;
 4. run focused format, lint, and type gates;
-5. run the broader relevant agent/CLI tests; and
-6. document provider transmission, cost, side effects, and limitations at the
+5. run the broader relevant agent/CLI tests;
+6. if you added a new test file, run
+   `uv run python tools/gen_test_facets.py` and commit the regenerated
+   `tests/test_facets.json` so the file is classified (`core`, `fixtures`,
+   `lfs`, `docker`, `toolchain`, `llm`, or `decbench`) rather than silently
+   defaulting to none; and
+7. document provider transmission, cost, side effects, and limitations at the
    user-facing entry point.
 
 ## Operational safety

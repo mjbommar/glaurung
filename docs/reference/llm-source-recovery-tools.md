@@ -2,9 +2,30 @@
 
 > **Kind:** reference · **Status:** maintained
 
-> **Design ladder, not a current command reference.** Individual tools may be
-> implemented while the end-to-end pipeline remains incomplete. Consult
-> [`README.md`](llm-tool-contract.md), current source, and tests for availability.
+> **Design ladder, shipped.** All 25 tools below exist as `MemoryTool` files
+> under `python/glaurung/llm/tools/`, orchestrated by `scripts/recover_source.py`
+> (2,500+ lines) — a separate whole-program pipeline, not the
+> `ask`/`register_analysis_tools` surface documented in
+> [`llm-tool-contract.md`](llm-tool-contract.md). One tool ships under a
+> different name than proposed here (see the table below). Consult current
+> source and tests before citing an exact tool name or signature.
+
+## Shipped tools
+
+| # | Ladder name | File | Wired via |
+| ---: | --- | --- | --- |
+| 1–15, 17–25 | (as named below) | `python/glaurung/llm/tools/<name>.py` | `scripts/recover_source.py` |
+| 16 | `propose_function_name` | `propose_function_name_post_rewrite.py` | `scripts/recover_source.py` |
+
+`verify_recovery_tool.py` (`verify_compile`/`verify_runtime`, deterministic
+recompile/re-run checks) and `propose_types_for_function.py` are two more
+shipped tools outside the 25-step ladder, registered separately in
+`register_analysis_tools` (see the contract this registration follows in
+[`llm-tool-contract.md`](llm-tool-contract.md)).
+
+For the CLI entry points that consume recovered source, see
+`uv run glaurung verify-recovery --help` and
+`uv run glaurung java-recovery-report --help`.
 
 ## Goal
 
@@ -362,14 +383,15 @@ outputs.
 ## Implementation notes
 
 - Each tool lives in `python/glaurung/llm/tools/` and follows the
-  `MemoryTool[In, Out]` pattern already used by the 12 tools shipped in
-  the `#78–#89` batch.
-- Specialised agents in `python/glaurung/llm/agents/specialized.py`
-  compose these tools. One agent per recovery phase (e.g.
-  `LayerZeroLabelerAgent`, `StructureRecoveryAgent`,
-  `FunctionRewriteAgent`, `ProjectAssemblyAgent`, `AuditAgent`) keeps
-  the orchestration surface small.
-- Content-addressed caching belongs at the `MemoryTool.run` boundary,
-  not inside each tool — it is a pipeline concern, not a tool concern.
-- The `preferred_model()` helper in `llm/config.py` already handles
-  Opus / GPT selection; tools should not hardcode model choice.
+  `MemoryTool[In, Out]` pattern documented in
+  [`llm-tool-contract.md`](llm-tool-contract.md).
+- `scripts/recover_source.py` composes these tools directly as one
+  whole-program pipeline script, not through per-phase agent classes.
+  `python/glaurung/llm/agents/specialized.py` exists but holds unrelated
+  single-purpose agents (function explanation, vulnerability hunting, rename
+  sweeps, …), not a recovery-phase agent family.
+- Caching is a per-function JSON cache under `<out>/cache/` inside
+  `scripts/recover_source.py` itself (`CACHE_VERSION`), not a
+  `MemoryTool.run`-boundary mechanism.
+- `preferred_model()` in `llm/config.py` handles model selection; tools
+  should not hardcode a model choice.

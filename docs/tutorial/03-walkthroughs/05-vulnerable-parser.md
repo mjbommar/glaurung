@@ -46,9 +46,14 @@ See [`view-main.out`](../_fixtures/03-vulnparse/view-main.out) and
 ```bash
 uv run glaurung view "$DB" 0x11e9 --binary "$BIN" \
   --pane pseudo --pseudo-lines 30
-uv run glaurung disasm "$BIN" --function parse_record \
+uv run glaurung disasm "$BIN" --db "$DB" --function parse_record \
   --max-instructions 160
 ```
+
+`--function` only takes effect in the KB-aware path, which requires `--db`;
+without it, `--function` is silently ignored and the command disassembles
+from the file's entry point instead. `--addr 0x11e9` is the equivalent
+address-based form if a project database is not open.
 
 The current pseudocode is intentionally linked rather than quoted in prose:
 [`view-parse-record.out`](../_fixtures/03-vulnparse/view-parse-record.out).

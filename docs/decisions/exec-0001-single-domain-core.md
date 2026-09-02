@@ -2,7 +2,7 @@
 
 > **Kind:** decision · **Status:** maintained
 
-**Status:** Accepted · **Date:** 2026-06
+**ADR status:** Accepted · **Date:** 2026-06
 
 ## Context
 
@@ -16,7 +16,8 @@ Write **one** IR interpreter (`step()`/`run()`) generic over a `Domain` trait th
 abstracts the value type and its bit-vector primitives. Implement `Domain` for
 `Concrete` (the emulator) and `Symbolic` (the executor); later optionally
 `Interval`/`VSA`. The only places concrete and symbolic legitimately diverge are
-`as_branch` (concrete always decides; symbolic may `Fork`) and `concretize_addr`.
+`as_branch` (concrete always decides; symbolic may `Fork`) and the
+concretization hook (shipped as `as_u64`, not the `concretize_addr` named here).
 
 ## Alternatives rejected
 
@@ -31,7 +32,7 @@ abstracts the value type and its bit-vector primitives. Implement `Domain` for
 Every mature dual-mode framework converged on this: angr/claripy backends
 (`BackendConcrete`/`BackendZ3`/`BackendVSA`) over one VEX `SimEngine`; Triton's
 concolic AST; BINSEC's one DBA core; Miasm's `SymbolicExecutionEngine` over the
-same IR the jitter runs. → [`../01-research/ir-design-lessons.md`](../design/execution-engine-research/ir-design-lessons.md) §6.
+same IR the jitter runs. → [`design/execution-engine-research/ir-design-lessons.md`](../design/execution-engine-research/ir-design-lessons.md) §6.
 
 **Validated by prototype** (compiled `rustc -O`): a single `step()` drove both a
 concrete run (`ebx=0x100, zf=1`) and a symbolic run emitting a valid SMT-LIB2
@@ -44,7 +45,19 @@ constraint — zero duplicated interpreter logic.
   path nothing.
 - (+) New domains (interval/taint) added without touching the interpreter — could
   eventually subsume `ioctl_taint`.
-- (−) The interpreter is generic → compiled once per domain (code size); the memory
-  model must also be domain-parameterized (`type Mem`). Accepted; prototype-proven.
+- (−) The interpreter is generic → compiled once per domain (code size). Accepted;
+  prototype-proven.
 
-→ [`../02-architecture/value-domain-trait.md`](../history/execution-engine-2026-06/architecture/value-domain-trait.md)
+## What the implementation changed
+
+The ADR predicted a second consequence — "the memory model must also be
+domain-parameterized (`type Mem`)" — and that did not happen. `src/exec/memory.rs`
+is `Memory<D: Domain>`, generic over the *domain*, storing `Option<D::Val>` bytes
+and assembling multi-byte accesses through `concat`/`extract`; the `Domain` trait
+itself carries no associated memory type and no `load`/`store`/`concretize_addr`
+(`src/exec/domain.rs`). One memory implementation serves both domains, so the
+trait stayed narrower than this ADR expected. Verified with
+`rg -n 'type (Mem|Val)' src/exec/domain.rs src/exec/concrete.rs src/symbolic/symdomain.rs`
+and `rg -n 'pub struct Memory' src/exec/memory.rs`.
+
+→ [`architecture/execution-engine.md`](../architecture/execution-engine.md)

@@ -1,8 +1,8 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 303,
-  "lfs": 101,
+  "core": 308,
+  "lfs": 102,
   "toolchain": 28,
   "fixtures": 28,
   "docker": 18,
@@ -380,6 +380,9 @@
   "test_dispatch_decline_reasons.py": [
    "lfs"
   ],
+  "test_docs_contracts.py": [
+   "lfs"
+  ],
   "test_docs_links.py": [
    "core"
   ],
@@ -460,6 +463,21 @@
    "lfs"
   ],
   "test_function_simple.py": [
+   "core"
+  ],
+  "test_gen_cli_reference.py": [
+   "core"
+  ],
+  "test_gen_env_reference.py": [
+   "core"
+  ],
+  "test_gen_feature_reference.py": [
+   "core"
+  ],
+  "test_gen_pass_reference.py": [
+   "core"
+  ],
+  "test_gen_provenance_reference.py": [
    "core"
   ],
   "test_generic_tool_evidence.py": [

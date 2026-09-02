@@ -70,6 +70,11 @@ analysis and project file remain the evidence backbone.
 
 ## Reference
 
+Every chapter above declares `Kind: guide` (a task-oriented walkthrough); the
+four pages below declare `Kind: reference` (a fact table kept in sync with
+source) instead — reach for a chapter to learn a workflow and a reference
+page to look up an exact flag, ladder, or corpus path.
+
 - [CLI cheatsheet](../reference/cli.md) — the current top-level command
   inventory and safe invocation shapes
 - [REPL keymap](../reference/repl-keymap.md) — interactive commands

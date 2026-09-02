@@ -100,8 +100,9 @@ dev-oracle = ["exec", "dep:unicorn-engine"]
 # than shelling out to a binary. Optional; the base build needs no solver.
 solver-z3 = ["symbolic", "dep:z3"]
 # Native, in-process, pure-Rust SMT backend via the `axeyum` solver. No C
-# dependency, wheel-shippable. Intended default once validated (ADR-002);
-# opt-in for now. Priority in solve(): solver-z3 > solver-axeyum > pipe.
+# dependency, wheel-shippable. Opt-in; the "default once validated" target was
+# retired -- see docs/decisions/solver-002-axeyum-as-default-backend.md.
+# Priority in solve(): solver-z3 > solver-axeyum > pipe.
 solver-axeyum = ["symbolic", "dep:axeyum-solver", "dep:axeyum-ir"]
 # Benchmark-only native Bitwuzla 0.9.1 cell. This direct C-API adapter is
 # intentionally not part of production backend selection; it exists only for

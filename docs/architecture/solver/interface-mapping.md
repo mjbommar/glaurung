@@ -1,4 +1,4 @@
-# 02 - Interface mapping
+# Solver interface mapping
 
 > **Kind:** architecture · **Status:** maintained
 
@@ -14,12 +14,12 @@ no "unsupported" path at the IR level (only engine-level timeout/resource
 |---|---|---|
 | build BV terms | `symbolic::expr::{Expr, ExprPool, ExprId}` | `axeyum-ir`: `TermArena`, `TermId`, `Sort`, `SymbolId`, `Value` |
 | assert + solve | `Solver::check(pool, asserts)` | `axeyum-solver`: `IncrementalBvSolver::{assert, check}`, `CheckResult`, `Model` |
-| text bridge (MVP) | `pipe::build_script` (renders SMT-LIB2) | `axeyum-solver::solve_smtlib(&str, &SolverConfig) -> SmtLibOutcome` |
+| text bridge (`solver-axeyum-text`) | `pipe::build_script` (renders SMT-LIB2) | `axeyum-solver::solve_smtlib(&str, &SolverConfig) -> SmtLibOutcome` |
 | unsat proof | (none today) | `axeyum-solver::export_qf_bv_unsat_proof(arena, &[TermId]) -> UnsatProofOutcome` |
 
 Minimum dependency for the native backend: **`axeyum-ir` + `axeyum-solver`**
 (rest transitive). `axeyum-smtlib` only if we parse text ourselves - we do
-not (the MVP hands text straight to `solve_smtlib`).
+not (the text bridge hands rendered SMT-LIB2 straight to `solve_smtlib`).
 
 ## The one type-system subtlety: Bool vs BitVec(1)
 
@@ -88,6 +88,30 @@ All axeyum builders are `arena.<op>(...) -> Result<TermId, IrError>`.
 | `Shl` | `bv_shl` | |
 | `Shr` | `bv_lshr` | **logical** right shift |
 | `Sar` | `bv_ashr` | **arithmetic** right shift |
+| `LogicalAnd` | *(not an ALU op — see below)* | source-level short-circuit `&&` |
+| `LogicalOr` | *(not an ALU op — see below)* | source-level short-circuit `\|\|` |
+
+**`LogicalAnd` / `LogicalOr` are not bitvector operations, and lowering them to
+`bv_and` / `bv_or` is wrong.** They are source-level short-circuit operators that
+booleanize both operands and yield 1 or 0 at the node width:
+
+```
+logical_and(a, b) := ite(and(a != 0, b != 0), bv_const(w, 1), bv_const(w, 0))
+logical_or (a, b) := ite(or (a != 0, b != 0), bv_const(w, 1), bv_const(w, 0))
+```
+
+The `!= 0` test runs on the **already width-coerced** operands, because
+truncation can zero a nonzero value. Every backend must be term-for-term
+identical to `ExprPool::render_smtlib`'s truthiness renderer, because
+`ordered_replay` re-renders each imported native pack through the text bridge and
+rejects the pack unless it hashes to the recorded constraint — so a divergent
+lowering is a rejected replay, not a wrong answer that survives. These two
+variants reach a backend through `native_trace::parse_bin_op` (`"logical_and"` /
+`"logical_or"`); nothing between the pool and the backend desugars them. They
+were added to the IR on 2026-07-31 (`b03d5057`) and left three backends' exhaustive
+matches broken until `114a5c4c` (2026-08-17); the test that pins the lowering is
+`native_source_logical_ops_match_the_text_bridge_truthiness`, and its table is
+chosen so a naive `bvand`/`bvor` gives a different verdict on every row.
 
 ### `Un{op, a, width}`
 
@@ -118,14 +142,18 @@ axeyum's `bv_ugt/uge/sgt/sge` are never needed. `lift to bv1` =
 | `ZExt{a, from, to}` | `zero_ext(to.bits()-from.bits(), T(a))` | axeyum takes the *extra* bit count |
 | `SExt{a, from, to}` | `sign_ext(to.bits()-from.bits(), T(a))` | ditto |
 | `Trunc{a, to}` | `extract(to.bits()-1, 0, T(a))` | low `to` bits |
-| `Extract{a, hi, lo}` | `extract(hi, lo, T(a))` | result width `hi-lo` (glaurung) - confirm axeyum's inclusive/exclusive convention in P2 unit test |
-| `Concat{hi, lo, ..}` | `concat(T(hi), T(lo))` | high operand first (SMT-LIB order); verify operand order in P2 |
+| `Extract{a, hi, lo}` | `extract(hi, lo, T(a))` | result width `hi-lo` (glaurung) |
+| `Concat{hi, lo, ..}` | `concat(T(hi), T(lo))` | high operand first (SMT-LIB order) |
 | `Ite{c, t, e, width}` | `ite(bool(T(c)), T(t), T(e))` | `c` is BV1 -> Bool via `not(eq(c,0))` |
 
-Two conventions to pin with a unit test in P2 (not assumed): axeyum's
-`extract(hi,lo,..)` bit-index inclusivity, and `concat` operand order
-(which half is the high bits). Both are checked against z3 on a hand-built
-formula, so a wrong guess fails loudly rather than silently.
+Two conventions were assumptions and are now pinned by unit tests rather than
+belief: axeyum's `extract(hi,lo,..)` bit-index inclusivity, and `concat` operand
+order (which half is the high bits). Both are checked against z3 on a hand-built
+formula, so a wrong guess fails loudly. Declared `concat` operand widths are
+additionally enforced at *every* solver boundary — see
+[`solver-016`](../../decisions/solver-016-enforce-declared-concat-widths.md); a
+width mismatch here is what once made axeyum fast-fail on ~98% of queries and
+produced a retracted speedup claim.
 
 ## Width handling
 
@@ -134,9 +162,9 @@ formula, so a wrong guess fails loudly rather than silently.
   representable.
 - **Mirror z3's `coerce`**: the z3 backend normalizes operands to each
   node's declared width (`z3_backend.rs:98`) because the pipe/`render`
-  path does not coerce. The axeyum translator should coerce identically
-  (zero-extend/truncate an operand to the node's declared width before
-  applying the op) so the two backends agree by construction. See `05` R3.
+  path does not coerce. The axeyum translator coerces identically
+  (zero-extend/truncate an operand to the node's declared width before applying
+  the op) so the two backends agree by construction.
 
 ## Assert + check flow (native backend)
 
@@ -144,7 +172,7 @@ formula, so a wrong guess fails loudly rather than silently.
 fn check(&mut self, pool, asserts) -> SolveResult:
     let mut arena = TermArena::new();
     let mut solver = IncrementalBvSolver::with_config(
-        SolverConfig::new().with_timeout(Duration::from_millis(250)));  // match z3
+        SolverConfig::new().with_timeout(solver::check_timeout()));  // 250 ms default
     let mut memo: HashMap<ExprId, TermId>;
     let mut sym_map: HashMap<u32 /*glaurung Sym id*/, SymbolId>;
     for (e, expected) in asserts:
@@ -153,16 +181,28 @@ fn check(&mut self, pool, asserts) -> SolveResult:
         solver.assert(&arena, a)?          // NonBooleanAssertion impossible: `a` is Bool
     match solver.check(&arena):
         Sat(model)  -> SolveResult::Sat(read_model(model, sym_map))
-        Unsat       -> SolveResult::Unsat   // (+ optional proof, Phase 3)
+        Unsat       -> SolveResult::Unsat   // proofs are a separate off-trait call
         Unknown(_)  -> SolveResult::Unknown
     // any Result::Err(SolverError) or IrError -> SolveResult::Error(msg)
 ```
 
-One-shot contract: the current `Solver` trait re-passes the full assert
-list each call, so the native backend builds a **fresh arena + solver per
-`check`** (mirroring z3_backend's fresh per-call solver). This does NOT
-exploit axeyum's warm incrementality - that is the P5 incremental-trait
-work, where glaurung push/pops as it forks. Correct now; faster later.
+One-shot contract: `Solver::check` re-passes the full assert list each call, so
+`AxeyumSolver` builds a **fresh arena + solver per `check`**, mirroring the z3
+backend's fresh per-call solver.
+
+That is no longer the only route. `IncrementalAxeyumSolver` implements
+[`IncrementalSolver`](../solver-backends.md) — a genuinely retained session driven
+by assertion *deltas*, exclusive to one explorer owner — and above it sit the warm
+path (`GLAURUNG_AXEYUM_WARM_REUSE`), the source-prefix lineage that lets a sibling
+fork reuse an ancestor's session, and the opt-in first-class direct-delta session
+(`GLAURUNG_AXEYUM_DIRECT_DELTA`). Those are decided in
+[`solver-008`](../../decisions/solver-008-auto-warm-requires-same-path-reuse.md),
+[`solver-011`](../../decisions/solver-011-first-class-direct-delta-session.md),
+[`solver-013`](../../decisions/solver-013-source-ancestry-sibling-reuse.md) and
+[`solver-020`](../../decisions/solver-020-bounded-continuation-by-default.md); direct
+delta remains opt-in per
+[`solver-012`](../../decisions/solver-012-direct-delta-stays-opt-in.md) and
+[`solver-021`](../../decisions/solver-021-defer-wider-direct-delta-default.md).
 
 ## Result + model mapping
 
@@ -177,12 +217,12 @@ work, where glaurung push/pops as it forks. Correct now; faster later.
 Model read-back: for each `(glaurung_id, SymbolId)` in `sym_map`,
 `model.get(SymbolId)` -> `Value::Bv{value, ..}` -> insert
 `values[glaurung_id] = value` (u128). `Value::Wide` (> 128-bit) cannot fit
-glaurung's `u128` model slot - document + skip (see `05` R4; does not
-occur for <=128-bit inputs, which is all real IOCTL data). This is a
+glaurung's `u128` model slot - document + skip (it does not occur for
+<=128-bit inputs, which is all real IOCTL data). This is a
 **strict improvement** over the existing backends, which cap at
 `as_u64()` (64-bit).
 
-## Unsat proof (Phase 3)
+## Unsat proof
 
 The warm `check()` returns bare `Unsat` (no proof). To obtain a
 DRAT-checked certificate for one exact path, call the concrete off-trait
@@ -211,10 +251,10 @@ enumerated.
 
 ## What axeyum offers that glaurung does not yet use (future seams)
 
-- Incremental `push`/`pop`/`assert` + `check_assuming_core` (unsat-core
-  path pruning) -> the P5 incremental trait.
-- `block_model` all-SAT enumeration -> if glaurung ever wants
-  multi-model / input-diversification (it does not today).
-- `check_with_memory` (SMT arrays) -> only if glaurung ever models memory
-  as arrays instead of concretizing (it does not today).
-- `with_timeout` per check -> used from v1 to honor the 250 ms budget.
+- **Used now:** incremental `push`/`pop`/`assert`, temporary assumptions, and
+  `with_timeout` per check.
+- **Still unused:** `check_assuming_core` (unsat-core path pruning);
+  `block_model` all-SAT enumeration, which would matter only if the engine ever
+  wanted multi-model input diversification; and `check_with_memory` (SMT arrays),
+  which would matter only if memory stopped being concretized — see
+  [`exec-0004`](../../decisions/exec-0004-symbolic-memory.md).

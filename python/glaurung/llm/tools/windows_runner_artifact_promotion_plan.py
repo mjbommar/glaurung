@@ -35,7 +35,7 @@ class WindowsRunnerArtifactPromotionPlanArgs(BaseModel):
         None,
         description="Optional runner-artifact-review JSON path. Defaults inside artifact_dir.",
     )
-    docs_root: str = "docs/windows-port"
+    docs_root: str = "data/baselines/windows-ghidra-parity"
     baseline_root: str = WINDOWS_GHIDRA_PARITY_DIR
     output_path: str | None = Field(
         None,
@@ -239,9 +239,11 @@ def _destination_for(
 ) -> Path | None:
     """Map one promotable artifact to its checked-in destination.
 
-    JSON dashboards are data and land under `baseline_root`
-    (`data/baselines/windows-ghidra-parity/`); the rendered Markdown tables are
-    prose and stay under `docs_root` (`docs/history/windows-port-2026-05/`).
+    JSON dashboards land under `baseline_root` and their rendered Markdown
+    tables under `docs_root`; both default to
+    `data/baselines/windows-ghidra-parity/`, because the tables are generated
+    renderings of the JSON, not prose, and nothing under `docs/` is generated
+    output.
     """
     if mode == "ghidra_parity":
         if artifact.endswith("_refresh.json"):

@@ -75,7 +75,7 @@ jobs:
             --format json \
             --artifact-dir artifacts/windows-ghidra-parity \
             --review-path artifacts/windows-ghidra-parity/runner-artifact-review.json \
-            --docs-root docs/windows-port \
+            --docs-root data/baselines/windows-ghidra-parity \
             --baseline-root data/baselines/windows-ghidra-parity \
             --output-path artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.json \
             > artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.stdout.json

@@ -250,7 +250,7 @@ jobs:
             --format json \
             --artifact-dir artifacts/windows-target-pipeline/high-volume \
             --review-path artifacts/windows-target-pipeline/high-volume/runner-artifact-review.json \
-            --docs-root docs/windows-port \
+            --docs-root data/baselines/windows-ghidra-parity \
             --output-path artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-plan.json \
             > artifacts/windows-target-pipeline/high-volume/runner-artifact-promotion-plan.stdout.json; then
             echo "high-volume artifact promotion is blocked; see runner-artifact-promotion-plan.json"

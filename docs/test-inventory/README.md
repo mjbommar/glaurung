@@ -16,21 +16,31 @@ The plan that acts on what this inventory found is
 
 ## Files
 
-| file | what it is |
-|---|---|
-| `index.json` | the whole inventory, machine-readable |
-| `index.yaml` | the same, for reading |
-| `unreachable.json` | the subset nothing runs — the raw list |
-| `unreachable-triage.md` | **that list classified into buckets that imply different actions** — read this first |
-| `findings.md` | what the survey turned up, in prose |
-| `coverage.md` | reach and domain tables |
+| file | what it is | produced by |
+|---|---|---|
+| `index.json` | the whole inventory, machine-readable | `tools/build_test_inventory.py` |
+| `index.yaml` | the same, for reading | `tools/build_test_inventory.py` |
+| `unreachable.json` | the subset nothing runs — the raw list | `tools/build_test_inventory.py` |
+| `unreachable-triage.md` | **that list classified into buckets that imply different actions** — read this first | hand-written |
+| `findings.md` | what the survey turned up, in prose | hand-written |
+| `coverage.md` | reach and domain tables, **frozen at an older commit than `index.json`** — see its own header before quoting it | hand-written |
 
-Regenerate:
+`tools/build_test_inventory.py` writes only `index.json`, `index.yaml`, and
+`unreachable.json`. Regenerate those three with:
 
 ```bash
 uv run python tools/build_test_inventory.py \
     --fragments <survey-fragments> --out docs/test-inventory
 ```
+
+The `--fragments` directory holds five `*.jsonl` survey files, one per
+territory walked, that feed the merge (see the docstring in
+`tools/build_test_inventory.py`). Those fragments are **not committed to the
+repository**, so this command cannot currently be re-run from a fresh
+checkout — only from whatever local fragment directory produced the checked-in
+`index.json`. See the
+[test-inventory authority plan](../development/roadmap/test-inventory-authority.md)
+for the plan to make that reproducible.
 
 ## Entry shape
 

@@ -17,7 +17,6 @@ Archive formats are container formats that bundle multiple files and directories
 - **ZIP Format**: `/reference/specifications/archive/ZIP_APPNOTE.TXT`
 - **TAR Format**: `/reference/specifications/archive/tar_format.html`
 - **PAX Format**: `/reference/specifications/archive/pax_format.html`
-- **libarchive Headers**: `/reference/specifications/archive/archive.h`
 - **Magic Signatures**: `/reference/specifications/archive/magic_archive_signatures.txt`
 
 ## Supported Archive Formats

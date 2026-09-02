@@ -31,6 +31,16 @@ Every write here is `set_by="manual"` and enters the undo log (#228) —
 | — | `label <addr> <name> [--type <c-type>]` | Set / retype a global data label |
 | — | `proto <name> <return> <param-c-types...>` | Set a function prototype (used by call-site hints + propagation) |
 
+`rename`, `comment`, `label`, and `proto` also exist as non-interactive
+top-level CLI commands (`python/glaurung/cli/commands/annotate.py`), so a
+script can write the same annotations without driving the REPL — see
+[the CLI tour's "Script your annotations"](../tutorial/01-getting-started/cli-tour.md#script-your-annotations)
+for the shapes (`glaurung rename <db> <func> <name>`,
+`glaurung comment <db> <va> [text...]`,
+`glaurung label <db> <va> [name] [--type] [--size] [--delete]`,
+`glaurung proto <db> <name> [ret] [params...]`, all accepting `--binary`
+and `--by <source>`).
+
 ## Inspection
 
 | Key | Long form | Action |
@@ -96,7 +106,7 @@ inspectable from the CLI.
 
 ## See also
 
-- [`cli-cheatsheet.md`](cli.md) — the CLI surface
-- [`set-by-precedence.md`](provenance.md) — why a manual rename can't be clobbered by an analyzer pass
-- Tier 2 §E `naming-and-types.md` — the daily-basics rename loop
-- Tier 2 §F `cross-references.md` — using `x` to navigate
+- [CLI cheatsheet](cli.md) — the full non-interactive CLI surface
+- [`set_by` precedence](provenance.md) — why a manual rename can't be clobbered by an analyzer pass
+- Tier 2 §E [`naming-and-types.md`](../tutorial/02-daily-basics/naming-and-types.md) — the daily-basics rename loop
+- Tier 2 §F [`cross-references.md`](../tutorial/02-daily-basics/cross-references.md) — using `x` to navigate

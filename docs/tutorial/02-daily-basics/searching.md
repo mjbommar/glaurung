@@ -86,4 +86,9 @@ uv run glaurung xrefs "$DB" 0x11d0 --binary "$BIN" --direction to
 The useful loop is `find` → inspect the returned object or VA → follow precise
 xrefs. A name match is navigation, not behavioral proof.
 
+This pivot is illustrative: `chapter_searching` in `scripts/verify_tutorial.py`
+does not execute these two commands (the same `view`/`xrefs` shape on the
+same address is byte-verified in
+[§G — Cross-references](cross-references.md) instead).
+
 Continue to [§J — Bookmarks and journal](bookmarks-and-journal.md).

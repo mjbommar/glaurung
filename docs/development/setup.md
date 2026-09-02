@@ -13,14 +13,15 @@ is not a supported installation path. Build from a Git checkout with `uv` and
 the Rust toolchain.
 
 The project produces a platform-specific CPython extension. The clean-room
-workflow below was validated on Linux x86-64 with Debian 12, CPython 3.11, and
+workflow below was validated on Linux x86-64 with Debian 12, CPython 3.12, and
 Rust 1.88. Native macOS and Windows builds may require the corresponding
 platform compiler tools and are not covered by that Linux validation.
 
 ## Prerequisites
 
-- Git.
-- CPython 3.11 or newer, as declared by `pyproject.toml`.
+- Git, with [Git LFS](https://git-lfs.com/) installed. The sample corpus is
+  stored as LFS objects.
+- CPython 3.12 or newer, as declared by `pyproject.toml`'s `requires-python`.
 - Rust 1.88 or newer. `gimli 0.33`, a direct dependency, requires Rust 1.88.
 - A C compiler and linker. On Linux, install the distribution's basic build
   toolchain (`build-essential` on Debian/Ubuntu).
@@ -33,6 +34,8 @@ python3 --version
 rustc --version
 cargo --version
 uv --version
+git lfs version
+sqlite3 --version   # optional, but the .glaurung project files are SQLite
 ```
 
 ## Source install
@@ -40,10 +43,18 @@ uv --version
 ```bash
 git clone https://github.com/mjbommar/glaurung.git
 cd glaurung
+git lfs install && git lfs pull
 uv sync --locked --dev
 uv run glaurung --version
 uv run glaurung --help
 ```
+
+Run `git lfs install && git lfs pull` before anything that opens a sample. The
+binaries under `samples/` are Git LFS objects, and a checkout without them
+contains small pointer files in their place, so triage, kickoff, the tutorial
+harness and much of the test suite read text where they expect an ELF.
+Check with `file samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2`:
+it should report an ELF, not ASCII text.
 
 `uv sync --locked --dev` does four things:
 
@@ -151,8 +162,11 @@ uv run --isolated --with pytest-cov pytest \
 ```
 
 After changes to Rust code used by Python, run `uv run maturin develop` before
-Python tests. Decompiler work has additional focused and broad gates in
-[decompiler-testing.md](decompiler-testing.md).
+Python tests. `cargo test --features symbolic` covers `src/symbolic/`, which
+neither of the other Rust builds compiles.
+[testing-gates.md](testing-gates.md) lists every gate, which ones CI runs, and
+the refresh command for each committed baseline; decompiler work has additional
+focused and broad gates in [decompiler-testing.md](decompiler-testing.md).
 
 ## Reproduce the clean-room install with Docker
 
@@ -227,6 +241,8 @@ variables take precedence over values in that file.
 | `GLAURUNG_INPUT_TOKENS_LIMIT` | Input-token ceiling | `400000` |
 | `GLAURUNG_TOTAL_TOKENS_LIMIT` | Total-token ceiling | `500000` |
 | `GLAURUNG_MAX_OUTPUT_TOKENS` | Per-request output ceiling | `32768` |
+| `GLAURUNG_REQUIRE_LLM` | Make LLM-backed tools fail rather than degrade to a deterministic answer when no model is reachable (`1`/`true`/`yes`/`on`) | unset (off) |
+| `GLAURUNG_TOOL_STRICT` | Strict tool-schema mode for agent tools; `0` relaxes it globally, `1` forces it on | on |
 
 Example `.env`:
 
@@ -255,6 +271,7 @@ Detailed agent-run reproducibility and budget policy is in
 | `GLAURUNG_TYPES_DIR` | Override the generated type/prototype data directory |
 | `GLAURUNG_FLIRT_LIB` | Override the default FLIRT-lite signature file |
 | `GLAURUNG_JVM_TOOLS_JAR` | Override the optional JVM helper JAR path |
+| `GLAURUNG_PROJECT_ROOT` | Default `.glaurung` project root for tools that take one |
 
 The two global size variables only raise the effective limits; use explicit
 CLI flags to request a smaller bound. The operation cache has no eviction or
@@ -280,6 +297,11 @@ Packer weights are configured through the Python API; see
 decompiler-debug, and benchmark-only environment variables are specialized
 developer controls and are documented with their owning subsystem rather than
 treated as general user configuration.
+
+The tables above cover the variables a user of the CLI normally sets. The
+complete list — including the Rust, solver, fixture-harness and CI variables —
+is generated from the code in
+[the environment-variable reference](../reference/environment-variables.md).
 
 ## Troubleshooting
 

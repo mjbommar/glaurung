@@ -29,6 +29,41 @@ not reproduce the older proposal structs locally.
 The Rust types use Serde and selected binary codecs internally, but that does
 not make every serialized form a permanent cross-version file format.
 
+## Program-scoped ownership
+
+`src/program/` (23 files, 8,951 lines) is the layer between the raw core types
+and analysis. It is what the decompiler entry points load a binary *through*,
+and it exists so that program-wide facts have one owner rather than being
+reassembled per caller.
+
+- `ProgramSession` (`session.rs`) owns the expensive work — the parse, the
+  validated `TargetSpec`, the symbol store, the type store, the DWARF types,
+  and the cache keys those depend on. `from_path` and `from_image` are the two
+  ways in.
+- `ProgramImage` (`image.rs`) is the loaded image: sections, segments, and the
+  byte spans (`spans.rs`) analysis reads through.
+- `ProgramEnvironment` (`environment.rs`), with `format_environment.rs` and
+  `caller_environment.rs`, holds the immutable semantic facts derived from the
+  image and its debug information.
+- `SymbolStore` (`symbols.rs`) is the one that repays reading. Its vocabulary
+  is not "name at address": it distinguishes `SymbolAuthority` from
+  `SymbolSource`, records `SymbolEvidence` per fact, keeps `SymbolConflict` and
+  `SymbolIncompleteness` as first-class outcomes, and separates `AddressSymbol`
+  from `AddressUnknown`. Competing evidence is retained and ranked rather than
+  merged.
+- `TypeStore` (`types.rs`) with `types/dwarf.rs`, `types/import.rs` and
+  `types/verify.rs` is the same shape for types.
+- `ReferenceResolver` (`references.rs`) resolves a reference site to a target
+  and records `ReferenceOrigin` — how it was established — alongside it.
+- `call_graph.rs` is the program-scoped call graph, distinct from
+  `core::CallGraph`.
+
+Two things about this layer are deliberate and easy to lose in a refactor: it
+never merges conflicting evidence by name alone, and incompleteness never
+silently becomes completeness. `src/program/diagnostics.rs`, which would give
+those diagnostics one home, does not exist —
+see [`module-boundaries.md`](module-boundaries.md) §1.
+
 ## Triage artifacts
 
 `src/triage/` owns the bounded `TriagedArtifact` returned by the native triage
@@ -47,8 +82,10 @@ architecture-specific lifters, shared AST, type recovery, verification, and
 rendering passes. These types evolve with the decompiler and should not be
 confused with `src/core/` instructions or persisted KB nodes.
 
-See the [decompiler architecture](../reference/decompiler-output-format.md) and dated
-evidence checkpoints for the current maturity boundary.
+See the [decompiler pipeline](decompiler-pipeline.md) for what is built,
+[the pass list](../reference/decompiler-passes.md) for the order they run in,
+and [the output format](../reference/decompiler-output-format.md) for what
+comes out.
 
 ## Python and persistence
 
@@ -66,10 +103,13 @@ on session scope, schema compatibility, or save/close behavior.
 
 ## Provenance and confidence
 
-Provenance is boundary-specific. Examples include `ToolMetadata` in the Rust
-core, evidence records and properties in the KB, and `set_by` fields with
-precedence in persistent naming/type tables. Confidence belongs on uncertain
-analysis results; it does not make a canonical address probabilistic.
+Provenance is boundary-specific and each boundary spells it differently:
+`ToolMetadata` in the Rust core, `SymbolAuthority` / `SymbolSource` /
+`SymbolEvidence` in `src/program/`, evidence records and node properties in the
+KB, and the ranked `set_by` column in the persistent naming and type tables
+([`../reference/provenance.md`](../reference/provenance.md)). Confidence belongs
+on uncertain analysis results; it does not make a canonical address
+probabilistic — which is why `Address` has no `confidence` field.
 
 Keep these distinct:
 
@@ -79,10 +119,17 @@ Keep these distinct:
 - an LLM-generated hypothesis; and
 - a verified behavioral result.
 
-## Historical design records
+## Where the shapes came from
 
-The other files in this directory capture earlier unified-model proposals,
-critiques, implementation plans, nesting designs, and disassembler/decompiler
-foundations. Their status banners mark them as historical. They can explain why
-some types exist, but their illustrative fields, paths, and checklists are not
-current APIs.
+A 2025 four-model design round produced parallel proposals and critiques for
+roughly fifteen of these objects. They are archived in
+[`../history/data-model-2025/`](../history/data-model-2025/) and are worth
+consulting for one reason: they record what was *declined*, which the shipped
+types cannot show.
+
+`AddressKind` is the clearest case. It ships with six variants — `VA`,
+`FileOffset`, `RVA`, `Physical`, `Relative`, `Symbolic` — and a review
+explicitly proposed narrowing it to the first three. That narrowing was
+considered and **not adopted**; the other two P0 recommendations from the same
+review (renaming `width` to `bits`, and removing `Address.confidence`) were.
+Without the record, six variants look like an oversight rather than a decision.

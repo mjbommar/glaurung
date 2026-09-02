@@ -2,10 +2,28 @@
 
 > **Kind:** reference · **Status:** maintained
 
-> **Design and implementation record.** Confirm individual tool availability
-> in `python/glaurung/llm/tools/` and current registration before treating a
-> section below as a shipped operator workflow. See [`TOOLS.md`](llm-tool-contract.md) for
-> the maintained tool contract.
+> **Design and implementation record.** The plan below is largely built: 19 of
+> the 21 numbered tools are shipped as `MemoryTool` objects under
+> `python/glaurung/llm/tools/` and registered in `register_analysis_tools`
+> (`python/glaurung/llm/agents/memory_agent.py`). See
+> [`llm-tool-contract.md`](llm-tool-contract.md) for the maintained tool
+> contract and how to verify any one tool's current registration.
+
+## Shipped tools
+
+| File | Registered tool names |
+| --- | --- |
+| `extract_archive.py` | `enumerate_archive`, `extract_archive_entry`, `extract_archive_all`, `recursive_unpack` |
+| `find_embedded_executables.py` | `find_embedded_executables` |
+| `find_encoded_blobs.py` | `find_base64_blobs`, `find_hex_blobs`, `find_pem_blocks`, `try_xor_brute`, `scan_xor_encoded_strings`, `find_compressed_blobs` |
+| `find_structured_blobs.py` | `find_embedded_images`, `find_xml_blobs`, `find_json_blobs`, `find_plist_blobs`, `find_ini_blobs`, `extract_pe_overlay`, `extract_elf_section` |
+| `analyze_recursively.py` | `analyze_recursively` |
+| `pe_list_resources.py` | `pe_list_resources` (ships instead of the `extract_pe_resources` name below) |
+
+Not shipped under the names proposed below: `extract_pe_resources` (use
+`pe_list_resources`, a different result shape) and `extract_macho_section`;
+`decode_at` (tool 14) has no standalone mechanical-decoder tool — decoding is
+folded into the individual `find_*` tools instead.
 
 ## The gap
 
@@ -159,22 +177,25 @@ question the user usually has when they hand a sample to Glaurung.
 
 ## Adversarial sample plan
 
-We have a few existing samples in `samples/containers/` and
-`samples/adversarial/` but they're shallow. To exercise Tier B–D
-properly, build a small adversarial corpus:
+Most of this corpus now exists under `samples/adversarial/embedded/`
+(`nested_zip_in_zip.zip`, `pe_with_overlay.exe`, `b64_payload_in_elf.elf`,
+`xor_url_in_elf.elf`, `recursively_nested.bin`); confirm any individual path
+against the current checkout before citing it, and see
+[`sample-corpus.md`](sample-corpus.md). Full proposed list, status marked:
 
 - `nested_zip_in_zip.zip` — a zip containing a zip containing the
-  hello binary.
-- `pe_with_overlay.exe` — Windows hello followed by an appended zip.
+  hello binary. **shipped.**
+- `pe_with_overlay.exe` — Windows hello followed by an appended zip. **shipped.**
 - `b64_payload_in_elf.elf` — Linux hello with a base64-encoded ELF
-  embedded in `.rodata`.
-- `xor_encoded_url_in_elf.elf` — XOR-encoded C2 URL in `.rodata`.
-- `png_in_pe.exe` — PE with an embedded PNG resource.
-- `manifest_in_pe.exe` — PE with an XML manifest in `.rsrc`.
+  embedded in `.rodata`. **shipped.**
+- `xor_encoded_url_in_elf.elf` — XOR-encoded C2 URL in `.rodata`. **shipped as
+  `xor_url_in_elf.elf`.**
+- `png_in_pe.exe` — PE with an embedded PNG resource. not shipped.
+- `manifest_in_pe.exe` — PE with an XML manifest in `.rsrc`. not shipped.
 - `gzip_in_string_table.elf` — gzipped payload spliced into the
-  string table.
+  string table. not shipped.
 - `recursively_nested.bin` — base64(zip(xor(hello))) for the
-  end-to-end Tier E test.
+  end-to-end Tier E test. **shipped.**
 
 Each sample is small (≤ a few hundred KB), built from existing hello
 samples plus a synthesizer script under `samples/adversarial/`. The
@@ -219,14 +240,18 @@ synthesizer is committed; the binaries are derived artifacts.
 
 ## Where these tools live
 
-- Pure-Python extractors: `python/glaurung/llm/tools/extract_*.py`,
-  same `MemoryTool[Args, Result]` pattern as the existing 32 tools.
-- Heuristic scanners (Tier C/D): same location.
-- Recursive driver: `python/glaurung/llm/agents/recursive_triage.py`
-  — a new specialised agent that composes the tools.
-- Adversarial samples: `samples/adversarial/embedded/` plus a
-  `scripts/build-adversarial-samples.sh` synthesizer that takes
-  existing hello samples and produces the nested forms.
+- Extractors and scanners: `python/glaurung/llm/tools/{extract_archive,
+  find_embedded_executables,find_encoded_blobs,find_structured_blobs,
+  analyze_recursively,pe_list_resources}.py`, the same `MemoryTool[Args,
+  Result]` pattern documented in [`llm-tool-contract.md`](llm-tool-contract.md).
+- Recursive driver: `analyze_recursively` is itself one more `MemoryTool`
+  (`python/glaurung/llm/tools/analyze_recursively.py`), registered directly
+  into `register_analysis_tools`. There is no separate `recursive_triage.py`
+  agent or `BinaryTriageAgent` class — that part of the original plan was not
+  built as a distinct agent.
+- Adversarial samples: `samples/adversarial/` (see
+  [`sample-corpus.md`](sample-corpus.md)); confirm any specific nested-sample
+  path against the current checkout before citing it.
 
 ## Why most of this is not LLM-driven
 

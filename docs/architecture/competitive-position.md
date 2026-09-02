@@ -131,8 +131,11 @@ cast gone because the declared type now matches. **Partial** — see §3.2.
 ### Tier 2 — the difference between usable and pleasant
 
 **6. Apply a struct to a variable.** All three have it; we store `c_type` as a
-string and resolve it against nothing. `type_field_uses` exists in our schema with
-no production reader or writer.
+string and resolve it against nothing. `type_field_uses` exists in our schema and
+is half-wired: `windows_project_memory_operand_facts.py` reads it to label a
+memory operand with a likely type and field, but the only writer of
+`type_db.record_field_use` is a test, so in a real project the table is empty and
+that reader always finds nothing.
 
 **7. Split / merge a variable** — undoing the decompiler's speculative merging.
 Ghidra's own issue **#975 is the most-reacted open issue in its tracker (54
@@ -245,15 +248,18 @@ including deletions, as of this work.
 ## 4. What to do next, in order
 
 1. **The line map.** Not free: `Expr`/`Stmt` derive `PartialEq, Eq` and have no
-   node identity, and `prepare.rs` terminates a fixpoint on `if owned == before`.
-   The cheap shape is a marker **variant** (`Stmt::Origin(u64)`), not a field —
+   node identity. (The fixpoint in `prepare.rs` no longer compares whole
+   functions — the passes report whether they edited — so structural equality is
+   one obstacle fewer than it was, but the missing node identity is the real
+   one.) The cheap shape is a marker **variant** (`Stmt::Origin(u64)`), not a field —
    a variant costs 182 exhaustive-match sites that the compiler finds, whereas a
    field on `Stmt::Assign` alone costs 1,472 construction sites. The hazard is
    passes that *skip over* marker statements (`return_folds.rs` already does this
    for `Comment | Nop`); missing one is a silent behaviour change, so each site
    needs reading rather than a sweep. Ghidra's precedent says the result may be
    approximate and should say so.
-2. **Apply a struct to a variable.** `type_field_uses` already exists unused.
+2. **Apply a struct to a variable.** `type_field_uses` already exists, with a
+   reader and no production writer.
 3. **Split / merge a variable.** Highest *demand* signal of anything here.
 4. **Per-call-site prototype override.** Our `call_spec` on `Stmt::Call` is the
    natural home.

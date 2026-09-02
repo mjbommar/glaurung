@@ -1,6 +1,13 @@
-# 09 - Taint provenance and finding labels
+# Taint provenance and finding labels
 
 > **Kind:** architecture · **Status:** maintained
+
+> Decided by
+> [`solver-027`](../../decisions/solver-027-preserve-taint-provenance.md),
+> [`solver-028`](../../decisions/solver-028-finding-confidence-partition.md) and
+> [`solver-029`](../../decisions/solver-029-systembuffer-address-versus-content.md).
+> The engine that produces these sinks is
+> [`architecture/execution-engine.md`](../execution-engine.md).
 
 ## Why raw sinks are not a coverage oracle
 
@@ -83,8 +90,8 @@ a fixed-work corpus with nonzero labeled positives before using finding recall
 as an acceptance gate. Keep raw losses and additions visible, but do not treat
 the arbitrary-model raw union as ground truth.
 
-Boundary-set or diverse enumeration remains a configuration sweep under the A0
-contract. Symbolic memory remains the only architectural item and starts only
+Boundary-set or diverse enumeration remains a configuration sweep under the
+[`ConcretizationPolicy`](concretization-policy.md) contract. Symbolic memory remains the only architectural item and starts only
 if the corrected, labeled sweep leaves measured headroom.
 
 ## Machine-readable confidence partition

@@ -1,94 +1,93 @@
-# ADR-0005 — SMT Backend: Native-First (`z3` crate), Pipe as Fallback
+# ADR-0005 — SMT Backend: Native-First, Pipe as Fallback, Pure-Rust Alongside
 
 > **Kind:** decision · **Status:** maintained
 
-**Status:** Accepted (revised 2026-06-10 — reversed the original "pipe-first") ·
-**Date:** 2026-06
+**ADR status:** Accepted; reversed once (2026-06) and extended once (2026-07) · **Date:** 2026-06
 
-> **Revision note.** This ADR originally said "pipe first, native optional." That
-> was wrong for this project and is reversed below. The original reasoning —
-> "avoid a C/C++ build dependency in the base wheel" — is satisfied by
-> **feature-gating**, not by avoiding native bindings. Glaurung is a native Rust
-> engine; shelling out to an external `z3` binary (or depending on a Python
-> `z3-solver` package) is exactly the kind of non-Rust coupling the project
-> avoids. The original ADR optimized for author convenience and dressed it up as
-> a distribution argument.
+> **Revision note.** This ADR was originally "pipe first, native optional", and
+> the file kept that name long after the decision flipped. The original argument
+> — avoid a C/C++ build dependency in the base wheel — is satisfied by
+> **feature-gating**, not by refusing native bindings. A native Rust engine
+> should not shell out to a binary on `PATH`.
 
 ## Context
 
-Symbolic execution needs an SMT solver over QF_BV (bit-vectors + arrays). Three
-ways to obtain one: (a) link a native solver into the Rust build via a crate;
-(b) spawn an external solver binary and speak SMT-LIB2 over a pipe; (c) depend on
-a Python package that bundles a binary. The engine is otherwise entirely
-in-process Rust (emulator, register file, memory, `Domain`, `Expr` IR).
+Symbolic execution needs a QF_BV solver. Three ways to get one: link a native
+solver through a Rust crate; spawn a solver binary and speak SMT-LIB2 over a
+pipe; or depend on a Python package that bundles a binary. Everything else in
+the engine — interpreter, register file, memory, `Domain`, the `Expr` IR — is
+in-process Rust.
 
 ## Decision
 
-1. **Primary backend: the native `z3` crate, linked in-process**, behind the
-   `solver-z3` cargo feature. The bit-vector `Expr` IR is translated directly to
-   z3 AST; results come back as Rust values. No subprocess, no PATH discovery, no
-   Python. This is consistent with the rest of the engine.
-2. **Fallback backend: the SMT-LIB2 pipe** (`PipeSolver`) — spawns a solver
-   binary (`bitwuzla`/`z3`/`cvc5`, or `$GLAURUNG_SMT_SOLVER`). Zero build
-   dependency; used when no native solver is compiled in. Kept because it's
-   genuinely useful in minimal/build-constrained environments, not as the
-   recommended path.
-3. **One `Solver` trait** (`check(pool, asserts) -> SolveResult`) with both
-   backends behind it; `solve()` prefers native when `solver-z3` is on, else the
-   pipe. A future **pure-Rust** backend (bit-blast → SAT, e.g. `varisat`/`splr`)
-   can implement the same trait.
-4. **Base build stays lean by feature-gating**, not by avoiding native code:
-   `default` has no solver; `symbolic` builds the `Expr` IR + pipe fallback (pure
-   Rust, no link); `solver-z3` links libz3.
+1. **One seam.** `pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult`
+   in `src/symbolic/solver/mod.rs`. Backends implement `Solver`
+   (`fn check(&mut self, pool, asserts) -> SolveResult`), and retained sessions
+   implement the separate `IncrementalSolver` (`assert`/`push`/`pop`/
+   `scope_depth`/`check`/`check_assuming`) added when the warm path landed.
+2. **Native z3 is the preferred backend** (`solver-z3`, the `z3` crate linking
+   libz3), translating the `Expr` DAG straight to z3 AST in-process.
+3. **The SMT-LIB2 pipe is the zero-dependency fallback** (`PipeSolver`), trying
+   `$GLAURUNG_SMT_SOLVER`, then `bitwuzla`, `z3`, `cvc5` on `PATH`.
+4. **The base build stays lean by feature-gating, not by avoiding native code.**
+   `default = ["triage-core"]` has no solver; `symbolic` builds the `Expr` IR and
+   the pipe fallback with no link; each `solver-*` feature adds one backend.
 
-## On pure-Rust solvers
+## What happened next: the pure-Rust backend was built
 
-There is no mature pure-Rust *SMT* solver competitive on QF_BV; the strong ones
-(z3, bitwuzla, cvc5, yices, boolector) are C/C++. Pure-Rust *SAT* solvers do
-exist (`varisat`, `splr`, `batsat`, `creusat`). The fully-Rust route is therefore
-**bit-blasting QF_BV → CNF → a pure-Rust SAT solver** — viable for the small
-bounded constraints binary symbex produces, slower on hard instances. This is a
-worthwhile future `Solver` backend; native z3 is the pragmatic high-performance
-default today.
+This ADR's "On pure-Rust solvers" section said there was no mature pure-Rust SMT
+solver competitive on QF_BV, and that bit-blasting to a pure-Rust SAT solver was
+"a worthwhile future `Solver` backend". That backend now exists. `solver-axeyum`
+binds [axeyum](https://github.com/mjbommar/axeyum) — a pure-Rust QF_BV solver by
+the same author — in-process with no C dependency, pinned in `Cargo.toml` by git
+rev. It is roughly 5,100 lines of adapter across
+`src/symbolic/solver/axeyum_backend.rs` and `axeyum_backend/{config, profile,
+snapshot, translate, warm_paths, warm_stats}.rs`, and it carries the retained
+session, warm-path, and direct-delta machinery the one-shot trait cannot express.
+
+`solve()`'s cascade among *enabled* backends is therefore **z3 > axeyum > pipe**;
+a fourth backend, `solver-bitwuzla`, binds the Bitwuzla 0.9.1 C API directly and
+is deliberately excluded from selection — it exists only as a
+topology-equivalent measurement cell
+([`solver-031`](solver-031-pinned-bitwuzla-measurement-cell.md)).
+
+Axeyum was *not* made the default. See
+[`solver-002`](solver-002-axeyum-as-default-backend.md), which proposed exactly
+that and is superseded.
 
 ## Alternatives rejected
 
-- **Pipe-first / pipe-only** (the original decision) — shells out to an external
-  process; not self-contained; couples to a runtime binary on PATH or a Python
-  package. Demoted to fallback.
-- **Python `z3-solver` dependency** — couples a Rust-spawned binary to a Python
-  package; only helps the wheel consumer, nothing for cargo consumers; not
-  Rust-native. Rejected for the core.
-- **Bitwuzla-only native** — fastest on QF_BV, but the Rust binding is thin and
-  UNIX-only to vendor; revisit as an optional `solver-bitwuzla` backend later.
+- **Pipe-first or pipe-only** (the original decision) — couples the engine to a
+  binary on `PATH` or a Python package. Demoted to fallback, kept because it is
+  genuinely useful in build-constrained environments.
+- **A Python `z3-solver` dependency** — helps wheel consumers only, does nothing
+  for cargo consumers, and is not Rust-native.
+- **Bitwuzla as the production native backend** — fastest on QF_BV, but the
+  binding is thin and the C dependency is exactly what the shippability goal is
+  trying to avoid. It became a benchmark cell instead.
 
-## Distribution by consumer
+## The wheel, correctly stated
 
-- **cargo / Rust consumers:** `--features solver-z3` links libz3 (system lib, or
-  the `z3` crate's `bundled`/`gh-release` for a self-contained build). Pure-Rust
-  symbolic-without-solving needs only `symbolic`.
-- **pip / wheel consumers:** build the wheel with `solver-z3` so libz3 is linked
-  into the extension — no external binary, no Python solver dep. (An optional
-  `glaurung[symbolic]` extra could ship a solver binary for the pipe fallback,
-  but it isn't the primary mechanism.)
+The wheel ships **no solver**. `python-ext = ["pyo3", "pyo3/extension-module",
+"exec"]` pulls the concrete emulator and stops there: `symbolic` is in neither
+`default` nor `python-ext`, so neither the `Expr` IR nor any backend is compiled
+into the extension module. (An earlier version of this ADR said the wheel path
+would use the `z3` crate's `bundled`/`gh-release` features; it does not, and no
+wheel build enables a solver feature today.) Verified with
+`sed -n '/^\[features\]/,/^\[/p' Cargo.toml`.
 
 ## Consequences
 
-- (+) Self-contained, in-process, Rust-API solving; deterministic; consistent
-  with the rest of the engine.
-- (+) Caching/independence (Phase 4) live in our code over the `Expr` IR,
-  independent of backend.
-- (−) `solver-z3` adds a C/C++ link (libz3) and build time — bounded by the
-  feature gate; the base build is unaffected.
-- (−) z3's `Context` is `!Send + !Sync` → one solver context per worker thread
-  (matches the per-worker exploration model anyway).
+- (+) In-process, Rust-API solving; deterministic; consistent with the engine.
+- (+) Caching and independence live in our code over the `Expr` IR
+  (`solver/constraint_cache.rs`), independent of which backend answers.
+- (−) `solver-z3` adds a libz3 link and build time — bounded by the gate.
+- (−) z3's `Context` is `!Send + !Sync`, so one context per worker thread. The
+  warm paths in the axeyum backend are thread-local for the same reason.
+- (−) Four backends is four build lanes. `scripts/feature-build-gate.sh` type-checks
+  `solver-z3`, `solver-axeyum`, `solver-axeyum-text`, `solver-bitwuzla`,
+  `solver-z3,solver-axeyum`, and `--all-features`, because `cargo test --features
+  python-ext` compiles none of them.
 
-## Implementation status (2026-06-10)
-
-Implemented: `Solver` trait (`symbolic/solver/mod.rs`); native `Z3Solver`
-(`solver/z3_backend.rs`, feature `solver-z3`) — solves QF_BV in-process, returns
-Rust models; `PipeSolver` fallback (`solver/pipe.rs`). Verified end-to-end: a
-constraint built by running the **interpreter over the symbolic `Domain`** solves
-to the expected input via linked z3 (`x + 1 == 0x100` → `x = 0xff`); unsat
-detection works. libz3 is linked via the system library (`libz3-dev`); the wheel
-path will use `bundled`/`gh-release`.
+→ [`architecture/solver-backends.md`](../architecture/solver-backends.md),
+[`design/execution-engine-research/smt-backends.md`](../design/execution-engine-research/smt-backends.md)

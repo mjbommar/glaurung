@@ -2,7 +2,7 @@
 
 > **Kind:** decision · **Status:** maintained
 
-**Status:** Accepted · **Date:** 2026-06
+**ADR status:** Accepted · **Date:** 2026-06
 
 ## Context
 
@@ -32,7 +32,7 @@ Realistic interpreter perf is ~1–2 orders of magnitude slower than native — 
 for *bounded, forensic* execution of function slices (we do not boot OSes, N1).
 Speed comes from: lift-once block cache, block-at-a-time dispatch, successor
 caching (software block chaining), flat index-based IR, no per-instruction
-allocation. → [`../01-research/emulator-engineering.md`](../design/execution-engine-research/emulator-engineering.md) §1.
+allocation. → [`design/execution-engine-research/emulator-engineering.md`](../design/execution-engine-research/emulator-engineering.md) §1.
 
 ## Alternatives rejected
 
@@ -40,6 +40,18 @@ allocation. → [`../01-research/emulator-engineering.md`](../design/execution-e
   hostile to hooks/SMC/determinism, premature for our workloads.
 - **Reuse Unicorn/QEMU at runtime** — violates the native-Rust goal (N5); Unicorn
   is a dev-only oracle, not a runtime engine.
+
+## What the implementation changed
+
+The interpreter shipped (`src/exec/interp.rs`); the **cache** in "cached IR
+interpreter" did not. There is no `src/exec/liftcache.rs` and no block cache:
+`Machine::run_function` walks a `LlirFunction` whose blocks were lifted by the
+caller, so lifting happens once per call, not once per block-per-execution.
+Verified with `ls src/exec` (ten files: `budget, concrete, domain, helpers,
+interp, memory, mod, oracle, simproc, state`) and
+`rg -n 'liftcache|LiftCache|block_cache' src/` (no hits). The decision — interpret, do not
+JIT — held; the caching half remains open, and it is the first thing to build if
+whole-binary emulation ever becomes hot.
 
 ## Consequences
 

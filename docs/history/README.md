@@ -49,7 +49,7 @@ The design, risk, and evidence record for integrating the pure-Rust `axeyum`
 SMT solver behind `solver-axeyum`. The live parts moved to
 [`architecture/solver-backends.md`](../architecture/solver-backends.md),
 [`architecture/solver/`](../architecture/solver/) and
-[`decisions/solver-decision-log.md`](../decisions/solver-decision-log.md).
+the 31 [`decisions/solver-0NN-*.md`](../decisions/README.md) records.
 
 | file | date | what it recorded | superseded by / known-false claims |
 |---|---|---|---|
@@ -278,6 +278,7 @@ underlying work is driven instead by `tools/fitness_report.py`,
 
 | file | date | what it recorded | superseded by / known-false claims |
 |---|---|---|---|
+| [OUTCOMES.md](refactoring-portfolio-2026-08/OUTCOMES.md) | 2026-09-02 | each of the seven projects scored against the code at `13faa6f7`, with the then/now line counts | current as a scoring of a closed exercise; the boundaries themselves are restated live in [`architecture/module-boundaries.md`](../architecture/module-boundaries.md) |
 | [README.md](refactoring-portfolio-2026-08/README.md) | 2026-08-13 | the seven-project portfolio and its repo-wide completion gate | orphaned: one inbound link in the repository, zero commits citing any project; its gate omits the four decompiler baselines and the six structural side-files |
 | [architecture-review-2026-08-13.md](refactoring-portfolio-2026-08/architecture-review-2026-08-13.md) | 2026-08-13 | the file-concentration measurement at `fb4ee6ba` that the portfolio was built on | the only before-measurement of file concentration; without it the CFG 7,125 → 1,992 result is unprovable |
 | [01-program-semantic-authority.md](refactoring-portfolio-2026-08/01-program-semantic-authority.md) | 2026-08-13 | one owner for images, symbols, types and provenance | **not started as specified**; `src/program/diagnostics.rs` does not exist, and the precedence-table goal was met on the Python side in `llm/kb/provenance.py` instead |
@@ -325,6 +326,3 @@ and [`reference/windows-api-type-sync.md`](../reference/windows-api-type-sync.md
 | [co-investment-policy.md](windows-port-2026-05/co-investment-policy.md) | 2026-05-16 | the collaboration policy with the external agentic-security-bot repo | governs a relationship outside this repository and is unverifiable from here; unrelated to the DecBench upstream boundary |
 | [glaurung-vs-ghidra-regression-review.md](windows-port-2026-05/glaurung-vs-ghidra-regression-review.md) | 2026-05-20 | a 10-fixture regression dashboard narrative, 2026-05-19 | a dated comparison snapshot |
 | [glaurung-vs-ghidra-full-debug-review.md](windows-port-2026-05/glaurung-vs-ghidra-full-debug-review.md) | 2026-05-20 | a 30-fixture debug narrative, 2026-05-19 | as above |
-| [glaurung_vs_ghidra_vendor_windows.md](windows-port-2026-05/glaurung_vs_ghidra_vendor_windows.md) | 2026-05-20 | a generated 10-file comparison table | **the generator is lost**: no script under `tools/` or `scripts/` regenerates it |
-| [glaurung_vs_ghidra_vendor_windows_30.md](windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30.md) | 2026-05-20 | the 30-file version of the same table | as above |
-| [glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md](windows-port-2026-05/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md) | 2026-05-20 | the same table regenerated after the tiny-stub gate | as above; the numbers differ visibly from the pre-fix file, so the pair is the evidence for that fix |

@@ -20,7 +20,7 @@ Mach-O (Mach Object) is the native executable format for Apple platforms includi
 - **Relocations**: `/reference/specifications/macho/reloc.h`
 
 ### Implementation References
-- **Go Standard Library**: `/reference/specifications/macho/golang_macho.go`
+- **Go Standard Library**: `/reference/specifications/elf/golang_macho.go`
 - **LLVM LIEF**: `/reference/LIEF/include/LIEF/MachO/`
 - **Apple Open Source**: dyld and cctools repositories
 

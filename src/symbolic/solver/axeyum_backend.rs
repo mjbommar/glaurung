@@ -12,7 +12,7 @@
 //!   via [`super::pipe::build_script`] and calls axeyum's `solve_smtlib`.
 //!   Kept as a cross-check / reference and a zero-translation fallback.
 //!
-//! See `docs/history/axeyum-integration-2026-07/` (esp. `02-interface-mapping.md`).
+//! See `docs/architecture/solver/interface-mapping.md` (live contract; record in `docs/history/axeyum-integration-2026-07/`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};

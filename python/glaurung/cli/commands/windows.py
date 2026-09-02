@@ -1148,7 +1148,9 @@ class WindowsCommand(BaseCommand):
         self._add_common_child_arguments(promotion_plan)
         promotion_plan.add_argument("--artifact-dir", required=True)
         promotion_plan.add_argument("--review-path")
-        promotion_plan.add_argument("--docs-root", default="docs/windows-port")
+        promotion_plan.add_argument(
+            "--docs-root", default="data/baselines/windows-ghidra-parity"
+        )
         promotion_plan.add_argument(
             "--baseline-root", default=WINDOWS_GHIDRA_PARITY_DIR
         )

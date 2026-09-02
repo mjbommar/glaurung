@@ -16,7 +16,8 @@ Create and populate an explicit project with the deterministic kickoff workflow:
 
 ```bash
 BIN="samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
-DB="/tmp/hello-docs.glaurung"
+DB="${TMPDIR:-$HOME/.cache/glaurung/tmp}/hello-docs.glaurung"
+mkdir -p "$(dirname "$DB")"
 
 uv run glaurung kickoff "$BIN" --db "$DB"
 uv run glaurung repl "$BIN" --db "$DB"
@@ -141,11 +142,12 @@ it (`index_function_identities`), resolves it (`find_by_identity`,
 `resolve_entry_va`), and carries annotations from an older build onto a newer one
 (`port_annotations`).
 
-`scheme` names the algorithm rather than fixing one: `glaurung-structural-v1`
-today, with room for a WARP function GUID (see
-`docs/design/whole-binary-serialization-2026-08-20.md`) as another `scheme` value
-in the same TEXT column — no schema change, no migration, and a function may
-carry several identities at once.
+`scheme` names the algorithm rather than fixing one: `STRUCTURAL_V1` —
+`glaurung-structural-v1` — is what can be computed today, with room for a WARP
+function GUID (see
+[`../decisions/whole-binary-serialization.md`](../decisions/whole-binary-serialization.md))
+as another `scheme` value in the same TEXT column: no schema change, no
+migration, and a function may carry several identities at once.
 
 Two limits are deliberate. Identity is *structural*, so functions that compile to
 the same shape share it (identical PLT thunks are routine); `port_annotations`
@@ -165,5 +167,14 @@ identity rows collide with the fresh ones on the primary key.
   and other sensitive evidence. Apply the same access controls as the case data.
 - Source revision and command output remain necessary for reproducibility; the
   database is accumulated state, not a proof that every analysis completed.
+
+## See also
+
+- [`python-package-map.md`](python-package-map.md) — the full 35-table list and
+  which of the nine modules owns each one.
+- [`../reference/provenance.md`](../reference/provenance.md) — the `set_by`
+  ladder every write in these tables is checked against.
+- [`module-boundaries.md`](module-boundaries.md) §6 — the storage boundary this
+  layer is meant to hold, and the migration gap it has not closed.
 
 Focused persistence coverage lives in `python/tests/test_persistent_kb.py`.

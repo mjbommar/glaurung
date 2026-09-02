@@ -46,4 +46,31 @@ same binary and image base, make a project backup, and inspect how name/type
 conflicts are handled. Tutorial generation checks do not launch or validate the
 scripts inside those proprietary/external applications.
 
+## C header and whole-binary bundle
+
+Two more `--output-format` choices target consumers other than an
+interactive disassembler:
+
+```bash
+uv run glaurung export "$DB" --output-format header > analysis.h
+uv run glaurung export "$DB" --output-format bundle --binary "$BIN" > bundle.json
+```
+
+`header` emits the project's persisted type database as a standalone,
+`#pragma once` C header — every recovered `typedef`, struct, and union, with
+no function bodies. `bundle` is the whole-binary machine-readable artifact:
+every function's boundaries, prototype, stack variables, xrefs, and
+content-derived identity (`glaurung.bundle/1` schema). By default `bundle`
+does not decompile; add `--bodies` to include each function's decompiled C,
+which costs orders of magnitude more than the rest of the bundle combined
+and requires `--binary`:
+
+```bash
+uv run glaurung export "$DB" --output-format bundle --binary "$BIN" --bodies > bundle-with-bodies.json
+```
+
+`--binary` is required for both `bundle` variants (functions need the
+binary's bytes to compute content-derived identity, and `--bodies` needs
+them to decompile) and for any project that spans more than one binary.
+
 Continue to [§V — Typed locals](typed-locals-from-libc.md).

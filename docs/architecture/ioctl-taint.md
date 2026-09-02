@@ -2,11 +2,13 @@
 
 > **Kind:** architecture · **Status:** maintained
 
-Domain-specific abstract interpretation over `LlirFunction` for Windows
-WDM driver IOCTL handlers. Implements the precision layer that
-`tools/windows/ioctl_null_deref_audit.py` (in ASB) lacks, and replaces
-the symbolic-execution path used by upstream IOCTLance with a much
-cheaper static analysis.
+`src/analysis/ioctl_taint.rs` — a domain-specific abstract interpretation over
+`LlirFunction` for Windows WDM driver IOCTL handlers. It is the **cheap static
+half** of the driver work: it nominates candidate IRP-derived dereferences in a
+single dataflow pass, where upstream IOCTLance spends full angr symbolic
+execution. The expensive half exists too and is complementary rather than
+superseded — [`src/symbolic/ioctl.rs`](execution-engine.md) confirms reachability
+and emits a concrete IOCTL witness for what this pass merely flags.
 
 ## Why a new module
 
@@ -60,12 +62,21 @@ For each `Op` in source order within a block:
 | `Assign { dst, src: Reg(r) }` | `state[dst] = state[r]` |
 | `Assign { dst, src: Const(c) }` | `state[dst] = Const(c)` |
 | `Assign { dst, src: Addr(_) }` | `state[dst] = Top` |
-| `Load { dst, addr: MemOp { base, disp, .. } }` | apply struct-field map below; on no match → `Top` |
-| `Bin { dst, .. }` / `Un { dst, .. }` | `state[dst] = Top` |
-| `Cmp { dst, op, lhs, rhs }` | record null-check info; `state[dst] = Top` |
-| `Store { .. }` | no register change |
+| `Load { dst, addr: MemOp { base, disp, .. } }` | apply the struct-field map below; on no match → `Top` |
+| `CondLoad { dst, .. }` | `state[dst] = Top` (the guard is not modelled) |
+| `ZExt`/`SExt`/`Trunc`/`Extract { dst, src, .. }` | `state[dst] = state[src]` — a width change **preserves** the kind; a zero-extended `InputLen` is still a length |
+| `Bin { dst, .. }` / `Un { dst, .. }` | `state[dst] = Top`, except `xor r, r`, which is recognised as the zero idiom and yields `Const(0)` |
+| `Concat { dst, .. }` / `Ite { dst, .. }` | `state[dst] = Top` (conservative) |
+| `Intrinsic { outs, .. }` | every declared output becomes `Top` |
+| `Cmp { dst, op, lhs, rhs }` | record a `FlagInference` (null or length); `state[dst] = Top` |
+| `Undef { dst, .. }` | `state[dst] = Top` |
+| `Store`/`CondStore { .. }` | no register change |
 | `Call { .. }` | kill MS x64 caller-saved: `rax, rcx, rdx, r8, r9, r10, r11`; preserve callee-saved `rbx, rbp, rsi, rdi, r12-r15` |
-| `Return`, `Jump`, `CondJump`, `Nop`, `Unknown` | no register change |
+| `IndirectJump`, `Jump`, `CondJump`, `Return`, `ReturnValue`, `CondReturn`, `CondReturnValue`, `Nop`, `Unknown` | no register change |
+
+Register names are canonicalized to their 64-bit root before lookup
+(`canon_reg`), so `eax`/`ax`/`al` all read and write the `rax` cell; unknown
+names (ARM64, x86-32) map to themselves.
 
 Struct-field map (only when `state[base]` is in the table):
 
@@ -105,17 +116,22 @@ For null-deref precision we also need: "is register `R` known to be
 non-NULL at instruction `I`?". A compiler emits null checks as
 either `test R, R; je null_handler` or `cmp R, 0; je null_handler`.
 
-We record the following per block:
-- `null_eq_flag` — VReg flag-reg holding the result of "R == 0" test
-- `null_eq_subj` — the source-level VReg `R` being compared against 0
+A `Cmp` therefore returns a `FlagInference`, of which there are two kinds:
 
-When a `CondJump { cond, target, inverted }` reads a flag that is
-`null_eq_flag` for some `R`, we know:
+- `Null(NullEq)` — the flag register holds the result of an `R == 0` test, and
+  `NullEq` records which source register `R` was compared;
+- `Length(LengthCheck)` — a `len < K` (`Ult`) or `len <= K` (`Ule`) test with
+  `K > 0`, which implies SystemBuffer is non-NULL on the not-taken branch. A
+  length check thus feeds the *same* non-NULL set as an explicit null check;
+  there is no separate `guarded_by_length_check` output.
+
+When a `CondJump { cond, target, inverted }` reads a flag that carries a
+`Null` inference for some `R`, we know:
 - on the "taken" branch (target), `R == 0` (if `!inverted`) or `R != 0` (if `inverted`)
 - on the "fall-through" branch, the opposite
 
-We attach this fact to the successor block's IN: a side table
-`nonnull_in: HashSet<VReg>` per block. The meet for this set is
+We attach this fact to the successor block's IN: a per-block
+`NonNull = BTreeSet<String>` of canonical register names. The meet for this set is
 intersection (a register is known-nonnull on entry iff it's nonnull
 on *every* incoming edge).
 
@@ -129,44 +145,49 @@ block before the deref).
 `Vec<TaintFinding>` where each:
 
 ```rust
-struct TaintFinding {
-    deref_va: u64,           // VA of the Load/Store op
-    block_va: u64,           // VA of the containing block start
-    base_reg: String,        // physical register name at deref
-    base_kind: Taint,        // SystemBuffer / UserBuffer / Type3InputBuffer
-    disp: i64,
-    access_width: u8,
-    access: Access,          // Read | Write
-    guarded_by_nullcheck: bool,
-    guarded_by_length_check: bool,
+pub struct TaintFinding {
+    pub deref_va: u64,             // VA of the Load/Store op
+    pub block_va: u64,             // VA of the containing block start
+    pub base_reg: String,          // physical register name at the deref
+    pub base_kind: Taint,          // SystemBuffer / UserBuffer / Type3InputBuffer / …
+    pub disp: i64,
+    pub access_width: u8,          // 1, 2, 4 or 8
+    pub access: Access,            // Read | Write
+    pub guarded_by_nullcheck: bool,
 }
 ```
 
-The detector layer in Python filters this list by
-`base_kind ∈ {SystemBuffer, UserBuffer, Type3InputBuffer} ∧ !guarded`.
+A consumer filters by `base_kind ∈ {SystemBuffer, UserBuffer,
+Type3InputBuffer} ∧ !guarded_by_nullcheck`.
 
-## Python API
+## Rust API
 
-```python
-import glaurung as g
-findings = g.analysis.ioctl_taint(path, entry_va)
-# -> list[dict] with the fields above
+```rust
+pub fn analyze(lf: &LlirFunction) -> IoctlTaintResult
 ```
 
-## Validation criteria
+```rust
+pub struct IoctlTaintResult {
+    pub findings: Vec<TaintFinding>,   // IRP-derived accesses, in deref-VA order
+    pub block_in: BTreeMap<u64, State>, // per-block IN state, for follow-up detectors
+    pub dispatcher_state: State,        // seed for orphan (jump-table) case bodies
+}
+```
 
-A v6 detector built on this primitive must:
+`block_in` is exposed so a detector that needs register provenance at a
+particular block head does not have to re-run the analysis, and
+`dispatcher_state` is the heuristically chosen state used to seed jump-table
+case bodies that no CFG edge reaches.
 
-1. **Catch** every site in `findings/.../sweep-2026-05-25-ranked.json`
-   marked as confirmed TP: NDKPing.sys (6), usbprint.sys (3 public),
-   amd64_libusb0.sys (≥10 of the 17 focal).
-2. **Drop** the FP clusters in: xboxgip.sys sub_1400045e0,
-   Classpnp.sys ClassDeviceControl, fltMgr.sys sub_18005dcb0,
-   parport.sys sub_1c000a9b4, stream.sys sub_1c0016c40, rdpdr.sys
-   sub_140024190 — these should drop to 0–2 findings (from 80 / 62 /
-   58 / 20 / 1 / 3 — only the rdpdr 3 was already low).
-3. Run end-to-end on the 402-driver corpus in under 5 minutes (vs
-   v5's ~10 minutes).
+**There is no Python binding.** The pass is Rust-only; `glaurung.analysis`
+exposes `ioctl_surface_map_bytes` / `ioctl_surface_map_path`, which are a
+different, coarser surface. The consumer inside this repository is
+`src/symbolic/ioctl.rs`, which reuses the same IRP offsets and dispatch ABI and
+then *confirms* what this pass nominates — see
+[`execution-engine.md`](execution-engine.md).
+
+Verified with `rg -n 'pub fn analyze|pub struct (TaintFinding|IoctlTaintResult)|guarded_by' src/analysis/ioctl_taint.rs`
+and `rg -n 'ioctl_taint' src/python_bindings python/glaurung` (no hits).
 
 ## Not in scope (v1)
 
@@ -174,5 +195,8 @@ A v6 detector built on this primitive must:
 - Indirect calls.
 - Anything beyond x86-64. The lifter supports x86 and ARM64; null
   deref on ARM64 drivers can come later.
-- Other detector classes (double-fetch, arbitrary-RW, probe-bypass)
-  — those reuse the same primitive and ship in later phases.
+- Other detector classes (double-fetch, arbitrary-RW, probe-bypass) — those
+  reuse the same primitive, and the ones that shipped did so on the *symbolic*
+  engine (`src/symbolic/ioctl.rs`), not on this pass.
+- Length-aware bounds checking. A `LengthCheck` here only implies non-NULL; it
+  does not compare an access against `InputBufferLength`/`OutputBufferLength`.

@@ -1,332 +1,53 @@
-# Glaurung Decompiler Architecture
+# Decompiler output format
 
 > **Kind:** reference · **Status:** maintained
 
-Current evidence and migration decisions:
+What `glaurung decompile` emits, and what the deliberate absences mean. For how
+the output is produced, see
+[`../architecture/decompiler-pipeline.md`](../architecture/decompiler-pipeline.md).
 
-- [2026-08-06 execution diary](../history/decompiler-checkpoints-2026-07/2026-08-06-architecture-decbench-execution-diary.md)
-- [2026-08-06 ranked rearchitecture plan](../history/design/plans-superseded/decompiler-rearchitecture-2026-08-06.md)
-- [Decompiler middle architecture](../history/design/plans-superseded/decompiler-middle-architecture.md)
-
-## Overview
-
-Glaurung's decompiler transforms low-level machine code, bytecode, and intermediate representations into high-level source code. This document details our multi-stage decompilation pipeline, supported languages, and integration strategies.
-
-## Decompilation Philosophy
-
-1. **Correctness over Readability**: Preserve semantics first, optimize for human readability second
-2. **Multi-Level IR**: Progressive lifting through increasingly abstract representations
-3. **Pattern Recognition**: Identify and reconstruct high-level constructs
-4. **AI-Assisted Recovery**: Leverage LLMs for variable naming and structure inference
-5. **Incremental Refinement**: Support iterative improvement of decompiled code
-
-## Decompilation Pipeline
+## The command
 
 ```
-┌──────────────┐
-│ Binary/Bytecode │
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│ Disassembly  │ ← Stage 1: Instruction Decoding
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│ Low-Level IR │ ← Stage 2: Initial Lifting
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│ Mid-Level IR │ ← Stage 3: SSA Form
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│ High-Level IR│ ← Stage 4: Type Recovery
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│Control Flow  │ ← Stage 5: Structure Recovery
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│ AST Generation│ ← Stage 6: Syntax Tree
-└──────┬───────┘
-       ▼
-┌──────────────┐
-│Source Code   │ ← Stage 7: Code Generation
-└──────────────┘
+glaurung decompile <path> [--format plain|rich|json|jsonl] [--json]
 ```
 
-## Supported Decompilation Targets
+`--format` and `--json` come from the shared CLI base
+(`python/glaurung/cli/commands/base.py`); the rest are
+`decompile`'s own (`python/glaurung/cli/commands/decompile.py`):
 
-### Tier 1: Production-Ready Native Code
+| flag | effect |
+|---|---|
+| `--func VA\|name` | one function. Hex, decimal, or a name resolved against analysis. Stripped binaries only have `sub_<VA>` names, so a VA is preferred. Default: the detected entry point |
+| `--all` | up to `--limit` discovered functions |
+| `--vas VAS\|@FILE\|-` | exactly these entry VAs, in one analysis pass. Inline list, a file, or stdin; `#` comments allowed. Emits a JSON list. Intended for batch harnesses that already know their targets — `@FILE` and `-` carry no argv length bound |
+| `--limit N` | max functions for `--all` (default 8) |
+| `--no-types` | disable the type-annotation pass |
+| `--timeout-ms`, `--max-blocks`, `--max-instructions` | per-function budgets; default to the analysis config |
+| `--range-start VA`, `--range-end VA` | explicit `[start, end)` range-seeded decompile |
+| `--style plain\|c\|decbench` | see below |
+| `--pdb-cache DIR` | Microsoft-style PDB cache for PE/PDB public function names |
+| `--cache-dir DIR` | persistent cache for single-function output, keyed by (version, sha256, VA, flags). Falls back to `$GLAURUNG_CACHE_DIR`. Append-only |
+| `--db FILE` | a `.glaurung` project. Names recorded there (analyst rename, DWARF, FLIRT) are applied at the definition **and** at every call site. Without it this command is blind to the project, so a renamed function still prints as `sub_<hex>` |
+| `--analysis-config FILE` | Windows analysis config YAML/JSON. Defaults to `.glaurung/windows-analysis.yaml` or `$GLAURUNG_WINDOWS_ANALYSIS_CONFIG` |
 
-| Source | Target Language | Decompiler | Quality | Notes |
-|--------|----------------|------------|---------|-------|
-| **x86/x64** | C/C++ | Ghidra, Reko, B2R2 | ⭐⭐⭐⭐ | Full support, type recovery |
-| **ARM/AArch64** | C/C++ | Ghidra, RetDec | ⭐⭐⭐⭐ | Good struct reconstruction |
-| **MIPS** | C | Ghidra, Reko | ⭐⭐⭐ | Basic flow recovery |
-| **PowerPC** | C | Ghidra | ⭐⭐⭐ | Limited type inference |
-| **RISC-V** | C | Ghidra | ⭐⭐ | Experimental |
-| **WebAssembly** | C/Rust | wasm-decompile | ⭐⭐⭐⭐ | Excellent recovery |
+There is no engine selection flag. Glaurung has one decompiler.
 
-### Tier 2: Bytecode Languages
+### Styles
 
-| Platform | Target | Decompiler | Quality | Features |
-|----------|--------|------------|---------|----------|
-| **Java** | Java | Fernflower, CFR, Procyon | ⭐⭐⭐⭐⭐ | Near-perfect recovery |
-| **.NET/C#** | C#, VB.NET, F# | ILSpy, dnSpy | ⭐⭐⭐⭐⭐ | Source-level debugging |
-| **Python** | Python | uncompyle6, pycdc, decompyle3 | ⭐⭐⭐⭐ | Good for 3.8+ |
-| **Lua** | Lua | luadec, unluac | ⭐⭐⭐ | Version-specific |
-| **Flash** | ActionScript | JPEXS, RABCDAsm | ⭐⭐⭐ | AS2/AS3 support |
-| **Dalvik** | Java | jadx, dex2jar | ⭐⭐⭐⭐ | Android APK support |
+| `--style` | output |
+|---|---|
+| `plain` (default) | register-level detail, `%`-prefixed names, type annotations |
+| `c` | `%` prefixes and annotations stripped — a closer-to-C view |
+| `decbench` | parseable C: a real `long name(long arg0, …)` signature with declared locals, for external tooling that parses the output as C |
 
-### Tier 3: Specialized Formats
+`decbench` is a behaviour fork, not a formatting switch: it is the only style
+that turns on DWARF output contracts, the DWARF type environment, the program
+environment, and semantic prototype recovery.
 
-| Format | Target | Tool | Quality | Use Case |
-|--------|--------|------|---------|----------|
-| **LLVM IR** | C/C++ | llvm-cbe | ⭐⭐⭐ | Compiler research |
-| **SPIR-V** | GLSL/HLSL | SPIRV-Cross | ⭐⭐⭐⭐ | Shader analysis |
-| **CUDA PTX** | CUDA C | - | ⭐⭐ | GPU kernel recovery |
-| **Verilog** | C | Verilator | ⭐⭐⭐ | Hardware → Software |
+## Structured JSON
 
-## Core Components
-
-### 1. Intermediate Representations (IR)
-
-#### Low-Level IR (LLIR)
-```rust
-pub enum LowLevelIR {
-    Load { dst: Reg, src: Mem },
-    Store { dst: Mem, src: Reg },
-    BinOp { op: Op, dst: Reg, lhs: Val, rhs: Val },
-    Jump { target: Label },
-    Call { func: Addr, args: Vec<Val> },
-}
-```
-
-#### Mid-Level IR (MLIR) - SSA Form
-```rust
-pub struct SSAValue {
-    id: ValueId,
-    ty: Type,
-    def: Definition,
-    uses: Vec<UseRef>,
-}
-
-pub enum Definition {
-    Phi(Vec<(BlockId, ValueId)>),
-    Operation(OpCode, Vec<ValueId>),
-    Constant(Value),
-}
-```
-
-#### High-Level IR (HLIR) - Typed
-```rust
-pub enum HighLevelExpr {
-    Variable { name: String, ty: Type },
-    FieldAccess { obj: Box<Expr>, field: String },
-    ArrayIndex { arr: Box<Expr>, idx: Box<Expr> },
-    FunctionCall { name: String, args: Vec<Expr> },
-    Cast { expr: Box<Expr>, to: Type },
-}
-```
-
-### 2. Type Recovery System
-
-```rust
-pub struct TypeInference {
-    constraints: Vec<TypeConstraint>,
-    solutions: HashMap<VarId, Type>,
-}
-
-pub enum TypeConstraint {
-    Equal(TypeVar, TypeVar),
-    Subtype(TypeVar, TypeVar),
-    HasField(TypeVar, String, TypeVar),
-    Callable(TypeVar, Vec<TypeVar>, TypeVar),
-}
-```
-
-### 3. Control Flow Reconstruction
-
-#### Pattern Matching for High-Level Constructs
-
-| Pattern | Assembly Signature | Recovered Construct |
-|---------|-------------------|-------------------|
-| **If-Then** | `cmp; jz label` | `if (condition) { ... }` |
-| **If-Else** | `cmp; jz else; ...; jmp end; else:` | `if (...) { ... } else { ... }` |
-| **While** | `loop: cmp; jz end; ...; jmp loop` | `while (condition) { ... }` |
-| **For** | `init; loop: cmp; jz end; ...; inc; jmp loop` | `for (init; cond; inc) { ... }` |
-| **Switch** | `jmp table[reg]` | `switch (expr) { case ...: }` |
-| **Try-Catch** | Exception handler tables | `try { ... } catch { ... }` |
-
-### 4. Data Structure Recovery
-
-#### Struct Identification
-```rust
-// Heuristics for struct recovery
-pub struct StructRecovery {
-    access_patterns: Vec<MemoryAccess>,
-    field_offsets: BTreeMap<i64, FieldInfo>,
-    vtable_refs: Option<Address>,
-}
-
-impl StructRecovery {
-    fn infer_struct(&self) -> RecoveredStruct {
-        // 1. Group by base pointer
-        // 2. Identify consistent offsets
-        // 3. Infer field types from usage
-        // 4. Detect inheritance via vtables
-    }
-}
-```
-
-#### Array and String Detection
-- Constant stride access → Array
-- Null-terminated reads → C string
-- Length-prefixed → Pascal string
-- UTF-16 patterns → Wide string
-
-### 5. AI-Assisted Enhancement
-
-```python
-class AIDecompilerEnhancer:
-    def suggest_variable_names(self, context):
-        """Use LLM to suggest meaningful variable names"""
-        prompt = f"Given this decompiled function: {context}, suggest variable names"
-        return self.llm.complete(prompt)
-    
-    def identify_algorithms(self, ast):
-        """Recognize common algorithms and patterns"""
-        # MD5, SHA, sorting, searching, etc.
-        pass
-    
-    def recover_comments(self, code):
-        """Generate explanatory comments"""
-        pass
-```
-
-## Decompiler Comparison
-
-### Native Code Decompilers
-
-| Tool | Languages | Strengths | Weaknesses | License |
-|------|-----------|-----------|------------|---------|
-| **Ghidra** | C/C++ | Extensive arch support, scriptable | Java-based, slow | Apache 2.0 |
-| **IDA Pro + Hex-Rays** | C/C++ | Industry standard, excellent output | Expensive, closed-source | Commercial |
-| **Reko** | C | Open-source, extensible | Limited arch support | GPL |
-| **RetDec** | C | Good LLVM integration | Incomplete type recovery | MIT |
-| **B2R2** | F# IR | Formal methods backing | Academic, less mature | MIT |
-| **Snowman** | C++ | Clean code output | Limited maintenance | GPL |
-
-### Bytecode Decompilers
-
-| Platform | Best Tool | Runner-ups | Notes |
-|----------|-----------|------------|-------|
-| **Java** | Fernflower | CFR, Procyon | IntelliJ uses Fernflower |
-| **.NET** | ILSpy | dnSpy, dotPeek | ILSpy most active |
-| **Python** | uncompyle6 | decompyle3, pycdc | Version-specific |
-| **Android** | JADX | dex2jar + JD-GUI | JADX is all-in-one |
-
-## Implementation Strategy
-
-### Phase 1: Foundation
-```rust
-// Core decompiler trait
-pub trait Decompiler {
-    type IR;
-    type AST;
-    
-    fn lift_to_ir(&self, asm: &[Instruction]) -> Self::IR;
-    fn analyze_ir(&mut self, ir: &Self::IR) -> AnalysisResults;
-    fn generate_ast(&self, ir: &Self::IR, analysis: &AnalysisResults) -> Self::AST;
-    fn emit_code(&self, ast: &Self::AST, lang: Language) -> String;
-}
-```
-
-### Phase 2: Multi-Engine Integration
-```rust
-pub struct UnifiedDecompiler {
-    engines: HashMap<Architecture, Box<dyn Decompiler>>,
-    config: DecompilerConfig,
-}
-
-impl UnifiedDecompiler {
-    pub fn decompile(&self, binary: &Binary) -> DecompiledProgram {
-        let engine = self.select_engine(&binary.architecture);
-        let ir = engine.lift_to_ir(&binary.instructions);
-        let enhanced_ir = self.apply_optimizations(ir);
-        engine.emit_code(enhanced_ir, self.config.target_language)
-    }
-}
-```
-
-### Phase 3: AI Integration
-```python
-class HybridDecompiler:
-    def __init__(self, traditional_engine, ai_model):
-        self.engine = traditional_engine
-        self.ai = ai_model
-    
-    def decompile(self, binary):
-        # Traditional decompilation
-        base_code = self.engine.decompile(binary)
-        
-        # AI enhancement
-        enhanced = self.ai.enhance(base_code, {
-            'suggest_names': True,
-            'add_comments': True,
-            'identify_patterns': True,
-            'recover_types': True
-        })
-        
-        return enhanced
-```
-
-## Advanced Features
-
-### 1. Incremental Decompilation
-- Decompile on-demand
-- Cache results
-- Update only changed regions
-
-### 2. Interactive Refinement
-- User-guided type hints
-- Manual struct definitions
-- Custom naming rules
-
-### 3. Cross-Reference Integration
-- Import/export tracking
-- Call graph analysis
-- Data flow visualization
-
-### 4. Optimization Detection
-```rust
-pub enum CompilerOptimization {
-    TailCallElimination,
-    LoopUnrolling,
-    InlinedFunction,
-    DeadCodeElimination,
-    StrengthReduction,
-}
-
-pub fn detect_optimizations(ir: &IR) -> Vec<CompilerOptimization> {
-    // Pattern matching for common optimizations
-}
-```
-
-### 5. Obfuscation Handling
-- Control flow flattening reversal
-- Opaque predicate removal
-- String decryption
-- VM-based protection unpacking
-
-## Output Formats
-
-### Structured JSON (`decompile --format json`)
-
-The machine-readable form, and the one an external consumer or benchmark
-harness should read. One object per function:
+`--format json` (or `--json`). One object per function:
 
 ```json
 {
@@ -344,236 +65,76 @@ harness should read. One object per function:
 }
 ```
 
-`variables` is the recovered inventory (`ir::recovered_variables`), reported only
-for names the render actually emitted — we never invent a variable from the C.
+`variables` is the recovered inventory (`src/ir/recovered_variables.rs`),
+reported only for names the render actually emitted — a variable is never
+invented from the C. Ordering is deterministic (parameters by ABI slot, then
+locals by name) so two identical decompilations cannot disagree.
 
-**`addresses` are the machine addresses the slot is read or written at**,
-ascending and deduplicated. **Empty means UNCLAIMED, never "there are none."**
-Three things follow from that, all deliberate:
+| field | meaning |
+|---|---|
+| `name` | the identifier as it appears in the rendered C |
+| `type` | the declared C type, or `"long"` when only the width is known (`RecoveredVariable::ctype`) |
+| `kind` | `"arg"` for an ABI parameter, `"stack"` for a promoted frame slot |
+| `arg_index` | zero-based ABI parameter position; `null` for a stack local |
+| `stack_offset` | signed frame displacement the slot was minted from, in the frame's own coordinate space; `null` for a parameter, and `null` for a local whose coordinate was withheld as ambiguous |
+| `size` | access width in bytes, when the promotion pass proved one |
+| `addresses` | machine addresses the slot is read or written at, ascending and deduplicated |
 
-* A **parameter carries none.** A register's live range is not a storage
-  coordinate, and deriving one needs liveness this join does not do.
-* A slot is silent wherever the coordinate the decompiler published is not the
-  coordinate the machine uses — an omitted frame pointer at `-O2`, or ARM32,
-  where the published frame is entry-relative while the machine addresses it
-  through a live register. Silence, never a wrong address.
-* An address can fall **outside `[entry_va, entry_va + size)`**. A function is
-  not always contiguous: `cpp_exception.cold` sits below its hot part. Those
-  addresses are correct; a consumer that clamps to the contiguous extent will
-  drop them.
+Top-level `size` and `variables` are additive: every previously emitted key keeps
+its name and meaning. Single-function mode (`--func` without `--vas`) goes
+through `decompile_at`, which does not return the inventory, so it emits
+`"size": null` and `"variables": []` — absent rather than claiming the function
+has no variables.
 
-There is deliberately **no line map** — no `{line → address}`. That needs
-AST-node-to-instruction lineage, which lowering discards (`lower_block` calls
-`lower_op(&ins.op, ..)` and drops `ins.va`). Per-variable addresses are a
-different problem and need no node identity at all; see
-`src/ir/variable_addresses.rs` for the join and its fail-closed rules.
+### `addresses`: empty means UNCLAIMED, never "there are none"
 
-Every emitted address is validated against an external disassembler — 8,441
-addresses across ELF, PE and Mach-O on x86-64, i386 and aarch64, checked by both
-`objdump` and `llvm-objdump`, with zero found to be anything other than a real
-instruction start accessing that slot.
+Three consequences, all deliberate. The rules and the measurements are in the
+module doc of `src/ir/variable_addresses.rs`.
 
-### C/C++ Output
-```c
-// Decompiled function with recovered types
-struct user_data {
-    int id;           // offset: 0x00
-    char name[256];   // offset: 0x04
-    float score;      // offset: 0x104
-};
+- **A parameter carries none.** A register's live range is not a storage
+  coordinate, and deriving one needs liveness this join deliberately does not do.
+- **A slot is silent wherever the published coordinate is not the coordinate the
+  machine uses.** Two configurations do this today: x86-64 at `-O2`, where gcc
+  omits the frame pointer and coordinates are `entry_rsp`-based while the machine
+  only ever names `rsp`; and ARM32, where locals sit at positive displacements
+  from `r7` while the published coordinates are entry-relative and negative.
+  Silence, never a wrong address — a plausible wrong address is worse than none,
+  because it is a real instruction start inside the function and so passes a
+  consumer's validator while mis-attributing the evidence.
+- **An address can fall outside `[entry_va, entry_va + size)`.** A function is not
+  always contiguous: `cpp_exception.cold` sits below its hot part. Those
+  addresses are correct — 2 of 6,726 over 250 fixture binaries — and a consumer
+  that clamps to the contiguous extent will drop them.
 
-int process_user(struct user_data* user) {
-    if (user->id < 0) {
-        return -1;  // Error: invalid ID
-    }
-    
-    user->score = calculate_score(user->name);
-    return 0;  // Success
-}
-```
+Every emitted address has been validated against an external disassembler as a
+real instruction start whose instruction accesses that displacement: **8,441
+addresses, zero wrong**, across ELF, PE and Mach-O on x86-64, i386 and aarch64,
+by both `objdump` and `llvm-objdump`. The per-corpus breakdown and the per-slot
+coverage rates are the table in `src/ir/variable_addresses.rs` (measured
+2026-08-29).
 
-### Python Output
-```python
-# Decompiled from bytecode
-def process_data(input_list):
-    """Recovered function processing data list"""
-    result = []
-    for item in input_list:
-        if isinstance(item, int):
-            result.append(item * 2)
-        else:
-            result.append(str(item).upper())
-    return result
-```
+### There is deliberately no line map
 
-### Pseudocode Output
-```
-FUNCTION process_packet(buffer, length):
-    IF length < HEADER_SIZE:
-        RETURN ERROR_TOO_SHORT
-    
-    header = CAST<PacketHeader>(buffer)
-    IF header.magic != EXPECTED_MAGIC:
-        RETURN ERROR_INVALID_MAGIC
-    
-    payload = buffer + HEADER_SIZE
-    RETURN handle_payload(payload, header.type)
-```
+No `{line → address}`. That needs AST-node-to-instruction lineage, which lowering
+discards: `lower_block` (`src/ir/ast/lower_conds.rs:280`) passes only `&ins.op`
+onward and drops `ins.va`, and `ast::Function` keeps `name`, `entry_va` and
+`body`.
 
-## Quality Metrics
+Per-variable addresses are a *different* problem and need no node identity at
+all — the join is on the frame coordinate, which both `stack_locals` and the LLIR
+still hold. Conflating the two is why the capability went unbuilt for as long as
+it did. dewolf and Reko emit this same shape, and DecBench's ingest supports it:
+variable addresses are filtered independently of line mappings and survive with
+none.
 
-### Decompilation Quality Assessment
-1. **Syntactic Correctness**: Does it compile?
-2. **Semantic Preservation**: Same behavior?
-3. **Readability Score**: Human assessment
-4. **Type Recovery Rate**: % of types recovered
-5. **Structure Recovery**: Loops, conditions identified
+## Stderr
 
-### Benchmarks
-| Metric | Target | Current |
-|--------|--------|---------|
-| Compilation Rate | 95% | 87% |
-| Semantic Accuracy | 99% | 94% |
-| Type Recovery | 80% | 72% |
-| Readability (1-10) | 7+ | 6.3 |
+`glaurung decompile` names on stderr any function that failed the pre-render
+definition-before-use check; stdout stays exactly the payload. `GLAURUNG_VERIFY_DEFS=1`
+additionally splices per-violation `// glaurung-verify:` comments into the body.
+It is opt-in because the decbench render is an artifact external tooling parses
+and scores. See
+[`../architecture/register-model.md`](../architecture/register-model.md).
 
-## Configuration
-
-Glaurung does not currently load the proposed `[decompiler]` TOML tables from
-earlier versions of this document, and the native CLI does not select Ghidra or
-Fernflower as engines. Configure each invocation with CLI flags:
-
-```bash
-uv run glaurung decompile BINARY \
-  --func main \
-  --style c \
-  --timeout-ms 5000 \
-  --max-blocks 10000 \
-  --max-instructions 100000
-```
-
-Use `--no-types` to disable type annotations, `--all --limit N` for a bounded
-multi-function run, or `--vas ...` for an explicit batch. Windows PE analysis
-can additionally load the shared YAML described in
-[`../../windows-port/windows-analysis-config.md`](windows-analysis-config.md)
-through `--analysis-config`. Run `uv run glaurung decompile --help` for the
-current options.
-
-## Testing and Validation
-
-### Round-Trip Testing
-```
-Source → Compile → Binary → Decompile → Source'
-Compare: Source ≈ Source'
-```
-
-### Differential Testing
-- Compare outputs from multiple decompilers
-- Identify consensus vs. divergence
-- Flag suspicious differences
-
-### Corpus Testing
-- Known binaries with source
-- Malware samples with reports
-- Obfuscated challenges
-
-## Integration Examples
-
-### Rust API
-```rust
-use glaurung::decompiler::{Decompiler, Language};
-
-let decompiler = Decompiler::new()
-    .architecture(Architecture::X86_64)
-    .language(Language::C)
-    .enable_type_recovery()
-    .build()?;
-
-let source = decompiler.decompile_function(&binary, function_addr)?;
-println!("{}", source);
-```
-
-### Python API
-```python
-import glaurung
-
-# Decompile entire binary
-decompiler = glaurung.Decompiler(
-    engine="ghidra",
-    target_language="c",
-    ai_enhance=True
-)
-
-program = decompiler.decompile_binary(binary_path)
-for function in program.functions:
-    print(f"// Function: {function.name}")
-    print(function.source_code)
-```
-
-### CLI Usage
-```bash
-# Basic decompilation
-glaurung decompile binary.exe -o source.c
-
-# With options
-glaurung decompile \
-    --engine ghidra \
-    --language cpp \
-    --types auto \
-    --ai-enhance \
-    --comments \
-    binary.exe
-```
-
-## Future Roadmap
-
-### 2025 Q1-Q2
-- [ ] Integrate Ghidra decompiler
-- [ ] Implement type inference engine
-- [ ] Add Rust output support
-
-### 2025 Q3-Q4
-- [ ] AI-powered variable naming
-- [ ] Automated algorithm recognition
-- [ ] Decompiler fuzzing framework
-
-### 2026+
-- [ ] Neural decompilation models
-- [ ] Quantum algorithm recovery
-- [ ] Cross-language translation
-
-## Research and References
-
-### Key Papers
-1. "A Principled Approach to Decompilation" (Cifuentes, 1994)
-2. "TIE: Principled Reverse Engineering of Types in Binary Programs" (Lee et al., 2011)
-3. "Decompilation of Binary Programs" (Van Emmerik, 1994)
-4. "Using Recurrent Neural Networks for Decompilation" (Katz et al., 2018)
-5. "Phoenix: Towards Ultra-Low Overhead, Recoverable, and Correct Decompilation" (Chen et al., 2023)
-
-### Books
-- "Reversing: Secrets of Reverse Engineering" by Eldad Eilam
-- "The IDA Pro Book" by Chris Eagle
-- "Practical Binary Analysis" by Dennis Andriesse
-
-### Tools and Resources
-- [Ghidra Documentation](https://ghidra-sre.org/)
-- [RetDec Wiki](https://github.com/avast/retdec/wiki)
-- [Compiler Explorer](https://godbolt.org/) - Understanding compiler output
-- [Decompiler Explorer](https://dogbolt.org/) - Compare decompilers
-
-## Contributing
-
-### Areas Needing Work
-1. **RISC-V Decompilation**: Needs lifting rules
-2. **Go Binary Support**: Unique calling conventions
-3. **Rust Binary Support**: Trait recovery
-4. **Swift Support**: Objective-C bridge handling
-5. **Obfuscation Removal**: Advanced techniques
-
-### How to Contribute
-1. Implement new architecture support
-2. Improve type inference algorithms
-3. Add pattern recognition rules
-4. Contribute test cases
-5. Document decompilation techniques
+A discovery budget that fired produces a rendered incompleteness note ahead of
+the body, so truncation is visible in the output rather than silent.

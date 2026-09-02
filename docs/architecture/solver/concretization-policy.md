@@ -1,6 +1,15 @@
-# 08 - Concretization policy
+# Concretization policy
 
 > **Kind:** architecture · **Status:** maintained
+
+> "A0" below is the workstream name for the extraction of this seam out of
+> `explore.rs`; it is decided by
+> [`solver-026`](../../decisions/solver-026-concretization-as-a-policy.md), and
+> A2 (deferred symbolic memory) and A3 (forking over a boundary set) are the two
+> follow-ons it deliberately did not do. The commits are `07ea0c16`
+> (behaviour-preserving policy seam), `845239f0` (taint provenance preserved
+> through symbolic loads) and `931d8a84` (findings partitioned by confidence),
+> all on `master`.
 
 ## Why this is one policy seam
 
@@ -61,7 +70,7 @@ A0 must preserve the default explorer behavior. The contract tests pin:
 - the historical representative trace ID
   `glaurung-representative-value-v1`;
 - every legacy canonical-policy alias and stable policy ID;
-- the exact complementary site-hash schedule used by ADR-0239;
+- the exact complementary site-hash schedule of the two `site-hash-{0,1}` policies;
 - read-only representative selection versus address equality binding;
 - fail-closed behavior for infeasible paths and unsupported widths.
 
@@ -81,7 +90,7 @@ accepted correction at `845239f` intentionally changes taint labels while
 leaving the A0 selection seam intact. The two raw Z3-only rows are now
 `**Arg0`, and both authority outputs have zero high-confidence findings on this
 15-function slice. See
-[`09-taint-provenance-and-finding-labels.md`](taint-provenance.md).
+[`taint-provenance.md`](taint-provenance.md).
 Pre-correction ordered hashes remain valid A0 compatibility evidence but are
 not the baseline for a finding-coverage claim.
 
@@ -91,22 +100,19 @@ preferred and legacy variables separately. Both emit identical finding output,
 unsupported, unknown, no-solver, error, or final-UNSAT choice. Only elapsed
 solver time differs, as expected.
 
-## Validation status
+## How it is gated
 
-- All six policy-contract and all 17 explorer tests pass with
-  `solver-axeyum`.
-- `cargo check --features solver-z3,solver-axeyum --all-targets` passes.
-- `cargo doc --features solver-axeyum --no-deps` completes; its 23 warnings are
-  inherited broken/private-link and HTML-tag warnings outside this module.
-- The complete `cargo test --features solver-axeyum --no-fail-fast` run passes
-  977/979 library tests, every integration test, and doctests. The two failures
-  are existing WinAPI prototype-rendering assertions and reproduce unchanged on
-  untouched base `e98c090`.
-- The new module passes a direct `rustfmt --check`, and a filtered strict Clippy
-  run reports no diagnostic in `concretization.rs` or the changed explorer
-  seam. Repository-wide format and `-D warnings` gates remain red on the
-  historical base because of unrelated pre-existing drift; A0 does not rewrite
-  those files merely to create a green-looking branch.
+The contract lives in `src/symbolic/concretization.rs` and is covered by its own
+policy-contract tests plus the explorer tests that exercise both seams; both run
+under any `solver-*` feature. `scripts/feature-build-gate.sh` type-checks the
+`solver-z3,solver-axeyum` lane the sweep needs, and the CI
+`cargo test --features symbolic` lane compiles the module on every push.
+
+A measurement made with this seam is only comparable when the *whole* identity
+matches: policy id, trace id, driver, fixed-work boundary, and the ordered
+finding hash. That is the point of pinning the trace ids above — two runs whose
+selection differed are supposed to be distinguishable from two runs whose
+*engine* differed.
 
 ## What A0 does not claim
 

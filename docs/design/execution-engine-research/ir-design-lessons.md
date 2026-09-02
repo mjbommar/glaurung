@@ -140,6 +140,29 @@ x86 flags) live in the lifter only.
 - **P0-f** `endian` on `MemOp`; width authoritative.
 - **P1**  The `Domain` trait + interpreter written once over it.
 
+### What was adopted, and the one that was not
+
+**P0-b, P0-c, P0-e, P0-f and P1 all shipped**: `ZExt`/`SExt`/`Trunc`/`Extract`/
+`Concat` are real `Op` variants, `Op::Intrinsic { name, ins, outs, reads_mem,
+writes_mem }` carries the footprint (with `Op::Unknown` retained only as a
+deprecated alias), flags are condition-code virtual registers rather than raw
+EFLAGS bits, and the `Domain` trait is the keystone of `src/exec`.
+
+**P0-a's concrete form was rejected.** The recommendation was a typed
+`Const { value, width }`, and `src/ir/types.rs` still reads:
+
+```rust
+pub enum Value { Reg(VReg), Const(i64), Addr(u64) }
+```
+
+Width lives on the `VReg` and is derived from an instruction's `dst`, not stored
+on every `Bin`/`Un`/`Cmp` node — decided during Phase 0 and never revisited. The
+*principle* held (every operation is modular at an explicit width, and the
+`Domain` trait takes that width as a parameter on every method); only the
+representation differs. **P0-d** likewise held in spirit and not in form: the
+register file is flat and canonical, but the x86-64 partial-write rules live in
+`src/exec/state.rs` where the layout is, rather than being encoded by the lifter.
+
 ## Sources
 
 - [angr — VEX IR](https://docs.angr.io/advanced-topics/ir), [claripy backends](https://docs.angr.io/en/latest/advanced-topics/claripy.html)

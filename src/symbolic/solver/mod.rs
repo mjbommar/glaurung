@@ -1270,8 +1270,8 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
         }
     }
 
-    // Backend priority (ADR-002): explicitly-enabled z3 (perf) > axeyum
-    // (pure-Rust default) > pipe (zero-dep fallback).
+    // Backend priority: z3 (perf) > axeyum (pure-Rust) > pipe (zero-dep). See
+    // docs/architecture/solver-backends.md; decisions/solver-002 is superseded.
     let __solve_start = std::time::Instant::now();
     #[cfg(feature = "solver-z3")]
     let (result, axeyum_execution) = (z3_backend::Z3Solver::new().check(pool, asserts), None);

@@ -3,15 +3,22 @@
 > **Kind:** design · **Status:** proposed
 
 Condensed findings from the literature and existing frameworks, gathered during
-the 2026-06 design effort. These inform every architecture and phase decision.
-Each file states **what the best designs do** and **the tradeoff**, with sources.
+the 2026-06 design effort. Each file states **what the best designs do** and
+**the trade-off**, with sources.
+
+These are kept as *research*, not as architecture: they describe a field, and
+several of their recommendations were rejected in implementation. Where a file
+made a call that did not survive, it now says so in place rather than being
+quietly corrected. For what was actually built, read
+[`architecture/execution-engine.md`](../../architecture/execution-engine.md) and
+[`architecture/solver-backends.md`](../../architecture/solver-backends.md).
 
 | File | Topic | One-line takeaway |
 |---|---|---|
 | [`ir-design-lessons.md`](ir-design-lessons.md) | How VEX/P-code/BIL/BNIL/ESIL/Miasm/Triton make an IR *executable* | Totality + per-value bit width + one interpreter over many value backends |
 | [`symbolic-execution-survey.md`](symbolic-execution-survey.md) | angr/KLEE/Triton/QSYM/SymCC/veritesting/memory models | Concretize + concolic + cache + direct toward the sink; completeness is a trap |
 | [`emulator-engineering.md`](emulator-engineering.md) | QEMU TCG / Unicorn / bochscpu / snapshot fuzzers | Cached IR interpreter + dirty-page COW snapshots + small-core/helper split |
-| [`smt-backends.md`](smt-backends.md) | Z3 / Bitwuzla / cvc5 / easy-smt for QF_ABV | Abstract behind a `Solver` trait; pipe first, native optional; default Bitwuzla, Z3 fallback |
+| [`smt-backends.md`](smt-backends.md) | Z3 / Bitwuzla / cvc5 / axeyum for QF_BV | Abstract behind a `Solver` trait, and gate every backend by feature. The survey's pipe-first recommendation was reversed: what ships is native z3 preferred, pure-Rust axeyum second, pipe last |
 
 ## The three cross-cutting conclusions
 
@@ -24,6 +31,9 @@ Each file states **what the best designs do** and **the tradeoff**, with sources
    validated by prototype.)
 
 3. **Tractability beats completeness on real binaries.** The engines that work on
-   malware/drivers aggressively concretize, run concolically, cache solver
-   queries, and direct search toward targets. Each is a deliberate, controlled
-   surrender of soundness. (→ ADR-0004, ADR-0006.)
+   malware and drivers aggressively concretize, cache solver queries, and bound
+   their own exploration. Each is a deliberate, controlled surrender of
+   soundness. (→ [`exec-0004`](../../decisions/exec-0004-symbolic-memory.md),
+   [`exec-0006`](../../decisions/exec-0006-execution-mode.md).) Two of the four
+   levers this conclusion names were *not* adopted: the engine is not concolic
+   and its search is not directed. Both decision records say why.

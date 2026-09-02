@@ -2,7 +2,7 @@
 
 > **Kind:** decision · **Status:** maintained
 
-**Status:** Accepted · **Date:** 2026-06
+**ADR status:** Accepted · **Date:** 2026-06
 
 ## Context
 
@@ -35,8 +35,10 @@ optionally add an SSA tier *above* it later (the Binary Ninja LLIL→MLIL split)
    reads, and no residual `Unknown` — run over the whole sample corpus.
 4. The existing Rust + Python test suite is the migration safety net.
 
-→ [`../02-architecture/executable-llir.md`](../history/execution-engine-2026-06/architecture/executable-llir.md),
-[`../03-phases/phase-0-ir-hardening.md`](../history/execution-engine-2026-06/phases/phase-0-ir-hardening.md).
+→ [`history/…/architecture/executable-llir.md`](../history/execution-engine-2026-06/architecture/executable-llir.md),
+[`history/…/phases/phase-0-ir-hardening.md`](../history/execution-engine-2026-06/phases/phase-0-ir-hardening.md).
+This ADR is `exec-0002`; the unrelated `solver-002` in the solver series is a
+different decision (see [`README.md`](README.md)).
 
 ## Consequences
 

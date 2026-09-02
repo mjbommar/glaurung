@@ -419,7 +419,7 @@ refresh instruction instead of producing phantom regressions.
 tools/stripped_differential.py                          # whole corpus
 tools/stripped_differential.py --fixture 08_indirect_dispatch --explain
 tools/dectest.py 08_indirect_dispatch:gcc:O2strip:dispatch --show
-tools/dectest.py @exceptions --stripped
+tools/dectest.py @dispatch-forms --stripped
 ```
 
 `fixture_harness.compile_fixture` compiles **every** lane with `-g`,
@@ -874,6 +874,44 @@ Debian/Ubuntu:
 ```bash
 sudo apt install gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf gcc-multilib
 ```
+
+## What execution-differential testing cannot see
+
+`tests/decompiler_fixtures/` judges a cell by **executing** the recovered C
+against the original and diffing return values and mutated buffers. That is a
+strong contract, and it is blind to exactly one thing: **structure**.
+
+Goto soup is faithful. Every arm is present, every edge is real, the C compiles
+and returns the right answer for every input — it is simply not the source's
+control flow. On the scored DecBench sample set it has been the largest single
+defect class by function count, and for a long time **not one cell in the whole
+fixture corpus could fail because of it**: the structural predicates were
+`indirect_call`, `memory_store`, `nonempty`, `head_tested_while`, `for_loop` and
+`void_signature`, and none of them is about dispatch or about goto.
+
+That is why the structural lane exists alongside the differential, and why it
+grew two predicates (`tests/decompiler_fixtures/structural.py`, `PREDICATES`):
+
+* **`switch`** — a `switch` statement survived into the rendered C.
+  Deliberately weak: it asks whether the renderer emitted the construct, not
+  whether the arms are right, because `04_switch_shapes` plus the manifest's
+  `arg_values` already drive the exact case constants.
+* **`goto_free`** — no `goto` survived. Phrased as an *absence* on purpose: the
+  structural map records booleans, so `{"goto_free": True}` reads as the property
+  being asserted. A count would be the wrong shape — it would need refreshing
+  every time a lane's rendering shifted by one label. A `goto` is not itself a
+  defect (`102_duffs_device`, `103_computed_goto` and `105_goto_ladder` are
+  *about* goto); the predicate exists so a fixture whose source has none can say
+  so.
+
+Both are additive: `gen_structural_baseline.py` evaluates only the predicates a
+fixture's `STRUCTURAL` entry declares, so adding one changes no existing fixture.
+
+The general rule is the one to carry: **a lane proves the property it measures
+and nothing else.** A green differential means no behavioural regression, not
+"no regression". Deciding which lane can see a change is part of making the
+change — see the gate list above, and the two-property fail-closed rule in
+[The full gate](#the-full-gate).
 
 ## Refreshing baselines
 

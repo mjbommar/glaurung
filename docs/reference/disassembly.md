@@ -110,11 +110,10 @@ Do not use exit zero alone as proof that meaningful code was decoded.
 
 ## Related workflows
 
-- Use [`glaurung cfg`](../README.md) for function discovery and control-flow
-  analysis.
-- Use the [decompiler documentation](../history/decompiler-checkpoints-2026-07) for pseudocode and the
-  LLIR/SSA/AST pipeline.
-- Use the [triage guide](../history/triage-2025) to establish format and architecture
+- Use `glaurung cfg` for function discovery and control-flow analysis.
+- Use the [decompiler output format](decompiler-output-format.md) reference for
+  pseudocode and the LLIR/SSA/AST pipeline's JSON contract.
+- Use the [triage guide](../guides/triage.md) to establish format and architecture
   before overriding either.
 
 Run `uv run glaurung disasm --help` for the current accepted values.

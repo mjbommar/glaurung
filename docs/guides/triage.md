@@ -200,6 +200,8 @@ test.
 - [CLI tour](../tutorial/01-getting-started/cli-tour.md)
 - [Packer walkthrough](../tutorial/03-walkthroughs/06-upx-packed-binary.md)
 
-The other files in this directory are historical proposals and implementation
-plans. Their status banners identify them as design records rather than current
-operator contracts.
+Earlier triage proposals and implementation plans live in
+[`docs/history/triage-2025/`](../history/triage-2025/) and
+[`docs/design/signature-tiers.md`](../design/signature-tiers.md); their status
+banners identify them as design records rather than current operator
+contracts.
