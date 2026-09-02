@@ -152,8 +152,15 @@ scheduled independently of the longer pipeline/SSA migrations.
   standalone `ty` retry could not acquire or install its executable under the
   restricted runner, so that environment-limited tail check is not claimed as
   fresh evidence.
-- [ ] **WP1 bounded MIR trial.** Two-day hard cap; no competing goto-aware
-  definedness implementation until the trial records a keep/delete verdict.
+- [x] **WP1 bounded MIR trial.** The temporary read-only production consumer
+  correctly detected the synthetic one-predecessor definition hole and gave
+  complete clean proofs for 3,368 wide-switch uses and 144 gcc-O2 Duff uses,
+  but the scalar-MIR path cost approximately +19.5% median wall time and
+  +4,196 KiB median RSS in the bounded alternating A/B probe. That fails the
+  hard less-than-10% rule. The consumer and its tests were removed, no scored
+  output changed, and competing goto-aware implementations are unblocked.
+  Full population coverage was not claimed after the hard performance failure.
+  See the [trial report](../review/decompiler-2026-09-02/mir-trial-results.md).
 - [~] **WP4 total structurer in shadow mode.** The bounded `structure_v2/`
   boundary and `structure-v2-shadow` feature now observe the exact typed CFG
   used by production v1. The first condition-DAG slice is deterministic,
@@ -381,7 +388,13 @@ not gating.** Diary Entries 55-62.
   that bails on flow it cannot linearize. First step: build MIR unconditionally
   in `prepare_llir_for_lowering` and carry it on `PreparedLlir` — no consumer can
   migrate to an artifact that is never computed. The measured cost of doing so is
-  +13% on a whole-binary decompile, which is the real decision.
+  +13% on a whole-binary decompile, which was the original warning. The bounded
+  2026-09-02 WP1 consumer trial subsequently failed the plan's hard performance
+  rule at approximately +19.5% even after limiting construction to scalar MIR.
+  It found no unique issue in two real-binary probes, so the temporary consumer
+  was removed. MIR remains non-authoritative; selective substrate deletion is
+  deferred to WP10 because its verifier, object, and type-join tests retain
+  independent responsibilities. See the [WP1 evidence](../review/decompiler-2026-09-02/mir-trial-results.md).
 - [ ] The production aggregate/type consumers still depend on AST-era adapters.
   Audited 2026-08-15: 7 consumers on the adapter, 0 on MIR.
   `memory_objects/ast.rs` describes itself as "Prepared-AST compatibility

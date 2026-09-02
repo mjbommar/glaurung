@@ -205,15 +205,18 @@ used-before-definition on goto-bearing functions currently skipped by
 
 ### Implementation sequence
 
-- [ ] RED: add a small goto-bearing fixture with a definition on only one
-  predecessor and prove the current structured walk declines it.
-- [ ] Expose a read-only MIR definedness result through the existing health
-  record. Do not modify pseudocode.
-- [ ] Record `analysis=MIR`, queried value, use site, predecessor evidence,
-  and completeness/decline reason.
-- [ ] Run over the deduplicated structure population and capture unique
-  findings, clean proofs, declines, wall time, and RSS.
-- [ ] Do not implement the recommendation 9 AST-label-graph alternative
+- [r] RED: a temporary small goto-bearing CFG with a definition on only one
+  predecessor proved that MIR reports the missing path while the structured
+  walk declines goto-bearing flow. The trial code was removed after rejection.
+- [r] A temporary read-only MIR result was exposed through the health record
+  without modifying pseudocode, then removed after rejection.
+- [r] The temporary record carried `analysis=MIR`, queried value, use site,
+  predecessor evidence, and completeness/decline reason.
+- [r] Two real-binary probes produced complete clean proofs, but the population
+  sweep was stopped after the hard performance criterion failed. The bounded
+  A/B evidence and its explicitly limited denominator are recorded in
+  `mir-trial-results.md`.
+- [x] Do not implement the recommendation 9 AST-label-graph alternative
   during this trial.
 
 ### Decision rule
@@ -225,11 +228,11 @@ not cheaper to obtain from the authoritative SSA work in WP3.
 
 If rejected:
 
-- [ ] Record results in
+- [x] Record results in
   `docs/review/decompiler-2026-09-02/mir-trial-results.md`.
-- [ ] Inventory every production and test reference to `src/ir/mir/`,
+- [x] Inventory every production and test reference to `src/ir/mir/`,
   `src/ir/memory_ssa.rs`, and the MIR adapters in `src/ir/memory_objects/`.
-- [ ] Delete only after porting any independent LLIR invariant checks and
+- [~] Delete only after porting any independent LLIR invariant checks and
   demonstrating the `release` profile remains green.
 - [ ] Implement goto-aware definedness later over authoritative SSA or the AST
   label CFG, choosing the cheaper complete representation.
@@ -945,9 +948,12 @@ relevant ratchet's accepted-regression record.
 
 ### M2 — Dormant architecture decision made
 
-- [ ] WP1 complete.
-- [ ] MIR is either a named production authority or removed with retained
-  invariants ported.
+- [x] WP1 experiment complete: the production definedness consumer was
+  rejected on its hard performance criterion and removed; see
+  `mir-trial-results.md`.
+- [~] MIR is not a named production authority. Its production consumer was
+  removed, while responsibility-by-responsibility substrate deletion remains
+  a WP10 item because independent verifier/object/type tests are retained.
 
 ### M3 — One semantic pipeline
 
@@ -987,8 +993,9 @@ relevant ratchet's accepted-regression record.
 5. Start the WP4 shadow structurer and WP5 host jump-table vertical slice as
    soon as WP0 is complete; do not wait for WP2 or WP3.
 6. Land or reject WP7A's typed literal and range-check increments independently.
-7. Run the two-day MIR trial before implementing any alternative goto-aware
-   definedness checker.
+7. [x] The two-day MIR trial rejected production construction for the
+   definedness query at approximately +19.5% median wall time; its temporary
+   consumer was removed. Competing approaches are now unblocked.
 8. Begin WP2/WP3 as an independent architecture lane with the effort and
    conservative-invalidation rules above.
 
