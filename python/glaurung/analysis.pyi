@@ -17,10 +17,15 @@
 
 from glaurung._native import analysis as _mod
 
+CFR_SCHEME = _mod.CFR_SCHEME
+CfrSignature = _mod.CfrSignature
 analyze_functions_bytes = _mod.analyze_functions_bytes
 analyze_functions_bytes_with_stats = _mod.analyze_functions_bytes_with_stats
 analyze_functions_path = _mod.analyze_functions_path
 analyze_functions_path_with_stats = _mod.analyze_functions_path_with_stats
+cfr_distance = _mod.cfr_distance
+cfr_signatures_path = _mod.cfr_signatures_path
+cfr_similarity = _mod.cfr_similarity
 cil_methods_path = _mod.cil_methods_path
 data_xrefs_path = _mod.data_xrefs_path
 detect_entry_bytes = _mod.detect_entry_bytes
