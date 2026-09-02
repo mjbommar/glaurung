@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{LoopForest, RegionCandidate, Terminal, Transfer};
+use super::{LocalRegions, LoopForest, RegionCandidate, Terminal, Transfer};
 use crate::ir::structure::Cfg;
 
 /// A concrete disagreement between a candidate and its source CFG.
@@ -20,6 +20,7 @@ pub enum CandidateError {
 pub(super) fn verify_candidate(
     cfg: &Cfg,
     loops: &LoopForest,
+    locals: &LocalRegions,
     candidate: &RegionCandidate,
 ) -> Vec<CandidateError> {
     let mut errors = Vec::new();
@@ -47,7 +48,7 @@ pub(super) fn verify_candidate(
         for transfer in &block_region.transfers {
             let to = transfer_target(transfer);
             *actual_edges.entry((block, to)).or_default() += 1;
-            if !transfer_kind_is_valid(cfg, loops, block, transfer) {
+            if !transfer_kind_is_valid(cfg, loops, locals, block, transfer) {
                 errors.push(CandidateError::TransferKindInvalid { from: block, to });
             }
         }
@@ -84,39 +85,56 @@ pub(super) fn verify_candidate(
 
 fn transfer_target(transfer: &Transfer) -> usize {
     match transfer {
-        Transfer::Flow { to } | Transfer::Branch { to, .. } | Transfer::Break { to, .. } => *to,
+        Transfer::Flow { to }
+        | Transfer::Branch { to, .. }
+        | Transfer::Break { to, .. }
+        | Transfer::LocalGoto { to, .. } => *to,
         Transfer::Continue { header, .. } => *header,
     }
 }
 
-fn transfer_kind_is_valid(cfg: &Cfg, loops: &LoopForest, from: usize, transfer: &Transfer) -> bool {
+fn transfer_kind_is_valid(
+    cfg: &Cfg,
+    loops: &LoopForest,
+    locals: &LocalRegions,
+    from: usize,
+    transfer: &Transfer,
+) -> bool {
     let to = transfer_target(transfer);
     let conditional = cfg.cond_taken[from].filter(|_| cfg.succs[from].len() == 2);
     let expected_taken = conditional.map(|target| target == to);
     match transfer {
         Transfer::Continue { header, taken } => {
-            loops.is_back_edge(from, *header) && *taken == expected_taken
+            locals.region_for_block(*header).is_none()
+                && loops.is_back_edge(from, *header)
+                && *taken == expected_taken
         }
         Transfer::Break { header, to, taken } => {
-            loops.innermost_containing(from).is_some_and(|loop_info| {
-                loop_info.header == *header
-                    && loop_info.blocks.binary_search(to).is_err()
-                    && *taken == expected_taken
-            })
+            locals.region_for_block(*to).is_none()
+                && loops.innermost_containing(from).is_some_and(|loop_info| {
+                    loop_info.header == *header
+                        && loop_info.blocks.binary_search(to).is_err()
+                        && *taken == expected_taken
+                })
         }
         Transfer::Branch { taken, .. } => {
-            !loops.is_back_edge(from, to)
+            locals.region_for_block(to).is_none()
+                && !loops.is_back_edge(from, to)
                 && loops
                     .innermost_containing(from)
                     .is_none_or(|loop_info| loop_info.blocks.binary_search(&to).is_ok())
                 && expected_taken == Some(*taken)
         }
         Transfer::Flow { .. } => {
-            !loops.is_back_edge(from, to)
+            locals.region_for_block(to).is_none()
+                && !loops.is_back_edge(from, to)
                 && loops
                     .innermost_containing(from)
                     .is_none_or(|loop_info| loop_info.blocks.binary_search(&to).is_ok())
                 && expected_taken.is_none()
+        }
+        Transfer::LocalGoto { to, taken, region } => {
+            locals.region_for_block(*to) == Some(*region) && *taken == expected_taken
         }
     }
 }
@@ -153,11 +171,9 @@ mod tests {
             ],
         };
         let cfg = Cfg::from(&function, &compute_ssa(&function));
-        let errors = verify_candidate(
-            &cfg,
-            &LoopForest::from_cfg(&cfg),
-            &RegionCandidate { blocks: vec![] },
-        );
+        let loops = LoopForest::from_cfg(&cfg);
+        let locals = LocalRegions::from_cfg(&cfg, &loops);
+        let errors = verify_candidate(&cfg, &loops, &locals, &RegionCandidate { blocks: vec![] });
         assert!(errors.contains(&CandidateError::BlockMissing { block: 0 }));
         assert!(errors.contains(&CandidateError::BlockMissing { block: 1 }));
         assert!(errors.contains(&CandidateError::EdgeMissing { from: 0, to: 1 }));

@@ -28,6 +28,10 @@ import build_guard as BG  # ty: ignore[unresolved-import]
 
 STYLES = ("plain", "c", "decbench")
 
+HONEST_GOTO_PROPERTIES = {
+    "irreducible_scc_multiple_entries_no_dominating_header",
+}
+
 # `plain`/`c`:  function NAME @ 0xVA {      decbench:  // glaurung: NAME @ 0xVA
 _HDR = re.compile(
     r"(?m)^(?:// glaurung: (?P<a>\S+) @ 0x[0-9a-fA-F]+\s*$"
@@ -499,6 +503,7 @@ def structural_report(workdir: Path) -> dict:
                 }
 
     return {
+        "accepted_honest_goto": accepted_honest_gotos(readability),
         "closure": closure,
         "readability": readability,
         "effects": effects,
@@ -507,6 +512,31 @@ def structural_report(workdir: Path) -> dict:
         "gaps": sorted(gaps),
         "skipped": sorted(skipped),
     }
+
+
+def accepted_honest_gotos(
+    readability: dict[str, dict[str, int]],
+) -> dict[str, dict[str, int | str]]:
+    """Classify goto-bearing lanes backed by a reproducible CFG contract.
+
+    A manifest declaration alone is insufficient: a lane appears only while its
+    rendered output actually contains a goto.  The paired Rust shadow-structurer
+    test owns proof of the named CFG property.
+    """
+    accepted: dict[str, dict[str, int | str]] = {}
+    for key, counts in readability.items():
+        parts = key.split(":")
+        if len(parts) != 4:
+            continue
+        fixture, function, _cc, _opt = parts
+        property_name = M.HONEST_GOTO_CONTRACTS.get((fixture, function))
+        goto_count = counts.get("goto", 0)
+        if property_name in HONEST_GOTO_PROPERTIES and goto_count > 0:
+            accepted[key] = {
+                "goto_count": goto_count,
+                "property": property_name,
+            }
+    return accepted
 
 
 _SIG_CACHE: dict[str, dict] = {}

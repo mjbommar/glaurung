@@ -1,4 +1,22 @@
 {
+  "accepted_honest_goto": {
+    "211_irreducible_loops:two_entry_loop:clang:O0": {
+      "goto_count": 2,
+      "property": "irreducible_scc_multiple_entries_no_dominating_header"
+    },
+    "211_irreducible_loops:two_entry_loop:clang:O2": {
+      "goto_count": 2,
+      "property": "irreducible_scc_multiple_entries_no_dominating_header"
+    },
+    "211_irreducible_loops:two_entry_loop:gcc:O0": {
+      "goto_count": 2,
+      "property": "irreducible_scc_multiple_entries_no_dominating_header"
+    },
+    "211_irreducible_loops:two_entry_loop:gcc:O2": {
+      "goto_count": 6,
+      "property": "irreducible_scc_multiple_entries_no_dominating_header"
+    }
+  },
   "closure": {
     "01_conditional_polarity:classify:c": "closed",
     "01_conditional_polarity:classify:decbench": "closed",

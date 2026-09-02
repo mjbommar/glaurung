@@ -7,11 +7,13 @@
 
 mod conditions;
 mod dominators;
+mod local;
 mod region;
 mod verify;
 
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
 pub use dominators::{LoopForest, LoopInfo, LoopKind};
+pub use local::{HonestGotoEvidence, LocalRegions};
 pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
 pub use verify::CandidateError;
 
@@ -37,6 +39,7 @@ pub struct ShadowReport {
     pub conditions: Option<ConditionDag>,
     pub loops: LoopForest,
     pub candidate: Option<RegionCandidate>,
+    pub honest_gotos: Vec<HonestGotoEvidence>,
     pub verification_errors: Vec<CandidateError>,
     pub refusal: Option<Refusal>,
 }
@@ -52,11 +55,12 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
     let block_count = cfg.succs.len();
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
     let loops = LoopForest::from_cfg(cfg);
-    match ConditionDag::from_cfg(cfg, &loops) {
+    let local_regions = LocalRegions::from_cfg(cfg, &loops);
+    match ConditionDag::from_cfg(cfg, &loops, &local_regions) {
         Ok(conditions) => {
-            let candidate = RegionCandidate::from_cfg(cfg, &loops);
+            let candidate = RegionCandidate::from_cfg(cfg, &loops, &local_regions);
             let verification_errors = candidate.as_ref().map_or_else(Vec::new, |candidate| {
-                verify::verify_candidate(cfg, &loops, candidate)
+                verify::verify_candidate(cfg, &loops, &local_regions, candidate)
             });
             if verification_errors.is_empty() {
                 ShadowReport {
@@ -66,6 +70,7 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
                     represented_edges: edge_count,
                     conditions: Some(conditions),
                     candidate,
+                    honest_gotos: local_regions.evidence().to_vec(),
                     loops,
                     verification_errors,
                     refusal: None,
@@ -78,6 +83,7 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
                     represented_edges: 0,
                     conditions: Some(conditions),
                     candidate: None,
+                    honest_gotos: Vec::new(),
                     loops,
                     verification_errors,
                     refusal: Some(Refusal::CandidateInvalid),
@@ -91,6 +97,7 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
             represented_edges: 0,
             conditions: None,
             candidate: None,
+            honest_gotos: Vec::new(),
             loops,
             verification_errors: Vec::new(),
             refusal: Some(refusal),
@@ -161,6 +168,9 @@ mod tests {
                 ConditionNode::False => false,
                 ConditionNode::True => true,
                 ConditionNode::Branch { block } => branches[*block],
+                ConditionNode::LocalRegion { .. } => {
+                    panic!("acyclic truth-table fixture has no local region")
+                }
                 ConditionNode::Not(inner) => !evaluate(dag, *inner, branches),
                 ConditionNode::And(terms) => {
                     terms.iter().all(|term| evaluate(dag, *term, branches))
@@ -186,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn an_irreducible_two_entry_cycle_is_a_typed_refusal_not_partial_coverage() {
+    fn an_irreducible_two_entry_cycle_degrades_to_verified_local_gotos() {
         let function = LlirFunction {
             entry_va: 0x1000,
             blocks: vec![
@@ -197,10 +207,21 @@ mod tests {
         };
         let report = observe(&function, &compute_ssa(&function));
 
-        assert_eq!(report.refusal, Some(Refusal::CyclicGraph));
-        assert_eq!(report.covered_blocks, 0);
-        assert_eq!(report.represented_edges, 0);
-        assert_eq!(report.conditions, None);
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(report.covered_blocks, report.block_count);
+        assert_eq!(report.represented_edges, report.edge_count);
+        assert_eq!(report.honest_gotos.len(), 1);
+        let evidence = &report.honest_gotos[0];
+        assert_eq!(evidence.blocks, vec![1, 2]);
+        assert_eq!(evidence.entry_targets, vec![1, 2]);
+        assert_eq!(
+            evidence.property,
+            "irreducible_scc_multiple_entries_no_dominating_header"
+        );
+        let candidate = report.candidate.expect("local-labelled candidate");
+        assert!(candidate
+            .transfers()
+            .any(|transfer| matches!(transfer, Transfer::LocalGoto { to: 1 | 2, .. })));
         assert!(report.verification_errors.is_empty());
     }
 
@@ -307,7 +328,8 @@ mod tests {
             .filter(|transfer| match transfer {
                 Transfer::Flow { to }
                 | Transfer::Branch { to, .. }
-                | Transfer::Break { to, .. } => *to == shared_return,
+                | Transfer::Break { to, .. }
+                | Transfer::LocalGoto { to, .. } => *to == shared_return,
                 Transfer::Continue { .. } => false,
             })
             .count();
@@ -315,5 +337,47 @@ mod tests {
             incoming >= 2,
             "early and normal exits must both reach the shared terminal: {candidate:#?}"
         );
+    }
+
+    #[test]
+    fn real_two_entry_loop_is_an_accepted_honest_goto() {
+        let lifted = lift_real_fixture("211_irreducible_loops-gcc-O0.so", "two_entry_loop");
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(report.honest_gotos.len(), 1, "{report:#?}");
+        assert_eq!(
+            report.honest_gotos[0].property,
+            "irreducible_scc_multiple_entries_no_dominating_header"
+        );
+        assert!(report.honest_gotos[0].entry_targets.len() >= 2);
+        assert_eq!(report.covered_blocks, report.block_count);
+        assert_eq!(report.represented_edges, report.edge_count);
+    }
+
+    #[test]
+    fn real_nested_irreducible_region_does_not_erase_the_outer_loop() {
+        let lifted = lift_real_fixture(
+            "211_irreducible_loops-gcc-O0.so",
+            "irreducible_inside_reducible",
+        );
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert!(!report.loops.is_empty(), "outer reducible loop survives");
+        assert!(
+            !report.honest_gotos.is_empty(),
+            "inner irreducible SCC is named"
+        );
+        let candidate = report.candidate.expect("locally degraded candidate");
+        assert!(candidate.transfers().any(|transfer| matches!(
+            transfer,
+            Transfer::Continue { .. } | Transfer::Break { .. }
+        )));
+        assert!(candidate
+            .transfers()
+            .any(|transfer| matches!(transfer, Transfer::LocalGoto { .. })));
+        assert_eq!(candidate.blocks().len(), report.block_count);
+        assert_eq!(candidate.transfer_count(), report.edge_count);
     }
 }

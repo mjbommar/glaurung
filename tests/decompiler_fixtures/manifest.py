@@ -2559,6 +2559,18 @@ def structural_spec(fixture: str, func: str) -> dict:
     return STRUCTURAL.get((fixture, func), {})
 
 
+# A goto may be classified as structurally necessary only when a shadow-v2
+# fixture test independently reproduces this exact CFG property.  This is a
+# closed contract, not a prose waiver for output that merely happens to contain
+# a goto.
+HONEST_GOTO_CONTRACTS: dict[tuple[str, str], str] = {
+    (
+        "211_irreducible_loops",
+        "two_entry_loop",
+    ): "irreducible_scc_multiple_entries_no_dominating_header",
+}
+
+
 # A deliberately recognizable undergraduate curriculum.  Keeping this catalog
 # separate makes corpus growth reviewable: every project must name its exported
 # semantic units, exist on disk, and receive a safe execution contract where it

@@ -988,6 +988,57 @@ def test_declared_structural_predicates_are_all_present(report):
             assert pred in got, f"predicate {pred} not evaluated for {fkey}"
 
 
+def test_honest_goto_contract_requires_a_named_reproducible_cfg_property():
+    rows = S.accepted_honest_gotos(
+        {
+            "211_irreducible_loops:two_entry_loop:gcc:O0": {
+                "switch": 0,
+                "goto": 2,
+                "break": 0,
+            },
+            "211_irreducible_loops:reducible_control:gcc:O0": {
+                "switch": 0,
+                "goto": 0,
+                "break": 0,
+            },
+        }
+    )
+
+    assert rows == {
+        "211_irreducible_loops:two_entry_loop:gcc:O0": {
+            "goto_count": 2,
+            "property": "irreducible_scc_multiple_entries_no_dominating_header",
+        }
+    }
+    assert set(M.HONEST_GOTO_CONTRACTS.values()) <= S.HONEST_GOTO_PROPERTIES
+
+
+def test_honest_goto_contract_does_not_waive_a_goto_free_cell():
+    rows = S.accepted_honest_gotos(
+        {
+            "211_irreducible_loops:two_entry_loop:gcc:O0": {
+                "switch": 0,
+                "goto": 0,
+                "break": 0,
+            }
+        }
+    )
+
+    assert rows == {}
+
+
+def test_accepted_honest_gotos_match_the_pinned_evidence(report, baseline):
+    current = report["accepted_honest_goto"]
+    assert current == baseline["accepted_honest_goto"], (
+        "accepted honest-goto evidence changed; inspect the CFG property and "
+        "rendered goto counts before refreshing structural_baseline.json"
+    )
+    assert all(
+        row["property"] in S.HONEST_GOTO_PROPERTIES and row["goto_count"] > 0
+        for row in current.values()
+    )
+
+
 # --- baseline comparison (fail closed on regression) ------------------------
 
 

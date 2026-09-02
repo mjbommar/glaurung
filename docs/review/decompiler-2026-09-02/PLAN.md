@@ -379,9 +379,10 @@ that preserves honest local gotos when required.
   - `recover.rs`: deterministic region construction;
   - `verify.rs`: block and edge accounting;
   - `cleanup.rs`: bounded tail duplication and else-after-terminal flattening.
-  The boundary now has `mod.rs`, `conditions.rs`, `dominators.rs`, `region.rs`,
-  and `verify.rs`, while reusing v1's typed `Cfg` directly. Deterministic tree
-  recovery, cleanup, and a separately normalized CFG view remain open.
+  The boundary now has `mod.rs`, `conditions.rs`, `dominators.rs`, `local.rs`,
+  `region.rs`, and `verify.rs`, while reusing v1's typed `Cfg` directly.
+  Deterministic tree recovery, cleanup, and a separately normalized CFG view
+  remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -402,13 +403,19 @@ that preserves honest local gotos when required.
 - [x] `03_loop_shapes.c::loop_return_on_neg`: shared terminal tail. The real
   gcc-O0 fixture preserves distinct loop exits converging on one return block,
   which remains singly owned.
-- [ ] Existing irreducible/dispatch fixtures for honest local goto behavior.
-- [ ] A synthetic irreducible CFG whose correct result necessarily retains a
+- [x] Existing irreducible/dispatch fixtures for honest local goto behavior.
+  The real `211_irreducible_loops` `two_entry_loop` and nested-irreducible
+  functions preserve verified local labelled transfers; the nested case also
+  proves that the surrounding natural loop survives.
+- [x] A synthetic irreducible CFG whose correct result necessarily retains a
   goto, recorded as `accepted_honest_goto`.
-- [ ] Extend `tools/gen_structural_baseline.py` and
+- [x] Extend `tools/gen_structural_baseline.py` and
   `python/tests/test_decompiler_fixture_structural.py` for that classification.
   Every accepted row must name a reproducible CFG property; free-form waivers
-  are invalid.
+  are invalid. The closed manifest contract names
+  `irreducible_scc_multiple_entries_no_dominating_header`, the Rust fixture test
+  reproduces it, and the structural report records only lanes that actually
+  contain a goto.
 
 ### Safety properties
 
@@ -418,9 +425,11 @@ that preserves honest local gotos when required.
   typed refusal.
   `verify.rs` independently compares candidate ownership, terminals, edge
   multiplicity, polarity, and `Break`/`Continue` classification with the typed
-  CFG; irreducible residual cycles return `CyclicGraph` with zero claimed
-  coverage.
-- [ ] Local failure cannot collapse an otherwise structured function.
+  CFG. Accepted irreducible SCCs become local labelled regions; unclassified
+  residual cycles still return `CyclicGraph` with zero claimed coverage.
+- [x] Local failure cannot collapse an otherwise structured function. The real
+  nested-irreducible fixture retains its outer natural loop while only the
+  inner multi-entry SCC degrades to local gotos.
 - [ ] Tail duplication is size-bounded and terminal-block-only initially.
 - [ ] Condition simplification preserves machine-width predicate semantics.
 

@@ -1,6 +1,6 @@
 //! Typed, non-rendering region candidate for shadow comparison.
 
-use super::LoopForest;
+use super::{LocalRegions, LoopForest};
 use crate::ir::structure::Cfg;
 
 /// One explicit representation of a CFG edge.
@@ -21,6 +21,11 @@ pub enum Transfer {
         header: usize,
         to: usize,
         taken: Option<bool>,
+    },
+    LocalGoto {
+        to: usize,
+        taken: Option<bool>,
+        region: usize,
     },
 }
 
@@ -46,7 +51,7 @@ pub struct RegionCandidate {
 }
 
 impl RegionCandidate {
-    pub(super) fn from_cfg(cfg: &Cfg, loops: &LoopForest) -> Option<Self> {
+    pub(super) fn from_cfg(cfg: &Cfg, loops: &LoopForest, locals: &LocalRegions) -> Option<Self> {
         let blocks = (0..cfg.succs.len())
             .map(|block| {
                 let conditional = cfg.cond_taken[block].filter(|_| cfg.succs[block].len() == 2);
@@ -55,6 +60,9 @@ impl RegionCandidate {
                     .copied()
                     .map(|to| {
                         let taken = conditional.map(|target| to == target);
+                        if let Some(region) = locals.region_for_block(to) {
+                            return Transfer::LocalGoto { to, taken, region };
+                        }
                         if loops.is_back_edge(block, to) {
                             return Transfer::Continue { header: to, taken };
                         }

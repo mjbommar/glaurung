@@ -41,6 +41,7 @@ def main() -> int:
     print(
         f"  effects: {len(rep['effects'])}, placeholders: {sum(rep['placeholder'].values())}"
     )
+    print(f"  accepted honest goto lanes: {len(rep['accepted_honest_goto'])}")
     viol = {k: v for k, v in rep["verify"].items() if v}
     print(
         f"  def-before-use: {sum(len(v) for v in viol.values())} violation(s) "

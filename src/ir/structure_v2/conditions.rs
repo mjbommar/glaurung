@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::{LoopForest, Refusal};
+use super::{LocalRegions, LoopForest, Refusal};
 use crate::ir::structure::Cfg;
 
 /// Stable index into a [`ConditionDag`].
@@ -15,6 +15,7 @@ pub enum ConditionNode {
     False,
     True,
     Branch { block: usize },
+    LocalRegion { region: usize },
     Not(ConditionId),
     And(Vec<ConditionId>),
     Or(Vec<ConditionId>),
@@ -28,18 +29,34 @@ pub struct ConditionDag {
 }
 
 impl ConditionDag {
-    pub(super) fn from_cfg(cfg: &Cfg, loops: &LoopForest) -> Result<Self, Refusal> {
-        let order = topological_order(&cfg.succs, loops).ok_or(Refusal::CyclicGraph)?;
+    pub(super) fn from_cfg(
+        cfg: &Cfg,
+        loops: &LoopForest,
+        locals: &LocalRegions,
+    ) -> Result<Self, Refusal> {
+        if locals.has_unclassified_cycles() {
+            return Err(Refusal::CyclicGraph);
+        }
+        let order = topological_order(&cfg.succs, loops, locals).ok_or(Refusal::CyclicGraph)?;
         let mut builder = Builder::new();
         let mut reaching = vec![builder.false_id; cfg.succs.len()];
         if !reaching.is_empty() {
             reaching[0] = builder.true_id;
         }
+        for evidence in locals.evidence() {
+            let marker = builder.intern(ConditionNode::LocalRegion {
+                region: evidence.region,
+            });
+            for &block in &evidence.blocks {
+                reaching[block] = marker;
+            }
+        }
 
         for block in order {
             let source_condition = reaching[block];
             for &successor in &cfg.succs[block] {
-                if loops.is_back_edge(block, successor) {
+                if loops.is_back_edge(block, successor) || locals.is_internal_edge(block, successor)
+                {
                     continue;
                 }
                 let edge_condition = match cfg.cond_taken[block] {
@@ -169,11 +186,15 @@ impl Builder {
     }
 }
 
-fn topological_order(successors: &[Vec<usize>], loops: &LoopForest) -> Option<Vec<usize>> {
+fn topological_order(
+    successors: &[Vec<usize>],
+    loops: &LoopForest,
+    locals: &LocalRegions,
+) -> Option<Vec<usize>> {
     let mut indegree = vec![0usize; successors.len()];
     for (block, targets) in successors.iter().enumerate() {
         for &target in targets {
-            if loops.is_back_edge(block, target) {
+            if loops.is_back_edge(block, target) || locals.is_internal_edge(block, target) {
                 continue;
             }
             indegree[target] += 1;
@@ -188,7 +209,7 @@ fn topological_order(successors: &[Vec<usize>], loops: &LoopForest) -> Option<Ve
     while let Some(block) = ready.pop_first() {
         order.push(block);
         for &target in &successors[block] {
-            if loops.is_back_edge(block, target) {
+            if loops.is_back_edge(block, target) || locals.is_internal_edge(block, target) {
                 continue;
             }
             indegree[target] -= 1;
