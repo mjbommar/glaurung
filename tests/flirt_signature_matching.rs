@@ -64,10 +64,17 @@ const SHIPPED_PROLOGUE_LEN: usize = 32;
 
 /// Functions in a fixture that the shipped default library gives a name to.
 ///
-/// **Must be zero, and is.** `data/sigs/glaurung-base.x86_64.flirt.json` holds
-/// 30 C++ signatures harvested from `samples/binaries/`; the fixture corpus is
-/// unrelated C. Every hit would be a `set_by=flirt` write of a wrong name into
-/// a real project's KB, so this is a hard ceiling, not a statistical one.
+/// **Must be zero.** `data/sigs/glaurung-base.x86_64.flirt.json` holds 19
+/// relocation-masked signatures built from `libmathlib.a`; the fixture corpus
+/// is unrelated C. Every hit would be a `set_by=flirt` write of a wrong name
+/// into a real project's KB, so this is a hard ceiling, not a statistical one.
+///
+/// The value was measured on 2026-08-31 against the previous library (30 exact
+/// prologues from linked C++ samples). It has **not** been re-measured since
+/// the library was rebuilt from the archive, because
+/// `tests/decompiler_fixtures/build` is gitignored and was absent in the
+/// worktree that made the change -- this test skips itself in that state. The
+/// ceiling stays at zero because it is a correctness bound, not an observation.
 const MAX_SHIPPED_LIBRARY_FALSE_POSITIVES: usize = 0;
 
 /// Names assigned to clang-built functions by a library built from gcc.
@@ -239,9 +246,14 @@ fn library_from(sigs: &[(String, Vec<u8>)], prologue_len: usize) -> FlirtLibrary
                 name: name.clone(),
                 prologue_hex: bytes.iter().map(|b| format!("{b:02x}")).collect(),
                 source_binary: "tests/decompiler_fixtures/build".to_string(),
+                // No mask, no CRC, no refs: this helper deliberately builds
+                // the v1 shape, because most measurements in this file are
+                // about what exact-byte matching can and cannot do.
+                ..Default::default()
             })
             .collect(),
         index: Default::default(),
+        library: None,
         stats: serde_json::Value::Null,
     };
     let json = serde_json::to_string(&file).expect("signature library must serialize");
@@ -403,6 +415,11 @@ fn signatures_from_a_real_static_library_are_relocation_contaminated() {
 /// `fib.localalias`). Demanding the symbol-table name would be demanding
 /// something the algorithm cannot deliver, and would hide the failures it
 /// genuinely can: a miss, or a name from a different byte sequence entirely.
+///
+/// Since the v2 matcher those shared-prologue functions come back **unnamed**
+/// rather than under an arbitrary one of their peers' names, which is the
+/// point of `FlirtMatch::Ambiguous`. They are therefore excluded from the
+/// miss count below and reported separately.
 #[test]
 fn a_library_names_the_functions_it_was_built_from() {
     if skip_fixtures() {
@@ -435,11 +452,17 @@ fn a_library_names_the_functions_it_was_built_from() {
             }
             checked += 1;
             let peers = &equivalent[&truth.prologue];
-            if peers.len() > 1 {
+            let shares_its_bytes = peers.len() > 1;
+            if shares_its_bytes {
                 ambiguous += 1;
             }
             if placeholder.name == format!("sub_{:x}", truth.va) {
-                if unmatched.len() < 10 {
+                // Since the matcher gained an ambiguity verdict it declines to
+                // name a function whose bytes are shared with a differently
+                // named one, instead of picking whichever the map happened to
+                // hold. Not naming those is the correct outcome, so only a
+                // function with a UNIQUE byte sequence counts as a miss here.
+                if !shares_its_bytes && unmatched.len() < 10 {
                     unmatched.push(format!(
                         "  {stem}: {} at {:#x} was not matched at all",
                         truth.name, truth.va
@@ -478,9 +501,9 @@ fn a_library_names_the_functions_it_was_built_from() {
         wrong_bytes.join("\n")
     );
     eprintln!(
-        "flirt self-recall: {checked}/{checked} recovered, of which {ambiguous} \
-         share their 32-byte prologue with another function and could have \
-         come back under either name"
+        "flirt self-recall: every function with a unique 32-byte prologue was \
+         recovered out of {checked} checked; {ambiguous} share their prologue \
+         with a differently named function and are deliberately left unnamed"
     );
 }
 
@@ -557,7 +580,7 @@ fn a_matching_signature_never_overwrites_an_established_name() {
 /// `load_default_library()` picks up `data/sigs/glaurung-base.x86_64.flirt.json`
 /// on any run started from the repository root, and every hit it produces is
 /// written with `set_by=flirt`, which outranks `auto` in the KB. The shipped
-/// signatures are 30 C++ symbols harvested from `samples/binaries/`; the
+/// signatures are 19 relocation-masked symbols from `libmathlib.a`; the
 /// fixtures are unrelated C.
 ///
 /// Both entry points are exercised, because they fail differently:
@@ -580,9 +603,11 @@ fn the_shipped_signature_library_names_nothing_wrongly() {
     });
     let lib = FlirtLibrary::from_json(&text).expect("shipped library must parse");
     assert!(
-        lib.signature_count() >= 20,
+        lib.signature_count() >= 15,
         "the shipped library holds only {} signatures; if it has been emptied \
-         this test proves nothing",
+         this test proves nothing. The floor moved from 20 to 15 when the \
+         library was rebuilt from libmathlib.a: 19 masked signatures from an \
+         unlinked archive replaced 30 exact prologues from linked samples.",
         lib.signature_count()
     );
     assert_eq!(
@@ -960,3 +985,301 @@ fn a_short_prologue_manufactures_false_positives() {
 /// matcher can only name by coin flip, and the coin is `HashMap::insert`
 /// order.
 const MAX_INDISTINGUISHABLE_AT_SHIPPED_LEN: f64 = 0.0654;
+
+// ---------------------------------------------------------------------------
+// 5. The property v1 could not have: surviving a relink.
+// ---------------------------------------------------------------------------
+
+/// One of the two committed images that link the same archive different ways.
+///
+/// Built by `tests/fixtures/flirt/build.sh` and committed rather than
+/// generated, so this test runs on a machine with no compiler and so the two
+/// images cannot change identity under a toolchain upgrade.
+/// `tests/fixtures/flirt/README.md` records the toolchain and provenance.
+fn relink_fixture(name: &str) -> PathBuf {
+    repo_root().join("tests/fixtures/flirt").join(name)
+}
+
+/// Named `mathlib_*` functions in one of the relink fixtures, with the bytes
+/// at the entry that the matcher would see.
+fn mathlib_functions(path: &Path, window: usize) -> BTreeMap<String, (u64, Vec<u8>)> {
+    let mut out = BTreeMap::new();
+    let Ok(data) = std::fs::read(path) else {
+        return out;
+    };
+    let Ok(obj) = object::File::parse(&*data) else {
+        return out;
+    };
+    for sym in obj.symbols() {
+        if sym.kind() != SymbolKind::Text || sym.size() == 0 {
+            continue;
+        }
+        let Ok(name) = sym.name() else { continue };
+        if !name.starts_with("mathlib_") {
+            continue;
+        }
+        let Some(index) = sym.section_index() else {
+            continue;
+        };
+        let Ok(section) = obj.section_by_index(index) else {
+            continue;
+        };
+        // As much as the matcher can ever want; a short read is fine, and a
+        // signature whose CRC range runs past it simply will not match.
+        let want = window as u64;
+        let mut bytes = Vec::new();
+        for len in (1..=want).rev() {
+            if let Ok(Some(b)) = section.data_range(sym.address(), len) {
+                bytes = b.to_vec();
+                break;
+            }
+        }
+        if bytes.len() < SHIPPED_PROLOGUE_LEN {
+            continue;
+        }
+        out.insert(name.to_string(), (sym.address(), bytes));
+    }
+    out
+}
+
+/// **The load-bearing test.** One archive, two link layouts, one library.
+///
+/// `libmathlib.a` is linked into `mathlib_link_a` (PIE, one driver) and
+/// `mathlib_link_b` (non-PIE, a longer driver calling a different subset), so
+/// its functions land at different addresses with different resolved call and
+/// data displacements in the two images. A signature built from the *archive*
+/// must name the same function in both -- that is the entire difference
+/// between a signature library and a byte-for-byte record of one link.
+///
+/// The test also counts how many of those functions have identical 32-byte
+/// windows across the two links, because that count is the ceiling an
+/// exact-byte matcher could ever reach on the same data.
+#[test]
+fn one_archive_linked_two_ways_is_named_in_both() {
+    let lib_path = repo_root().join("data/sigs/glaurung-base.x86_64.flirt.json");
+    let text = std::fs::read_to_string(&lib_path)
+        .unwrap_or_else(|e| panic!("{} must be readable ({e})", lib_path.display()));
+    let lib = FlirtLibrary::from_json(&text).expect("shipped library must parse");
+    let window = lib.match_window();
+
+    let a = mathlib_functions(&relink_fixture("mathlib_link_a.x86_64.elf"), window);
+    let b = mathlib_functions(&relink_fixture("mathlib_link_b.x86_64.elf"), window);
+    assert!(
+        a.len() >= 5 && b.len() >= 5,
+        "the relink fixtures carry {} and {} mathlib_* symbols; they are \
+         committed, so this means the checkout is incomplete rather than that \
+         the linker changed its mind",
+        a.len(),
+        b.len()
+    );
+
+    let mut both_links_named = 0usize;
+    let mut checked = 0usize;
+    let mut misses: Vec<String> = Vec::new();
+    let mut wrong: Vec<String> = Vec::new();
+    let mut exact_bytes_agree = 0usize;
+
+    // Only functions the library actually carries. A symbol the builder
+    // declined to sign -- `mathlib_version_minor` is seven bytes, `endbr64;
+    // xor eax,eax; ret` -- is not a miss, it is the builder's `min_fixed_bytes`
+    // rule working. Counting those as failures would push toward signing
+    // things that cannot be identified.
+    let signed: BTreeSet<String> = lib.signatures().iter().map(|s| s.name.clone()).collect();
+    let mut unsigned: Vec<String> = Vec::new();
+
+    for (name, (va_a, bytes_a)) in &a {
+        let Some((va_b, bytes_b)) = b.get(name) else {
+            continue;
+        };
+        if !signed.contains(name) {
+            unsigned.push(name.clone());
+            continue;
+        }
+        checked += 1;
+        if bytes_a[..SHIPPED_PROLOGUE_LEN] == bytes_b[..SHIPPED_PROLOGUE_LEN] {
+            exact_bytes_agree += 1;
+        }
+        let got_a = lib.match_at(bytes_a).unique().map(str::to_string);
+        let got_b = lib.match_at(bytes_b).unique().map(str::to_string);
+        match (got_a.as_deref(), got_b.as_deref()) {
+            (Some(x), Some(y)) if x == name && y == name => both_links_named += 1,
+            (Some(x), Some(y)) => wrong.push(format!(
+                "  {name}: link A at {va_a:#x} came back as {x}, link B at \
+                 {va_b:#x} as {y}"
+            )),
+            _ => misses.push(format!("  {name}: link A {got_a:?}, link B {got_b:?}")),
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "the shipped library gave {} archive function(s) a name belonging to a \
+         different function. A masked signature that matches the wrong thing \
+         is worse than no signature:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+    assert_eq!(
+        both_links_named,
+        checked,
+        "only {both_links_named} of {checked} archive functions were named in \
+         BOTH link layouts. This is the property the mask exists for; a gap \
+         here means the relocation-derived mask is not covering everything the \
+         linker rewrote:\n{}",
+        misses.join("\n")
+    );
+    assert!(
+        checked >= 15,
+        "only {checked} of the archive's functions were both signed and \
+         present in the two links; the library or the fixtures shrank"
+    );
+    eprintln!(
+        "relink: {both_links_named}/{checked} mathlib functions named in both \
+         link layouts; only {exact_bytes_agree}/{checked} have identical \
+         32-byte windows, which is all an exact-byte matcher could ever reach. \
+         {} symbol(s) carry no signature at all ({unsigned:?}).",
+        unsigned.len()
+    );
+}
+
+/// The same measurement with the masks stripped, which is what v1 was.
+///
+/// Without this the test above proves only that *something* works. With it,
+/// the masks are shown to be the cause: the identical pipeline over the
+/// identical bytes, with `mask_hex` and the CRC removed, recalls less.
+#[test]
+fn the_same_library_without_masks_does_not_survive_the_relink() {
+    let lib_path = repo_root().join("data/sigs/glaurung-base.x86_64.flirt.json");
+    let text = std::fs::read_to_string(&lib_path).expect("shipped library must read");
+    let mut file: FlirtLibraryFile =
+        serde_json::from_str(&text).expect("shipped library must deserialize");
+    let masked_entries = file.entries.iter().filter(|e| e.mask_hex.is_some()).count();
+    assert!(
+        masked_entries >= 15,
+        "only {masked_entries} shipped signatures carry a mask; if the library \
+         went back to being unmasked this comparison is vacuous"
+    );
+    for e in file.entries.iter_mut() {
+        e.mask_hex = None;
+        e.crc16 = None;
+        e.crc_len = 0;
+    }
+    let unmasked = FlirtLibrary::from_file(file);
+    let window = unmasked.match_window();
+
+    let a = mathlib_functions(&relink_fixture("mathlib_link_a.x86_64.elf"), window);
+    let b = mathlib_functions(&relink_fixture("mathlib_link_b.x86_64.elf"), window);
+
+    let mut checked = 0usize;
+    let mut named_in_both = 0usize;
+    let signed: BTreeSet<String> = unmasked
+        .signatures()
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    for (name, (_, bytes_a)) in &a {
+        let Some((_, bytes_b)) = b.get(name) else {
+            continue;
+        };
+        if !signed.contains(name) {
+            continue;
+        }
+        checked += 1;
+        if unmasked.match_at(bytes_a).unique() == Some(name.as_str())
+            && unmasked.match_at(bytes_b).unique() == Some(name.as_str())
+        {
+            named_in_both += 1;
+        }
+    }
+    assert!(checked >= 5, "only {checked} functions compared; vacuous");
+    assert!(
+        named_in_both < checked,
+        "the UNMASKED library named all {checked} functions in both links. \
+         Either the two fixtures are not actually different layouts, or the \
+         archive's code contains no relocations -- either way the masked test \
+         above is proving nothing."
+    );
+    eprintln!(
+        "relink without masks: {named_in_both}/{checked} named in both layouts \
+         (the masked library reaches {checked}/{checked})"
+    );
+}
+
+/// A signature from this archive must not name a function that is not from it.
+///
+/// The negative direction, run against binaries present in every checkout
+/// rather than against the gitignored fixture corpus. `mathlib_*` names are
+/// distinctive, so any hit outside the two relink fixtures is unambiguously
+/// wrong and needs no adjudication.
+#[test]
+fn the_shipped_library_names_nothing_in_unrelated_samples() {
+    let lib_path = repo_root().join("data/sigs/glaurung-base.x86_64.flirt.json");
+    let text = std::fs::read_to_string(&lib_path).expect("shipped library must read");
+    let lib = FlirtLibrary::from_json(&text).expect("shipped library must parse");
+
+    let root = repo_root().join("samples/binaries/platforms/linux/amd64/export/native");
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+
+    let mut scanned = 0usize;
+    let mut binaries = 0usize;
+    let mut hits: Vec<String> = Vec::new();
+    for path in paths.iter().take(60) {
+        let Ok(data) = std::fs::read(path) else {
+            continue;
+        };
+        if !data.starts_with(b"\x7fELF") {
+            continue;
+        }
+        binaries += 1;
+        let functions = known_functions(path, SHIPPED_PROLOGUE_LEN);
+        if functions.is_empty() {
+            continue;
+        }
+        let mut funcs = placeholders(&functions);
+        scanned += funcs.len();
+        apply_flirt_overrides(&data, &mut funcs, &lib);
+        for (f, truth) in funcs.iter().zip(functions.iter()) {
+            if f.name != format!("sub_{:x}", truth.va) {
+                hits.push(format!(
+                    "  {}: {} at {:#x} named {}",
+                    path.display(),
+                    truth.name,
+                    truth.va,
+                    f.name
+                ));
+            }
+        }
+    }
+    assert!(
+        binaries >= 5 && scanned >= 100,
+        "only {scanned} functions across {binaries} sample binaries were \
+         offered to the shipped library; a vacuous pass"
+    );
+    assert!(
+        hits.is_empty(),
+        "the shipped mathlib library named {} function(s) in binaries that do \
+         not link it. Each one would be a set_by=flirt write outranking \
+         auto:\n{}",
+        hits.len(),
+        hits.join("\n")
+    );
+    eprintln!(
+        "shipped library vs {scanned} functions in {binaries} unrelated \
+         samples: 0 names assigned"
+    );
+}

@@ -20,10 +20,16 @@ a single hash column, and ``identity`` is TEXT. That is deliberate:
 ``docs/decisions/whole-binary-serialization.md`` recommends
 adopting Vector35's WARP function GUID (Apache-2.0; a UUIDv5 over
 relocation-masked basic blocks) as the eventual identity, and its values
-are UUID strings. A WARP GUID is a new ``scheme`` value written into the
-same column -- not a schema change, not a migration, and not a second
-table. A function may carry several identities at once; the primary key
-is ``(binary_id, entry_va, scheme)``.
+are UUID strings. That is now implemented: :data:`WARP_FUNCTION_GUID_V1`
+is a new ``scheme`` value written into the same column -- not a schema
+change, not a migration, and not a second table. A function may carry
+several identities at once; the primary key is
+``(binary_id, entry_va, scheme)``.
+
+The two schemes are not redundant. Structural is fuzzy and survives a
+recompile at the same optimisation level; WARP is exact, survives only a
+relink or a rebase, and interoperates with Binary Ninja. Every function
+in this module takes ``scheme`` and does the same thing under either.
 
 What the identity cannot do
 ---------------------------
@@ -52,6 +58,27 @@ from .persistent import PersistentKnowledgeBase
 #: too; a WARP function GUID would land here as e.g.
 #: ``"warp-function-guid-v1"``.
 STRUCTURAL_V1 = "glaurung-structural-v1"
+
+#: Vector35's WARP function GUID (Apache-2.0): a UUIDv5 over the
+#: relocation-masked bytes of a function's basic blocks, computed by
+#: ``src/identity/warp.rs``. This is the scheme the module docstring
+#: above anticipated -- a new ``scheme`` value in the same column, not a
+#: schema change and not a second table.
+#:
+#: It answers a *different* question to :data:`STRUCTURAL_V1`. WARP is
+#: exact: it survives relinking and rebasing and nothing else, so two
+#: builds at different optimisation levels never share one. In exchange
+#: it is interoperable -- the same GUID Binary Ninja computes -- and it
+#: is O(1) to look up. WARP deliberately never prunes colliding
+#: functions, so a GUID may name several; :func:`port_annotations`
+#: refuses to carry an annotation across an ambiguous identity, which is
+#: the right behaviour for both schemes.
+WARP_FUNCTION_GUID_V1 = "warp-function-guid-v1"
+
+#: Every scheme this build can compute. Storing another one is still
+#: allowed -- :func:`set_function_identity` takes any string -- but
+#: :func:`compute_identities` will not invent it.
+COMPUTABLE_SCHEMES = (STRUCTURAL_V1, WARP_FUNCTION_GUID_V1)
 
 #: Names that encode the address they were generated at. Porting one to
 #: a different build produces a name that is not merely useless but
@@ -149,10 +176,12 @@ def compute_identities(
     Raises ``ValueError`` for an unknown ``scheme``: silently returning
     an empty map would look exactly like a binary with no functions.
     """
+    if scheme == WARP_FUNCTION_GUID_V1:
+        return compute_warp_identities(binary_path)
     if scheme != STRUCTURAL_V1:
         raise ValueError(
             f"unknown identity scheme {scheme!r}; this build can compute "
-            f"only {STRUCTURAL_V1!r} (other schemes may be stored by "
+            f"{COMPUTABLE_SCHEMES!r} (other schemes may be stored by "
             "whoever can compute them)"
         )
 
@@ -201,6 +230,50 @@ def compute_identities(
             scheme=scheme,
             identity=fs.fingerprint,
             n_blocks=fs.stats[0] if fs.stats else None,
+        )
+    return out
+
+
+def compute_warp_identities(binary_path: str) -> Dict[int, FunctionIdentity]:
+    """Compute a WARP function GUID for every function in ``binary_path``.
+
+    Args:
+        binary_path: Path to an executable or object file.
+
+    Returns:
+        ``{entry_va: FunctionIdentity}`` under scheme
+        :data:`WARP_FUNCTION_GUID_V1`, with ``binary_id`` left at ``0``.
+        ``n_blocks`` is the number of basic blocks that went into the
+        GUID, which is the honest denominator for "how much evidence is
+        behind this identity" -- a one-block function's GUID is exact but
+        cheap to collide with.
+
+    Raises:
+        ValueError: the file is not a parseable object, or its
+            architecture has no relocatable-instruction rule yet. WARP
+            GUIDs are implemented for x86 and x86-64; see
+            ``docs/reference/function-identity-warp.md``.
+
+    Note:
+        The constraints WARP uses to disambiguate colliding GUIDs are
+        computed by the native layer and available through
+        ``glaurung.analysis.warp_function_guids_path``. They are not
+        stored here: ``function_identity`` holds one string per
+        ``(binary, entry_va, scheme)``, and a constraint set is a
+        relation, not a scalar. Storing it belongs with the
+        ``function_reference`` work, not with the identity column.
+    """
+    import glaurung as g
+
+    out: Dict[int, FunctionIdentity] = {}
+    for func in g.analysis.warp_function_guids_path(str(binary_path)):
+        entry_va = int(func.entry_va)
+        out[entry_va] = FunctionIdentity(
+            binary_id=0,
+            entry_va=entry_va,
+            scheme=WARP_FUNCTION_GUID_V1,
+            identity=str(func.guid),
+            n_blocks=len(func.block_guids),
         )
     return out
 

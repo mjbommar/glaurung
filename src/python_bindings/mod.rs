@@ -9,6 +9,7 @@ pub mod debug;
 pub mod disasm;
 #[cfg(feature = "exec")]
 pub mod exec;
+pub mod flirt;
 pub mod identity;
 pub mod ir;
 pub mod similarity;
@@ -32,9 +33,10 @@ pub fn register_python_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
     triage::register_triage_bindings(py, m)?;
     strings::register_strings_bindings(py, m)?;
     analysis::register_analysis_bindings(py, m)?;
-    // Must follow `analysis`: the identity schemes attach to the submodule
-    // that call creates.
+    // Both of these attach to the `analysis` submodule the line above
+    // creates, so they must follow it.
     identity::register_identity_bindings(py, m)?;
+    flirt::register_flirt_bindings(py, m)?;
     symbols::register_symbols_bindings(py, m)?;
     disasm::register_disasm_bindings(py, m)?;
     similarity::register_similarity_bindings(py, m)?;

@@ -43,6 +43,8 @@ and troubleshooting live in the [development setup guide](development/setup.md).
 | Work with Java, JVM bytecode, or archives | [Java and JVM analysis](guides/java-jvm.md) |
 | Detect packers or compare binaries | [Packer configuration](reference/packer-config.md) and [similarity analysis](reference/similarity.md) |
 | Tell which functions changed between two builds | [Structural function identity](reference/function-identity-structural.md) — the L1 control-flow invariants `glaurung diff` ranks by |
+| Recognise an exact known build of a known function | [WARP function GUIDs](reference/function-identity-warp.md) — the L0 rung: a UUIDv5 over relocation-masked basic-block bytes |
+| Name library functions in a stripped binary | [FLIRT-style signature libraries](reference/function-signature-libraries.md) — how the masked-byte library is built from `.a` relocations, and what it matches |
 | Measure how well a function-identity scheme retrieves | [Identity measurement](development/identity-measurement.md) — the XO/XC/XM protocol, its filters, and measured AUC/MRR10 for CTPH and the structural fingerprint |
 | Fetch or locate an external research corpus | [External corpora](development/corpora.md) — URLs, sizes, and checksums for the corpora the measurement lanes read |
 | Use an LLM-backed command | [`ask` command](guides/ask.md), [LLM subsystem](architecture/llm-subsystem.md), and [runtime configuration](development/setup.md#runtime-configuration) |
@@ -86,6 +88,8 @@ commands are executed and byte-compared against `_fixtures/` by
 [packer configuration](reference/packer-config.md),
 [similarity](reference/similarity.md),
 [structural function identity](reference/function-identity-structural.md),
+[WARP function GUIDs](reference/function-identity-warp.md),
+[FLIRT-style signature libraries](reference/function-signature-libraries.md),
 [Windows configuration](reference/windows-analysis-config.md) and
 [API type sync](reference/windows-api-type-sync.md),
 [the IOC validator](reference/ioc-validator.md),
