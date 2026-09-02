@@ -3,17 +3,17 @@ _glaurung HEAD: `<sha>`_
 
 ## Aggregate
 - Binaries scored: **10** (errored: 0)
-- Functions discovered: **50** (named: 0)
+- Functions discovered: **183** (named: 83)
 - Multi-chunk functions: **0** (cold orphans: 0)
-- Decompiled OK: **50** (failed: 0)
+- Decompiled OK: **149** (failed: 7)
 - DWARF types: **0** (structs with fields: 0)
-- Stack-frame slots: **0** (across 0 functions)
-- Type-KB lift: **0** propagated, **20** auto-struct candidates
+- Stack-frame slots: **56** (across 28 functions)
+- Type-KB lift: **0** propagated, **19** auto-struct candidates
 - Packed binaries: **10** (by family: UPX×10)
 
 ## Rates
-- Symbol-name resolution (avg): **0.0%**
-- Decompile success (avg): **100.0%**
+- Symbol-name resolution (avg): **66.0%**
+- Decompile success (avg): **92.0%**
 - Language detection match: **0.0%**
 
 ## Per binary

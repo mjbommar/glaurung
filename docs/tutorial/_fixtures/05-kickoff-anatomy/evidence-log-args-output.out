@@ -1,1 +1,1 @@
-1|kickoff_analysis|kickoff: 16 fns, 8 named, 225 slots, 45 propagated, 0 structs|||{"binary_path": "<repo>/samples/binaries/platforms/linux|{"arch": "x86_64", "auto_structs_emitted": 0, "by_set_by": {"analyzer": 16}, "ca
+1|kickoff_analysis|kickoff: 16 fns, 8 named, 225 slots, 45 propagated, 0 structs|||{"binary_path": "<repo>/samples/binaries/plat|{"arch": "x86_64", "auto_structs_emitted": 0, "by_set_by": {"analyzer": 16}, "ca

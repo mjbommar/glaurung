@@ -11,7 +11,8 @@ fn main {
     t33 = (t10 - 1);
     %zf = (t35 == 1);
     t134 = (unsigned long)((unsigned int)(t33));
-    %sf = ((long)((int)(t33)) < 0);
+    t34 = (long)((int)(t33));
+    %sf = (t34 < 0);
     %of = (t32 ^ %sf);
     if (((%zf | (%sf ^ %of)) == 0)) {
         ret = var_20;
@@ -28,4 +29,3 @@ fn main {
         var_8 = var0;
         var1 = var_8;
         ret = var_10;
-        parse_record(ret, var1);
