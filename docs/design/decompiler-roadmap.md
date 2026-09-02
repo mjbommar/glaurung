@@ -183,12 +183,13 @@ scheduled independently of the longer pipeline/SSA migrations.
   `two_entry_loop` irreducible fixture now emits labelled CFG for only its
   verified local region; every honest goto resolves to an emitted label and
   its structured prefix and exit paths remain present. A RED adapter experiment
-  also established that the old one-exit `While` cannot faithfully spell
-  `loop_return_on_neg`'s two exit-specific paths, so multi-exit rendering needs
-  an explicit region/AST capability rather than exit selection by convention.
-  Nested-local rendering, multi-exit rendering, post-pass
-  execution/GED/runtime comparison, output measurement, and promotion are
-  still open.
+  established that the old one-exit `While` could not faithfully spell
+  `loop_return_on_neg`'s two exit-specific paths. An explicit `MultiExitLoop`
+  region/AST node now retains those typed transfers and materializes each
+  independently verified exit region at its exact branch; the real fixture
+  emits deterministic `while (1)` pseudocode with both returns and no goto.
+  Nested-local rendering, post-pass execution/GED/runtime comparison, output
+  measurement, and promotion are still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one

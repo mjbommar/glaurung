@@ -749,9 +749,9 @@ mod tests {
                         tally(part, ifs, gotos, loose);
                     }
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => {
-                    tally(body, ifs, gotos, loose)
-                }
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => tally(body, ifs, gotos, loose),
                 Region::Switch { arms, .. } => {
                     for arm in arms {
                         tally(arm, ifs, gotos, loose);
@@ -814,7 +814,9 @@ mod tests {
                 Region::IfThenElse { then_r, else_r, .. } => {
                     find_switch(then_r).or_else(|| find_switch(else_r))
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => find_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -958,7 +960,9 @@ mod tests {
                 Region::IfThenElse { then_r, else_r, .. } => {
                     find_switch(then_r).or_else(|| find_switch(else_r))
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => find_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -1386,6 +1390,7 @@ mod tests {
                     contains_do_while(then_r) || contains_do_while(else_r)
                 }
                 Region::While { body, .. } => contains_do_while(body),
+                Region::MultiExitLoop { body, .. } => contains_do_while(body),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
                 Region::Block(_)
                 | Region::Goto(_)
@@ -2067,6 +2072,7 @@ mod tests {
                     contains_do_while(then_r) || contains_do_while(else_r)
                 }
                 Region::While { body, .. } => contains_do_while(body),
+                Region::MultiExitLoop { body, .. } => contains_do_while(body),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
                 Region::Block(_)
                 | Region::Goto(_)
@@ -2300,9 +2306,9 @@ mod tests {
                     let (c2, b2) = count_block(else_r, target);
                     (c1 + c2, b1 || b2)
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => {
-                    count_block(body, target)
-                }
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => count_block(body, target),
                 Region::RawLoop { blocks, .. } => (
                     blocks.iter().filter(|&&block| block == target).count(),
                     false,
@@ -2427,7 +2433,8 @@ mod tests {
                 Region::Seq(parts) => parts.iter().any(|part| owns_block(part, target)),
                 Region::IfThen { then_r, .. }
                 | Region::While { body: then_r, .. }
-                | Region::DoWhile { body: then_r, .. } => owns_block(then_r, target),
+                | Region::DoWhile { body: then_r, .. }
+                | Region::MultiExitLoop { body: then_r, .. } => owns_block(then_r, target),
                 Region::IfThenElse { then_r, else_r, .. } => {
                     owns_block(then_r, target) || owns_block(else_r, target)
                 }
@@ -2461,7 +2468,10 @@ mod tests {
                 }
                 Region::IfThen { then_r, .. }
                 | Region::While { body: then_r, .. }
-                | Region::DoWhile { body: then_r, .. } => loop_is_followed_by_block(then_r, target),
+                | Region::DoWhile { body: then_r, .. }
+                | Region::MultiExitLoop { body: then_r, .. } => {
+                    loop_is_followed_by_block(then_r, target)
+                }
                 Region::IfThenElse { then_r, else_r, .. } => {
                     loop_is_followed_by_block(then_r, target)
                         || loop_is_followed_by_block(else_r, target)
@@ -2513,9 +2523,9 @@ mod tests {
                     assert_no_unstructured(then_r);
                     assert_no_unstructured(else_r);
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => {
-                    assert_no_unstructured(body)
-                }
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => assert_no_unstructured(body),
                 Region::RawLoop { .. } => {}
                 Region::Switch { arms, .. } => {
                     arms.iter().for_each(assert_no_unstructured);
@@ -2616,7 +2626,9 @@ mod tests {
                 Region::IfThenElse { then_r, else_r, .. } => {
                     find_switch(then_r).or_else(|| find_switch(else_r))
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => find_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -2891,7 +2903,9 @@ mod tests {
                 Region::IfThenElse { then_r, else_r, .. } => {
                     has_goto(then_r, target) || has_goto(else_r, target)
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => has_goto(body, target),
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => has_goto(body, target),
                 Region::Switch { arms, .. } => arms.iter().any(|arm| has_goto(arm, target)),
                 Region::Block(_) | Region::RawLoop { .. } | Region::Unstructured(_) => false,
             }

@@ -107,6 +107,10 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
                 report_uncovered(*cond, succs, &covered, out);
                 walk(body, succs, out);
             }
+            Region::MultiExitLoop { body, exits, .. } => {
+                walk(body, succs, out);
+                exits.iter().for_each(|(_, exit)| walk(exit, succs, out));
+            }
             Region::RawLoop { .. } => {}
             Region::Switch {
                 guard,

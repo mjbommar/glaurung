@@ -408,12 +408,15 @@ that preserves honest local gotos when required.
   labelled-CFG fallback: every retained local goto resolves to an emitted
   label, exit paths and their verified terminal clones remain present, and no
   irreducible edge is hidden behind speculative structure. Nested local regions
-  and multi-exit loop rendering remain open. A RED experiment on
-  `loop_return_on_neg` confirmed that v1's one-distinguished-exit `While` cannot
-  encode its two exit-specific paths without reversing a branch or moving a
-  verified terminal clone; that case therefore requires an explicit region/AST
-  capability rather than a lossy adapter. Post-pass comparison and a separately
-  normalized CFG view also remain open.
+  and nested local-region rendering remains open. A RED experiment on
+  `loop_return_on_neg` confirmed that v1's one-distinguished-exit `While` could
+  not encode its two exit-specific paths without reversing a branch or moving a
+  verified terminal clone. The region/AST boundary now has an explicit
+  `MultiExitLoop`: its body retains typed exit transfers, lowering materializes
+  each independently verified exit region at that exact transfer, and the real
+  fixture emits deterministic `while (1)` pseudocode with both return paths and
+  no goto. Post-pass comparison and a separately normalized CFG view remain
+  open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -427,9 +430,10 @@ that preserves honest local gotos when required.
   unsupported tree vocabularies retain `None` rather than speculative text.
   The first proven post-tested single-exit loop now renders through the same
   path. Verified top-level local-labelled trees now render honest, resolved
-  gotos plus separately owned labelled definitions and exit paths. Multi-exit
-  and nested-local rendering, health, post-pass pseudocode, execution, GED, and
-  runtime comparisons remain.
+  gotos plus separately owned labelled definitions and exit paths. Verified
+  multi-exit loops now render through the explicit region/AST node rather than
+  selecting one distinguished exit. Nested-local rendering, health, post-pass
+  pseudocode, execution, GED, and runtime comparisons remain.
 
 ### RED fixtures
 
@@ -479,8 +483,9 @@ that preserves honest local gotos when required.
   and the real `loop_return_on_neg` shared return are green. Each planned clone
   is now materialized as an explicit `DuplicatedReturn` in the recovered tree;
   the tree verifier rejects missing or invented materializations one-for-one
-  against the independently checked plan. Rendering the clones and measuring
-  their output remain open.
+  against the independently checked plan. The real multi-exit rendering now
+  consumes that materialization and retains both return paths; corpus-wide
+  output measurement remains open.
 - [x] Condition simplification preserves machine-width predicate semantics.
   Each shadow condition atom now carries the SSA producer's exact `CmpOp`,
   recoverable operand width, and `CondJump` inversion; unavailable producer or

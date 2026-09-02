@@ -56,6 +56,55 @@ fn recover_direct_loop_breaks(stmts: &mut [Stmt], exit_va: u64) {
     }
 }
 
+/// Replace the typed transfers retained by a multi-exit loop with their exact
+/// structured exit paths. The exit statements are cloned at the transfer site;
+/// bounded clone provenance is established by structure-v2 before this lowerer
+/// is called.
+fn materialize_multi_exit_transfers(
+    statements: Vec<Stmt>,
+    header_va: u64,
+    exits: &std::collections::HashMap<u64, Vec<Stmt>>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    let statement_count = statements.len();
+    for (index, statement) in statements.into_iter().enumerate() {
+        match statement {
+            // Falling off the loop body is C's implicit continue. Only erase a
+            // header transfer when it is terminal in its current structured
+            // arm; retaining a non-terminal transfer is safer than executing
+            // statements that the CFG skipped.
+            Stmt::Goto { target } if target == header_va && index + 1 == statement_count => {}
+            Stmt::Goto { target } if exits.contains_key(&target) => {
+                out.extend(exits[&target].clone());
+            }
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => out.push(Stmt::If {
+                cond,
+                then_body: materialize_multi_exit_transfers(then_body, header_va, exits),
+                else_body: else_body
+                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits)),
+            }),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn statements_terminate(statements: &[Stmt]) -> bool {
+    match statements.last() {
+        Some(Stmt::Return { .. } | Stmt::Break | Stmt::Goto { .. }) => true,
+        Some(Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        }) => statements_terminate(then_body) && statements_terminate(else_body),
+        _ => false,
+    }
+}
+
 /// The successor reached by source-order fallthrough rather than an explicit
 /// transfer in `block`'s final instruction.
 fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
@@ -407,6 +456,34 @@ fn lower_region_inner(
                 cond: continue_cond,
             }]
         }
+        Region::MultiExitLoop {
+            header,
+            body,
+            exits,
+            continuation,
+        } => {
+            let continuation_va = continuation.map(|block| lf.blocks[block].start_va);
+            let mut lowered_exits = std::collections::HashMap::new();
+            for (target, exit) in exits {
+                let mut statements = lower_region(exit, lf, targets, lower_scalar_float);
+                if let Some(continuation_va) = continuation_va {
+                    strip_trailing_goto(&mut statements, continuation_va);
+                }
+                if !statements_terminate(&statements) {
+                    statements.push(Stmt::Break);
+                }
+                lowered_exits.insert(lf.blocks[*target].start_va, statements);
+            }
+            let body = lower_region(body, lf, targets, lower_scalar_float);
+            vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: materialize_multi_exit_transfers(
+                    body,
+                    lf.blocks[*header].start_va,
+                    &lowered_exits,
+                ),
+            }]
+        }
         Region::RawLoop {
             header,
             blocks,
@@ -590,9 +667,9 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
             collect_goto_targets(then_r, lf, out);
             collect_goto_targets(else_r, lf, out);
         }
-        Region::While { body, .. } | Region::DoWhile { body, .. } => {
-            collect_goto_targets(body, lf, out)
-        }
+        Region::While { body, .. }
+        | Region::DoWhile { body, .. }
+        | Region::MultiExitLoop { body, .. } => collect_goto_targets(body, lf, out),
         Region::RawLoop { exits, .. } => {
             out.extend(exits.iter().map(|exit| lf.blocks[*exit].start_va));
         }

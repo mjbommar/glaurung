@@ -54,6 +54,17 @@ pub enum Region {
         cond: usize,
         exit: Option<usize>,
     },
+    /// A loop whose body retains typed transfers to two or more distinct exit
+    /// regions before those paths reconverge at `continuation`. Unlike
+    /// [`Region::While`], the header block remains inside `body`: lowering
+    /// materializes each exit path at its exact transfer and emits a
+    /// semantically explicit `while (1)`.
+    MultiExitLoop {
+        header: usize,
+        body: Box<Region>,
+        exits: Vec<(usize, Region)>,
+        continuation: Option<usize>,
+    },
     /// A natural loop with multiple internal conditional latches and no
     /// distinguished header test. Blocks are owned once and lowered in labelled
     /// CFG form inside `while (1)`, preserving the loop boundary without
@@ -149,6 +160,12 @@ impl Region {
                         out.push(*e);
                     }
                 }
+                Region::MultiExitLoop { body, exits, .. } => {
+                    walk(body, out);
+                    for (_, exit) in exits {
+                        walk(exit, out);
+                    }
+                }
                 Region::RawLoop { blocks, .. } => out.extend(blocks.iter().copied()),
                 Region::Switch {
                     guard,
@@ -194,6 +211,7 @@ pub fn entry_block(r: &Region) -> Option<usize> {
         Region::IfThen { cond, .. } | Region::IfThenElse { cond, .. } => Some(*cond),
         Region::While { header, .. } => Some(*header),
         Region::DoWhile { body, cond, .. } => entry_block(body).or(Some(*cond)),
+        Region::MultiExitLoop { header, .. } => Some(*header),
         Region::RawLoop { header, .. } => Some(*header),
         Region::Switch {
             guard, dispatch, ..

@@ -441,7 +441,9 @@ mod gcc_dispatch_corpus_tests {
             Region::IfThenElse { then_r, else_r, .. } => {
                 switch_case_labels(then_r).or_else(|| switch_case_labels(else_r))
             }
-            Region::While { body, .. } | Region::DoWhile { body, .. } => switch_case_labels(body),
+            Region::While { body, .. }
+            | Region::DoWhile { body, .. }
+            | Region::MultiExitLoop { body, .. } => switch_case_labels(body),
             Region::Block(_)
             | Region::Goto(_)
             | Region::RawLoop { .. }
@@ -463,7 +465,10 @@ mod gcc_dispatch_corpus_tests {
                 .any(|part| raw_loop_owns_dispatch(part, function)),
             Region::IfThen { then_r, .. }
             | Region::While { body: then_r, .. }
-            | Region::DoWhile { body: then_r, .. } => raw_loop_owns_dispatch(then_r, function),
+            | Region::DoWhile { body: then_r, .. }
+            | Region::MultiExitLoop { body: then_r, .. } => {
+                raw_loop_owns_dispatch(then_r, function)
+            }
             Region::IfThenElse { then_r, else_r, .. } => {
                 raw_loop_owns_dispatch(then_r, function) || raw_loop_owns_dispatch(else_r, function)
             }
@@ -484,9 +489,9 @@ mod gcc_dispatch_corpus_tests {
     fn structured_loop_owns_dispatch(region: &crate::ir::structure::Region) -> bool {
         use crate::ir::structure::Region;
         match region {
-            Region::While { body, .. } | Region::DoWhile { body, .. } => {
-                switch_case_labels(body).is_some()
-            }
+            Region::While { body, .. }
+            | Region::DoWhile { body, .. }
+            | Region::MultiExitLoop { body, .. } => switch_case_labels(body).is_some(),
             Region::Seq(parts) => parts.iter().any(structured_loop_owns_dispatch),
             Region::IfThen { then_r, .. } => structured_loop_owns_dispatch(then_r),
             Region::IfThenElse { then_r, else_r, .. } => {
@@ -1078,7 +1083,9 @@ mod gcc_dispatch_corpus_tests {
                 Region::IfThenElse { then_r, else_r, .. } => {
                     switch_arms(then_r).or_else(|| switch_arms(else_r))
                 }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => switch_arms(body),
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => switch_arms(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }

@@ -41,7 +41,7 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
             kind,
             body,
             exits,
-        } => adapt_loop(*header, *kind, body, exits),
+        } => adapt_loop(*header, *kind, body, exits, None),
         StructuredRegion::LocalGoto { to, .. } | StructuredRegion::SharedGoto { to, .. } => {
             Some(Region::Goto(*to))
         }
@@ -54,8 +54,21 @@ fn adapt_loop(
     kind: LoopKind,
     body: &StructuredRegion,
     exits: &[super::LoopExitRegion],
+    continuation: Option<usize>,
 ) -> Option<Region> {
-    if kind != LoopKind::PostTested || !exits.is_empty() {
+    if !exits.is_empty() {
+        let exits = exits
+            .iter()
+            .map(|exit| Some((exit.target, adapt_region(&exit.region)?)))
+            .collect::<Option<Vec<_>>>()?;
+        return Some(Region::MultiExitLoop {
+            header,
+            body: Box::new(adapt_loop_body(body, header)?),
+            exits,
+            continuation,
+        });
+    }
+    if kind != LoopKind::PostTested {
         return None;
     }
     let mut facts = PostTestedFacts::default();
@@ -76,6 +89,101 @@ fn adapt_loop(
         cond: latch,
         exit: Some(exit),
     })
+}
+
+fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
+    match region {
+        StructuredRegion::Empty => Some(Region::Seq(Vec::new())),
+        StructuredRegion::Block(block) => Some(Region::Block(block.block)),
+        StructuredRegion::Return { block } => Some(Region::Block(*block)),
+        StructuredRegion::DuplicatedReturn { source_block, .. } => {
+            Some(Region::Block(*source_block))
+        }
+        StructuredRegion::Sequence(regions) => adapt_loop_sequence(regions, header),
+        StructuredRegion::If {
+            source_block,
+            then_region,
+            else_region,
+            ..
+        } => adapt_loop_if(
+            *source_block,
+            then_region,
+            else_region.as_deref(),
+            None,
+            header,
+        ),
+        StructuredRegion::Break {
+            header: seen, to, ..
+        } if *seen == header => Some(Region::Goto(*to)),
+        StructuredRegion::Continue { header: seen, .. } if *seen == header => {
+            Some(Region::Goto(header))
+        }
+        StructuredRegion::LocalGoto { to, .. } | StructuredRegion::SharedGoto { to, .. } => {
+            Some(Region::Goto(*to))
+        }
+        StructuredRegion::Loop { .. }
+        | StructuredRegion::Break { .. }
+        | StructuredRegion::Continue { .. } => None,
+    }
+}
+
+fn adapt_loop_sequence(regions: &[StructuredRegion], header: usize) -> Option<Region> {
+    let mut adapted = Vec::new();
+    let mut index = 0usize;
+    while index < regions.len() {
+        if matches!(
+            (&regions[index], regions.get(index + 1)),
+            (
+                StructuredRegion::Block(block),
+                Some(StructuredRegion::If { source_block, .. })
+            ) if block.block == *source_block
+        ) {
+            index += 1;
+        }
+        let adapted_region = match &regions[index] {
+            StructuredRegion::If {
+                source_block,
+                then_region,
+                else_region,
+                ..
+            } => adapt_loop_if(
+                *source_block,
+                then_region,
+                else_region.as_deref(),
+                regions.get(index + 1).and_then(entry_block),
+                header,
+            )?,
+            region => adapt_loop_body(region, header)?,
+        };
+        adapted.push(adapted_region);
+        index += 1;
+    }
+    Some(Region::Seq(adapted))
+}
+
+fn adapt_loop_if(
+    source_block: usize,
+    then_region: &StructuredRegion,
+    else_region: Option<&StructuredRegion>,
+    join: Option<usize>,
+    header: usize,
+) -> Option<Region> {
+    let then_r = Box::new(adapt_loop_body(then_region, header)?);
+    match else_region {
+        None | Some(StructuredRegion::Empty) => Some(Region::IfThen {
+            cond: source_block,
+            then_r,
+            join,
+            invert: false,
+        }),
+        Some(else_region) => Some(Region::IfThenElse {
+            cond: source_block,
+            then_r,
+            else_r: Box::new(adapt_loop_body(else_region, header)?),
+            join,
+            invert: false,
+        }),
+    }
 }
 
 #[derive(Default)]
@@ -180,6 +288,18 @@ fn adapt_sequence(regions: &[StructuredRegion]) -> Option<Region> {
                 *source_block,
                 then_region,
                 else_region.as_deref(),
+                regions.get(index + 1).and_then(entry_block),
+            )?,
+            StructuredRegion::Loop {
+                header,
+                kind,
+                body,
+                exits,
+            } => adapt_loop(
+                *header,
+                *kind,
+                body,
+                exits,
                 regions.get(index + 1).and_then(entry_block),
             )?,
             region => adapt_region(region)?,

@@ -131,6 +131,10 @@ fn owned(r: &Region, out: &mut Vec<usize>) {
             owned(body, out);
             out.push(*cond);
         }
+        Region::MultiExitLoop { body, exits, .. } => {
+            owned(body, out);
+            exits.iter().for_each(|(_, exit)| owned(exit, out));
+        }
         Region::RawLoop { blocks, .. } => out.extend(blocks.iter().copied()),
         Region::Switch {
             guard,
@@ -242,6 +246,12 @@ fn goto_edges(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>
             goto_edges(body, edges, out);
         }
         Region::DoWhile { body, .. } => goto_edges(body, edges, out),
+        Region::MultiExitLoop { body, exits, .. } => {
+            goto_edges(body, edges, out);
+            exits
+                .iter()
+                .for_each(|(_, exit)| goto_edges(exit, edges, out));
+        }
         Region::Switch {
             dispatch,
             arms,
@@ -404,6 +414,10 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             }
             implied(body, edges, out);
         }
+        Region::MultiExitLoop { body, exits, .. } => {
+            implied(body, edges, out);
+            exits.iter().for_each(|(_, exit)| implied(exit, edges, out));
+        }
         Region::Switch {
             guard,
             dispatch,
@@ -486,6 +500,20 @@ fn loops_and_switches(
             headers.insert(header);
             enclosing.push(header);
             loops_and_switches(body, enclosing, headers, raw_loop_blocks, switch_owner);
+            enclosing.pop();
+        }
+        Region::MultiExitLoop {
+            header,
+            body,
+            exits,
+            ..
+        } => {
+            headers.insert(*header);
+            enclosing.push(*header);
+            loops_and_switches(body, enclosing, headers, raw_loop_blocks, switch_owner);
+            exits.iter().for_each(|(_, exit)| {
+                loops_and_switches(exit, enclosing, headers, raw_loop_blocks, switch_owner)
+            });
             enclosing.pop();
         }
         Region::RawLoop { header, blocks, .. } => {
@@ -599,7 +627,9 @@ pub fn account(
                 gotos(then_r, out);
                 gotos(else_r, out);
             }
-            Region::While { body, .. } | Region::DoWhile { body, .. } => gotos(body, out),
+            Region::While { body, .. }
+            | Region::DoWhile { body, .. }
+            | Region::MultiExitLoop { body, .. } => gotos(body, out),
             Region::Switch {
                 arms,
                 formal_default,

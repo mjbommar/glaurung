@@ -672,6 +672,14 @@ mod tests {
                 "planned terminal clone must be materialized: {tail:?}\n{tree:#?}"
             );
         }
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified multi-exit loop should render: {report:#?}"));
+        assert!(pseudocode.contains("while (1)"), "{pseudocode}");
+        assert!(pseudocode.matches("return").count() >= 2, "{pseudocode}");
+        assert!(!pseudocode.contains("goto "), "{pseudocode}");
+        assert_eq!(report.raw_pseudocode, observe(&lifted, &ssa).raw_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
         assert_eq!(report.tree, observe(&lifted, &ssa).tree);
     }
