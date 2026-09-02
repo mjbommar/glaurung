@@ -10,7 +10,7 @@ it is, never to learn *what* the code does today. For that, start at
 [`docs/README.md`](../README.md).
 
 The last two columns are drawn from the per-file audit ledgers in
-[`docs/development/docs-audit-2026-09-02/`](docs-rewrite-2026-09/audit/),
+[`docs/history/docs-rewrite-2026-09/audit/`](docs-rewrite-2026-09/audit/),
 produced against `master` @ `b8884687` on 2026-09-02.
 
 ## Root
