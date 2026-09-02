@@ -115,6 +115,8 @@ def test_the_prototype_changes_the_rendered_signature(
     assert changed != plain, "the prototype did nothing"
     assert changed.startswith("unsigned int validate("), changed
     assert changed.count("short") == recovered_arity, changed
+    assert all(f"p{i}" in changed for i in range(recovered_arity)), changed
+    assert all(f"arg{i}" not in changed for i in range(recovered_arity)), changed
 
 
 def test_the_return_type_alone_can_be_declared(binary, recovered_arity, tmp_path):
@@ -177,7 +179,7 @@ def test_an_unspecified_parameter_type_becomes_void_star(
         "int",
         [("p0", "")] + [(f"p{i}", "int") for i in range(1, recovered_arity)],
     )
-    assert "void * arg0" in signature(decompile(binary, db))
+    assert "void * p0" in signature(decompile(binary, db))
 
 
 def test_without_a_project_nothing_changes(binary):

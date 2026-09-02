@@ -76,6 +76,7 @@ pub use decbench_render::{
     render_decbench_typed_with_output_and_prototype,
     render_decbench_typed_with_output_and_prototype_and_dwarf_types,
     render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types,
+    render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names,
 };
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;

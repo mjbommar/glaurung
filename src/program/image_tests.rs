@@ -44,6 +44,24 @@ fn one_owned_image_answers_target_entry_and_address_queries_without_reparsing() 
 }
 
 #[test]
+fn a_text_symbol_name_at_multiple_addresses_is_not_a_unique_identity() {
+    let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/decompiler_fixtures/build/166_rust_generics-rustc-O0.so");
+    if !binary.is_file() {
+        return;
+    }
+    let image = ProgramImage::from_path(&binary).expect("parse real Rust fixture");
+    let duplicate = "_ZN4core3ptr28drop_in_place$LT$$RF$str$GT$17h230fbaafe2cfecddE";
+
+    assert!(image.defined_text_symbol_address(duplicate).is_some());
+    assert_eq!(image.unique_defined_text_symbol_address(duplicate), None);
+    assert_eq!(
+        image.unique_defined_text_symbol_address("rust_generic_i32"),
+        Some(0x7c20)
+    );
+}
+
+#[test]
 fn one_owned_image_reuses_exact_unwind_function_extents() {
     let data = std::fs::read(hello_binary()).expect("read real ELF");
     let expected = crate::analysis::exception::eh_frame_functions(&data);

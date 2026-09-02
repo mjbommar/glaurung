@@ -761,7 +761,7 @@ without concealing inference disagreement.
 
 ### Production changes
 
-- [ ] Trace `tail_dispatch` through:
+- [x] Trace `tail_dispatch` through:
   `src/python_bindings/ir/dwarf_contracts.rs`,
   `src/python_bindings/ir/type_maps.rs`,
   `src/ir/ast/declaration_plan.rs`, and
@@ -770,7 +770,7 @@ without concealing inference disagreement.
   trusted debug declaration, inferred recovery.
 - [ ] Preserve all candidates with provenance and record a typed
   `PrototypeConflict` health finding when they disagree.
-- [ ] Render the authoritative declaration's types, names, and variadic tail
+- [x] Render the authoritative declaration's types, names, and variadic tail
   when representable.
 - [ ] Keep conflict diagnostics out of scored pseudocode by default. Expose
   them through structured Python results and an explicitly annotated analyst
@@ -780,12 +780,58 @@ without concealing inference disagreement.
 
 ### Tests
 
-- [ ] RED `tail_dispatch` exact prototype and parameter names.
-- [ ] Analyst-over-DWARF and DWARF-over-inference authority tests.
-- [ ] Stale/conflicting PDB or DWARF fixture with both facts retained.
+- [x] RED `tail_dispatch` exact prototype and parameter names.
+- [x] Analyst-over-DWARF and DWARF-over-inference authority tests.
+- [x] Stale/conflicting DWARF fixture with both facts retained. PDB remains
+  separately open below.
 - [ ] Variadic and aggregate declaration cases.
-- [ ] Scored-style determinism test proving metadata does not change text.
-- [ ] Stripped-lane recovery tests remain independent of declarations.
+- [x] Scored-style determinism test proving metadata does not change text.
+- [x] Stripped-lane recovery tests remain independent of declarations.
+
+### Implementation evidence — 2026-09-02 DWARF/analyst increment
+
+Implemented locally in `src/debug/dwarf.rs`,
+`src/python_bindings/ir/dwarf_contracts.rs`,
+`src/ir/ast/declaration_plan.rs`, `src/ir/ast/decbench_render.rs`, and
+`src/ir/health.rs`:
+
+- addressless C/C++ declaration DIEs are joined only through a unique defined
+  text-symbol identity; non-C source declarations and ambiguous Rust/C++ local
+  symbol names are not promoted into C declaration authority;
+- source function and parameter names, types, and variadic state reach the
+  signature and every corresponding body use through the declaration plan;
+- analyst prototype tuples accept an additive fourth parameter-name list while
+  retaining the shipped three-item form, and the CLI now transports names the
+  project database already stored;
+- analyst, DWARF, and machine-recovered candidates are retained as independently
+  sourced `PrototypeConflict` entries in deterministic order, while scored text
+  stays unchanged; and
+- authoritative and inferred candidates fork from one recovery result, so
+  provenance does not add a second whole-function type-recovery walk.
+
+The first census attempt exposed `rustc:O0` `7898 -> 7924` undefined reads and
+`rustc:O2` `5093 -> 5105`. The regression came from treating addressless Rust
+DWARF declarations as C contracts. The language/identity guard above removed
+the regression; the final unmodified baseline gate passed all six tests.
+
+Validation at this increment:
+
+- `cargo test --features python-ext`: 2,837 passed, 3 ignored, plus all
+  integration targets and doc tests;
+- `python/tests/test_decompiler_declaration_authority.py`: 4 passed;
+- `python/tests/test_analyst_prototype_reaches_decompile.py`: 11 passed against
+  a real compiled fixture;
+- `python/tests/test_decompiler_defuse_census.py`: 6 passed, no baseline edit;
+- native stub freshness and focused Ruff/ty checks passed. Whole-tree `ty`
+  remains independently red with 335 pre-existing diagnostics.
+
+Still open in WP8: PDB procedure declarations. The PDB reader currently parses
+`LF_PROCEDURE`/`LF_MFUNCTION` type records and public-symbol addresses, but not
+the `S_GPROC32`/`S_LPROC32` module records that connect a function VA to its
+type index. Consequently the strict PDB prototype xfails in
+`python/tests/test_pdb_type_recovery.py` remain valid and must not be removed or
+called covered. Aggregate declaration coverage and the explicitly annotated
+analyst render mode also remain open.
 
 ### Exit criteria
 

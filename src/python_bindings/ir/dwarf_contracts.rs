@@ -5,11 +5,13 @@
 /// compact companion map carries parameter and output facts to typed recovery.
 #[derive(Debug, Clone)]
 pub(super) struct DwarfPrototypeContract {
+    pub(super) function_name: Option<String>,
     /// Whether the producer marked this as a complete function prototype.
     /// This distinguishes `f(void)` from an old-style `f()` when both have no
     /// formal-parameter DIEs.
     pub(super) prototyped: bool,
     pub(super) parameter_types: Vec<crate::debug::dwarf::DwarfParameterType>,
+    pub(super) parameter_names: Vec<Option<String>>,
     pub(super) return_type: crate::debug::dwarf::DwarfReturnType,
     pub(super) stack_objects: Vec<crate::debug::dwarf::DwarfStackObject>,
     pub(super) register_locals: Vec<crate::debug::dwarf::DwarfRegisterLocal>,
@@ -21,17 +23,35 @@ pub(super) fn dwarf_output_contracts(
     image
         .dwarf_functions()
         .iter()
-        .map(|function| {
-            (
-                function.entry_va,
+        .filter_map(|function| {
+            let entry_va = if function.chunks.is_empty() {
+                // A name-only declaration is safe to render as C only when it
+                // came from a C-family compilation unit. Rust/Go declarations
+                // describe a different source ABI and routinely share local
+                // monomorphized names; treating them as C contracts changed
+                // LLIR parameter materialization and regressed definedness.
+                if !matches!(function.language.as_deref(), Some("C" | "C++")) {
+                    return None;
+                }
+                function
+                    .name
+                    .as_deref()
+                    .and_then(|name| image.unique_defined_text_symbol_address(name))?
+            } else {
+                function.entry_va
+            };
+            Some((
+                entry_va,
                 DwarfPrototypeContract {
+                    function_name: function.name.clone(),
                     prototyped: function.prototyped,
                     parameter_types: function.parameter_types.clone(),
+                    parameter_names: function.parameter_names.clone(),
                     return_type: function.return_type.clone(),
                     stack_objects: function.stack_objects.clone(),
                     register_locals: function.register_locals.clone(),
                 },
-            )
+            ))
         })
         .collect()
 }

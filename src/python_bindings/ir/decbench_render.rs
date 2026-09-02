@@ -92,6 +92,7 @@ pub(super) fn decbench_text(
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
     recovered_prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
+    declared_parameter_names: Option<&[Option<String>]>,
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
@@ -121,6 +122,7 @@ pub(super) fn decbench_text(
         readonly_data,
         recovered_prototype,
         declared_prototype,
+        declared_parameter_names,
         dwarf_types,
         dwarf_local_types,
         dwarf_local_names,
@@ -146,6 +148,7 @@ fn decbench_text_with_installed_environment(
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
     recovered_prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
+    declared_parameter_names: Option<&[Option<String>]>,
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
@@ -579,12 +582,13 @@ fn decbench_text_with_installed_environment(
         .or(single_render_prototype.as_ref())
         .or(render_prototype);
     let body = profiler.measure("render_decbench", || {
-        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names(
             &prepared,
             decl,
             width,
             output_kind,
             render_prototype,
+            declared_parameter_names,
             dwarf_types,
             calling_convention_pointer_width(cc),
             &dwarf_pointer_types,

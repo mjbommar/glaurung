@@ -314,3 +314,71 @@ fn the_report_is_ordered_by_entry_address_so_parallel_and_serial_runs_agree() {
         .collect::<Vec<_>>();
     assert_eq!(ours, vec!["0x4a5000", "0x4a6000", "0x4a7000"]);
 }
+
+fn prototype(
+    return_type: &str,
+    params: &[&str],
+    variadic: bool,
+) -> crate::ir::call_contracts::CallPrototype {
+    crate::ir::call_contracts::CallPrototype::from_analyst(
+        return_type,
+        &params
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>(),
+        variadic,
+    )
+}
+
+#[test]
+fn prototype_conflicts_retain_each_candidate_source_in_stable_order() {
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+    let authoritative = prototype("long", &["short"], true);
+    let dwarf = prototype("int", &["int"], false);
+    let inferred = prototype("int", &["unsigned int"], false);
+
+    crate::ir::health::record_prototype_conflict(
+        "declared",
+        0x4a8000,
+        "analyst",
+        &authoritative,
+        "inferred",
+        &inferred,
+    );
+    crate::ir::health::record_prototype_conflict(
+        "declared",
+        0x4a8000,
+        "analyst",
+        &authoritative,
+        "dwarf",
+        &dwarf,
+    );
+
+    let report = crate::ir::health::take_render_verification();
+    assert_eq!(report.prototype_conflict_count, 2);
+    assert_eq!(
+        report
+            .prototype_conflicts
+            .iter()
+            .map(|conflict| conflict.candidate_source.as_str())
+            .collect::<Vec<_>>(),
+        vec!["dwarf", "inferred"]
+    );
+}
+
+#[test]
+fn an_identical_prototype_is_not_a_conflict() {
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+    let same = prototype("int", &["int"], false);
+
+    crate::ir::health::record_prototype_conflict(
+        "agrees", 0x4a9000, "dwarf", &same, "inferred", &same,
+    );
+
+    assert_eq!(
+        crate::ir::health::take_render_verification().prototype_conflict_count,
+        0
+    );
+}

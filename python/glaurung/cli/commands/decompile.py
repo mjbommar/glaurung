@@ -53,7 +53,9 @@ def _decompile_at_cached(
     cache_dir_arg: Optional[str],
     analyst_names: Optional[dict[int, str]] = None,
     analyst_locals: Optional[dict[int, tuple[str, str]]] = None,
-    analyst_prototype: Optional[tuple[str, list[str], bool]] = None,
+    analyst_prototype: Optional[
+        tuple[str, list[str], bool] | tuple[str, list[str], bool, list[str]]
+    ] = None,
 ) -> str:
     """Run ``g.ir.decompile_at`` with optional persistent caching.
 

@@ -138,6 +138,34 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
     dwarf_local_types: &std::collections::HashMap<String, String>,
 ) -> String {
+    render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names(
+        f,
+        tm,
+        width_tm,
+        output_kind,
+        declared_prototype,
+        None,
+        dwarf_types,
+        pointer_width,
+        dwarf_pointer_types,
+        dwarf_local_types,
+    )
+}
+
+/// Typed DecBench renderer with authoritative parameter names.
+#[allow(clippy::too_many_arguments)]
+pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&CallPrototype>,
+    declared_parameter_names: Option<&[Option<String>]>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    pointer_width: u8,
+    dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
+    dwarf_local_types: &std::collections::HashMap<String, String>,
+) -> String {
     let source_locals = dwarf_local_types
         .keys()
         .cloned()
@@ -200,6 +228,10 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
                 || (output_kind != crate::ir::types_recover::RecoveredOutputKind::Void
                     && prototype.return_type != "void"))
     });
+    // Names are part of the declaration, not a free-standing cosmetic overlay.
+    // If the declaration is rejected (wrong arity, unrenderable type, or return
+    // contract mismatch), reject its names as one atomic fact as well.
+    let declared_parameter_names = declared_prototype.and(declared_parameter_names);
     let all_declared_parameters_renderable = declared_prototype.is_some_and(|prototype| {
         prototype
             .parameter_types
@@ -420,6 +452,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         width_tm,
         output_kind,
         declared_prototype,
+        declared_parameter_names,
         arg_count,
         source_type_aliases: &source_type_aliases,
         dwarf_type_env: &dwarf_type_env,
@@ -514,7 +547,15 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
             if i > 0 {
                 out.push_str(", ");
             }
-            let _ = write!(out, "{} arg{}", aty, i);
+            let parameter_name = dec_plan(|plan| {
+                plan.parameter_name(i)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("arg{i}"))
+            });
+            let _ = write!(out, "{} {}", aty, parameter_name);
+        }
+        if dec_plan(DeclarationPlan::variadic) {
+            out.push_str(", ...");
         }
     }
     out.push_str(") {\n");
@@ -529,7 +570,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         CallPrototype {
             return_type: return_type.clone(),
             parameter_types,
-            variadic: false,
+            variadic: dec_plan(DeclarationPlan::variadic),
             authority: if all_declared_parameters_renderable {
                 CallPrototypeAuthority::Authoritative
             } else {

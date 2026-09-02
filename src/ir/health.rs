@@ -179,6 +179,26 @@ pub struct RenderVerdict {
     pub violations: Vec<HealthViolation>,
 }
 
+/// One source-level prototype represented without conflating it with its origin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrototypeShape {
+    pub return_type: String,
+    pub parameter_types: Vec<String>,
+    pub variadic: bool,
+}
+
+/// A disagreement between an authoritative declaration and machine recovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrototypeConflict {
+    pub function: String,
+    pub entry_va: String,
+    pub authoritative_source: String,
+    pub authoritative: PrototypeShape,
+    pub candidate_source: String,
+    pub candidate: PrototypeShape,
+    pub disagreements: Vec<String>,
+}
+
 /// What the pre-render verifier proved, and failed to prove, since the last drain.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct RenderVerificationReport {
@@ -195,6 +215,10 @@ pub struct RenderVerificationReport {
     pub dropped_verdicts: usize,
     /// Every failing verdict, ordered by entry address then name.
     pub unverified: Vec<RenderVerdict>,
+    /// Declaration/recovery disagreements retained independently of output text.
+    pub prototype_conflict_count: usize,
+    /// Conflicts ordered by address then function name.
+    pub prototype_conflicts: Vec<PrototypeConflict>,
 }
 
 /// Failing verdicts retained before the ledger starts counting rather than storing.
@@ -223,6 +247,7 @@ struct RenderLedger {
     verified: usize,
     unverified: std::collections::BTreeMap<(u64, String), RenderVerdict>,
     dropped: usize,
+    prototype_conflicts: std::collections::BTreeMap<(u64, String, String), PrototypeConflict>,
 }
 
 fn render_ledger() -> std::sync::MutexGuard<'static, RenderLedger> {
@@ -258,6 +283,48 @@ pub fn record_render_verification(verification: &crate::ir::verify_defs::RenderV
         });
 }
 
+/// Record a declaration/recovery disagreement without changing rendered text.
+pub fn record_prototype_conflict(
+    function: &str,
+    entry_va: u64,
+    authoritative_source: &str,
+    authoritative: &crate::ir::call_contracts::CallPrototype,
+    candidate_source: &str,
+    candidate: &crate::ir::call_contracts::CallPrototype,
+) {
+    let mut disagreements = Vec::new();
+    if authoritative.return_type != candidate.return_type {
+        disagreements.push("return_type".to_string());
+    }
+    if authoritative.parameter_types != candidate.parameter_types {
+        disagreements.push("parameter_types".to_string());
+    }
+    if authoritative.variadic != candidate.variadic {
+        disagreements.push("variadic".to_string());
+    }
+    if disagreements.is_empty() {
+        return;
+    }
+    let shape = |prototype: &crate::ir::call_contracts::CallPrototype| PrototypeShape {
+        return_type: prototype.return_type.clone(),
+        parameter_types: prototype.parameter_types.clone(),
+        variadic: prototype.variadic,
+    };
+    let conflict = PrototypeConflict {
+        function: function.to_string(),
+        entry_va: format!("{entry_va:#x}"),
+        authoritative_source: authoritative_source.to_string(),
+        authoritative: shape(authoritative),
+        candidate_source: candidate_source.to_string(),
+        candidate: shape(candidate),
+        disagreements,
+    };
+    render_ledger()
+        .prototype_conflicts
+        .entry((entry_va, function.to_string(), candidate_source.to_string()))
+        .or_insert(conflict);
+}
+
 /// Drain and return everything verified since the last call.
 pub fn take_render_verification() -> RenderVerificationReport {
     let mut ledger = render_ledger();
@@ -272,6 +339,8 @@ pub fn take_render_verification() -> RenderVerificationReport {
             .sum(),
         dropped_verdicts: taken.dropped,
         unverified: taken.unverified.into_values().collect(),
+        prototype_conflict_count: taken.prototype_conflicts.len(),
+        prototype_conflicts: taken.prototype_conflicts.into_values().collect(),
     }
 }
 

@@ -442,7 +442,12 @@ fn write_reg_lvalue_dec(v: &VReg, out: &mut String) {
     match v {
         VReg::Phys(n) => {
             if let Some(idx) = parse_arg_index(n) {
-                let _ = write!(out, "arg{}", idx);
+                let displayed = dec_plan(|plan| {
+                    plan.displayed_parameter(n)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("arg{idx}"))
+                });
+                out.push_str(&displayed);
             } else {
                 out.push_str(&sanitize_c_ident(n));
             }

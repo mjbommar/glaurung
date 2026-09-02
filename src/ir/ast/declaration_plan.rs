@@ -73,6 +73,8 @@ pub(super) struct DeclarationInputs<'a> {
     /// An authoritative source prototype, already filtered for arity and
     /// renderability by the caller.
     pub(super) declared_prototype: Option<&'a CallPrototype>,
+    /// Source parameter names paired with the authoritative declaration.
+    pub(super) declared_parameter_names: Option<&'a [Option<String>]>,
     /// Signature arity, which is an ABI property and may exceed the arguments
     /// still referenced by the body.
     pub(super) arg_count: usize,
@@ -97,6 +99,8 @@ pub(super) struct DeclarationPlan {
     return_ctype: String,
     returns_void: bool,
     parameters: Vec<String>,
+    parameter_names: Vec<String>,
+    variadic: bool,
     pointer_parameters: HashMap<String, String>,
     locals: Vec<(String, LocalDeclaration)>,
     declared_ctypes: HashMap<String, String>,
@@ -117,6 +121,8 @@ impl Default for DeclarationPlan {
             return_ctype: "long".to_string(),
             returns_void: false,
             parameters: Vec::new(),
+            parameter_names: Vec::new(),
+            variadic: false,
             pointer_parameters: HashMap::new(),
             locals: Vec::new(),
             declared_ctypes: HashMap::new(),
@@ -141,6 +147,7 @@ impl DeclarationPlan {
             width_tm,
             output_kind,
             declared_prototype,
+            declared_parameter_names,
             arg_count,
             source_type_aliases,
             dwarf_type_env,
@@ -195,6 +202,7 @@ impl DeclarationPlan {
         }
 
         let returns_void = output_kind == RecoveredOutputKind::Void;
+        let variadic = declared_prototype.is_some_and(|prototype| prototype.variadic);
         let return_ctype = declared_prototype.map_or_else(
             || {
                 if returns_void {
@@ -216,6 +224,8 @@ impl DeclarationPlan {
         let mut declared_ctypes = HashMap::new();
         let mut pointer_parameters = HashMap::new();
         let mut parameters = Vec::with_capacity(arg_count);
+        let mut parameter_names = Vec::with_capacity(arg_count);
+        let mut used_parameter_names = HashSet::new();
         for index in 0..arg_count {
             let name = format!("arg{index}");
             let recovered_type = || ctype_for(&name, tm).to_string();
@@ -230,6 +240,15 @@ impl DeclarationPlan {
             }
             declared_ctypes.insert(name, c_type.clone());
             parameters.push(c_type);
+            let source_name = declared_parameter_names
+                .and_then(|names| names.get(index))
+                .and_then(Option::as_deref)
+                .filter(|candidate| crate::ir::naming::valid_authoritative_local_name(candidate))
+                .filter(|candidate| !ids.locals.contains(*candidate))
+                .filter(|candidate| used_parameter_names.insert((*candidate).to_string()))
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("arg{index}"));
+            parameter_names.push(source_name);
         }
 
         // Promoted stack slots and exact SSA-derived `varN` values may take a
@@ -283,6 +302,8 @@ impl DeclarationPlan {
             return_ctype,
             returns_void,
             parameters,
+            parameter_names,
+            variadic,
             pointer_parameters,
             locals,
             declared_ctypes,
@@ -313,6 +334,21 @@ impl DeclarationPlan {
     /// Declared parameter types, in signature order.
     pub(super) fn parameters(&self) -> &[String] {
         &self.parameters
+    }
+
+    /// Source spelling selected for the parameter at `index`.
+    pub(super) fn parameter_name(&self, index: usize) -> Option<&str> {
+        self.parameter_names.get(index).map(String::as_str)
+    }
+
+    /// Source spelling for an internal `argN` role, when one was declared.
+    pub(super) fn displayed_parameter(&self, role: &str) -> Option<&str> {
+        parse_arg_index(role).and_then(|index| self.parameter_name(index))
+    }
+
+    /// Whether the authoritative declaration accepts an unnamed argument tail.
+    pub(super) fn variadic(&self) -> bool {
+        self.variadic
     }
 
     /// The declared type of `name` if it is a pointer-typed parameter.

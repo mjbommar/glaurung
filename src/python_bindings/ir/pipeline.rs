@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 
 use super::callee_contracts::DirectCalleeFacts;
 use super::dwarf_contracts::{dwarf_source_register_lifetimes, DwarfPrototypeContract};
-use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype};
+use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with_inferred};
 
 /// Replace calls to the compiler's division runtime helpers with the arithmetic
 /// they perform (see [`crate::ir::soft_helpers`]).
@@ -385,6 +385,9 @@ pub(super) struct PreparedLlir {
     pub(super) numbered: crate::ir::types::LlirFunction,
     pub(super) definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
     pub(super) parameter_slots: std::collections::HashSet<usize>,
+    /// Machine-only recovery before DWARF locks are applied, retained solely
+    /// for declaration-conflict provenance.
+    pub(super) inferred_prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
     pub(super) prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
 }
 
@@ -488,8 +491,9 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     } else {
         crate::ir::value_number::live_in_arg_slots_llir(function, cc)
     };
+    let mut inferred_prototype = None;
     let prototype = recover_semantic_prototype.then(|| {
-        let mut prototype = recover_decbench_prototype(
+        let (mut prototype, inferred) = recover_decbench_prototype_with_inferred(
             function,
             &ssa,
             cc,
@@ -498,6 +502,9 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
             declared,
             type_env,
         );
+        if declared.is_some() {
+            inferred_prototype = Some(inferred);
+        }
         // Debug declarations remain the strongest source.  A registration API
         // supplies the missing contract only when local/debug recovery did not
         // already lock one, which keeps conflicting evidence fail-closed.
@@ -598,6 +605,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         numbered,
         definition_widths,
         parameter_slots,
+        inferred_prototype,
         prototype,
     }
 }

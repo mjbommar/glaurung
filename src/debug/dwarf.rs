@@ -48,6 +48,9 @@ pub struct DwarfFunction {
     /// optimized subprogram may inherit each type through its parameter DIE's
     /// `DW_AT_abstract_origin`.
     pub parameter_types: Vec<DwarfParameterType>,
+    /// Source parameter names in declaration order. Missing or invalid names
+    /// remain `None`; callers must not invent a spelling from positional data.
+    pub parameter_names: Vec<Option<String>>,
     /// Whether the subprogram declared a prototype (`DW_AT_prototyped`).
     pub prototyped: bool,
     /// Authoritative source-level return contract from `DW_AT_type`.
@@ -315,10 +318,10 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 continue;
             }
 
-            let chunks = match collect_ranges(&dwarf, &unit, &entry) {
-                Ok(rs) if !rs.is_empty() => rs,
-                _ => continue,
-            };
+            // Keep addressless declaration DIEs as declaration evidence. The
+            // program image can join them to a defined text symbol by name;
+            // discovery consumers continue to ignore their empty range list.
+            let chunks = collect_ranges(&dwarf, &unit, &entry).unwrap_or_default();
             let entry_va = chunks.first().map(|range| range.start).unwrap_or(0);
 
             let name = pick_name(&dwarf, &unit, &entry);
@@ -333,15 +336,23 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                     .unwrap_or(DwarfReturnType::Unknown),
             };
             let parameter_types = parameter_offsets
-                .into_iter()
+                .iter()
                 .map(|parameter_offset| {
-                    let Ok(parameter) = unit.entry(parameter_offset) else {
+                    let Ok(parameter) = unit.entry(*parameter_offset) else {
                         return DwarfParameterType::Unknown;
                     };
                     inherited_attr_value(&unit, &parameter, gimli::DW_AT_type)
                         .and_then(|type_attr| _resolve_type_string(&dwarf, &unit, type_attr))
                         .map(DwarfParameterType::Type)
                         .unwrap_or(DwarfParameterType::Unknown)
+                })
+                .collect::<Vec<_>>();
+            let parameter_names = parameter_offsets
+                .iter()
+                .map(|parameter_offset| {
+                    unit.entry(*parameter_offset)
+                        .ok()
+                        .and_then(|parameter| inherited_name_of(&dwarf, &unit, &parameter))
                 })
                 .collect::<Vec<_>>();
             let param_count = parameter_types.len() as u32;
@@ -366,6 +377,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 language: unit_lang.clone(),
                 param_count,
                 parameter_types,
+                parameter_names,
                 prototyped,
                 return_type,
                 stack_objects,

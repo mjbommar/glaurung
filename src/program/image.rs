@@ -136,6 +136,7 @@ pub struct ProgramImage {
     plt_stub_ranges: Arc<[Range<u64>]>,
     eh_frame_functions: Arc<[crate::analysis::exception::EhFrameFunction]>,
     defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
+    ambiguous_defined_text_symbol_names: Arc<HashSet<String>>,
     defined_symbols_by_va: Arc<HashMap<u64, String>>,
     noreturn_import_targets: Arc<OnceLock<Arc<HashSet<u64>>>>,
     exception_call_sites: Arc<OnceLock<Arc<[crate::analysis::exception::ExceptionCallSite]>>>,
@@ -276,6 +277,7 @@ impl ProgramImage {
         }
 
         let mut defined_text_symbols_by_name = HashMap::new();
+        let mut ambiguous_defined_text_symbol_names = HashSet::new();
         let mut defined_symbols_by_va = HashMap::new();
         for symbol in object.symbols().chain(object.dynamic_symbols()) {
             if !symbol.is_definition() {
@@ -292,9 +294,15 @@ impl ProgramImage {
                 .entry(address)
                 .or_insert_with(|| name.to_string());
             if symbol.kind() == SymbolKind::Text {
-                defined_text_symbols_by_name
-                    .entry(name.to_string())
-                    .or_insert(address);
+                match defined_text_symbols_by_name.entry(name.to_string()) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(address);
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot) if *slot.get() != address => {
+                        ambiguous_defined_text_symbol_names.insert(name.to_string());
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {}
+                }
             }
         }
         let eh_frame_functions = crate::analysis::exception::eh_frame_functions_in(&object, &bytes);
@@ -313,6 +321,7 @@ impl ProgramImage {
             plt_stub_ranges: plt_stub_ranges.into(),
             eh_frame_functions: eh_frame_functions.into(),
             defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
+            ambiguous_defined_text_symbol_names: Arc::new(ambiguous_defined_text_symbol_names),
             defined_symbols_by_va: Arc::new(defined_symbols_by_va),
             noreturn_import_targets: Arc::new(OnceLock::new()),
             exception_call_sites: Arc::new(OnceLock::new()),
@@ -369,6 +378,16 @@ impl ProgramImage {
     /// Look up the first defined text symbol with `name`.
     pub fn defined_text_symbol_address(&self, name: &str) -> Option<u64> {
         self.defined_text_symbols_by_name.get(name).copied()
+    }
+
+    /// Look up a defined text symbol only when its name denotes one address.
+    ///
+    /// A name-only debug declaration is not an identity when link-time copies
+    /// of the same local Rust/C++ symbol survive at distinct addresses.
+    pub fn unique_defined_text_symbol_address(&self, name: &str) -> Option<u64> {
+        (!self.ambiguous_defined_text_symbol_names.contains(name))
+            .then(|| self.defined_text_symbol_address(name))
+            .flatten()
     }
 
     /// Look up the first defined symbol naming an exact code address.

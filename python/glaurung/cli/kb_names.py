@@ -196,8 +196,8 @@ def render_comment_header(
 
 def load_analyst_prototype(
     db_path: Optional[str], binary: str, function_name: str
-) -> Optional[tuple[str, list[str], bool]]:
-    """``(return_type, [param types], is_variadic)`` for one function, or ``None``.
+) -> Optional[tuple[str, list[str], bool, list[str]]]:
+    """Return types, variadic state, and parameter names for one function.
 
     Prototypes are keyed by NAME in the project, not by address, so the caller
     must pass the name the function is currently known by -- which after a
@@ -236,15 +236,21 @@ def load_analyst_prototype(
         # signature. Half a prototype is worse than none: it would silently
         # replace a fully recovered signature with a broken one.
         return None
-    return (return_type, params, bool(proto.is_variadic))
+    names = [(p.name or "").strip() for p in (proto.params or [])]
+    return (return_type, params, bool(proto.is_variadic), names)
 
 
-def prototype_digest(proto: Optional[tuple[str, list[str], bool]]) -> str:
+def prototype_digest(
+    proto: Optional[
+        tuple[str, list[str], bool] | tuple[str, list[str], bool, list[str]]
+    ],
+) -> str:
     """Digest of a prototype overlay, for the decompile cache key."""
     if not proto:
         return ""
-    ret, params, variadic = proto
-    payload = f"{ret}({','.join(params)}){'...' if variadic else ''}"
+    ret, params, variadic, *name_fields = proto
+    names = name_fields[0] if name_fields else []
+    payload = f"{ret}({','.join(params)}){'...' if variadic else ''}|{','.join(names)}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

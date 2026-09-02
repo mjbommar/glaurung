@@ -31,7 +31,7 @@ mod session;
 mod type_maps;
 
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyAny, PyList};
 
 use callee_contracts::{
     apply_recovered_direct_callee_effects, recover_direct_callee_layouts,
@@ -65,6 +65,48 @@ use pipeline::{
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AnalystPrototype {
+    return_type: String,
+    parameter_types: Vec<String>,
+    variadic: bool,
+    parameter_names: Vec<Option<String>>,
+}
+
+fn extract_analyst_prototype(
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<AnalystPrototype>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if let Ok((return_type, parameter_types, variadic, parameter_names)) =
+        value.extract::<(String, Vec<String>, bool, Vec<Option<String>>)>()
+    {
+        if parameter_names.len() != parameter_types.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "analyst prototype has {} parameter types but {} parameter names",
+                parameter_types.len(),
+                parameter_names.len()
+            )));
+        }
+        return Ok(Some(AnalystPrototype {
+            return_type,
+            parameter_types,
+            variadic,
+            parameter_names,
+        }));
+    }
+    let (return_type, parameter_types, variadic) =
+        value.extract::<(String, Vec<String>, bool)>()?;
+    let parameter_names = vec![None; parameter_types.len()];
+    Ok(Some(AnalystPrototype {
+        return_type,
+        parameter_types,
+        variadic,
+        parameter_names,
+    }))
+}
 
 fn load_program_image(path: &str) -> PyResult<crate::program::image::ProgramImage> {
     use crate::program::image::{ProgramImage, ProgramImageError};
@@ -120,8 +162,9 @@ fn decompile_at_py(
     max_functions: usize,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
     analyst_locals: Option<std::collections::HashMap<i64, (String, String)>>,
-    analyst_prototype: Option<(String, Vec<String>, bool)>,
+    analyst_prototype: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<String> {
+    let analyst_prototype = extract_analyst_prototype(analyst_prototype)?;
     let session = load_program_session(&path)?;
     decompile_at_session(
         py,
@@ -156,7 +199,7 @@ pub(super) fn decompile_at_session(
     max_functions: usize,
     analyst_names: Option<&std::collections::HashMap<u64, String>>,
     analyst_locals: Option<&std::collections::HashMap<i64, (String, String)>>,
-    analyst_prototype: Option<&(String, Vec<String>, bool)>,
+    analyst_prototype: Option<&AnalystPrototype>,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
     use crate::analysis::cfg::Budgets;
@@ -315,6 +358,7 @@ pub(super) fn decompile_at_session(
         numbered: lf,
         definition_widths,
         parameter_slots: mut param_slots,
+        inferred_prototype,
         mut prototype,
         ..
     } = prepared_llir;
@@ -457,16 +501,45 @@ pub(super) fn decompile_at_session(
         // parameter c_types (`ast::declaration_plan`) -- so there is no second
         // mechanism and the two cannot disagree.
         // Analyst first, then DWARF -- see `CallPrototype::from_analyst`.
+        let dwarf_render_contract = dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va));
         let declared_render = analyst_prototype
-            .map(|(ret, params, variadic)| {
-                crate::ir::call_contracts::CallPrototype::from_analyst(ret, params, *variadic)
+            .map(|prototype| {
+                crate::ir::call_contracts::CallPrototype::from_analyst(
+                    &prototype.return_type,
+                    &prototype.parameter_types,
+                    prototype.variadic,
+                )
             })
-            .or_else(|| {
-                dwarf_outputs
-                    .as_ref()
-                    .and_then(|outputs| outputs.get(&func_va))
+            .or_else(|| dwarf_render_contract.and_then(dwarf_render_prototype));
+        let declared_parameter_names = analyst_prototype
+            .map(|prototype| prototype.parameter_names.as_slice())
+            .or_else(|| dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()));
+        if analyst_prototype.is_some() {
+            record_prototype_conflict_with_candidate(
+                &f.name,
+                func_va,
+                "analyst",
+                declared_render.as_ref(),
+                "dwarf",
+                dwarf_render_contract
                     .and_then(dwarf_render_prototype)
-            });
+                    .as_ref(),
+            );
+        }
+        record_recovered_prototype_conflict(
+            &f.name,
+            func_va,
+            if analyst_prototype.is_some() {
+                "analyst"
+            } else {
+                "dwarf"
+            },
+            declared_render.as_ref(),
+            inferred_prototype.as_ref(),
+            cc,
+        );
         decbench_text(
             &f,
             &mut profiler,
@@ -478,6 +551,7 @@ pub(super) fn decompile_at_session(
             &readonly_data,
             prototype.as_ref(),
             declared_render.as_ref(),
+            declared_parameter_names,
             dwarf_types.as_deref().unwrap_or(&[]),
             &stack_facts.source_types,
             &stack_facts.source_names,
@@ -644,11 +718,19 @@ fn decompile_range_at_py(
         numbered: lf,
         definition_widths,
         parameter_slots: mut param_slots,
+        inferred_prototype,
         prototype,
         ..
     } = prepared_llir;
-    let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&func.name, func_va);
-    let mut f = profiler.measure("lower", || lower(&lf, &region, func.name.clone()));
+    let declared_function_name = dwarf_outputs
+        .as_ref()
+        .and_then(|outputs| outputs.get(&func_va))
+        .and_then(|contract| contract.function_name.as_ref())
+        .cloned()
+        .unwrap_or_else(|| func.name.clone());
+    let mut profiler =
+        crate::decompile::profile::FunctionProfiler::from_env(&declared_function_name, func_va);
+    let mut f = profiler.measure("lower", || lower(&lf, &region, declared_function_name));
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // An explicit byte range has no discovered callee Function objects from
     // which to recover cross-function storage layouts.
@@ -732,10 +814,18 @@ fn decompile_range_at_py(
             Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
             None => (None, None, None),
         };
-        let declared_render = dwarf_outputs
+        let dwarf_render_contract = dwarf_outputs
             .as_ref()
-            .and_then(|outputs| outputs.get(&func_va))
-            .and_then(dwarf_render_prototype);
+            .and_then(|outputs| outputs.get(&func_va));
+        let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
+        record_recovered_prototype_conflict(
+            &f.name,
+            func_va,
+            "dwarf",
+            declared_render.as_ref(),
+            inferred_prototype.as_ref(),
+            cc,
+        );
         decbench_text(
             &f,
             &mut profiler,
@@ -747,6 +837,7 @@ fn decompile_range_at_py(
             &readonly_data,
             prototype.as_ref(),
             declared_render.as_ref(),
+            dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
             dwarf_types.as_deref().unwrap_or(&[]),
             &stack_facts.source_types,
             &stack_facts.source_names,
@@ -777,16 +868,45 @@ fn recover_decbench_prototype(
     declared: Option<&DwarfPrototypeContract>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
 ) -> crate::ir::types_recover::RecoveredPrototype {
+    recover_decbench_prototype_with_inferred(
+        lf_raw,
+        ssa,
+        cc,
+        param_slots,
+        arm_vfp_args,
+        declared,
+        type_env,
+    )
+    .0
+}
+
+/// Return the selected prototype and the untouched machine-recovered candidate.
+///
+/// Keeping both from one recovery avoids paying for (and risking divergence
+/// between) two whole type-recovery walks merely to report provenance.
+fn recover_decbench_prototype_with_inferred(
+    lf_raw: &crate::ir::types::LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    arm_vfp_args: bool,
+    declared: Option<&DwarfPrototypeContract>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+) -> (
+    crate::ir::types_recover::RecoveredPrototype,
+    crate::ir::types_recover::RecoveredPrototype,
+) {
     use crate::debug::dwarf::{DwarfParameterType, DwarfReturnType};
     use crate::ir::types_recover::RecoveredOutputKind;
 
-    let mut prototype = crate::ir::types_recover::recover_prototype_with_arm_vfp_args(
+    let inferred = crate::ir::types_recover::recover_prototype_with_arm_vfp_args(
         lf_raw,
         ssa,
         cc,
         param_slots,
         arm_vfp_args,
     );
+    let mut prototype = inferred.clone();
     if let Some(declared) = declared {
         // A MEMORY-class result is not in a register at all: the CALLER
         // allocates the object and passes its address in the first INTEGER
@@ -906,7 +1026,7 @@ fn recover_decbench_prototype(
         }
         Some(DwarfReturnType::Unknown) | None => {}
     }
-    prototype
+    (prototype, inferred)
 }
 
 fn lock_parameter_slots_from_prototype(
@@ -932,6 +1052,49 @@ fn locked_parameter_count(
     prototype
         .filter(|prototype| prototype.parameter_arity_is_locked())
         .map(|prototype| prototype.parameters().len())
+}
+
+fn record_recovered_prototype_conflict(
+    function: &str,
+    entry_va: u64,
+    source: &str,
+    declared: Option<&crate::ir::call_contracts::CallPrototype>,
+    inferred: Option<&crate::ir::types_recover::RecoveredPrototype>,
+    cc: crate::ir::call_args::CallConv,
+) {
+    let (Some(declared), Some(inferred)) = (declared, inferred) else {
+        return;
+    };
+    let inferred = callee_contracts::recovered_call_prototype(inferred, cc);
+    record_prototype_conflict_with_candidate(
+        function,
+        entry_va,
+        source,
+        Some(declared),
+        "inferred",
+        Some(&inferred),
+    );
+}
+
+fn record_prototype_conflict_with_candidate(
+    function: &str,
+    entry_va: u64,
+    authoritative_source: &str,
+    authoritative: Option<&crate::ir::call_contracts::CallPrototype>,
+    candidate_source: &str,
+    candidate: Option<&crate::ir::call_contracts::CallPrototype>,
+) {
+    let (Some(authoritative), Some(candidate)) = (authoritative, candidate) else {
+        return;
+    };
+    crate::ir::health::record_prototype_conflict(
+        function,
+        entry_va,
+        authoritative_source,
+        authoritative,
+        candidate_source,
+        candidate,
+    );
 }
 
 /// Decompile the first `limit` discovered functions. Returns a list of
@@ -1096,6 +1259,7 @@ fn decompile_all_py(
             numbered: lf,
             definition_widths,
             parameter_slots: mut param_slots,
+            inferred_prototype,
             mut prototype,
             ..
         } = prepared_llir;
@@ -1177,10 +1341,18 @@ fn decompile_all_py(
                 &role_names,
                 &definition_widths,
             );
-            let declared_render = dwarf_outputs
+            let dwarf_render_contract = dwarf_outputs
                 .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value))
-                .and_then(dwarf_render_prototype);
+                .and_then(|outputs| outputs.get(&func.entry_point.value));
+            let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
+            record_recovered_prototype_conflict(
+                &f.name,
+                func.entry_point.value,
+                "dwarf",
+                declared_render.as_ref(),
+                inferred_prototype.as_ref(),
+                cc,
+            );
             decbench_text(
                 &f,
                 &mut profiler,
@@ -1192,6 +1364,7 @@ fn decompile_all_py(
                 &readonly_data,
                 prototype.as_ref(),
                 declared_render.as_ref(),
+                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 &stack_facts.source_types,
                 &stack_facts.source_names,
@@ -1430,6 +1603,7 @@ fn decompile_many_py(
             numbered: lf,
             definition_widths,
             parameter_slots: mut param_slots,
+            inferred_prototype,
             mut prototype,
             ..
         } = prepared_llir;
@@ -1520,10 +1694,18 @@ fn decompile_many_py(
                 &role_names,
                 &definition_widths,
             );
-            let declared_render = dwarf_outputs
+            let dwarf_render_contract = dwarf_outputs
                 .as_ref()
-                .and_then(|outputs| outputs.get(&func_va))
-                .and_then(dwarf_render_prototype);
+                .and_then(|outputs| outputs.get(&func_va));
+            let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
+            record_recovered_prototype_conflict(
+                &f.name,
+                func_va,
+                "dwarf",
+                declared_render.as_ref(),
+                inferred_prototype.as_ref(),
+                cc,
+            );
             decbench_text(
                 &f,
                 &mut profiler,
@@ -1535,6 +1717,7 @@ fn decompile_many_py(
                 &readonly_data,
                 prototype.as_ref(),
                 declared_render.as_ref(),
+                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 &stack_facts.source_types,
                 &stack_facts.source_names,
@@ -1646,6 +1829,7 @@ fn take_render_verification_py(py: Python<'_>) -> PyResult<Py<pyo3::PyAny>> {
     out.set_item("unverified_functions", report.unverified_functions)?;
     out.set_item("undefined_uses", report.undefined_uses)?;
     out.set_item("dropped_verdicts", report.dropped_verdicts)?;
+    out.set_item("prototype_conflict_count", report.prototype_conflict_count)?;
     let unverified = PyList::empty(py);
     for verdict in &report.unverified {
         let entry = PyDict::new(py);
@@ -1663,6 +1847,26 @@ fn take_render_verification_py(py: Python<'_>) -> PyResult<Py<pyo3::PyAny>> {
         unverified.append(entry)?;
     }
     out.set_item("unverified", unverified)?;
+    let conflicts = PyList::empty(py);
+    for conflict in &report.prototype_conflicts {
+        let entry = PyDict::new(py);
+        entry.set_item("function", &conflict.function)?;
+        entry.set_item("entry_va", &conflict.entry_va)?;
+        entry.set_item("authoritative_source", &conflict.authoritative_source)?;
+        entry.set_item("candidate_source", &conflict.candidate_source)?;
+        let prototype_dict = |prototype: &crate::ir::health::PrototypeShape| -> PyResult<_> {
+            let item = PyDict::new(py);
+            item.set_item("return_type", &prototype.return_type)?;
+            item.set_item("parameter_types", &prototype.parameter_types)?;
+            item.set_item("variadic", prototype.variadic)?;
+            Ok(item)
+        };
+        entry.set_item("authoritative", prototype_dict(&conflict.authoritative)?)?;
+        entry.set_item("candidate", prototype_dict(&conflict.candidate)?)?;
+        entry.set_item("disagreements", &conflict.disagreements)?;
+        conflicts.append(entry)?;
+    }
+    out.set_item("prototype_conflicts", conflicts)?;
     Ok(out.into())
 }
 
@@ -1978,8 +2182,10 @@ mod tests {
     #[test]
     fn dwarf_arm_frame_registers_map_to_stack_object_hints() {
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             register_locals: Vec::new(),
             stack_objects: vec![
@@ -2016,8 +2222,10 @@ mod tests {
     #[test]
     fn dwarf_aarch64_cfa_maps_to_the_entry_stack_coordinate() {
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
@@ -2041,8 +2249,10 @@ mod tests {
     #[test]
     fn dwarf_arm_cfa_maps_to_the_entry_stack_coordinate() {
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
@@ -2068,8 +2278,10 @@ mod tests {
     #[test]
     fn dwarf_scalar_stack_objects_retain_their_authoritative_coordinate() {
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
@@ -2100,8 +2312,10 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
@@ -2158,8 +2372,10 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
@@ -2247,8 +2463,10 @@ mod tests {
             }],
         };
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![at_rsi("low", "uint32_t"), at_rsi("product", "uint64_t")],
@@ -2309,8 +2527,10 @@ mod tests {
             }],
         };
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![at_rsi("first"), at_rsi("second")],
@@ -2356,8 +2576,10 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
@@ -2443,8 +2665,10 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
@@ -2504,8 +2728,10 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let contract = DwarfPrototypeContract {
+            function_name: None,
             prototyped: true,
             parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
