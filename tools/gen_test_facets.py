@@ -53,8 +53,13 @@ RULES: dict[str, re.Pattern[str]] = {
     # Reads sample binaries, which are Git LFS objects: a checkout without
     # `lfs: true` sees 130-byte pointer files.
     "lfs": re.compile(r"samples/(binaries|packed|adversarial|source)\b"),
-    # Needs the pinned fixture-toolchain Docker image.
-    "docker": re.compile(r"\bdocker\b|fixture_toolchain\b|\bTC\.run\("),
+    # Needs the pinned fixture-toolchain Docker image. The rule wants an
+    # INVOCATION, not the word: a test that merely says "docker" in a docstring
+    # about CI would otherwise be tiered as needing it.
+    "docker": re.compile(
+        r"shutil\.which\(\s*[\"']docker|subprocess\.run\(\s*\[\s*[\"']docker|"
+        r"fixture_toolchain\b|\bTC\.run\("
+    ),
     # Needs a live model endpoint and a key. Opt-in by construction.
     "llm": re.compile(
         r"OPENAI_API_KEY|ANTHROPIC_API_KEY|GLAURUNG_LLM_LIVE|live_llm|"

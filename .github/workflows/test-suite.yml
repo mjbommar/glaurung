@@ -179,13 +179,24 @@ jobs:
       # ones we ship either.
       - name: Build the extension
         run: uv run maturin develop --release
-      # Tests needing tests/decompiler_fixtures/build/ will SKIP -- that
-      # directory is gitignored and built by decompiler-fixtures.yml, which is
-      # the workflow that owns the expensive matrix. The skips are visible
-      # because pytest.ini carries -ra, which is the point: a run with 200
-      # silent skips used to look identical to a clean one.
+      # `-m "not fixtures"`: this runner never has tests/decompiler_fixtures/
+      # build/ (gitignored; built only by decompiler-fixtures.yml, which owns
+      # the expensive matrix and runs the `fixtures` facet itself). Before the
+      # facet system those tests SKIPPED at runtime -- 1,162 of them from the
+      # known-failure corpus alone -- and the -ra summary that exists to make
+      # real skips visible was buried under skips that were certain in
+      # advance. Deselecting by facet keeps -ra for the skips that carry
+      # information. The facet assignments live in tests/test_facets.json and
+      # test_test_facets.py fails if a file that needs the matrix is missing
+      # the marker.
+      #
+      # `docker`, `llm` and `decbench` are NOT deselected here: those tests
+      # detect their own prerequisites and skip with a reason, and that
+      # runtime skip is the honest signal for facilities this runner might or
+      # might not have (Docker is present on ubuntu-latest; the pinned image
+      # is not).
       - name: Python tests
-        run: uv run pytest python/tests/
+        run: uv run pytest python/tests/ -m "not fixtures and not decbench"
 
   lint:
     name: ruff and ty

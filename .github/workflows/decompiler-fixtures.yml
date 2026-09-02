@@ -136,6 +136,16 @@ jobs:
           python -m pytest -p no:cacheprovider -m slow -v \
             python/tests/test_decompiler_fixture_matrix.py \
             python/tests/test_decompiler_fixture_structural.py
+      # The known-failure corpus: 1,162 strict xfails measured against DWARF
+      # ground truth (`tests/open_defects/known_failures.json`). It needs the
+      # built matrix, which only this job has -- on the test-suite runner every
+      # one of them skips. Run here, after the matrix, so a FIX shows up as an
+      # XPASS in CI rather than only on a developer's machine. `-m fixtures`
+      # is the facet `tests/test_facets.json` assigns it.
+      - name: Known-failure corpus (strict xfails; a fix goes red here)
+        run: |
+          python -m pytest -p no:cacheprovider -m fixtures -q \
+            python/tests/test_known_decompiler_failures.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
