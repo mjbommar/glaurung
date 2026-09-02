@@ -34,6 +34,28 @@ pub(crate) fn stack_derived_values(
         _ => false,
     };
     let mut tainted: BTreeSet<SsaValue> = BTreeSet::new();
+    // Seed: a read of a stack register at version zero is the incoming frame
+    // pointer, which nothing inside the function defines. Hoisted out of the
+    // fixed point below because it depends on nothing the fixed point learns --
+    // leaving it inside re-walked every operand of every instruction on every
+    // one of up to `MAX_ROUNDS` sweeps to discover the same set.
+    for (block_idx, block) in function.blocks.iter().enumerate() {
+        for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            for operand in operands(&instruction.op) {
+                if let Operand::Reg { use_index } = operand {
+                    if let Some(value) = ssa.use_value_ref(function, addr, use_index) {
+                        if is_stack_storage(&value.base) {
+                            tainted.insert(value.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     for _ in 0..widths::MAX_ROUNDS {
         let mut changed = false;
         for (block_idx, block) in function.blocks.iter().enumerate() {
@@ -85,25 +107,6 @@ pub(crate) fn stack_derived_values(
             };
             if (is_stack_storage(&result.base) || inherits) && tainted.insert(result) {
                 changed = true;
-            }
-        }
-        // Live-in stack registers: version zero of a stack register is the
-        // incoming frame pointer, and nothing defines it inside the function.
-        for (block_idx, block) in function.blocks.iter().enumerate() {
-            for (instr_idx, instruction) in block.instrs.iter().enumerate() {
-                let addr = InstrAddr {
-                    block_idx,
-                    instr_idx,
-                };
-                for operand in operands(&instruction.op) {
-                    if let Operand::Reg { use_index } = operand {
-                        if let Some(value) = ssa.use_value_ref(function, addr, use_index) {
-                            if is_stack_storage(&value.base) && tainted.insert(value.clone()) {
-                                changed = true;
-                            }
-                        }
-                    }
-                }
             }
         }
         if !changed {
