@@ -241,12 +241,12 @@ def test_inventory_reports_language_split_counts():
     by_language = _summary("counts_by_language")
     assert by_language.get("c") == {
         "types": 9,
-        "structure": 621,
+        "structure": 623,
         "returns": 33,
         "pointers": 0,
-        "unrecovered": 42,
+        "unrecovered": 40,
         "no_body": 0,
-        "goto_statements": 6225,
+        "goto_statements": 6277,
     }
     assert by_language.get("rust") == {
         "types": 298,
@@ -266,12 +266,12 @@ def test_inventory_reports_provenance_deduplicated_counts():
     deduplicated = _summary("deduplicated_counts")
     assert deduplicated == {
         "types": 218,
-        "structure": 473,
+        "structure": 474,
         "returns": 67,
         "pointers": 0,
-        "unrecovered": 30,
+        "unrecovered": 29,
         "no_body": 0,
-        "goto_statements": 4635,
+        "goto_statements": 4661,
     }
     deduplicated_by_language = _summary("deduplicated_counts_by_language")
     for axis, total in deduplicated.items():
@@ -351,11 +351,15 @@ def test_the_failure_count_does_not_grow():
     assert counts.get("types", 0) <= 307, (
         f"prototype mismatches grew to {counts.get('types')} (recorded 307)"
     )
-    assert counts.get("structure", 0) <= 715, (
-        f"functions with unwanted goto grew to {counts.get('structure')} (recorded 715)"
+    # The required wide154 cell added two measured debug/stripped rows. The
+    # rpn cell now executes correctly and has no unrecovered marker, but its
+    # honest v1 fallback grew from 3 to 12 gotos in each form. Keep that mixed
+    # result visible until structure-v2 is promoted for these shapes.
+    assert counts.get("structure", 0) <= 717, (
+        f"functions with unwanted goto grew to {counts.get('structure')} (recorded 717)"
     )
-    assert counts.get("goto_statements", 0) <= 6791, (
-        f"goto statements grew to {counts.get('goto_statements')} (recorded 6,791)"
+    assert counts.get("goto_statements", 0) <= 6843, (
+        f"goto statements grew to {counts.get('goto_statements')} (recorded 6,843)"
     )
     assert counts.get("returns", 0) <= 92, (
         f"return-type mismatches grew to {counts.get('returns')} (recorded 92)"

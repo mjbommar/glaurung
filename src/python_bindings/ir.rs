@@ -365,6 +365,7 @@ pub(super) fn decompile_at_session(
         &mut profiler,
         cfg_health,
         cc,
+        false,
         prototype.as_ref(),
         &mut param_slots,
         locked_parameter_count(prototype.as_ref()),
@@ -679,6 +680,7 @@ fn decompile_range_at_py(
         &mut profiler,
         cfg_health,
         cc,
+        false,
         prototype.as_ref(),
         &mut param_slots,
         locked_parameter_count(prototype.as_ref()),
@@ -1129,6 +1131,7 @@ fn decompile_all_py(
             &mut profiler,
             cfg_health,
             cc,
+            false,
             prototype.as_ref(),
             &mut param_slots,
             locked_parameter_count(prototype.as_ref()),
@@ -1220,7 +1223,7 @@ fn decompile_all_py(
 
 #[pyfunction]
 #[pyo3(name = "decompile_many")]
-#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=0usize, analyst_names=None))]
+#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", shadow_v2=false, pdb_cache="", max_functions=0usize, analyst_names=None))]
 #[allow(clippy::too_many_arguments)]
 fn decompile_many_py(
     py: Python<'_>,
@@ -1231,6 +1234,7 @@ fn decompile_many_py(
     timeout_ms: u64,
     types: bool,
     style: &str,
+    shadow_v2: bool,
     pdb_cache: &str,
     max_functions: usize,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
@@ -1270,16 +1274,7 @@ fn decompile_many_py(
     // requested entries. Direct-callee prototype evidence is recovered lazily
     // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
     // need to consume this worklist merely to render one call accurately.
-    let requested_function_limit = if max_functions == 0 {
-        func_vas
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            .max(1)
-    } else {
-        max_functions
-    };
+    let requested_function_limit = pipeline::requested_function_limit(&func_vas, max_functions);
     let budgets = Budgets {
         max_functions: requested_function_limit,
         max_blocks,
@@ -1410,7 +1405,7 @@ fn decompile_many_py(
         }
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let prepared_llir = prepare_llir_for_lowering(
+        let mut prepared_llir = pipeline::prepare_llir_for_lowering_with_shadow(
             &mut lf_raw,
             &image,
             &exception_sites,
@@ -1424,7 +1419,11 @@ fn decompile_many_py(
                 .as_deref()
                 .and_then(|environment| environment.prototype_for(func_va)),
             dwarf_type_env.as_ref(),
+            shadow_v2,
         );
+        prepared_llir
+            .select_shadow_v2(shadow_v2, style == "decbench")
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         let PreparedLlir {
             region,
             cfg_health,
@@ -1471,6 +1470,7 @@ fn decompile_many_py(
             &mut profiler,
             cfg_health,
             cc,
+            shadow_v2,
             prototype.as_ref(),
             &mut param_slots,
             locked_parameter_count(prototype.as_ref()),

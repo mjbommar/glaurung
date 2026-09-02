@@ -195,9 +195,25 @@ scheduled independently of the longer pipeline/SSA migrations.
   lowering it to C `break`; otherwise it declines. The five currently
   renderable real WP4 fixtures now also record deterministic
   parseable C after the shared source-level preparation pass, all from the same
-  adapted AST; each passes a real host `cc -fsyntax-only` test. Full-pipeline
-  and execution/GED/runtime comparison, output measurement, and promotion are
-  still open.
+  adapted AST; each passes a real host `cc -fsyntax-only` test. The optional
+  production bridge now reaches the normal typed render and verifier via
+  `decompile_many(..., shadow_v2=True)` without changing the v1 default. On the
+  real clang-O2 `154::wide154_dense_effects`, the guarded-switch adapter no
+  longer lowers its owner block twice, verified-shadow-only recursive
+  machine-frame cleanup removes nested spills, pre-render definedness is clean,
+  and the exact generated C matches the original on all 34 deterministic
+  differential cases. The guarded def-use baseline now also records the
+  separately attributed default-v1 coverage exposed by `c7473267`'s two sound
+  miniz dispatch tables and by the newly required wide-switch cell; the six
+  census assertions pass without claiming that debt as a v2 win. The census
+  then caught and prevented a refactor from deleting top-level spills whose
+  uses were nested under control flow; a focused v1 regression now preserves
+  that historical liveness contract. The independently verified host matrix
+  also moves clang-O2 `rpn_evaluate` from fail to pass and removes its two
+  debug/stripped unrecovered rows, while the inventory records its honest
+  readability cost (3 to 12 gotos in each form). Corpus-wide
+  execution/GED/runtime comparison, output measurement, and promotion remain
+  open.
 - [~] **WP5 typed indirect targets.** The current discovery pipeline already
   implements bounded comparison, memory/stack, power-of-two-mask, PIC-relative,
   absolute, Thumb table-branch, and ARM word-table recovery across
@@ -209,8 +225,10 @@ scheduled independently of the longer pipeline/SSA migrations.
   verified WP4 candidate records case values `0..7` plus the linked bypass
   edge. The independent verifier rejects forged case labels. Production v1
   still falls back honestly on Duff's shared suffix-entry loop, and the strict
-  constant-false-latch xfail remains open; switch-tree recovery, the other
-  named fixture lanes, and a fresh corpus census remain.
+  constant-false-latch xfail remains open. The clang-O2 154 wide switch now
+  carries all 256 typed cases through the optional production pipeline and its
+  first exact 34-case execution differential; the other named fixture lanes
+  and a fresh corpus census remain.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one
   width-proved range-check fusion are independent of the SSA-native idiom lane.
 

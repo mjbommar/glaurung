@@ -58,6 +58,33 @@ RENDER_CASES = [
     "175_float_matrix_kernel",
 ]
 
+WIDE_CLANG_O2 = FIXTURES / "build" / "154_wide_switch-clang-O2.so"
+
+
+def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
+    # Isolate this render's verdict from any earlier test in the same process.
+    g.ir.take_render_verification()
+    exports = D.exported_functions(str(WIDE_CLANG_O2))
+    [(_name, _va, body, *_extra)] = g.ir.decompile_many(
+        str(WIDE_CLANG_O2),
+        [exports["wide154_dense_effects"]],
+        style="decbench",
+        shadow_v2=True,
+    )
+
+    signature = next(line for line in body.splitlines() if "wide154_dense_effects(" in line)
+    assert "int32_t" in signature, signature
+    assert "int32_t *" in signature, signature
+    assert "switch (" in body
+    assert "case 0:" in body
+    assert "case 255:" in body
+    assert "unrecovered indirect jump" not in body
+
+    verification = g.ir.take_render_verification()
+    assert verification["verified_functions"] == 1, verification
+    assert verification["undefined_uses"] == 0, verification
+    assert verification["unverified"] == [], verification
+
 
 def _source_for(fixture: str) -> Path:
     for suffix in (".c", ".cpp"):
@@ -67,8 +94,8 @@ def _source_for(fixture: str) -> Path:
     raise AssertionError(f"no source for {fixture}")
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.parametrize("fixture", RENDER_CASES)  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
+@pytest.mark.parametrize("fixture", RENDER_CASES)
 def test_every_style_renders_every_function(fixture: str) -> None:
     source = _source_for(fixture)
     binary, error = H.compile_fixture(source, "gcc", "O0", strict=False)
@@ -79,7 +106,7 @@ def test_every_style_renders_every_function(fixture: str) -> None:
     assert required, f"{fixture} exported none of its declared functions"
 
     for style in STYLES:
-        rendered = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+        rendered = g.ir.decompile_many(
             str(binary), [exports[f] for f in required], style=style
         )
         assert rendered, f"{fixture} style={style!r} rendered nothing at all"
@@ -95,7 +122,7 @@ def test_every_style_renders_every_function(fixture: str) -> None:
             )
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_styles_are_not_all_the_same_renderer() -> None:
     """The three styles must actually differ.
 
@@ -111,7 +138,7 @@ def test_styles_are_not_all_the_same_renderer() -> None:
 
     outputs = {}
     for style in STYLES:
-        rendered = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+        rendered = g.ir.decompile_many(
             str(binary), [va], style=style
         )
         assert rendered

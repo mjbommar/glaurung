@@ -1004,6 +1004,13 @@ mod tests {
                 !pseudocode.contains("unrecovered indirect jump"),
                 "{pseudocode}"
             );
+            if binary.contains("clang") {
+                assert_eq!(
+                    pseudocode.matches("rsp = (rsp - 408);").count(),
+                    1,
+                    "the guarded switch adapter must not execute its owner block twice:\n{pseudocode}"
+                );
+            }
             let repeated = observe(&lifted, &compute_ssa(&lifted));
             assert_eq!(report.tree, repeated.tree);
             assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);

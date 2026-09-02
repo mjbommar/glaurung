@@ -78,6 +78,56 @@
       "measure": "violations",
       "reason": "same arity fix (11d55613); reverting src/ir/value_number.rs alone reproduces the recorded 4466 exactly.",
       "to": 4478
+    },
+    {
+      "attributable_delta": 32,
+      "delta": 32,
+      "from": 256,
+      "key": "clang:O2",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "newly required wide154_dense_effects cell added after the 2026-09-02 baseline; v1 debt retained while verified shadow v2 is zero-read",
+      "to": 288
+    },
+    {
+      "attributable_delta": 1,
+      "delta": 1,
+      "from": 86,
+      "key": "clang:O2",
+      "kind": "lane_total",
+      "measure": "functions_with_violations",
+      "reason": "newly required wide154_dense_effects cell added after the 2026-09-02 baseline",
+      "to": 87
+    },
+    {
+      "attributable_delta": 240,
+      "delta": 240,
+      "from": 7658,
+      "key": "rustc:O0",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "c7473267 soundly resolves two guarded miniz_oxide dispatch tables, exposing 40 latent reads in each of six embedded O0 fixture binaries",
+      "to": 7898
+    },
+    {
+      "attributable_delta": 160,
+      "delta": 160,
+      "from": 4933,
+      "key": "rustc:O2",
+      "kind": "lane_total",
+      "measure": "violations",
+      "reason": "c7473267 soundly resolves two guarded miniz_oxide dispatch tables, exposing 40 latent reads in each of four embedded O2 fixture binaries",
+      "to": 5093
+    },
+    {
+      "attributable_delta": 32,
+      "delta": 32,
+      "from": 0,
+      "key": "154_wide_switch:clang:O2:wide154_dense_effects",
+      "kind": "required_function",
+      "measure": "undefined_reads",
+      "reason": "newly required v1 cell added after baseline; verified shadow v2 output has zero undefined reads and passes 34 execution cases",
+      "to": 32
     }
   ],
   "fixture_lane_totals": {
@@ -1448,8 +1498,8 @@
     },
     "154_wide_switch:clang:O2": {
       "functions_emitted": 13,
-      "functions_with_violations": 0,
-      "violations": 0
+      "functions_with_violations": 1,
+      "violations": 32
     },
     "154_wide_switch:gcc:O0": {
       "functions_emitted": 11,
@@ -1704,7 +1754,7 @@
     "166_rust_generics:rustc:O0": {
       "functions_emitted": 538,
       "functions_with_violations": 353,
-      "violations": 1245
+      "violations": 1285
     },
     "166_rust_generics:rustc:O2": {
       "functions_emitted": 22,
@@ -1714,12 +1764,12 @@
     "167_rust_trait_objects:rustc:O0": {
       "functions_emitted": 540,
       "functions_with_violations": 351,
-      "violations": 1241
+      "violations": 1281
     },
     "167_rust_trait_objects:rustc:O2": {
       "functions_emitted": 520,
       "functions_with_violations": 340,
-      "violations": 1233
+      "violations": 1273
     },
     "168_rust_enum_niche:rustc:O0": {
       "functions_emitted": 34,
@@ -1734,12 +1784,12 @@
     "169_rust_slices_bounds:rustc:O0": {
       "functions_emitted": 570,
       "functions_with_violations": 376,
-      "violations": 1296
+      "violations": 1336
     },
     "169_rust_slices_bounds:rustc:O2": {
       "functions_emitted": 512,
       "functions_with_violations": 337,
-      "violations": 1225
+      "violations": 1265
     },
     "16_red_black_tree:clang:O0": {
       "functions_emitted": 11,
@@ -1764,17 +1814,17 @@
     "170_rust_panic_unwind:rustc:O0": {
       "functions_emitted": 543,
       "functions_with_violations": 354,
-      "violations": 1249
+      "violations": 1289
     },
     "170_rust_panic_unwind:rustc:O2": {
       "functions_emitted": 520,
       "functions_with_violations": 346,
-      "violations": 1241
+      "violations": 1281
     },
     "171_rust_overflow:rustc:O0": {
       "functions_emitted": 537,
       "functions_with_violations": 346,
-      "violations": 1239
+      "violations": 1279
     },
     "171_rust_overflow:rustc:O2": {
       "functions_emitted": 29,
@@ -2684,12 +2734,12 @@
     "219_rust_iterator_chains:rustc:O0": {
       "functions_emitted": 653,
       "functions_with_violations": 430,
-      "violations": 1379
+      "violations": 1419
     },
     "219_rust_iterator_chains:rustc:O2": {
       "functions_emitted": 508,
       "functions_with_violations": 336,
-      "violations": 1226
+      "violations": 1266
     },
     "21_graph_dfs:clang:O0": {
       "functions_emitted": 11,
@@ -4272,18 +4322,6 @@
       "violations": 0
     }
   },
-  "language_totals": {
-    "c": {
-      "functions_emitted": 11166,
-      "functions_with_violations": 207,
-      "violations": 656
-    },
-    "rust": {
-      "functions_emitted": 5548,
-      "functions_with_violations": 3585,
-      "violations": 12591
-    }
-  },
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2929,
@@ -4292,8 +4330,8 @@
     },
     "clang:O2": {
       "functions_emitted": 2727,
-      "functions_with_violations": 86,
-      "violations": 256
+      "functions_with_violations": 87,
+      "violations": 288
     },
     "gcc:O0": {
       "functions_emitted": 2830,
@@ -4308,12 +4346,24 @@
     "rustc:O0": {
       "functions_emitted": 3415,
       "functions_with_violations": 2218,
-      "violations": 7658
+      "violations": 7898
     },
     "rustc:O2": {
       "functions_emitted": 2133,
       "functions_with_violations": 1367,
-      "violations": 4933
+      "violations": 5093
+    }
+  },
+  "language_totals": {
+    "c": {
+      "functions_emitted": 11166,
+      "functions_with_violations": 208,
+      "violations": 688
+    },
+    "rust": {
+      "functions_emitted": 5548,
+      "functions_with_violations": 3585,
+      "violations": 12991
     }
   },
   "problems": [],
@@ -5538,7 +5588,40 @@
     "154_wide_switch:clang:O0:wide154_dense_effects": [],
     "154_wide_switch:clang:O0:wide154_dense_switch": [],
     "154_wide_switch:clang:O0:wide154_sparse_switch": [],
-    "154_wide_switch:clang:O2:wide154_dense_effects": [],
+    "154_wide_switch:clang:O2:wide154_dense_effects": [
+      "stack_1 is read but never defined",
+      "stack_18 is read but never defined",
+      "stack_2 is read but never defined",
+      "stack_3 is read but never defined",
+      "stack_39 is read but never defined",
+      "stack_44 is read but never defined",
+      "stack_49 is read but never defined",
+      "stack_81 is read but never defined",
+      "var123 is read but never defined",
+      "var232 is read but never defined",
+      "var236 is read but never defined",
+      "var237 is read but never defined",
+      "var238 is read but never defined",
+      "var320 is read but never defined",
+      "var324 is read but never defined",
+      "var325 is read but never defined",
+      "var326 is read but never defined",
+      "var551 is read but never defined",
+      "var555 is read but never defined",
+      "var556 is read but never defined",
+      "var557 is read but never defined",
+      "var72 is read but never defined",
+      "var779 is read but never defined",
+      "var783 is read but never defined",
+      "var784 is read but never defined",
+      "var785 is read but never defined",
+      "var79 is read but never defined",
+      "var862 is read but never defined",
+      "var866 is read but never defined",
+      "var867 is read but never defined",
+      "var868 is read but never defined",
+      "var91 is read but never defined"
+    ],
     "154_wide_switch:clang:O2:wide154_dense_switch": [],
     "154_wide_switch:clang:O2:wide154_sparse_switch": [],
     "154_wide_switch:gcc:O0:wide154_dense_effects": [],

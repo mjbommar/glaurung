@@ -462,20 +462,48 @@ that preserves honest local gotos when required.
   selecting one distinguished exit. Each renderable RED fixture additionally
   records deterministic post-preparation parseable C and compiles under the host
   syntax gate. The nested-local fixture now renders a verified outer loop plus
-  closed honest gotos for its inner irreducible region. Health, full-pipeline
-  pseudocode, execution, GED, and runtime comparisons remain. A current scoped
+  closed honest gotos for its inner irreducible region. Health, corpus-wide
+  full-pipeline pseudocode, GED, and runtime comparisons remain. A current scoped
   production differential for
   `154_wide_switch:clang:O2:wide154_dense_effects` still reports the committed
   `fail`: v1 emits an unrecovered indirect jump even though the v2 shadow tree
-  renders all 256 values. The harness does not yet execute shadow output, so a
-  baseline-stable v1 failure is not promotion evidence.
+  renders all 256 values. That committed v1 result remains the default-path
+  baseline and is not v2 promotion evidence by itself.
   `prepare_llir_for_lowering_with_shadow` now closes the first pipeline-context
   gap without changing default selection: on explicit opt-in it adapts only an
   independently verified v2 tree into the same production `Region` boundary
   used by lowering. A real clang-O2 `wide154_dense_effects` test proves the
   production-prepared LLIR retains `case 0..255` and no indirect-jump
-  placeholder. Applying the normal prototype, AST-pass, render, and execution
-  stages to that optional region remains the next step.
+  placeholder. `decompile_many(..., style="decbench", shadow_v2=True)` now
+  carries that verified region through the normal prototype, AST-pass, typed
+  render, pre-render definedness, and execution-differential stages while the
+  default remains v1. The first exact run exposed two real adapter/pipeline
+  defects rather than being accepted as a crash: the guarded-switch owner block
+  was lowered twice, and nested callee-save spills survived cleanup. Focused
+  Rust tests now require the adapter to consume a separate switch-guard leaf
+  exactly once. Machine-frame cleanup now exposes separate top-level and
+  recursive scopes: every production caller retains the historical top-level
+  proof, while only an independently selected shadow-v2 region opts into the
+  recursive walk needed after structuring nests the prologue. The real clang-O2
+  output has zero undefined reads and matches the original
+  `wide154_dense_effects` on all 34 deterministic differential cases. This is
+  one scoped execution cell, not the corpus-wide promotion comparison.
+  The full def-use ratchet also exposed baseline drift predating this increment.
+  Exact commit A/B testing showed `c7473267` soundly added two guarded
+  `miniz_oxide::inflate::decompress` dispatch tables (25 and 4 arms), exposing
+  40 latent reads in each Rust binary that embeds that runtime body; the new
+  required `wide154_dense_effects` v1 cell separately contributes 32 reads.
+  `defuse_baseline.json` now records those five guarded acceptances with their
+  provenance. The six census assertions pass; none of those default-v1 debts is
+  presented as a shadow-v2 improvement. A subsequent full-census run also
+  caught a refactor error where the historical shallow candidate scan stopped
+  seeing reads inside nested control flow; a focused Rust regression now pins
+  that v1 liveness contract. After the repair, the census is green again.
+  The host execution matrix additionally moved
+  `42_rpn_evaluator:clang:O2:rpn_evaluate` from fail to pass. Its regenerated
+  inventory removes two unrecovered rows (debug and stripped) but records the
+  readability tradeoff honestly: each form grows from 3 to 12 gotos. This is a
+  behavioural/coverage improvement, not evidence that v1 structuring improved.
 
 ### RED fixtures
 
@@ -596,18 +624,21 @@ one authoritative set of case edges.
   resolves all 256 table slots at site `0x15d9`, and records no unresolved
   decline for that site. All 256 values reach the independently verified shadow
   tree and deterministic parseable C without an indirect-jump placeholder;
-  execution-differential coverage remains open. The gcc-O2
+  scoped execution-differential coverage is now green for this clang-O2 cell,
+  while the remaining fixture/compiler matrix remains open. The gcc-O2
   `206::dispatch_in_loop` lane now
   preserves a guarded byte selector through register zero-extension, decodes
   exact cases `0..6`, and renders that typed switch inside its verified loop.
   Other compiler/optimization and named fixture lanes remain.
 - [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
-- [ ] Execution differential for every newly recovered switch. The scoped
-  clang-O2 `154::wide154_dense_effects` production lane was rerun after the
-  256-slot recovery and remains a known `fail`, because the fixture harness
-  executes v1 output while the recovered switch is still shadow-only. Add an
-  explicit shadow-output differential path before counting this cell green.
+- [~] Execution differential for every newly recovered switch. The explicit
+  shadow-output path now runs the exact typed C returned by
+  `decompile_many(..., shadow_v2=True)` through the ordinary fixture comparator.
+  The clang-O2 `154::wide154_dense_effects` cell passes all 34 deterministic
+  cases with zero pre-render undefined reads. The default v1 path remains its
+  committed `fail`, and every other newly recovered switch cell still needs
+  the same explicit execution evidence before WP5 can complete.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic

@@ -235,6 +235,67 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
 /// call itself — it walks forward and stops at the first nested `If`, and these
 /// stores sit above all of a function's control flow.
 pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
+    prune_callee_saved_spills_with_scope(f, cc, false);
+}
+
+/// Remove otherwise-dead callee saves nested by an experimental region tree.
+///
+/// Unlike [`prune_callee_saved_spills`], this walks structured bodies. Callers
+/// must opt in only when the selected region has independent verification;
+/// register-looking nested assignments are not sufficient global provenance.
+pub fn prune_callee_saved_spills_nested(f: &mut Function, cc: CallConv) {
+    prune_callee_saved_spills_with_scope(f, cc, true);
+}
+
+fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursive: bool) {
+    fn visit_statements(body: &[Stmt], recursive: bool, visit: &mut impl FnMut(&Stmt)) {
+        for statement in body {
+            visit(statement);
+            if !recursive {
+                continue;
+            }
+            match statement {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    visit_statements(then_body, true, visit);
+                    if let Some(else_body) = else_body {
+                        visit_statements(else_body, true, visit);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    visit_statements(body, true, visit);
+                }
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    visit(init.as_ref());
+                    visit_statements(body, true, visit);
+                    visit(step.as_ref());
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        visit_statements(case_body, true, visit);
+                    }
+                    if let Some(default_body) = default {
+                        visit_statements(default_body, true, visit);
+                    }
+                }
+                Stmt::TryCatch {
+                    try_body, catches, ..
+                } => {
+                    visit_statements(try_body, true, visit);
+                    for catch in catches {
+                        visit_statements(&catch.body, true, visit);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     // A promoted spill appears in either spelling depending on how far stack
     // promotion got: `Assign` when the slot became a plain local, `Store` when
     // it is still addressed. Both render identically as `stack_2 = rbp;`, so
@@ -279,33 +340,57 @@ pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
         }
     };
 
-    let candidates: Vec<VReg> = f.body.iter().filter_map(spilled_slot).collect();
+    let mut candidates = Vec::new();
+    visit_statements(&f.body, recursive, &mut |statement| {
+        if let Some(slot) = spilled_slot(statement) {
+            if !candidates.contains(&slot) {
+                candidates.push(slot);
+            }
+        }
+    });
     let mut doomed_slots: Vec<VReg> = Vec::new();
     for slot in candidates {
         // Every statement that mentions the slot, other than its own spill.
-        let readers: Vec<&Stmt> = f
-            .body
-            .iter()
-            .filter(|s| spilled_slot(s).as_ref() != Some(&slot))
-            .filter(|s| stmt_reads(s, &slot))
-            .collect();
-        let dead = match readers.as_slice() {
+        let mut reader_count = 0usize;
+        let mut sole_restore = None;
+        visit_statements(&f.body, recursive, &mut |statement| {
+            let reads_slot = if recursive {
+                stmt_reads_direct(statement, &slot)
+            } else {
+                stmt_reads(statement, &slot)
+            };
+            if spilled_slot(statement).as_ref() == Some(&slot) || !reads_slot {
+                return;
+            }
+            reader_count += 1;
+            sole_restore = restore_of(statement, &slot);
+        });
+        let dead = match reader_count {
             // Never observed at all: the spill alone is dead.
-            [] => true,
+            0 => true,
             // Observed exactly once, by a restore whose result nothing reads.
-            [only] => match restore_of(only, &slot) {
+            1 => match sole_restore {
                 // The spill and the restore both mention the register — the
                 // spill reads it, the restore writes it. Neither counts as an
                 // observation of the restored value, so both are excluded.
                 // Before SSA renaming they share one name, which is exactly the
                 // shape the unit tests pin.
-                Some(restored) => !f
-                    .body
-                    .iter()
-                    .filter(|s| {
-                        restore_of(s, &slot).is_none() && spilled_slot(s).as_ref() != Some(&slot)
-                    })
-                    .any(|s| stmt_reads(s, &restored)),
+                Some(restored) => {
+                    let mut observed = false;
+                    visit_statements(&f.body, recursive, &mut |statement| {
+                        if restore_of(statement, &slot).is_none()
+                            && spilled_slot(statement).as_ref() != Some(&slot)
+                            && if recursive {
+                                stmt_reads_direct(statement, &restored)
+                            } else {
+                                stmt_reads(statement, &restored)
+                            }
+                        {
+                            observed = true;
+                        }
+                    });
+                    !observed
+                }
                 None => false,
             },
             _ => false,
@@ -315,14 +400,94 @@ pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
         }
     }
     if !doomed_slots.is_empty() {
-        f.body.retain(|stmt| {
-            if spilled_slot(stmt).is_some_and(|slot| doomed_slots.contains(&slot)) {
-                return false;
+        fn prune_body(
+            body: &mut Vec<Stmt>,
+            recursive: bool,
+            doomed_slots: &[VReg],
+            spilled_slot: &impl Fn(&Stmt) -> Option<VReg>,
+            restore_of: &impl Fn(&Stmt, &VReg) -> Option<VReg>,
+        ) {
+            if recursive {
+                for statement in body.iter_mut() {
+                    match statement {
+                        Stmt::If {
+                            then_body,
+                            else_body,
+                            ..
+                        } => {
+                            prune_body(then_body, true, doomed_slots, spilled_slot, restore_of);
+                            if let Some(else_body) = else_body {
+                                prune_body(else_body, true, doomed_slots, spilled_slot, restore_of);
+                            }
+                        }
+                        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                            prune_body(body, true, doomed_slots, spilled_slot, restore_of);
+                        }
+                        Stmt::For {
+                            init, step, body, ..
+                        } => {
+                            if removable(init.as_ref(), doomed_slots, spilled_slot, restore_of) {
+                                **init = Stmt::Nop;
+                            }
+                            prune_body(body, true, doomed_slots, spilled_slot, restore_of);
+                            if removable(step.as_ref(), doomed_slots, spilled_slot, restore_of) {
+                                **step = Stmt::Nop;
+                            }
+                        }
+                        Stmt::Switch { cases, default, .. } => {
+                            for (_, case_body) in cases {
+                                prune_body(case_body, true, doomed_slots, spilled_slot, restore_of);
+                            }
+                            if let Some(default_body) = default {
+                                prune_body(
+                                    default_body,
+                                    true,
+                                    doomed_slots,
+                                    spilled_slot,
+                                    restore_of,
+                                );
+                            }
+                        }
+                        Stmt::TryCatch {
+                            try_body, catches, ..
+                        } => {
+                            prune_body(try_body, true, doomed_slots, spilled_slot, restore_of);
+                            for catch in catches {
+                                prune_body(
+                                    &mut catch.body,
+                                    true,
+                                    doomed_slots,
+                                    spilled_slot,
+                                    restore_of,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
-            !doomed_slots
-                .iter()
-                .any(|slot| restore_of(stmt, slot).is_some())
-        });
+            body.retain(|statement| !removable(statement, doomed_slots, spilled_slot, restore_of));
+        }
+
+        fn removable(
+            statement: &Stmt,
+            doomed_slots: &[VReg],
+            spilled_slot: &impl Fn(&Stmt) -> Option<VReg>,
+            restore_of: &impl Fn(&Stmt, &VReg) -> Option<VReg>,
+        ) -> bool {
+            spilled_slot(statement).is_some_and(|slot| doomed_slots.contains(&slot))
+                || doomed_slots
+                    .iter()
+                    .any(|slot| restore_of(statement, slot).is_some())
+        }
+
+        prune_body(
+            &mut f.body,
+            recursive,
+            &doomed_slots,
+            &spilled_slot,
+            &restore_of,
+        );
     }
 
     prune_orphaned_stack_pointer_arithmetic(f);
@@ -452,6 +617,39 @@ fn is_stack_pointer(v: &VReg) -> bool {
 /// boundary rather than a storage location.
 fn is_saved_frame_slot(v: &VReg) -> bool {
     matches!(v, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top")
+}
+
+/// Reads owned by this statement node, excluding reads in nested bodies.
+///
+/// Recursive AST walks must use this view; pairing it with [`stmt_reads`]
+/// would count the same nested restore once for every enclosing control node.
+fn stmt_reads_direct(statement: &Stmt, register: &VReg) -> bool {
+    match statement {
+        Stmt::Assign { src, .. } => expr_reads(src, register),
+        Stmt::Store { addr, src, .. } => expr_reads(addr, register) || expr_reads(src, register),
+        Stmt::Call { target, args, .. } => {
+            expr_reads(target, register) || args.iter().any(|arg| expr_reads(arg, register))
+        }
+        Stmt::Return { value } => value
+            .as_ref()
+            .is_some_and(|value| expr_reads(value, register)),
+        Stmt::Throw { value } => expr_reads(value, register),
+        Stmt::If { cond, .. }
+        | Stmt::While { cond, .. }
+        | Stmt::DoWhile { cond, .. }
+        | Stmt::For { cond, .. } => expr_reads(cond, register),
+        Stmt::Switch { discriminant, .. } => expr_reads(discriminant, register),
+        Stmt::Push { value } => expr_reads(value, register),
+        Stmt::IndirectGoto { target } => expr_reads(target, register),
+        Stmt::Pop { target } => target == register,
+        Stmt::TryCatch { .. }
+        | Stmt::Label(_)
+        | Stmt::Goto { .. }
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => false,
+    }
 }
 
 /// Whether a promoted `local_*` is the entry-stack save of ARM machine state.
@@ -1287,6 +1485,118 @@ mod tests {
                 value: Some(Expr::Const(7))
             }]
         );
+    }
+
+    /// A structured early-return guard can place the machine prologue inside
+    /// an `else` arm. Callee-save cleanup must follow the AST rather than only
+    /// scanning the function's top-level statement list.
+    #[test]
+    fn nested_x86_entry_callee_save_is_removed_by_explicit_recursive_pass() {
+        let mut f = Function {
+            name: "guarded_frame".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("guard")),
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-1)),
+                }],
+                else_body: Some(vec![
+                    Stmt::Assign {
+                        dst: reg("local_8"),
+                        src: Expr::Reg(reg("r15")),
+                    },
+                    Stmt::Return {
+                        value: Some(Expr::Const(7)),
+                    },
+                ]),
+            }],
+        };
+
+        prune_callee_saved_spills_nested(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::If {
+            else_body: Some(else_body),
+            ..
+        } = &f.body[0]
+        else {
+            panic!("guarded frame shape changed: {:#?}", f.body);
+        };
+        assert_eq!(
+            else_body,
+            &vec![Stmt::Return {
+                value: Some(Expr::Const(7))
+            }]
+        );
+    }
+
+    /// Production's historical pass is deliberately top-level-only. A nested
+    /// register-looking assignment is not enough evidence by itself to erase
+    /// it across the full corpus; the shadow structurer opts into the stronger
+    /// recursive cleanup only after independent output verification.
+    #[test]
+    fn default_callee_save_pass_preserves_nested_assignments() {
+        let nested_save = Stmt::Assign {
+            dst: reg("local_8"),
+            src: Expr::Reg(reg("r15")),
+        };
+        let mut f = Function {
+            name: "guarded_frame".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("guard")),
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-1)),
+                }],
+                else_body: Some(vec![
+                    nested_save.clone(),
+                    Stmt::Return {
+                        value: Some(Expr::Const(7)),
+                    },
+                ]),
+            }],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::If {
+            else_body: Some(else_body),
+            ..
+        } = &f.body[0]
+        else {
+            panic!("guarded frame shape changed: {:#?}", f.body);
+        };
+        assert_eq!(else_body.first(), Some(&nested_save));
+    }
+
+    /// The historical top-level pass still treats a read inside structured
+    /// control flow as a real observation of a top-level spill. Its scan is
+    /// shallow only for candidate discovery and removal, not for liveness.
+    #[test]
+    fn default_callee_save_pass_sees_nested_reads_of_top_level_spills() {
+        let spill = Stmt::Assign {
+            dst: reg("local_8"),
+            src: Expr::Reg(reg("r15")),
+        };
+        let mut f = Function {
+            name: "nested_read".into(),
+            entry_va: 0,
+            body: vec![
+                spill.clone(),
+                Stmt::If {
+                    cond: Expr::Reg(reg("guard")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Reg(reg("local_8"))),
+                    }],
+                    else_body: Some(vec![Stmt::Return {
+                        value: Some(Expr::Const(7)),
+                    }]),
+                },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(f.body.first(), Some(&spill));
     }
 
     /// A later SSA definition stored in a local is ordinary recovered state,

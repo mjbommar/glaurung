@@ -342,13 +342,7 @@ fn adapt_loop_sequence(regions: &[StructuredRegion], header: usize) -> Option<Re
     let mut adapted = Vec::new();
     let mut index = 0usize;
     while index < regions.len() {
-        if matches!(
-            (&regions[index], regions.get(index + 1)),
-            (
-                StructuredRegion::Block(block),
-                Some(StructuredRegion::If { source_block, .. })
-            ) if block.block == *source_block
-        ) {
+        if control_node_consumes_owner_leaf(&regions[index], regions.get(index + 1)) {
             index += 1;
         }
         let adapted_region = match &regions[index] {
@@ -479,15 +473,10 @@ fn adapt_sequence(regions: &[StructuredRegion]) -> Option<Region> {
     let mut adapted = Vec::new();
     let mut index = 0usize;
     while index < regions.len() {
-        if matches!(
-            (&regions[index], regions.get(index + 1)),
-            (
-                StructuredRegion::Block(block),
-                Some(StructuredRegion::If { source_block, .. })
-            ) if block.block == *source_block
-        ) {
-            // The shadow algebra keeps the condition-owner leaf separately for
-            // exact ownership. v1's `If*` node owns and lowers that same block.
+        if control_node_consumes_owner_leaf(&regions[index], regions.get(index + 1)) {
+            // The shadow algebra keeps a control-owner leaf separately for
+            // exact ownership. v1's `If*` and guarded `Switch` nodes own and
+            // lower that same block, so adapting both would execute it twice.
             index += 1;
         }
         let adapted_region = match &regions[index] {
@@ -520,6 +509,28 @@ fn adapt_sequence(regions: &[StructuredRegion]) -> Option<Region> {
         index += 1;
     }
     Some(Region::Seq(adapted))
+}
+
+fn control_node_consumes_owner_leaf(
+    region: &StructuredRegion,
+    next: Option<&StructuredRegion>,
+) -> bool {
+    matches!(
+        (region, next),
+        (
+            StructuredRegion::Block(block),
+            Some(StructuredRegion::If { source_block, .. })
+        ) if block.block == *source_block
+    ) || matches!(
+        (region, next),
+        (
+            StructuredRegion::Block(block),
+            Some(StructuredRegion::Switch {
+                guard: Some(guard),
+                ..
+            })
+        ) if block.block == *guard
+    )
 }
 
 fn adapt_if(
@@ -594,6 +605,39 @@ mod tests {
                 else_r: Box::new(Region::Block(2)),
                 join: None,
                 invert: false,
+            }]))
+        );
+    }
+
+    #[test]
+    fn adapter_consumes_the_separate_switch_guard_leaf_once() {
+        let tree = StructuredRegion::Sequence(vec![
+            StructuredRegion::Block(BlockRegion {
+                block: 0,
+                transfers: Vec::new(),
+                terminal: None,
+            }),
+            StructuredRegion::Switch {
+                guard: Some(0),
+                dispatch: 1,
+                cases: vec![crate::ir::structure_v2::SwitchCaseRegion {
+                    target: 2,
+                    values: vec![0],
+                    region: Box::new(StructuredRegion::Return { block: 2 }),
+                }],
+                default: None,
+            },
+        ]);
+
+        assert_eq!(
+            adapt_region(&tree),
+            Some(Region::Seq(vec![Region::Switch {
+                guard: Some(0),
+                dispatch: 1,
+                case_labels: vec![vec![0]],
+                arms: vec![Region::Block(2)],
+                formal_default: None,
+                join: None,
             }]))
         );
     }

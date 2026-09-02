@@ -4080,7 +4080,7 @@
     "rpn_evaluate": "pass"
   },
   "42_rpn_evaluator:clang:O2": {
-    "rpn_evaluate": "fail"
+    "rpn_evaluate": "pass"
   },
   "42_rpn_evaluator:gcc:O0": {
     "rpn_evaluate": "pass"

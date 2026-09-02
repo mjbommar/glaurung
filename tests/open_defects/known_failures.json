@@ -1,25 +1,25 @@
 {
  "note": "Measured decompiler failures. Regenerate with tools/gen_known_failures.py.",
- "elapsed_seconds": 1365.8,
+ "elapsed_seconds": 1429.0,
  "objects_scanned": 1676,
  "counts": {
   "types": 307,
-  "structure": 715,
+  "structure": 717,
   "returns": 92,
   "pointers": 0,
-  "unrecovered": 48,
+  "unrecovered": 46,
   "no_body": 0,
- "goto_statements": 6791
+  "goto_statements": 6843
  },
  "counts_by_language": {
   "c": {
    "types": 9,
-   "structure": 621,
+   "structure": 623,
    "returns": 33,
    "pointers": 0,
-   "unrecovered": 42,
+   "unrecovered": 40,
    "no_body": 0,
-   "goto_statements": 6225
+   "goto_statements": 6277
   },
   "rust": {
    "types": 298,
@@ -33,22 +33,22 @@
  },
  "deduplicated_counts": {
   "types": 218,
-  "structure": 473,
+  "structure": 474,
   "returns": 67,
   "pointers": 0,
-  "unrecovered": 30,
+  "unrecovered": 29,
   "no_body": 0,
-  "goto_statements": 4635
+  "goto_statements": 4661
  },
  "deduplicated_counts_by_language": {
   "c": {
    "types": 5,
-   "structure": 405,
+   "structure": 406,
    "returns": 18,
    "pointers": 0,
-   "unrecovered": 26,
+   "unrecovered": 25,
    "no_body": 0,
-   "goto_statements": 4208
+   "goto_statements": 4234
   },
   "rust": {
    "types": 213,
@@ -3632,9 +3632,21 @@
   },
   {
    "obj": "154_wide_switch-clang-O2.so",
+   "fn": "wide154_dense_effects",
+   "va": 4432,
+   "gotos": 17
+  },
+  {
+   "obj": "154_wide_switch-clang-O2.so",
    "fn": "wide154_sparse_switch",
    "va": 10256,
    "gotos": 70
+  },
+  {
+   "obj": "154_wide_switch-clang-O2strip.dwarf.so",
+   "fn": "wide154_dense_effects",
+   "va": 4432,
+   "gotos": 17
   },
   {
    "obj": "154_wide_switch-clang-O2strip.dwarf.so",
@@ -5956,13 +5968,13 @@
    "obj": "42_rpn_evaluator-clang-O2.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 3
+   "gotos": 12
   },
   {
    "obj": "42_rpn_evaluator-clang-O2strip.dwarf.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 3
+   "gotos": 12
   },
   {
    "obj": "42_rpn_evaluator-gcc-O0.so",
@@ -8131,18 +8143,6 @@
    "obj": "215_switch_on_wide_selector-gcc-O2strip.dwarf.so",
    "fn": "wide_selector_mixed",
    "va": 4496,
-   "n": 1
-  },
-  {
-   "obj": "42_rpn_evaluator-clang-O2.so",
-   "fn": "rpn_evaluate",
-   "va": 4352,
-   "n": 1
-  },
-  {
-   "obj": "42_rpn_evaluator-clang-O2strip.dwarf.so",
-   "fn": "rpn_evaluate",
-   "va": 4352,
    "n": 1
   }
  ],

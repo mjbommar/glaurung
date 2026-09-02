@@ -85,6 +85,7 @@ pub(super) fn run_ast_passes(
     profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     cc: crate::ir::call_args::CallConv,
+    nested_machine_frame_cleanup: bool,
     prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     param_slots: &mut std::collections::HashSet<usize>,
     locked_parameter_count: Option<usize>,
@@ -241,7 +242,12 @@ pub(super) fn run_ast_passes(
     // before dead-store elimination removes the now-unused `rbp = rsp` witness.
     // A second call after the remaining passes still handles epilogues exposed
     // by stack-op rematerialisation.
-    pass!("recognise_machine_frame", recognise_machine_frame(f, cc));
+    pass!("recognise_machine_frame", {
+        recognise_machine_frame(f, cc);
+        if nested_machine_frame_cleanup {
+            crate::ir::dead_stores::prune_callee_saved_spills_nested(f, cc);
+        }
+    });
     // Project a prototype-proven result while the raw ABI output register is
     // still present. ARM32/AArch64 reuse arg0's register for the result; the
     // following spill-role split must rename both its final definition and the
@@ -383,6 +389,24 @@ pub(super) struct PreparedLlir {
 }
 
 impl PreparedLlir {
+    pub(super) fn select_shadow_v2(
+        &mut self,
+        requested: bool,
+        typed_pipeline: bool,
+    ) -> Result<(), &'static str> {
+        if !requested {
+            return Ok(());
+        }
+        if !typed_pipeline {
+            return Err("shadow_v2 requires style='decbench'");
+        }
+        self.region = self
+            .shadow_v2_region
+            .take()
+            .ok_or("verified structure v2 region unavailable")?;
+        Ok(())
+    }
+
     /// Verified typed MIR for this function, built on demand.
     ///
     /// Available for EVERY decompilation rather than only when
@@ -405,6 +429,19 @@ impl PreparedLlir {
         image: &crate::program::image::ProgramImage,
     ) -> Result<crate::ir::mir::MirFunction, Vec<String>> {
         crate::ir::mir::lower_verified_with_image(&self.numbered, image)
+    }
+}
+
+pub(super) fn requested_function_limit(func_vas: &[u64], max_functions: usize) -> usize {
+    if max_functions == 0 {
+        func_vas
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            .max(1)
+    } else {
+        max_functions
     }
 }
 
