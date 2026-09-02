@@ -2,8 +2,8 @@
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
   "core": 297,
-  "lfs": 101,
-  "fixtures": 29,
+  "lfs": 103,
+  "fixtures": 30,
   "toolchain": 28,
   "docker": 18,
   "llm": 5,
@@ -75,6 +75,9 @@
   ],
   "test_binary_diff_relocation_only.py": [
    "core"
+  ],
+  "test_binary_diff_structural.py": [
+   "lfs"
   ],
   "test_bookmark_journal.py": [
    "lfs"
@@ -891,6 +894,12 @@
    "lfs"
   ],
   "test_structural_fingerprint.py": [
+   "lfs"
+  ],
+  "test_structural_md_index_measurement.py": [
+   "fixtures"
+  ],
+  "test_structural_signature.py": [
    "lfs"
   ],
   "test_suggest_function_name.py": [
