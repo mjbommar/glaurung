@@ -120,7 +120,7 @@ block of six calls with the same degrees are the same feature.
 ## The mask / keep table
 
 The specification, with the precedent for each row. Rows are from the synthesis
-in [`04-program-representations-and-schemas.md`](../research/program-measures-2026-09-02/04-program-representations-and-schemas.md) §9(b); the
+in [`04-program-representations-and-schemas.md`](../research/program-measures-2026-09-02/04-program-representations-and-schemas.md) section 9(b); the
 "where" column names the code that implements it.
 
 | Masked | Kept in its place | Precedent | Where |
