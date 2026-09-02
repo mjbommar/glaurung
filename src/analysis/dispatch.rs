@@ -706,6 +706,15 @@ impl DispatchTracker {
             }
         } else if let Some(d) = Self::dest_reg(ins) {
             let previous_bound = self.bounded.get(canon_ref(d).as_ref()).copied();
+            let zero_extended_bound = m
+                .starts_with("movz")
+                .then(|| {
+                    ins.operands
+                        .get(1)
+                        .and_then(|operand| operand.register.as_deref())
+                        .and_then(|source| self.bounded.get(canon_ref(source).as_ref()).copied())
+                })
+                .flatten();
             // Synthetic instruction adapters may mark `cmp`'s first operand as
             // ReadWrite even though the machine instruction does not write it.
             // Preserve its identity just as the real decoder does.
@@ -755,6 +764,8 @@ impl DispatchTracker {
                 if let Some(n) = imm1.filter(|n| *n >= 0) {
                     self.bound_value(d, n as u64);
                 }
+            } else if let Some(bound) = zero_extended_bound {
+                self.bound_value(d, bound);
             }
         }
 
@@ -1725,6 +1736,30 @@ mod tests {
         assert!(matches!(
             t.resolve(&ins("jmp", vec![reg_read("rcx")]), &tables()),
             Some(Resolution::Table { .. })
+        ));
+    }
+
+    #[test]
+    fn a_bound_survives_zero_extension_of_the_guarded_subregister() {
+        let mut guard = DispatchTracker::new();
+        guard.observe(&ins("cmp", vec![reg_op("al"), imm_op(3)]));
+
+        let mut dispatch = DispatchTracker::new();
+        dispatch.inherit_bound(Some(guard.export_bounds()));
+        dispatch.inherit_addresses(Some(&HashMap::from([("rdx".to_string(), 0x2000)])));
+        dispatch.observe(&ins(
+            "movzx",
+            vec![reg_write_sized("eax", 32), reg_read("al")],
+        ));
+        dispatch.observe(&ins(
+            "movsxd",
+            vec![reg_op("rax"), mem_op(Some("rdx"), 0, Some("rax"))],
+        ));
+        dispatch.observe(&ins("add", vec![reg_op("rax"), reg_op("rdx")]));
+
+        assert!(matches!(
+            dispatch.resolve(&ins("jmp", vec![reg_read("rax")]), &tables()),
+            Some(Resolution::Table { ref targets, .. }) if targets.len() == 4
         ));
     }
 

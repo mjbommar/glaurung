@@ -188,6 +188,12 @@ pub(super) fn verify_tree(
         }
     }
     let mut expected_tails = duplicated_tails.to_vec();
+    expected_tails.retain(|tail| {
+        !controls.iter().any(|(from, transfer)| {
+            *from == tail.cloned_at_predecessor
+                && matches!(transfer, Transfer::Break { to, .. } if *to == tail.source_block)
+        })
+    });
     for (source_block, cloned_at_predecessor) in materialized_tails {
         if let Some(position) = expected_tails.iter().position(|tail| {
             tail.source_block == source_block && tail.cloned_at_predecessor == cloned_at_predecessor

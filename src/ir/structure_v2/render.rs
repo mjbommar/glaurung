@@ -106,6 +106,19 @@ fn adapt_loop(
             continuation,
         });
     }
+    if tree_has_switch(body) {
+        let continuation = continuation.or_else(|| unique_loop_break_target(body, header))?;
+        let mut saw_break = false;
+        if !all_loop_breaks_target(body, header, continuation, &mut saw_break) || !saw_break {
+            return None;
+        }
+        return Some(Region::MultiExitLoop {
+            header,
+            body: Box::new(adapt_loop_body(body, header)?),
+            exits: vec![(continuation, Region::Seq(Vec::new()))],
+            continuation: Some(continuation),
+        });
+    }
     if kind == LoopKind::PreTested {
         let continuation = continuation?;
         let mut saw_break = false;
@@ -142,6 +155,55 @@ fn adapt_loop(
     })
 }
 
+fn unique_loop_break_target(region: &StructuredRegion, header: usize) -> Option<usize> {
+    let mut target = None;
+    fn collect(region: &StructuredRegion, header: usize, target: &mut Option<usize>) -> bool {
+        match region {
+            StructuredRegion::Sequence(regions) => {
+                regions.iter().all(|region| collect(region, header, target))
+            }
+            StructuredRegion::If {
+                then_region,
+                else_region,
+                ..
+            } => {
+                collect(then_region, header, target)
+                    && else_region
+                        .as_deref()
+                        .is_none_or(|region| collect(region, header, target))
+            }
+            StructuredRegion::Switch { cases, default, .. } => {
+                cases
+                    .iter()
+                    .all(|case| collect(&case.region, header, target))
+                    && default
+                        .as_ref()
+                        .is_none_or(|default| collect(&default.region, header, target))
+            }
+            StructuredRegion::Break {
+                header: seen, to, ..
+            } if *seen == header => match target {
+                Some(expected) => *expected == *to,
+                None => {
+                    *target = Some(*to);
+                    true
+                }
+            },
+            StructuredRegion::Continue { header: seen, .. } => *seen == header,
+            StructuredRegion::Loop { .. } | StructuredRegion::Break { .. } => false,
+            StructuredRegion::Empty
+            | StructuredRegion::Block(_)
+            | StructuredRegion::Return { .. }
+            | StructuredRegion::DuplicatedReturn { .. }
+            | StructuredRegion::LocalGoto { .. }
+            | StructuredRegion::SharedGoto { .. } => true,
+        }
+    }
+    collect(region, header, &mut target)
+        .then_some(target)
+        .flatten()
+}
+
 /// Confirm that a single-exit loop's typed breaks all reach the lexical
 /// continuation before spelling those transfers as C `break` statements.
 fn all_loop_breaks_target(
@@ -170,6 +232,14 @@ fn all_loop_breaks_target(
                     all_loop_breaks_target(region, header, continuation, saw_break)
                 })
         }
+        StructuredRegion::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .all(|case| all_loop_breaks_target(&case.region, header, continuation, saw_break))
+                && default.as_ref().is_none_or(|default| {
+                    all_loop_breaks_target(&default.region, header, continuation, saw_break)
+                })
+        }
         StructuredRegion::Break {
             header: seen, to, ..
         } => {
@@ -177,7 +247,7 @@ fn all_loop_breaks_target(
             *seen == header && *to == continuation
         }
         StructuredRegion::Continue { header: seen, .. } => *seen == header,
-        StructuredRegion::Loop { .. } | StructuredRegion::Switch { .. } => false,
+        StructuredRegion::Loop { .. } => false,
     }
 }
 
@@ -202,6 +272,29 @@ fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
             None,
             header,
         ),
+        StructuredRegion::Switch {
+            guard,
+            dispatch,
+            cases,
+            default,
+        } => {
+            let formal_default = if let Some(default) = default {
+                Some(Box::new(adapt_loop_body(&default.region, header)?))
+            } else {
+                None
+            };
+            Some(Region::Switch {
+                guard: *guard,
+                dispatch: *dispatch,
+                case_labels: cases.iter().map(|case| case.values.clone()).collect(),
+                arms: cases
+                    .iter()
+                    .map(|case| adapt_loop_body(&case.region, header))
+                    .collect::<Option<Vec<_>>>()?,
+                formal_default,
+                join: None,
+            })
+        }
         StructuredRegion::Break {
             header: seen, to, ..
         } if *seen == header => Some(Region::Goto(*to)),
@@ -212,9 +305,31 @@ fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
             Some(Region::Goto(*to))
         }
         StructuredRegion::Loop { .. }
-        | StructuredRegion::Switch { .. }
         | StructuredRegion::Break { .. }
         | StructuredRegion::Continue { .. } => None,
+    }
+}
+
+fn tree_has_switch(region: &StructuredRegion) -> bool {
+    match region {
+        StructuredRegion::Switch { .. } => true,
+        StructuredRegion::Sequence(regions) => regions.iter().any(tree_has_switch),
+        StructuredRegion::If {
+            then_region,
+            else_region,
+            ..
+        } => tree_has_switch(then_region) || else_region.as_deref().is_some_and(tree_has_switch),
+        StructuredRegion::Loop { body, exits, .. } => {
+            tree_has_switch(body) || exits.iter().any(|exit| tree_has_switch(&exit.region))
+        }
+        StructuredRegion::Empty
+        | StructuredRegion::Block(_)
+        | StructuredRegion::Return { .. }
+        | StructuredRegion::DuplicatedReturn { .. }
+        | StructuredRegion::Break { .. }
+        | StructuredRegion::Continue { .. }
+        | StructuredRegion::LocalGoto { .. }
+        | StructuredRegion::SharedGoto { .. } => false,
     }
 }
 

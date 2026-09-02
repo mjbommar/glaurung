@@ -258,17 +258,13 @@ impl TreeBuilder<'_> {
         }
         let mut cases = Vec::with_capacity(evidence.cases.len());
         for case in evidence.cases {
-            let region = if Some(case.target) == stop {
-                StructuredRegion::Empty
-            } else if self.owned[case.target] {
-                StructuredRegion::SharedGoto {
-                    from: dispatch,
-                    to: case.target,
-                    taken: None,
-                }
-            } else {
-                self.build(case.target, stop)?
-            };
+            let transfer = self
+                .candidate_block(dispatch)?
+                .transfers
+                .iter()
+                .find(|transfer| transfer_target(transfer) == case.target)?
+                .to_owned();
+            let region = self.build_tree_transfer(dispatch, &transfer, stop)?;
             cases.push(SwitchCaseRegion {
                 target: case.target,
                 values: case.values,

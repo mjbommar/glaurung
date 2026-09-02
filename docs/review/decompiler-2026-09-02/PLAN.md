@@ -430,9 +430,11 @@ that preserves honest local gotos when required.
   a case, and emits deterministic parseable C. Multi-exit loops no longer
   require an invented common continuation: the gcc-O2
   `206_aarch64_wide_dispatch::dispatch_in_loop` shape independently owns its
-  non-reconverging terminal exits, renders the verified loop, and retains the
-  still-unresolved indirect jump as an explicit WP5 marker. Every currently
-  renderable real WP4 tree (`early_return`,
+  non-reconverging terminal exits. WP5 now preserves the guard's `al <= 6`
+  proof through GCC's `movzbl al, eax`; the exact seven PIC-relative targets
+  reach a switch nested inside that verified loop, including the case that
+  exits to the shared return, with no indirect-jump placeholder. Every
+  currently renderable real WP4 tree (`early_return`,
   `dowhile_atleastonce`, `loop_return_on_neg`, top-level `two_entry_loop`,
   nested `irreducible_inside_reducible`, `duff_copy`,
   `wide154_dense_effects`, and `dispatch_in_loop`)
@@ -576,10 +578,10 @@ one authoritative set of case edges.
   `215`, across applicable O0/O2 and architecture lanes.
   The real `102` gcc-O2 discovery-to-shadow vertical slice is green. The gcc-O2
   `154` side-effect switch preserves all 208 typed case values through verified
-  deterministic C rendering. The gcc-O2 `206::dispatch_in_loop` CFG now reaches
-  verified deterministic loop output, but its in-loop table remains an honest
-  unresolved indirect jump and therefore a WP5 discovery gap. Other
-  compiler/optimization and named fixture lanes remain.
+  deterministic C rendering. The gcc-O2 `206::dispatch_in_loop` lane now
+  preserves a guarded byte selector through register zero-extension, decodes
+  exact cases `0..6`, and renders that typed switch inside its verified loop.
+  Other compiler/optimization and named fixture lanes remain.
 - [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [ ] Execution differential for every newly recovered switch.

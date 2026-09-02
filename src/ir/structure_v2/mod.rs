@@ -1015,6 +1015,19 @@ mod tests {
         assert_eq!(report.covered_blocks, report.block_count, "{report:#?}");
         assert_eq!(report.represented_edges, report.edge_count, "{report:#?}");
         assert!(!report.loops.is_empty(), "fixture must retain its loop");
+        let candidate = report
+            .candidate
+            .as_ref()
+            .unwrap_or_else(|| panic!("dispatch loop should have a candidate: {report:#?}"));
+        assert_eq!(candidate.switches().len(), 1, "{candidate:#?}");
+        assert_eq!(
+            candidate.switches()[0]
+                .cases
+                .iter()
+                .flat_map(|case| case.values.iter().copied())
+                .collect::<Vec<_>>(),
+            (0..7).collect::<Vec<_>>()
+        );
         let tree = report
             .tree
             .as_ref()
@@ -1028,11 +1041,14 @@ mod tests {
             .as_deref()
             .unwrap_or_else(|| panic!("dispatch loop should render: {report:#?}"));
         assert!(pseudocode.contains("while (1)"), "{pseudocode}");
+        assert!(pseudocode.contains("switch ("), "{pseudocode}");
+        assert!(pseudocode.contains("case 0:"), "{pseudocode}");
+        assert!(pseudocode.contains("case 6:"), "{pseudocode}");
         assert!(pseudocode.contains("break;"), "{pseudocode}");
         assert!(pseudocode.contains("return "), "{pseudocode}");
         assert!(
-            pseudocode.contains("unrecovered indirect jump"),
-            "dispatch discovery remains a separately visible WP5 gap: {pseudocode}"
+            !pseudocode.contains("unrecovered indirect jump"),
+            "{pseudocode}"
         );
         let repeated = observe(&lifted, &compute_ssa(&lifted));
         assert_eq!(report.tree, repeated.tree);
