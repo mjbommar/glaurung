@@ -40,6 +40,10 @@ pub mod demangle;
 /// Similarity and fuzzy hashing (CTPH)
 pub mod similarity;
 
+/// Content-derived function identity schemes (WARP GUIDs, structural
+/// invariants, the canonical function representation).
+pub mod identity;
+
 /// Cross-platform string scanning and language detection
 pub mod strings;
 

@@ -55,6 +55,18 @@ class BinaryDiffCommand(BaseCommand):
                 "Default: 0.85."
             ),
         )
+        parser.add_argument(
+            "--no-structural-rematch",
+            action="store_true",
+            help=(
+                "Skip the L1 structural pass. On by default: it ranks the "
+                "changed table by how far the MD-index, block/edge counts, "
+                "mnemonic product and rare constants moved, and re-pairs "
+                "added/removed rows whose control-flow shape is globally "
+                "rare (Diaphora's `count <= 2` rule) and identical on both "
+                "sides. Costs one extra discovery pass per binary."
+            ),
+        )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
         from glaurung.llm.kb.binary_diff import (
@@ -83,6 +95,7 @@ class BinaryDiffCommand(BaseCommand):
             skip_anonymous=not args.include_anonymous,
             pdb_cache=(args.pdb_cache or None),
             cross_name_threshold=threshold,
+            structural_rematch=not args.no_structural_rematch,
         )
 
         if formatter.format_type == OutputFormat.JSON:

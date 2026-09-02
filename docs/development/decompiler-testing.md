@@ -543,6 +543,26 @@ checkout's Python, registers the backend, and then delegates to DecBench's
 normal CLI. Set `DECBENCH_PYTHON` only when that interpreter is not at
 `$DECBENCH_DIR/.venv/bin/python`; do not patch the external checkout.
 
+## The same corpus, used to measure function identity
+
+`tests/decompiler_fixtures/build/` is a matched-build matrix — the same 206
+sources under two compilers at two optimisation levels with symbols intact —
+which makes it ground truth for a second question the decompiler lanes do not
+ask: **can we tell that two binaries contain the same function?**
+
+[`identity-measurement.md`](identity-measurement.md) is that harness. It reads
+the same build directory (via `GLAURUNG_IDENTITY_CORPUS`, or the same
+manifest-relative path), applies the published retrieval filters, and scores
+any identity scheme over Marcelli's XO / XC / XM tasks with AUC, MRR10 and
+Recall@k. Two schemes already in the tree are retro-scored there: CTPH is at
+chance, and the Python structural fingerprint reaches AUC 0.73 cross-compiler
+and collapses to 0.52 when the optimisation level is also free.
+
+```bash
+cargo test --features python-ext --test identity_retrieval   # ~13s
+uv run pytest python/tests/test_identity_retrieval_protocol.py -q   # ~70s
+```
+
 ## The full corpus, from the published dataset
 
 The section below scores the 250-function **sample set**. The whole 94,575-function

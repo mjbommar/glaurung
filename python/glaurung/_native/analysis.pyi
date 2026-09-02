@@ -12,6 +12,35 @@
 
 from typing import Any
 
+STRUCTURAL_SCHEME: str
+
+class StructuralSignature:
+    """Structural invariants of one function: the L1 rung of the identity ladder."""
+
+    back_edges: Any
+    basic_blocks: Any
+    callers_in: Any
+    calls_out_direct: Any
+    calls_out_indirect: Any
+    cyclic_blocks: Any
+    cyclomatic_complexity: Any
+    edges: Any
+    entry_va: Any
+    instructions: Any
+    loops: Any
+    md_index_bottom_up: Any
+    md_index_relaxed: Any
+    md_index_top_down: Any
+    mnemonic_spp: Any
+    name: Any
+    rare_constants: Any
+    string_refs: Any
+    strongly_connected_components: Any
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+    def __repr__(self) -> Any: ...
+    def to_dict(self) -> Any: ...
+
 def analyze_functions_bytes(data: Any, max_functions: Any = 0, max_blocks: Any = 2048, max_instructions: Any = 50000, timeout_ms: Any = 100) -> Any: ...
 def analyze_functions_bytes_with_stats(data: Any, max_functions: Any = 0, max_blocks: Any = 2048, max_instructions: Any = 50000, timeout_ms: Any = 100) -> Any: ...
 def analyze_functions_path(path: Any, max_read_bytes: Any = 104857600, max_file_size: Any = 104857600, max_functions: Any = 0, max_blocks: Any = 2048, max_instructions: Any = 50000, timeout_ms: Any = 100, total_timeout_ms: Any = 0) -> Any: ...
@@ -39,4 +68,6 @@ def pe_list_resources_bytes(data: Any, max_resources: Any = 4096, max_resource_d
 def pe_list_resources_path(path: Any, max_read_bytes: Any = 104857600, max_file_size: Any = 104857600, max_resources: Any = 4096, max_resource_depth: Any = 32, max_resource_data_bytes: Any = 1048576, preview_bytes: Any = 16) -> Any: ...
 def pe_tls_path(path: Any, max_read_bytes: Any = 104857600, max_file_size: Any = 104857600) -> Any: ...
 def pe_view_resource_path(path: Any, type_filter: Any = None, name_filter: Any = None, language_id: Any = None, max_read_bytes: Any = 104857600, max_file_size: Any = 104857600, max_resources: Any = 4096, max_resource_depth: Any = 32, max_resource_data_bytes: Any = 1048576, preview_bytes: Any = 64, max_text_bytes: Any = 65536, max_payload_bytes: Any = 65536) -> Any: ...
+def structural_ranking_similarity(a: Any, b: Any) -> Any: ...
+def structural_signatures_path(path: Any, max_read_bytes: Any = 104857600, max_file_size: Any = 104857600, max_functions: Any = 0, max_blocks: Any = 8192, max_instructions: Any = 500000, timeout_ms: Any = 5000, total_timeout_ms: Any = 0) -> Any: ...
 def va_to_file_offset_path(path: Any, va: Any, max_read_bytes: Any = 104857600, max_file_size: Any = 104857600) -> Any: ...

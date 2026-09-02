@@ -17,6 +17,8 @@
 
 from glaurung._native import analysis as _mod
 
+STRUCTURAL_SCHEME = _mod.STRUCTURAL_SCHEME
+StructuralSignature = _mod.StructuralSignature
 analyze_functions_bytes = _mod.analyze_functions_bytes
 analyze_functions_bytes_with_stats = _mod.analyze_functions_bytes_with_stats
 analyze_functions_path = _mod.analyze_functions_path
@@ -44,4 +46,6 @@ pe_list_resources_bytes = _mod.pe_list_resources_bytes
 pe_list_resources_path = _mod.pe_list_resources_path
 pe_tls_path = _mod.pe_tls_path
 pe_view_resource_path = _mod.pe_view_resource_path
+structural_ranking_similarity = _mod.structural_ranking_similarity
+structural_signatures_path = _mod.structural_signatures_path
 va_to_file_offset_path = _mod.va_to_file_offset_path
