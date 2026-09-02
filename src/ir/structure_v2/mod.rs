@@ -532,7 +532,7 @@ mod tests {
         let discovered = session.discover_functions(
             &crate::analysis::cfg::Budgets {
                 max_functions: 1,
-                max_blocks: 128,
+                max_blocks: 1024,
                 max_instructions: 4096,
                 timeout_ms: 5000,
                 total_timeout_ms: 0,
@@ -944,6 +944,101 @@ mod tests {
         assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert_prepared_c(&report);
         assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+    }
+
+    #[test]
+    fn real_wide_effect_switch_reaches_shadow_without_losing_cases() {
+        let lifted = lift_real_fixture("154_wide_switch-gcc-O2.so", "wide154_dense_effects");
+        assert!(
+            lifted.blocks.len() > 128,
+            "fixture must remain a scale test"
+        );
+        let report = observe(&lifted, &compute_ssa(&lifted));
+        let candidate = report
+            .candidate
+            .as_ref()
+            .unwrap_or_else(|| panic!("wide switch should have a candidate: {report:#?}"));
+        let dispatch = candidate
+            .switches()
+            .iter()
+            .max_by_key(|dispatch| {
+                dispatch
+                    .cases
+                    .iter()
+                    .map(|case| case.values.len())
+                    .sum::<usize>()
+            })
+            .unwrap_or_else(|| panic!("wide switch should have typed cases: {report:#?}"));
+        assert_eq!(
+            dispatch
+                .cases
+                .iter()
+                .map(|case| case.values.len())
+                .sum::<usize>(),
+            208,
+            "{dispatch:#?}"
+        );
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("wide switch should recover a verified tree: {report:#?}"));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Switch { .. }
+        )));
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("wide switch should render: {report:#?}"));
+        assert!(pseudocode.contains("switch ("), "{pseudocode}");
+        assert!(pseudocode.contains("case 0:"), "{pseudocode}");
+        assert!(pseudocode.contains("case 207:"), "{pseudocode}");
+        assert!(
+            !pseudocode.contains("unrecovered indirect jump"),
+            "{pseudocode}"
+        );
+        let repeated = observe(&lifted, &compute_ssa(&lifted));
+        assert_eq!(report.tree, repeated.tree);
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
+        assert_prepared_c(&report);
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+    }
+
+    #[test]
+    fn real_dispatch_in_loop_without_a_join_recovers_a_verified_tree() {
+        let lifted = lift_real_fixture("206_aarch64_wide_dispatch-gcc-O2.so", "dispatch_in_loop");
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(report.covered_blocks, report.block_count, "{report:#?}");
+        assert_eq!(report.represented_edges, report.edge_count, "{report:#?}");
+        assert!(!report.loops.is_empty(), "fixture must retain its loop");
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("dispatch loop should recover locally: {report:#?}"));
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::Loop { .. }
+        )));
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("dispatch loop should render: {report:#?}"));
+        assert!(pseudocode.contains("while (1)"), "{pseudocode}");
+        assert!(pseudocode.contains("break;"), "{pseudocode}");
+        assert!(pseudocode.contains("return "), "{pseudocode}");
+        assert!(
+            pseudocode.contains("unrecovered indirect jump"),
+            "dispatch discovery remains a separately visible WP5 gap: {pseudocode}"
+        );
+        let repeated = observe(&lifted, &compute_ssa(&lifted));
+        assert_eq!(report.tree, repeated.tree);
+        assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
+        assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
+        assert_prepared_c(&report);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 }

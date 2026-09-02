@@ -455,17 +455,17 @@ impl TreeBuilder<'_> {
             [] => (Vec::new(), None),
             [continuation] => (Vec::new(), Some(*continuation)),
             _ => {
-                let join = self.cfg.immediate_postdominator(loop_info.header)?;
+                let join = self.cfg.immediate_postdominator(loop_info.header);
                 let mut regions = Vec::with_capacity(exits.len());
                 for target in exits {
-                    if target != join {
+                    if Some(target) != join {
                         regions.push(LoopExitRegion {
                             target,
-                            region: Box::new(self.build(target, Some(join))?),
+                            region: Box::new(self.build(target, join)?),
                         });
                     }
                 }
-                (regions, Some(join))
+                (regions, join)
             }
         };
         let loop_region = StructuredRegion::Loop {

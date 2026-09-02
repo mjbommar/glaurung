@@ -425,11 +425,19 @@ that preserves honest local gotos when required.
   verified eight-way typed dispatch as `switch`/`case 0..7`, while locally
   degrading the suffix-entry irreducible loop to resolved labelled gotos; no
   indirect-jump placeholder survives. Repeated recovery produces the same tree
-  and text. Every currently renderable real WP4 tree (`early_return`,
+  and text. The 208-case gcc-O2 `wide154_dense_effects` fixture now proves the
+  same typed-switch path scales beyond the small vertical slice without losing
+  a case, and emits deterministic parseable C. Multi-exit loops no longer
+  require an invented common continuation: the gcc-O2
+  `206_aarch64_wide_dispatch::dispatch_in_loop` shape independently owns its
+  non-reconverging terminal exits, renders the verified loop, and retains the
+  still-unresolved indirect jump as an explicit WP5 marker. Every currently
+  renderable real WP4 tree (`early_return`,
   `dowhile_atleastonce`, `loop_return_on_neg`, top-level `two_entry_loop`,
-  nested `irreducible_inside_reducible`, and `duff_copy`)
+  nested `irreducible_inside_reducible`, `duff_copy`,
+  `wide154_dense_effects`, and `dispatch_in_loop`)
   now also records deterministic parseable C derived from that same adapted AST
-  by the shared source-level preparation pass; all six texts pass a real host
+  by the shared source-level preparation pass; all eight texts pass a real host
   `cc -fsyntax-only` test. This is not yet the full production pass stack:
   pipeline-context comparison, execution, and a separately normalized CFG view
   remain open.
@@ -566,8 +574,12 @@ one authoritative set of case edges.
   until the semantic fix lands here.
 - [~] Focused fixture coverage for `102`, `103`, `145`, `154`, `206`, and
   `215`, across applicable O0/O2 and architecture lanes.
-  The first real `102` gcc-O2 discovery-to-shadow vertical slice is green;
-  other compiler/optimization and named fixture lanes remain.
+  The real `102` gcc-O2 discovery-to-shadow vertical slice is green. The gcc-O2
+  `154` side-effect switch preserves all 208 typed case values through verified
+  deterministic C rendering. The gcc-O2 `206::dispatch_in_loop` CFG now reaches
+  verified deterministic loop output, but its in-loop table remains an honest
+  unresolved indirect jump and therefore a WP5 discovery gap. Other
+  compiler/optimization and named fixture lanes remain.
 - [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [ ] Execution differential for every newly recovered switch.
