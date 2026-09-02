@@ -717,7 +717,8 @@ mod tests {
     #[test]
     fn real_two_entry_loop_is_an_accepted_honest_goto() {
         let lifted = lift_real_fixture("211_irreducible_loops-gcc-O0.so", "two_entry_loop");
-        let report = observe(&lifted, &compute_ssa(&lifted));
+        let ssa = compute_ssa(&lifted);
+        let report = observe(&lifted, &ssa);
 
         assert_eq!(report.refusal, None, "{report:#?}");
         assert_eq!(report.honest_gotos.len(), 1, "{report:#?}");
@@ -737,6 +738,22 @@ mod tests {
             region,
             StructuredRegion::LocalGoto { .. }
         )));
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified local-labelled tree should render: {report:#?}"));
+        assert!(pseudocode.contains("goto L_"), "{pseudocode}");
+        for target in pseudocode.lines().filter_map(|line| {
+            line.trim()
+                .strip_prefix("goto ")
+                .and_then(|line| line.strip_suffix(';'))
+        }) {
+            assert!(
+                pseudocode.contains(&format!("{target}:")),
+                "unresolved {target} in:\n{pseudocode}"
+            );
+        }
+        assert_eq!(report.raw_pseudocode, observe(&lifted, &ssa).raw_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
     }
 

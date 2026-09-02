@@ -403,9 +403,17 @@ that preserves honest local gotos when required.
   pre-pass pseudocode with a structured `if/else` and no goto. The real
   single-exit `dowhile_atleastonce` tree also renders as `do`/`while`, with its
   body exit recovered as `break` and no goto; the adapter requires a unique
-  typed latch and exit before accepting that spelling. Multi-exit loop and
-  local-labelled rendering, post-pass comparison, and a separately normalized
-  CFG view remain open.
+  typed latch and exit before accepting that spelling. The top-level real
+  `two_entry_loop` local-labelled tree now renders through the existing
+  labelled-CFG fallback: every retained local goto resolves to an emitted
+  label, exit paths and their verified terminal clones remain present, and no
+  irreducible edge is hidden behind speculative structure. Nested local regions
+  and multi-exit loop rendering remain open. A RED experiment on
+  `loop_return_on_neg` confirmed that v1's one-distinguished-exit `While` cannot
+  encode its two exit-specific paths without reversing a branch or moving a
+  verified terminal clone; that case therefore requires an explicit region/AST
+  capability rather than a lossy adapter. Post-pass comparison and a separately
+  normalized CFG view also remain open.
 - [x] Keep `src/ir/structure/` as production authority until shadow evidence
   satisfies the promotion criteria.
 - [~] Feed both structurers the same typed CFG and compare coverage, health,
@@ -418,8 +426,10 @@ that preserves honest local gotos when required.
   deterministic raw pseudocode through the existing AST/printer pipeline;
   unsupported tree vocabularies retain `None` rather than speculative text.
   The first proven post-tested single-exit loop now renders through the same
-  path. Multi-exit/local rendering, health, post-pass pseudocode, execution,
-  GED, and runtime comparisons remain.
+  path. Verified top-level local-labelled trees now render honest, resolved
+  gotos plus separately owned labelled definitions and exit paths. Multi-exit
+  and nested-local rendering, health, post-pass pseudocode, execution, GED, and
+  runtime comparisons remain.
 
 ### RED fixtures
 

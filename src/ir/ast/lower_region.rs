@@ -606,7 +606,24 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
                 collect_goto_targets(default, lf, out);
             }
         }
-        Region::Block(_) | Region::Unstructured(_) => {}
+        Region::Unstructured(blocks) => {
+            let owned: std::collections::HashSet<_> = blocks.iter().copied().collect();
+            for block in blocks {
+                out.extend(
+                    lf.blocks[*block]
+                        .succs
+                        .iter()
+                        .filter_map(|successor| {
+                            lf.blocks
+                                .iter()
+                                .position(|candidate| candidate.start_va == *successor)
+                        })
+                        .filter(|successor| !owned.contains(successor))
+                        .map(|successor| lf.blocks[successor].start_va),
+                );
+            }
+        }
+        Region::Block(_) => {}
     }
 }
 

@@ -7,10 +7,16 @@ use crate::ir::types::LlirFunction;
 /// Render a verified tree through the production AST lowerer when every shape
 /// has a faithful v1-region spelling.
 pub(super) fn render_raw_pseudocode(lf: &LlirFunction, tree: &StructuredTree) -> Option<String> {
-    if !tree.local_regions.is_empty() {
-        return None;
+    let mut regions = vec![adapt_region(&tree.root)?];
+    for local in &tree.local_regions {
+        regions.push(Region::Unstructured(
+            local.blocks.iter().map(|block| block.block).collect(),
+        ));
+        for exit in &local.exits {
+            regions.push(adapt_region(&exit.region)?);
+        }
     }
-    let region = adapt_region(&tree.root)?;
+    let region = Region::Seq(regions);
     let function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
     Some(crate::ir::ast::render_c(&function))
 }
@@ -36,10 +42,10 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
             body,
             exits,
         } => adapt_loop(*header, *kind, body, exits),
-        StructuredRegion::SharedGoto { to, .. } => Some(Region::Goto(*to)),
-        StructuredRegion::Break { .. }
-        | StructuredRegion::Continue { .. }
-        | StructuredRegion::LocalGoto { .. } => None,
+        StructuredRegion::LocalGoto { to, .. } | StructuredRegion::SharedGoto { to, .. } => {
+            Some(Region::Goto(*to))
+        }
+        StructuredRegion::Break { .. } | StructuredRegion::Continue { .. } => None,
     }
 }
 

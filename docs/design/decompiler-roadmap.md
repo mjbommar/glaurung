@@ -179,9 +179,16 @@ scheduled independently of the longer pipeline/SSA migrations.
   the existing AST/printer: the real `early_return` fixture emits deterministic
   raw pre-pass pseudocode with a structured `if/else` and no goto. The real
   single-exit `dowhile_atleastonce` fixture now emits a proved `do`/`while` with
-  its early exit rendered as `break` and no goto. Multi-exit and local-labelled
-  rendering, post-pass execution/GED/runtime comparison, output measurement,
-  and promotion are still open.
+  its early exit rendered as `break` and no goto. The real top-level
+  `two_entry_loop` irreducible fixture now emits labelled CFG for only its
+  verified local region; every honest goto resolves to an emitted label and
+  its structured prefix and exit paths remain present. A RED adapter experiment
+  also established that the old one-exit `While` cannot faithfully spell
+  `loop_return_on_neg`'s two exit-specific paths, so multi-exit rendering needs
+  an explicit region/AST capability rather than exit selection by convention.
+  Nested-local rendering, multi-exit rendering, post-pass
+  execution/GED/runtime comparison, output measurement, and promotion are
+  still open.
 - [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
   after WP0 and feeds typed cases to the shadow structurer when ready.
 - [ ] **WP7A immediate render idioms.** Destination-typed literals and one
