@@ -17,6 +17,12 @@ implementation, not to infer that a command or backend exists.
 - [Binary triage](../triage/) is the first deterministic pass for format,
   architecture, strings, symbols, packer signals, and containers.
 - [Parsers](../parsers/) maps current owned parsers and format-specific commands.
+- [WARP function GUIDs](function-identity-warp.md) documents the exact,
+  relocation-masked function identity (`warp-function-guid-v1`), what it can
+  and cannot be invariant to, and what the knowledge base stores.
+- [Signature libraries](function-signature-libraries.md) documents the
+  masked FLIRT-style matcher, how masks are derived from `.a` relocation
+  tables, and why `lancelot-flirt` was priced and declined.
 
 Other user-facing analysis commands include:
 

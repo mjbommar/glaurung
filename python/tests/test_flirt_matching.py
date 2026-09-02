@@ -25,6 +25,9 @@ _HELLO_STRIPPED = Path(
     "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-stripped"
 )
 _DEFAULT_LIBRARY = Path("data/sigs/glaurung-base.x86_64.flirt.json")
+#: A stripped image that links the archive the shipped library is built from.
+#: Committed by `tests/fixtures/flirt/build.sh`; see that directory's README.
+_STRIPPED_MATHLIB = Path("tests/fixtures/flirt/mathlib_link_a.stripped.x86_64.elf")
 
 
 def test_library_builder_round_trips(tmp_path: Path) -> None:
@@ -66,27 +69,61 @@ def test_default_library_exists() -> None:
     data = json.loads(_DEFAULT_LIBRARY.read_text())
     assert data["arch"] == "x86_64"
     assert data["entries"], "baseline library must not be empty"
+    # Since 2026-09-02 the shipped library is built from unlinked objects and
+    # carries masks and a provenance key. A file without them is a regression
+    # to harvesting linked binaries, which cannot survive a relink.
+    assert data["schema_version"] == "2"
+    assert data["library"]["name"]
+    assert data["library"]["variant"]
+    assert any(e.get("mask_hex") for e in data["entries"])
 
 
 def test_flirt_lifts_stripped_binary_naming() -> None:
-    """The whole point of #158: a stripped binary that previously had 0
-    named functions (besides the entrypoint) recovers multiple real
-    function names via FLIRT prologue matching against the baseline
-    library."""
-    binary = _need(_HELLO_STRIPPED)
+    """The whole point of #158: a stripped binary with no symbol table
+    recovers real function names from the shipped signature library.
+
+    The target changed on 2026-09-02 and the reason is worth recording.
+    This test used to run against ``hello-clang-stripped`` and pass because
+    the shipped library held 30 exact prologues harvested from *that same
+    sample tree*, including its CRT stubs. That is self-recall: the library
+    could name those binaries and no others, because a prologue taken from a
+    linked image records the link rather than the function.
+
+    The library is now built from the unlinked objects in ``libmathlib.a``
+    with relocation-derived masks, so it names ``mathlib_*`` in any binary
+    that links that archive -- which is a capability rather than a
+    coincidence -- and names nothing in ``hello-clang-stripped``, which does
+    not link it. The fixture below is a stripped image that does.
+    See ``docs/analysis/function-signature-libraries.md``.
+    """
+    binary = _need(_STRIPPED_MATHLIB)
     if not _DEFAULT_LIBRARY.exists():
         pytest.skip("baseline FLIRT library not present")
     funcs, _cg = g.analysis.analyze_functions_path(str(binary))
     named = [f for f in funcs if not f.name.startswith("sub_")]
-    # Conservative bar: at least 2 named (entrypoint + 1 FLIRT match).
-    # The baseline library covers the standard CRT prologues.
-    assert len(named) >= 2, (
+    assert len(named) >= 10, (
         f"FLIRT did not lift the stripped binary; named={[f.name for f in named]}"
     )
-    # _start is the trivially-discoverable entrypoint; require at least
-    # one FLIRT-only match BEYOND it.
-    flirt_only = [f for f in named if f.name != "_start"]
-    assert flirt_only, "no FLIRT-only matches surfaced — only the entrypoint got named"
+    from_library = [f for f in named if f.name.startswith("mathlib_")]
+    assert len(from_library) >= 10, (
+        "the names recovered did not come from the signature library: "
+        f"{[f.name for f in named]}"
+    )
+
+
+def test_the_shipped_library_names_nothing_it_cannot_justify() -> None:
+    """The counterpart to the test above, and the more important half.
+
+    ``hello-clang-stripped`` does not link ``libmathlib.a``, so every name
+    the shipped library could put on it would be wrong -- and would be
+    written at ``set_by=flirt``, which outranks ``auto`` in the KB.
+    """
+    binary = _need(_HELLO_STRIPPED)
+    if not _DEFAULT_LIBRARY.exists():
+        pytest.skip("baseline FLIRT library not present")
+    funcs, _cg = g.analysis.analyze_functions_path(str(binary))
+    wrong = [f.name for f in funcs if f.name.startswith("mathlib_")]
+    assert not wrong, f"library names applied to an unrelated binary: {wrong}"
 
 
 def test_flirt_does_not_overwrite_dwarf_names() -> None:

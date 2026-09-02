@@ -39,7 +39,7 @@ why each gap matters. Updated whenever a roadmap task completes.
 | # | Task | Status | Notes |
 |---|---|---|---|
 | 157 | DWARF + PDB ingestion (DWARF v1) | ✅ | gimli-based; functions, chunks, signatures, language; DWARF 5 + addrx |
-| 158 | Signature library + matcher (exact-prologue, "FLIRT-lite") | ✅ | 32-byte exact-prologue hash + scan-and-rename — a lightweight scheme, **not** a full masked-byte FLIRT or Ghidra FunctionID; baseline lib at `data/sigs/glaurung-base.x86_64.flirt.json` |
+| 158 | Signature library + matcher (masked-byte FLIRT-style) | ✅ | 32-byte pattern + **variant-byte mask derived from `.a` relocation tables** + IDA CRC16 + referenced-name disambiguation; scan-and-rename. Still **not** Ghidra FunctionID, and it does not read IDA `.sig`/`.pat` (see `docs/analysis/function-signature-libraries.md` for why `lancelot-flirt` was declined). Shipped lib at `data/sigs/glaurung-base.x86_64.flirt.json`, built from `libmathlib.a`: 20/20 functions named across a relink where exact matching reaches 1/20 |
 | 159 | Diff-verification benchmark harness | ✅ | `python -m glaurung.bench` — 10-binary CI matrix + `--packed-matrix` UPX tier; 12+ metrics, baseline at `docs/benchmarks/baseline.{json,md}` |
 | 160 | Indirect-call resolution (vtable v1) | ✅ | rodata-scan for arrays of code pointers; jump-table walker shipped as #177 |
 | 163 | Auto-struct recovery (Layer-1 pass) | ✅ | `[reg+offset]` access patterns → struct candidates with set_by="auto" |

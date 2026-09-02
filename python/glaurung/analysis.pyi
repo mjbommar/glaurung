@@ -17,6 +17,8 @@
 
 from glaurung._native import analysis as _mod
 
+WarpConstraint = _mod.WarpConstraint
+WarpFunction = _mod.WarpFunction
 analyze_functions_bytes = _mod.analyze_functions_bytes
 analyze_functions_bytes_with_stats = _mod.analyze_functions_bytes_with_stats
 analyze_functions_path = _mod.analyze_functions_path
@@ -29,6 +31,7 @@ elf_got_map_path = _mod.elf_got_map_path
 elf_plt_map_path = _mod.elf_plt_map_path
 find_code_pointers_bytes = _mod.find_code_pointers_bytes
 find_code_pointers_path = _mod.find_code_pointers_path
+flirt_signatures_from_archive_path = _mod.flirt_signatures_from_archive_path
 gopclntab_names_path = _mod.gopclntab_names_path
 index_java_archive_bytes = _mod.index_java_archive_bytes
 index_java_archive_path = _mod.index_java_archive_path
@@ -45,3 +48,5 @@ pe_list_resources_path = _mod.pe_list_resources_path
 pe_tls_path = _mod.pe_tls_path
 pe_view_resource_path = _mod.pe_view_resource_path
 va_to_file_offset_path = _mod.va_to_file_offset_path
+warp_function_guids_path = _mod.warp_function_guids_path
+warp_scheme = _mod.warp_scheme

@@ -243,10 +243,34 @@ def test_an_unknown_scheme_is_an_error_not_an_empty_result(
 ) -> None:
     """An identity scheme this build cannot compute must say so. Returning
     an empty map would be indistinguishable from a binary with no
-    functions, and would silently index nothing."""
+    functions, and would silently index nothing.
+
+    This test used to name ``warp-function-guid-v1`` as its uncomputable
+    example. It is computable now (``src/identity/warp.rs``), so the example
+    has to be a name that is genuinely not a scheme -- otherwise the test
+    would go green for the wrong reason the moment WARP landed, which is
+    what happened.
+    """
     v1, _ = recompile_pair
     with pytest.raises(ValueError, match="unknown identity scheme"):
-        fid.compute_identities(str(v1), scheme="warp-function-guid-v1")
+        fid.compute_identities(str(v1), scheme="no-such-scheme-v9")
+
+
+def test_every_computable_scheme_actually_computes(
+    recompile_pair: tuple[Path, Path],
+) -> None:
+    """The other half of the test above, and the reason it went stale.
+
+    ``COMPUTABLE_SCHEMES`` is the list :func:`compute_identities` promises to
+    handle. A name on that list that raises, or that returns nothing, is the
+    same defect as an unknown scheme returning an empty map -- it just fails
+    in the other direction.
+    """
+    v1, _ = recompile_pair
+    for scheme in fid.COMPUTABLE_SCHEMES:
+        rows = fid.compute_identities(str(v1), scheme=scheme)
+        assert rows, f"{scheme} computed no identities at all"
+        assert all(r.scheme == scheme for r in rows.values())
 
 
 def test_lookup_by_identity_finds_the_function_in_another_binary(
