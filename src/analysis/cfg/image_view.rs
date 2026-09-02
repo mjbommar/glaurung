@@ -50,10 +50,15 @@ pub(super) fn parse_exec_regions(
             object::Architecture::Riscv64 => BArch::RISCV64,
             _ => BArch::Unknown,
         };
-        // Default endian by architecture family; object::File doesn't expose global endianness
-        endian = match arch {
-            BArch::PPC | BArch::PPC64 => Endianness::Big,
-            _ => Endianness::Little,
+        // Read the container's actual endianness, exactly like
+        // `ProgramImage::from_bytes` (`src/program/image.rs`) does:
+        // `object::Object::is_little_endian()` reads ELF `e_ident[EI_DATA]`
+        // (or the equivalent field in other containers) directly, so this is
+        // not a per-architecture guess.
+        endian = if obj.is_little_endian() {
+            Endianness::Little
+        } else {
+            Endianness::Big
         };
 
         let raw_entry_va = obj.entry();
@@ -282,5 +287,88 @@ pub(super) fn code_addr(va: u64, arch: BArch) -> u64 {
         va & !1
     } else {
         va
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal ELF32/MSB (big-endian) MIPS image: just an ELF header, one
+    /// executable `.text` section, and a `.shstrtab`. No relocations, no
+    /// program headers, no instructions worth decoding -- this only needs to
+    /// be a real object that `object::read::File::parse` accepts with
+    /// `e_ident[EI_DATA] = ELFDATA2MSB` and `e_machine = EM_MIPS`. Mirrors
+    /// the byte-level header builder in `analysis/jump_table.rs`'s
+    /// `elf32_be_with_a_jump_table`.
+    fn elf32_be_mips_minimal() -> Vec<u8> {
+        const TEXT_VA: u32 = 0x1000;
+        let names = b"\0.text\0.shstrtab\0";
+        let text_name = 1u32;
+        let shstrtab_name = 7u32;
+
+        let text = vec![0u8; 0x10];
+        let text_off = 52u32;
+        let shstrtab_off = text_off + text.len() as u32;
+        let shoff = shstrtab_off + names.len() as u32;
+
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\x7fELF");
+        data.push(1); // ELFCLASS32
+        data.push(2); // ELFDATA2MSB (big-endian)
+        data.push(1); // EV_CURRENT
+        data.extend_from_slice(&[0u8; 9]);
+        data.extend_from_slice(&2u16.to_be_bytes()); // ET_EXEC
+        data.extend_from_slice(&8u16.to_be_bytes()); // EM_MIPS
+        data.extend_from_slice(&1u32.to_be_bytes()); // e_version
+        data.extend_from_slice(&TEXT_VA.to_be_bytes()); // e_entry
+        data.extend_from_slice(&0u32.to_be_bytes()); // e_phoff
+        data.extend_from_slice(&shoff.to_be_bytes()); // e_shoff
+        data.extend_from_slice(&0u32.to_be_bytes()); // e_flags
+        data.extend_from_slice(&52u16.to_be_bytes()); // e_ehsize
+        data.extend_from_slice(&0u16.to_be_bytes()); // e_phentsize
+        data.extend_from_slice(&0u16.to_be_bytes()); // e_phnum
+        data.extend_from_slice(&40u16.to_be_bytes()); // e_shentsize
+        data.extend_from_slice(&3u16.to_be_bytes()); // e_shnum
+        data.extend_from_slice(&2u16.to_be_bytes()); // e_shstrndx
+        debug_assert_eq!(data.len(), 52);
+
+        data.extend_from_slice(&text);
+        data.extend_from_slice(names);
+
+        let mut section = |name: u32, kind: u32, flags: u32, addr: u32, off: u32, size: u32| {
+            for field in [name, kind, flags, addr, off, size, 0, 0, 4, 0] {
+                data.extend_from_slice(&field.to_be_bytes());
+            }
+        };
+        section(0, 0, 0, 0, 0, 0); // SHT_NULL
+        section(text_name, 1, 0x6, TEXT_VA, text_off, text.len() as u32); // ALLOC|EXECINSTR
+        section(shstrtab_name, 3, 0, 0, shstrtab_off, names.len() as u32); // SHT_STRTAB
+        data
+    }
+
+    /// The bug: `parse_exec_regions` hard-coded `Endianness::Little` for
+    /// every architecture but PPC, so a big-endian MIPS image (every
+    /// mips32/mips64 binary in the Cisco Talos Dataset-1 corpus) fed
+    /// little-endian mode to Capstone against big-endian bytes. Before the
+    /// fix this asserts `Endianness::Big` and fails with `Little`; after the
+    /// fix it reads `e_ident[EI_DATA]` via `obj.is_little_endian()`, exactly
+    /// like `ProgramImage::from_bytes` (`src/program/image.rs`) already does.
+    #[test]
+    fn parse_exec_regions_reads_true_endianness_for_big_endian_mips() {
+        let data = elf32_be_mips_minimal();
+        let parsed = crate::decompile::profile::parse_object(&data)
+            .expect("the hand-built header must be a real ELF");
+        assert!(!parsed.is_64(), "the test image must be ELFCLASS32");
+        assert!(!parsed.is_little_endian(), "and ELFDATA2MSB");
+
+        let (regions, arch, endian, _entry) = parse_exec_regions(&data);
+        assert_eq!(arch, BArch::MIPS);
+        assert_eq!(
+            endian,
+            Endianness::Big,
+            "big-endian MIPS bytes must not be handed to the disassembler in little-endian mode"
+        );
+        assert!(!regions.is_empty(), "the .text section must be found");
     }
 }
