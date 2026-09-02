@@ -284,7 +284,8 @@ def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["sum_array"])
     assert code is not None
-    assert "arg0[" in code and "int i;" in code and "int s;" in code, code
+    assert "a[" in code and "int i;" in code and "int s;" in code, code
+    assert "arg0" not in code, code
     assert "long var3;" not in code and "long var6;" not in code, code
     assert (
         D.build_so(code, tmp_path, "dec_sum_array", link_against=str(binary))
@@ -654,7 +655,7 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     assert "typedef struct node" in code, code
     assert "struct node * next;" in code, code
     assert "int val;" in code, code
-    assert re.search(r"node \* list_find\(node \* arg0, int arg1\)", code), code
+    assert re.search(r"node \* list_find\(node \* h, int v\)", code), code
     assert "->val" in code, code
     assert "->next" in code, code
     assert "+ 0x8" not in code, code
@@ -743,11 +744,12 @@ def test_clang_o0_linked_list_sum_round_trips_exact_instruction_bytes(
     find_code = D.decompiled_c(str(original), functions["list_find"])
     assert code is not None
     assert find_code is not None
-    assert "while ((arg0 != 0))" in code, code
-    assert "(long)arg0" not in code, code
-    assert "(unsigned long)((unsigned int)(arg0->val))" not in code, code
-    assert "(unsigned long)((unsigned int)(arg0->val))" not in find_code, find_code
-    assert "(unsigned long)((unsigned int)(arg1))" not in find_code, find_code
+    assert "while ((h != 0))" in code, code
+    assert "(long)h" not in code, code
+    assert "(unsigned long)((unsigned int)(h->val))" not in code, code
+    assert "(unsigned long)((unsigned int)(h->val))" not in find_code, find_code
+    assert "(unsigned long)((unsigned int)(v))" not in find_code, find_code
+    assert "arg0" not in code and "arg0" not in find_code, (code, find_code)
 
     recovered_source = tmp_path / "linkedlist-list_sum-recovered.c"
     recovered_source.write_text(code)

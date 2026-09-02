@@ -305,7 +305,12 @@ fn normalize_wrapped_array_index(index: &Expr, element_size: u8) -> std::borrow:
 /// this path: otherwise an ILP32 wrapped index can be made safe on the read
 /// side while the corresponding write still escapes as host-width arithmetic.
 fn write_array_access_dec(base: &str, index: &Expr, element_size: u8, out: &mut String) {
-    out.push_str(base);
+    // `try_array_index` returns the IR role (`arg0`), not necessarily the
+    // spelling selected for the function declaration (`in`, `buffer`, ...).
+    // Route the base through the same declaration-aware register renderer as
+    // every other use, or an authoritative signature can leave an undefined
+    // `argN` in the body and make otherwise-correct output invalid C.
+    write_reg_lvalue_dec(&VReg::phys(base), out);
     out.push('[');
     write_expr_dec(&normalize_wrapped_array_index(index, element_size), out);
     out.push(']');
