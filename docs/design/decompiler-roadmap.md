@@ -138,14 +138,20 @@ files, tests, dependencies, effort bands, and stop conditions. Capability work
 (shadow structuring, typed indirect targets, and two narrow render idioms) is
 scheduled independently of the longer pipeline/SSA migrations.
 
-- [~] **WP0 minimal inventory and gate integrity.** At `e55576bc4612`, the
+- [x] **WP0 minimal inventory and gate integrity.** From the pinned baseline
+  `e55576bc4612` through implementation revision `7aec4e842fa1`, the
   strict-xfail inventory has gained raw C/Rust totals and provenance-normalized
   totals derived from its measured rows. The normalized primary denominator is
   218 type, 473 structure, 67 return, 30 unrecovered, and 4,635 goto statements;
   exact byte identity remains a separate stripped-divergence fact. The
   gcc-O2 Duff's-device constant-false live latch now has its own strict xfail,
-  separate from the unresolved-indirect-jump row. The three-profile gate is
-  still open, so WP0 is not complete.
+  separate from the unresolved-indirect-jump row. The three-profile gate now
+  prints its evidence denominator and fails closed when required lanes are
+  missing. Focused WP0 tests, the Rust fast lane (2,792 passed), and the Python
+  core lane (2,376 passed, 22 skipped, 44 expected failures) are green. The
+  standalone `ty` retry could not acquire or install its executable under the
+  restricted runner, so that environment-limited tail check is not claimed as
+  fresh evidence.
 - [ ] **WP1 bounded MIR trial.** Two-day hard cap; no competing goto-aware
   definedness implementation until the trial records a keep/delete verdict.
 - [ ] **WP4 total structurer in shadow mode.** Starts after WP0 rather than

@@ -703,9 +703,12 @@ relevant ratchet's accepted-regression record.
 
 ### M0 — Evidence is trustworthy
 
-- [ ] WP0 complete.
-- [ ] Existing committed baselines are cited at one pinned revision.
-- [ ] Gate profiles identify their denominator and fail closed.
+- [x] WP0 complete at `7aec4e842fa1`; the generated inventories and gate
+  contracts were established in `eb6484ce` and the core-facet preflight was
+  corrected in `7aec4e84`.
+- [x] Existing committed baselines are cited at pinned revision
+  `e55576bc4612` in the active-roadmap status entry.
+- [x] Gate profiles identify their denominator and fail closed.
 
 ### M1 — Capability work is producing evidence
 
