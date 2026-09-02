@@ -934,6 +934,9 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             out.push(')');
         }
         Expr::Cmp { op, lhs, rhs } => {
+            if write_unsigned_subtract_range_dec(*op, lhs, rhs, out) {
+                return;
+            }
             // Unsigned comparisons need explicit `unsigned long` casts; the
             // register-level `u<` / `u<=` spellings are not valid C.
             if matches!(op, CmpOp::Ult | CmpOp::Ule) {
@@ -1004,6 +1007,95 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         // (implicit-declaration warning only) keeps it a valid `long` rvalue.
         Expr::Unknown(_) => out.push_str("__unknown(0)"),
     }
+}
+
+fn strip_integer_casts(mut expression: &Expr) -> &Expr {
+    while let Expr::Cast { expr, .. } = expression {
+        expression = expr;
+    }
+    expression
+}
+
+fn unsigned_range_render_parts(expression: &Expr) -> Option<(&Expr, i64, u8)> {
+    let mut narrowest = None;
+    let mut current = expression;
+    while let Expr::Cast { width, expr, .. } = current {
+        narrowest = Some(narrowest.map_or(*width, |seen: u8| seen.min(*width)));
+        current = expr;
+    }
+    let (value, low) = match current {
+        Expr::Bin {
+            op: BinOp::Sub,
+            lhs,
+            rhs,
+        } => match strip_integer_casts(rhs) {
+            Expr::Const(low) if *low >= 0 => (lhs.as_ref(), *low),
+            _ => return None,
+        },
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => match strip_integer_casts(rhs) {
+            Expr::Const(delta) if *delta < 0 => (lhs.as_ref(), delta.checked_neg()?),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let width = narrowest.or_else(|| expr_machine_width(value))?;
+    matches!(width, 1 | 2 | 4 | 8).then_some((value, low, width))
+}
+
+fn write_unsigned_range_value(value: &Expr, width: u8, out: &mut String) {
+    let _ = write!(out, "({})(", int_ctype(false, width));
+    write_expr_dec(value, out);
+    out.push(')');
+}
+
+/// Render the compiler idiom `(unsigned W)(x - low) <= span` (or its reversed
+/// rejecting form) as an explicit closed range. Width comes from the existing
+/// typed render context and is restated on both uses of `x`.
+fn write_unsigned_subtract_range_dec(op: CmpOp, lhs: &Expr, rhs: &Expr, out: &mut String) -> bool {
+    if !matches!(op, CmpOp::Ult | CmpOp::Ule) {
+        return false;
+    }
+
+    if let (Expr::Const(limit), Some((value, low, width))) =
+        (strip_integer_casts(lhs), unsigned_range_render_parts(rhs))
+    {
+        let inside_op = if op == CmpOp::Ult {
+            CmpOp::Ule
+        } else {
+            CmpOp::Ult
+        };
+        if let Some((low, high)) =
+            crate::ir::cmp_fusion::unsigned_range_bounds(width, low, *limit, inside_op)
+        {
+            out.push('(');
+            write_unsigned_range_value(value, width, out);
+            let _ = write!(out, " < {low} || {high} < ");
+            write_unsigned_range_value(value, width, out);
+            out.push(')');
+            return true;
+        }
+    }
+
+    if let (Some((value, low, width)), Expr::Const(limit)) =
+        (unsigned_range_render_parts(lhs), strip_integer_casts(rhs))
+    {
+        if let Some((low, high)) =
+            crate::ir::cmp_fusion::unsigned_range_bounds(width, low, *limit, op)
+        {
+            out.push('(');
+            let _ = write!(out, "{low} <= ");
+            write_unsigned_range_value(value, width, out);
+            out.push_str(" && ");
+            write_unsigned_range_value(value, width, out);
+            let _ = write!(out, " <= {high})");
+            return true;
+        }
+    }
+    false
 }
 
 fn unsigned_all_ones_width(expression: &Expr) -> Option<u8> {
@@ -1537,6 +1629,48 @@ fn signed_integer_type_represents(c_type: &str, value: i64) -> bool {
     (low..=high).contains(&value)
 }
 
+/// Re-spell an unsigned-looking immediate in the signed destination's value
+/// domain when the two spellings have the same two's-complement bit pattern.
+///
+/// The lifters preserve immediates as machine bit patterns, so a 32-bit
+/// `0xffff_ffff` commonly reaches the typed renderer as positive `4294967295`.
+/// Once the consuming declaration proves `int32_t`, C will truncate those bits
+/// to that destination. Printing `-1` states the resulting source-level value
+/// directly and avoids an implementation-defined out-of-range conversion.
+/// Unknown, unsigned, boolean, pointer, and 64-bit destinations decline.
+pub(super) fn signed_destination_literal(
+    c_type: &str,
+    value: i64,
+    pointer_width: u8,
+) -> Option<i64> {
+    if value < 0 {
+        return None;
+    }
+    let width = match c_type.trim() {
+        "signed char" | "int8_t" => 1,
+        "short" | "signed short" | "short int" | "signed short int" | "int16_t" => 2,
+        "int" | "signed" | "signed int" | "int32_t" => 4,
+        "long" | "signed long" | "long int" | "signed long int" => pointer_width,
+        "long long" | "signed long long" | "long long int" | "signed long long int" | "int64_t" => {
+            8
+        }
+        _ => return None,
+    };
+    // Expr::Const is i64, so an unsigned-looking 64-bit value with its sign
+    // bit set cannot be represented as a positive input here. Negative i64
+    // literals are already printed in their signed value domain.
+    if width == 0 || width >= 8 {
+        return None;
+    }
+    let bits = u32::from(width) * 8;
+    let modulus = 1_i128 << bits;
+    let raw = i128::from(value);
+    if raw >= modulus || raw < modulus / 2 {
+        return None;
+    }
+    i64::try_from(raw - modulus).ok()
+}
+
 fn effective_call_site_spec(
     target: &Expr,
     args: &[Expr],
@@ -1882,6 +2016,16 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     if matches!(destination_type, "float" | "double") {
         write_float_expr_dec(src, if destination_type == "float" { 4 } else { 8 }, out);
         return;
+    }
+
+    if let Expr::Const(value) = src {
+        let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+        if let Some(signed_value) =
+            signed_destination_literal(destination_type, *value, pointer_width)
+        {
+            write_const_dec(signed_value, out);
+            return;
+        }
     }
 
     // ...and the mirror of it, which did not exist. This function picks the

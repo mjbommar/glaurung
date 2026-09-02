@@ -313,7 +313,7 @@ fn decbench_text_with_installed_environment(
         // would defeat it.
         pass!(
             "fuse_comparisons",
-            crate::ir::cmp_fusion::fuse_comparisons(&mut prepared)
+            crate::ir::cmp_fusion::fuse_comparisons_with_types(&mut prepared, tm)
         );
         pass!(
             "fold_constants_after_typed_folds",
@@ -358,6 +358,17 @@ fn decbench_text_with_installed_environment(
                 tm,
                 machine_word_bytes(cc),
             )
+        );
+        // The subtract-and-unsigned-compare range idiom is deliberately
+        // width-gated. Its first cmp_fusion pass runs before widening so the
+        // established zero rules retain their historical position; rerun the
+        // same idempotent boundary now that narrowing casts state whether the
+        // range is 8/16/32/64-bit. Without this ordering, the safe rule can
+        // never fire on production ASTs even though the final renderer has the
+        // width evidence.
+        pass!(
+            "fuse_width_stated_ranges",
+            crate::ir::cmp_fusion::fuse_comparisons_with_types(&mut prepared, tm)
         );
     }
     let decl = refined_decl.as_ref();

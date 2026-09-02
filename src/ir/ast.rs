@@ -1431,7 +1431,8 @@ pub fn install_dec_global_names(symbols: crate::ir::data_symbols::DataSymbols) {
 
 /// Drop any installed data-symbol names.
 pub fn clear_dec_global_names() {
-    DEC_GLOBAL_NAMES.with(|names| *names.borrow_mut() = crate::ir::data_symbols::DataSymbols::new());
+    DEC_GLOBAL_NAMES
+        .with(|names| *names.borrow_mut() = crate::ir::data_symbols::DataSymbols::new());
 }
 
 /// The C identifier for static storage at `address`.
@@ -5071,6 +5072,139 @@ function f @ 0x1000 {
             text.contains("int small_shift(int arg0) {"),
             "a sub-word shift is not evidence of a packed 64-bit parameter:\n{text}"
         );
+    }
+
+    #[test]
+    fn signed_destination_spells_an_all_ones_literal_as_minus_one() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let result = VReg::phys("var0");
+        let f = Function {
+            name: "typed_literal".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Const(0xffff_ffff),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result.clone())),
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            result,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(text.contains("var0 = -1;"), "got:\n{text}");
+        assert!(!text.contains("var0 = 0xffffffff;"), "got:\n{text}");
+    }
+
+    #[test]
+    fn signed_destination_literal_spelling_preserves_every_narrow_bit_pattern() {
+        for (ctype, width) in [("signed char", 1_u8), ("short", 2_u8)] {
+            let modulus = 1_u64 << (u32::from(width) * 8);
+            let sign_bit = modulus / 2;
+            for raw in 0..modulus {
+                let spelled = super::dec_render::signed_destination_literal(
+                    ctype,
+                    i64::try_from(raw).expect("8/16-bit pattern fits i64"),
+                    8,
+                )
+                .unwrap_or_else(|| i64::try_from(raw).expect("8/16-bit pattern fits i64"));
+                let recovered_bits = if spelled < 0 {
+                    i128::from(spelled) + i128::from(modulus)
+                } else {
+                    i128::from(spelled)
+                };
+                assert_eq!(
+                    recovered_bits,
+                    i128::from(raw),
+                    "{ctype} raw={raw:#x} spelled={spelled}"
+                );
+                assert_eq!(spelled < 0, raw >= sign_bit);
+            }
+        }
+
+        let signed32_cases = [
+            (0x7fff_ffff_i64, None),
+            (0x8000_0000_i64, Some(i64::from(i32::MIN))),
+            (0xffff_ffff_i64, Some(-1)),
+            (0x1_0000_0000_i64, None),
+        ];
+        for (raw, expected) in signed32_cases {
+            assert_eq!(
+                super::dec_render::signed_destination_literal("int32_t", raw, 8),
+                expected,
+                "int32_t raw={raw:#x}"
+            );
+        }
+        for unsigned in [
+            "unsigned char",
+            "unsigned short",
+            "unsigned int",
+            "uint32_t",
+        ] {
+            assert_eq!(
+                super::dec_render::signed_destination_literal(unsigned, 0xffff_ffff, 8),
+                None,
+                "unsigned destination {unsigned} must retain its bit-pattern spelling"
+            );
+        }
+        assert_eq!(
+            super::dec_render::signed_destination_literal("int64_t", i64::MAX, 8),
+            None,
+            "every positive i64 already lies in int64_t's signed value domain"
+        );
+    }
+
+    #[test]
+    fn typed_renderer_spells_reversed_unsigned_subtract_as_an_explicit_range() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let argument = VReg::phys("arg0");
+        let f = Function {
+            name: "range_guard".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(15)),
+                    rhs: Box::new(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(argument.clone())),
+                        rhs: Box::new(Expr::Const(-1)),
+                    }),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-1)),
+                }],
+                else_body: None,
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            argument,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let text = render_decbench_typed(&f, Some(&types), Some(&types));
+
+        assert!(
+            text.contains("(unsigned int)(arg0) < 1 || 16 < (unsigned int)(arg0)"),
+            "got:\n{text}"
+        );
+        assert!(!text.contains("arg0 - 1"), "got:\n{text}");
     }
 
     #[test]
