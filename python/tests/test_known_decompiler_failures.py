@@ -84,6 +84,11 @@ def _counts() -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _summary(name: str) -> dict:
+    value = _DATA.get(name, {})
+    return value if isinstance(value, dict) else {}
+
+
 #: One decompile per (object, function), shared across both axes.
 _CACHE: dict[tuple[str, str], str | None] = {}
 
@@ -229,6 +234,78 @@ def test_the_inventory_is_present_and_populated():
         f"{INVENTORY.name} missing; regenerate with "
         "`uv run python tools/gen_known_failures.py`"
     )
+
+
+def test_inventory_reports_language_split_counts():
+    """Rust-heavy axes must not obscure the primary C defect totals."""
+    by_language = _summary("counts_by_language")
+    assert by_language.get("c") == {
+        "types": 9,
+        "structure": 621,
+        "returns": 33,
+        "pointers": 0,
+        "unrecovered": 42,
+        "no_body": 0,
+        "goto_statements": 6225,
+    }
+    assert by_language.get("rust") == {
+        "types": 298,
+        "structure": 94,
+        "returns": 59,
+        "pointers": 0,
+        "unrecovered": 6,
+        "no_body": 0,
+        "goto_statements": 566,
+    }
+    for axis, total in _counts().items():
+        assert by_language["c"][axis] + by_language["rust"][axis] == total
+
+
+def test_inventory_reports_provenance_deduplicated_counts():
+    """Matching O2/debug-stripped defect observations count once."""
+    deduplicated = _summary("deduplicated_counts")
+    assert deduplicated == {
+        "types": 218,
+        "structure": 473,
+        "returns": 67,
+        "pointers": 0,
+        "unrecovered": 30,
+        "no_body": 0,
+        "goto_statements": 4635,
+    }
+    deduplicated_by_language = _summary("deduplicated_counts_by_language")
+    for axis, total in deduplicated.items():
+        assert (
+            deduplicated_by_language["c"][axis]
+            + deduplicated_by_language["rust"][axis]
+            == total
+        )
+
+
+def test_binary_identity_uses_real_content_not_filename_convention():
+    """Most stripped pairs are identical, while seven Rust pairs are not."""
+    if not BUILD.is_dir():
+        pytest.skip("fixture matrix is absent")
+    c_o2 = BUILD / "02_integer_widths-gcc-O2.so"
+    c_stripped = BUILD / "02_integer_widths-gcc-O2strip.dwarf.so"
+    rust_o2 = BUILD / "166_rust_generics-rustc-O2.so"
+    rust_stripped = BUILD / "166_rust_generics-rustc-O2strip.dwarf.so"
+    if not all(path.is_file() for path in (c_o2, c_stripped, rust_o2, rust_stripped)):
+        pytest.skip("required real O2/stripped fixture pairs are absent")
+    identities = G.binary_content_identities(
+        [c_o2, c_stripped, rust_o2, rust_stripped]
+    )
+    assert identities[c_o2.name] == identities[c_stripped.name]
+    assert identities[rust_o2.name] != identities[rust_stripped.name]
+
+
+def test_generated_inventory_summaries_are_current():
+    """Committed summary metadata must match the measured row inventory."""
+    rows = {axis: _rows(axis) for axis in G.AXES}
+    by_language, deduplicated, deduplicated_by_language = G.inventory_summaries(rows)
+    assert _summary("counts_by_language") == by_language
+    assert _summary("deduplicated_counts") == deduplicated
+    assert _summary("deduplicated_counts_by_language") == deduplicated_by_language
     counts = _counts()
     assert sum(v for k, v in counts.items() if k != "goto_statements") > 900, (
         f"the inventory records only {counts}; it should hold the ~1,162 "

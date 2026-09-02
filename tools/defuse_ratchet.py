@@ -69,6 +69,12 @@ LANE_MEASURES = ("violations", "functions_with_violations")
 #: Default measure when `--accept-regression` names a lane without one.
 DEFAULT_MEASURE = "violations"
 
+SUMMARY_MEASURES = (
+    "functions_emitted",
+    "functions_with_violations",
+    "violations",
+)
+
 #: `LANE[/MEASURE]=+DELTA: REASON`. The lane name itself contains a colon
 #: (`rustc:O0`) and a required-function key contains three
 #: (`195_x:gcc:O0:make_quad`), which is why the measure is `/`-separated and the
@@ -78,6 +84,19 @@ _ACCEPT = re.compile(r"^\s*(?P<key>[^=]+?)\s*=\s*\+(?P<delta>\d+)\s*:\s*(?P<why>
 
 class AcceptSyntaxError(ValueError):
     """A `--accept-regression` argument that could not be parsed."""
+
+
+def language_totals(lane_totals: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    """Roll compiler lanes into explicit C and Rust reporting totals."""
+    totals = {
+        language: {measure: 0 for measure in SUMMARY_MEASURES}
+        for language in ("c", "rust")
+    }
+    for lane, measurements in lane_totals.items():
+        language = "rust" if lane.startswith("rustc:") else "c"
+        for measure in SUMMARY_MEASURES:
+            totals[language][measure] += int(measurements.get(measure, 0))
+    return totals
 
 
 class Regression:

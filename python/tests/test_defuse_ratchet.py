@@ -19,12 +19,14 @@ does. The real corpus exercises the same functions through
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 TOOL = ROOT / "tools" / "defuse_ratchet.py"
+BASELINE = ROOT / "tests" / "decompiler_fixtures" / "defuse_baseline.json"
 
 
 def _load_tool():
@@ -61,6 +63,32 @@ def _totals(violations: int, with_violations: int = 1, emitted: int = 10) -> dic
         "functions_with_violations": with_violations,
         "violations": violations,
     }
+
+
+def test_language_totals_keep_rust_from_obscuring_c(dr):
+    lanes = {
+        "gcc:O0": _totals(7, with_violations=2, emitted=20),
+        "clang:O2": _totals(11, with_violations=3, emitted=30),
+        "rustc:O0": _totals(900, with_violations=200, emitted=400),
+        "rustc:O2": _totals(500, with_violations=100, emitted=300),
+    }
+    assert dr.language_totals(lanes) == {
+        "c": {
+            "functions_emitted": 50,
+            "functions_with_violations": 5,
+            "violations": 18,
+        },
+        "rust": {
+            "functions_emitted": 700,
+            "functions_with_violations": 300,
+            "violations": 1400,
+        },
+    }
+
+
+def test_committed_language_totals_match_the_lane_census(dr):
+    baseline = json.loads(BASELINE.read_text())
+    assert baseline["language_totals"] == dr.language_totals(baseline["lane_totals"])
 
 
 # --------------------------------------------------------------------------

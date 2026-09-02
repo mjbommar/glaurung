@@ -23,6 +23,7 @@ name-keyed lookup silently resolves to the wrong closure.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,8 @@ import diff_decompile as D
 BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 SRC = ROOT / "tests" / "decompiler_fixtures" / "src"
 OUT = ROOT / "tests" / "open_defects" / "known_failures.json"
+
+AXES = ("types", "structure", "returns", "pointers", "unrecovered", "no_body")
 
 #: C type text -> width in bytes. `long` is 8 on every target this corpus
 #: builds for; the i386 lane is covered by `arch_baseline.json`, not here.
@@ -136,6 +139,76 @@ def sources_without_goto() -> set[str]:
     return out
 
 
+def language_for_object(name: str) -> str:
+    """Return the source-language reporting axis for a fixture object."""
+    return "rust" if "-rustc-" in name else "c"
+
+
+def _content_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def binary_content_identities(paths: list[Path]) -> dict[str, str]:
+    """Map object names to identities derived from their real file bytes."""
+    return {path.name: _content_digest(path) for path in paths}
+
+
+def provenance_identity_for_object(name: str) -> str:
+    """Return the source-build identity shared by O2 and stripped evidence."""
+    return re.sub(r"-O2strip\.dwarf(?=\.so$)", "-O2", name)
+
+
+def inventory_summaries(
+    rows_by_axis: dict[str, list[dict]],
+) -> tuple[dict[str, dict[str, int]], dict[str, int], dict[str, dict[str, int]]]:
+    """Compute language-split and provenance-deduplicated inventory counts.
+
+    O2 and O2strip are observations of one source-build lane. If their measured
+    row facts diverge they remain distinct; matching facts count once even when
+    stripped debug sections make the complete object bytes differ. Byte
+    identity is measured separately by ``binary_content_identities``.
+    """
+    by_language = {
+        language: {**{axis: 0 for axis in AXES}, "goto_statements": 0}
+        for language in ("c", "rust")
+    }
+    deduplicated = {**{axis: 0 for axis in AXES}, "goto_statements": 0}
+    deduplicated_by_language = {
+        language: {**{axis: 0 for axis in AXES}, "goto_statements": 0}
+        for language in ("c", "rust")
+    }
+
+    for axis in AXES:
+        seen: set[tuple[str, str]] = set()
+        for row in rows_by_axis.get(axis, []):
+            language = language_for_object(str(row["obj"]))
+            by_language[language][axis] += 1
+            if axis == "structure":
+                by_language[language]["goto_statements"] += int(row["gotos"])
+
+            row_facts = json.dumps(
+                {key: value for key, value in row.items() if key != "obj"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            identity = (provenance_identity_for_object(str(row["obj"])), row_facts)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            deduplicated[axis] += 1
+            deduplicated_by_language[language][axis] += 1
+            if axis == "structure":
+                gotos = int(row["gotos"])
+                deduplicated["goto_statements"] += gotos
+                deduplicated_by_language[language]["goto_statements"] += gotos
+
+    return by_language, deduplicated, deduplicated_by_language
+
+
 def main() -> int:
     if not BUILD.is_dir():
         print(f"{BUILD} absent; build the fixture matrix first", file=sys.stderr)
@@ -232,6 +305,17 @@ def main() -> int:
                         }
                     )
 
+    rows_by_axis = {
+        "types": sorted(types, key=lambda r: (r["obj"], r["va"], r["arg"])),
+        "structure": sorted(structure, key=lambda r: (r["obj"], r["va"])),
+        "returns": sorted(returns, key=lambda r: (r["obj"], r["va"])),
+        "pointers": sorted(pointers, key=lambda r: (r["obj"], r["va"], r["arg"])),
+        "unrecovered": sorted(markers, key=lambda r: (r["obj"], r["va"])),
+        "no_body": sorted(nobody, key=lambda r: (r["obj"], r["va"])),
+    }
+    by_language, deduplicated, deduplicated_by_language = inventory_summaries(
+        rows_by_axis
+    )
     payload = {
         "note": "Measured decompiler failures. Regenerate with tools/gen_known_failures.py.",
         "elapsed_seconds": round(time.time() - t0, 1),
@@ -245,12 +329,10 @@ def main() -> int:
             "no_body": len(nobody),
             "goto_statements": sum(r["gotos"] for r in structure),
         },
-        "types": sorted(types, key=lambda r: (r["obj"], r["va"], r["arg"])),
-        "structure": sorted(structure, key=lambda r: (r["obj"], r["va"])),
-        "returns": sorted(returns, key=lambda r: (r["obj"], r["va"])),
-        "pointers": sorted(pointers, key=lambda r: (r["obj"], r["va"], r["arg"])),
-        "unrecovered": sorted(markers, key=lambda r: (r["obj"], r["va"])),
-        "no_body": sorted(nobody, key=lambda r: (r["obj"], r["va"])),
+        "counts_by_language": by_language,
+        "deduplicated_counts": deduplicated,
+        "deduplicated_counts_by_language": deduplicated_by_language,
+        **rows_by_axis,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, indent=1) + "\n")

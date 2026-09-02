@@ -151,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {problem}", file=sys.stderr)
         return 1
 
+    report["language_totals"] = R.language_totals(report["lane_totals"])
+
     summary = D.summarize(report)
     print(
         f"REQUIRED: {summary['required_violations']} violation(s) in "
@@ -161,6 +163,12 @@ def main(argv: list[str] | None = None) -> int:
     for lane, totals in sorted(report["lane_totals"].items()):
         print(
             f"  {lane:12s} {totals['violations']:6d} violation(s) in "
+            f"{totals['functions_with_violations']:5d} of "
+            f"{totals['functions_emitted']:5d} emitted function(s)"
+        )
+    for language, totals in report["language_totals"].items():
+        print(
+            f"  language={language:4s} {totals['violations']:6d} violation(s) in "
             f"{totals['functions_with_violations']:5d} of "
             f"{totals['functions_emitted']:5d} emitted function(s)"
         )

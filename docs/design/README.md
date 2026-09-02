@@ -11,6 +11,13 @@ who opens the wrong one gets a plan that was superseded weeks ago.
 | **[decompiler-roadmap.md](decompiler-roadmap.md)** | **The plan.** The single tracker. Every checkbox carries evidence: `[x]` done with a commit and a measurement, `[~]` partial with a stated boundary, `[ ]` open with a named blocker. |
 | **decompiler-roadmap-diary-YYYY-MM-DD.md** | **The log.** One entry per increment, RED → GREEN → VERIFY, with the command output that justifies each claim. Newest file is the active one. |
 
+The detailed execution specification for the 2026-09-02 decompiler review is
+[`docs/review/decompiler-2026-09-02/PLAN.md`](../review/decompiler-2026-09-02/PLAN.md).
+It supplies file-level work packages, tests, sizing, and stop conditions; it is
+subordinate to `decompiler-roadmap.md`, and active/status changes must be
+mirrored into that single tracker. The dated real-binary roadmap remains
+product-sequencing evidence, not a separate checkbox authority.
+
 Nothing else in this directory is a work queue. If a document here proposes work,
 it is either already reflected in the roadmap or it is history.
 

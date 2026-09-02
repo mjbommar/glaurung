@@ -1,7 +1,9 @@
 # Glaurung decompiler and binary-analysis roadmap
 
-**Status:** canonical consolidated roadmap  
-**Last updated:** 2026-08-13  
+**Status:** canonical consolidated roadmap
+
+**Last updated:** 2026-09-02
+
 **Planning baseline:** Glaurung `fb4ee6ba5966e0e4a7fe001b523231fc5fcd43f4`
 
 This file consolidates the architecture review, DecBench gap analysis, repair
@@ -126,6 +128,32 @@ measured against; the ratio is bookkeeping, not evidence.
 
 
 ## Current state
+
+### Active 2026-09-02 review execution package
+
+The detailed implementation specification is
+[`docs/review/decompiler-2026-09-02/PLAN.md`](../review/decompiler-2026-09-02/PLAN.md).
+This roadmap remains the single status authority; the package supplies exact
+files, tests, dependencies, effort bands, and stop conditions. Capability work
+(shadow structuring, typed indirect targets, and two narrow render idioms) is
+scheduled independently of the longer pipeline/SSA migrations.
+
+- [~] **WP0 minimal inventory and gate integrity.** At `e55576bc4612`, the
+  strict-xfail inventory has gained raw C/Rust totals and provenance-normalized
+  totals derived from its measured rows. The normalized primary denominator is
+  218 type, 473 structure, 67 return, 30 unrecovered, and 4,635 goto statements;
+  exact byte identity remains a separate stripped-divergence fact. The
+  gcc-O2 Duff's-device constant-false live latch now has its own strict xfail,
+  separate from the unresolved-indirect-jump row. The three-profile gate is
+  still open, so WP0 is not complete.
+- [ ] **WP1 bounded MIR trial.** Two-day hard cap; no competing goto-aware
+  definedness implementation until the trial records a keep/delete verdict.
+- [ ] **WP4 total structurer in shadow mode.** Starts after WP0 rather than
+  waiting for the shared-pipeline or authoritative-SSA migrations.
+- [ ] **WP5 typed indirect targets.** Host jump-table vertical slice starts
+  after WP0 and feeds typed cases to the shadow structurer when ready.
+- [ ] **WP7A immediate render idioms.** Destination-typed literals and one
+  width-proved range-check fusion are independent of the SSA-native idiom lane.
 
 ### Product and submission snapshot
 
@@ -3298,4 +3326,3 @@ Every candidate must:
 7. compare exact function identities, not adjusted aggregate arithmetic;
 8. use fresh no-cache evaluation where cache identity is in doubt; and
 9. delete superseded workaround code when the foundational owner replaces it.
-

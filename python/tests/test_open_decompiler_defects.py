@@ -134,3 +134,38 @@ def test_an_inlined_printf_keeps_its_argument(inlined_printf_object):
     assert not argless, (
         "these printf calls format %d but pass no value:\n  " + "\n  ".join(argless)
     )
+
+
+DUFF_OBJECT = (
+    ROOT / "tests" / "decompiler_fixtures" / "build" / "102_duffs_device-gcc-O2.so"
+)
+
+
+def _duff_copy_code() -> str:
+    """Render the real gcc-O2 Duff's-device fixture by exported address."""
+    if not DUFF_OBJECT.is_file():
+        pytest.skip(
+            f"{DUFF_OBJECT.relative_to(ROOT)} is gitignored and absent; "
+            "build the fixture matrix to run this defect"
+        )
+    exported = D.exported_functions(str(DUFF_OBJECT))
+    assert "duff_copy" in exported, "fixture no longer exports duff_copy"
+    code = D.decompiled_c(str(DUFF_OBJECT), exported["duff_copy"])
+    assert code, "duff_copy produced no decompiled body"
+    return code
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "OPEN DEFECT (constant-false live latch): gcc -O2 Duff's device emits "
+        "`if (0) { goto L_1180; }`, deleting the live loop backedge. This is "
+        "a semantic wrong answer distinct from the existing unrecovered "
+        "indirect-jump inventory row."
+    ),
+)
+def test_duff_copy_does_not_delete_its_live_loop_latch():
+    """A live Duff's-device latch must not fold to a constant-false branch."""
+    code = _duff_copy_code()
+    false_latch = re.search(r"if\s*\(0\)\s*\{\s*goto\s+L_1180\s*;", code)
+    assert false_latch is None, code

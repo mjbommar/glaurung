@@ -35,6 +35,7 @@ module is the one both can import without pulling in the native extension.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sys
@@ -56,6 +57,18 @@ def native_so() -> Path | None:
     """The built extension, or None if it has never been built."""
     matches = sorted(NATIVE_GLOB.parent.glob(NATIVE_GLOB.name))
     return matches[0] if matches else None
+
+
+def native_fingerprint(so: Path | None = None) -> str | None:
+    """SHA-256 of the exact extension whose behavior a gate will measure."""
+    so = native_so() if so is None else so
+    if so is None or not so.is_file():
+        return None
+    digest = hashlib.sha256()
+    with so.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _newest_mtime(paths) -> tuple[float, Path | None]:
@@ -262,6 +275,7 @@ def main() -> int:
     so = native_so()
     reason = stale_reason(so)
     print(f"native extension: {so if so else '(absent)'}")
+    print(f"native SHA-256:  {native_fingerprint(so) or '(absent)'}")
     print(f"glaurung CLI:     {glaurung_bin()}")
     print(f"worker Python:    {python_bin()}")
     if reason:

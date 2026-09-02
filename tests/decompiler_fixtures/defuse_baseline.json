@@ -4272,6 +4272,18 @@
       "violations": 0
     }
   },
+  "language_totals": {
+    "c": {
+      "functions_emitted": 11166,
+      "functions_with_violations": 207,
+      "violations": 656
+    },
+    "rust": {
+      "functions_emitted": 5548,
+      "functions_with_violations": 3585,
+      "violations": 12591
+    }
+  },
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2929,

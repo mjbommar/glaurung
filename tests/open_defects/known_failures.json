@@ -9,7 +9,56 @@
   "pointers": 0,
   "unrecovered": 48,
   "no_body": 0,
-  "goto_statements": 6791
+ "goto_statements": 6791
+ },
+ "counts_by_language": {
+  "c": {
+   "types": 9,
+   "structure": 621,
+   "returns": 33,
+   "pointers": 0,
+   "unrecovered": 42,
+   "no_body": 0,
+   "goto_statements": 6225
+  },
+  "rust": {
+   "types": 298,
+   "structure": 94,
+   "returns": 59,
+   "pointers": 0,
+   "unrecovered": 6,
+   "no_body": 0,
+   "goto_statements": 566
+  }
+ },
+ "deduplicated_counts": {
+  "types": 218,
+  "structure": 473,
+  "returns": 67,
+  "pointers": 0,
+  "unrecovered": 30,
+  "no_body": 0,
+  "goto_statements": 4635
+ },
+ "deduplicated_counts_by_language": {
+  "c": {
+   "types": 5,
+   "structure": 405,
+   "returns": 18,
+   "pointers": 0,
+   "unrecovered": 26,
+   "no_body": 0,
+   "goto_statements": 4208
+  },
+  "rust": {
+   "types": 213,
+   "structure": 68,
+   "returns": 49,
+   "pointers": 0,
+   "unrecovered": 4,
+   "no_body": 0,
+   "goto_statements": 427
+  }
  },
  "types": [
   {

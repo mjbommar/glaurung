@@ -3,8 +3,8 @@
  "counts": {
   "core": 297,
   "lfs": 101,
+  "fixtures": 29,
   "toolchain": 28,
-  "fixtures": 28,
   "docker": 18,
   "llm": 5,
   "decbench": 2
@@ -279,6 +279,9 @@
    "docker"
   ],
   "test_decompiler_frame_semantics.py": [
+   "core"
+  ],
+  "test_decompiler_gate.py": [
    "core"
   ],
   "test_decompiler_global_data.py": [
@@ -728,7 +731,7 @@
    "core"
   ],
   "test_open_decompiler_defects.py": [
-   "core"
+   "fixtures"
   ],
   "test_overlay.py": [
    "core"
