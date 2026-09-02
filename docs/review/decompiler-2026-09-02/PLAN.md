@@ -463,7 +463,12 @@ that preserves honest local gotos when required.
   records deterministic post-preparation parseable C and compiles under the host
   syntax gate. The nested-local fixture now renders a verified outer loop plus
   closed honest gotos for its inner irreducible region. Health, full-pipeline
-  pseudocode, execution, GED, and runtime comparisons remain.
+  pseudocode, execution, GED, and runtime comparisons remain. A current scoped
+  production differential for
+  `154_wide_switch:clang:O2:wide154_dense_effects` still reports the committed
+  `fail`: v1 emits an unrecovered indirect jump even though the v2 shadow tree
+  renders all 256 values. The harness does not yet execute shadow output, so a
+  baseline-stable v1 failure is not promotion evidence.
 
 ### RED fixtures
 
@@ -591,7 +596,11 @@ one authoritative set of case edges.
   Other compiler/optimization and named fixture lanes remain.
 - [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
-- [ ] Execution differential for every newly recovered switch.
+- [ ] Execution differential for every newly recovered switch. The scoped
+  clang-O2 `154::wide154_dense_effects` production lane was rerun after the
+  256-slot recovery and remains a known `fail`, because the fixture harness
+  executes v1 output while the recovered switch is still shadow-only. Add an
+  explicit shadow-output differential path before counting this cell green.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
