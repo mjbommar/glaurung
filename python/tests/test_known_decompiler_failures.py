@@ -198,7 +198,7 @@ def _unrecovered_params():
         )
 
 
-@pytest.mark.parametrize("row", _return_params())
+@pytest.mark.parametrize("row", list(_return_params()))
 def test_recovered_return_type_matches_dwarf(row):
     """The return type the compiler recorded must survive recovery."""
     _require_corpus(row["obj"])
@@ -211,7 +211,7 @@ def test_recovered_return_type_matches_dwarf(row):
     assert got != row["got"], f"{row['fn']} still returns `{row['got']}`"
 
 
-@pytest.mark.parametrize("row", _unrecovered_params())
+@pytest.mark.parametrize("row", list(_unrecovered_params()))
 def test_no_unrecovered_construct_remains(row):
     """`unrecovered` in the output is the renderer conceding a hole."""
     _require_corpus(row["obj"])
@@ -237,7 +237,7 @@ def test_the_inventory_is_present_and_populated():
     )
 
 
-@pytest.mark.parametrize("row", _type_params())
+@pytest.mark.parametrize("row", list(_type_params()))
 def test_recovered_prototype_matches_dwarf(row):
     """The recovered parameter type must match what the compiler recorded."""
     _require_corpus(row["obj"])
@@ -254,7 +254,7 @@ def test_recovered_prototype_matches_dwarf(row):
     )
 
 
-@pytest.mark.parametrize("row", _structure_params())
+@pytest.mark.parametrize("row", list(_structure_params()))
 def test_goto_free_source_recovers_without_goto(row):
     """Source with no `goto` must not recover with one."""
     _require_corpus(row["obj"])

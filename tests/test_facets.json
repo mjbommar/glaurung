@@ -1,0 +1,1412 @@
+{
+ "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
+ "counts": {
+  "core": 296,
+  "lfs": 101,
+  "toolchain": 28,
+  "fixtures": 28,
+  "docker": 18,
+  "llm": 5,
+  "decbench": 2
+ },
+ "files": {
+  "test_abi_argument_recovery.py": [
+   "lfs"
+  ],
+  "test_address.py": [
+   "core"
+  ],
+  "test_address_range.py": [
+   "core"
+  ],
+  "test_address_space.py": [
+   "core"
+  ],
+  "test_adversarial_coverage.py": [
+   "lfs"
+  ],
+  "test_agent_refactor.py": [
+   "core"
+  ],
+  "test_analyst_comments_reach_decompile.py": [
+   "docker"
+  ],
+  "test_analyst_locals_reach_decompile.py": [
+   "docker"
+  ],
+  "test_analyst_prototype_reaches_decompile.py": [
+   "docker"
+  ],
+  "test_analyst_rename_reaches_decompile.py": [
+   "docker"
+  ],
+  "test_annotated_lift_grounding.py": [
+   "core"
+  ],
+  "test_artifact.py": [
+   "core"
+  ],
+  "test_artifact_similarity.py": [
+   "core"
+  ],
+  "test_ask_java_seeding.py": [
+   "lfs"
+  ],
+  "test_basic_block.py": [
+   "core"
+  ],
+  "test_bench_harness.py": [
+   "lfs"
+  ],
+  "test_bench_packer.py": [
+   "lfs"
+  ],
+  "test_benchmark_triage.py": [
+   "lfs"
+  ],
+  "test_binary.py": [
+   "core"
+  ],
+  "test_binary_diff.py": [
+   "lfs"
+  ],
+  "test_binary_diff_cross_name.py": [
+   "lfs"
+  ],
+  "test_binary_diff_relocation_only.py": [
+   "core"
+  ],
+  "test_bookmark_journal.py": [
+   "lfs"
+  ],
+  "test_borrow_symbols.py": [
+   "lfs"
+  ],
+  "test_build_configuration_invariants.py": [
+   "core"
+  ],
+  "test_cfg.py": [
+   "lfs"
+  ],
+  "test_cfg_db.py": [
+   "core"
+  ],
+  "test_cil_metadata.py": [
+   "lfs"
+  ],
+  "test_classfile.py": [
+   "lfs"
+  ],
+  "test_cli_annotate.py": [
+   "docker"
+  ],
+  "test_cli_cache.py": [
+   "core"
+  ],
+  "test_cli_decompile.py": [
+   "toolchain",
+   "lfs"
+  ],
+  "test_cli_explain.py": [
+   "lfs",
+   "llm"
+  ],
+  "test_cli_explain_with_layer0.py": [
+   "lfs"
+  ],
+  "test_cli_graph.py": [
+   "lfs"
+  ],
+  "test_cli_graph_names.py": [
+   "docker"
+  ],
+  "test_cli_startup_is_lazy.py": [
+   "core"
+  ],
+  "test_cli_triage.py": [
+   "core"
+  ],
+  "test_compiler_detection_improvements.py": [
+   "lfs"
+  ],
+  "test_containers.py": [
+   "core"
+  ],
+  "test_cortex_m_system_registers.py": [
+   "core"
+  ],
+  "test_cost_budget_breaker.py": [
+   "core"
+  ],
+  "test_coverage_footer.py": [
+   "core"
+  ],
+  "test_critic_skip_on_demoted.py": [
+   "core"
+  ],
+  "test_ctph.py": [
+   "core"
+  ],
+  "test_ctph_cluster.py": [
+   "core"
+  ],
+  "test_ctph_parameter_validation.py": [
+   "core"
+  ],
+  "test_cwe_sweep.py": [
+   "core"
+  ],
+  "test_data_labels.py": [
+   "lfs"
+  ],
+  "test_data_type.py": [
+   "core"
+  ],
+  "test_decbench_audit_full.py": [
+   "core"
+  ],
+  "test_decbench_corpus_contracts.py": [
+   "core"
+  ],
+  "test_decbench_external_agentic.py": [
+   "toolchain"
+  ],
+  "test_decbench_glaurung_backend.py": [
+   "toolchain",
+   "decbench"
+  ],
+  "test_decbench_matrix_ratchet.py": [
+   "core"
+  ],
+  "test_decbench_merge_shards.py": [
+   "core"
+  ],
+  "test_decbench_score_ledger.py": [
+   "core"
+  ],
+  "test_decbench_symbol_resolution.py": [
+   "core"
+  ],
+  "test_decbench_type_defect_corpus.py": [
+   "core"
+  ],
+  "test_declared_extent_gate.py": [
+   "fixtures"
+  ],
+  "test_decompile_coverage.py": [
+   "lfs"
+  ],
+  "test_decompile_determinism.py": [
+   "fixtures",
+   "lfs"
+  ],
+  "test_decompile_incompleteness_marker.py": [
+   "lfs"
+  ],
+  "test_decompile_vas_sources.py": [
+   "fixtures"
+  ],
+  "test_decompile_with_names.py": [
+   "lfs"
+  ],
+  "test_decompiler_arch_roundtrip.py": [
+   "fixtures",
+   "toolchain",
+   "docker"
+  ],
+  "test_decompiler_arm32_semantics.py": [
+   "core"
+  ],
+  "test_decompiler_arm_frame_spills.py": [
+   "toolchain"
+  ],
+  "test_decompiler_arm_terminal_loop.py": [
+   "core"
+  ],
+  "test_decompiler_atomic_semantics.py": [
+   "toolchain"
+  ],
+  "test_decompiler_caller_arity.py": [
+   "toolchain"
+  ],
+  "test_decompiler_canary.py": [
+   "fixtures"
+  ],
+  "test_decompiler_control_flow_semantics.py": [
+   "docker"
+  ],
+  "test_decompiler_curriculum_corpus.py": [
+   "fixtures",
+   "docker"
+  ],
+  "test_decompiler_curriculum_reference.py": [
+   "docker"
+  ],
+  "test_decompiler_defuse_census.py": [
+   "core"
+  ],
+  "test_decompiler_determinism.py": [
+   "core"
+  ],
+  "test_decompiler_emission_invariants.py": [
+   "core"
+  ],
+  "test_decompiler_fixture_build_cache.py": [
+   "fixtures",
+   "docker"
+  ],
+  "test_decompiler_fixture_compile.py": [
+   "fixtures",
+   "docker"
+  ],
+  "test_decompiler_fixture_harness.py": [
+   "fixtures",
+   "docker"
+  ],
+  "test_decompiler_fixture_matrix.py": [
+   "fixtures",
+   "docker"
+  ],
+  "test_decompiler_fixture_structural.py": [
+   "toolchain",
+   "docker"
+  ],
+  "test_decompiler_fixture_toolchain.py": [
+   "fixtures",
+   "docker"
+  ],
+  "test_decompiler_frame_semantics.py": [
+   "core"
+  ],
+  "test_decompiler_global_data.py": [
+   "fixtures"
+  ],
+  "test_decompiler_guarded_call.py": [
+   "docker"
+  ],
+  "test_decompiler_ilp32_wide_return.py": [
+   "core"
+  ],
+  "test_decompiler_lazy_call_select.py": [
+   "toolchain"
+  ],
+  "test_decompiler_memory_objects.py": [
+   "toolchain"
+  ],
+  "test_decompiler_metamorphic.py": [
+   "fixtures"
+  ],
+  "test_decompiler_observable_parameter_width.py": [
+   "toolchain"
+  ],
+  "test_decompiler_output_canaries.py": [
+   "lfs"
+  ],
+  "test_decompiler_packed_arithmetic.py": [
+   "fixtures"
+  ],
+  "test_decompiler_packet_parser.py": [
+   "fixtures"
+  ],
+  "test_decompiler_profile.py": [
+   "lfs"
+  ],
+  "test_decompiler_render_styles.py": [
+   "fixtures"
+  ],
+  "test_decompiler_return_definedness.py": [
+   "core"
+  ],
+  "test_decompiler_return_reaching_definitions.py": [
+   "toolchain"
+  ],
+  "test_decompiler_session.py": [
+   "toolchain"
+  ],
+  "test_decompiler_signed_division.py": [
+   "fixtures"
+  ],
+  "test_decompiler_stack_objects.py": [
+   "fixtures"
+  ],
+  "test_decompiler_stripped_lane.py": [
+   "fixtures"
+  ],
+  "test_decompiler_vector_memory.py": [
+   "fixtures"
+  ],
+  "test_decompiler_wide_arithmetic_width.py": [
+   "toolchain"
+  ],
+  "test_decompiler_x86_rep_stos.py": [
+   "core"
+  ],
+  "test_dectest_equivalence.py": [
+   "fixtures"
+  ],
+  "test_dectest_selection.py": [
+   "fixtures"
+  ],
+  "test_defuse_ratchet.py": [
+   "core"
+  ],
+  "test_demangle_integration.py": [
+   "core"
+  ],
+  "test_demangle_pass.py": [
+   "lfs"
+  ],
+  "test_disasm_operands.py": [
+   "core"
+  ],
+  "test_disassembler.py": [
+   "core"
+  ],
+  "test_dispatch_decline_reasons.py": [
+   "lfs"
+  ],
+  "test_dwarf_ingestion.py": [
+   "lfs"
+  ],
+  "test_dwarf_types.py": [
+   "lfs"
+  ],
+  "test_effectful_loop_rotation.py": [
+   "toolchain"
+  ],
+  "test_estate_reachability.py": [
+   "fixtures",
+   "lfs"
+  ],
+  "test_evidence_annotate.py": [
+   "lfs"
+  ],
+  "test_evidence_log.py": [
+   "lfs"
+  ],
+  "test_exec_engine.py": [
+   "lfs"
+  ],
+  "test_export.py": [
+   "lfs"
+  ],
+  "test_extbench_aggregation.py": [
+   "core"
+  ],
+  "test_find_cli.py": [
+   "lfs"
+  ],
+  "test_finding_critic.py": [
+   "core"
+  ],
+  "test_finding_verifier.py": [
+   "core"
+  ],
+  "test_findings_schema.py": [
+   "core"
+  ],
+  "test_fitness_report.py": [
+   "core"
+  ],
+  "test_flag_predicate_roundtrip.py": [
+   "fixtures"
+  ],
+  "test_flirt_matching.py": [
+   "lfs"
+  ],
+  "test_format_environment.py": [
+   "toolchain"
+  ],
+  "test_frame_cli.py": [
+   "lfs"
+  ],
+  "test_func_ref.py": [
+   "core"
+  ],
+  "test_function.py": [
+   "core"
+  ],
+  "test_function_chunks.py": [
+   "lfs"
+  ],
+  "test_function_disasm.py": [
+   "core"
+  ],
+  "test_function_identity_survives_stripping.py": [
+   "core"
+  ],
+  "test_function_prototypes.py": [
+   "lfs"
+  ],
+  "test_function_simple.py": [
+   "core"
+  ],
+  "test_generic_tool_evidence.py": [
+   "lfs"
+  ],
+  "test_gopclntab.py": [
+   "lfs"
+  ],
+  "test_graph_types_simple.py": [
+   "core"
+  ],
+  "test_guess_field_type.py": [
+   "core"
+  ],
+  "test_id.py": [
+   "core"
+  ],
+  "test_instruction.py": [
+   "core"
+  ],
+  "test_ioc.py": [
+   "core"
+  ],
+  "test_ioc_validator.py": [
+   "core"
+  ],
+  "test_ioc_validator_v2.py": [
+   "core"
+  ],
+  "test_ioctl_surface.py": [
+   "core"
+  ],
+  "test_ir.py": [
+   "lfs"
+  ],
+  "test_java_access_flags.py": [
+   "core"
+  ],
+  "test_java_agent_context_tool.py": [
+   "core"
+  ],
+  "test_java_agent_runner.py": [
+   "core"
+  ],
+  "test_java_agents_live.py": [
+   "llm"
+  ],
+  "test_java_annotate_mappings_tool.py": [
+   "core"
+  ],
+  "test_java_archive_navigation_tools.py": [
+   "core"
+  ],
+  "test_java_audit_archive_set_tool.py": [
+   "core"
+  ],
+  "test_java_call_graph_tool.py": [
+   "core"
+  ],
+  "test_java_cfg_tool.py": [
+   "core"
+  ],
+  "test_java_class_attributes.py": [
+   "core"
+  ],
+  "test_java_class_kind.py": [
+   "core"
+  ],
+  "test_java_classfile_policy.py": [
+   "core"
+  ],
+  "test_java_compare_rebuilt_abi_tool.py": [
+   "core"
+  ],
+  "test_java_compile_recovered_project_tool.py": [
+   "core"
+  ],
+  "test_java_correlate_behavior_config_tool.py": [
+   "core"
+  ],
+  "test_java_decompile_tools.py": [
+   "core"
+  ],
+  "test_java_detect_entrypoints_tool.py": [
+   "core"
+  ],
+  "test_java_detect_frameworks_tool.py": [
+   "core"
+  ],
+  "test_java_detect_obfuscation_tool.py": [
+   "lfs"
+  ],
+  "test_java_detect_secrets_tool.py": [
+   "core"
+  ],
+  "test_java_detect_sensitive_behavior_tool.py": [
+   "core"
+  ],
+  "test_java_detect_suspicious_blobs_tool.py": [
+   "core"
+  ],
+  "test_java_extract_config_surface_tool.py": [
+   "core"
+  ],
+  "test_java_index_archive_tool.py": [
+   "lfs"
+  ],
+  "test_java_index_source_project_tool.py": [
+   "core"
+  ],
+  "test_java_infer_build_system_tool.py": [
+   "core"
+  ],
+  "test_java_infer_dependencies_tool.py": [
+   "core"
+  ],
+  "test_java_list_annotations_tool.py": [
+   "core"
+  ],
+  "test_java_list_classes_tool.py": [
+   "core"
+  ],
+  "test_java_list_fields_tool.py": [
+   "core"
+  ],
+  "test_java_list_methods_tool.py": [
+   "core"
+  ],
+  "test_java_list_packages_tool.py": [
+   "core"
+  ],
+  "test_java_lookup_mapping_tool.py": [
+   "core"
+  ],
+  "test_java_reachability_tool.py": [
+   "core"
+  ],
+  "test_java_reconstruct_source_tree_tool.py": [
+   "core"
+  ],
+  "test_java_recover_project_tool.py": [
+   "core"
+  ],
+  "test_java_recovery_report_cli.py": [
+   "core"
+  ],
+  "test_java_recovery_report_tool.py": [
+   "core"
+  ],
+  "test_java_repair_decompiled_source_tool.py": [
+   "core"
+  ],
+  "test_java_risk_report_tool.py": [
+   "core"
+  ],
+  "test_java_safe_corpus.py": [
+   "core"
+  ],
+  "test_java_specialized_agents.py": [
+   "llm"
+  ],
+  "test_java_trace_to_sink_tool.py": [
+   "core"
+  ],
+  "test_java_validate_recovered_application_tool.py": [
+   "core"
+  ],
+  "test_java_verify_signatures_tool.py": [
+   "core"
+  ],
+  "test_java_view_bytecode_tool.py": [
+   "core"
+  ],
+  "test_java_view_class_tool.py": [
+   "core"
+  ],
+  "test_java_xrefs_tool.py": [
+   "core"
+  ],
+  "test_jump_table_discovery.py": [
+   "lfs"
+  ],
+  "test_kb_bundle.py": [
+   "core"
+  ],
+  "test_kb_disasm_symbols.py": [
+   "docker"
+  ],
+  "test_kb_function_identity.py": [
+   "toolchain"
+  ],
+  "test_kb_manual_precedence.py": [
+   "core"
+  ],
+  "test_kb_provenance_rank.py": [
+   "core"
+  ],
+  "test_kb_stack_var_preserves.py": [
+   "core"
+  ],
+  "test_kickoff_analysis.py": [
+   "lfs"
+  ],
+  "test_kickoff_pdb_naming.py": [
+   "core"
+  ],
+  "test_known_decompiler_failures.py": [
+   "fixtures"
+  ],
+  "test_large_binaries_are_not_silently_truncated.py": [
+   "fixtures"
+  ],
+  "test_large_module_review.py": [
+   "core"
+  ],
+  "test_layer0_prepass_extractors.py": [
+   "core"
+  ],
+  "test_libc_pointer_roundtrip.py": [
+   "toolchain"
+  ],
+  "test_llm.py": [
+   "core"
+  ],
+  "test_llm_config.py": [
+   "llm"
+  ],
+  "test_llm_naming_live.py": [
+   "lfs",
+   "llm"
+  ],
+  "test_llm_require_flag.py": [
+   "core"
+  ],
+  "test_llm_tools.py": [
+   "lfs"
+  ],
+  "test_local_gate_fails_closed.py": [
+   "decbench"
+  ],
+  "test_lock_state.py": [
+   "core"
+  ],
+  "test_loop_hoist_traps.py": [
+   "fixtures"
+  ],
+  "test_luac.py": [
+   "lfs"
+  ],
+  "test_macho_lane.py": [
+   "core"
+  ],
+  "test_macho_stubs.py": [
+   "lfs"
+  ],
+  "test_max_tokens_defaults.py": [
+   "core"
+  ],
+  "test_minecraft_detect_archive_tool.py": [
+   "core"
+  ],
+  "test_minecraft_extract_bundled_server_tool.py": [
+   "core"
+  ],
+  "test_minecraft_fetch_mappings_tool.py": [
+   "core"
+  ],
+  "test_model_hyperparameters.py": [
+   "core"
+  ],
+  "test_model_settings_shim.py": [
+   "core"
+  ],
+  "test_module_group.py": [
+   "core"
+  ],
+  "test_name_local_variable.py": [
+   "core"
+  ],
+  "test_name_verification.py": [
+   "lfs"
+  ],
+  "test_native_stub_current.py": [
+   "core"
+  ],
+  "test_open_decompiler_defects.py": [
+   "core"
+  ],
+  "test_overlay.py": [
+   "core"
+  ],
+  "test_overlay_integration.py": [
+   "core"
+  ],
+  "test_packed_image_is_not_the_program.py": [
+   "core"
+  ],
+  "test_packer_detect.py": [
+   "lfs"
+  ],
+  "test_packers.py": [
+   "core"
+  ],
+  "test_partial_findings_writes.py": [
+   "core"
+  ],
+  "test_pass_health_report.py": [
+   "core"
+  ],
+  "test_patch.py": [
+   "lfs"
+  ],
+  "test_patch_shorthands.py": [
+   "lfs"
+  ],
+  "test_pattern.py": [
+   "core"
+  ],
+  "test_pdb_fetch.py": [
+   "core"
+  ],
+  "test_pdb_type_db.py": [
+   "core"
+  ],
+  "test_pdb_type_recovery.py": [
+   "core"
+  ],
+  "test_pe32_cdecl_roundtrip.py": [
+   "toolchain",
+   "lfs"
+  ],
+  "test_pe32_import_thunk_targets.py": [
+   "lfs"
+  ],
+  "test_pe_direct_calls.py": [
+   "core"
+  ],
+  "test_pe_identity_lane.py": [
+   "core"
+  ],
+  "test_pe_import_call_sites.py": [
+   "core"
+  ],
+  "test_pe_import_enrichment.py": [
+   "lfs"
+  ],
+  "test_pe_resources_tool.py": [
+   "core"
+  ],
+  "test_perf_gate_fails_closed.py": [
+   "core"
+  ],
+  "test_persistent_kb.py": [
+   "lfs"
+  ],
+  "test_pipeline_profile_report.py": [
+   "lfs"
+  ],
+  "test_proto_hints.py": [
+   "lfs"
+  ],
+  "test_realistic_corpus.py": [
+   "core"
+  ],
+  "test_realworld_windows_vendor_corpus.py": [
+   "core"
+  ],
+  "test_recover_source_externs.py": [
+   "toolchain"
+  ],
+  "test_recover_source_fortran_build.py": [
+   "toolchain"
+  ],
+  "test_recover_source_fortran_main.py": [
+   "toolchain"
+  ],
+  "test_recover_source_imports_vs_callers.py": [
+   "lfs"
+  ],
+  "test_recover_source_strings_count.py": [
+   "lfs"
+  ],
+  "test_recovered_tree_buildability.py": [
+   "toolchain"
+  ],
+  "test_register.py": [
+   "core"
+  ],
+  "test_relocation.py": [
+   "core"
+  ],
+  "test_rename_rerender.py": [
+   "lfs"
+  ],
+  "test_roundtrip_review.py": [
+   "core"
+  ],
+  "test_runtime_classifier.py": [
+   "core"
+  ],
+  "test_sample_corpus_duplication.py": [
+   "lfs"
+  ],
+  "test_scan_until_byte.py": [
+   "lfs"
+  ],
+  "test_scratch_stays_off_tmpfs.py": [
+   "fixtures"
+  ],
+  "test_section.py": [
+   "core"
+  ],
+  "test_segment.py": [
+   "core"
+  ],
+  "test_src_dependency_boundaries.py": [
+   "core"
+  ],
+  "test_stack_frame_vars.py": [
+   "lfs"
+  ],
+  "test_stdlib_type_bundles.py": [
+   "lfs"
+  ],
+  "test_stranded_doc_comments.py": [
+   "core"
+  ],
+  "test_strict_tool_default.py": [
+   "core"
+  ],
+  "test_string_language_detection.py": [
+   "core"
+  ],
+  "test_string_literal.py": [
+   "core"
+  ],
+  "test_string_xrefs_cli.py": [
+   "lfs"
+  ],
+  "test_strings_wrappers.py": [
+   "core"
+  ],
+  "test_struct_recovery.py": [
+   "lfs"
+  ],
+  "test_structural_fingerprint.py": [
+   "lfs"
+  ],
+  "test_suggest_function_name.py": [
+   "core"
+  ],
+  "test_suspicious_symbols.py": [
+   "core"
+  ],
+  "test_swallowed_defects.py": [
+   "lfs"
+  ],
+  "test_symbol.py": [
+   "core"
+  ],
+  "test_symbol_summary_fields.py": [
+   "toolchain",
+   "lfs"
+  ],
+  "test_symbols_analysis.py": [
+   "lfs"
+  ],
+  "test_symbols_demangled.py": [
+   "core"
+  ],
+  "test_symbols_python.py": [
+   "core"
+  ],
+  "test_symbols_samples.py": [
+   "lfs"
+  ],
+  "test_test_census.py": [
+   "core"
+  ],
+  "test_test_facets.py": [
+   "core"
+  ],
+  "test_thumb_mode.py": [
+   "lfs"
+  ],
+  "test_tool_metadata.py": [
+   "core"
+  ],
+  "test_tool_routing.py": [
+   "core"
+  ],
+  "test_triage_config.py": [
+   "core"
+  ],
+  "test_triage_entropy.py": [
+   "core"
+  ],
+  "test_triage_integration.py": [
+   "core"
+  ],
+  "test_triage_io.py": [
+   "core"
+  ],
+  "test_triage_sniffers.py": [
+   "core"
+  ],
+  "test_triage_types.py": [
+   "core"
+  ],
+  "test_triage_wrappers.py": [
+   "core"
+  ],
+  "test_type_db.py": [
+   "lfs"
+  ],
+  "test_type_propagation.py": [
+   "lfs"
+  ],
+  "test_typed_render.py": [
+   "lfs"
+  ],
+  "test_undo_redo.py": [
+   "lfs"
+  ],
+  "test_usage_limits.py": [
+   "core"
+  ],
+  "test_usage_limits_wiring.py": [
+   "core"
+  ],
+  "test_usage_tracker.py": [
+   "core"
+  ],
+  "test_variable.py": [
+   "core"
+  ],
+  "test_variable_addresses.py": [
+   "toolchain"
+  ],
+  "test_variadic_abi_invariants.py": [
+   "core"
+  ],
+  "test_verify_recovery.py": [
+   "toolchain",
+   "lfs"
+  ],
+  "test_verify_recovery_tool.py": [
+   "toolchain"
+  ],
+  "test_verify_tutorial.py": [
+   "core"
+  ],
+  "test_view_cli.py": [
+   "lfs"
+  ],
+  "test_view_function_tools.py": [
+   "core"
+  ],
+  "test_vtable_discovery.py": [
+   "lfs"
+  ],
+  "test_winapi_prototypes.py": [
+   "lfs"
+  ],
+  "test_windows_agent_evidence_bundle_tool.py": [
+   "core"
+  ],
+  "test_windows_agent_exports.py": [
+   "core"
+  ],
+  "test_windows_analysis_helpers.py": [
+   "lfs"
+  ],
+  "test_windows_analyst_notebook_review_agent.py": [
+   "core"
+  ],
+  "test_windows_analyst_notebook_tool.py": [
+   "core"
+  ],
+  "test_windows_api_contract_primitives_tool.py": [
+   "core"
+  ],
+  "test_windows_api_contract_rule_scan_tool.py": [
+   "core"
+  ],
+  "test_windows_binary_diff_summary_tool.py": [
+   "lfs"
+  ],
+  "test_windows_bootstrap_project_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_boundaries.py": [
+   "core"
+  ],
+  "test_windows_build_corpus_tool.py": [
+   "core"
+  ],
+  "test_windows_callsite_operand_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_candidate_start_worklist_tool.py": [
+   "core"
+  ],
+  "test_windows_candidate_validation_report_tool.py": [
+   "core"
+  ],
+  "test_windows_cfg_dominance_tool.py": [
+   "core"
+  ],
+  "test_windows_cfg_gate_to_sink_tool.py": [
+   "core"
+  ],
+  "test_windows_check_gate_to_sink_tool.py": [
+   "core"
+  ],
+  "test_windows_cli_analyst.py": [
+   "core"
+  ],
+  "test_windows_compare_selector_cases_tool.py": [
+   "core"
+  ],
+  "test_windows_component_profile_tool.py": [
+   "core"
+  ],
+  "test_windows_compose_candidate_packets_tool.py": [
+   "core"
+  ],
+  "test_windows_compose_source_gate_sink_packet_tool.py": [
+   "core"
+  ],
+  "test_windows_config.py": [
+   "core"
+  ],
+  "test_windows_corpus_curator_agent.py": [
+   "lfs"
+  ],
+  "test_windows_data_ref_confidence_tool.py": [
+   "core"
+  ],
+  "test_windows_decompile_context_packet_tool.py": [
+   "lfs"
+  ],
+  "test_windows_diff_security_relevant_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_emit_review_packet_tool.py": [
+   "core"
+  ],
+  "test_windows_emit_validation_harness_template_tool.py": [
+   "core"
+  ],
+  "test_windows_emit_vm_validation_plan_tool.py": [
+   "core"
+  ],
+  "test_windows_enumerate_entrypoints_tool.py": [
+   "core"
+  ],
+  "test_windows_evidence_review_agent.py": [
+   "core"
+  ],
+  "test_windows_function_arg_roles_tool.py": [
+   "core"
+  ],
+  "test_windows_function_body_split_candidates_tool.py": [
+   "core"
+  ],
+  "test_windows_function_boundary_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_function_chunks.py": [
+   "core"
+  ],
+  "test_windows_function_pretty_lift_tool.py": [
+   "core"
+  ],
+  "test_windows_function_similarity_manifest_tool.py": [
+   "lfs"
+  ],
+  "test_windows_function_start_explain_tool.py": [
+   "core"
+  ],
+  "test_windows_functionization_review_agent.py": [
+   "core"
+  ],
+  "test_windows_functionization_rule_replay_tool.py": [
+   "lfs"
+  ],
+  "test_windows_ghidra_delta_manifest_tool.py": [
+   "core"
+  ],
+  "test_windows_ghidra_parity_baseline.py": [
+   "core"
+  ],
+  "test_windows_ghidra_parity_regression.py": [
+   "core"
+  ],
+  "test_windows_high_volume_preflight_tool.py": [
+   "core"
+  ],
+  "test_windows_import_pdb_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_import_thunk_catalog_tool.py": [
+   "core"
+  ],
+  "test_windows_import_validation_artifact_directory_tool.py": [
+   "core"
+  ],
+  "test_windows_interactive_analyst_agent.py": [
+   "lfs"
+  ],
+  "test_windows_large_pe_read_limits.py": [
+   "core"
+  ],
+  "test_windows_list_operation_sinks_tool.py": [
+   "core"
+  ],
+  "test_windows_live_kernel_snapshot_tool.py": [
+   "core"
+  ],
+  "test_windows_ntos_ntdll_regression_demo.py": [
+   "core"
+  ],
+  "test_windows_operation_backlog_packets_tool.py": [
+   "core"
+  ],
+  "test_windows_operation_classification_backlog_tool.py": [
+   "core"
+  ],
+  "test_windows_operation_metadata_tool.py": [
+   "core"
+  ],
+  "test_windows_operation_return_value_snapshots_tool.py": [
+   "core"
+  ],
+  "test_windows_patch_diff_packets_tool.py": [
+   "lfs"
+  ],
+  "test_windows_patch_diff_review_agent.py": [
+   "lfs"
+  ],
+  "test_windows_patch_function_identity_extract_tool.py": [
+   "lfs"
+  ],
+  "test_windows_pdb_identity_manifest_tool.py": [
+   "core"
+  ],
+  "test_windows_pipeline_blocker_task_plan_tool.py": [
+   "core"
+  ],
+  "test_windows_project_branch_condition_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_project_call_argument_snapshot_tool.py": [
+   "core"
+  ],
+  "test_windows_project_callgraph_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_project_callgraph_reachability_tool.py": [
+   "core"
+  ],
+  "test_windows_project_callgraph_slice_tool.py": [
+   "core"
+  ],
+  "test_windows_project_callsite_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_project_cfg_path_query_tool.py": [
+   "core"
+  ],
+  "test_windows_project_data_label_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_project_data_table_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_project_data_table_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_project_fact_manifest_tool.py": [
+   "core"
+  ],
+  "test_windows_project_fact_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_function_boundary_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_project_function_start_explain_tool.py": [
+   "core"
+  ],
+  "test_windows_project_guard_condition_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_project_helper_argument_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_memory_access_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_project_memory_access_query_tool.py": [
+   "core"
+  ],
+  "test_windows_project_memory_operand_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_project_onehop_argument_flow_tool.py": [
+   "core"
+  ],
+  "test_windows_project_onehop_flow_packets_tool.py": [
+   "core"
+  ],
+  "test_windows_project_onehop_sink_chains_tool.py": [
+   "core"
+  ],
+  "test_windows_project_operation_backlog_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_operation_coverage_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_operation_gate_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_operation_return_value_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_operation_risk_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_operation_source_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_prototype_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_project_return_value_use_snapshot_tool.py": [
+   "core"
+  ],
+  "test_windows_project_sink_call_packets_tool.py": [
+   "core"
+  ],
+  "test_windows_project_sink_operation_summary_tool.py": [
+   "core"
+  ],
+  "test_windows_project_symbol_range_facts_tool.py": [
+   "core"
+  ],
+  "test_windows_project_xref_query_tool.py": [
+   "core"
+  ],
+  "test_windows_rank_candidate_packets_tool.py": [
+   "core"
+  ],
+  "test_windows_reconcile_pdb_identity_tool.py": [
+   "core"
+  ],
+  "test_windows_record_candidate_snapshot_mapping_tool.py": [
+   "core"
+  ],
+  "test_windows_record_validation_artifact_bundle_tool.py": [
+   "core"
+  ],
+  "test_windows_regression_fixture_catalog_tool.py": [
+   "core"
+  ],
+  "test_windows_replay_regression_fixtures_tool.py": [
+   "core"
+  ],
+  "test_windows_risk_cli.py": [
+   "lfs"
+  ],
+  "test_windows_rule_authoring_agent.py": [
+   "core"
+  ],
+  "test_windows_runner_artifact_promotion_apply_tool.py": [
+   "core"
+  ],
+  "test_windows_runner_artifact_promotion_plan_tool.py": [
+   "core"
+  ],
+  "test_windows_runner_artifact_review_tool.py": [
+   "core"
+  ],
+  "test_windows_scan_rejection_dashboard_tool.py": [
+   "lfs"
+  ],
+  "test_windows_seed_binary_diff_triage_tool.py": [
+   "lfs"
+  ],
+  "test_windows_simd_start_classifier_tool.py": [
+   "core"
+  ],
+  "test_windows_sink_to_gate_review_agent.py": [
+   "core"
+  ],
+  "test_windows_source_reachability_tool.py": [
+   "core"
+  ],
+  "test_windows_source_sink_operand_match_tool.py": [
+   "core"
+  ],
+  "test_windows_strings_utf16.py": [
+   "core"
+  ],
+  "test_windows_summarize_helper_side_effects_tool.py": [
+   "core"
+  ],
+  "test_windows_surface_catalog_tool.py": [
+   "core"
+  ],
+  "test_windows_surface_metadata_tool.py": [
+   "core"
+  ],
+  "test_windows_symbol_similarity_extraction_plan_tool.py": [
+   "core"
+  ],
+  "test_windows_syscall_atlas_diff_tool.py": [
+   "core"
+  ],
+  "test_windows_syscall_handler_correlate_tool.py": [
+   "core"
+  ],
+  "test_windows_syscall_stub_atlas_tool.py": [
+   "core"
+  ],
+  "test_windows_sysinfo_and_callsite_facts.py": [
+   "core"
+  ],
+  "test_windows_target_pipeline_agent.py": [
+   "lfs"
+  ],
+  "test_windows_target_surface_profile_tool.py": [
+   "core"
+  ],
+  "test_windows_trace_arg_flow_tool.py": [
+   "core"
+  ],
+  "test_windows_trace_onehop_flow_tool.py": [
+   "core"
+  ],
+  "test_windows_triage_worklist_agent.py": [
+   "lfs"
+  ],
+  "test_windows_type_sync.py": [
+   "toolchain"
+  ],
+  "test_windows_validation_harness_recipe_tool.py": [
+   "core"
+  ],
+  "test_windows_validation_planning_agent.py": [
+   "lfs"
+  ],
+  "test_windows_vulnerability_seed_catalog_tool.py": [
+   "core"
+  ],
+  "test_windows_vulnerability_seed_packets_tool.py": [
+   "core"
+  ],
+  "test_write_readme_and_manpage.py": [
+   "core"
+  ],
+  "test_xref_db.py": [
+   "lfs"
+  ],
+  "test_xrefs_cli.py": [
+   "lfs"
+  ]
+ }
+}
