@@ -37,6 +37,7 @@ configuration, and troubleshooting live in the
 | Read or test pseudocode output | [Decompiler overview](analysis/decompiler/README.md) and [decompiler testing](development/decompiler-testing.md) |
 | Analyze PE files or Windows software | [Windows analysis](windows-port/README.md) and [Windows configuration](windows-port/windows-analysis-config.md) |
 | Detect packers or compare binaries | [Packer configuration](triage/packer-config.md) and [similarity analysis](triage/similarity.md) |
+| Measure how well a function-identity scheme retrieves | [Identity measurement](development/identity-measurement.md) — the XO/XC/XM protocol, its filters, and measured AUC/MRR10 for CTPH and the structural fingerprint |
 | Use an LLM-backed command | [`ask` command](cli/ASK_COMMAND.md), [LLM subsystem](llm/README.md), and [runtime configuration](development/setup.md#runtime-configuration) |
 | Reproduce a guided investigation | [Walkthroughs](tutorial/03-walkthroughs/) and [demos](demos/README.md) |
 | Run source examples | [Executable examples](../examples/README.md) |

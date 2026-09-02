@@ -3,7 +3,7 @@
  "counts": {
   "core": 297,
   "lfs": 101,
-  "fixtures": 29,
+  "fixtures": 30,
   "toolchain": 28,
   "docker": 18,
   "llm": 5,
@@ -461,6 +461,9 @@
   ],
   "test_id.py": [
    "core"
+  ],
+  "test_identity_retrieval_protocol.py": [
+   "fixtures"
   ],
   "test_instruction.py": [
    "core"
