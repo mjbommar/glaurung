@@ -1,5 +1,7 @@
 # Docs audit — `docs/analysis/`, `docs/architecture/`, `docs/refactoring/`
 
+> **Kind:** record · **Date:** 2026-09-02
+
 Auditor scope: 46 markdown files. Repository at `master` / `b8884687` (2026-09-02). Read-only; no repo file was modified.
 
 ## Executive summary

@@ -2,6 +2,10 @@
 name = "glaurung"
 version = "0.1.0"
 edition = "2021"
+# The floor `docs/development/setup.md` and the CI toolchain image assert.
+# Declaring it here is what makes cargo enforce it instead of failing
+# somewhere deep in a dependency on an older toolchain.
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]

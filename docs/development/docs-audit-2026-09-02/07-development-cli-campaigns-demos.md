@@ -1,5 +1,7 @@
 # Audit: docs/development/, docs/test-inventory/, docs/cli/, docs/campaigns/, docs/sessions/, docs/demos/, docs/README.md
 
+> **Kind:** record · **Date:** 2026-09-02
+
 ## Executive summary
 
 This slice (50 files) is, with a handful of exceptions, the best-maintained documentation in the

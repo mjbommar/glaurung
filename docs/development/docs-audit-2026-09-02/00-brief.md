@@ -1,5 +1,7 @@
 # Shared brief for docs-audit agents
 
+> **Kind:** record · **Date:** 2026-09-02
+
 Repository: /home/mjbommar/projects/personal/glaurung (git, branch master, HEAD b8884687, 2026-09-02).
 Glaurung is a Rust+PyO3 reverse-engineering framework; read /home/mjbommar/projects/personal/glaurung/CLAUDE.md first for orientation.
 

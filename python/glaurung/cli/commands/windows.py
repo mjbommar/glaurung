@@ -9,6 +9,11 @@ from typing import Any
 
 import glaurung as g
 from glaurung import windows_analysis
+from glaurung.windows_baselines import (
+    VENDOR_WINDOWS_30_COMPARISON,
+    VENDOR_WINDOWS_30_DIAGNOSTICS,
+    WINDOWS_GHIDRA_PARITY_DIR,
+)
 from glaurung.llm.agents.windows_interactive_analyst import (
     WindowsInteractiveAnalystConfig,
     WindowsInteractiveAnalystSessionState,
@@ -227,14 +232,11 @@ class WindowsCommand(BaseCommand):
         analyst.add_argument("--question", required=True)
         analyst.add_argument(
             "--comparison-path",
-            default=(
-                "docs/windows-port/"
-                "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-            ),
+            default=VENDOR_WINDOWS_30_COMPARISON,
         )
         analyst.add_argument(
             "--diagnostics-path",
-            default="docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+            default=VENDOR_WINDOWS_30_DIAGNOSTICS,
         )
         analyst.add_argument("--file")
         analyst.add_argument("--address")
@@ -313,14 +315,11 @@ class WindowsCommand(BaseCommand):
         )
         analyst_loop.add_argument(
             "--comparison-path",
-            default=(
-                "docs/windows-port/"
-                "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-            ),
+            default=VENDOR_WINDOWS_30_COMPARISON,
         )
         analyst_loop.add_argument(
             "--diagnostics-path",
-            default="docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+            default=VENDOR_WINDOWS_30_DIAGNOSTICS,
         )
         analyst_loop.add_argument("--max-turns", type=int, default=32)
         analyst_loop.add_argument("--default-max-items", type=int, default=8)
@@ -395,10 +394,7 @@ class WindowsCommand(BaseCommand):
         )
         corpus_guard.add_argument(
             "--comparison-path",
-            default=(
-                "docs/windows-port/"
-                "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-            ),
+            default=VENDOR_WINDOWS_30_COMPARISON,
         )
         corpus_guard.add_argument("--manifest-path")
         corpus_guard.add_argument(
@@ -1153,6 +1149,9 @@ class WindowsCommand(BaseCommand):
         promotion_plan.add_argument("--artifact-dir", required=True)
         promotion_plan.add_argument("--review-path")
         promotion_plan.add_argument("--docs-root", default="docs/windows-port")
+        promotion_plan.add_argument(
+            "--baseline-root", default=WINDOWS_GHIDRA_PARITY_DIR
+        )
         promotion_plan.add_argument("--output-path")
         promotion_plan.add_argument(
             "--add-to-kb",
@@ -1199,14 +1198,11 @@ class WindowsCommand(BaseCommand):
         pipeline.add_argument("--binary-kind")
         pipeline.add_argument(
             "--comparison-path",
-            default=(
-                "docs/windows-port/"
-                "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-            ),
+            default=VENDOR_WINDOWS_30_COMPARISON,
         )
         pipeline.add_argument(
             "--diagnostics-path",
-            default="docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+            default=VENDOR_WINDOWS_30_DIAGNOSTICS,
         )
         pipeline.add_argument("--validation-inventory-path")
         pipeline.add_argument("--build-label")
@@ -2888,6 +2884,7 @@ def _execute_runner_artifact_promotion_plan(
             artifact_dir=args.artifact_dir,
             review_path=args.review_path,
             docs_root=args.docs_root,
+            baseline_root=args.baseline_root,
             output_path=args.output_path,
             add_to_kb=args.add_to_kb,
         ),
@@ -3073,6 +3070,7 @@ def _format_runner_artifact_promotion_plan_human(
     lines = [
         f"Windows runner artifact promotion plan: {status}",
         f"  actions={result.action_count} docs_root={result.docs_root}",
+        f"  baseline_root={result.baseline_root}",
     ]
     if result.output_path:
         lines.append(f"  output={result.output_path}")

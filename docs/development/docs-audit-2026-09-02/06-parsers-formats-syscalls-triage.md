@@ -1,5 +1,7 @@
 # Audit: docs/parsers/, docs/formats/, docs/syscalls/, docs/triage/
 
+> **Kind:** record · **Date:** 2026-09-02
+
 ## Executive summary (read this first)
 
 1. This is the best-maintained corner of the docs tree seen so far: nearly every file in scope

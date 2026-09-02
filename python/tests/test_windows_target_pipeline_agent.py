@@ -17,10 +17,10 @@ from glaurung.llm.tools.windows_build_corpus import WindowsBuildCorpusArgs
 
 
 COMPARISON = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+    "data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
 )
 DIAGNOSTICS = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
 )
 _SWITCHY_V1 = Path("samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2")
 _SWITCHY_V2 = Path(

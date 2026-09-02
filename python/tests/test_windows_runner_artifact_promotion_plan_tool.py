@@ -24,7 +24,7 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
-def _write_clean_ghidra_artifacts(tmp_path: Path) -> tuple[Path, Path]:
+def _write_clean_ghidra_artifacts(tmp_path: Path) -> tuple[Path, Path, Path]:
     artifact_dir = tmp_path / "artifacts"
     _write_json(
         artifact_dir / "runner-artifact-review.json",
@@ -52,13 +52,15 @@ def _write_clean_ghidra_artifacts(tmp_path: Path) -> tuple[Path, Path]:
     )
     docs_root = tmp_path / "docs" / "windows-port"
     docs_root.mkdir(parents=True)
-    return artifact_dir, docs_root
+    baseline_root = tmp_path / "data" / "baselines" / "windows-ghidra-parity"
+    baseline_root.mkdir(parents=True)
+    return artifact_dir, docs_root, baseline_root
 
 
 def test_windows_runner_artifact_promotion_plan_maps_ghidra_refresh_to_docs(
     tmp_path: Path,
 ) -> None:
-    artifact_dir, docs_root = _write_clean_ghidra_artifacts(tmp_path)
+    artifact_dir, docs_root, baseline_root = _write_clean_ghidra_artifacts(tmp_path)
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -69,18 +71,24 @@ def test_windows_runner_artifact_promotion_plan_maps_ghidra_refresh_to_docs(
             artifact_dir=str(artifact_dir),
             review_path=str(artifact_dir / "runner-artifact-review.json"),
             docs_root=str(docs_root),
+            baseline_root=str(baseline_root),
         ),
     )
 
     assert result.claim_level == "runner_artifact_promotion_plan_not_finding"
     assert result.promotion_allowed is True
     assert result.action_count == 2
-    destinations = {Path(action.destination_path).name for action in result.actions}
+    destinations = {
+        Path(action.destination_path).name: Path(action.destination_path).parent
+        for action in result.actions
+    }
     assert (
-        "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json" in destinations
+        destinations["glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"]
+        == baseline_root
     )
     assert (
-        "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md" in destinations
+        destinations["glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.md"]
+        == docs_root
     )
     assert all(action.operation == "copy" for action in result.actions)
     assert all(action.source_sha256 for action in result.actions)
@@ -160,6 +168,7 @@ def test_windows_runner_artifact_promotion_plan_maps_target_pipeline_artifacts(
         encoding="utf-8",
     )
     docs_root = tmp_path / "docs" / "windows-port"
+    baseline_root = tmp_path / "data" / "baselines" / "windows-ghidra-parity"
     ctx = _ctx(tmp_path)
     tool = build_tool()
 
@@ -170,6 +179,7 @@ def test_windows_runner_artifact_promotion_plan_maps_target_pipeline_artifacts(
             artifact_dir=str(artifact_dir),
             review_path=str(artifact_dir / "runner-artifact-review.json"),
             docs_root=str(docs_root),
+            baseline_root=str(baseline_root),
         ),
     )
 
@@ -191,7 +201,7 @@ def test_windows_runner_artifact_promotion_plan_cli_json(
     tmp_path: Path,
     capsys,
 ) -> None:
-    artifact_dir, docs_root = _write_clean_ghidra_artifacts(tmp_path)
+    artifact_dir, docs_root, baseline_root = _write_clean_ghidra_artifacts(tmp_path)
 
     rc = GlaurungCLI().run(
         [
@@ -203,6 +213,8 @@ def test_windows_runner_artifact_promotion_plan_cli_json(
             str(artifact_dir / "runner-artifact-review.json"),
             "--docs-root",
             str(docs_root),
+            "--baseline-root",
+            str(baseline_root),
             "--format",
             "json",
         ]

@@ -101,7 +101,7 @@ def test_windows_scan_rejection_dashboard_native_replay_real_pe(
         ctx,
         ctx.kb,
         tool.input_model(
-            diagnostics_path="docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+            diagnostics_path="data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
             file="SurfacePenBleLcAddrAdaptationDriver.sys",
             include_native_scan=True,
             max_native_files=1,
@@ -130,7 +130,7 @@ def test_windows_scan_rejection_dashboard_native_replay_pdata_rejections(
         ctx,
         ctx.kb,
         tool.input_model(
-            diagnostics_path="docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
+            diagnostics_path="data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json",
             file="win10-vwififlt.sys",
             include_native_scan=True,
             max_native_files=1,

@@ -1,5 +1,7 @@
 # Docs audit — execution-engine, roundtrip, axeyum-integration, research, IOC_VALIDATOR_V2, benchmarks
 
+> **Kind:** record · **Date:** 2026-09-02
+
 Repo: `/home/mjbommar/projects/personal/glaurung` @ `b8884687` (master, 2026-09-02).
 Scope: 55 `.md` files + 894 non-md data/script files. All verification against code, `Cargo.toml`, `src/lib.rs`, `build.rs`, `.github/workflows/`, `scripts/`, and `git log`. Read-only; nothing in the repo was modified.
 

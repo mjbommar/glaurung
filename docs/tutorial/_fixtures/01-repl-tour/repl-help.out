@@ -39,8 +39,8 @@ glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/nativ
     strings [<n>]               first N triage strings
 
   AI
-    ask <question>              run the memory agent (51 tools) over the
-                                binary; persists results to the KB
+    ask <question>              run the memory agent's analysis tools over
+                                the binary; persists results to the KB
 
   Misc
     help | ? | h                this text

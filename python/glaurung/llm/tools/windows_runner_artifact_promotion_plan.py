@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import WINDOWS_GHIDRA_PARITY_DIR
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
@@ -35,6 +36,7 @@ class WindowsRunnerArtifactPromotionPlanArgs(BaseModel):
         description="Optional runner-artifact-review JSON path. Defaults inside artifact_dir.",
     )
     docs_root: str = "docs/windows-port"
+    baseline_root: str = WINDOWS_GHIDRA_PARITY_DIR
     output_path: str | None = Field(
         None,
         description="Optional JSON path to persist the promotion plan.",
@@ -58,6 +60,7 @@ class WindowsRunnerArtifactPromotionPlanResult(BaseModel):
     artifact_dir: str
     review_path: str
     docs_root: str
+    baseline_root: str
     promotion_allowed: bool
     action_count: int
     actions: list[WindowsRunnerArtifactPromotionAction]
@@ -103,6 +106,7 @@ class WindowsRunnerArtifactPromotionPlanTool(
             args.review_path or artifact_dir / "runner-artifact-review.json"
         ).expanduser()
         docs_root = Path(args.docs_root).expanduser()
+        baseline_root = Path(args.baseline_root).expanduser()
         review = json.loads(review_path.read_text(encoding="utf-8"))
         blockers: list[str] = []
         warnings: list[str] = []
@@ -121,6 +125,7 @@ class WindowsRunnerArtifactPromotionPlanTool(
                 promotable_artifacts=promotable_artifacts,
                 artifact_dir=artifact_dir,
                 docs_root=docs_root,
+                baseline_root=baseline_root,
                 warnings=warnings,
             )
             if not blockers
@@ -133,6 +138,7 @@ class WindowsRunnerArtifactPromotionPlanTool(
             artifact_dir=str(artifact_dir),
             review_path=str(review_path),
             docs_root=str(docs_root),
+            baseline_root=str(baseline_root),
             promotion_allowed=not blockers and bool(actions),
             actions=actions,
             blockers=blockers,
@@ -167,6 +173,7 @@ class WindowsRunnerArtifactPromotionPlanTool(
             artifact_dir=str(artifact_dir),
             review_path=str(review_path),
             docs_root=str(docs_root),
+            baseline_root=str(baseline_root),
             promotion_allowed=promotion_allowed,
             action_count=len(actions),
             actions=actions,
@@ -196,6 +203,7 @@ def _promotion_actions(
     promotable_artifacts: list[str],
     artifact_dir: Path,
     docs_root: Path,
+    baseline_root: Path,
     warnings: list[str],
 ) -> list[WindowsRunnerArtifactPromotionAction]:
     actions: list[WindowsRunnerArtifactPromotionAction] = []
@@ -204,7 +212,7 @@ def _promotion_actions(
         if not source.exists() or not source.is_file():
             warnings.append(f"promotable artifact missing: {artifact}")
             continue
-        destination = _destination_for(mode, artifact, docs_root)
+        destination = _destination_for(mode, artifact, docs_root, baseline_root)
         if destination is None:
             warnings.append(f"no promotion mapping for artifact: {artifact}")
             continue
@@ -227,11 +235,18 @@ def _destination_for(
     mode: str,
     artifact: str,
     docs_root: Path,
+    baseline_root: Path,
 ) -> Path | None:
+    """Map one promotable artifact to its checked-in destination.
+
+    JSON dashboards are data and land under `baseline_root`
+    (`data/baselines/windows-ghidra-parity/`); the rendered Markdown tables are
+    prose and stay under `docs_root` (`docs/windows-port/`).
+    """
     if mode == "ghidra_parity":
         if artifact.endswith("_refresh.json"):
             return (
-                docs_root
+                baseline_root
                 / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
             )
         if artifact.endswith("_refresh.md"):
@@ -241,7 +256,7 @@ def _destination_for(
             )
         if artifact == "glaurung_vs_ghidra_vendor_windows_30.json":
             return (
-                docs_root
+                baseline_root
                 / "glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
             )
         if artifact == "glaurung_vs_ghidra_vendor_windows_30.md":
@@ -261,6 +276,7 @@ def _write_result(
     artifact_dir: str,
     review_path: str,
     docs_root: str,
+    baseline_root: str,
     promotion_allowed: bool,
     actions: list[WindowsRunnerArtifactPromotionAction],
     blockers: list[str],
@@ -275,6 +291,7 @@ def _write_result(
         "artifact_dir": artifact_dir,
         "review_path": review_path,
         "docs_root": docs_root,
+        "baseline_root": baseline_root,
         "promotion_allowed": promotion_allowed,
         "action_count": len(actions),
         "actions": [action.model_dump(mode="json") for action in actions],

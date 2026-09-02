@@ -34,14 +34,14 @@ class WindowsImportThunkCatalogArgs(BaseModel):
         None,
         description=(
             "Path to a Glaurung/Ghidra comparison JSON. Defaults to the "
-            "30-file post-tiny-stub-gate dashboard in docs/windows-port."
+            "30-file post-tiny-stub-gate dashboard in data/baselines/windows-ghidra-parity."
         ),
     )
     diagnostics_path: str | None = Field(
         None,
         description=(
             "Path to per-address diagnostics JSON. Defaults to the 30-file "
-            "diagnostics artifact in docs/windows-port."
+            "diagnostics artifact in data/baselines/windows-ghidra-parity."
         ),
     )
     file: str = Field(

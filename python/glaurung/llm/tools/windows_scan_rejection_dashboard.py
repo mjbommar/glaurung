@@ -10,6 +10,7 @@ from typing import Any, Literal
 import glaurung as g
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import VENDOR_WINDOWS_30_DIAGNOSTICS
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
@@ -23,9 +24,7 @@ from .windows_agent_evidence_bundle import (
 )
 
 
-DEFAULT_DIAGNOSTICS = (
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
-)
+DEFAULT_DIAGNOSTICS = VENDOR_WINDOWS_30_DIAGNOSTICS
 
 RejectionSampleSource = Literal["cached", "native"]
 RecallRiskLevel = Literal["low", "medium", "high", "unknown"]

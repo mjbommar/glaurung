@@ -9,7 +9,9 @@ import sys
 import tempfile
 import unittest
 
-MODULE_PATH = pathlib.Path(__file__).with_name("lineage_gate.py")
+MODULE_PATH = (
+    pathlib.Path(__file__).resolve().parents[2] / "tools" / "axeyum" / "lineage_gate.py"
+)
 SPEC = importlib.util.spec_from_file_location("lineage_gate", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 lineage_gate = importlib.util.module_from_spec(SPEC)

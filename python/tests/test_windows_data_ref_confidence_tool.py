@@ -10,10 +10,10 @@ from glaurung.llm.tools.windows_data_ref_confidence import build_tool
 
 
 COMPARISON = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+    "data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
 )
 DIAGNOSTICS = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
+    "data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
 )
 
 

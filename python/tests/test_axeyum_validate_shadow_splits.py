@@ -12,7 +12,12 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).with_name("validate_shadow_splits.py")
+SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "tools"
+    / "axeyum"
+    / "validate_shadow_splits.py"
+)
 
 
 class ValidateShadowSplitsTests(unittest.TestCase):

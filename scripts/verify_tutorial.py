@@ -21,7 +21,7 @@ harness:
      Markdown can link to or quote.
 
 Convention: every chapter has exactly one `.glaurung` file under
-/tmp/tutorial-fixtures/<chapter>.glaurung — the harness creates a
+`$TMPDIR/tutorial-fixtures/<chapter>.glaurung` — the harness creates a
 fresh one per chapter so steps don't bleed state.
 """
 
@@ -40,7 +40,31 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "docs" / "tutorial" / "_fixtures"
-TMP = Path("/tmp/tutorial-fixtures")
+
+
+def _scratch_root() -> Path:
+    """Where the harness may create per-chapter databases and patched binaries.
+
+    Nothing in this project may write to `/tmp`: it is a shared, per-user
+    quota'd tmpfs here, and exhausting it has produced fake fixture drift and
+    pytest internal errors rather than a disk-full message. `TMPDIR` is the
+    documented escape hatch; the fallback matches the cache directory the
+    project's own instructions tell contributors to export.
+    """
+    env = os.environ.get("TMPDIR")
+    root = Path(env) if env else Path.home() / ".cache" / "glaurung" / "tmp"
+    return root / "tutorial-fixtures"
+
+
+TMP = _scratch_root()
+TMP.mkdir(parents=True, exist_ok=True)
+
+#: The path the checked-in fixtures were captured under. Scratch paths appear
+#: verbatim in captured output (`db=…/03-c2-demo.glaurung`), so the real
+#: scratch directory is normalized back to this token and the evidence files
+#: stay comparable across machines and across the `TMPDIR` fix above. It is a
+#: display token, not a location the harness writes to.
+TMP_TOKEN = "/tmp/tutorial-fixtures"
 
 
 @dataclass(frozen=True)
@@ -107,6 +131,9 @@ def stable(text: str) -> str:
     # Fixtures must compare across clones and worktrees. Keep the repository
     # relative suffix while removing the machine-specific checkout prefix.
     text = text.replace(str(REPO), "<repo>")
+    # The scratch directory is `TMPDIR`-derived and therefore machine-specific;
+    # fixtures record it under the token the corpus was captured with.
+    text = text.replace(str(TMP), TMP_TOKEN)
     # Timestamps in benchmark / kickoff markdown summaries.
     text = re.sub(
         r"benchmark — \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:\d{2})?",

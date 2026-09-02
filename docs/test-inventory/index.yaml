@@ -1777,7 +1777,7 @@ entries:
   gated_by: nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks
     it via cargo check --all-targets)
   size_bytes: 18357
-  notes: driven by docs/axeyum-integration/benchmark/run_benchmark.sh -- a doc-tree script, not part of
+  notes: driven by bench/axeyum/run_benchmark.sh -- a doc-tree script, not part of
     any gate
   territory: rust-tests
   reach: unreachable
@@ -1867,7 +1867,7 @@ entries:
   gated_by: nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks
     it via cargo check --all-targets)
   size_bytes: 4867
-  notes: driven by docs/axeyum-integration/benchmark/run_benchmark.sh
+  notes: driven by bench/axeyum/run_benchmark.sh
   territory: rust-tests
   reach: unreachable
 - id: Cargo.toml:[[example]]:axeyum_incremental
@@ -1953,7 +1953,7 @@ entries:
   gated_by: nothing runs it (no test, script or workflow executes it; scripts/feature-build-gate.sh type-checks
     it via cargo check --all-targets)
   size_bytes: 3479
-  notes: driven by docs/axeyum-integration/benchmark/run_benchmark.sh
+  notes: driven by bench/axeyum/run_benchmark.sh
   territory: rust-tests
   reach: unreachable
 - id: Cargo.toml:[[example]]:axeyum_sweep

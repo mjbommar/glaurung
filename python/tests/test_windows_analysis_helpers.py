@@ -6,7 +6,9 @@ from glaurung import windows_analysis as wa
 
 REPO = Path(__file__).resolve().parents[2]
 CORPUS = REPO / "samples/binaries/platforms/windows/vendor/realworld"
-BASELINE = REPO / "docs/windows-port/glaurung_vs_ghidra_vendor_windows.json"
+BASELINE = (
+    REPO / "data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows.json"
+)
 SURFACE_PEN = CORPUS / "windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
 
 

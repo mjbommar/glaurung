@@ -1,5 +1,7 @@
 # Audit: docs/tutorial/ (chapters, reference, _fixtures)
 
+> **Kind:** record · **Date:** 2026-09-02
+
 ## Executive summary
 
 `docs/tutorial/` is in genuinely good shape and should be the backbone of the

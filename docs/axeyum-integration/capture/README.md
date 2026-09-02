@@ -55,7 +55,7 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
    ```
    revision=$(git rev-parse HEAD)
    source="Glaurung revision $revision; trusted solver-z3 capture; drivers win10-vwififlt, sqfs-intel-DptfDevGen, windows-update-intel-audio-IntcSST"
-   python3 build_corpus.py /path/to/new-raw-corpus /path/to/representative-pack 6 \
+   python3 tools/axeyum/build_corpus.py /path/to/new-raw-corpus /path/to/representative-pack 6 \
      --tier representative --full-out /path/to/full-pack --jobs 8 --source "$source"
    ```
 
@@ -65,20 +65,20 @@ query's **trusted verdict** (from the z3 oracle) and a structural `family`.
    hash/UTF-8 validators while preserving hash-sorted output. Files are
    hard-linked when possible and copied only when the filesystem requires it.
    Run the focused fail-closed tests with
-   `python3 -m unittest test_build_corpus.py`.
+   `uv run pytest python/tests/test_axeyum_build_corpus.py`.
 
    If a widened full tier exceeds one process's bounded memory, partition the
    already reconciled full pack into deterministic physical process shards:
 
    ```
-   python3 shard_corpus.py /path/to/full-pack /path/to/full-shards --shards 4
+   python3 tools/axeyum/shard_corpus.py /path/to/full-pack /path/to/full-shards --shards 4
    ```
 
    `shard-set-v1.json` fixes the parent capture-index digest, modulo rule, exact
    disjoint shard sizes, and each child capture-index digest. Every child still
    passes through Axeyum's independent manifest generator; sharding never
    changes a verdict or treats a partial run as full coverage. Test it with
-   `python3 -m unittest test_shard_corpus.py`.
+   `uv run pytest python/tests/test_axeyum_shard_corpus.py`.
 
 4. **Generate byte-owning manifests and validate ingestion** in Axeyum. This
    second step makes Axeyum, rather than the untrusted producer, hash the exact
@@ -567,7 +567,7 @@ RSS, and timing gates. Compare a newly captured off/on pair only with the named
 transition:
 
 ```sh
-python3 docs/axeyum-integration/capture/lineage_gate.py compare \
+python3 tools/axeyum/lineage_gate.py compare \
   /path/to/cache-off/lineage-gate-v1.json \
   /path/to/cache-on/lineage-gate-v1.json \
   --allow-replay-sat-cache-enablement
@@ -676,12 +676,12 @@ contains both backends:
 
 ```sh
 gate_dir=$(mktemp -d /tmp/glaurung-lineage-gate.XXXXXX)/artifact
-python3 docs/axeyum-integration/capture/lineage_gate.py run \
+python3 tools/axeyum/lineage_gate.py run \
   --binary target/release/examples/ioctlance \
   --axeyum-repo /home/mjbommar/projects/personal/axeyum \
   --output "$gate_dir"
 
-python3 docs/axeyum-integration/capture/lineage_gate.py validate \
+python3 tools/axeyum/lineage_gate.py validate \
   "$gate_dir/lineage-gate-v1.json"
 ```
 
@@ -717,7 +717,7 @@ hashes may differ, while system, policy, driver bytes, work, findings, and
 repetition identity must match:
 
 ```sh
-python3 docs/axeyum-integration/capture/lineage_gate.py compare \
+python3 tools/axeyum/lineage_gate.py compare \
   /path/to/baseline/lineage-gate-v1.json \
   /path/to/candidate/lineage-gate-v1.json
 ```
@@ -727,9 +727,9 @@ adaptive GQ9 transition. Every other policy field remains identical, and the
 same alarms apply:
 
 ```sh
-python3 docs/axeyum-integration/capture/lineage_gate.py compare \
-  docs/axeyum-integration/capture/lineage-baseline-v1.json \
-  docs/axeyum-integration/capture/lineage-adaptive-candidate-v1.json \
+python3 tools/axeyum/lineage_gate.py compare \
+  tests/corpora/axeyum-qfbv/lineage-baseline-v1.json \
+  tests/corpora/axeyum-qfbv/lineage-adaptive-candidate-v1.json \
   --allow-lineage-to-adaptive
 ```
 
@@ -765,8 +765,8 @@ the recorded release binary has SHA-256
 Future homogeneous candidates compare directly against the committed file:
 
 ```sh
-python3 docs/axeyum-integration/capture/lineage_gate.py compare \
-  docs/axeyum-integration/capture/lineage-baseline-v1.json \
+python3 tools/axeyum/lineage_gate.py compare \
+  tests/corpora/axeyum-qfbv/lineage-baseline-v1.json \
   /path/to/candidate/lineage-gate-v1.json
 ```
 
@@ -785,7 +785,7 @@ ADR-012 exclusive-transfer control: adaptive reuse plus owner transfer, with
 serial sibling leasing off:
 
 ```sh
-python3 docs/axeyum-integration/capture/lineage_gate.py run \
+python3 tools/axeyum/lineage_gate.py run \
   --binary target/release/examples/ioctlance \
   --axeyum-repo /home/mjbommar/projects/personal/axeyum \
   --output /path/to/direct-artifact \
@@ -890,7 +890,7 @@ one pop. Direct+serial runtime functionality is now sound and the gate names it
 `source-prefix-v1`. Run it with:
 
 ```sh
-python3 docs/axeyum-integration/capture/lineage_gate.py run \
+python3 tools/axeyum/lineage_gate.py run \
   --binary target/release/examples/ioctlance \
   --axeyum-repo /home/mjbommar/projects/personal/axeyum \
   --output /path/to/source-direct-artifact \
@@ -972,19 +972,20 @@ capture. Build the 60-second split corpus first, then decide whether a complete
 Validate every captured byte before using or publishing the corpus:
 
 ```sh
-python3 validate_shadow_splits.py /path/to/new-split-corpus \
+python3 tools/axeyum/validate_shadow_splits.py /path/to/new-split-corpus \
   --summary-out /path/to/new-split-corpus/summary-v1.json \
   --capture-index-out /path/to/new-split-corpus/capture-index-v1.json \
   --name glaurung-driver-shadow-splits-v1 \
   --source 'Glaurung and Axeyum revisions, driver, and exact policy'
-python3 -m unittest test_validate_shadow_splits.py
+uv run pytest python/tests/test_axeyum_validate_shadow_splits.py
 ```
 
 The validator fails closed on malformed or empty indexes, invalid result
 classes, rows without exactly one decided backend, duplicate/conflicting hashes,
 missing or orphaned scripts, non-UTF-8 bytes, and filename/content SHA-256
 mismatches. Its summary counts distinct queries by stable backend-class pair and
-deciding backend. Captured `.smt2` payloads under `shadow-splits/` are Git LFS
+deciding backend. Captured `.smt2` payloads under
+`tests/corpora/axeyum-qfbv/shadow-splits/` are Git LFS
 objects; the TSV index and JSON summary remain reviewable ordinary Git text.
 The optional hash-free capture index assigns the only decided result as the
 diagnostic expectation and exposes `diagnostic`, deciding-backend,
@@ -1158,7 +1159,7 @@ target/release/examples/ioctlance \
 
 trace=$(find "$trace_root" -mindepth 1 -maxdepth 1 -type d \
   -name 'glaurung-ordered-trace-*' -print -quit)
-python3 docs/axeyum-integration/capture/validate_ordered_trace.py "$trace"
+python3 tools/axeyum/validate_ordered_trace.py "$trace"
 ```
 
 The published directory contains `trace-manifest-v1.json`, the non-deduplicated

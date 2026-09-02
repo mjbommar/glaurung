@@ -67,13 +67,13 @@ From a clean checkout with both backends buildable:
 
 ```sh
 # one shot, fast drivers only (~few minutes):
-docs/axeyum-integration/benchmark/run_benchmark.sh --fast
+bench/axeyum/run_benchmark.sh --fast
 
 # include the large kernel drivers tcpip/dxgkrnl (minutes each):
-docs/axeyum-integration/benchmark/run_benchmark.sh --full-drivers
+bench/axeyum/run_benchmark.sh --full-drivers
 ```
 
-Outputs land in `results/` (JSONL for Tier 0, tables for the rest) with a
+Outputs land in `bench/axeyum/results/` (JSONL for Tier 0, tables for the rest) with a
 `provenance.txt` stamp (git revs, host, CPU, rustc). If the glaurung tree fails
 to build against the local axeyum checkout, sync axeyum
 (`git -C ~/projects/personal/axeyum pull --ff-only`) -- glaurung HEAD tracks a
@@ -82,7 +82,7 @@ recent axeyum revision.
 ## Historical results (the checked-in run)
 
 Provenance: glaurung `9ace064`, axeyum `1cc1918`, i9-12900K, rustc 1.97-nightly,
-2026-07-17. See `results/provenance.txt`.
+2026-07-17. See `bench/axeyum/results/provenance.txt`.
 
 ### Tier 0 -- primitives (230 cells, all operators x {8,16,32,64,128}b, sat+unsat)
 
@@ -198,8 +198,11 @@ drivers (tcpip, dxgkrnl) are reproducible via `--full-drivers`.
 ## File map
 
 ```
-benchmark/
+docs/axeyum-integration/benchmark/
   README.md                 <- this file
+  REVIEWER-CHECKLIST.md     <- skeptical-reviewer self-critique
+
+bench/axeyum/
   run_benchmark.sh          <- reproducible orchestrator (provenance-stamped)
   results/
     provenance.txt          <- git revs, host, CPU, rustc, date

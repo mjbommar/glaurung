@@ -1,5 +1,7 @@
 # Audit — `docs/design/*.md` (top level only; `execution-engine/` and `roundtrip/` excluded)
 
+> **Kind:** record · **Date:** 2026-09-02
+
 Auditor scope: the 48 markdown files directly inside `docs/design/`, 38,318 lines.
 Repo state: `master` @ `b8884687`, 2026-09-02. All verification done read-only against
 code, git, and JSON baselines. No builds, no pytest.
@@ -176,7 +178,7 @@ dated archive under `docs/history/`. See §Proposed new structure.
 - `docs/design/README.md` (2026-08-27): "`decompiler-roadmap.md` — **The plan.** The
   single tracker."
 - `docs/design/decompiler-roadmap-diary-2026-08-31.md` Entry 1 (2026-09-01): "Durable
-  plan: [real-binary-decompiler-roadmap-2026-08-31.md](../development/…)".
+  plan: `[real-binary-decompiler-roadmap-2026-08-31.md](../development/…)`".
 - `docs/development/real-binary-decompiler-roadmap-2026-08-31.md` exists, has a
   "Progress update — 2026-09-01", and cites `docs/design/decbench-full-failure-taxonomy-2026-08-31.md`
   as its evidence. It also references a `decompiler-roadmap-package-2026-08-31.md`.

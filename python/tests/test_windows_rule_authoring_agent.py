@@ -10,7 +10,7 @@ from glaurung.llm.agents.windows_rule_authoring import (
 
 
 COMPARISON = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+    "data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
 )
 CHECKED_IN_REPLAY_FIXTURES = Path(
     "python/tests/fixtures/windows/functionization_rule_fixtures.yaml"

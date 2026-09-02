@@ -1,5 +1,7 @@
 # Glaurung — Ground-Truth Map of the Code
 
+> **Kind:** record · **Date:** 2026-09-02
+
 Generated 2026-09-02 from a read-only sweep of `/home/mjbommar/projects/personal/glaurung`
 at `master` = `b8884687`. Every number here comes from the source tree or git, not from
 `docs/` or `CLAUDE.md`. Where the docs disagree with the tree, the tree wins and the

@@ -4,10 +4,11 @@
 #
 # Bottom-up: Tier 0 (solver primitives) -> Tier 1 (formula families) ->
 # Tier 1b (width x count mechanism) -> Tier 2 (warm vs one-shot) ->
-# Tier 3 (real ioctlance driver query streams). See README.md for the design.
+# Tier 3 (real ioctlance driver query streams). See
+# docs/axeyum-integration/benchmark/README.md for the design.
 #
 # Usage:
-#   docs/axeyum-integration/benchmark/run_benchmark.sh [--fast] [--full-drivers]
+#   bench/axeyum/run_benchmark.sh [--fast] [--full-drivers]
 #
 #   --fast          skip the large Tier-3 drivers (tcpip, dxgkrnl)
 #   --full-drivers  additionally run the large drivers (minutes each)
@@ -17,9 +18,9 @@
 # stream. Results (JSONL + tables + a provenance stamp) land in results/.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
-BD="docs/axeyum-integration/benchmark"
+BD="bench/axeyum"
 RES="$BD/results"
 mkdir -p "$RES"
 REAL="samples/binaries/platforms/windows/vendor/realworld"

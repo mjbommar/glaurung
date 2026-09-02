@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 297,
+  "core": 303,
   "lfs": 101,
   "toolchain": 28,
   "fixtures": 28,
@@ -51,6 +51,18 @@
   ],
   "test_ask_java_seeding.py": [
    "lfs"
+  ],
+  "test_axeyum_build_corpus.py": [
+   "core"
+  ],
+  "test_axeyum_lineage_gate.py": [
+   "core"
+  ],
+  "test_axeyum_shard_corpus.py": [
+   "core"
+  ],
+  "test_axeyum_validate_shadow_splits.py": [
+   "core"
   ],
   "test_basic_block.py": [
    "core"
@@ -367,6 +379,12 @@
   ],
   "test_dispatch_decline_reasons.py": [
    "lfs"
+  ],
+  "test_docs_links.py": [
+   "core"
+  ],
+  "test_docs_manifest.py": [
+   "core"
   ],
   "test_dwarf_ingestion.py": [
    "lfs"

@@ -1,5 +1,7 @@
 # Top-level agent/contributor docs audit — CLAUDE.md, AGENTS.md, README.md, .claude/
 
+> **Kind:** record · **Date:** 2026-09-02
+
 Scope: `CLAUDE.md` (383 lines), `AGENTS.md` (109), `README.md` (193),
 `.claude/agents/rust-data-model-creator.md`, plus `pyproject.toml`, `pytest.ini`,
 `Cargo.toml`, `.github/workflows/*.yml` as verification sources.

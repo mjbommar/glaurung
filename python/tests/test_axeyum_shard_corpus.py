@@ -4,12 +4,21 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from shard_corpus import build_shards
+
+MODULE_PATH = (
+    Path(__file__).resolve().parents[2] / "tools" / "axeyum" / "shard_corpus.py"
+)
+SPEC = importlib.util.spec_from_file_location("shard_corpus", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+shard_corpus = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(shard_corpus)
+build_shards = shard_corpus.build_shards
 
 
 class ShardCorpusTests(unittest.TestCase):

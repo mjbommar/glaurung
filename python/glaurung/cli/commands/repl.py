@@ -40,6 +40,26 @@ from .base import BaseCommand
 from ..formatters.base import BaseFormatter
 
 
+def _tool_count(agent: object) -> str:
+    """How many tools the just-built memory agent actually registered.
+
+    The REPL used to print a hardcoded "51 tools", which was wrong by a factor
+    of four and had no way of noticing: the surface grows every time a tool
+    module is added. Counting the live registry means the banner cannot go
+    stale, and the count is only ever computed after `create_memory_agent()`
+    has already been imported, so nothing here makes CLI startup less lazy.
+
+    pydantic-ai's registry is internal (`_function_toolset._tools`, a dict
+    keyed by tool name). If its shape changes, say "an unknown number" rather
+    than block a session over a cosmetic banner.
+    """
+    toolset = getattr(agent, "_function_toolset", None)
+    tools = getattr(toolset, "_tools", None) or getattr(toolset, "tools", None)
+    if isinstance(tools, (dict, list, tuple, set)):
+        return str(len(tools))
+    return "an unknown number of"
+
+
 class ReplCommand(BaseCommand):
     """``glaurung repl <binary>`` — interactive analysis session."""
 
@@ -738,7 +758,9 @@ class ReplCommand(BaseCommand):
                 from glaurung.llm.agents.memory_agent import create_memory_agent
 
                 agent = create_memory_agent()
-                sys.stdout.write("(loaded memory agent — 51 tools available)\n")
+                sys.stdout.write(
+                    f"(loaded memory agent — {_tool_count(agent)} tools available)\n"
+                )
             question = " ".join(argv)
             try:
                 result = agent.run_sync(question, deps=ctx)
@@ -932,8 +954,8 @@ glaurung repl commands
     strings [<n>]               first N triage strings
 
   AI
-    ask <question>              run the memory agent (51 tools) over the
-                                binary; persists results to the KB
+    ask <question>              run the memory agent's analysis tools over
+                                the binary; persists results to the KB
 
   Misc
     help | ? | h                this text
