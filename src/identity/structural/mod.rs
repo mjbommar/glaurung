@@ -20,7 +20,7 @@
 //!
 //! A digest answers "same or not". These answer "how far apart", which is what
 //! a *ranked* changed-function list needs, and they do it without a model, a
-//! corpus or a training step. `docs/research/program-measures-2026-09-02.md`
+//! corpus or a training step. `docs/history/program-measures-2026-09-02.md`
 //! puts this at the top of its ranked plan for exactly that reason: a rebuild
 //! of the same source with the same compiler has zero free compilation
 //! variables, and in that regime structural invariants are close to exact while

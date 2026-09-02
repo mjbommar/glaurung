@@ -9,6 +9,7 @@ import glaurung as g
 import yaml
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import VENDOR_WINDOWS_30_COMPARISON
 from ..context import MemoryContext
 from ..kb.adapters import import_triage
 from ..tools.windows_agent_evidence_bundle import (
@@ -104,9 +105,7 @@ class WindowsRuleReplayFixture(BaseModel):
 
 
 class WindowsRuleAuthoringConfig(BaseModel):
-    comparison_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-    )
+    comparison_path: str = Field(VENDOR_WINDOWS_30_COMPARISON)
     max_boundary_rows: int = Field(12, ge=1, le=128)
     max_work_items: int = Field(8, ge=1, le=64)
     min_precision_extra: int = Field(50, ge=0)

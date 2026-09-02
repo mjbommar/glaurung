@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import (
+    VENDOR_WINDOWS_30_COMPARISON,
+    VENDOR_WINDOWS_30_DIAGNOSTICS,
+)
 from .windows_interactive_analyst import (
     InteractiveIntent,
     WindowsInteractiveAnalystConfig,
@@ -36,12 +40,8 @@ class WindowsAnalystLoopConfig(BaseModel):
     """Configuration for a bounded analyst command loop."""
 
     commands: list[WindowsAnalystLoopCommand] = Field(min_length=1)
-    comparison_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-    )
-    diagnostics_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
-    )
+    comparison_path: str = Field(VENDOR_WINDOWS_30_COMPARISON)
+    diagnostics_path: str = Field(VENDOR_WINDOWS_30_DIAGNOSTICS)
     session_state: WindowsInteractiveAnalystSessionState | None = None
     max_turns: int = Field(32, ge=1, le=128)
     default_max_items: int = Field(8, ge=1, le=64)

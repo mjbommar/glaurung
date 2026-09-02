@@ -2,7 +2,7 @@
 //! [`Domain`] trait. Instantiated with [`Concrete`](crate::exec::Concrete) it is
 //! the emulator; instantiated with the (future) symbolic domain it is the
 //! symbolic executor. See
-//! `docs/design/execution-engine/02-architecture/value-domain-trait.md`.
+//! `docs/history/execution-engine-2026-06/architecture/value-domain-trait.md`.
 //!
 //! Phase-1 scope: registers, arithmetic/logic, width changes, select, memory
 //! load/store, intra-block control flow, and multi-block `run_function` with a
@@ -1104,7 +1104,7 @@ mod tests {
     // Self-contained differential validation: real instruction encodings with
     // hand-computed expected register state, run through decode→lift→execute.
     // (Substitutes for the Unicorn oracle where Unicorn's C build is unavailable;
-    // see docs/design/execution-engine/04-testing/differential-oracle.md.)
+    // see docs/history/execution-engine-2026-06/testing/differential-oracle.md.)
 
     #[test]
     fn validate_x86_32bit_arithmetic() {

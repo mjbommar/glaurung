@@ -238,7 +238,7 @@ specifications/
 - **goblin**: Rust binary parser
 - **angr/CLE**: Binary loader
 
-### Supporting `/docs/triage/README.md`:
+### Supporting `/docs/guides/triage.md`:
 - All format specifications needed for Stage 2 (Header Peek)
 - Magic signatures for Stage 1 (Container Probe)
 - Packer signatures for Stage 4 (Entropy/Packers)

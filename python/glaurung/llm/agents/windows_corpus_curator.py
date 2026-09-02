@@ -10,6 +10,7 @@ from typing import Any, Literal
 import glaurung as g
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import VENDOR_WINDOWS_30_COMPARISON
 from ..context import MemoryContext
 from ..kb.adapters import import_triage
 from ..tools.windows_agent_evidence_bundle import (
@@ -98,7 +99,7 @@ class WindowsCorpusAcceptedDriftMatch(BaseModel):
 
 class WindowsCorpusCuratorConfig(BaseModel):
     corpus_root: str = "samples/binaries/platforms/windows/vendor/realworld"
-    comparison_path: str = "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+    comparison_path: str = VENDOR_WINDOWS_30_COMPARISON
     manifest_path: str | None = None
     accepted_drift_path: str | None = Field(
         None,
@@ -231,7 +232,7 @@ def run_windows_corpus_curator(
     commands = [
         "python scripts/windows_ghidra_parity.py "
         "--windows-root samples/binaries/platforms/windows/vendor/realworld "
-        "--out-json docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
+        f"--out-json {VENDOR_WINDOWS_30_COMPARISON}"
     ]
     tool_sequence = [
         "windows_corpus_curator:local_inventory",

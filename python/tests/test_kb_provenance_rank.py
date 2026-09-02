@@ -1,6 +1,6 @@
 """Provenance is a ranked ladder, not a `manual`-or-not flag.
 
-`CLAUDE.md` and `docs/architecture/PERSISTENT_PROJECT.md` both describe a
+`CLAUDE.md` and `docs/architecture/persistent-project.md` both describe a
 `set_by` ladder -- manual/dwarf/stdlib/flirt/propagated/auto/borrowed, manual
 always wins. Only the top rung was ever implemented. The guard repeated across
 five setters was::

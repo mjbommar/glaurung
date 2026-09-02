@@ -1,6 +1,6 @@
 """How often does an MD-index survive `-O0` -> `-O2`? Measured, not assumed.
 
-`docs/analysis/function-identity-structural.md` reports one number for
+`docs/reference/function-identity-structural.md` reports one number for
 the L1 rung's stability across an optimisation level, and this is the
 code that produces it. It is `slow`-marked and reads the gitignored
 matched-build corpus at `tests/decompiler_fixtures/build/`, so an

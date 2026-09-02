@@ -11,8 +11,8 @@ happened to be in someone else's corpus.
 
 ## Why they are in the repository
 
-Every metric quoted in `docs/design/decompiler-refactors.md` and
-`docs/design/decbench-submission-readiness.md` was measured against this corpus.
+Every metric quoted in `docs/history/design/plans-superseded/decompiler-refactors.md` and
+`docs/history/design/campaigns/decbench-submission-readiness.md` was measured against this corpus.
 Until 2026-07-26 it lived only in `/tmp`, which meant none of those numbers could
 be reproduced after a reboot — the figures were real but unrepeatable, which is
 most of the way to not being real. Committing 47 lines fixes that permanently.

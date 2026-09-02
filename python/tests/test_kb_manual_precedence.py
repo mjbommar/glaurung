@@ -1,7 +1,7 @@
 """`manual` outranks every automatic source, for every annotation an analyst can set.
 
 CLAUDE.md states the KB rule as "manual always wins", and
-`docs/architecture/IDA_GHIDRA_PARITY.md` advertises the precedence rule as a
+`docs/history/architecture-reviews/ida-ghidra-parity-2026-08.md` advertises the precedence rule as a
 differentiator over IDA and Ghidra. Three setters enforced it and two did not,
 so an analyst could name a function, re-run analysis, and lose the name with no
 error and no undo entry naming the culprit.

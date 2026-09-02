@@ -1,5 +1,7 @@
 # §E — Naming and types
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: make narrowly supported analyst annotations, see them affect later views,
 and retain enough provenance and history to reverse a mistake.
 
@@ -105,6 +107,6 @@ uv run glaurung undo "$DB" --list
 Manual writes have the highest precedence and are not meant to be silently
 overwritten by analyzer passes. That makes analyst discipline and undo history
 important. See [`undo-list.out`](../_fixtures/02-naming-and-types/undo-list.out)
-and the [`set_by` precedence reference](../reference/set-by-precedence.md).
+and the [`set_by` precedence reference](../../reference/provenance.md).
 
 Continue to [§F — Cross-references](cross-references.md).

@@ -1,5 +1,7 @@
 # Decompiler parity: what a three-way comparison found, and what to build
 
+> **Kind:** guide · **Status:** maintained
+
 A head-to-head of glaurung against **angr 9.3.3** and **Ghidra 12.1.3** on our
 own clang sample binaries, scored against the real C source, plus the
 prioritized backlog that falls out of it.

@@ -6,7 +6,7 @@ this one asserts the same evidence survives a full `triage.analyze_path`.
 
 Sample paths are anchored from `Path(__file__)` up to the repo root; they used
 to be CWD-relative `"../samples/..."` and resolved outside the repository, so
-this file had never run (`docs/development/test-estate/01-reachability.md`
+this file had never run (`docs/history/development/test-estate/01-reachability.md`
 1.4).
 """
 

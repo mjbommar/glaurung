@@ -75,12 +75,12 @@ pub mod formats;
 pub mod winmd;
 
 /// Native execution engine (concrete emulation + symbolic execution) over the
-/// LLIR. See `docs/design/execution-engine/`. Feature-gated; pure Rust.
+/// LLIR. See `docs/history/execution-engine-2026-06/`. Feature-gated; pure Rust.
 #[cfg(feature = "exec")]
 pub mod exec;
 
 /// Symbolic / concolic execution: a bitvector expression IR and a symbolic
-/// `Domain` over the same interpreter. See `docs/design/execution-engine/`.
+/// `Domain` over the same interpreter. See `docs/history/execution-engine-2026-06/`.
 #[cfg(feature = "symbolic")]
 pub mod symbolic;
 

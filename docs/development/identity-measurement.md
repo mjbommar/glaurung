@@ -1,9 +1,11 @@
 # Measuring function identity
 
-> **Status: shipped harness, measured numbers.** Every figure on this page was
+> **Kind:** guide · **Status:** maintained
+
+> **Shipped harness, measured numbers.** Every figure on this page was
 > read off a run on 2026-09-02 and is pinned as a ratchet in the test that
 > produced it. This is plan items 1 and 9 of
-> [`docs/research/program-measures-2026-09-02.md`](../research/program-measures-2026-09-02.md)
+> [`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md)
 > — the measurement harness the four identity schemes (WARP GUIDs, L1
 > structural invariants, the CFR feature vector, L3 value fingerprints) are
 > ranked against, over **two corpora**: the matched-build fixture matrix, and
@@ -872,7 +874,7 @@ rather than one, the way `structural`'s are in this file.
 
 ## See also
 
-* [`docs/research/program-measures-2026-09-02.md`](../research/program-measures-2026-09-02.md)
+* [`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md)
   — the design, the identity ladder, and the four literature surveys behind it.
 * [`docs/development/corpora.md`](corpora.md) — provenance for every
   downloaded corpus: URLs, sizes, SHA-256s, licences, and how to fetch again.

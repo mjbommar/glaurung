@@ -61,7 +61,7 @@ pub const OPT_LEVELS: [&str; 2] = ["O0", "O2"];
 /// Marcelli et al. discard functions with fewer than 5 basic blocks and TikNib
 /// does the same. Tiny functions are overwhelmingly one-line wrappers whose
 /// retrieval says nothing about a representation, and they inflate every
-/// metric that counts them. See `docs/research/program-measures-2026-09-02.md`,
+/// metric that counts them. See `docs/history/program-measures-2026-09-02.md`,
 /// "Measurement protocol".
 pub const MIN_BASIC_BLOCKS: usize = 5;
 

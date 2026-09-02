@@ -18,7 +18,7 @@ uv run glaurung decompile "$SAMPLE" --func main --style c
 
 The [first-binary tutorial](../docs/tutorial/01-getting-started/first-binary.md)
 explains the output and shows how to retain analysis in a `.glaurung` project.
-The [sample-corpus reference](../docs/tutorial/reference/sample-corpus.md) maps
+The [sample-corpus reference](../docs/reference/sample-corpus.md) maps
 tutorial chapters to their fixtures.
 
 ## What is in this tree

@@ -8,6 +8,10 @@ from typing import Literal
 import glaurung as g
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import (
+    VENDOR_WINDOWS_30_COMPARISON,
+    VENDOR_WINDOWS_30_DIAGNOSTICS,
+)
 from ..context import MemoryContext
 from ..kb.adapters import import_triage
 from ..tools.windows_agent_evidence_bundle import (
@@ -84,12 +88,8 @@ class WindowsChangedFunctionFact(BaseModel):
 
 
 class WindowsTriageWorklistConfig(BaseModel):
-    comparison_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-    )
-    diagnostics_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
-    )
+    comparison_path: str = Field(VENDOR_WINDOWS_30_COMPARISON)
+    diagnostics_path: str = Field(VENDOR_WINDOWS_30_DIAGNOSTICS)
     max_items: int = Field(15, ge=1, le=128)
     max_tool_rows: int = Field(12, ge=1, le=128)
     changed_functions: list[WindowsChangedFunctionFact] = Field(default_factory=list)

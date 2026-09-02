@@ -4,12 +4,12 @@
 - entry: **0x46d1e0**
 
 ## Functions
-- discovered: **1522** (with blocks: 1522, named: 0)
-- callgraph edges: **8774**
-- name sources: gopclntab=1801, analyzer=193
+- discovered: **1527** (with blocks: 1527, named: 0)
+- callgraph edges: **8775**
+- name sources: gopclntab=1801, analyzer=197
 
 ## Type system
-- stdlib prototypes loaded: **96**
+- stdlib prototypes loaded: **114**
 - DWARF types imported: **0**
 - stack slots discovered: **1079**
 - types propagated: **0**

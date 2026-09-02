@@ -1,9 +1,9 @@
 """Tests for `tools/fitness_report.py`: the file-size fitness measures from
-`docs/design/decompiler-roadmap.md`'s "Code quality, composition, and
+`docs/development/testing-gates.md`'s "Code quality, composition, and
 file-size program", and the committed-baseline ratchet over them.
 
-The end-state targets in the roadmap are not met today (the tree is far from
-them), so these tests do NOT assert the targets. They assert two different
+Not every end-state target is met today, so these tests do NOT assert the
+targets. They assert two different
 things:
 
 1. The pure measurement functions do what their docstrings say, on small

@@ -7,7 +7,7 @@ Re-runnable; outputs are derived artifacts that can be regenerated
 on demand and don't need to live in git in their full form.
 
 Each sample exercises one or more of the tool tiers described in
-docs/llm/EMBEDDED_CONTENT_TOOLS.md. Output ordering mirrors the
+docs/reference/llm-embedded-content-tools.md. Output ordering mirrors the
 sprint plan.
 """
 

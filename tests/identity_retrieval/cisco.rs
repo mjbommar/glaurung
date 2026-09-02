@@ -4,7 +4,7 @@
 //!
 //! # Why this corpus and not another
 //!
-//! `docs/research/program-measures-2026-09-02.md` (plan item 9, and section 3
+//! `docs/history/program-measures-2026-09-02.md` (plan item 9, and section 3
 //! of report 01) names two external corpora. This is the second of them, and
 //! it is the one that makes our numbers land in a *published table*: it is the
 //! artifact of Marcelli et al., "How Machine Learning Is Solving the Binary

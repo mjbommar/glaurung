@@ -1,5 +1,7 @@
 # §D — REPL tour
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: navigate a persistent project, inspect evidence, make provenance-aware
 annotations, and confirm that the writes are undoable.
 
@@ -29,7 +31,7 @@ help
 
 The output groups navigation, inspection, annotation, persistence, and project
 commands. See the verified [`repl-help.out`](../_fixtures/01-repl-tour/repl-help.out)
-or the [REPL keymap](../reference/repl-keymap.md).
+or the [REPL keymap](../../reference/repl-keymap.md).
 
 ## Move the cursor
 

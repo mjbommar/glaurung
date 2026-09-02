@@ -1,5 +1,7 @@
 # §W — Benchmark harness as CI evidence
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: run the checked-in matrices, retain machine-readable output, and avoid
 turning revision-specific score totals into permanent guarantees.
 

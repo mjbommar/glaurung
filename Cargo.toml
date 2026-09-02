@@ -2,6 +2,10 @@
 name = "glaurung"
 version = "0.1.0"
 edition = "2021"
+# The floor `docs/development/setup.md` and the CI toolchain image assert.
+# Declaring it here is what makes cargo enforce it instead of failing
+# somewhere deep in a dependency on an older toolchain.
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -86,7 +90,7 @@ structure-v2-shadow = []
 # or `solver-z3` to include them).
 python-ext = ["pyo3", "pyo3/extension-module", "exec"]
 # Native execution engine (concrete emulator). Pure Rust, no new C dependency —
-# see docs/design/execution-engine/. Off by default; opt in with --features exec.
+# see docs/history/execution-engine-2026-06/. Off by default; opt in with --features exec.
 exec = []
 # Symbolic / concolic execution over the same engine. Builds a bitvector
 # expression IR (pure Rust). The solver is pluggable behind a trait.
@@ -99,8 +103,9 @@ dev-oracle = ["exec", "dep:unicorn-engine"]
 # than shelling out to a binary. Optional; the base build needs no solver.
 solver-z3 = ["symbolic", "dep:z3"]
 # Native, in-process, pure-Rust SMT backend via the `axeyum` solver. No C
-# dependency, wheel-shippable. Intended default once validated (ADR-002);
-# opt-in for now. Priority in solve(): solver-z3 > solver-axeyum > pipe.
+# dependency, wheel-shippable. Opt-in; the "default once validated" target was
+# retired -- see docs/decisions/solver-002-axeyum-as-default-backend.md.
+# Priority in solve(): solver-z3 > solver-axeyum > pipe.
 solver-axeyum = ["symbolic", "dep:axeyum-solver", "dep:axeyum-ir"]
 # Benchmark-only native Bitwuzla 0.9.1 cell. This direct C-API adapter is
 # intentionally not part of production backend selection; it exists only for

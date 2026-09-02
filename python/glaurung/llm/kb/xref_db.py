@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS function_names (
 -- scheme can be added without a schema change or a migration. Today the
 -- only writer is `function_identity.STRUCTURAL_V1`; a WARP function
 -- GUID (UUIDv5 over relocation-masked basic blocks --
--- docs/design/whole-binary-serialization-2026-08-20.md) is a `scheme`
+-- docs/decisions/whole-binary-serialization.md) is a `scheme`
 -- value, not a second table. Deliberately TEXT and not, say, a BLOB
 -- digest: a UUID string and a 16-hex digest have to fit the same column.
 --

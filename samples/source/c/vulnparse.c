@@ -11,7 +11,7 @@
  * into a 64-byte buffer, smashing saved registers and the return
  * address that follow.
  *
- * Used in docs/demos/demo-2-vulnerability-hunting.md.
+ * Used in docs/guides/demos/demo-2-vulnerability-hunting.md.
  */
 #include <stdio.h>
 #include <stdlib.h>

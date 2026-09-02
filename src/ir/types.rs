@@ -5,7 +5,7 @@ use std::fmt;
 /// Bit width of a value or operation. Newtype over a `u16` count of **bits** so
 /// the type system distinguishes widths from arbitrary integers and so callers
 /// read at an explicit, machine-checkable width. See
-/// `docs/design/execution-engine/02-architecture/executable-llir.md`.
+/// `docs/history/execution-engine-2026-06/architecture/executable-llir.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Width(pub u16);
 

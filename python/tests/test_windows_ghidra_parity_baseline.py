@@ -4,7 +4,14 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-BASELINE = REPO / "docs" / "windows-port" / "glaurung_vs_ghidra_vendor_windows.json"
+BASELINE = (
+    REPO
+    / "data"
+    / "baselines"
+    / "windows-ghidra-parity"
+    / "glaurung_vs_ghidra_vendor_windows.json"
+)
+
 CORPUS_MANIFEST = (
     REPO
     / "samples"

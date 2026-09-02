@@ -1,5 +1,7 @@
 # CFG discovery determinism: diagnosis (2026-09-02)
 
+> **Kind:** design · **Status:** proposed
+
 `docs/development/identity-measurement.md` attributes the structural (L1)
 identity scheme's run-to-run AUC spread to `analysis::cfg`'s per-function
 wall-clock budget. This document confirms the mechanism, reproduces it, and

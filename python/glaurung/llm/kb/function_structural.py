@@ -9,7 +9,7 @@ integer or a real, so every one of them is B-tree indexable and no
 approximate-nearest-neighbour structure is involved anywhere.
 
 The formulas, their sources and what each one is invariant to live in
-``docs/analysis/function-identity-structural.md`` and on the Rust type
+``docs/reference/function-identity-structural.md`` and on the Rust type
 (``src/identity/structural/``). This module is storage and lookup only;
 it computes nothing itself beyond calling the native binding.
 

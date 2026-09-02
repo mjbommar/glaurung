@@ -1,13 +1,19 @@
 # Glaurung documentation
 
+> **Kind:** guide · **Status:** maintained
+
 Glaurung is a pre-1.0 reverse-engineering framework with a Rust analysis core,
 Python bindings, a command-line interface, persistent project databases, and
-optional LLM-assisted workflows. Start with the task-oriented material below;
-the `design/`, `campaigns/`, and `sessions/` trees are engineering records, not
-beginner guides or promises of shipped behavior.
+optional LLM-assisted workflows.
 
-Decompiler output is still experimental. Treat pseudocode as an analysis aid
-and verify important conclusions against disassembly and runtime behavior.
+The tree is organized by **kind of document**, not by subsystem: guides tell you
+how to do something, references are fact tables, architecture describes how the
+code is built, decisions record why, design holds proposals for work not yet
+done, and `history/` is dated evidence that is never guidance. Every file says
+which it is on its third line.
+
+Decompiler output is still experimental. Treat pseudocode as an analysis aid and
+verify important conclusions against disassembly and runtime behavior.
 
 ## Start here
 
@@ -17,124 +23,185 @@ and verify important conclusions against disassembly and runtime behavior.
    [REPL tour](tutorial/01-getting-started/repl-tour.md).
 4. Continue through the [complete tutorial track](tutorial/README.md).
 
-For a shorter overview, supported platforms, and a Python API example, use the
-[repository README](../README.md). Installation prerequisites, build modes,
-configuration, and troubleshooting live in the
-[development setup guide](development/setup.md).
+For a shorter overview and a Python API example, use the
+[repository README](../README.md). Prerequisites, build modes, configuration,
+and troubleshooting live in the [development setup guide](development/setup.md).
 
 ## Find a workflow
 
 | Goal | Read this |
 | --- | --- |
-| Inspect an unfamiliar binary quickly | [Triage overview](triage/README.md) and [first binary](tutorial/01-getting-started/first-binary.md) |
-| Learn the CLI command surface | [CLI tour](tutorial/01-getting-started/cli-tour.md) and [CLI cheat sheet](tutorial/reference/cli-cheatsheet.md) |
-| Navigate or annotate a project database | [REPL tour](tutorial/01-getting-started/repl-tour.md) and [analyst workflows](cli/analyst-ergonomics.md) |
-| Make an annotation show up in the decompiled output | [The annotation loop](cli/analyst-annotation-loop.md) — `rename`/`comment`/`label`/`proto` and what `--db` changes on each surface |
+| Inspect an unfamiliar binary quickly | [Triage guide](guides/triage.md) and [first binary](tutorial/01-getting-started/first-binary.md) |
+| Learn the CLI command surface | [CLI tour](tutorial/01-getting-started/cli-tour.md) and the [CLI reference](reference/cli.md) |
+| Navigate or annotate a project database | [REPL tour](tutorial/01-getting-started/repl-tour.md) and [analyst workflows](guides/analyst-workflows.md) |
+| Make an annotation reach the decompiled output | [The annotation loop](guides/annotation-loop.md) — `rename`/`comment`/`label`/`proto`, and what `--db` changes on each surface |
 | Work with names, types, xrefs, stack frames, or patches | [Daily basics](tutorial/02-daily-basics/) |
-| Understand project data and provenance | [Persistent projects](architecture/PERSISTENT_PROJECT.md), [data model](architecture/data-model/README.md), and [`set_by` precedence](tutorial/reference/set-by-precedence.md) |
-| See where we stand against IDA Pro, Ghidra, and angr | [Decompiler UX competitive ranking](design/decompiler-ux-competitive-ranking.md) — 18 capabilities ranked, with our column measured rather than recalled |
-| Understand analysis architecture | [Analysis index](analysis/README.md), [disassembly](analysis/disassembly/README.md), and [decompiler overview](analysis/decompiler/README.md) |
-| Read or test pseudocode output | [Decompiler overview](analysis/decompiler/README.md) and [decompiler testing](development/decompiler-testing.md) |
-| Analyze PE files or Windows software | [Windows analysis](windows-port/README.md) and [Windows configuration](windows-port/windows-analysis-config.md) |
-| Detect packers or compare binaries | [Packer configuration](triage/packer-config.md) and [similarity analysis](triage/similarity.md) |
+| Understand project data and provenance | [Persistent projects](architecture/persistent-project.md), [data model](architecture/data-model.md), and the [`set_by` ladder](reference/provenance.md) |
+| Read or test pseudocode output | [Decompiler output format](reference/decompiler-output-format.md), the [pass list](reference/decompiler-passes.md), and [decompiler testing](development/decompiler-testing.md) |
+| Understand how the decompiler is built | [Decompiler pipeline](architecture/decompiler-pipeline.md) and the [architecture index](architecture/README.md) |
+| Analyze PE files or Windows software | [Windows analysis](guides/windows-analysis.md) and [Windows configuration](reference/windows-analysis-config.md) |
+| Work with Java, JVM bytecode, or archives | [Java and JVM analysis](guides/java-jvm.md) |
+| Detect packers or compare binaries | [Packer configuration](reference/packer-config.md) and [similarity analysis](reference/similarity.md) |
+| Tell which functions changed between two builds | [Structural function identity](reference/function-identity-structural.md) — the L1 control-flow invariants `glaurung diff` ranks by |
 | Measure how well a function-identity scheme retrieves | [Identity measurement](development/identity-measurement.md) — the XO/XC/XM protocol, its filters, and measured AUC/MRR10 for CTPH and the structural fingerprint |
-| Use an LLM-backed command | [`ask` command](cli/ASK_COMMAND.md), [LLM subsystem](llm/README.md), and [runtime configuration](development/setup.md#runtime-configuration) |
-| Reproduce a guided investigation | [Walkthroughs](tutorial/03-walkthroughs/) and [demos](demos/README.md) |
+| Fetch or locate an external research corpus | [External corpora](development/corpora.md) — URLs, sizes, and checksums for the corpora the measurement lanes read |
+| Use an LLM-backed command | [`ask` command](guides/ask.md), [LLM subsystem](architecture/llm-subsystem.md), and [runtime configuration](development/setup.md#runtime-configuration) |
+| See where we stand against IDA Pro, Ghidra, and angr | [Competitive position](architecture/competitive-position.md) |
+| Reproduce a guided investigation | [Walkthroughs](tutorial/03-walkthroughs/) and [demos](guides/demos/README.md) |
 | Run source examples | [Executable examples](../examples/README.md) |
-| Use or rebuild the sample corpus | [Sample corpus guide](../samples/README.md) |
-| Contribute code or documentation | [Contributor policy](../CLAUDE.md), [agent policy](../AGENTS.md), and [development guidelines](development/guidelines.md) |
+| Use or rebuild the sample corpus | [Sample corpus](reference/sample-corpus.md) and [`samples/README.md`](../samples/README.md) |
+| Run the right test gate before pushing | [Testing gates](development/testing-gates.md) |
+| Avoid a trap this project has already hit | [Traps](development/traps.md) |
+| Contribute code | [Contributor policy](../CLAUDE.md) and [development guidelines](development/guidelines.md) |
+| Contribute documentation | [Contributing docs](development/contributing-docs.md) |
 
-## Documentation by subsystem
+## Documentation by directory
 
-### User and operator guides
+### [`tutorial/`](tutorial/README.md) — learn by doing
 
-- [`tutorial/`](tutorial/README.md): progressive, real-sample exercises from
-  installation through analyst and agent workflows.
-- [`cli/`](cli/): focused command and analyst-workflow guides.
-- [`triage/`](triage/README.md): first-pass analysis, resource bounds, strings,
-  packer signals, containers, and similarity.
-- [`windows-port/`](windows-port/README.md): PE/PDB workflows, configuration,
-  hardening, and Windows-specific analysis.
-- [`demos/`](demos/README.md): longer malware, vulnerability, and patch-analysis
-  scenarios.
+A progressive track over real checked-in samples, from installation through
+daily analysis, walkthroughs, recipes, and agent workflows. Every chapter's
+commands are executed and byte-compared against `_fixtures/` by
+`scripts/verify_tutorial.py`, so the prose cannot drift from the CLI unnoticed.
 
-### Core analysis and data model
+### [`guides/`](guides/) — task-oriented, outside the tutorial track
 
-- [`analysis/`](analysis/README.md): current analysis entry points plus clearly
-  separated research checkpoints and historical proposals.
-- [`architecture/`](architecture/README.md): current persistent-project and
-  data-model boundaries plus dated reviews and proposals.
-- [`parsers/`](parsers/README.md): native, bytecode, archive, Android, and
-  managed-runtime parser documentation.
-- [`formats/`](formats/README.md): format and compiler-artifact reference material.
-- [`syscalls/`](syscalls/README.md): Linux and Windows syscall references used by
-  analysis.
+[Triage](guides/triage.md), [analyst workflows](guides/analyst-workflows.md),
+[the annotation loop](guides/annotation-loop.md), [`ask`](guides/ask.md),
+[Windows analysis](guides/windows-analysis.md),
+[Java and JVM](guides/java-jvm.md),
+[parsers and formats](guides/parsers-and-formats.md), and longer
+[demo scenarios](guides/demos/README.md).
 
-### AI-assisted and symbolic workflows
+### [`reference/`](reference/) — fact tables
 
-- [`llm/`](llm/README.md): maintained operator/contributor guides plus clearly
-  labeled historical design and roadmap records.
-- [`agentic-glaurung/`](agentic-glaurung/README.md): architecture, safety,
-  evaluation, and delivery plan for autonomous source recovery. Its
-  [status page](agentic-glaurung/STATUS.md) is the authority on what is actually
-  implemented.
-- [`axeyum-integration/`](axeyum-integration/README.md): symbolic execution and
-  solver integration design, evidence, and validation material.
+[CLI surface](reference/cli.md),
+[environment variables](reference/environment-variables.md),
+[cargo features](reference/cargo-features.md),
+[the `set_by` provenance ladder](reference/provenance.md),
+[decompiler passes](reference/decompiler-passes.md),
+[decompiler output format](reference/decompiler-output-format.md),
+[disassembly](reference/disassembly.md),
+[language detection](reference/language-detection.md),
+[packer configuration](reference/packer-config.md),
+[similarity](reference/similarity.md),
+[structural function identity](reference/function-identity-structural.md),
+[Windows configuration](reference/windows-analysis-config.md) and
+[API type sync](reference/windows-api-type-sync.md),
+[the IOC validator](reference/ioc-validator.md),
+[the REPL keymap](reference/repl-keymap.md),
+[the sample corpus](reference/sample-corpus.md), plus
+[binary formats](reference/formats/README.md) and
+[syscall tables](reference/syscalls/README.md).
 
-### Engineering records
+Several of these are generated from the code they describe and carry
+`**Status:** generated`. Edit the generator, not the page —
+[contributing-docs.md](development/contributing-docs.md) names each one.
 
-- [`design/`](design/): active and historical design proposals. A proposal can
-  describe behavior that is not implemented yet.
-- [`development/`](development/): setup, repository structure, contributor
-  guidance, testing, and roadmaps.
-- [`campaigns/`](campaigns/): dated multi-change effort records.
-- [`research/`](research/): exploratory designs and investigations.
-- [`sessions/`](sessions/): dated verification or development-session notes.
+### [`architecture/`](architecture/README.md) — how the code is built
+
+The [crate and package map](architecture/README.md), the
+[decompiler pipeline](architecture/decompiler-pipeline.md), the
+[register model](architecture/register-model.md),
+[x86 flags](architecture/x86-flags.md), the
+[data model](architecture/data-model.md),
+[persistent projects](architecture/persistent-project.md), the
+[execution engine](architecture/execution-engine.md),
+[solver backends](architecture/solver-backends.md),
+[IOCTL taint](architecture/ioctl-taint.md), the
+[LLM subsystem](architecture/llm-subsystem.md), and our
+[competitive position](architecture/competitive-position.md). These describe
+what exists; a claim here should be checkable against `src/`.
+
+### [`decisions/`](decisions/README.md) — why, and what lost
+
+Architecture decision records for the execution engine and the solver work.
+Rejected alternatives are the part that cannot be recovered from the code, so
+this is where they live.
+
+### [`design/`](design/README.md) — proposals for work not yet built
+
+Live proposals, and the [open questions](design/open-questions.md) each with the
+experiment that would settle it. A document here describes intended behavior,
+not shipped behavior.
+
+### [`development/`](development/) — contributing
+
+[Setup](development/setup.md), [guidelines](development/guidelines.md),
+[testing gates](development/testing-gates.md), [traps](development/traps.md),
+[contributing docs](development/contributing-docs.md),
+[decompiler testing](development/decompiler-testing.md), the
+[parity backlog](development/decompiler-parity-backlog.md), the
+[curriculum corpus](development/decompiler-curriculum-corpus.md), the
+[external corpora](development/corpora.md) the measurement lanes read, the
+[identity measurement protocol](development/identity-measurement.md), the live
+[roadmap set](development/roadmap/README.md), and the
+[test estate](development/test-estate/README.md) work.
+
+### [`test-inventory/`](test-inventory/README.md) — what the suite covers
+
+Generated inventory of every test and what reaches it, with a
+[triage of the unreachable entries](test-inventory/unreachable-triage.md).
+
+### [`history/`](history/README.md) — dated record, never guidance
+
+Session diaries, superseded plans, defect registers, and design records, each
+declaring the date it was true. Read it for how something came to be; do not
+follow it as instruction. The index says what superseded each entry.
 
 ## How to interpret status
 
-Documentation in this repository serves several different purposes:
+Every live document declares two things in its header.
 
-- User guides should describe commands and behavior available in the current
-  checkout. A limitation should be called out next to the affected workflow.
-- Design, roadmap, and plan documents describe intended work as well as shipped
-  work. Check their status sections and then confirm behavior in code or tests.
-- Campaign and session documents are evidence from a point in time. They may be
-  useful history, but they are not a current compatibility guarantee.
-- Generated pseudocode and LLM output are hypotheses. Neither is a substitute
-  for binary-level evidence.
+**Kind** says what the document is for:
 
-When two documents disagree, prefer current command help, current code and
-tests, and the most specific maintained guide. Please file or fix the stale
-document instead of silently relying on the contradiction.
+| Kind | Read it as |
+| --- | --- |
+| `guide` | instructions for doing something now |
+| `reference` | a fact table about the current code |
+| `architecture` | a description of how the code is built |
+| `decision` | one decision and the alternatives it beat |
+| `design` | a proposal; the behavior may not exist |
+| `plan` | a work order with phases and gates |
+| `record` | dated evidence, in `history/` only |
+
+**Status** says how current it is: `maintained` means someone keeps it true;
+`generated` means a tool in `tools/` produces it and hand edits are lost;
+`proposed` means it describes intended rather than shipped work.
+
+Generated pseudocode and LLM output are hypotheses in either case, and neither
+substitutes for binary-level evidence. When two documents disagree, prefer
+current command help, current code and tests, and the most specific maintained
+guide — then fix the stale document rather than relying on the contradiction.
 
 ## Search the documentation
 
 Run searches from the repository root:
 
 ```bash
-# Find a subsystem, command, or API.
-rg -n "symbol extraction" docs python src
-
-# Find explicit implementation-status language.
-rg -n -i "implemented|in progress|planned|not implemented" docs
-
-# Find documentation debt.
-rg -n "TODO|FIXME" docs
+rg -n "symbol extraction" docs python src   # a subsystem, command, or API
+rg -n "^> \*\*Kind:\*\* design" docs        # everything still only proposed
+rg -n "TODO|FIXME" docs                     # documentation debt
 ```
 
 ## Documentation contribution rules
 
+The full version, including the generators and how the tutorial harness works,
+is in [contributing-docs.md](development/contributing-docs.md). The short form:
+
+- Declare a `Kind:` and a `Status:` on line 3, and put the file in the
+  directory for that kind.
 - Put task-oriented instructions near the user workflow and design rationale
   near the owning subsystem.
-- State whether a feature is available, experimental, optional, or planned.
-- Use real checked-in samples; do not invent output or APIs.
-- Show repository commands with `uv run`, `uvx`, or `cargo` as appropriate.
-- Test copy-paste commands from a clean checkout or clean environment before
-  presenting them as supported.
-- Link new pages from the nearest subsystem README and from this page when they
-  introduce a top-level workflow.
-- Avoid hard-coded test counts and other facts that go stale quickly.
+- Use real checked-in samples; do not invent output or APIs. Show commands with
+  `uv run`, `uvx`, or `cargo`, and test them from a clean checkout.
+- A number in a live document comes with the command that produced it and the
+  commit it was run at, or it is left out.
+- No dated narrative in a live document: an incident becomes one durable rule
+  plus an entry in [traps.md](development/traps.md) or `history/`.
+- No dates in live filenames, and no data or executable scripts under `docs/`.
+- Link a new page from the nearest index and from this page when it introduces
+  a top-level workflow.
 
-Contributor commands and project-wide policy are maintained in
-[`CLAUDE.md`](../CLAUDE.md) and [`AGENTS.md`](../AGENTS.md).
+Project-wide contributor policy is in [`CLAUDE.md`](../CLAUDE.md); other agent
+tooling is pointed there by [`AGENTS.md`](../AGENTS.md).

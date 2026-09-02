@@ -1,5 +1,7 @@
 # §O — Managed .NET PE
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: recognize a managed PE and recover method names from CIL metadata without
 misrepresenting the file as ordinary x86 native code.
 

@@ -3,7 +3,7 @@
 //! One interpreter, parameterized by an abstract value domain. The concrete
 //! emulator and the symbolic executor are two `impl Domain`; the interpreter's
 //! `step()` is written once over this trait. See
-//! `docs/design/execution-engine/02-architecture/value-domain-trait.md`.
+//! `docs/history/execution-engine-2026-06/architecture/value-domain-trait.md`.
 //!
 //! All arithmetic is **modular at an explicit [`Width`]**. The only places where
 //! concrete and symbolic semantics legitimately diverge are [`Domain::as_branch`]

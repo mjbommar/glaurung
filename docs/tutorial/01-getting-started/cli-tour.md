@@ -1,11 +1,21 @@
 # §C — CLI tour
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: learn the main command families and when they read a binary directly
 versus when they use a persistent `.glaurung` project.
 
 This is an orientation, not a promise that every top-level command fits one
-workflow. Use the [CLI cheatsheet](../reference/cli-cheatsheet.md) and
+workflow. Use the [CLI cheatsheet](../../reference/cli.md) and
 `uv run glaurung <command> --help` for the complete current surface.
+
+The commands run through `chapter_cli_tour` in `scripts/verify_tutorial.py`
+(triage/strings/disasm/cfg/kickoff/find/view/xrefs/strings-xrefs/frame/undo)
+are executed and byte-checked against the fixtures linked below; the
+`symbols`, `decompile`, `graph`, `diff`, `export`, `patch`, `ask`,
+`bookmark`, `journal`, and scripted-annotation commands shown in this
+chapter are illustrative — verify their exact flags with `--help` before
+relying on them in a script.
 
 ## Set up one binary and project
 
@@ -95,6 +105,30 @@ uv run glaurung bookmark --help
 uv run glaurung journal --help
 ```
 
+### Script your annotations
+
+The same writes the REPL performs interactively are also four non-interactive
+top-level commands — `rename`, `comment`, `label`, and `proto` — so a script
+or another tool can annotate a project without driving the REPL. All four
+take the project path first, resolve an address or an existing function name,
+and record `--by` (default `manual`) as provenance:
+
+```bash
+uv run glaurung rename "$DB" main friendly_main
+uv run glaurung comment "$DB" 0x1150 "entry point, calls print_sum"
+uv run glaurung label "$DB" 0x4040 g_counter --type int --size 4
+uv run glaurung proto "$DB" friendly_main int
+```
+
+Omitting the trailing value (name, comment text, or return type) shows the
+current record instead of writing one. Pass `--binary "$BIN"` when a write
+needs to read bytes (for example `proto --check-arity`), and pass
+`--by <source>` — `auto`, `dwarf`, `pdb`, `stdlib`, `flirt`, `propagated`, or
+`borrowed` — when the write comes from automation rather than an analyst, so
+it cannot outrank a real manual edit. See
+[the REPL keymap](../../reference/repl-keymap.md) for the interactive
+equivalents.
+
 ## Decompile, graph, compare, and export
 
 These command families answer larger questions:
@@ -118,7 +152,7 @@ output file, and use `--verify` to re-read the result:
 
 ```bash
 uv run glaurung patch --help
-uv run glaurung patch "$BIN" /tmp/hello-patched \
+uv run glaurung patch "$BIN" "${TMPDIR:-$HOME/.cache/glaurung/tmp}/hello-patched" \
   --va 0x11e0 --nop --verify --force
 ```
 

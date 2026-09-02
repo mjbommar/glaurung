@@ -2,7 +2,7 @@
 
 Fixtures for **#179 -- PDB ingestion**. This directory is the
 shipped #197 fixture set referenced by
-`docs/architecture/IDA_GHIDRA_PARITY.md`.
+`docs/history/architecture-reviews/ida-ghidra-parity-2026-08.md`.
 
 8 (PE, PDB) pairs from a single Win11 23H2 corpus snapshot,
 spanning kernel / driver / userland / system-service diversity:
@@ -51,7 +51,7 @@ fetch script + provenance manifest instead:
 
    To run them: `bash tests/fixtures/msvc-pdb/fetch.sh`. Wiring
    that into a session-scoped pytest fixture is phase 1.7 of
-   `docs/development/test-estate/01-reachability.md`; the
+   `docs/history/development/test-estate/01-reachability.md`; the
    decision it needs is whether a test run should fetch 78 MB
    from Microsoft on its own initiative, which is why it has not
    simply been done.
@@ -114,7 +114,7 @@ fn pdb_ingest_ntoskrnl() {
 
 ## Diversity rationale (test plan layers)
 
-Per `docs/windows-port/pdb-ingestion-design.md` sec "Test
+Per `docs/history/windows-port-2026-05/pdb-ingestion-design.md` sec "Test
 fixtures", this set feeds two layers:
 
 1. **`test_pdb_ingest.py`** -- per-fixture smoke: load PDB,
@@ -128,7 +128,7 @@ fixtures", this set feeds two layers:
    anchor; the kernel fixtures supply the more complex cases.
 
 Per the new resource test plan
-(`docs/parsers/pe-coff/WINDOWS_RESOURCES_CAPABILITIES_TEST_PLAN.md`),
+(`docs/history/parsers-2025/pe-coff-windows-resources-test-plan.md`),
 the fixture set also exercises the resource paths just landed:
 
 - `lsass.exe`, `spoolsv.exe` -- VS_VERSIONINFO + UAC manifest

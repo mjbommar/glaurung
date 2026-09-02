@@ -34,7 +34,7 @@ use crate::identity::structural::{
 ///
 /// The formulas are documented on the Rust type
 /// (`crate::identity::structural::StructuralSignature`) and, for an analyst,
-/// in `docs/analysis/function-identity-structural.md`.
+/// in `docs/reference/function-identity-structural.md`.
 #[pyclass(name = "StructuralSignature", module = "glaurung.analysis", frozen)]
 #[derive(Clone)]
 pub struct PyStructuralSignature {

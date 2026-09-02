@@ -1,5 +1,15 @@
 # Phase 3 — Fuzz the code that eats hostile bytes
 
+> **Kind:** plan · **Status:** proposed
+
+**Phase status: partial.** 3.1 (fuzz crate in a gate lane) landed at `78ad620e`,
+3.2/3.3 (three deeper targets plus a seed generator) at `f57014dc`, and 3.4
+(nightly runner, with an invariant asserting it is actually run) at `665fe25d`.
+`fuzz/fuzz_targets/` now holds eight targets. 3.5 (the structured adversarial
+corpus) is open, and `scripts/fuzz-smoke.sh` was never written — the nightly
+workflow took its place. Live status:
+[`EXECUTION.md`](EXECUTION.md).
+
 ## The problem
 
 Glaurung's threat model is *malicious binaries designed to break the
@@ -16,7 +26,7 @@ analyzer*, and the fuzzing story is inverted twice over:
    `triage-core, triage-heuristics, triage-containers` and could be silently
    broken right now.
 
-## 3.1 Make the fuzz crate buildable by a gate
+## 3.1 Make the fuzz crate buildable by a gate — **done** (`78ad620e`)
 
 Keep it a separate crate (cargo-fuzz convention) but add **lane 12** to
 `scripts/feature-build-gate.sh`:
@@ -64,7 +74,11 @@ a finding (`Cfg` budgets exist to make it one).
   test in the owning module *and* stays in `fuzz/artifacts/` — the unit test
   is what keeps it fixed when nobody runs the fuzzer.
 
-## 3.4 Run it
+## 3.4 Run it — **done** (`665fe25d`)
+
+Landed as `.github/workflows/fuzz-nightly.yml`, with a test asserting the
+workflow actually invokes the targets. The local `scripts/fuzz-smoke.sh` below
+was not written and is not planned; the nightly runner covers the role.
 
 * CI: nightly workflow, `cargo fuzz run <target> -- -max_total_time=120` per
   target (~15 min wall for all). Findings upload as artifacts; the job fails

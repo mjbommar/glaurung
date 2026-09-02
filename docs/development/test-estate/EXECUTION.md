@@ -1,5 +1,7 @@
 # Execution log
 
+> **Kind:** plan · **Status:** proposed
+
 Live status for [`README.md`](README.md) (the estate plan) and
 [`../decompiler-parity-backlog.md`](../decompiler-parity-backlog.md) (the
 parity backlog). `[x]` landed and verified, `[~]` in flight, `[ ]` not started.
@@ -9,14 +11,11 @@ toolset, so the plan lives here instead — which is more durable anyway, since
 it survives the session and is reviewable in a diff.
 
 The full-corpus evidence update and cross-plan priority order live in
-`docs/development/real-binary-decompiler-roadmap-2026-08-31.md`, and its
-missing-body ledger in
-`docs/design/decbench-full-failure-taxonomy-2026-08-31.md`.
-
-> Both are written by a concurrent session and are **not committed yet**, so
-> they are named here as plain paths rather than links: a link to an untracked
-> file resolves in the author's working tree and is broken in every clone.
-> Turn these back into links when those documents land.
+[`../roadmap/real-binary-decompiler.md`](../roadmap/real-binary-decompiler.md),
+under [`../roadmap/README.md`](../roadmap/README.md); its missing-body ledger
+is the pinned
+[failure taxonomy](../../history/design/campaigns/decbench-full-failure-taxonomy-2026-08-31.md).
+Both have since landed, so they are links again.
 
 ## Landed
 
@@ -281,7 +280,7 @@ Not skipped, not reported, indistinguishable from a pass. On a machine without
 cross-compilers an unknown fraction of the 2,829 is vacuous and the total does
 not move. This is the `-ra` problem of phase 1.6 one layer down, and worse:
 these are not skips, so no flag reveals them. Tracked as R8 in the
-[roadmap package](../decompiler-roadmap-package-2026-08-31.md).
+[roadmap package](../roadmap/README.md).
 
 **R8, measured and closed.** The coverage findings above now have numbers
 attached and gates behind them:

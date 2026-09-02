@@ -1,5 +1,7 @@
 # §R — UPX-packed binary
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: detect a packed input, interpret the command's shell status correctly,
 and avoid presenting stub analysis as analysis of the unpacked program.
 

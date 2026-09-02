@@ -17,7 +17,7 @@ Scheme, not hash
 The ``function_identity`` table stores ``(scheme, identity)`` rather than
 a single hash column, and ``identity`` is TEXT. That is deliberate:
 :data:`STRUCTURAL_V1` is what we can compute today, but
-``docs/design/whole-binary-serialization-2026-08-20.md`` recommends
+``docs/decisions/whole-binary-serialization.md`` recommends
 adopting Vector35's WARP function GUID (Apache-2.0; a UUIDv5 over
 relocation-masked basic blocks) as the eventual identity, and its values
 are UUID strings. A WARP GUID is a new ``scheme`` value written into the

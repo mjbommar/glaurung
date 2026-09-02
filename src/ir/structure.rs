@@ -700,7 +700,7 @@ mod tests {
     /// That is the third local fix to this function to be reverted after
     /// measurement, and the third for the same reason: widening one predicate
     /// trades one shape for another. The answer is the region analysis
-    /// `docs/design/decbench-defect-reproductions-2026-08-27.md` §7 P3
+    /// `docs/history/design/campaigns/decbench-defect-reproductions-2026-08-27.md` §7 P3
     /// specifies — a loop forest computed once, a region context replacing
     /// `stop_at`, and a loop-relative join oracle — not a fourth predicate.
     #[test]
@@ -2972,10 +2972,10 @@ mod tests {
 
     /// RED->GREEN target for the roadmap item "Preserve irreducible and
     /// unresolved flow with explicit goto/indirect fallback rather than
-    /// inventing structure" (`docs/design/decompiler-roadmap.md`, "Complete
-    /// CFG and semantic structuring") and design rule 8 ("A failed proof
-    /// keeps a lower-level expression, explicit unknown, or honest goto. It
-    /// does not guess.").
+    /// inventing structure" (`docs/history/design/decompiler-roadmap-2026-08-13.md`,
+    /// "Complete CFG and semantic structuring") and design rule 8 ("A failed
+    /// proof keeps a lower-level expression, explicit unknown, or honest goto.
+    /// It does not guess.").
     ///
     /// `recover_verified_with_health` is the single production entry point
     /// (its own doc comment says so). On a graph no `While`/`DoWhile`/`RawLoop`

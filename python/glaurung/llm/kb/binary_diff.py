@@ -35,7 +35,7 @@ v4 (current) implementation:
     ~482 removed ``sub_<hex>`` rows collapse into legitimate
     ``changed`` rows for the same underlying function.
   - v4 L1 structural pass (see
-    ``docs/analysis/function-identity-structural.md``): after the two
+    ``docs/reference/function-identity-structural.md``): after the two
     passes above, each two-sided row gets a ``structural_delta``
     (``1 - structural_ranking_similarity`` over the BinDiff MD-index,
     the block/edge/instruction counts, the mnemonic small-primes

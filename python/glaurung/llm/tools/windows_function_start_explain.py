@@ -6,6 +6,10 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import (
+    VENDOR_WINDOWS_30_COMPARISON,
+    VENDOR_WINDOWS_30_DIAGNOSTICS,
+)
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
@@ -24,12 +28,8 @@ DiagnosticKind = Literal["missing", "extra", "none"]
 Confidence = Literal["high", "medium", "low", "unknown"]
 
 
-DEFAULT_COMPARISON = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-)
-DEFAULT_DIAGNOSTICS = Path(
-    "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
-)
+DEFAULT_COMPARISON = Path(VENDOR_WINDOWS_30_COMPARISON)
+DEFAULT_DIAGNOSTICS = Path(VENDOR_WINDOWS_30_DIAGNOSTICS)
 
 
 class WindowsFunctionStartExplainArgs(BaseModel):
@@ -37,14 +37,14 @@ class WindowsFunctionStartExplainArgs(BaseModel):
         None,
         description=(
             "Path to a Glaurung/Ghidra comparison JSON. Defaults to the "
-            "30-file post-tiny-stub-gate dashboard in docs/windows-port."
+            "30-file post-tiny-stub-gate dashboard in data/baselines/windows-ghidra-parity."
         ),
     )
     diagnostics_path: str | None = Field(
         None,
         description=(
             "Path to per-address diagnostics JSON. Defaults to the 30-file "
-            "diagnostics artifact in docs/windows-port."
+            "diagnostics artifact in data/baselines/windows-ghidra-parity."
         ),
     )
     file: str = Field(

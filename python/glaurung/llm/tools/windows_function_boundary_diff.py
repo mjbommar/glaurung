@@ -32,7 +32,7 @@ class WindowsFunctionBoundaryDiffArgs(BaseModel):
         None,
         description=(
             "Path to a Glaurung/Ghidra comparison JSON. Defaults to the "
-            "30-file post-tiny-stub-gate dashboard in docs/windows-port."
+            "30-file post-tiny-stub-gate dashboard in data/baselines/windows-ghidra-parity."
         ),
     )
     file: str | None = Field(

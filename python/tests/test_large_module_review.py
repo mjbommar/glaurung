@@ -1,8 +1,8 @@
-"""The roadmap's "reject new production modules over 1,000 LOC without a
-documented review" gate.
+"""The "reject new production modules over 1,000 LOC without a documented
+review" gate.
 
-    docs/design/decompiler-roadmap.md, "Code quality, composition, and
-    file-size program" -> ownership map:
+    docs/development/testing-gates.md, "Code quality, composition, and
+    file-size program":
 
         - [ ] Reject new production modules over 1,000 LOC without a
               documented review.

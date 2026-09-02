@@ -8,6 +8,7 @@ import yaml
 import glaurung as g
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import VENDOR_WINDOWS_30_COMPARISON
 from ..context import MemoryContext
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
@@ -23,7 +24,7 @@ class WindowsFunctionizationRuleReplayArgs(BaseModel):
         description="Checked-in functionization rule replay YAML.",
     )
     comparison_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json",
+        VENDOR_WINDOWS_30_COMPARISON,
         description="Cached Glaurung-vs-Ghidra Windows comparison dashboard.",
     )
     max_fixtures: int = Field(64, ge=0, le=512)

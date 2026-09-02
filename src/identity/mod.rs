@@ -16,7 +16,7 @@
 //!   levels?"
 //!
 //! The design, the mask/keep list, the metric argument and the measurement
-//! protocol are in `docs/research/program-measures-2026-09-02.md`. Byte-level
+//! protocol are in `docs/history/program-measures-2026-09-02.md`. Byte-level
 //! digests (`crate::similarity`) keep one role, file-level near-duplicates;
 //! they are not extended to functions.
 

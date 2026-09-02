@@ -48,7 +48,7 @@ jobs:
           uv run python scripts/windows_ghidra_parity.py \
             --corpus samples/binaries/platforms/windows/vendor/realworld \
             --ghidra "${{ steps.ghidra.outputs.path }}" \
-            --previous-json docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json \
+            --previous-json data/baselines/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json \
             --output-json artifacts/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_refresh.json \
             --output-md artifacts/windows-ghidra-parity/glaurung_vs_ghidra_vendor_windows_30_refresh.md \
             --analysis-timeout-s "${{ inputs['analysis-timeout-s'] || '75' }}" \
@@ -75,7 +75,8 @@ jobs:
             --format json \
             --artifact-dir artifacts/windows-ghidra-parity \
             --review-path artifacts/windows-ghidra-parity/runner-artifact-review.json \
-            --docs-root docs/windows-port \
+            --docs-root data/baselines/windows-ghidra-parity \
+            --baseline-root data/baselines/windows-ghidra-parity \
             --output-path artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.json \
             > artifacts/windows-ghidra-parity/runner-artifact-promotion-plan.stdout.json
       - name: Dry-run refreshed parity promotion apply

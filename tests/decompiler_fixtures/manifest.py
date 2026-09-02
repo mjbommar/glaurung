@@ -2400,7 +2400,7 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     },
     # The guard ladders recover goto-free at gcc:O0 -- the shape matcher handles
     # THIS lane. The corpus instance that fails has its handlers further out of
-    # line; see `docs/design/fixture-expansion-2026-08-27.md`.
+    # line; see `docs/history/design/campaigns/fixture-expansion-2026-08-27.md`.
     ("209_out_of_line_guard_handlers", "guard_chain_rejoins"): {
         "goto_free": True,
         "switch": False,
@@ -3581,7 +3581,7 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "mc193_scaled_constant",
     ],
     # A parameter-supplied, harness-relocated linked list walked by pointer
-    # chase — the shape `dormant-transforms-2026-08-12.md` isolated as the single
+    # chase — the shape `docs/design/open-questions.md` isolates as the single
     # trigger for `loop_form::recover_sentinel_search_loops` and recorded as
     # unbuildable at the time. `l192_find_key` is that probe verbatim;
     # `l192_chase_keys` and `l192_stamp_chain` put the visit ORDER and the visited

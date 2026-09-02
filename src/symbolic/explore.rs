@@ -11,7 +11,7 @@
 //! follow deterministically, symbolic branches fork and are feasibility-checked.
 //! Concretize-with-threshold symbolic *memory*, directed search ordering, and
 //! witness concrete-replay are later Phase-5 increments
-//! (`docs/design/execution-engine/02-architecture/symbolic-engine.md`).
+//! (`docs/history/execution-engine-2026-06/architecture/symbolic-engine.md`).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 

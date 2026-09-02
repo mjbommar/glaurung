@@ -3,7 +3,7 @@
 //!
 //! # Why a trait and not four bespoke tests
 //!
-//! `docs/research/program-measures-2026-09-02.md` proposes four rungs of an
+//! `docs/history/program-measures-2026-09-02.md` proposes four rungs of an
 //! identity ladder (WARP GUIDs, structural invariants, the CFR feature vector,
 //! value fingerprints). The one thing that makes them comparable is being
 //! scored by the same driver over the same filtered corpus with the same
@@ -63,7 +63,7 @@ impl std::error::Error for SchemeError {}
 ///   for signatures the scheme considers identical.
 /// * `similarity(a, a) == 1.0` for every extractable sample (identity on the
 ///   quotient; see the metric axioms in
-///   `docs/research/program-measures-2026-09-02/02-program-measures-foundations.md`).
+///   `docs/history/program-measures-2026-09-02/02-program-measures-foundations.md`).
 ///
 /// A scheme is free to return the same signature for two different functions;
 /// that is a collision and the harness measures it, rather than forbidding it.

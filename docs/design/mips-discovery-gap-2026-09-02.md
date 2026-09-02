@@ -1,5 +1,7 @@
 # MIPS discovery gap on Cisco Talos Dataset-1 (2026-09-02)
 
+> **Kind:** design · **Status:** proposed
+
 ## Reproduction
 
 `GLAURUNG_CISCO_CORPUS=$HOME/.cache/glaurung/corpora/cisco-talos-dataset1 cargo

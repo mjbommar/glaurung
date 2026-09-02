@@ -7,7 +7,7 @@ indexes are populated on open) and a buffered writer for mutations
 (``add_node`` / ``add_edge`` / ``tag_node`` mutate in memory; the
 explicit ``save()`` call commits the diff to disk in one transaction).
 
-Schema is documented in ``docs/architecture/PERSISTENT_PROJECT.md``.
+Schema is documented in ``docs/architecture/persistent-project.md``.
 """
 
 from __future__ import annotations

@@ -5,11 +5,11 @@
 
 ## Functions
 - discovered: **16** (with blocks: 16, named: 10)
-- callgraph edges: **10**
+- callgraph edges: **12**
 - name sources: analyzer=16
 
 ## Type system
-- stdlib prototypes loaded: **96**
+- stdlib prototypes loaded: **114**
 - DWARF types imported: **0**
 - stack slots discovered: **66**
 - types propagated: **0**

@@ -8,7 +8,7 @@ glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/nativ
 >   0x1160  c2_main  (set_by=manual)
 0x1160>   fn main {
       // ── locals (from KB) ─────────────────────────────────
-      // -0x1b0  service_path  (unknown type, set_by=manual)
+      void *service_path;  // -0x1b0  set_by=manual
       void *var_140;  // -0x140  set_by=propagated
       char *var_110;  // -0x110  set_by=propagated
       // ─────────────────────────────────────────────────
@@ -41,7 +41,7 @@ glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/nativ
       ret = (unsigned long)((unsigned int)(*"ence"));
       var_168 = ret;
       t0 = *0x218c;
-      ret = (ret & -256);
+      ret = 0;
       t0 = (t0 & 255);
       ret = (ret | t0);
       var_164 = ret;

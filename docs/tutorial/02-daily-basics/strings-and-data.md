@@ -1,5 +1,7 @@
 # §H — Strings and data
 
+> **Kind:** guide · **Status:** maintained
+
 Goal: separate “string exists in the file” from “the current xref index records
 a use,” then add a type-correct label to a global pointer.
 
@@ -66,7 +68,10 @@ uv run glaurung find "$DB" primary_c2_server --kind data
 uv run glaurung find "$DB" server --kind data
 ```
 
-See [`find-label.out`](../_fixtures/02-strings-and-data/find-label.out).
+See [`find-label.out`](../_fixtures/02-strings-and-data/find-label.out) for the
+exact-name query and
+[`find-data-prefix.out`](../_fixtures/02-strings-and-data/find-data-prefix.out)
+for the prefix query.
 
 ## Evidence discipline
 

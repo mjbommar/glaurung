@@ -1,6 +1,8 @@
 # External corpora
 
-> **Status: provenance record.** Every URL, size and SHA-256 on this page was
+> **Kind:** reference · **Status:** maintained
+
+> **Provenance.** Every URL, size and SHA-256 on this page was
 > read off the fetch that produced the local copy on 2026-09-02, and each
 > checksum was compared against the one upstream publishes. Nothing here is
 > checked into the repository: these are large, externally licensed artifacts

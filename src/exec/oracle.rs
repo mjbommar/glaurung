@@ -1,7 +1,7 @@
 //! DEV-ONLY differential oracle — validate the emulator against Unicorn.
 //!
 //! Gated by the `dev-oracle` feature (links system libunicorn; **never shipped**
-//! — see `docs/design/execution-engine/04-testing/differential-oracle.md`).
+//! — see `docs/history/execution-engine-2026-06/testing/differential-oracle.md`).
 //! Given an initial register state and a block of real x86-64 machine code,
 //! [`diff_x86_64`] runs it on both our emulator (decode→lift→`run_block`) and
 //! Unicorn, then reports any GPR that disagrees. This is how we *know* the

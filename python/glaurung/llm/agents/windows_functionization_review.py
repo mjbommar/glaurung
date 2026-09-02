@@ -10,6 +10,10 @@ from __future__ import annotations
 import glaurung as g
 from pydantic import BaseModel, Field
 
+from ...windows_baselines import (
+    VENDOR_WINDOWS_30_COMPARISON,
+    VENDOR_WINDOWS_30_DIAGNOSTICS,
+)
 from ..context import MemoryContext
 from ..kb.adapters import import_triage
 from ..tools.windows_agent_evidence_bundle import (
@@ -43,12 +47,8 @@ from ..tools.windows_import_thunk_catalog import (
 
 
 class WindowsFunctionizationReviewConfig(BaseModel):
-    comparison_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_after_tiny_stub_gate.json"
-    )
-    diagnostics_path: str = Field(
-        "docs/windows-port/glaurung_vs_ghidra_vendor_windows_30_diagnostics.json"
-    )
+    comparison_path: str = Field(VENDOR_WINDOWS_30_COMPARISON)
+    diagnostics_path: str = Field(VENDOR_WINDOWS_30_DIAGNOSTICS)
     max_boundary_rows: int = Field(10, ge=1, le=64)
     max_worklist_rows: int = Field(10, ge=1, le=64)
     notebook_decisions: list[WindowsNotebookDecision] = Field(

@@ -48,11 +48,11 @@ Symbolic examples declare required features in `Cargo.toml`. `ioctl_scan` and
 `ioctlance` require `symbolic`; several real-driver and benchmark examples
 require `solver-axeyum`, and Axeyum comparisons also require `solver-z3`.
 Those programs may require external driver fixtures, Z3/libclang, or explicit
-environment controls documented in `docs/axeyum-integration/`.
+environment controls documented in `docs/history/axeyum-integration-2026-07/`.
 
 The current `solver-axeyum` gate at Glaurung `fcca960b` does not compile because
 the translator has not yet added `LogicalAnd`/`LogicalOr`. See the
-[Axeyum integration index](../docs/axeyum-integration/README.md). Do not present
+[solver backends](../docs/architecture/solver-backends.md). Do not present
 Axeyum example output as current until that gate is repaired and rerun.
 
 Examples such as `ioctlance` are research/validation harnesses, not stable CLI

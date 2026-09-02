@@ -1,5 +1,5 @@
 //! Function-identity retrieval harness: plan items 1 and 9 of
-//! `docs/research/program-measures-2026-09-02.md`.
+//! `docs/history/program-measures-2026-09-02.md`.
 //!
 //! # What this is for
 //!
@@ -608,7 +608,7 @@ fn ctph_retrieval_ratchets() {
 
 // ---------------------------------------------------------------------------
 // L1 structural invariants (`glaurung::identity::structural`), plan item 2 of
-// `docs/research/program-measures-2026-09-02.md`, scored under the same
+// `docs/history/program-measures-2026-09-02.md`, scored under the same
 // protocol as CTPH above. Numbers below were read off a run on 2026-09-02;
 // see `docs/development/identity-measurement.md` for the full table.
 // ---------------------------------------------------------------------------

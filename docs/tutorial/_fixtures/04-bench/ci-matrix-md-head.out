@@ -3,15 +3,15 @@ _glaurung HEAD: `<sha>`_
 
 ## Aggregate
 - Binaries scored: **10** (errored: 0)
-- Functions discovered: **381** (named: 156)
+- Functions discovered: **408** (named: 156)
 - Multi-chunk functions: **2** (cold orphans: 0)
-- Decompiled OK: **220** (failed: 0)
-- DWARF types: **142** (structs with fields: 18)
+- Decompiled OK: **226** (failed: 0)
+- DWARF types: **158** (structs with fields: 18)
 - Stack-frame slots: **831** (across 74 functions)
 - Type-KB lift: **0** propagated, **120** auto-struct candidates
 
 ## Rates
-- Symbol-name resolution (avg): **39.8%**
+- Symbol-name resolution (avg): **38.3%**
 - Decompile success (avg): **100.0%**
 - Language detection match: **80.0%**
 
@@ -19,4 +19,4 @@ _glaurung HEAD: `<sha>`_
 
 | binary | funcs | named | chunks>1 | cold orphans | decompiled | ms |
 |---|---:|---:|---:|---:|---:|---:|
-| `hello-c-gcc-O2` | 16 | 9 | 0 | 0 | 16/16 | N |
+| `hello-c-gcc-O2` | 17 | 9 | 0 | 0 | 17/17 | N |

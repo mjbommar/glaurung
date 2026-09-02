@@ -1,8 +1,6 @@
 # Decompiler curriculum corpus
 
-> **Status: maintained corpus guide.** The fixtures and selectors are current;
-> capability counts below are a revision-bound snapshot and must be rerun before
-> they are presented as current behavior.
+> **Kind:** guide · **Status:** maintained
 
 The curriculum corpus extends the focused bug fixtures with recognizable,
 composed programs from an undergraduate computer-science sequence. Its purpose is

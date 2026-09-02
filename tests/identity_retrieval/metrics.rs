@@ -3,7 +3,7 @@
 //!
 //! # Every number carries its conditions
 //!
-//! `docs/research/program-measures-2026-09-02.md`: "No number from this work
+//! `docs/history/program-measures-2026-09-02.md`: "No number from this work
 //! is comparable to anything unless it states the pool size and the set of
 //! free compilation variables. The same tool, SAFE, scores MRR 0.918 and 0.17
 //! in two published papers on different protocols." So [`TaskResult`] has no

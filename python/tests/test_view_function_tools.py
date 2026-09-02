@@ -3,7 +3,7 @@
 The sample path is anchored from `Path(__file__)` up to the repo root; it used
 to be a CWD-relative `"../samples/..."` inside a module-level
 `pytest.mark.skipif`, which resolved outside the repository and skipped this
-test unconditionally (`docs/development/test-estate/01-reachability.md` 1.4).
+test unconditionally (`docs/history/development/test-estate/01-reachability.md` 1.4).
 """
 
 from pathlib import Path
