@@ -55,7 +55,7 @@ mod region;
 mod switch_shape;
 mod verify;
 
-pub(crate) use cfg::Cfg;
+pub(crate) use cfg::{BranchPredicate, Cfg};
 use fallback::{
     contains_structured_loop, contains_switch, has_inner_loop_exit_that_reenters_via_outer_cycle,
     has_loop_conditional_with_join_beyond_loop, has_multi_latch_loop_with_distinct_exits,
@@ -144,7 +144,7 @@ pub fn recover_verified_with_health_and_destinations(
     let cfg = Cfg::from(lf, ssa);
     #[cfg(feature = "structure-v2-shadow")]
     {
-        let shadow = crate::ir::structure_v2::observe_cfg(&cfg);
+        let shadow = crate::ir::structure_v2::observe_cfg(&cfg, lf, ssa);
         tracing::debug!(
             entry_va = format_args!("{:#x}", lf.entry_va),
             blocks = shadow.block_count,

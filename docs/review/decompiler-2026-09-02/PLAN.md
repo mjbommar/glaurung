@@ -438,7 +438,12 @@ that preserves honest local gotos when required.
   per function. Synthetic boundary tests, a forged-provenance rejection test,
   and the real `loop_return_on_neg` shared return are green. Materializing the
   plan into the future structured tree and measuring its output remain open.
-- [ ] Condition simplification preserves machine-width predicate semantics.
+- [x] Condition simplification preserves machine-width predicate semantics.
+  Each shadow condition atom now carries the SSA producer's exact `CmpOp`,
+  recoverable operand width, and `CondJump` inversion; unavailable producer or
+  width evidence remains explicit `None`. Boolean complement folding compares
+  the complete typed atom. Boundary tests prove that exact complements fold,
+  while 32/64-bit or signed/unsigned mismatches do not.
 
 ### Promotion criteria
 

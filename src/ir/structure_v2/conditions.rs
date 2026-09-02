@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use super::{LocalRegions, LoopForest, Refusal};
-use crate::ir::structure::Cfg;
+use crate::ir::structure::{BranchPredicate, Cfg};
+use crate::ir::types::{CmpOp, Width};
 
 /// Stable index into a [`ConditionDag`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -14,8 +15,15 @@ pub struct ConditionId(pub usize);
 pub enum ConditionNode {
     False,
     True,
-    Branch { block: usize },
-    LocalRegion { region: usize },
+    Branch {
+        block: usize,
+        op: Option<CmpOp>,
+        operand_width: Option<Width>,
+        inverted: bool,
+    },
+    LocalRegion {
+        region: usize,
+    },
     Not(ConditionId),
     And(Vec<ConditionId>),
     Or(Vec<ConditionId>),
@@ -33,6 +41,7 @@ impl ConditionDag {
         cfg: &Cfg,
         loops: &LoopForest,
         locals: &LocalRegions,
+        branch_predicates: &[Option<BranchPredicate>],
     ) -> Result<Self, Refusal> {
         if locals.has_unclassified_cycles() {
             return Err(Refusal::CyclicGraph);
@@ -61,7 +70,13 @@ impl ConditionDag {
                 }
                 let edge_condition = match cfg.cond_taken[block] {
                     Some(taken) if cfg.succs[block].len() == 2 => {
-                        let branch = builder.intern(ConditionNode::Branch { block });
+                        let semantics = branch_predicates.get(block).copied().flatten();
+                        let branch = builder.intern(ConditionNode::Branch {
+                            block,
+                            op: semantics.and_then(|predicate| predicate.op),
+                            operand_width: semantics.and_then(|predicate| predicate.operand_width),
+                            inverted: semantics.is_some_and(|predicate| predicate.inverted),
+                        });
                         if successor == taken {
                             branch
                         } else {
@@ -155,6 +170,9 @@ impl Builder {
         }
         terms.sort_unstable();
         terms.dedup();
+        if contains_complement(&terms, &self.nodes) {
+            return self.false_id;
+        }
         match terms.as_slice() {
             [] => self.true_id,
             [only] => *only,
@@ -178,12 +196,24 @@ impl Builder {
         }
         terms.sort_unstable();
         terms.dedup();
+        if contains_complement(&terms, &self.nodes) {
+            return self.true_id;
+        }
         match terms.as_slice() {
             [] => self.false_id,
             [only] => *only,
             _ => self.intern(ConditionNode::Or(terms)),
         }
     }
+}
+
+fn contains_complement(terms: &[ConditionId], nodes: &[ConditionNode]) -> bool {
+    terms.iter().any(|id| {
+        let ConditionNode::Not(inner) = nodes[id.0] else {
+            return false;
+        };
+        terms.binary_search(&inner).is_ok()
+    })
 }
 
 fn topological_order(
@@ -219,4 +249,41 @@ fn topological_order(
         }
     }
     (order.len() == successors.len()).then_some(order)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn branch(width: Width, op: CmpOp) -> ConditionNode {
+        ConditionNode::Branch {
+            block: 0,
+            op: Some(op),
+            operand_width: Some(width),
+            inverted: false,
+        }
+    }
+
+    #[test]
+    fn exact_typed_complements_fold_to_boolean_constants() {
+        let mut builder = Builder::new();
+        let predicate = builder.intern(branch(Width::W32, CmpOp::Ult));
+        let negated = builder.not(predicate);
+
+        assert_eq!(builder.and([predicate, negated]), builder.false_id);
+        assert_eq!(builder.or([predicate, negated]), builder.true_id);
+    }
+
+    #[test]
+    fn width_or_signed_relation_mismatch_never_forms_a_complement() {
+        let mut builder = Builder::new();
+        let unsigned32 = builder.intern(branch(Width::W32, CmpOp::Ult));
+        let unsigned64 = builder.intern(branch(Width::W64, CmpOp::Ult));
+        let signed32 = builder.intern(branch(Width::W32, CmpOp::Slt));
+        let not_unsigned64 = builder.not(unsigned64);
+        let not_signed32 = builder.not(signed32);
+
+        assert_ne!(builder.and([unsigned32, not_unsigned64]), builder.false_id);
+        assert_ne!(builder.or([unsigned32, not_signed32]), builder.true_id);
+    }
 }

@@ -19,11 +19,20 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ir::ssa::SsaInfo;
-use crate::ir::types::LlirFunction;
+use crate::ir::types::{CmpOp, LlirFunction, Op, Value, Width};
+use crate::ir::use_def::InstrAddr;
 
 /// A shared, immutable set of block indices — what the natural-loop memos hand
 /// out. Shared rather than cloned because every consumer only reads it.
 pub(super) type BlockSet = Rc<HashSet<usize>>;
+
+/// Exact predicate facts recoverable from a conditional branch's SSA producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BranchPredicate {
+    pub(crate) op: Option<CmpOp>,
+    pub(crate) operand_width: Option<Width>,
+    pub(crate) inverted: bool,
+}
 
 /// Lookup helpers built once per call to [`super::recover`].
 pub(crate) struct Cfg {
@@ -230,6 +239,56 @@ impl Cfg {
         }
     }
 
+    /// Derive exact predicate facts only when the shadow structurer asks.
+    pub(crate) fn branch_predicates(
+        &self,
+        lf: &LlirFunction,
+        ssa: &SsaInfo,
+    ) -> Vec<Option<BranchPredicate>> {
+        let mut comparisons = HashMap::new();
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+                let Op::Cmp { op, lhs, rhs, .. } = &instruction.op else {
+                    continue;
+                };
+                let addr = InstrAddr {
+                    block_idx,
+                    instr_idx,
+                };
+                if let Some(value) = ssa.def_value_ref(lf, addr) {
+                    comparisons.insert(value.clone(), (*op, comparison_operand_width(lhs, rhs)));
+                }
+            }
+        }
+
+        let mut predicates = vec![None; self.succs.len()];
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            let Some((
+                instr_idx,
+                crate::ir::types::LlirInstr {
+                    op: Op::CondJump { inverted, .. },
+                    ..
+                },
+            )) = block.instrs.iter().enumerate().next_back()
+            else {
+                continue;
+            };
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            let comparison = ssa
+                .use_value_ref(lf, addr, 0)
+                .and_then(|value| comparisons.get(value));
+            predicates[block_idx] = Some(BranchPredicate {
+                op: comparison.map(|(op, _)| *op),
+                operand_width: comparison.and_then(|(_, width)| *width),
+                inverted: *inverted,
+            });
+        }
+        predicates
+    }
+
     /// The predecessors of `header` that `header` dominates — the back-edge
     /// tails, i.e. the latches of the natural loops headed there.
     pub(crate) fn dominating_tails(&self, header: usize) -> Vec<usize> {
@@ -349,6 +408,22 @@ impl Cfg {
 
     pub(super) fn is_explicit_switch_dispatch(&self, block: usize) -> bool {
         self.explicit_dispatch[block] && self.is_switch_dispatch(block)
+    }
+}
+
+fn comparison_operand_width(lhs: &Value, rhs: &Value) -> Option<Width> {
+    let lhs = match lhs {
+        Value::Reg(register) => register.width(),
+        Value::Const(_) | Value::Addr(_) => None,
+    };
+    let rhs = match rhs {
+        Value::Reg(register) => register.width(),
+        Value::Const(_) | Value::Addr(_) => None,
+    };
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
+        (Some(width), None) | (None, Some(width)) => Some(width),
+        _ => None,
     }
 }
 

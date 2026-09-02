@@ -52,17 +52,22 @@ pub struct ShadowReport {
 /// Analyze one function beside v1 without influencing its selected region.
 pub fn observe(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
     let cfg = crate::ir::structure::Cfg::from(lf, ssa);
-    observe_cfg(&cfg)
+    observe_cfg(&cfg, lf, ssa)
 }
 
 /// Observe the exact typed graph already built for production v1.
-pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
+pub(crate) fn observe_cfg(
+    cfg: &crate::ir::structure::Cfg,
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+) -> ShadowReport {
     let block_count = cfg.succs.len();
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
     let loops = LoopForest::from_cfg(cfg);
     let local_regions = LocalRegions::from_cfg(cfg, &loops);
     let duplicated_tails = cleanup::plan_tail_duplication(cfg);
-    match ConditionDag::from_cfg(cfg, &loops, &local_regions) {
+    let branch_predicates = cfg.branch_predicates(lf, ssa);
+    match ConditionDag::from_cfg(cfg, &loops, &local_regions, &branch_predicates) {
         Ok(conditions) => {
             let candidate = RegionCandidate::from_cfg(cfg, &loops, &local_regions);
             let verification_errors = candidate.as_ref().map_or_else(Vec::new, |candidate| {
@@ -118,7 +123,9 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg) -> ShadowReport {
 mod tests {
     use super::*;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::types::{Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg};
+    use crate::ir::types::{
+        CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value, Width,
+    };
 
     fn condition(target: u64) -> Op {
         Op::CondJump {
@@ -180,6 +187,40 @@ mod tests {
         }
     }
 
+    fn typed_comparison_cfg(op: CmpOp, lhs: VReg, inverted: bool) -> LlirFunction {
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1008,
+                    instrs: vec![
+                        LlirInstr {
+                            va: 0x1000,
+                            op: Op::Cmp {
+                                dst: VReg::Flag(Flag::C),
+                                op,
+                                lhs: Value::Reg(lhs),
+                                rhs: Value::Const(7),
+                            },
+                        },
+                        LlirInstr {
+                            va: 0x1004,
+                            op: Op::CondJump {
+                                cond: VReg::Flag(Flag::C),
+                                target: 0x1100,
+                                inverted,
+                            },
+                        },
+                    ],
+                    succs: vec![0x1100, 0x1200],
+                },
+                block(0x1100, Op::Return, vec![]),
+                block(0x1200, Op::Return, vec![]),
+            ],
+        }
+    }
+
     #[test]
     fn mixed_short_circuit_condition_dag_is_total_and_deterministic() {
         let function = mixed_short_circuit_cfg();
@@ -203,7 +244,7 @@ mod tests {
             match &dag.nodes[id.0] {
                 ConditionNode::False => false,
                 ConditionNode::True => true,
-                ConditionNode::Branch { block } => branches[*block],
+                ConditionNode::Branch { block, .. } => branches[*block],
                 ConditionNode::LocalRegion { .. } => {
                     panic!("acyclic truth-table fixture has no local region")
                 }
@@ -229,6 +270,59 @@ mod tests {
                 "false return under {branches:?}"
             );
         }
+    }
+
+    #[test]
+    fn condition_atoms_preserve_comparison_width_signedness_and_polarity() {
+        let unsigned32 = typed_comparison_cfg(CmpOp::Ult, VReg::phys("eax"), false);
+        let signed64_inverted = typed_comparison_cfg(CmpOp::Slt, VReg::phys("rax"), true);
+        let unknown = mixed_short_circuit_cfg();
+
+        let unsigned_report = observe(&unsigned32, &compute_ssa(&unsigned32));
+        let signed_report = observe(&signed64_inverted, &compute_ssa(&signed64_inverted));
+        let unknown_report = observe(&unknown, &compute_ssa(&unknown));
+
+        assert!(unsigned_report
+            .conditions
+            .expect("condition DAG")
+            .nodes
+            .iter()
+            .any(|node| matches!(
+                node,
+                ConditionNode::Branch {
+                    block: 0,
+                    op: Some(CmpOp::Ult),
+                    operand_width: Some(Width::W32),
+                    inverted: false,
+                }
+            )));
+        assert!(signed_report
+            .conditions
+            .expect("condition DAG")
+            .nodes
+            .iter()
+            .any(|node| matches!(
+                node,
+                ConditionNode::Branch {
+                    block: 0,
+                    op: Some(CmpOp::Slt),
+                    operand_width: Some(Width::W64),
+                    inverted: true,
+                }
+            )));
+        assert!(unknown_report
+            .conditions
+            .expect("condition DAG")
+            .nodes
+            .iter()
+            .any(|node| matches!(
+                node,
+                ConditionNode::Branch {
+                    op: None,
+                    operand_width: None,
+                    ..
+                }
+            )));
     }
 
     #[test]

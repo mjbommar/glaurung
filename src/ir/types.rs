@@ -212,7 +212,7 @@ pub enum UnOp {
     Neg,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CmpOp {
     Eq,
     Ne,
