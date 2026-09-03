@@ -403,7 +403,7 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_BITWUZLA_TYPECHECK_ONLY": "Skip Bitwuzla's link setup in `build.rs` for a link-free `cargo check` (used by the feature-build gate and lint scripts).",
     "CARGO_FEATURE_SOLVER_BITWUZLA": "Set automatically by Cargo when the `solver-bitwuzla` feature is enabled; `build.rs` reads it to decide whether to run the Bitwuzla link step at all.",
     "CARGO_TARGET_DIR": "Cargo's build-output directory; the identity-retrieval protocol test reads it to place its evaluation artifacts beside the build rather than in the source tree.",
-    "GLAURUNG_IDENTITY_CORPUS": "Path to the external function-identity corpus (Cisco Talos Dataset-1) the identity-retrieval lanes score against; unset skips those lanes -- see `docs/development/corpora.md`.",
+    "GLAURUNG_IDENTITY_CORPUS": "Path to a populated `tests/decompiler_fixtures/build` -- the matched-build corpus the function-identity lanes score against, so a worktree can point at a checkout that has one. Unset and absent in-tree, those lanes skip loudly. The *external* corpus (Cisco Talos Dataset-1) is `GLAURUNG_CISCO_CORPUS`, which this table cannot see: it is read from `tests/identity_retrieval/cisco.rs` and the Rust walk covers `src, benches, examples, fuzz` only. See `docs/development/identity-measurement.md` and `docs/development/corpora.md`.",
     # --- CI workflow env: blocks -----------------------------------------
     "REGISTRY": "Container registry host for the samples-docker publish workflow.",
     "IMAGE_NAME": "Container image name/tag prefix for the samples-docker publish workflow.",
