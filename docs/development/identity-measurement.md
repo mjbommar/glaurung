@@ -29,7 +29,7 @@ So this harness scores every scheme the same way over the same filtered
 population, and no result can be printed or serialised without its pool size
 and its free-variable set attached.
 
-Three schemes are scored below, and the three results say different things.
+Four schemes are scored below, and the four results say different things.
 **CTPH** (`glaurung::similarity`, the byte digest) is at chance on every task.
 **The Python structural fingerprint**
 (`python/glaurung/llm/kb/structural_fingerprint.py`) reaches AUC 0.73 and MRR10
@@ -40,7 +40,13 @@ the L1 rung, plan item 2) reaches AUC 0.94 cross-compiler, does **not**
 collapse when both the compiler and the optimisation level are free (AUC
 0.70), and reaches AUC 0.95 across an architecture change on Dataset-1 —
 clearing every other scheme's cross-architecture floor by a wide margin. All
-three results are below.
+three results are below. **`values`**
+(`glaurung::identity::values`, the L3 rung, plan item 12) runs the function
+under bounded execution and keys on the numbers it computes: it reaches AUC
+0.91 / Recall@1 0.52 on the cross-optimisation lane where the best graph
+scheme manages 0.76 / 0.18, and 0.85 / 0.41 on XM where that scheme reads
+0.73 / 0.13 -- and it *loses* to the CFR on cross-compiler Recall@1. All four
+results are below.
 
 ## The protocol
 
@@ -378,26 +384,87 @@ cushion against legitimate future scheme changes rather than against
 measurement noise), but the exemption described in "A note on reproducibility,
 sharpened" below no longer applies -- see there for the Dataset-1 numbers.
 
+### values — `glaurung::identity::values`, L3 value fingerprints
+
+Rust lane, 2026-09-03, **release** profile, extraction **732 to 766
+us/function** cold over whole images. Sampled pool 101 (chance R@1 0.0099)
+throughout. The full rule table, every simplification from vSim, the cost and
+coverage figures and the nine-configuration ablation are in
+[`reference/function-identity-values.md`](../reference/function-identity-values.md);
+this page carries the retrieval rows so they sit beside the other three
+schemes' on the same denominators.
+
+| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@5 | R@10 | R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| **XO-gcc** | optimisation | 389 | 410 | **0.9059** | **0.6274** | 0.5219 | 0.7635 | 0.8638 | 0.9640 |
+| XO-clang | optimisation | 366 | 377 | 0.8565 | 0.4574 | 0.3634 | 0.5765 | 0.6995 | 0.9344 |
+| XC-O0 | compiler | 487 | 494 | 0.9688 | 0.7724 | 0.6797 | 0.9014 | 0.9630 | 0.9979 |
+| XC-O2 | compiler | 357 | 377 | 0.9056 | 0.5654 | 0.4706 | 0.6723 | 0.7843 | 0.9692 |
+| **XM** | compiler + optimisation | 365 | 377 | **0.8518** | **0.4937** | 0.4055 | 0.5918 | 0.7096 | 0.9397 |
+| XM-S | + queries <20 blocks | 308 | 377 | 0.8458 | 0.4830 | 0.4026 | 0.5779 | 0.6916 | 0.9351 |
+| XM-M | + queries 20-100 blocks | 54 | 377 | 0.9169 | 0.4909 | 0.3889 | 0.6852 | 0.7407 | 0.9815 |
+| XM-L *(underpowered, n=3)* | + queries >100 blocks | 3 | 377 | 0.7233 | 0.6667 | 0.6667 | 0.6667 | 0.6667 | 0.6667 |
+
+**Reading it.** Two things, in the same order as the sections above.
+
+1. **It does not merely fail to collapse on XM — XM is where it wins most.**
+   AUC 0.8518 against `structural`'s 0.7026 and the CFR's 0.7296, and Recall@1
+   0.4055 against 0.0685 and 0.1342. The optimisation axis is what every
+   representation on this page loses signal to, and values are the thing an
+   optimiser is least free to change: it may unroll a loop, reassociate an
+   expression or hoist a constant, but it must still compute the same numbers.
+2. **It loses cross-compiler, and that is not a rounding error.** XC-O0
+   Recall@1 0.6797 against the CFR's 0.8706. Two compilers at `-O0` build so
+   nearly the same graph that a canonical form over it is close to exact.
+   These are complementary rungs; the honest summary is that the values lane
+   owns the optimisation axis and the CFR owns cross-compiler-at-fixed-`-O`.
+
+The **cost** is 732 to 766 us/function in release, which is the same order as
+the CFR's 223 to 655 us in *debug* and inside TikNib's published 20 to 1,030
+us band — not the result one would predict from the words "run the function".
+1.44% of runs hit the 20,000-instruction budget and **no** function (0 of
+1,787) hit it before producing a value.
+
+On **Dataset-1** this scheme runs the three x86-64 lanes only — XO AUC 0.9569
+/ R@1 0.8000 over 50 scored, XC 0.9368 / 0.7846 over 65, XM 0.9516 / 0.7500
+over 36 — and refuses the six cross-architecture and cross-bitness lanes
+outright. `glaurung::exec::Machine::new` builds an **x86-64 register file**;
+running ARM or MIPS through it would read every register as zero and return a
+fingerprint that looked like a measurement, so `fingerprints_for_path` raises
+instead, and `cisco_values_x86_64_lanes` asserts those lanes score **nothing**
+rather than quietly omitting them. Read the `Scored` column before the
+accuracies: 36 to 65 queries is above the 30-query floor for quoting a row and
+a long way below the point at which a few points mean anything.
+
 ### Head to head
 
-| | CTPH | Python structural fingerprint | `structural` (L1) |
-|---|---|---|---|
-| XO-gcc AUC | 0.5015 | 0.5825 | **0.7536** |
-| XC-O0 AUC | -- | -- | **0.9387** |
-| XC-O2 AUC | 0.5030 | 0.7287 | **0.7238** |
-| XM AUC | 0.5025 | 0.5150 | **0.7026** |
-| XC-O2 MRR10 | 0.0084 | **0.2241** | 0.2381 |
-| XM MRR10 | 0.0058 | 0.0357 | **0.1117** |
-| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) |
+| | CTPH | Python structural fingerprint | `structural` (L1) | `cfr` (L2) | `values` (L3) |
+|---|---|---|---|---|---|
+| XO-gcc AUC | 0.5015 | 0.5825 | 0.7536 | 0.7569 | **0.9059** |
+| XC-O0 AUC | -- | -- | 0.9387 | 0.9663 | **0.9688** |
+| XC-O2 AUC | 0.5030 | 0.7287 | 0.7238 | 0.8921 | **0.9056** |
+| XM AUC | 0.5025 | 0.5150 | 0.7026 | 0.7296 | **0.8518** |
+| XC-O0 R@1 | 0.0062 | -- | 0.4723 | **0.8706** | 0.6797 |
+| XC-O2 MRR10 | 0.0084 | 0.2241 | 0.2381 | **0.5688** | 0.5654 |
+| XM MRR10 | 0.0058 | 0.0357 | 0.1117 | 0.1990 | **0.4937** |
+| XM R@1 | 0.0055 | 0.0165 | 0.0685 | 0.1342 | **0.4055** |
+| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) | 223-655 us (debug) | 732-766 us (release) |
 
-All three columns are over the same tasks, the same tie rule and the same
-sampling. They are **not** over the same rows: the three harnesses filter
-1,787, 1,786 and 1,787 functions from populations discovered differently (see
-"Two known differences" below), so treat the comparison as between
-representations, not as a per-function A/B. `structural` is the first scheme
-in this table that does not collapse on XM, and it reaches this without a
-model, a corpus, or a training step -- exactly what the research synthesis
-predicted for the identity ladder's L1 rung.
+Every column is over the same tasks, the same tie rule and the same sampling.
+They are **not** over the same rows: the harnesses filter 1,787, 1,786 and
+1,787 functions from populations discovered differently (see "Two known
+differences" below), so treat the comparison as between representations, not
+as a per-function A/B. The extraction figures are also not directly
+comparable -- the first four are debug builds and `values` is release; see
+CLAUDE.md on how far the two profiles diverge.
+
+`structural` is the first scheme in this table that does not collapse on XM,
+and it reaches that without a model, a corpus, or a training step. `values` is
+the first that is *strong* there, and no single column wins outright: the CFR
+holds cross-compiler Recall@1 by a wide margin and `values` holds everything
+with the optimisation level free. That is the shape the identity ladder was
+designed for -- different rungs answering different questions -- rather than a
+replacement.
 
 ## Cisco Dataset-1
 
@@ -878,9 +945,12 @@ Both change the denominator, so both are stated rather than smoothed over.
 
 ## Where the numbers go next
 
-Plan item 2 (structural) has landed; the protocol document's plan items 3, 4
-and 6 (CFR prerequisites, the CFR itself, WARP) still produce schemes that
-land in this harness. When one does:
+Plan items 2 (structural), 3+4 (CFR), 6 (WARP) and the first slice of 12
+(values) have landed. Items 5 (TF-IDF and the inverted index), 7 (the
+BinaryFuse8 gate) and 10 (call-graph re-rank) still produce schemes or
+re-rankers that land in this harness, as does the rest of item 12
+(callee-to-caller propagation, which vSim's ablation puts at 0.08 Recall@1 and
+which is the largest single thing the values lane left out). When one does:
 
 * On the **in-house corpus**, the row to beat is now `structural`'s own
   **XC-O0 AUC 0.9387 / MRR10 0.5824**, and the row that says whether a new

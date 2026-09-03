@@ -556,19 +556,23 @@ impl ValueScheme {
     ///
     /// Returns `(functions measured, mean instructions retired per function,
     /// fraction of runs that hit the instruction budget, fraction of functions
-    /// whose runs ALL hit it before producing a value)`. The last two are
-    /// different questions: a long function that hits the budget after
-    /// harvesting two hundred values is a fingerprint, and one that hits it
-    /// having harvested nothing is a hole.
+    /// whose runs ALL hit it before producing a value, fraction of harvested
+    /// values the address rules removed)`. The middle two are different
+    /// questions: a long function that hits the budget after harvesting two
+    /// hundred values is a fingerprint, and one that hits it having harvested
+    /// nothing is a hole. The last one is what says whether the filter
+    /// ablation could have moved anything.
     pub fn coverage<'a>(
         &self,
         samples: impl Iterator<Item = &'a FunctionSample>,
-    ) -> (usize, f64, f64, f64) {
+    ) -> (usize, f64, f64, f64, f64) {
         let budgets = crate::corpus::harness_budgets();
         let mut measured = 0usize;
         let mut steps = 0u64;
         let mut runs = 0u64;
         let mut budget_hits = 0u64;
+        let mut observed = 0u64;
+        let mut addresses = 0u64;
         let mut starved = 0usize;
         let mut by_va: BTreeMap<(PathBuf, u64), glaurung::identity::values::HarvestStats> =
             BTreeMap::new();
@@ -592,19 +596,22 @@ impl ValueScheme {
                 steps += stats.steps;
                 runs += u64::from(stats.seeds);
                 budget_hits += u64::from(stats.budget_exhausted);
+                observed += stats.filter.seen as u64;
+                addresses += stats.filter.addresses_removed() as u64;
                 if stats.budget_exhausted_before_any_value {
                     starved += 1;
                 }
             }
         }
         if measured == 0 {
-            return (0, 0.0, 0.0, 0.0);
+            return (0, 0.0, 0.0, 0.0, 0.0);
         }
         (
             measured,
             steps as f64 / measured as f64,
             budget_hits as f64 / runs.max(1) as f64,
             starved as f64 / measured as f64,
+            addresses as f64 / observed.max(1) as f64,
         )
     }
 }

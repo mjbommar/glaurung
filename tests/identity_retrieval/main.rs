@@ -1280,13 +1280,14 @@ fn values_full_sweep() {
     // the one in the reports above is a cache hit.
     let scheme = scheme::ValueScheme::plain();
     let started = std::time::Instant::now();
-    let (measured, mean_steps, budget_hits, starved) =
+    let (measured, mean_steps, budget_hits, starved, addresses) =
         scheme.coverage(corpus.slices().flat_map(|slice| slice.samples.iter()));
     let elapsed = started.elapsed();
     eprintln!(
         "\ncoverage: {measured} functions, {mean_steps:.0} instructions retired per function \
          (all seeds); {budget_hits:.4} of runs hit the instruction budget, {starved:.4} of \
-         functions hit it before producing any value; {:.0} us/function cold, over whole images",
+         functions hit it before producing any value; the address rules removed {addresses:.4} \
+         of harvested values; {:.0} us/function cold, over whole images",
         elapsed.as_secs_f64() * 1e6 / measured.max(1) as f64
     );
 }
