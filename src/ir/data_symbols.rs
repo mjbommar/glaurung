@@ -53,6 +53,8 @@ pub struct DataSymbol {
     pub size: u64,
     /// The symbol's name, sanitised to a valid C identifier.
     pub name: String,
+    /// Exact object-file spelling retained for compiler-local scope recovery.
+    raw_name: String,
 }
 
 /// Data-object names for one image, keyed by exact start address.
@@ -62,6 +64,8 @@ pub struct DataSymbol {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DataSymbols {
     by_address: BTreeMap<u64, DataSymbol>,
+    /// File-backed scalar initializer bits for exact symbol extents.
+    initial_scalars: BTreeMap<u64, (u8, u64)>,
 }
 
 impl DataSymbols {
@@ -106,10 +110,14 @@ impl DataSymbols {
                     address,
                     size,
                     name,
+                    raw_name: raw.to_string(),
                 },
             );
         }
-        Self { by_address }
+        Self {
+            by_address,
+            initial_scalars: BTreeMap::new(),
+        }
     }
 
     /// The source name for static storage beginning **exactly** at `address`.
@@ -119,6 +127,58 @@ impl DataSymbols {
     /// is not a nearest-symbol search.
     pub fn name_for(&self, address: u64) -> Option<&str> {
         self.by_address.get(&address).map(|s| s.name.as_str())
+    }
+
+    /// The symbol-table extent of the object beginning exactly at `address`.
+    ///
+    /// Kept beside [`Self::name_for`] so consumers cannot accidentally take an
+    /// extent from a nearest or zero-sized boundary symbol.
+    pub fn size_for(&self, address: u64) -> Option<u64> {
+        self.by_address.get(&address).map(|s| s.size)
+    }
+
+    /// Remove pool entries that are only a prefix of a larger data object.
+    ///
+    /// C-string discovery necessarily stops at the first NUL.  For an exact
+    /// sized symbol, bytes beyond that terminator prove the address names a
+    /// character array with embedded NULs rather than that shorter string.
+    /// Folding it to `"prefix"` would make indexed reads of the tail undefined
+    /// in the emitted C. Unknown/unsized objects remain untouched.
+    pub fn remove_truncated_character_arrays(
+        &self,
+        pool: &mut std::collections::HashMap<u64, String>,
+    ) {
+        pool.retain(|address, text| {
+            self.by_address
+                .get(address)
+                .is_none_or(|symbol| symbol.size <= text.as_bytes().len().saturating_add(1) as u64)
+        });
+    }
+
+    /// Initial scalar bits from the object's file image at an exact symbol start.
+    pub fn initial_scalar_for(&self, address: u64) -> Option<(u8, u64)> {
+        self.initial_scalars.get(&address).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_initial_scalar_for_test(&mut self, address: u64, width: u8, value: u64) {
+        self.initial_scalars.insert(address, (width, value));
+    }
+
+    /// Source-like name when the compiler symbol spelling proves local-static
+    /// provenance.
+    ///
+    /// Clang emits `function.variable`, which names both sides of the ownership
+    /// relation. GCC's `variable.N` proves local-static origin but not its
+    /// owner, so it is deliberately excluded: after inlining, assigning that
+    /// object to each referencing function would split one shared identity.
+    /// Plain local symbols are excluded for the same reason.
+    pub fn function_static_name_for(&self, address: u64, function: &str) -> Option<String> {
+        let symbol = self.by_address.get(&address)?;
+        let clang_prefix = format!("{function}.");
+        let candidate = symbol.raw_name.strip_prefix(&clang_prefix)?;
+        let candidate = crate::ir::ast::sanitize_c_ident(candidate);
+        crate::ir::naming::valid_authoritative_local_name(&candidate).then_some(candidate)
     }
 
     /// Number of named objects.
@@ -173,8 +233,8 @@ pub fn from_object<'data, O>(object: &O) -> DataSymbols
 where
     O: object::Object<'data>,
 {
-    use object::{ObjectSymbol, SymbolKind};
-    DataSymbols::from_entries(object.symbols().filter_map(|symbol| {
+    use object::{ObjectSection, ObjectSymbol, SymbolKind};
+    let mut symbols = DataSymbols::from_entries(object.symbols().filter_map(|symbol| {
         (symbol.is_definition() && symbol.kind() == SymbolKind::Data)
             .then(|| {
                 symbol
@@ -183,7 +243,38 @@ where
                     .map(|name| (symbol.address(), symbol.size(), name.to_string()))
             })
             .flatten()
-    }))
+    }));
+    let little_endian = object.is_little_endian();
+    for symbol in object.symbols() {
+        let width = match symbol.size() {
+            1 | 2 | 4 | 8 => symbol.size() as u8,
+            _ => continue,
+        };
+        if !symbols.by_address.contains_key(&symbol.address()) {
+            continue;
+        }
+        let Some(section_index) = symbol.section_index() else {
+            continue;
+        };
+        let Ok(section) = object.section_by_index(section_index) else {
+            continue;
+        };
+        let Ok(Some(bytes)) = section.data_range(symbol.address(), symbol.size()) else {
+            continue;
+        };
+        let mut raw = [0u8; 8];
+        let value = if little_endian {
+            raw[..bytes.len()].copy_from_slice(bytes);
+            u64::from_le_bytes(raw)
+        } else {
+            raw[8 - bytes.len()..].copy_from_slice(bytes);
+            u64::from_be_bytes(raw)
+        };
+        symbols
+            .initial_scalars
+            .insert(symbol.address(), (width, value));
+    }
+    symbols
 }
 
 #[cfg(test)]
@@ -206,6 +297,54 @@ mod tests {
         let name = table.name_for(0x4040).expect("named");
         assert!(!name.contains('.'), "not a C identifier: {name}");
         assert_eq!(name, "outer_inner_deep");
+    }
+
+    #[test]
+    fn exact_object_size_is_available_with_its_name() {
+        let table = DataSymbols::from_entries([(0x4040u64, 4u64, "counter.0")]);
+        assert_eq!(table.name_for(0x4040), Some("counter_0"));
+        assert_eq!(table.size_for(0x4040), Some(4));
+        assert_eq!(table.size_for(0x4041), None);
+    }
+
+    #[test]
+    fn embedded_nul_array_is_not_misclassified_as_its_string_prefix() {
+        let table = DataSymbols::from_entries([
+            (0x2000u64, 6u64, "escapes.0"),
+            (0x3000u64, 6u64, "vowels.0"),
+        ]);
+        let mut pool = std::collections::HashMap::from([
+            (0x2000, "\t\n\\".to_string()),
+            (0x3000, "aeiou".to_string()),
+            (0x4000, "unsized".to_string()),
+        ]);
+
+        table.remove_truncated_character_arrays(&mut pool);
+
+        assert!(!pool.contains_key(&0x2000));
+        assert_eq!(pool.get(&0x3000).map(String::as_str), Some("aeiou"));
+        assert_eq!(pool.get(&0x4000).map(String::as_str), Some("unsized"));
+    }
+
+    #[test]
+    fn compiler_scoped_static_names_recover_the_local_identifier() {
+        let table = DataSymbols::from_entries([
+            (0x4018u64, 4u64, "static_var.0"),
+            (0x4040u64, 4u64, "static_function.static_var"),
+            (0x4050u64, 4u64, "file_static"),
+        ]);
+        assert_eq!(
+            table.function_static_name_for(0x4018, "static_function"),
+            None
+        );
+        assert_eq!(
+            table.function_static_name_for(0x4040, "static_function"),
+            Some("static_var".to_string())
+        );
+        assert_eq!(
+            table.function_static_name_for(0x4050, "static_function"),
+            None
+        );
     }
 
     #[test]
