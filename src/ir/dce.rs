@@ -509,9 +509,7 @@ fn collect_flag_reads_in_expr(
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
             collect_flag_reads_in_expr(expr, out, versioned)
         }
-        Expr::FunctionTableEntry { index, .. } => {
-            collect_flag_reads_in_expr(index, out, versioned)
-        }
+        Expr::FunctionTableEntry { index, .. } => collect_flag_reads_in_expr(index, out, versioned),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
                 collect_flag_reads_in_expr(argument, out, versioned);

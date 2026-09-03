@@ -246,15 +246,7 @@ pub fn erase_unobserved_masked_inputs(
                 .instrs
                 .iter()
                 .enumerate()
-                .filter(|(_, instruction)| {
-                    matches!(
-                        instruction.op,
-                        Op::Bin {
-                            op: BinOp::And,
-                            ..
-                        }
-                    )
-                })
+                .filter(|(_, instruction)| matches!(instruction.op, Op::Bin { op: BinOp::And, .. }))
                 .map(move |(instr_idx, _)| InstrAddr {
                     block_idx,
                     instr_idx,
@@ -391,12 +383,9 @@ fn transfer_masks_into(op: &Op, demanded: u64, masks: &mut Vec<(usize, u64)>) {
             value(masks, &mut use_index, lhs, FULL);
             value(masks, &mut use_index, rhs, FULL);
         }
-        Op::ZExt { src, from, .. } | Op::Trunc { src, from, .. } => value(
-            masks,
-            &mut use_index,
-            src,
-            demanded & width_mask(*from),
-        ),
+        Op::ZExt { src, from, .. } | Op::Trunc { src, from, .. } => {
+            value(masks, &mut use_index, src, demanded & width_mask(*from))
+        }
         Op::SExt { src, from, .. } => {
             let low = demanded & width_mask(*from);
             let high = demanded & !width_mask(*from);

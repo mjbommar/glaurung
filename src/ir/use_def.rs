@@ -498,7 +498,7 @@ mod tests {
     /// make an operand optional, since those are where an order or a count can
     /// silently drift.
     fn every_op_shape() -> Vec<Op> {
-        use crate::ir::types::{CallEffects, MemOp, UnOp, Value, VReg, Width};
+        use crate::ir::types::{CallEffects, MemOp, UnOp, VReg, Value, Width};
         let r = |n: &str| VReg::phys(n);
         let v = |n: &str| Value::Reg(VReg::phys(n));
         let mem = |base: Option<&str>, index: Option<&str>| {
@@ -685,11 +685,7 @@ mod tests {
             assert_eq!(uses, reference_uses, "uses mismatch for {op:?}");
 
             assert_eq!(def_ref(&op).cloned(), reference_def, "def_ref for {op:?}");
-            assert_eq!(
-                use_count(&op),
-                reference_uses.len(),
-                "use_count for {op:?}"
-            );
+            assert_eq!(use_count(&op), reference_uses.len(), "use_count for {op:?}");
             let mut walked = Vec::new();
             for_each_use(&op, |register| walked.push(register.clone()));
             assert_eq!(walked, reference_uses, "for_each_use order for {op:?}");
