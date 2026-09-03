@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """Build a signed, content-addressed signature-set release.
 
-Input is a directory of signature blobs plus the harvester's `index.json`,
-which carries the per-library provenance (package, version, arch, variant,
-archive sha256) this tool copies into the manifest. Output is a directory:
+Input is any number of directories of signature blobs, each with its
+harvester's `index.json` carrying the per-library provenance (package,
+version, arch, variant, archive sha256) this tool copies into the manifest.
+Four harvesters write three index shapes and the WARP builder writes a fourth,
+so `_load_index` sniffs rather than assuming; `_library_name` explains the
+three ways a library's own name is recovered from a harvest key.
+
+Every blob is rewritten as a `gsig/1` container before it is hashed, so the
+digest names the container and not the JSON (`--convert none` opts out). Two
+identity schemes ship side by side -- `flirt-masked-pattern-v1` and
+`warp-function-guid-v1` -- each converted through the writer for its own
+scheme, each recorded in the manifest entry's `kind`.
+
+Output is a directory:
 
     <out>/blobs/<sha256>            one file per blob, named by its digest
     <out>/manifest.json             the signed document
@@ -27,17 +38,23 @@ Two publish paths follow, and they are deliberately not symmetric:
   overwritten if found: the store is content-addressed and immutable, so an
   existing key already holds the right bytes.
 
-Example (the dry run recorded in docs/reference/signature-distribution.md)::
+Example (the 2026.09.2 dry run recorded in
+docs/reference/signature-distribution.md)::
 
     uv run python tools/publish_signature_set.py \\
-        --blobs ~/.cache/glaurung/system-libs/sigs \\
-        --set base --set-version 2026.09.1 --serial 1 \\
-        --secret-key ~/.cache/glaurung/keys/glaurung-sigs-dev.key \\
-        --out ~/.cache/glaurung/release/2026.09.1
+        --source "$HOME/.cache/glaurung/system-libs/sigs:**/*.flirt.json" \\
+        --source "$HOME/.cache/glaurung/system-libs/armtc-13.2.1/sigs:*.flirt.json:cortex-m:cortex-m" \\
+        --source "$HOME/.cache/glaurung/system-libs/warp:*.warp.json:windows-warp:warp" \\
+        --carry-forward "$HOME/.cache/glaurung/release/2026.09.1/manifest.json" \\
+        --set base --set-version 2026.09.2 --serial 2 \\
+        --out "$HOME/.cache/glaurung/release/2026.09.2" \\
+        --unsigned --quiet
 
-`--generate-key` writes a fresh keypair if one does not exist. The secret key
-is written `0600` outside the repository and must never be committed; only the
-`.pub` belongs in `data/sigs/trusted-keys/`.
+`--unsigned` builds and measures without signing: no key is read, and the
+exact `minisign -Sm` command is printed instead. `--generate-key` writes a
+fresh throwaway keypair for local testing; the secret key is written `0600`
+outside the repository and must never be committed, and only the `.pub`
+belongs in `data/sigs/trusted-keys/`.
 """
 
 from __future__ import annotations
@@ -52,7 +69,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "python"))
@@ -92,13 +109,30 @@ S3_SIGNATURE_KEY = "sigs/v1/manifest.json.minisig"
 S3_BLOB_CACHE_CONTROL = "public, max-age=31536000, immutable"
 S3_MANIFEST_CACHE_CONTROL = "public, max-age=300"
 
-#: The container format the current harvester emits. `gsig/1` replaces this
-#: once the chunked container lands; the field exists so a client can tell.
-DEFAULT_FORMAT = "flirt-json/2"
+#: The container a blob ships in once it has been converted. `--convert none`
+#: publishes the harvester's own bytes instead and records `RAW_FORMAT`.
+DEFAULT_FORMAT = "gsig/1"
 
-#: The identity scheme those records are under. Tracks
+#: What the harvesters write, and what serial 1 published: JSON.
+RAW_FORMAT = "flirt-json/2"
+
+#: The identity scheme masked-pattern records are under. Tracks
 #: `glaurung.llm.kb.siglib.FLIRT_MASKED_PATTERN_V1`.
 DEFAULT_KIND = "flirt-masked-pattern-v1"
+
+#: The identity scheme exact-match GUID records are under. Tracks
+#: `glaurung.llm.kb.siglib.WARP_FUNCTION_GUID_V1`.
+WARP_KIND = "warp-function-guid-v1"
+
+#: `sig_convert`'s `--scheme` value for each kind.
+SCHEME_FOR_KIND = {DEFAULT_KIND: "flirt", WARP_KIND: "warp"}
+
+#: Manifest keys are `<library>/<version>/<variant>/<arch>`, and Decision 1 of
+#: the programme notes makes the *scheme* part of the key too. The
+#: masked-pattern scheme is left unprefixed because 292 of its keys are
+#: already published under those exact strings and a carried-forward blob has
+#: to match by key; every other scheme carries its prefix.
+KEY_PREFIX = {DEFAULT_KIND: "", WARP_KIND: "warp:"}
 
 #: The licence line every derived-signature blob carries. The reasoning is in
 #: docs/reference/signature-distribution.md; the short form is Hex-Rays' own
@@ -172,23 +206,69 @@ class SourceBlob:
     key: str
     signatures: int
     record: dict[str, Any]
+    #: The identity scheme, copied into the manifest entry's `kind`.
+    kind: str = DEFAULT_KIND
+    #: The report bucket: one distro cell, one Docker image, one Rust
+    #: toolchain, `cortex-m`, or `windows-warp`. Reporting rolls these up.
+    bucket: str = "unknown"
+    #: How the resolver ranks this blob against another claiming the same
+    #: key. See `_resolve_contested`.
+    source_class: str = "unknown"
 
 
-def _load_index(blobs_dir: Path) -> dict[str, dict[str, Any]]:
-    """The harvester's `index.json`, keyed by output filename.
+#: How a contested key is resolved when history does not already decide it,
+#: best first.
+#:
+#: A network cell wins over a Docker image because it carries the *upstream*
+#: package hash -- the `.deb`/`.apk` digest the distributor published -- so its
+#: provenance can be re-fetched by anyone. A Docker image's provenance is a
+#: `dpkg -l` line inside a container we built, which is weaker evidence about
+#: the same bytes. Measured on this corpus the rule never fires: all 96
+#: contested keys are Docker-versus-Docker (`linux-amd64` against
+#: `linux-arm64`), which is what `--prefer-image` is for.
+SOURCE_CLASS_ORDER = ("network", "rust", "cortex-m", "warp", "docker", "unknown")
+
+
+def _classify_image(image: str) -> str:
+    """Which `SOURCE_CLASS_ORDER` class a harvest record's `image` belongs to."""
+    if image.startswith(("debian-", "ubuntu-", "alpine-", "fedora-")):
+        return "network"
+    if image.startswith("rust-"):
+        return "rust"
+    if image:
+        return "docker"
+    return "unknown"
+
+
+def _load_index(blobs_dir: Path) -> tuple[str, dict[str, dict[str, Any]]]:
+    """A source directory's `index.json`, and which shape it is in.
+
+    Three harvesters write three shapes and none of them is going to be
+    retrofitted for a publisher's convenience, so the publisher sniffs:
+
+    * the FLIRT harvest keys rows by `output` and counts `unique_signatures`;
+    * the Cortex-M harvest does the same but has no `triplet`, and encodes the
+      library name in its own `key` instead;
+    * the WARP builder keys rows by `file`, counts `unique`, and declares a
+      top-level `scheme`.
 
     Absent is not fatal: a directory of blobs with no index still publishes,
     with `source: "unknown"` provenance, which is honest rather than invented.
+
+    Returns:
+        `("flirt", rows)` or `("warp", rows)`, rows keyed by filename.
     """
     index_path = blobs_dir / "index.json"
     if not index_path.is_file():
-        return {}
+        return "flirt", {}
     payload = json.loads(index_path.read_text(encoding="utf-8"))
     records = payload.get("libraries") or []
-    return {
-        str(record.get("output") or ""): record
+    shape = "warp" if payload.get("scheme") == WARP_KIND else "flirt"
+    field = "file" if shape == "warp" else "output"
+    return shape, {
+        str(record.get(field) or ""): record
         for record in records
-        if isinstance(record, dict) and record.get("output")
+        if isinstance(record, dict) and record.get(field)
     }
 
 
@@ -208,8 +288,30 @@ def _library_name(record: dict[str, Any], fallback: str) -> str:
     """
     harvest_key = str(record.get("key") or "")
     triplet = str(record.get("triplet") or "")
+    # The Rust sysroot harvester writes a slash-separated key,
+    # `rust-std/<version>/<variant>/<arch>/<crate>`, and a matching nested
+    # output path. Its last segment is the crate name -- which is what a key
+    # should carry. The `archive` fallback below would instead give
+    # `libaddr2line-98301de5f7086436.rlib`, whose embedded codegen hash
+    # changes between two builds of the same rustc and would make every
+    # release look like a new library.
+    if "/" in harvest_key:
+        return harvest_key.rsplit("/", 1)[-1]
     if triplet and f".{triplet}." in harvest_key:
         return harvest_key.split(f".{triplet}.", 1)[1]
+    # The Cortex-M harvest records no triplet -- there is no distro triplet to
+    # record -- and spells its key `<library>.<version>.<variant>.<arch>`. The
+    # last three are recorded fields, so stripping them is exact, where the
+    # archive fallback below is not: every Cortex-M multilib's `newlib` comes
+    # out of a file called `libc.a`, so 12 distinct libraries would all be
+    # named `libc` and collide on one key.
+    suffix = ".{}.{}.{}".format(
+        record.get("library_version") or "",
+        record.get("variant") or "",
+        record.get("arch") or "",
+    )
+    if harvest_key.endswith(suffix) and len(harvest_key) > len(suffix):
+        return harvest_key[: -len(suffix)]
     archive = str(record.get("archive") or "")
     if archive:
         stem = Path(archive).name
@@ -236,30 +338,77 @@ def _library_key(record: dict[str, Any], fallback: str) -> str:
     return f"{library}/{version}/{variant}/{arch}"
 
 
+def _warp_key(record: dict[str, Any], path: Path) -> tuple[str, str]:
+    """`(manifest key, report bucket)` for one WARP library.
+
+    The WARP index records `module`, `version` and `variant` but no `arch`:
+    the architecture is in the filename, which is where the builder puts it
+    (`afd.sys-10.0.19041.1766-msvc-14.20-b27412.x86_64.warp.json`). Taking it
+    from the filename is exact for every file that builder writes.
+    """
+    stem = path.name
+    for suffix in (".warp.json", ".warp.gsig", ".gsig", ".json"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    arch = stem.rsplit(".", 1)[-1] if "." in stem else "unknown"
+    key = "{}{}/{}/{}/{}".format(
+        KEY_PREFIX[WARP_KIND],
+        record.get("module") or stem,
+        record.get("version") or "unknown",
+        record.get("variant") or "unknown",
+        arch,
+    )
+    return key, "windows-warp"
+
+
 def collect(
     blobs_dir: Path,
     *,
     pattern: str,
     min_signatures: int,
-    limit: int | None,
+    limit: int | None = None,
     prefer_images: Sequence[str] = (),
+    bucket: str | None = None,
+    source_class: str | None = None,
 ) -> tuple[list[SourceBlob], list[str]]:
-    """Candidate blobs, plus the reason each rejection was rejected.
+    """Candidate blobs from one source directory, plus every rejection reason.
 
     Empty libraries are the common case and they are dropped here, not
     silently published: five glibc archives have been 8-byte stubs since 2.34
     and MinGW import libraries are pure thunks, so a harvest legitimately
     produces many zero-signature outputs. Publishing them would inflate the
     set with blobs that can never match anything.
+
+    Args:
+        blobs_dir: A directory of blobs with (usually) an `index.json`.
+        pattern: Glob selecting blob files. `*` accepts both schemes.
+        min_signatures: Drop a blob below this count.
+        limit: Keep at most this many, after resolution.
+        prefer_images: Accepted for signature compatibility; resolution now
+            happens once across all sources, in `_resolve_contested`.
+        bucket: Override the report bucket for every blob here. Needed for the
+            Cortex-M harvest, whose rows record no `image` to derive one from.
+        source_class: Override the resolution class, for the same reason.
     """
-    index = _load_index(blobs_dir)
+    del prefer_images
+    shape, index = _load_index(blobs_dir)
     chosen: list[SourceBlob] = []
     rejected: list[str] = []
     for path in sorted(blobs_dir.glob(pattern)):
         if path.name == "index.json" or not path.is_file():
             continue
-        record = index.get(path.name, {})
-        signatures = int(record.get("unique_signatures") or 0)
+        # The FLIRT harvest writes flat filenames; the Rust sysroot harvest
+        # writes `rust-std/<version>/<variant>/<arch>/<crate>.flirt.json` and
+        # records that whole relative path as the row's `output`. Try the
+        # relative path first, then the bare name, so both index correctly.
+        # Getting this wrong is silent: an unmatched row leaves the blob with
+        # no provenance and no signature count, so it cannot be filtered and
+        # publishes with `source: "unknown"`.
+        relative = path.relative_to(blobs_dir).as_posix()
+        record = index.get(relative) or index.get(path.name) or {}
+        count_field = "unique" if shape == "warp" else "unique_signatures"
+        signatures = int(record.get(count_field) or 0)
         if not record:
             # No index entry: keep it, but it cannot be filtered on a count
             # it does not have.
@@ -267,58 +416,132 @@ def collect(
         elif signatures < min_signatures:
             rejected.append(f"{path.name}: {signatures} signatures")
             continue
+        if shape == "warp":
+            key, derived_bucket = _warp_key(record, path)
+            kind, derived_class = WARP_KIND, "warp"
+        else:
+            key = _library_key(record, path.name.split(".")[0])
+            image = str(record.get("image") or "")
+            kind = DEFAULT_KIND
+            derived_class = _classify_image(image)
+            derived_bucket = image or "unknown"
         chosen.append(
             SourceBlob(
                 path=path,
-                key=_library_key(record, path.name.split(".")[0]),
+                key=key,
                 signatures=max(signatures, 0),
                 record=record,
+                kind=kind,
+                bucket=bucket or derived_bucket,
+                source_class=source_class or derived_class,
             )
         )
-    if prefer_images:
-        chosen, dropped = _resolve_by_image(chosen, prefer_images)
-        rejected.extend(dropped)
     if limit is not None:
         chosen = chosen[:limit]
     return chosen, rejected
 
 
-def _resolve_by_image(
-    sources: Sequence[SourceBlob], prefer: Sequence[str]
-) -> tuple[list[SourceBlob], list[str]]:
-    """Keep one source per key, choosing by builder image in `prefer` order.
+def _resolve_contested(
+    sources: Sequence[SourceBlob],
+    *,
+    prefer_images: Sequence[str] = (),
+    published: Mapping[str, BlobEntry] | None = None,
+) -> tuple[list[SourceBlob], list[str], dict[str, BlobEntry]]:
+    """Keep one source per `(scheme, library, version, variant, arch)` key.
 
-    Measured on the 2026-09-03 Docker harvest: 134 of 245 keys are contested,
-    and the contesting blobs differ **only** in an absolute build path the
-    harvester embeds in the blob's own provenance
-    (`/home/.../system-libs/linux-amd64/...` versus `.../linux-arm64/...`).
-    The builder image is not part of a signature's identity -- the same
-    cross-compiled `arm-linux-gnueabihf` glibc is the same library whichever
-    host built it -- so the bytes should be identical and are not.
+    Three rules, in order, and the order is the point:
 
-    That is a harvester defect, not a distribution one, and this function is
-    the operator's escape rather than its fix: without `--prefer-image` the
-    collision is a hard failure, which is what keeps the defect visible. Once
-    the absolute path is out of the emitted blob the two hash the same and the
-    content-addressed store deduplicates them for free.
+    1. **History decides first.** A key the previous manifest already
+       published keeps that blob: the resolution was made once, is signed, and
+       is on a CDN. Re-litigating it every release would churn hashes for no
+       reason and cost every client a re-download. Measured against serial 1,
+       this alone settles all 96 contested keys.
+    2. **Then the source class**, `SOURCE_CLASS_ORDER`: a network cell beats a
+       Docker image because it carries the upstream package hash.
+    3. **Then `--prefer-image`**, for a contest *inside* one class.
+
+    Anything still contested after all three is a hard error, which is the
+    correct default: two different blobs under one key means a harvester's
+    `variant` field is not distinguishing two builds, and that defect should
+    stay visible rather than being silently resolved by sort order.
+
+    Measured on the 2026-09-03 Docker harvest: 96 of 316 keys are contested,
+    every one of them `linux-amd64` against `linux-arm64`, and the contesting
+    blobs differ **only** in an absolute build path the harvester embeds in
+    the blob's own provenance. Once that path is out of the emitted blob the
+    two hash the same and the content-addressed store deduplicates them free.
+
+    Returns:
+        `(kept, dropped-with-reasons, carried-forward entries by key)`.
     """
-    order = {name: rank for rank, name in enumerate(prefer)}
-    best: dict[str, SourceBlob] = {}
-    dropped: list[str] = []
+    published = published or {}
+    class_rank = {name: i for i, name in enumerate(SOURCE_CLASS_ORDER)}
+    image_rank = {name: i for i, name in enumerate(prefer_images)}
+
+    grouped: dict[str, list[SourceBlob]] = {}
     for source in sources:
-        current = best.get(source.key)
-        if current is None:
-            best[source.key] = source
+        grouped.setdefault(source.key, []).append(source)
+
+    kept: list[SourceBlob] = []
+    dropped: list[str] = []
+    carried: dict[str, BlobEntry] = {}
+    for key, contenders in sorted(grouped.items()):
+        if key in published:
+            carried[key] = published[key]
+            for loser in contenders:
+                dropped.append(
+                    f"{loser.path.name}: key {key!r} was already published as "
+                    f"{published[key].sha256[:12]}; carried forward unchanged"
+                )
             continue
-        current_rank = order.get(str(current.record.get("image") or ""), len(order))
-        rank = order.get(str(source.record.get("image") or ""), len(order))
-        loser, winner = (source, current) if current_rank <= rank else (current, source)
-        best[source.key] = winner
-        dropped.append(
-            f"{loser.path.name}: key {loser.key!r} also built by image "
-            f"{winner.record.get('image')!r}, which --prefer-image ranks higher"
-        )
-    return sorted(best.values(), key=lambda s: s.path.name), dropped
+        if len(contenders) == 1:
+            kept.append(contenders[0])
+            continue
+
+        def rank(blob: SourceBlob) -> tuple[int, int, str]:
+            return (
+                class_rank.get(blob.source_class, len(class_rank)),
+                image_rank.get(str(blob.record.get("image") or ""), len(image_rank)),
+                blob.path.name,
+            )
+
+        ordered = sorted(contenders, key=rank)
+        # Identical bytes under one key are not a collision, they are the
+        # deduplication the content-addressed store exists for -- worth 26 to
+        # 43 percent between adjacent releases of one distro line. Check that
+        # before ranking, or a corpus that overlaps perfectly fails to
+        # publish. Conversion preserves this: the writer is deterministic, so
+        # identical input JSON produces an identical container.
+        if len({_sha256(c.path) for c in ordered}) == 1:
+            kept.append(ordered[0])
+            dropped.extend(
+                f"{loser.path.name}: key {key!r} is byte-identical to "
+                f"{ordered[0].path.name}; deduplicated"
+                for loser in ordered[1:]
+            )
+            continue
+        winner, runner_up = ordered[0], ordered[1]
+        if rank(winner)[:2] == rank(runner_up)[:2]:
+            raise SystemExit(
+                f"key collision: {key!r} is claimed by "
+                + ", ".join(
+                    f"{c.path.name} (class {c.source_class}, image "
+                    f"{c.record.get('image') or '-'})"
+                    for c in ordered
+                )
+                + ".\nNothing distinguishes them: the source class is the same "
+                "and --prefer-image does not rank them. Either the harvester's "
+                "variant field is not separating two builds, or you want "
+                "--prefer-image <image> to say which one wins."
+            )
+        kept.append(winner)
+        for loser in ordered[1:]:
+            dropped.append(
+                f"{loser.path.name}: key {key!r} also produced by "
+                f"{winner.path.name} (class {winner.source_class}, image "
+                f"{winner.record.get('image') or '-'}), which ranks higher"
+            )
+    return sorted(kept, key=lambda s: (s.key, s.path.name)), dropped, carried
 
 
 # --- manifest construction ---------------------------------------------------
@@ -332,11 +555,30 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _provenance(record: dict[str, Any]) -> Provenance:
+def _provenance(source: SourceBlob) -> Provenance:
+    """The provenance the *source index* recorded, per scheme.
+
+    The two index shapes name different things, and flattening them into one
+    set of field names would lose the distinction between "the `.deb` this
+    archive came out of" and "the PE this GUID was computed from". So each
+    scheme fills the fields it actually has, and `source` says which harvester
+    spoke.
+    """
+    record = source.record
     if not record:
         return Provenance(source="unknown")
+    if source.kind == WARP_KIND:
+        return Provenance(
+            # e.g. `corpus:windows-10-x64` -- the WARP builder's own label for
+            # the PE corpus a module was read out of.
+            source=str(record.get("source") or "warp-pe-pdb"),
+            package=str(record.get("module") or ""),
+            version=str(record.get("version") or ""),
+            arch=source.key.rsplit("/", 1)[-1],
+            variant=str(record.get("variant") or ""),
+        )
     return Provenance(
-        source=str(record.get("source") or "docker-harvest"),
+        source=str(record.get("source") or _default_flirt_source(source)),
         package=str(record.get("library_name") or ""),
         version=str(record.get("library_version") or ""),
         arch=str(record.get("arch") or ""),
@@ -346,6 +588,22 @@ def _provenance(record: dict[str, Any]) -> Provenance:
         triplet=str(record.get("triplet") or ""),
         image=str(record.get("image") or ""),
     )
+
+
+def _default_flirt_source(source: SourceBlob) -> str:
+    """What produced a masked-pattern blob, when its index row does not say.
+
+    Serial 1 recorded `docker-harvest` for every blob including the network
+    cells, which is not quite true of any of them and flatly untrue of the
+    Cortex-M set (a vendor tarball, no container involved). The class the
+    resolver already computed is the honest answer.
+    """
+    return {
+        "network": "distro-archive",
+        "rust": "rust-sysroot",
+        "cortex-m": "arm-gnu-toolchain",
+        "docker": "docker-harvest",
+    }.get(source.source_class, "unknown")
 
 
 def _blob_key(digest: str) -> str:
@@ -373,6 +631,52 @@ def _urls(digest: str, *, repo: str, tag: str, blob_base_url: str) -> list[str]:
     return urls
 
 
+def _materialize(
+    source: SourceBlob, out_blobs: Path, *, convert: bool, codec: str
+) -> tuple[str, int, str]:
+    """Put one source's *published bytes* in `<out_blobs>/<sha256>`.
+
+    With `convert`, the blob is rewritten as a `gsig/1` container through the
+    Rust writer, so the digest names the container and not the JSON. Without
+    it the harvester's own bytes are copied, which is what serial 1 published.
+
+    The conversion is deterministic -- sorted string table, fixed codec and
+    chunk size, no timestamp or path in the file -- which is the property that
+    lets the manifest name a blob by its hash at all. `tests/flirt_gsig_*.rs`
+    hold it.
+
+    Returns:
+        `(sha256, size in bytes, format string)`.
+    """
+    out_blobs.mkdir(parents=True, exist_ok=True)
+    if not convert:
+        digest = _sha256(source.path)
+        target = out_blobs / digest
+        if not target.is_file():
+            tmp = target.with_name(target.name + ".part")
+            shutil.copyfile(source.path, tmp)
+            os.replace(tmp, target)
+        return digest, source.path.stat().st_size, RAW_FORMAT
+
+    from glaurung.tools import sig_convert  # noqa: PLC0415
+
+    staged = out_blobs / f".convert-{os.getpid()}.gsig"
+    report = sig_convert.to_gsig(
+        source.path,
+        staged,
+        codec=codec,
+        scheme=SCHEME_FOR_KIND.get(source.kind, "auto"),
+    )
+    digest = str(report["sha256"])
+    size = int(report["bytes_written"])
+    target = out_blobs / digest
+    if target.is_file():
+        staged.unlink()
+    else:
+        os.replace(staged, target)
+    return digest, size, DEFAULT_FORMAT
+
+
 def build_manifest(
     sources: Sequence[SourceBlob],
     out_blobs: Path,
@@ -388,37 +692,59 @@ def build_manifest(
     blob_format: str,
     kind: str,
     release_tag: str | None = None,
+    convert: bool = False,
+    codec: str = "zstd",
+    carried: Mapping[str, BlobEntry] | None = None,
+    carried_blobs: Path | None = None,
 ) -> tuple[Manifest, dict[str, Path]]:
-    """Copy each source to `<out_blobs>/<sha256>` and describe it.
+    """Publish each source to `<out_blobs>/<sha256>` and describe it.
 
     Two sources that hash the same become one blob. That deduplication is
     worth 26 to 43 percent between adjacent releases of one distro line, and
     it is free precisely because the store is content-addressed.
+
+    `carried` entries are copied into the manifest **verbatim** -- same
+    sha256, same `format`, same recorded provenance -- so the CDN object a
+    previous serial published is reused rather than replaced. Their URLs are
+    left alone too: a carried blob's GitHub URL points at the release that
+    actually holds it, and rewriting it to this release's tag would name an
+    asset nobody uploaded.
     """
     out_blobs.mkdir(parents=True, exist_ok=True)
     entries: dict[str, BlobEntry] = {}
     written: dict[str, Path] = {}
     now = datetime.now(timezone.utc)
-    for source in sources:
-        digest = _sha256(source.path)
-        size = source.path.stat().st_size
-        target = out_blobs / digest
-        if not target.is_file():
+
+    for key, entry in sorted((carried or {}).items()):
+        entries[key] = entry
+        target = out_blobs / entry.sha256
+        source_path = (carried_blobs / entry.sha256) if carried_blobs else None
+        if not target.is_file() and source_path is not None and source_path.is_file():
             tmp = target.with_name(target.name + ".part")
-            shutil.copyfile(source.path, tmp)
+            shutil.copyfile(source_path, tmp)
             os.replace(tmp, target)
-        written[digest] = target
+        if target.is_file():
+            written[entry.sha256] = target
+
+    for source in sources:
+        digest, size, fmt = _materialize(
+            source, out_blobs, convert=convert, codec=codec
+        )
+        written[digest] = out_blobs / digest
         entry = BlobEntry(
             key=source.key,
-            kind=kind,
-            format=blob_format,
+            kind=source.kind or kind,
+            # `_materialize` is the only thing that knows what it wrote, so
+            # it names the format. `--format` overrides it, for a producer
+            # publishing a container this tool did not build.
+            format=blob_format or fmt,
             compression="none",
             sha256=digest,
             size_bytes=size,
             uncompressed_bytes=size,
             signatures=source.signatures,
             licence=licence,
-            provenance=_provenance(source.record),
+            provenance=_provenance(source),
             urls=tuple(
                 _urls(
                     digest,
@@ -430,7 +756,8 @@ def build_manifest(
         )
         # Two harvest outputs can legitimately share a key (the same build
         # point harvested from two images). Identical bytes are the same blob;
-        # differing bytes are a real collision the operator must resolve.
+        # differing bytes are a real collision `_resolve_contested` should
+        # already have settled, so reaching here means it did not.
         existing = entries.get(source.key)
         if existing is not None:
             if existing.sha256 != digest:
@@ -745,6 +1072,77 @@ def _resolve_key(path: Path, generate: bool) -> minisign.SecretKey:
     return secret
 
 
+def _parse_source_spec(
+    spec: str, default_pattern: str
+) -> tuple[Path, str, str | None, str | None]:
+    """`DIR[:PATTERN[:BUCKET[:CLASS]]]` -> the four things `collect` needs.
+
+    Split from the right on at most three colons, so a Windows-style drive
+    letter or any other colon inside the path survives.
+    """
+    parts = spec.split(":")
+    if len(parts) > 4:
+        head = ":".join(parts[:-3])
+        parts = [head, *parts[-3:]]
+    directory = Path(parts[0])
+    pattern = parts[1] if len(parts) > 1 and parts[1] else default_pattern
+    bucket = parts[2] if len(parts) > 2 and parts[2] else None
+    source_class = parts[3] if len(parts) > 3 and parts[3] else None
+    if source_class is not None and source_class not in SOURCE_CLASS_ORDER:
+        raise SystemExit(
+            f"--source class {source_class!r} is not one of "
+            f"{', '.join(SOURCE_CLASS_ORDER)}"
+        )
+    return directory, pattern, bucket, source_class
+
+
+def summarize(
+    manifest: Manifest,
+    sources: Sequence[SourceBlob],
+    carried: Mapping[str, BlobEntry],
+) -> list[str]:
+    """The per-source size table, and the per-scheme signature counts.
+
+    This is the number the programme actually needs before an upload: what a
+    client downloads, broken down by where it came from, so a decision to
+    include or exclude a source is made against its real cost rather than
+    against the JSON it was derived from.
+    """
+    bucket_of = {source.key: source.bucket for source in sources}
+    for key in carried:
+        bucket_of.setdefault(key, "carried-forward (serial < this one)")
+
+    rows: dict[str, tuple[int, int, int]] = {}
+    schemes: dict[str, tuple[int, int]] = {}
+    for blob in manifest.blobs:
+        bucket = bucket_of.get(blob.key, "unknown")
+        count, size, sigs = rows.get(bucket, (0, 0, 0))
+        rows[bucket] = (count + 1, size + blob.size_bytes, sigs + blob.signatures)
+        s_blobs, s_sigs = schemes.get(blob.kind, (0, 0))
+        schemes[blob.kind] = (s_blobs + 1, s_sigs + blob.signatures)
+
+    out = ["", "blobs and bytes by source:", ""]
+    out.append(
+        "  {:<44} {:>6} {:>10} {:>14}".format("SOURCE", "BLOBS", "SIGS", "BYTES")
+    )
+    for bucket in sorted(rows):
+        count, size, sigs = rows[bucket]
+        out.append(f"  {bucket:<44} {count:>6} {sigs:>10} {size:>14,}")
+    out.append(
+        "  {:<44} {:>6} {:>10} {:>14,}".format(
+            "TOTAL",
+            len(manifest.blobs),
+            manifest.total_signatures,
+            manifest.total_bytes,
+        )
+    )
+    out.extend(["", "signatures by scheme:", ""])
+    for kind in sorted(schemes):
+        s_blobs, s_sigs = schemes[kind]
+        out.append(f"  {kind:<44} {s_blobs:>6} {s_sigs:>10}")
+    return out
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="publish_signature_set.py",
@@ -752,12 +1150,60 @@ def main(argv: Sequence[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--blobs", type=Path, required=True, help="Directory of signature blobs"
+        "--blobs",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Directory of signature blobs. Repeatable: every directory given "
+        "is published into one set, and each is read with whichever "
+        "index.json shape it has (FLIRT harvest, Cortex-M harvest, WARP "
+        "builder). Use --source for finer control.",
+    )
+    parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        metavar="DIR[:PATTERN[:BUCKET[:CLASS]]]",
+        help="A blob directory with an explicit glob, report bucket and "
+        "resolution class, colon-separated. Repeatable. The bucket is what "
+        "the size report groups by; the class is how a contested key is "
+        f"ranked ({', '.join(SOURCE_CLASS_ORDER)}).",
     )
     parser.add_argument(
         "--pattern",
-        default="*.flirt.json",
-        help="Glob selecting blob files inside --blobs (default: %(default)s)",
+        default="**/*.json",
+        help="Glob selecting blob files inside each --blobs directory "
+        "(default: %(default)s -- both *.flirt.json and *.warp.json, and "
+        "recursive, because the Rust sysroot harvest nests its output under "
+        "rust-std/<version>/<variant>/<arch>/. index.json is always skipped)",
+    )
+    parser.add_argument(
+        "--convert",
+        choices=("gsig", "none"),
+        default="gsig",
+        help="Rewrite every blob as a gsig/1 container before hashing it "
+        "(default: %(default)s), or publish the harvester's own JSON bytes. "
+        "Conversion changes a blob's sha256, so it is not free: a key already "
+        "published as JSON must be carried forward, not reconverted, or every "
+        "client re-downloads it.",
+    )
+    parser.add_argument(
+        "--codec",
+        default="zstd",
+        help="gsig codec (default: %(default)s). Part of the blob's identity: "
+        "changing it changes every hash.",
+    )
+    parser.add_argument(
+        "--carry-forward",
+        type=Path,
+        default=None,
+        metavar="MANIFEST",
+        help="A previously published manifest.json. Every key it names is "
+        "reused verbatim -- same sha256, same format -- so the CDN objects "
+        "stay valid and clients re-download nothing. Blobs are copied from "
+        "<MANIFEST dir>/blobs when they are there; a missing local copy is "
+        "reported, not fatal, since the published object is what matters.",
     )
     parser.add_argument("--set", dest="set_name", default="base", help="Set name")
     parser.add_argument("--set-version", required=True, help="e.g. 2026.09.1")
@@ -792,6 +1238,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"manifest.json built from the same --blobs/--set/--serial, that "
         f"exact copy is kept so the externally-produced signature stays "
         f"valid.",
+    )
+    parser.add_argument(
+        "--unsigned",
+        action="store_true",
+        help="Build and measure the release without signing it. The manifest, "
+        "SHA256SUMS and NOTICE are written and the exact `minisign -Sm` "
+        "command is printed; no key is read and nothing is signed. This is "
+        "the honest shape of a dry run whose signing key belongs to a human: "
+        "the alternative -- signing with the local dev key -- produces an "
+        "artifact that looks publishable and is not. Implies no --upload.",
     )
     parser.add_argument(
         "--release-tag",
@@ -831,7 +1287,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "printing the commands. GitHub Releases always stays print-only.",
     )
     parser.add_argument("--licence", default=DEFAULT_LICENCE)
-    parser.add_argument("--format", dest="blob_format", default=DEFAULT_FORMAT)
+    parser.add_argument(
+        "--format",
+        dest="blob_format",
+        default=None,
+        help="Override the container name recorded in each manifest entry. "
+        f"Defaults to what was actually written: {DEFAULT_FORMAT} with "
+        f"--convert gsig, {RAW_FORMAT} with --convert none.",
+    )
     parser.add_argument("--kind", default=DEFAULT_KIND)
     parser.add_argument(
         "--min-signatures",
@@ -858,9 +1321,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    blobs_dir: Path = args.blobs.expanduser()
-    if not blobs_dir.is_dir():
-        raise SystemExit(f"--blobs {blobs_dir} is not a directory")
+    specs = [(Path(d), args.pattern, None, None) for d in args.blobs]
+    specs.extend(_parse_source_spec(spec, args.pattern) for spec in args.source)
+    if not specs:
+        raise SystemExit("give at least one --blobs directory or --source spec")
     out: Path = args.out.expanduser()
 
     secret_key_path = args.secret_key.expanduser()
@@ -870,15 +1334,53 @@ def main(argv: Sequence[str] | None = None) -> int:
         else f"https://{args.s3_bucket}"
     )
 
-    sources, rejected = collect(
-        blobs_dir,
-        pattern=args.pattern,
-        min_signatures=args.min_signatures,
-        limit=args.limit,
-        prefer_images=args.prefer_image,
+    published: dict[str, BlobEntry] = {}
+    carried_blobs: Path | None = None
+    if args.carry_forward is not None:
+        previous_path = args.carry_forward.expanduser()
+        previous = Manifest.read(previous_path)
+        if previous.serial >= args.serial:
+            raise SystemExit(
+                f"--carry-forward names serial {previous.serial} but this run "
+                f"is serial {args.serial}. A serial must exceed the one it "
+                "carries forward from, or a client that already holds the "
+                "older set will refuse this one."
+            )
+        published = {blob.key: blob for blob in previous.blobs}
+        carried_blobs = previous_path.parent / "blobs"
+
+    sources: list[SourceBlob] = []
+    rejected: list[str] = []
+    for directory, pattern, bucket, source_class in specs:
+        directory = directory.expanduser()
+        if not directory.is_dir():
+            raise SystemExit(f"{directory} is not a directory")
+        found, skipped = collect(
+            directory,
+            pattern=pattern,
+            min_signatures=args.min_signatures,
+            bucket=bucket,
+            source_class=source_class,
+        )
+        if not found:
+            raise SystemExit(f"no blobs matched {pattern!r} under {directory}")
+        sources.extend(found)
+        rejected.extend(skipped)
+
+    sources, contested, carried = _resolve_contested(
+        sources, prefer_images=args.prefer_image, published=published
     )
-    if not sources:
-        raise SystemExit(f"no blobs matched {args.pattern!r} under {blobs_dir}")
+    rejected.extend(contested)
+    if args.limit is not None:
+        sources = sources[: args.limit]
+
+    # A carried-forward key whose sources all lost a contest is already in
+    # `carried`; the rest of the previous manifest is carried too, so serial N
+    # is a superset of serial N-1 by construction rather than by luck.
+    still_present = {source.key for source in sources}
+    for key, entry in published.items():
+        if key not in still_present:
+            carried.setdefault(key, entry)
 
     manifest, _written = build_manifest(
         sources,
@@ -894,6 +1396,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         blob_format=args.blob_format,
         kind=args.kind,
         release_tag=args.release_tag,
+        convert=args.convert == "gsig",
+        codec=args.codec,
+        carried=carried,
+        carried_blobs=carried_blobs,
     )
 
     schema_errors = validate_against_schema(manifest.to_dict())
@@ -926,7 +1432,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     notice_path = write_notice(out, manifest)
     sign_cmd = sign_command(manifest_path, secret_key_path, manifest)
 
-    if args.signature is not None:
+    if args.unsigned:
+        if args.upload:
+            raise SystemExit(
+                "--unsigned and --upload are mutually exclusive: an unsigned "
+                "manifest is not publishable, and a client would refuse it."
+            )
+        signed_by = "(none -- --unsigned; the maintainer signs, see below)"
+    elif args.signature is not None:
         signature_source = Path(args.signature).expanduser()
         if not signature_source.is_file():
             raise SystemExit(
@@ -989,16 +1502,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
 
+    for line in summarize(manifest, sources, carried):
+        print(line)
+
     print(
         f"\nset {manifest.set_name} {manifest.set_version} serial "
         f"{manifest.serial}\n"
-        f"  blobs      {len(manifest.blobs)}\n"
-        f"  signatures {manifest.total_signatures}\n"
-        f"  bytes      {manifest.total_bytes}\n"
-        f"  manifest   {manifest_path}\n"
+        f"  blobs      {len(manifest.blobs)}"
+        + (f"  ({len(carried)} carried forward unchanged)" if carried else "")
+        + f"\n  signatures {manifest.total_signatures}\n"
+        f"  bytes      {manifest.total_bytes} "
+        f"({manifest.total_bytes / 1024 / 1024:.1f} MiB)\n"
+        f"  manifest   {manifest_path} "
+        f"({manifest_path.stat().st_size} bytes)\n"
         f"  signature  {signed_by}\n"
         f"  checksums  {sums_path}\n"
-        f"  notice     {notice_path}"
+        f"  notice     {notice_path}\n"
+        f"  trusted comment (what the maintainer must sign with):\n"
+        f"    {manifest.trusted_comment()}"
     )
     print(
         f"\nTo (re-)sign {manifest_path} by hand with a production key "

@@ -108,6 +108,7 @@
 mod codec;
 mod convert;
 mod reader;
+mod warp;
 mod wire;
 mod writer;
 
@@ -164,8 +165,12 @@ pub(crate) fn sample_library_file() -> crate::flirt::FlirtLibraryFile {
 
 pub use codec::{decompress_into, Encoder};
 pub use convert::{library_file_from_gsig, library_file_to_gsig};
-pub use reader::{GsigLibrary, GsigRecord};
-pub use writer::{write, write_guid_library, WriteOptions};
+pub use reader::{GsigConstraint, GsigGuidRecord, GsigLibrary, GsigRecord};
+pub use warp::{
+    warp_library_from_gsig, warp_library_to_gsig, WarpConstraintEntry, WarpEntry, WarpLibraryFile,
+    WarpLibraryKey,
+};
+pub use writer::{write, write_guid_library, write_warp_library, WriteOptions};
 
 /// The four magic bytes at offset 0 of every `.gsig` file.
 pub const MAGIC: [u8; 4] = *b"GSIG";
@@ -374,6 +379,13 @@ pub enum ChunkKind {
     Guids = 6,
     /// The JSON `index` map, stored only when it is not derivable.
     Index = 7,
+    /// The `postcard` [`wire::WireGuidRecord`] stream, parallel to
+    /// [`Self::Guids`]: everything about an exact-match record except the
+    /// GUID itself. Empty for a masked-pattern library.
+    GuidRecords = 8,
+    /// Fixed-width WARP constraints, `wire::CONSTRAINT_LEN` bytes each,
+    /// claimed in order by [`Self::GuidRecords`].
+    Constraints = 9,
 }
 
 impl ChunkKind {
@@ -388,6 +400,8 @@ impl ChunkKind {
             5 => Self::Refs,
             6 => Self::Guids,
             7 => Self::Index,
+            8 => Self::GuidRecords,
+            9 => Self::Constraints,
             _ => return None,
         })
     }
@@ -403,11 +417,13 @@ impl ChunkKind {
             Self::Refs => "refs",
             Self::Guids => "guids",
             Self::Index => "index",
+            Self::GuidRecords => "guid_records",
+            Self::Constraints => "constraints",
         }
     }
 
     /// Every kind this build knows, in the order the writer emits them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Meta,
         Self::Strings,
         Self::Signatures,
@@ -416,6 +432,8 @@ impl ChunkKind {
         Self::Refs,
         Self::Guids,
         Self::Index,
+        Self::GuidRecords,
+        Self::Constraints,
     ];
 }
 
@@ -676,6 +694,19 @@ pub enum GsigError {
     /// A string id points past the end of the string table.
     #[error("gsig string id {0} is out of range ({1} strings)")]
     BadStringId(u32, u32),
+    /// The container's identity scheme is not the one the caller asked for.
+    ///
+    /// Reading a masked-pattern library through the GUID path (or the
+    /// reverse) would return a well-formed, empty result rather than an
+    /// error, and an empty signature library is indistinguishable from a
+    /// legitimately empty harvest. Fail instead.
+    #[error("gsig file is a {got} library, not {want}")]
+    WrongScheme {
+        /// The scheme the caller wanted.
+        want: &'static str,
+        /// The scheme the file declares.
+        got: &'static str,
+    },
     /// A record's pattern, mask or reference range runs off its section.
     #[error("gsig record {0} runs past the end of the {1} section")]
     RecordOverrun(u32, &'static str),

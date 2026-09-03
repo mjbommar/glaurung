@@ -558,8 +558,164 @@ asset, 292 of 1000 assets) but is not the `base` set the design calls for:
 Ubuntu, Alpine and Fedora on amd64 and arm64, about 50 keys. Scoping the
 harvest is the harvester lane's call, not this one's.
 
+## Publishing the whole database: several sources, several schemes
+
+The 2026.09.1 run above took **one** directory of FLIRT JSON. The corpus is not
+one directory any more: four harvesters write masked-pattern libraries in three
+different `index.json` shapes, and the WARP builder writes exact-match GUID
+libraries in a fourth. `tools/publish_signature_set.py` therefore takes any
+number of sources, sniffs each index, and publishes them into one set.
+
+### The three index shapes, and why the tool sniffs
+
+| Harvester | Rows keyed by | Signature count field | Library name from |
+|---|---|---|---|
+| FLIRT (Docker images, distro network cells) | `output`, a flat filename | `unique_signatures` | the harvest `key`, split on the recorded `triplet` |
+| Rust sysroot | `output`, a **nested** path `rust-std/<version>/<variant>/<arch>/<crate>.flirt.json` | `unique_signatures` | the last `/` segment of the harvest `key` |
+| Cortex-M (ARM GNU toolchain) | `output`, a flat filename, **no `triplet`** | `unique_signatures` | the harvest `key` with `.<version>.<variant>.<arch>` stripped |
+| WARP (PE + PDB) | `file` | `unique`, plus a top-level `scheme` | `module`, with the arch taken from the filename |
+
+None of these is going to be retrofitted for the publisher's convenience, and
+each mis-read is silent rather than loud: an unmatched index row leaves a blob
+with no provenance and no signature count, so it cannot be filtered and
+publishes as `source: "unknown"`. Two of the four rules exist because the naive
+one is actively wrong:
+
+* The archive-basename fallback gives every Cortex-M multilib's `newlib` the
+  name `libc` (they all come out of a file called `libc.a`), so twelve distinct
+  libraries would collide on one key.
+* It gives a Rust crate the name `libaddr2line-98301de5f7086436.rlib`, whose
+  embedded codegen hash changes between two builds of the same rustc — so every
+  release would look like a new library.
+
+### How a contested key is resolved
+
+One blob per `(scheme, library, version, variant, arch)`. Three rules, in order:
+
+1. **History decides first.** A key the previous manifest already published
+   keeps that blob, byte for byte. The resolution was made once, is signed, and
+   is on a CDN; re-litigating it would churn hashes for no reason and cost
+   every client a re-download. Measured against serial 1 this alone settles
+   **all 96** contested keys.
+2. **Then the source class**, best first: `network`, `rust`, `cortex-m`,
+   `warp`, `docker`. A network cell beats a Docker image because it carries the
+   *upstream* package hash — the `.deb`/`.apk` digest the distributor published
+   — so its provenance can be re-fetched by anyone; a Docker image's provenance
+   is a `dpkg -l` line inside a container we built. **On this corpus the rule
+   never fires**: every one of the 96 contested keys is `linux-amd64` against
+   `linux-arm64`, which is the harvester defect described above.
+3. **Then `--prefer-image`**, for a contest inside one class.
+
+Byte-identical contenders are deduplicated before any of this — that is the
+26-to-43 percent cross-release overlap the content-addressed store exists for,
+not a collision. Anything still contested after all three rules is a hard
+failure, which is the correct default.
+
+Non-FLIRT schemes carry a prefix in the manifest key (`warp:afd.sys/...`).
+The masked-pattern scheme is left unprefixed because 292 keys are already
+published under those exact strings and a carried-forward blob has to match
+by key.
+
+### The 2026.09.2 dry run, measured
+
+Nothing was uploaded and nothing was signed: `--unsigned` writes the manifest,
+`SHA256SUMS` and `NOTICE`, prints the exact `minisign -Sm` command, and reads
+no key at all. Signing a dry run with the local dev key would produce an
+artifact that *looks* publishable and is not.
+
+```bash
+export TMPDIR="$HOME/.cache/glaurung/tmp"; mkdir -p "$TMPDIR"
+uv run python tools/publish_signature_set.py \
+    --source "$HOME/.cache/glaurung/system-libs/sigs:**/*.flirt.json" \
+    --source "$HOME/.cache/glaurung/system-libs/armtc-13.2.1/sigs:*.flirt.json:cortex-m:cortex-m" \
+    --source "$HOME/.cache/glaurung/system-libs/warp:*.warp.json:windows-warp:warp" \
+    --carry-forward "$HOME/.cache/glaurung/release/2026.09.1/manifest.json" \
+    --set base --set-version 2026.09.2 --serial 2 \
+    --out "$HOME/.cache/glaurung/release/2026.09.2" \
+    --unsigned --quiet
+```
+
+446 blobs, 533,820 signatures. The canonical trusted comment it printed — what
+the maintainer must pass to `minisign -t`, and what the client compares against
+the manifest body — was:
+
+```
+glaurung-sigs set=base version=2026.09.2 serial=2 blobs=446 built=2026-09-03T21:54:01Z
+```
+
+**Every blob is converted to `gsig/1` before it is hashed**, so the digest names
+the container and not the JSON. Measured per source, on exactly the 446 blobs
+this run publishes:
+
+| Source | Blobs | Signatures | Input JSON | Published `gsig/1` | Ratio |
+|---|---:|---:|---:|---:|---:|
+| `linux-amd64` (Docker) | 117 | 58,987 | 83,250,426 | 6,368,333 | 13.1x |
+| `linux-arm64` (Docker) | 54 | 34,345 | 41,633,122 | 3,193,987 | 13.0x |
+| `debian-bookworm-amd64` | 9 | 5,833 | 6,950,417 | 550,432 | 12.6x |
+| `debian-bookworm-arm64` | 8 | 4,868 | 6,088,788 | 436,226 | 14.0x |
+| `debian-trixie-amd64` | 10 | 6,589 | 7,985,258 | 628,050 | 12.7x |
+| `debian-trixie-arm64` | 10 | 5,839 | 7,348,157 | 515,013 | 14.3x |
+| `ubuntu-jammy-amd64` | 9 | 5,843 | 7,467,103 | 577,096 | 12.9x |
+| `ubuntu-jammy-arm64` | 8 | 4,718 | 6,014,591 | 426,790 | 14.1x |
+| `ubuntu-noble-amd64` | 10 | 6,503 | 8,619,113 | 651,681 | 13.2x |
+| `ubuntu-noble-arm64` | 11 | 5,706 | 7,918,370 | 530,494 | 14.9x |
+| `ubuntu-resolute-amd64` | 10 | 6,734 | 9,029,953 | 682,151 | 13.2x |
+| `ubuntu-resolute-arm64` | 12 | 6,077 | 8,428,206 | 559,952 | 15.1x |
+| `alpine-v3.20-x86_64` | 6 | 3,925 | 4,455,318 | 360,261 | 12.4x |
+| `alpine-v3.20-aarch64` | 6 | 3,639 | 4,773,438 | 331,591 | 14.4x |
+| `alpine-v3.21-x86_64` | 6 | 4,355 | 5,062,020 | 403,655 | 12.5x |
+| `alpine-v3.21-aarch64` | 6 | 3,977 | 5,413,340 | 368,645 | 14.7x |
+| `rust-1.88.0-x86_64-unknown-linux-gnu` | 12 | 1,711 | 1,690,005 | 205,776 | 8.2x |
+| `rust-1.97.1-x86_64-unknown-linux-gnu` | 12 | 1,664 | 1,705,735 | 174,595 | 9.8x |
+| Cortex-M (ARM GNU 13.2.1) | 48 | 32,812 | 36,293,733 | 3,053,488 | 11.9x |
+| Windows WARP | 82 | 329,695 | 142,026,166 | 18,007,887 | 7.9x |
+| **Total** | **446** | **533,820** | **402,153,259** | **38,026,103** | **10.6x** |
+
+Per scheme: 364 blobs and 204,125 signatures under
+`flirt-masked-pattern-v1`, 82 blobs and 329,695 under
+`warp-function-guid-v1`. The GUID scheme is 18 percent of the blobs, 62 percent
+of the identities and 47 percent of the bytes.
+
+### Carrying serial 1 forward costs 194 MiB
+
+The run above is a strict superset of serial 1 — every one of its 292 keys is
+listed with the *same* sha256, so those CDN objects are reused and no client
+re-downloads them. But serial 1 published **JSON**, not `gsig/1`, and carrying
+those blobs forward carries their size with them:
+
+| Serial-2 shape | Blobs | Signatures | Bytes | `manifest.json` |
+|---|---:|---:|---:|---:|
+| Carry serial 1 forward (the command above) | 446 | 533,820 | 241,879,366 (230.7 MiB) | 521,873 |
+| Re-cut every blob as `gsig/1` | 446 | 533,820 | 38,026,103 (36.3 MiB) | 523,139 |
+
+Same 446 keys either way — the `--prefer-image` resolution reproduces serial
+1's choice on all 96 contested keys exactly. The difference is 203,853,263
+bytes: carrying 292 JSON blobs forward costs **6.4 times the entire re-cut
+set**. Re-cutting orphans nothing (the store is content-addressed and immutable,
+so the serial-1 objects stay valid and stay fetchable by the manifest that
+names them); it costs one extra upload of 36 MiB and one re-download per
+client, once. **The recommendation is to re-cut**, with
+`--prefer-image linux-amd64 --prefer-image linux-arm64` in place of
+`--carry-forward`; both directories are on disk
+(`~/.cache/glaurung/release/2026.09.2` and `~/.cache/glaurung/release/2026.09.2-allgsig`) so the
+maintainer can compare before choosing. The decision is a maintainer's, which
+is why both were built rather than one.
+
+Other artefacts, carry-forward run: `SHA256SUMS` 61,182 bytes,
+`NOTICE` 57,975 bytes, no `manifest.json.minisig` (unsigned).
+
 ## Not done yet
 
+* **The WARP blobs are fetched and ingested, but not yet matched.** A
+  `warp-function-guid-v1` `.gsig` in the cache is skipped cleanly by the FLIRT
+  loader (`FlirtLibrary::from_gsig_library` refuses a scheme that is not
+  `flirt-masked-pattern-v1`, and `library_for_paths` skips the file and keeps
+  the rest), and `glaurung.llm.kb.siglib.ingest_warp_library_file` reads the
+  container directly. What does not exist yet is a matcher that consults a
+  fetched GUID library during analysis the way `apply_flirt_overrides` consults
+  a masked-pattern one: today the GUID path runs against a KB the caller
+  populated itself. Wiring the resolution order — cache, then KB — is the next
+  step, and is deliberately not in the distribution lane.
 * **Transport compression is `none`.** The field is in the manifest and the
   client honours it, but blobs are stored uncompressed so the Rust loader can
   read a cache file directly. `gsig/1` compresses internally with 64 KiB zstd

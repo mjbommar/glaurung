@@ -544,3 +544,80 @@ def test_record_and_list_function_match(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0].ambiguous is True
     assert rows[0].evidence is None
+
+
+# ---------------------------------------------------------------------------
+# ingest_warp_library_file: the gsig/1 container a published set actually ships
+# ---------------------------------------------------------------------------
+
+
+_WARP_JSON = _REPO / "tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.json"
+_WARP_GSIG = _REPO / "tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.gsig"
+
+
+def test_a_warp_gsig_blob_ingests_exactly_like_its_json(tmp_path: Path) -> None:
+    """The published set ships containers, not JSON, so this is the real path.
+
+    Every field a `siglib_function` row carries has to survive the container:
+    the GUID, both names, the block count, the byte length and the occurrence
+    count. A container that lost any of them would still ingest and still look
+    fine -- the rows would simply be less useful than the JSON's, silently.
+    """
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    from_json = _fresh_kb(tmp_path / "a", _need(_LINK_A))
+    from_gsig = _fresh_kb(tmp_path / "b", _need(_LINK_A))
+    json_summary = siglib.ingest_warp_library_file(from_json, str(_need(_WARP_JSON)))
+    gsig_summary = siglib.ingest_warp_library_file(from_gsig, str(_need(_WARP_GSIG)))
+
+    assert gsig_summary.functions_ingested == json_summary.functions_ingested == 4
+    assert gsig_summary.functions_skipped == 0
+
+    def rows(kb, siglib_id):
+        return sorted(
+            (f.identity, f.name, f.base_name, f.n_units, f.n_bytes, f.occurrences)
+            for f in siglib.list_siglib_functions(kb, siglib_id)
+        )
+
+    assert rows(from_gsig, gsig_summary.siglib_id) == rows(
+        from_json, json_summary.siglib_id
+    )
+
+
+def test_a_warp_gsig_blob_records_the_container_bytes_as_its_source_hash(
+    tmp_path: Path,
+) -> None:
+    """The hash names what was fetched.
+
+    A published blob is addressed by the sha256 of the *container*, so a KB
+    that recorded the JSON's hash instead could not be matched back to the
+    manifest entry it came from.
+    """
+    import hashlib
+
+    kb = _fresh_kb(tmp_path, _need(_LINK_A))
+    siglib.ingest_warp_library_file(kb, str(_need(_WARP_GSIG)))
+    row = siglib.get_siglib(
+        kb,
+        name="warp_sample",
+        version="1.0.0",
+        variant="msvc-14.20-b27412",
+        architecture="x86_64",
+        platform="windows",
+    )
+    assert row is not None
+    assert row.source_sha256 == hashlib.sha256(_WARP_GSIG.read_bytes()).hexdigest()
+
+
+def test_a_masked_pattern_container_is_refused_by_the_warp_ingest(
+    tmp_path: Path,
+) -> None:
+    """Filing a FLIRT blob under a GUID scheme would make the two
+    indistinguishable at lookup, so the reader refuses it outright rather than
+    returning an empty library that ingests as a no-op."""
+    kb = _fresh_kb(tmp_path, _need(_LINK_A))
+    flirt_gsig = _need(
+        _REPO / "tests/fixtures/flirt/gsig/mingw_crt_three.x86_64.flirt.gsig"
+    )
+    with pytest.raises(ValueError):
+        siglib.ingest_warp_library_file(kb, str(flirt_gsig))

@@ -16,7 +16,10 @@
 
 use std::path::{Path, PathBuf};
 
-use glaurung::flirt::gsig::{library_file_to_gsig, GsigLibrary, WriteOptions};
+use glaurung::flirt::gsig::{
+    library_file_to_gsig, warp_library_from_gsig, warp_library_to_gsig, GsigLibrary, Scheme,
+    WarpLibraryFile, WriteOptions,
+};
 use glaurung::flirt::FlirtLibraryFile;
 
 /// `sha256sum tests/fixtures/flirt/gsig/mingw_crt_three.x86_64.flirt.json`.
@@ -111,4 +114,98 @@ fn the_golden_gsig_reads_back_real_signatures() {
             "every golden record must carry a nonempty pattern"
         );
     }
+}
+
+// --- the WARP (exact-match GUID) scheme --------------------------------------
+//
+// The same tripwire for the second scheme the container carries. A published
+// set holds both, addressed by sha256, so a drift in either record layout
+// invalidates blobs that have already been announced.
+
+/// `sha256sum tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.json`.
+const WARP_JSON_SHA256: &str = "f6f4fe7487f5d7f8fee3d43da457dc48b0cce7b7586cae49319bfaaf53c53a07";
+
+/// `sha256sum tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.gsig`.
+const WARP_GSIG_SHA256: &str = "b7d166126f02edbbeeb87414076ebef26a1f4ebf7388a750839d7406fa749717";
+
+#[test]
+fn the_committed_warp_fixtures_match_their_recorded_sha256() {
+    let json_bytes = read(&fixture("warp_sample.x86_64.warp.json"));
+    let gsig_bytes = read(&fixture("warp_sample.x86_64.warp.gsig"));
+    assert_eq!(
+        sha256_hex(&json_bytes),
+        WARP_JSON_SHA256,
+        "the committed WARP JSON fixture no longer matches its recorded hash"
+    );
+    assert_eq!(
+        sha256_hex(&gsig_bytes),
+        WARP_GSIG_SHA256,
+        "the committed WARP gsig fixture no longer matches its recorded hash \
+         -- see tests/fixtures/flirt/gsig/README.md before refreshing this"
+    );
+}
+
+/// Building the WARP container from the committed JSON reproduces the
+/// committed bytes exactly.
+#[test]
+fn the_default_writer_reproduces_the_golden_warp_gsig_bytes() {
+    let json_bytes = read(&fixture("warp_sample.x86_64.warp.json"));
+    let file: WarpLibraryFile =
+        serde_json::from_slice(&json_bytes).expect("golden WARP JSON fixture must parse");
+    let rebuilt =
+        warp_library_to_gsig(&file, &WriteOptions::default()).expect("golden WARP must write");
+    let committed = read(&fixture("warp_sample.x86_64.warp.gsig"));
+    assert_eq!(
+        rebuilt, committed,
+        "rewriting the golden WARP JSON fixture did not reproduce the \
+         committed gsig bytes -- the writer changed without the fixture \
+         being refreshed"
+    );
+    assert_eq!(sha256_hex(&rebuilt), WARP_GSIG_SHA256);
+}
+
+/// The golden WARP `.gsig` reads back every field the knowledge base files in
+/// a `siglib_function` row -- name, base name, block count, byte length,
+/// ambiguity and constraints -- not merely a parseable header.
+#[test]
+fn the_golden_warp_gsig_reads_back_every_record_field() {
+    let gsig_bytes = read(&fixture("warp_sample.x86_64.warp.gsig"));
+    let lib = GsigLibrary::parse(&gsig_bytes).expect("golden WARP gsig must parse");
+    assert_eq!(lib.scheme(), Scheme::WarpFunctionGuidV1);
+    assert_eq!(lib.guid_records().len(), 4);
+    assert_eq!(lib.header().n_signatures as usize, lib.guid_records().len());
+
+    let scale = &lib.guid_records()[1];
+    assert_eq!(lib.string(scale.name).unwrap(), "sample_scale");
+    assert_eq!(lib.string(scale.base_name).unwrap(), "sample_scale");
+    assert_eq!(scale.block_count, 4);
+    assert_eq!(scale.byte_len, 197);
+    assert!(scale.ambiguous);
+    assert_eq!(scale.constraints.len(), 3);
+    // `null` is not zero: the fixture has a callee at offset 0 and a caller
+    // with no offset at all, and they must not collapse into each other.
+    assert_eq!(scale.constraints[0].offset, Some(0));
+    assert_eq!(scale.constraints[1].offset, None);
+    assert_eq!(lib.string(scale.constraints[1].kind).unwrap(), "caller");
+
+    // The shared GUID still reports both names, which is what stops a later
+    // library from claiming an ambiguous identity unopposed.
+    let mut names = lib.guid_names(scale.guid);
+    names.sort_unstable();
+    assert_eq!(names, vec!["sample_scale", "sample_scale_alias"]);
+}
+
+/// The JSON the reader hands back is the JSON the fixture holds, field for
+/// field. This is the property
+/// `glaurung.llm.kb.siglib.ingest_warp_library_file` depends on when it is
+/// pointed at a `.gsig` instead of a `.warp.json`.
+#[test]
+fn the_golden_warp_gsig_round_trips_to_its_json() {
+    let json_bytes = read(&fixture("warp_sample.x86_64.warp.json"));
+    let original: serde_json::Value =
+        serde_json::from_slice(&json_bytes).expect("golden WARP JSON must parse");
+    let gsig_bytes = read(&fixture("warp_sample.x86_64.warp.gsig"));
+    let lib = GsigLibrary::parse(&gsig_bytes).expect("golden WARP gsig must parse");
+    let back = warp_library_from_gsig(&lib).expect("golden WARP gsig must convert back");
+    assert_eq!(original, serde_json::to_value(&back).unwrap());
 }

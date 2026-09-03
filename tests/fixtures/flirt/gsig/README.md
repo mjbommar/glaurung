@@ -1,6 +1,6 @@
-# `gsig/1` golden fixture
+# `gsig/1` golden fixtures
 
-A twelve-signature library in both formats, committed so that
+One library per identity scheme, in both formats, committed so that
 `tests/flirt_gsig_golden.rs` can assert the container's bytes rather than only
 its behaviour.
 
@@ -8,11 +8,30 @@ its behaviour.
 |---|---|---|
 | `mingw_crt_three.x86_64.flirt.json` | The JSON library, built from [`../coff/mingw_crt_three.msvc.lib`](../coff/README.md) | `b3c067204d0d567fa85ddb619a54e81d52471db04a0ecaa3b15626d3aeae21d3` |
 | `mingw_crt_three.x86_64.flirt.gsig` | The same library as a `gsig/1` container, default codec | `0cfcc67998b269834423f0d48c21a2892a83d18ff24d9f5e6043065c43bcd0e5` |
+| `warp_sample.x86_64.warp.json` | A four-entry `warp-function-guid-v1` library. **Synthetic**, see below | `f6f4fe7487f5d7f8fee3d43da457dc48b0cce7b7586cae49319bfaaf53c53a07` |
+| `warp_sample.x86_64.warp.gsig` | The same library as a `gsig/1` container, default codec | `b7d166126f02edbbeeb87414076ebef26a1f4ebf7388a750839d7406fa749717` |
 
 1,526 bytes against 6,955 -- a 4.6x ratio, which is what twelve signatures
 gets you. The corpus-scale numbers, where interning and the columnar layout
 actually pay, are in
 [`docs/reference/function-signature-libraries.md`](../../../../docs/reference/function-signature-libraries.md).
+
+## Why the WARP fixture is synthetic
+
+The masked-pattern fixture is derived from a real archive, which is right: its
+job is to pin what the harvester actually emits. The WARP fixture's job is
+different. It pins the *container's* record layout, and what has to be covered
+is every optional shape at once -- an entry with no constraints, an ambiguous
+GUID shared by two names, a constraint at offset `0` **and** one with a `null`
+offset (which are different facts, and would otherwise collapse into each
+other unnoticed), and a non-empty `sources`/`stats` envelope. A real library
+is 1,035 entries covering a subset of that, and the only real WARP libraries
+on this machine are derived from Microsoft system binaries, which is not a
+licence question a test fixture should be settling. Four hand-written entries
+cover more and commit less.
+
+The GUIDs are real UUIDs but name nothing: they are the container's key
+material, not evidence about any binary.
 
 ## Why a golden file and not just a round-trip test
 
@@ -39,10 +58,15 @@ uv run python -m glaurung.tools.sig_convert to-gsig \
     tests/fixtures/flirt/gsig/mingw_crt_three.x86_64.flirt.json \
     tests/fixtures/flirt/gsig/mingw_crt_three.x86_64.flirt.gsig
 
+# The WARP fixture's JSON is hand-maintained; only the container is rebuilt.
+uv run python -m glaurung.tools.sig_convert to-gsig --scheme warp \
+    tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.json \
+    tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.gsig
+
 sha256sum tests/fixtures/flirt/gsig/*
 ```
 
-Then update the table above **and** the constant in
+Then update the table above **and** the constants in
 `tests/flirt_gsig_golden.rs`, and say in the commit message what changed about
 the format.
 

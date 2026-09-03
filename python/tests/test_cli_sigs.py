@@ -192,7 +192,23 @@ def test_fetch_over_a_file_url(capsys, tmp_path, isolated_cache, monkeypatch):
     """A real published release, served from disk, through the real code path."""
     corpus = tmp_path / "corpus"
     corpus.mkdir()
-    (corpus / "libx.flirt.json").write_text(json.dumps({"entries": ["x"] * 30}))
+    # A real masked-pattern library: the publisher converts every blob to a
+    # `gsig/1` container through the Rust writer, so a merely JSON-shaped
+    # placeholder no longer converts.
+    (corpus / "libx.flirt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "2",
+                "arch": "x86_64",
+                "prologue_len": 8,
+                "entries": [
+                    {"name": f"x_{i:04d}", "prologue_hex": f"554889e5{i:08x}"}
+                    for i in range(30)
+                ],
+                "index": {},
+            }
+        )
+    )
     (corpus / "index.json").write_text(
         json.dumps(
             {

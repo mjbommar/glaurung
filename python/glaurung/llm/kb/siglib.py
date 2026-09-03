@@ -1045,13 +1045,17 @@ def ingest_warp_library_file(
     *,
     source_sha256: Optional[str] = None,
 ) -> IngestSummary:
-    """Record a WARP JSON library file's provenance in the KB.
+    """Record a WARP library file's provenance in the KB.
 
     The file-shaped counterpart of :func:`ingest_warp_library`, which seeds
     identities directly from a symbolised binary. This one reads what
     ``glaurung.tools.build_warp_library`` wrote -- GUIDs, names and sizes, no
     bytes -- so a library built once on a machine with the PE and PDB corpus
     can be shipped to a machine that has neither and still name functions.
+
+    **Either format is accepted**: a ``*.warp.json`` file or a WARP ``gsig/1``
+    container, dispatched on the file's first four bytes. A published set
+    ships the container, so this is the path a fetched blob takes.
 
     The ``library`` key becomes the ``siglib`` row
     ``(name, version, variant, architecture, platform)``; every entry becomes
@@ -1066,9 +1070,13 @@ def ingest_warp_library_file(
 
     Args:
         kb: The knowledge base to write into.
-        warp_library_path: Path to a ``*.warp.json`` file.
+        warp_library_path: Path to a ``*.warp.json`` file or a WARP ``gsig/1``
+            container.
         source_sha256: Override the recorded hash of the library file. Computed
-            from the file's own bytes when omitted.
+            from the file's own bytes when omitted -- **the bytes on disk**, so
+            a JSON library and the container built from it hash differently,
+            which is correct: they are different artifacts and a manifest names
+            the one that was actually fetched.
 
     Returns:
         An :class:`IngestSummary`. ``functions_skipped`` counts entries with no
@@ -1083,8 +1091,17 @@ def ingest_warp_library_file(
     import json
     from pathlib import Path
 
-    text = Path(warp_library_path).read_text()
-    data = json.loads(text)
+    path = Path(warp_library_path)
+    raw = path.read_bytes()
+    if raw[:4] == b"GSIG":
+        # A container is read by the Rust reader that wrote it, never parsed
+        # in Python. It raises if the file is a masked-pattern library, which
+        # is what stops a FLIRT blob being filed under a GUID scheme.
+        import glaurung as g
+
+        data = json.loads(g.analysis.warp_library_to_json_str(str(path)))
+    else:
+        data = json.loads(raw.decode("utf-8"))
     library = data.get("library")
     if not library:
         raise ValueError(f"{warp_library_path} carries no 'library' key")
@@ -1095,7 +1112,7 @@ def ingest_warp_library_file(
             f"{WARP_FUNCTION_GUID_V1!r}"
         )
     if source_sha256 is None:
-        source_sha256 = hashlib.sha256(text.encode()).hexdigest()
+        source_sha256 = hashlib.sha256(raw).hexdigest()
 
     siglib_id = get_or_create_siglib(
         kb,

@@ -423,6 +423,106 @@ fn flirt_gsig_write_from_json_str_py<'py>(
     Ok(out)
 }
 
+/// Write a `gsig/1` container from a WARP GUID library's JSON text.
+///
+/// The `warp-function-guid-v1` counterpart of
+/// :func:`flirt_gsig_write_from_json_str`. A WARP library is an equality
+/// scheme, not a masked-pattern one, so it fills different sections of the
+/// same container and the header records which -- a reader dispatches on
+/// that before it interprets a single record.
+///
+/// Args:
+///     json_text: A ``*.warp.json`` library, as
+///         ``glaurung.tools.build_warp_library`` writes it.
+///     output_path: Where to write the container.
+///     codec: ``"zstd"`` (default, pure Rust), ``"store"``, or ``"zstd-max"``
+///         when the crate was built with the ``gsig-zstd`` feature.
+///
+/// Returns:
+///     A dict with ``bytes_written``, ``n_signatures`` (the entry count),
+///     ``n_strings``, ``chunk_count``, ``codec`` and ``sha256``.
+///
+/// Raises:
+///     OSError: the output cannot be written.
+///     ValueError: the text is not a WARP library, a GUID is not a UUID, or
+///         the codec is unknown.
+#[pyfunction]
+#[pyo3(name = "warp_gsig_write_from_json_str", signature = (json_text, output_path, codec = "zstd"))]
+fn warp_gsig_write_from_json_str_py<'py>(
+    py: Python<'py>,
+    json_text: &str,
+    output_path: &str,
+    codec: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let file: crate::flirt::gsig::WarpLibraryFile = serde_json::from_str(json_text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let options = crate::flirt::gsig::WriteOptions {
+        encoder: codec_from_name(codec)?,
+        ..Default::default()
+    };
+    let bytes = py
+        .detach(|| crate::flirt::gsig::warp_library_to_gsig(&file, &options))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    std::fs::write(output_path, &bytes)?;
+
+    let header = crate::flirt::gsig::GsigHeader::parse(&bytes)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let out = PyDict::new(py);
+    out.set_item("bytes_written", bytes.len())?;
+    out.set_item("n_signatures", header.n_signatures)?;
+    out.set_item("n_strings", header.n_strings)?;
+    out.set_item("chunk_count", header.chunk_count)?;
+    out.set_item("codec", codec)?;
+    out.set_item("sha256", {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&bytes))
+    })?;
+    Ok(out)
+}
+
+/// Read a WARP GUID library of either format and return it as JSON text.
+///
+/// The `warp-function-guid-v1` counterpart of
+/// :func:`flirt_library_to_json_str`, and the only supported way for Python
+/// to read a WARP ``.gsig``: the container is parsed by the reader that wrote
+/// it, never in Python.
+///
+/// A ``.gsig`` that is *not* a WARP library raises rather than returning an
+/// empty result -- an empty GUID library is indistinguishable from a
+/// legitimately empty harvest, which is the worst failure a signature corpus
+/// can have.
+///
+/// Args:
+///     path: Path to a ``*.warp.json`` or a WARP ``gsig/1`` container.
+///
+/// Returns:
+///     The library as a JSON string.
+///
+/// Raises:
+///     OSError: the file cannot be read.
+///     ValueError: it is neither format, or it is a masked-pattern container.
+#[pyfunction]
+#[pyo3(name = "warp_library_to_json_str", signature = (path))]
+fn warp_library_to_json_str_py(path: &str) -> PyResult<String> {
+    let mut magic = [0u8; 4];
+    {
+        use std::io::Read;
+        let mut handle = std::fs::File::open(path)?;
+        let _ = handle.read(&mut magic)?;
+    }
+    let file: crate::flirt::gsig::WarpLibraryFile = if crate::flirt::gsig::is_gsig(&magic) {
+        let loaded = crate::flirt::gsig::GsigLibrary::open(std::path::Path::new(path))
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))?;
+        crate::flirt::gsig::warp_library_from_gsig(&loaded)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))?
+    } else {
+        let text = std::fs::read_to_string(path)?;
+        serde_json::from_str(&text)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))?
+    };
+    serde_json::to_string(&file).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
 /// Tell `crate::flirt` where the installed `data/sigs/` is.
 ///
 /// Rust cannot work this out: the running executable is `python`, so
@@ -489,6 +589,11 @@ pub fn register_flirt_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
         flirt_gsig_write_from_json_str_py,
         analysis_mod
     )?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        warp_gsig_write_from_json_str_py,
+        analysis_mod
+    )?)?;
+    analysis_mod.add_function(wrap_pyfunction!(warp_library_to_json_str_py, analysis_mod)?)?;
     analysis_mod.add(
         "FLIRT_MASKED_PATTERN_SCHEME",
         crate::flirt::MASKED_PATTERN_SCHEME,

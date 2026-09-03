@@ -79,4 +79,6 @@ value_distance = _mod.value_distance
 value_fingerprints_path = _mod.value_fingerprints_path
 value_similarity = _mod.value_similarity
 warp_function_guids_path = _mod.warp_function_guids_path
+warp_gsig_write_from_json_str = _mod.warp_gsig_write_from_json_str
+warp_library_to_json_str = _mod.warp_library_to_json_str
 warp_scheme = _mod.warp_scheme

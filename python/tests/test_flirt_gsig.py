@@ -323,3 +323,70 @@ def test_matcher_entry_point_accepts_a_gsig_library() -> None:
         )
     # Must fail on the missing binary path, not on the gsig library.
     assert "gsig" not in str(excinfo.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# The second identity scheme: warp-function-guid-v1 in the same container
+# ---------------------------------------------------------------------------
+
+WARP_JSON = REPO / "tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.json"
+WARP_GSIG = REPO / "tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.gsig"
+
+
+def test_detect_scheme_reads_both_formats_and_both_schemes() -> None:
+    assert sig_convert.detect_scheme(_need(GOLDEN_JSON)) == sig_convert.FLIRT_SCHEME
+    assert sig_convert.detect_scheme(_need(GOLDEN_GSIG)) == sig_convert.FLIRT_SCHEME
+    assert sig_convert.detect_scheme(_need(WARP_JSON)) == sig_convert.WARP_SCHEME
+    assert sig_convert.detect_scheme(_need(WARP_GSIG)) == sig_convert.WARP_SCHEME
+
+
+def test_an_explicit_scheme_that_is_wrong_is_an_error(tmp_path: Path) -> None:
+    """``--scheme`` asserts rather than discovers.
+
+    Reading a masked-pattern library through the GUID path returns an empty,
+    well-formed library rather than an error, and an empty signature library
+    is indistinguishable from a legitimately empty harvest.
+    """
+    with pytest.raises(ValueError, match="not warp-function-guid-v1"):
+        sig_convert.to_gsig(_need(GOLDEN_JSON), tmp_path / "x.gsig", scheme="warp")
+    with pytest.raises(ValueError, match="not flirt-masked-pattern-v1"):
+        sig_convert.to_gsig(_need(WARP_JSON), tmp_path / "y.gsig", scheme="flirt")
+
+
+def test_a_warp_library_round_trips_through_the_container(tmp_path: Path) -> None:
+    original = json.loads(_need(WARP_JSON).read_text())
+    container = tmp_path / "roundtrip.gsig"
+    report = sig_convert.to_gsig(WARP_JSON, container)
+    assert report["n_signatures"] == len(original["entries"])
+    assert sig_convert.read_library(container) == original
+    # ...and writing it again is byte-identical, which is what lets a
+    # distribution address the blob by its hash.
+    again = tmp_path / "again.gsig"
+    sig_convert.to_gsig(container, again)
+    assert again.read_bytes() == container.read_bytes()
+
+
+def test_the_warp_container_is_smaller_than_its_json() -> None:
+    """The size claim, measured on the committed fixture rather than asserted.
+
+    The corpus-scale number is in ``docs/reference/signature-distribution.md``;
+    this only holds that the container is not somehow *larger*, which a badly
+    chunked writer can manage on a small input.
+    """
+    assert _need(WARP_GSIG).stat().st_size < _need(WARP_JSON).stat().st_size
+
+
+def test_a_warp_container_reports_its_scheme_and_guid_count() -> None:
+    info = g.analysis.flirt_library_info_path(str(_need(WARP_GSIG)))
+    assert info["format"] == "gsig"
+    assert info["scheme"] == "warp-function-guid-v1"
+    assert info["n_guids"] == 4
+    assert info["prologue_len"] == 0
+    names = {chunk["name"] for chunk in info["chunks"]}
+    assert {"guids", "guid_records", "constraints"} <= names
+    assert "patterns" not in names
+
+
+def test_reading_a_flirt_container_as_warp_is_refused() -> None:
+    with pytest.raises(ValueError, match="not warp-function-guid-v1"):
+        g.analysis.warp_library_to_json_str(str(_need(GOLDEN_GSIG)))
