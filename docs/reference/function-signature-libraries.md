@@ -186,11 +186,23 @@ the allowlist, the manifest schema, the licence position -- the archives are
 distribution packages under their own licences and are never checked in, only
 the derived signatures are redistributable -- and the measured table.
 
-**The first real set, 2026-09-03.** Three build images (`linux/amd64`, `windows/amd64`, and `linux/arm64` under qemu) yielded **419 archives, 508.6 MB, across 11 distinct target triplets and 37 distinct Debian packages**. Building one library per archive gave **126,215 unique signatures** from 198,361 raw, with 9,410 dropped as ambiguous and no build failures. `libcrypto.a` alone contributes 6,042 and glibc's `libc.a` 2,563, against the 16 this repository's own `libmathlib.a` produces.
+**The first real set, 2026-09-03.** Three build images (`linux/amd64`,
+`windows/amd64`, and `linux/arm64` under qemu) yielded **419 archives,
+508.6 MB, across 11 distinct target triplets and 37 distinct Debian
+packages**. Building one library per archive gave **126,215 unique
+signatures** from 198,361 raw, with 9,410 dropped as ambiguous and no build
+failures. `libcrypto.a` alone contributes 6,042 and glibc's `libc.a` 2,563,
+against the 16 this repository's own `libmathlib.a` produces.
 
-**Every MinGW-w64 archive scores zero.** `src/flirt/archive.rs` reads ELF and Mach-O relocation tables and the MinGW CRT is COFF, so 120 of the 419 rows produce nothing. They are harvested and keyed correctly and will yield signatures the day COFF relocations are read. That is a gap in the reader, not in the harvest.
+**Every MinGW-w64 archive scores zero.** `src/flirt/archive.rs` reads ELF
+and Mach-O relocation tables and the MinGW CRT is COFF, so 120 of the 419
+rows produce nothing. They are harvested and keyed correctly and will yield
+signatures the day COFF relocations are read. That is a gap in the reader,
+not in the harvest.
 
-None of these libraries is shipped in `data/sigs/` yet; keying, deduplication across variants and a shipping policy for a set this size are the next question, not this lane's.
+None of these libraries is shipped in `data/sigs/` yet; keying,
+deduplication across variants and a shipping policy for a set this size are
+the next question, not this lane's.
 
 ## Measured
 
