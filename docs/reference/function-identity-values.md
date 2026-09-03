@@ -86,15 +86,16 @@ contribute ten thousand induction values and drown everything else.
 
 **`ADDRESS_FLOOR = 0x10000` is the one deviation that changes results, and it
 is not cosmetic.** vSim's corpus is non-PIE executables based at `0x400000`, so
-HC1/HC2 never touch a small integer. Half of ours are x86-64 **shared objects**
-whose entire image maps below `0x10000`, and there the unguarded rule deletes
+HC1/HC2 never touch a small integer. Our in-house corpus is entirely x86-64 **shared
+objects** whose image maps below `0x10000` (the highest function entry in a
+fixture is around `0x1800`), and there the unguarded rule deletes
 `0`, `1`, `-1`, every structure size and every loop bound — precisely the
 population vSim's own ablation says carries the most signal (removing concrete
 values costs it 24.2% Recall@1). The floor is the conventional low-address
 guard: Linux ships `vm.mmap_min_addr` at 65536, so nothing a loader maps a real
-object over. The cost, stated rather than hidden: on our fixture corpus F1/F2
-contribute nothing and the filter is carried by F3 and F4. On a based
-executable all four fire.
+object over. The cost, stated rather than hidden: on the fixture corpus
+F1/F2 contribute nothing and the filter is carried by F3 and F4. On Cisco
+Dataset-1, whose binaries are executables based at `0x400000`, all four fire.
 
 ### Normalisation and the element space
 
@@ -272,8 +273,8 @@ setting named changes. Recall@1 on the five powered lanes.
 
 **The filter is worth 0.009 Recall@1 here, and vSim reports 0.09.** The order
 of magnitude is the deviation documented above, not a disagreement about the
-rule. Half the in-house corpus is shared objects whose whole image maps below
-`ADDRESS_FLOOR`, so F1 and F2 fire on almost nothing there and the ablation is
+rule. The whole in-house corpus is shared objects whose image maps below
+`ADDRESS_FLOOR`, so F1 and F2 fire on nothing there and the ablation is
 really measuring F3 and F4 alone. Those two still remove **14.01%** of
 harvested values, so the ablation is not vacuous — it is a smaller filter than
 the one vSim measured. The sign also flips on the two cross-compiler lanes
