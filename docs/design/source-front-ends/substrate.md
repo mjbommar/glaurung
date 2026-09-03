@@ -270,6 +270,36 @@ and owns, once, for every language:
   layer's decision, not this one's;
 * the **structural invariants** of `REQ-GEN-1`.
 
+**Back edges are a graph property, not a syntactic one.** The builder's first
+version decided `is_back` from the construct that created an edge, and the first
+real consumer — the C lowering — found two shapes where that is wrong, from the
+outside, by running `validate()` over 2,488 real functions:
+
+* a backward `goto` forming a loop was not recognised as a loop at all, because
+  the builder only marked back edges it had created from loop constructs, and
+  nothing in a `Flow` stream says a `goto`/`label` pair is one;
+* a `do`/`while`'s `continue` was marked a back edge but jumps **forward**,
+  because a bottom-tested loop's test sits below its body.
+
+The second was the other half of a defect already fixed for `for` loops, whose
+`continue` reaches the step rather than the head. The fix extends that same
+second-pass mechanism — `scope_head` became `scope_back_target: Option<NodeId>`,
+and a bottom-tested loop records `None` — and answers the `goto` case by running
+`cycle_closing_edges()`, the very scan `validate()` cross-checks against, over
+the finished graph. The two now agree by construction rather than by
+coincidence.
+
+Measured effect on the consumer: 4 → 0 validation failures on 930 in-repo
+functions and 108 → 0 on 1,558 corpus functions, with all 48 pre-existing
+substrate tests passing unmodified.
+
+**A third shape is known and deliberately unfixed**: a loop construct's back
+edge inside code unreachable from the entry, where `cycle_closing_edges()`
+never goes, so the edge is `is_back` while closing no cycle. The clean fix is to
+sweep unvisited nodes as extra DFS roots, which changes the documented semantics
+of a public method a live consumer already calls. It occurs nowhere in the
+188,716-function corpus, and the decision belongs to whoever owns both sides.
+
 What it does **not** own is Joern's granularity, Joern's funcend rule, or
 Joern's derived entry/exit flags. Those live in `csource/joern/` and are
 metric-only; the reasoning is

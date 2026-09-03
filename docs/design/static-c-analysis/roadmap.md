@@ -204,6 +204,52 @@ target exists. Plus the per-construct fixtures listed in
 
 **Stop condition.** None; this is the core of the work.
 
+**S2 is complete.** `src/csource/cfg/` lowers the AST to `Flow` events and the
+substrate builds the graph:
+
+```
+in-repo:     210 files,     930 functions,     930 CFGs, 0 validation failures
+decompiled:   14 files,   1,558 functions,   1,558 CFGs, 0 validation failures
+full tree: 1,606 files, 188,716 functions, 188,716 CFGs, 6.8 M nodes, 7.6 M edges
+```
+
+```bash
+cargo test --features python-ext --lib csource::cfg -- --nocapture
+GLAURUNG_PARSE_FULL_CORPUS=1 cargo test --release --features python-ext \
+  --lib csource::cfg -- --nocapture          # the 1,606-file sweep, ~4 min debug
+```
+
+**`REQ-CFG-6` is the component's whole point, and it is measured.** The parser
+deliberately leaves `&&`, `||` and `?:` as ordinary expressions; turning them
+into forks is this layer's job, and a graph that treats `if (a && b)` as one
+condition is wrong in exactly the way GED measures. **625 forks across 350 of
+930 in-repo functions; 65,168 across 25,962 of 188,716 on the tree.** The census
+is probed rather than asserted non-zero: one body measures 3 with the
+short-circuit operators, 0 with each swapped for its bitwise cousin, 4 with one
+added.
+
+Three results worth carrying, each of which cost something to find:
+
+* **Live labels are a fixpoint, not a scan.** A label is a jump target only if a
+  *reachable* `goto` names it. Taking every `goto` at face value kept 4,028
+  unreachable nodes alive on the zlib lane alone, all descending from one dead
+  `goto` in `inflate`.
+* **The consumer found two defects in the substrate**, and they were fixed in
+  the substrate rather than tolerated here — see
+  [`../source-front-ends/substrate.md`](../source-front-ends/substrate.md) §5.
+  The C side's allowance was deleted, not re-baselined, and replaced by a
+  regression test that drives both reproducers.
+* **2,324 of 188,716 functions legitimately fail `REQ-GEN-1`'s second
+  invariant.** `spin: g(); goto spin;` reaches the function end on no path, so
+  "every path reaches the end" is false *of the program*. The allowance for it
+  is structural and narrow — it admits nothing unless every stranded node still
+  has a successor, which is what makes the set a cycle rather than a dead end —
+  and unlike the substrate defects it does not go away when anything is fixed.
+  Inventing an exit edge would be a lie about what can happen.
+
+The same corpus caveat as S1 applies to the sweep: every artifact in it is
+Glaurung's own output.
+
 ## 5. S3 — Joern parity and GED
 
 **Deliverable.** The parity layer over S2 — Joern's expression-level node
@@ -297,7 +343,33 @@ quoted as one.
 ## 8. S6 and S7 — the rest
 
 **S6 — native `type_match`** (T-1..T-8). Fully independent of every other stage:
-it needs DWARF, which `gimli` already reads, and nothing else. Pure Rust, zero
+it needs DWARF, which `gimli` already reads, and nothing else.
+
+**Two of its eight components have landed** in `src/metrics/`, both because
+there was idle capacity rather than because S6 was scheduled. `type_name.rs`
+is T-2 and T-3, and `calibrate.rs` is T-4 and T-5. Each was differentialled
+against the live reference rather than against inputs we chose:
+
+```
+type_name : 122 candidate strings, 122/122 form-sets agreeing,
+            14,884/14,884 pairwise verdicts agreeing
+calibrate : 3,800 cases (3,000 per-function, 800 binary-wide), 3,800 agreeing
+```
+
+Between them they found **four defects in the reference implementation**, all
+reproduced rather than fixed, because parity is the contract and a corrected
+port would score functions differently from the benchmark it mirrors:
+`normalize_type("long long int")` emits the non-C spelling `"long long long"`;
+`"_Bool"` emits `"_bool"`; the calibration guard compares a raw list length
+against a deduplicated count, so one slot described twice abstains; and that
+guard's zero fallback is provably unreachable. Each carries an assertion, so a
+future cleanup that removes the quirk fails the suite.
+
+`calibrate.rs` also runs in `O(|G|·|D|)` where the reference is `O(|G|·|D|²)`,
+and its differential was measured for *sensitivity* — three deliberate
+deviations produced 229, 55 and 134 disagreements out of 3,800. Two of those
+probes initially caught almost nothing, which exposed a gap in the generated
+corpus rather than a passing test. Pure Rust, zero
 new dependencies, every component with a cheap equality test against the
 reference. Do it whenever there is a gap.
 

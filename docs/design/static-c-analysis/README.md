@@ -15,8 +15,13 @@ pure-Rust C front end whose first scored milestone is reproducing Joern's
 structural judgement exactly, on an 85,645-cell oracle that already exists
 offline. It ends somewhere considerably more interesting than a metric.
 
-Nothing here is built and nothing here is scheduled. The live plan is
-[`development/roadmap/`](../../development/roadmap/README.md).
+**Stages S0, S1 and S2 have landed** — the substrate (`src/syntax/`), the C
+front end (`src/csource/{normalize,lex,parse,cfg}`), the graph edit distance
+(`src/syntax/ged`), and two of the type metric's components (`src/metrics/`).
+What remains of the parity milestone is the Joern-compatibility layer and the
+L3 gate. Nothing here is *scheduled*: the live plan is
+[`development/roadmap/`](../../development/roadmap/README.md), and this
+directory is still where the reasoning lives rather than the work queue.
 
 ## The documents
 
