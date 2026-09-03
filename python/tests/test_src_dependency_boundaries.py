@@ -177,6 +177,112 @@ def test_at_least_one_target_file_exists():
     assert any((SRC / relative).is_file() for relative in TARGET_FILES)
 
 
+# --- the parsing substrate stays language-neutral -----------------------------
+
+# `src/syntax/` is the language-neutral parsing substrate; `src/csource/` is the
+# C front end built on it. Three rules from
+# `docs/design/source-front-ends/substrate.md` section 1, checked here because
+# they are cheap to enforce now and expensive to restore after something has
+# crossed them:
+#
+#   1. `syntax` must not import any language module.
+#   2. `csource::cfg` must not import `csource::joern` -- the Joern-parity layer
+#      reproduces another tool's artifacts, and if those leak into the general
+#      CFG then the lowering to LLIR inherits a graph shaped by a JVM program's
+#      expression granularity.
+#   3. `syntax::cfg` must not know what a C statement is; it consumes events.
+#
+# Rules 2 and 3 guard modules that do not exist yet. That is deliberate: a
+# boundary written before the first crossing costs one regex, and after it costs
+# a refactor. Each check skips cleanly while its files are absent, and
+# `test_the_substrate_boundary_checks_are_not_vacuous` fails if *every* one of
+# them is skipping, so the whole block cannot quietly become a no-op.
+
+SYNTAX_DIR = SRC / "syntax"
+CSOURCE_DIR = SRC / "csource"
+
+#: Any language front end the substrate must not reach into.
+LANGUAGE_MODULE_RE = re.compile(r"\bcrate::(csource|ir|disasm|analysis|formats)\b")
+
+
+def _rust_files(directory: Path) -> list[str]:
+    """Product `.rs` files under `directory`, `src/`-relative, tests excluded."""
+    if not directory.is_dir():
+        return []
+    found = []
+    for path in sorted(directory.rglob("*.rs")):
+        relative = path.relative_to(SRC)
+        if not fr.is_test_path(relative):
+            found.append(str(relative))
+    return found
+
+
+def test_the_substrate_does_not_import_a_language_front_end():
+    """`REQ-SYN-1`: nothing in `src/syntax/` names a specific language.
+
+    The substrate supplies mechanics -- spans, interning, a token buffer, an
+    event stream, a CFG builder over control-flow events. Token kinds and node
+    tags are opaque `u16` values a language supplies. The moment the substrate
+    imports a language module it stops being reusable and the second front end
+    pays for it.
+    """
+    for relative in _rust_files(SYNTAX_DIR):
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = LANGUAGE_MODULE_RE.search(text)
+        assert hit is None, (
+            f"{relative} imports {hit.group(0)!r}; src/syntax/ is the "
+            "language-neutral substrate and must not depend on a language front "
+            "end (REQ-SYN-1). If this is deliberate, move the code into the "
+            "language module rather than widening this check"
+        )
+
+
+def test_the_general_c_cfg_does_not_import_the_joern_parity_layer():
+    """The parity layer reproduces another tool's quirks; it must stay above.
+
+    `csource/cfg/` builds the graph a person would draw. `csource/joern/`
+    reproduces expression-granular nodes, a method-return node deleted only when
+    it stayed a singleton, and entry/exit as derived flags. Those are metric
+    artifacts. If they leak downward, `lower/` lowers a distorted graph to LLIR
+    and every consumer of the general CFG inherits the distortion.
+    """
+    for relative in _rust_files(CSOURCE_DIR / "cfg"):
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = re.search(r"\bcrate::csource::joern\b|\bsuper::joern\b", text)
+        assert hit is None, (
+            f"{relative} references {hit.group(0)!r}; the general CFG must not "
+            "depend on the Joern-parity layer (docs/design/static-c-analysis/"
+            "architecture.md section 1)"
+        )
+
+
+def test_the_substrate_cfg_builder_is_language_blind():
+    """`REQ-SYN-8`: the CFG builder consumes control-flow events, not syntax.
+
+    It never sees a token, a node tag or a keyword -- which is what makes it the
+    one component a second language front end reuses unchanged.
+    """
+    for relative in _rust_files(SYNTAX_DIR / "cfg") + (
+        ["syntax/cfg.rs"] if (SYNTAX_DIR / "cfg.rs").is_file() else []
+    ):
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = LANGUAGE_MODULE_RE.search(text)
+        assert hit is None, (
+            f"{relative} imports {hit.group(0)!r}; the CFG builder consumes "
+            "control-flow events and must stay language-blind (REQ-SYN-8)"
+        )
+
+
+def test_the_substrate_boundary_checks_are_not_vacuous():
+    """At least the substrate itself must exist, or the block above proves
+    nothing. This is the same guard `test_at_least_one_target_file_exists`
+    provides for the target-layer checks."""
+    assert _rust_files(SYNTAX_DIR), (
+        "src/syntax/ has no product .rs files; the substrate boundary checks "
+        "above would pass vacuously"
+    )
+
+
 # --- correctness cannot depend on environment variables ----------------------
 #
 # Every `std::env::var`/`var_os`/`vars()` read in production code (test files
@@ -212,6 +318,7 @@ def test_at_least_one_target_file_exists():
 ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     # -- decompiler-scope: diagnostics, all gate an eprintln/dump only --
     ("analysis/exception.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
+    ("analysis/cfg/repair.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("analysis/ioctl_surface.rs", '"GLAURUNG_IOCTL_DEBUG"'): "diagnostic",
     ("decompile/profile.rs", '"GLAURUNG_PIPELINE_PROFILE"'): "diagnostic",
     ("ir/exception_recover.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
