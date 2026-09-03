@@ -1,0 +1,50 @@
+NOTICE -- Glaurung signature set base 2026.09.1-bundled (serial 1)
+
+WHAT THIS RELEASE CONTAINS
+
+  Function *signatures*: masked byte patterns, CRC16 values over a bounded
+  window, function names, and references by name and offset. It contains no
+  object code, no archives, and no library bytes. The format deliberately
+  splits pattern from mask so that a signature set is not a copy of the
+  library it describes; Hex-Rays states the same property of FLIRT, that a
+  signature file "contains no byte from the original libraries, except for
+  the names of the functions".
+
+WHAT IT DOES NOT CONTAIN
+
+  No `.a`, `.o`, `.lib`, `.deb`, `.rpm` or `.apk` is redistributed here. Each
+  blob's `provenance` in manifest.json names the package, version,
+  architecture and input digest it was derived from, which is sufficient to
+  re-fetch the input from its original distributor and re-derive the blob
+  independently.
+
+LICENCE POSITION
+
+  The inputs are under their own licences -- LGPL-2.1-or-later for glibc,
+  GPL-3.0 with the GCC Runtime Library Exception for libstdc++ and libgcc,
+  and so on, recorded per blob. Redistributing those *archives* would carry
+  corresponding-source obligations; redistributing derived signatures and
+  names does not, on the reasoning above. Nothing here is a grant of rights
+  in the inputs.
+
+  Signature sets derived from inputs whose licence forbids redistribution of
+  the inputs, or whose licence cannot be determined, are not published. Sets
+  derived on a licensed build device (MSVC) are marked as such in their
+  provenance.
+
+TAKEDOWN
+
+  If you hold rights in an input and object to the derived signatures being
+  distributed, say so and the affected blobs are withdrawn: a new manifest is
+  published with a higher serial and without them. Because clients refuse a
+  serial below the one they hold, a withdrawal cannot be rolled back by
+  replaying an older signed manifest.
+
+PER-BLOB PROVENANCE
+
+  2 blob(s), 125 signature(s), 76414 bytes.
+  Full provenance for every blob is in manifest.json; a summary follows.
+
+  KEY                                                     SIGS  PROVENANCE
+  libz/1:1.2.11.dfsg-2ubuntu9.2/ubuntu-22.04-gcc-11.4.0/x86_64     109  docker-harvest zlib1g-dev 1:1.2.11.dfsg-2ubuntu9.2 x86_64
+  mathlib/1.0.0/gcc-15.2.0-O2/x86_64                        16  first-party glaurung-samples 1.0.0 x86_64

@@ -7,6 +7,13 @@
 See [`data/sigs/README.md`](../../data/sigs/README.md) for what the shipped
 library contains and how to rebuild it.
 
+**How a library reaches a user's machine** is a separate mechanism, and it has
+its own page: [signature-set distribution](signature-distribution.md) covers
+the signed content-addressed manifest, the `glaurung sigs` cache commands, the
+offline fallback bundled in the wheel, and the step-by-step release recipe.
+This page is about what a signature *is*; that one is about how a set of them
+is published, fetched and verified.
+
 This page is about the mechanism. It covers what changed on 2026-09-02, why
 `lancelot-flirt` was priced and declined, and what the matcher does now.
 

@@ -1,8 +1,8 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 309,
-  "lfs": 112,
+  "core": 314,
+  "lfs": 109,
   "toolchain": 34,
   "fixtures": 33,
   "docker": 18,
@@ -144,6 +144,9 @@
   ],
   "test_cli_graph_names.py": [
    "docker"
+  ],
+  "test_cli_sigs.py": [
+   "core"
   ],
   "test_cli_startup_is_lazy.py": [
    "core"
@@ -454,9 +457,6 @@
   ],
   "test_flag_predicate_roundtrip.py": [
    "fixtures"
-  ],
-  "test_flirt_cortex_m_fixture.py": [
-   "core"
   ],
   "test_flirt_library_builder.py": [
    "lfs"
@@ -937,8 +937,20 @@
   "test_segment.py": [
    "core"
   ],
-  "test_signature_source_harvest.py": [
-   "lfs"
+  "test_sigs_client.py": [
+   "core"
+  ],
+  "test_sigs_manifest.py": [
+   "core"
+  ],
+  "test_sigs_minisign.py": [
+   "core"
+  ],
+  "test_sigs_packaging.py": [
+   "core"
+  ],
+  "test_sigs_publish.py": [
+   "core"
   ],
   "test_src_dependency_boundaries.py": [
    "core"
@@ -1005,9 +1017,6 @@
    "core"
   ],
   "test_symbols_samples.py": [
-   "lfs"
-  ],
-  "test_system_archive_harvest.py": [
    "lfs"
   ],
   "test_test_census.py": [
@@ -1096,9 +1105,6 @@
    "lfs"
   ],
   "test_warp_function_guids.py": [
-   "lfs"
-  ],
-  "test_warp_windows_libraries.py": [
    "lfs"
   ],
   "test_winapi_prototypes.py": [

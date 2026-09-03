@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://glaurung.dev/schemas/sigs/manifest-1.json",
+  "title": "Glaurung signature-set distribution manifest",
+  "description": "One signed, content-addressed description of a signature set. Blobs are named by their sha256 on disk and in every URL, so mirrors are interchangeable and one Ed25519 signature over this document transitively covers every blob. Enforced by glaurung.sigs.manifest.validate_against_schema, which implements the subset of JSON Schema used here with no third-party dependency.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "set",
+    "set_version",
+    "serial",
+    "built_utc",
+    "valid_until",
+    "min_glaurung_version",
+    "blobs"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bumped only on an incompatible change. Every field added after a version is optional, with a default equal to the previous behaviour."
+    },
+    "set": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "The set name, e.g. \"base\". A client refuses a manifest whose set does not match what it asked for."
+    },
+    "set_version": {
+      "type": "string",
+      "description": "Human-facing release version, e.g. \"2026.09.1\". Also copied into the signed minisign trusted comment."
+    },
+    "serial": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic. The client refuses a manifest whose serial is below the cached one, which is the downgrade defence. Also in the signed trusted comment, so it cannot be edited without invalidating the signature."
+    },
+    "built_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "When the set was built, UTC, second resolution."
+    },
+    "valid_until": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "Staleness horizon. Past it the client still works -- refusing would brick an air-gapped install -- but reports the set as expired."
+    },
+    "min_glaurung_version": {
+      "type": "string",
+      "description": "The oldest reader the producer believes can interpret this set correctly."
+    },
+    "notice": {
+      "type": "string",
+      "description": "Free-form producer note. Never trusted for anything."
+    },
+    "blobs": {
+      "type": "array",
+      "description": "One entry per (scheme, library, version, variant, arch) key.",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "format",
+          "sha256",
+          "size_bytes",
+          "provenance"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "<library>/<version>/<variant>/<arch>. The unit of usefulness: no exact or masked scheme crosses an optimisation level."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Identity scheme of the records inside, e.g. flirt-masked-pattern-v1 or warp-function-guid-v1."
+          },
+          "format": {
+            "type": "string",
+            "description": "Container format of the bytes, e.g. flirt-json/2 or gsig/1. A client that does not know a format skips the blob rather than mis-parsing it."
+          },
+          "compression": {
+            "type": "string",
+            "description": "Transport compression of the stored bytes; \"none\" means size_bytes == uncompressed_bytes."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Digest of the stored bytes. This is the blob's file name in the cache and its name in every URL."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uncompressed_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "signatures": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many function signatures the blob holds. Reporting only; never trusted."
+          },
+          "licence": {
+            "type": "string",
+            "description": "Licence position for this blob: the inputs' licence, plus the note that what ships is derived signatures and names, never library bytes."
+          },
+          "provenance": {
+            "type": "object",
+            "description": "Enough to re-fetch the input and re-derive the blob independently.",
+            "required": ["source"],
+            "properties": {
+              "source": {
+                "type": "string",
+                "description": "Where the input came from, e.g. snapshot.debian.org, launchpad, alpine-cdn, koji, first-party."
+              },
+              "package": { "type": "string" },
+              "version": { "type": "string" },
+              "arch": { "type": "string" },
+              "archive": { "type": "string" },
+              "input_sha256": { "type": "string" },
+              "input_sha1": { "type": "string" },
+              "variant": { "type": "string" },
+              "triplet": { "type": "string" },
+              "image": { "type": "string" },
+              "buildinfo": { "type": "string" }
+            }
+          },
+          "urls": {
+            "type": "array",
+            "description": "Mirrors, tried in order. Interchangeable because the blob is content-addressed.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
