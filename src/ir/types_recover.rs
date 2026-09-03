@@ -2102,6 +2102,134 @@ mod tests {
     }
 
     #[test]
+    fn fallthrough_nop_rejects_a_live_call_result_as_void_residue() {
+        let function = mk_block(vec![
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    result: Some(VReg::phys("rax")),
+                    result_is_source_value: true,
+                    args: vec![],
+                    proven_args: Vec::new(),
+                    args_are_exact: true,
+                    is_tail_call: false,
+                }),
+            },
+            Op::Nop,
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Void);
+    }
+
+    #[test]
+    fn direct_return_of_a_call_result_without_fallthrough_nop_stays_direct() {
+        let function = mk_block(vec![
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    result: Some(VReg::phys("rax")),
+                    result_is_source_value: true,
+                    args: vec![],
+                    proven_args: Vec::new(),
+                    args_are_exact: true,
+                    is_tail_call: false,
+                }),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Direct);
+    }
+
+    #[test]
+    fn restoring_the_entry_result_register_from_a_stack_adjustment_is_void() {
+        let slot = MemOp {
+            base: Some(VReg::phys("rsp")),
+            size: 8,
+            ..Default::default()
+        };
+        let function = mk_block(vec![
+            Op::Store {
+                addr: slot.clone(),
+                src: Value::Reg(VReg::phys("rax")),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    result: Some(VReg::phys("rax")),
+                    result_is_source_value: true,
+                    args: vec![],
+                    proven_args: Vec::new(),
+                    args_are_exact: true,
+                    is_tail_call: false,
+                }),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: slot,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Void);
+    }
+
+    #[test]
+    fn returning_a_stack_value_written_by_the_function_stays_direct() {
+        let slot = MemOp {
+            base: Some(VReg::phys("rsp")),
+            size: 8,
+            ..Default::default()
+        };
+        let function = mk_block(vec![
+            Op::Store {
+                addr: slot.clone(),
+                src: Value::Const(7),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: slot,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Direct);
+    }
+
+    #[test]
     fn direct_result_materialization_gives_return_an_exact_ssa_use() {
         let mut function = mk_block(vec![
             Op::Assign {

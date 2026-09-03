@@ -121,6 +121,435 @@ pub(crate) fn clear_return_values(function: &mut Function) {
     clear_body_return_values(&mut function.body);
 }
 
+/// Remove the source-redundant fallthrough return of a proven-void function.
+///
+/// Every machine function ends in a return instruction, but C permits control
+/// to reach the closing brace of a `void` function.  Keeping the final bare
+/// `return;` therefore exposes machine structure that carries no source-level
+/// distinction.  Only the outermost terminal statement is removed: returns in
+/// branches and loops still control execution and must remain explicit.
+pub(crate) fn prune_void_fallthrough_return(function: &mut Function) {
+    if matches!(function.body.last(), Some(Stmt::Return { value: None })) {
+        function.body.pop();
+    }
+}
+
+/// Remove promoted stack locals whose value is never observed.
+///
+/// Clang reserves and zeroes a four-byte `main` return slot at `-O0` even when
+/// every source return writes the ABI result directly.  Stack promotion makes
+/// that bookkeeping look like `local_4 = 0`; retaining it invents a source
+/// local and prevents warning-clean recompilation.  Only pure assignments to
+/// anonymous promoted locals are eligible.  Debug-proven source locals are
+/// protected, and reads through any expression keep the assignment.
+pub(crate) fn prune_unread_promoted_locals(
+    function: &mut Function,
+    protected_locals: &std::collections::HashSet<String>,
+) {
+    fn pure(expression: &Expr) -> bool {
+        match expression {
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. } => true,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => pure(lhs) && pure(rhs),
+            Expr::Un { src, .. }
+            | Expr::Cast { expr: src, .. }
+            | Expr::NumericConvert { expr: src, .. } => pure(src),
+            Expr::Lea { .. } | Expr::PdbFieldAddr { .. } => true,
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => pure(cond) && pure(if_true) && pure(if_false),
+            Expr::WideArithmetic { args, .. } => args.iter().all(pure),
+            // Loads, calls, unresolved expressions, and function-table reads
+            // may be volatile, trapping, or effectful. Keep them even when the
+            // destination itself is unread.
+            Expr::Deref { .. }
+            | Expr::Call { .. }
+            | Expr::FunctionTableEntry { .. }
+            | Expr::Unknown(_) => false,
+        }
+    }
+
+    fn prune(body: &mut Vec<Stmt>, unread: &std::collections::HashSet<VReg>) -> usize {
+        let mut removed = 0;
+        for statement in body.iter_mut() {
+            match statement {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    removed += prune(then_body, unread);
+                    if let Some(else_body) = else_body {
+                        removed += prune(else_body, unread);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    removed += prune(body, unread);
+                }
+                Stmt::For { body, .. } => removed += prune(body, unread),
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case) in cases {
+                        removed += prune(case, unread);
+                    }
+                    if let Some(default) = default {
+                        removed += prune(default, unread);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    removed += prune(try_body, unread);
+                    for catch in catches {
+                        removed += prune(&mut catch.body, unread);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let before = body.len();
+        body.retain(|statement| {
+            !matches!(statement, Stmt::Assign { dst, src } if unread.contains(dst) && pure(src))
+                && !matches!(statement, Stmt::Store { addr: Expr::Reg(dst), src, .. }
+                    if unread.contains(dst) && pure(src))
+        });
+        removed + before - body.len()
+    }
+
+    fn observes(statement: &Stmt, target: &VReg) -> bool {
+        match statement {
+            Stmt::Assign { src, .. } => src.contains_reg(target),
+            Stmt::Store { addr, src, .. } => {
+                (!matches!(addr, Expr::Reg(register) if register == target)
+                    && addr.contains_reg(target))
+                    || src.contains_reg(target)
+            }
+            Stmt::Call {
+                target: callee,
+                args,
+                ..
+            } => {
+                callee.contains_reg(target)
+                    || args.iter().any(|argument| argument.contains_reg(target))
+            }
+            Stmt::Return { value } => value
+                .as_ref()
+                .is_some_and(|value| value.contains_reg(target)),
+            Stmt::Throw { value } | Stmt::Push { value } => value.contains_reg(target),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                cond.contains_reg(target)
+                    || then_body
+                        .iter()
+                        .any(|statement| observes(statement, target))
+                    || else_body.as_deref().is_some_and(|body| {
+                        body.iter().any(|statement| observes(statement, target))
+                    })
+            }
+            Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                cond.contains_reg(target)
+                    || body.iter().any(|statement| observes(statement, target))
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                observes(init, target)
+                    || cond.contains_reg(target)
+                    || observes(step, target)
+                    || body.iter().any(|statement| observes(statement, target))
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                discriminant.contains_reg(target)
+                    || cases
+                        .iter()
+                        .any(|(_, body)| body.iter().any(|statement| observes(statement, target)))
+                    || default.as_deref().is_some_and(|body| {
+                        body.iter().any(|statement| observes(statement, target))
+                    })
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                try_body.iter().any(|statement| observes(statement, target))
+                    || catches.iter().any(|catch| {
+                        catch
+                            .body
+                            .iter()
+                            .any(|statement| observes(statement, target))
+                    })
+            }
+            Stmt::IndirectGoto { target: value } => value.contains_reg(target),
+            Stmt::Pop { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => false,
+        }
+    }
+
+    loop {
+        let candidates = function
+            .body
+            .iter()
+            .flat_map(|statement| {
+                fn collect(statement: &Stmt, out: &mut Vec<VReg>) {
+                    match statement {
+                        Stmt::Assign {
+                            dst: VReg::Phys(name),
+                            ..
+                        } if name.starts_with("local_") => out.push(VReg::phys(name)),
+                        Stmt::Store {
+                            addr: Expr::Reg(VReg::Phys(name)),
+                            ..
+                        } if name.starts_with("local_") => out.push(VReg::phys(name)),
+                        Stmt::If {
+                            then_body,
+                            else_body,
+                            ..
+                        } => {
+                            then_body.iter().for_each(|statement| collect(statement, out));
+                            if let Some(else_body) = else_body {
+                                else_body.iter().for_each(|statement| collect(statement, out));
+                            }
+                        }
+                        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                            body.iter().for_each(|statement| collect(statement, out));
+                        }
+                        Stmt::For { init, step, body, .. } => {
+                            collect(init, out);
+                            body.iter().for_each(|statement| collect(statement, out));
+                            collect(step, out);
+                        }
+                        Stmt::Switch { cases, default, .. } => {
+                            for (_, body) in cases {
+                                body.iter().for_each(|statement| collect(statement, out));
+                            }
+                            if let Some(default) = default {
+                                default.iter().for_each(|statement| collect(statement, out));
+                            }
+                        }
+                        Stmt::TryCatch { try_body, catches } => {
+                            try_body.iter().for_each(|statement| collect(statement, out));
+                            for catch in catches {
+                                catch.body.iter().for_each(|statement| collect(statement, out));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let mut found = Vec::new();
+                collect(statement, &mut found);
+                found
+            })
+            .filter(|candidate| {
+                !matches!(candidate, VReg::Phys(name) if protected_locals.contains(name))
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let unread = candidates
+            .into_iter()
+            .filter(|candidate| {
+                !function
+                    .body
+                    .iter()
+                    .any(|statement| observes(statement, candidate))
+            })
+            .collect::<std::collections::HashSet<_>>();
+        if unread.is_empty() {
+            break;
+        }
+        if prune(&mut function.body, &unread) == 0 {
+            break;
+        }
+    }
+}
+
+/// Remove a void function's caller-owned result-register save/restore pair.
+///
+/// Clang sometimes spells an eight-byte stack adjustment as `push rax` before
+/// a call and `pop rax` afterwards. Stack promotion turns that into
+/// `local = ret; ...; ret = local`. Once prototype recovery has proved the
+/// function void, retaining the pair fabricates an uninitialized source local.
+/// Only the exact single-use promoted-slot bridge is removed; ordinary locals
+/// and result-register values used by any other statement are left alone.
+pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
+    fn reads(expr: &Expr, target: &VReg) -> bool {
+        match expr {
+            Expr::Reg(register)
+            | Expr::StackAddr {
+                object: register, ..
+            } => register == target,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                reads(lhs, target) || reads(rhs, target)
+            }
+            Expr::Un { src: expr, .. }
+            | Expr::Deref { addr: expr, .. }
+            | Expr::Cast { expr, .. }
+            | Expr::NumericConvert { expr, .. }
+            | Expr::FunctionTableEntry { index: expr, .. } => reads(expr, target),
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+                base.as_ref().is_some_and(|base| base == target)
+                    || index.as_ref().is_some_and(|index| index == target)
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => reads(cond, target) || reads(if_true, target) || reads(if_false, target),
+            Expr::WideArithmetic { args, .. } => {
+                args.iter().any(|argument| reads(argument, target))
+            }
+            Expr::Call {
+                target: callee,
+                args,
+                ..
+            } => reads(callee, target) || args.iter().any(|argument| reads(argument, target)),
+            Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => false,
+        }
+    }
+
+    fn direct_reads(statement: &Stmt, target: &VReg) -> bool {
+        match statement {
+            Stmt::Assign { src, .. } => reads(src, target),
+            Stmt::Store { addr, src, .. } => {
+                (!matches!(addr, Expr::Reg(register) if register == target) && reads(addr, target))
+                    || reads(src, target)
+            }
+            Stmt::Call {
+                target: callee,
+                args,
+                ..
+            } => reads(callee, target) || args.iter().any(|argument| reads(argument, target)),
+            Stmt::Return { value } => value.as_ref().is_some_and(|value| reads(value, target)),
+            Stmt::If { cond, .. }
+            | Stmt::While { cond, .. }
+            | Stmt::DoWhile { cond, .. }
+            | Stmt::For { cond, .. } => reads(cond, target),
+            Stmt::Switch { discriminant, .. } => reads(discriminant, target),
+            Stmt::Push { value } | Stmt::Throw { value } => reads(value, target),
+            Stmt::IndirectGoto { target: value } => reads(value, target),
+            Stmt::Pop { target: value } => value == target,
+            Stmt::TryCatch { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => false,
+        }
+    }
+
+    fn prune(body: &mut Vec<Stmt>) {
+        for statement in body.iter_mut() {
+            match statement {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    prune(then_body);
+                    if let Some(else_body) = else_body {
+                        prune(else_body);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune(body),
+                Stmt::For { body, .. } => prune(body),
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case) in cases {
+                        prune(case);
+                    }
+                    if let Some(default) = default {
+                        prune(default);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    prune(try_body);
+                    for catch in catches {
+                        prune(&mut catch.body);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut remove = std::collections::HashSet::new();
+        for (store_index, statement) in body.iter().enumerate() {
+            let Stmt::Store {
+                addr: Expr::Reg(slot),
+                src: Expr::Reg(saved),
+                ..
+            } = statement
+            else {
+                continue;
+            };
+            let promoted = matches!(slot, VReg::Phys(name)
+                if name.starts_with("local_") || name.starts_with("stack_"));
+            if !promoted || !is_exact_return_storage(saved) {
+                continue;
+            }
+            let restores = body
+                .iter()
+                .enumerate()
+                .filter(|(index, candidate)| {
+                    *index > store_index
+                        && matches!(candidate, Stmt::Assign { dst, src: Expr::Reg(source) }
+                            if dst == saved && source == slot)
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let [restore_index] = restores.as_slice() else {
+                continue;
+            };
+            let slot_reads = body
+                .iter()
+                .enumerate()
+                .filter(|(index, candidate)| *index != store_index && direct_reads(candidate, slot))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            if slot_reads.as_slice() != [*restore_index]
+                || body
+                    .iter()
+                    .skip(*restore_index + 1)
+                    .any(|candidate| direct_reads(candidate, saved))
+            {
+                continue;
+            }
+            remove.insert(store_index);
+            remove.insert(*restore_index);
+        }
+        if !remove.is_empty() {
+            let mut index = 0usize;
+            body.retain(|_| {
+                let keep = !remove.contains(&index);
+                index += 1;
+                keep
+            });
+        }
+    }
+
+    prune(&mut function.body);
+}
+
 fn clear_body_return_values(body: &mut [Stmt]) {
     for statement in body {
         match statement {
@@ -415,5 +844,134 @@ mod tests {
             Some(&Stmt::Return { value: None }),
             "a versioned output write must block the live-in fallback rather than return stale arg0"
         );
+    }
+
+    #[test]
+    fn unread_promoted_return_slot_is_removed() {
+        let mut function = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        prune_unread_promoted_locals(&mut function, &std::collections::HashSet::new());
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }]
+        );
+    }
+
+    #[test]
+    fn proven_void_terminal_return_becomes_source_fallthrough() {
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "puts".into(),
+                    },
+                    args: vec![Expr::StringLit {
+                        value: "hello".into(),
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_void_fallthrough_return(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(function.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn nonterminal_bare_return_keeps_its_control_effect() {
+        let mut function = Function {
+            name: "maybe_print".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![Stmt::Return { value: None }],
+                    else_body: None,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "puts".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        prune_void_fallthrough_return(&mut function);
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::If { then_body, .. }
+                if matches!(then_body.as_slice(), [Stmt::Return { value: None }])
+        ));
+    }
+
+    #[test]
+    fn unread_promoted_local_keeps_effectful_or_source_proven_writes() {
+        let protected = VReg::phys("local_8");
+        let mut function = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("local_4"),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x1000,
+                            name: "side_effect".into(),
+                        }),
+                        args: Vec::new(),
+                        result_width: Some(4),
+                        call_spec: None,
+                    },
+                },
+                Stmt::Assign {
+                    dst: protected.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_unread_promoted_locals(
+            &mut function,
+            &std::collections::HashSet::from(["local_8".to_string()]),
+        );
+
+        assert_eq!(function.body.len(), 3);
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Call { .. },
+                ..
+            }
+        ));
+        assert!(matches!(&function.body[1], Stmt::Assign { dst, .. } if dst == &protected));
     }
 }

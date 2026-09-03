@@ -23,6 +23,50 @@ use super::{
     TypeMapV,
 };
 
+/// Does this apparent result merely restore the register's entry value?
+///
+/// Clang uses `push rax` / `pop rax` as an eight-byte stack adjustment around
+/// some leaf calls.  The POP then reaches RET in the ABI result register, but
+/// it restores caller-owned scratch rather than producing a source result.
+/// Match the exact SSA entry identity and exact stack access; an ordinary load
+/// of a value computed or stored by the function remains a valid output trial.
+fn restores_entry_result_from_stack(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    candidate: &SsaValue,
+    definition: InstrAddr,
+) -> bool {
+    let Op::Load { addr: loaded, .. } =
+        &lf.blocks[definition.block_idx].instrs[definition.instr_idx].op
+    else {
+        return false;
+    };
+
+    for instr_idx in (0..definition.instr_idx).rev() {
+        let instruction = &lf.blocks[definition.block_idx].instrs[instr_idx];
+        match &instruction.op {
+            Op::Store { addr, .. } if addr == loaded => {
+                let address = InstrAddr {
+                    block_idx: definition.block_idx,
+                    instr_idx,
+                };
+                let (_, uses) = def_uses(&instruction.op);
+                let Some(source) = uses
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|index| ssa.use_value(lf, address, index))
+                else {
+                    return false;
+                };
+                return source.base == candidate.base && source.version == 0;
+            }
+            Op::CondStore { addr, .. } if addr == loaded => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// A result fact strong enough to cross the SSA-to-source prototype boundary.
 ///
 /// A narrow load cannot contain a machine pointer, so its scalar class and
@@ -171,6 +215,9 @@ pub(super) fn output_trial_is_dedicated(
             return false;
         };
         let op = &lf.blocks[addr.block_idx].instrs[addr.instr_idx].op;
+        if restores_entry_result_from_stack(lf, ssa, &current, addr) {
+            return false;
+        }
         let forwards_same_storage = matches!(
             op,
             Op::Assign {
@@ -195,6 +242,28 @@ pub(super) fn output_trial_is_dedicated(
                     ..
                 } if !effects.result_is_source_value
             ) {
+                return false;
+            }
+            // GCC -O0 leaves a source-level `void` function through an
+            // explicit fallthrough NOP.  If its last statement is a call, the
+            // callee's result register still reaches RET even though the
+            // wrapper did not return that value:
+            //
+            //     call printf
+            //     nop
+            //     leave
+            //     ret
+            //
+            // An actual `return printf(...)` has no intervening NOP.  Keep the
+            // rule attached to the call definition and its immediately next
+            // LLIR instruction; a NOP elsewhere in the epilogue is not source
+            // result evidence either way.
+            if matches!(op, Op::Call { .. })
+                && lf.blocks[addr.block_idx]
+                    .instrs
+                    .get(addr.instr_idx + 1)
+                    .is_some_and(|instruction| matches!(instruction.op, Op::Nop))
+            {
                 return false;
             }
             return true;
