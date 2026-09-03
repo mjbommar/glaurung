@@ -28,6 +28,28 @@ pub(super) struct DirectCalleeFacts {
     pub(super) table_entry_layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
 }
 
+type RecoveredDirectCallee = (
+    Vec<crate::ir::types::VReg>,
+    crate::ir::call_contracts::CallPrototype,
+    String,
+    bool,
+);
+
+fn apply_proven_integer_pair_boundary(
+    prototype: &mut crate::ir::call_contracts::CallPrototype,
+    caller: &crate::ir::types::LlirFunction,
+    target: u64,
+    cc: crate::ir::call_args::CallConv,
+    callee_defines_pair: bool,
+) {
+    if callee_defines_pair
+        && prototype.authority == crate::ir::call_contracts::CallPrototypeAuthority::Recovered
+        && crate::ir::interprocedural_return::caller_observes_integer_pair(caller, target, cc)
+    {
+        prototype.return_type = wide_integer_return_c_type(cc).to_string();
+    }
+}
+
 fn imported_symbol_base(name: &str) -> &str {
     name.strip_suffix("@plt")
         .or_else(|| name.strip_suffix(".plt"))
@@ -536,11 +558,7 @@ fn recover_direct_callee_definition(
     address_names: &std::collections::HashMap<u64, String>,
     call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
     remaining_depth: u8,
-) -> Option<(
-    Vec<crate::ir::types::VReg>,
-    crate::ir::call_contracts::CallPrototype,
-    String,
-)> {
+) -> Option<RecoveredDirectCallee> {
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::ssa::compute_ssa;
 
@@ -612,21 +630,30 @@ fn recover_direct_callee_definition(
                 Some(graph) if graph.shares_component(body_id, target_id) => 0,
                 _ => remaining_depth.saturating_sub(1),
             };
-            let Some((layout, prototype, _)) = recover_direct_callee_definition(
-                image,
-                functions,
-                target,
-                cc,
-                arm_vfp_args,
-                budgets,
-                dwarf_outputs,
-                type_env,
-                address_names,
-                call_graph,
-                nested_depth,
-            ) else {
+            let Some((layout, mut prototype, _, callee_defines_pair)) =
+                recover_direct_callee_definition(
+                    image,
+                    functions,
+                    target,
+                    cc,
+                    arm_vfp_args,
+                    budgets,
+                    dwarf_outputs,
+                    type_env,
+                    address_names,
+                    call_graph,
+                    nested_depth,
+                )
+            else {
                 continue;
             };
+            apply_proven_integer_pair_boundary(
+                &mut prototype,
+                &lifted,
+                target,
+                cc,
+                callee_defines_pair,
+            );
             nested.layouts.insert(target, layout);
             nested.prototypes.insert(target, prototype);
         }
@@ -666,8 +693,16 @@ fn recover_direct_callee_definition(
         call_prototype.variadic = true;
     }
     let declared = dwarf_outputs.and_then(|outputs| outputs.get(&body_va));
-    (!layout.is_empty() || retain_empty_direct_callee_layout(declared))
-        .then(|| (layout, call_prototype, callee.name.clone()))
+    let callee_defines_pair =
+        crate::ir::interprocedural_return::callee_defines_integer_pair_on_every_return(&lifted, cc);
+    (!layout.is_empty() || retain_empty_direct_callee_layout(declared)).then(|| {
+        (
+            layout,
+            call_prototype,
+            callee.name.clone(),
+            callee_defines_pair,
+        )
+    })
 }
 
 /// Recover the source-ordered physical parameter storage and prototype of direct callees.
@@ -691,14 +726,7 @@ pub(super) fn recover_direct_callee_layouts(
     address_names: &mut std::collections::HashMap<u64, String>,
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
-    cache: &mut std::collections::HashMap<
-        u64,
-        Option<(
-            Vec<crate::ir::types::VReg>,
-            crate::ir::call_contracts::CallPrototype,
-            String,
-        )>,
-    >,
+    cache: &mut std::collections::HashMap<u64, Option<RecoveredDirectCallee>>,
 ) -> DirectCalleeFacts {
     let mut facts = DirectCalleeFacts::default();
     let callees: std::collections::BTreeSet<u64> = caller
@@ -753,7 +781,14 @@ pub(super) fn recover_direct_callee_layouts(
             cache.insert(callee_va, recovered);
         }
         let recovered = cache.get(&callee_va).cloned().flatten();
-        if let Some((layout, prototype, name)) = recovered {
+        if let Some((layout, mut prototype, name, callee_defines_pair)) = recovered {
+            apply_proven_integer_pair_boundary(
+                &mut prototype,
+                caller,
+                callee_va,
+                cc,
+                callee_defines_pair,
+            );
             if dump {
                 eprintln!("callee 0x{callee_va:x}: recovered layout {layout:?}");
             }
@@ -850,14 +885,7 @@ fn recover_table_entry_layouts(
     address_names: &mut std::collections::HashMap<u64, String>,
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
-    cache: &mut std::collections::HashMap<
-        u64,
-        Option<(
-            Vec<crate::ir::types::VReg>,
-            crate::ir::call_contracts::CallPrototype,
-            String,
-        )>,
-    >,
+    cache: &mut std::collections::HashMap<u64, Option<RecoveredDirectCallee>>,
     dump: bool,
 ) {
     let referenced = crate::ir::function_tables::tables_referenced_by(caller, function_tables);
@@ -891,7 +919,7 @@ fn recover_table_entry_layouts(
             );
             cache.insert(entry_va, recovered);
         }
-        if let Some((layout, _, _)) = cache.get(&entry_va).cloned().flatten() {
+        if let Some((layout, _, _, _)) = cache.get(&entry_va).cloned().flatten() {
             if dump {
                 eprintln!("table entry 0x{entry_va:x}: recovered layout {layout:?}");
             }

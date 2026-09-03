@@ -1030,6 +1030,19 @@ pass, a narrow definition-health census reports no O0 or O2 violation, and all
 four host atomic lanes remain baseline-stable. Exact RED/GREEN and fixture
 evidence is in `results/wp9-store-width-demand.md`.
 
+### Implementation evidence - 2026-09-03 interprocedural INTEGER pair
+
+Direct-callee recovery now upgrades a call to the existing double-word INTEGER
+carrier only when the callee must-define analysis proves both ABI result halves
+on every reachable return and the exact caller consumes both before overwrite.
+This removes the undefined `rdx`/`var4` from Rust trait-object `rust_dyn_apply`
+at O2 and keeps O0 clean. Five positive/negative and cross-ABI proof tests and 18 adjacent
+call-result tests pass; both Rust fixture lanes remain baseline-stable. The
+broader host sweep measured 824/838 lanes but remains red from one infrastructure
+crash and three scalar C++ regressions in the concurrent snapshot, none of which
+crossed this new carrier path. Exact evidence and limits are in
+`results/wp9-interprocedural-integer-pair.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
