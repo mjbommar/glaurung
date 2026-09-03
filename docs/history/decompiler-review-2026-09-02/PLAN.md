@@ -128,7 +128,7 @@ the RED fixture or first vertical slice exposes the actual boundary.
 | WP7A | 2-5 days | typed literal spelling and one range-check fusion |
 | WP7B | 2-4 weeks, incremental | first SSA-native proved idiom |
 | WP8 | 3-7 days | `tail_dispatch` declaration and names rendered correctly |
-| WP9 | 4-8 weeks, incremental | one fact class moved behind `MachineModel` |
+| WP9 | 4-8 weeks, incremental | one fact class moved behind `TargetSpec` queries |
 | WP10 | 1-3 weeks total, spread across migrations | first superseded module removed with release evidence |
 
 ## 6. WP0 — Minimal inventory and gate integrity
@@ -978,27 +978,81 @@ into a standing test.
 
 ### Production changes
 
-- [ ] Define `MachineModel` in a new `src/ir/machine/` boundary only after an
-  inventory maps current ownership in `src/ir/regview.rs`, lifters, ABI
-  modules, stack recovery, naming, and dead-store handling.
-- [ ] Suggested modules: `mod.rs`, `registers.rs`, `flags.rs`, `abi.rs`,
-  `writers.rs`, plus per-target implementations.
-- [ ] Add ARM32 register views, including VFP overlap/pairing, before migrating
-  ARM32-specific shared-pass conditionals.
+- [x] Inventory current ownership in `src/target/`, `src/ir/regview.rs`,
+  lifters, ABI modules, stack recovery, naming, and dead-store handling. The
+  result is `results/wp9-machine-model-inventory.md`.
+- [~] Extend the existing `src/target/TargetSpec` boundary one fact class at a
+  time. Do not introduce a competing `src/ir/machine/` identity: target ID,
+  format/OS ABI, pointer width, instruction mode, PC rule, and special-register
+  roles already live under `src/target/` with an exhaustive conformance table.
+  Register views, ABI storage/effects, frame rules, and capability reporting
+  remain split across IR consumers.
+- [ ] Suggested target-owned query modules: `register_views.rs`, expanded
+  `abi.rs`, and `capabilities.rs`; retain compatibility facades while callers
+  migrate, and keep opcode semantics in the per-target lifters.
+- [~] Add ARM32 register views, including VFP/NEON overlap, before migrating
+  ARM32-specific shared-pass conditionals. `TargetSpec::register_view` now owns
+  ARM32 core aliases and the complete `s0..s31`/`d0..d31`/`q0..q15` storage
+  hierarchy. MIR register-effect completeness is the first consumer: `s0` and
+  `d0` writes are opaque because each defines only part of `q0`, while a `q0`
+  write is complete. Production SSA definition canonicalization is the second
+  consumer: complete ARM core aliases use the target-owned parent, while
+  partial `s`/`d` definitions deliberately retain their spelling until the
+  lifter models their read-modify-write semantics. Remaining shared consumers
+  and full VFP SSA identity are open.
 - [ ] Migrate one fact class at a time: register overlap, clobbers/live-ins,
   argument/return locations, flag semantics, then silent writers.
 - [ ] Keep lifter instruction semantics target-specific; share the queried
   contract, not necessarily implementations.
-- [ ] Add mnemonic capability census tooling and a documented exemption file.
+- [~] Add mnemonic capability census tooling and a documented exemption file.
+  The standing effect census now has non-empty real-binary denominators for all
+  four lifted targets, including i386, and validates every opaque mnemonic
+  against `tests/decompiler_fixtures/effect_census_exemptions.json`. The gate
+  rejects unreviewed names, count growth, overlapping matches, empty rationale
+  fields, unknown targets, and exemptions which no longer fire. A second
+  address-correlated census independently decodes each accepted LLIR block and
+  requires every decoded instruction to produce a non-opaque LLIR op or match
+  `tests/decompiler_fixtures/decoded_lift_exemptions.json`. Target, dynamic
+  instruction-mode, compiler, and optimisation keys now have committed
+  per-lane denominator and opaque-count ratchets.
 
 ### Tests
 
 - [ ] Byte-identical fixture sweep for each architecture-only migration.
 - [ ] Extend architecture roundtrip and ARM32 semantic tests.
-- [ ] New census test: every decoded mnemonic is lifted or has a reviewed,
-  reasoned exemption.
-- [ ] Ratchet `SILENT_REGISTER_WRITERS` toward zero.
-- [ ] Ensure `Op::Unknown` and generic intrinsic totals cannot silently grow.
+- [x] New census test: every decoded mnemonic is lifted or has a reviewed,
+  reasoned exemption. Both the post-lift opaque-effect census and the raw
+  decoded-mnemonic-to-LLIR correlation are now enforced across all four lifted
+  targets.
+- [~] Ratchet `SILENT_REGISTER_WRITERS` toward zero. The standing x86 test now
+  gives every remaining mnemonic an exact observed ceiling and rejects both
+  count growth and stale entries. Sixteen-bit `bsr`/`bsf` now preserve their
+  full register parents through explicit partial-read/write lowering, removing
+  all four observed `bsr` occurrences. `cpuid`, `rdtsc`, `rdtscp`, and `xgetbv`
+  now expose their complete architectural input/output dataflow on both i386
+  and x86-64, removing 12 more observed silent writes; 19 reviewed mnemonic
+  classes remained at that point. The exact 128-bit VEX `vpxor` register and
+  memory forms now preserve both explicit sources, destination lanes, and the
+  whole XMM view, removing four more silent writes; 18 reviewed mnemonic
+  classes remained at that point. `pushfq` now exposes all seven represented
+  flag inputs while retaining an honest unknown full flags word, and `popfq`
+  extracts those seven bits from the loaded word while preserving both stack
+  effects; four more observed silent writes are gone and 16 reviewed mnemonic
+  classes remained at that point. The fixed-width YMM `vmovdqu` register and
+  memory forms now transport all 256 bits as eight exact dword lanes, removing
+  92 measured unmodelled forms and the `vmovdqu` silent-writer class. This does
+  not claim general AVX semantics or first-class 256-bit LLIR storage. Fifteen
+  reviewed mnemonic classes remain; exact encoding/count ratchets prove the
+  other watched SIMD occurrences are YMM operations that still decline. The
+  isolated `d14748cf` WP9 overlay passed the complete Rust gate with 3,080
+  library tests passing, 3 ignored, and every integration and doc-test target
+  green.
+- [x] Ensure `Op::Unknown` and generic intrinsic totals cannot silently grow.
+  The per-target/mode/compiler/optimisation lane baseline requires zero
+  `Op::Unknown` and caps the combined opaque plus modelled-intrinsic total for
+  every measured lane. The combined WP9 overlay passed the complete isolated
+  Rust gate: 3,071 library tests passed, 3 were intentionally ignored, and
+  every integration and doc-test target passed.
 
 ### Implementation evidence - 2026-09-03 target-aware register reads
 
@@ -1016,8 +1070,128 @@ full-gate results, artifact hash, concurrent-worktree limitations, and remaining
 three unaccepted i386 baseline regressions are recorded in
 `results/wp9-target-aware-register-reads.md`.
 
-This is one bounded WP9 increment. It does not close the shared `MachineModel`,
+This is one bounded WP9 increment. It does not close the shared target-model
 ARM32/VFP, capability-census, or whole-architecture exit criteria below.
+
+### Implementation evidence - 2026-09-03 ARM32 scalar VFP views
+
+The first slice from `results/wp9-machine-model-inventory.md` is implemented in
+`src/target/register_views.rs`, exposed through `TargetSpec`, and consumed by
+MIR register-effect completeness. The target-qualified model keeps ARM core
+and VFP banks distinct, maps `s0` and `s1` onto the low/high halves of `d0`,
+and declines the same spelling under another architecture. Soft- and
+hard-float targets share architectural storage while retaining distinct
+calling conventions.
+
+TDD and focused validation on the live shared snapshot:
+
+- RED: target conformance did not compile because `register_view` did not
+  exist; the MIR behavior test also described the former false-complete `s0`
+  effect;
+- `cargo test --features python-ext arm32_ --no-fail-fast`: 35 passed;
+- `cargo test --features python-ext target:: --lib`: 5 passed;
+- `cargo test --features python-ext ir::mir::tests:: --lib`: 15 passed; and
+- release extension rebuild completed.
+
+The slice was then overlaid by itself onto a fresh clone at `d14748cf`, with
+the committed fixture build mounted read-only. In that isolated tree,
+`cargo test --features python-ext` produced 3,065 passes, 0 failures, and 3
+ignored tests. The same 410-lane ARMv7 O0/O2 sweep was run both on the isolated
+slice and on an untouched control clone at `d14748cf`; both reported exactly
+184 baseline regressions and 5 improvements. Thus the pre-existing ARM
+baseline is red, but this slice changes zero lane verdicts relative to its
+control. MIR remains an on-demand/debug analysis and the slice does not change
+scored C.
+
+The follow-up NEON increment makes `q0..q15` the widest canonical storage
+parents: `s0..s3` partition `q0`, and `d0:d1` partition it. Its RED tests
+proved that `q0` was absent and MIR falsely called a `d0` write complete;
+GREEN validation passed all 35 ARM32-filtered tests, all 5 target tests, and
+all 15 MIR tests. A fresh isolated overlay at `d14748cf` passed the complete
+Rust gate, including 3,065 library tests with 0 failures and 3 ignored tests,
+all integration binaries, and doc tests. Its release-built 410-lane ARMv7
+O0/O2 sweep again reported exactly the untouched control's 184 regressions and
+5 improvements, proving zero fixture-verdict changes from both the scalar and
+NEON register-view increments.
+
+Promotion is intentionally not claimed. A full isolated Python-suite attempt
+was already producing failures in pre-existing fixture/decompiler groups and
+was interrupted after roughly 22 percent when its process stopped yielding a
+usable final report. Under the repository rule requiring the whole Python
+suite after a source commit, that is not a passing gate.
+
+The next increment migrated the duplicated ARM core-alias table out of
+production SSA. `TargetSpec::complete_register_write_parent` is now the
+fail-closed definition query: `a1` returns `r0`, a full `q0` write returns
+`q0`, and partial `s0`/`d0` writes return no parent. Its RED conformance test
+failed because the target query did not exist; GREEN validation passed all 5
+target tests, all 12 SSA tests, and all 36 ARM32-filtered tests. An exact-file
+isolated overlay passed the complete Rust gate, including 3,066 library tests
+with 0 failures and 3 ignored tests, every integration binary, and doc tests.
+The release 410-lane ARMv7 O0/O2 sweep remained identical to the untouched
+control and both preceding slices: 184 historical regressions and 5
+improvements, hence zero fixture-verdict changes attributable to the SSA
+migration.
+
+The attempted next step—unifying ARM scalar/vector SSA storage—was explicitly
+deferred after inspecting the actual IR boundary. `Value::Const` is an `i64`,
+while the widest `q` parent is 128 bits, and existing x86/AArch64 vector
+lifters intentionally scalarise lanes rather than synthesize a 128-bit
+read-modify-write. Canonicalising `s0` or `d0` directly to `q0` would therefore
+manufacture a complete definition with no representable preservation of the
+untouched bits. Full VFP SSA identity now has an explicit prerequisite:
+scalarised ARM vector lanes or first-class 128-bit LLIR values and operations,
+followed by real-instruction execution tests.
+
+The independent capability-census increment added an existing committed i386
+PE sample to the standing census corpus. A RED test first failed because the
+per-architecture
+census helper did not exist; GREEN now proves non-empty file, function, and
+instruction denominators for i386, x86-64, ARMv7, and AArch64. The measured
+report covers 10 binaries, 432 lifted functions, and 53,488 instructions,
+including 26,089 i386 instructions that were previously invisible.
+
+The follow-up RED test failed because no reviewed exemption manifest existed.
+The new manifest records target, exact mnemonic or family, measured ceiling,
+reason, semantic risk, owner, and removal condition. Its live gate covers all
+236 current opaque effects: 194 i386 x87-family operations, 16 x86-64
+`hlt`/`pause`/`ud2` operations, and 26 ARM `svc` or guarded-control effects;
+AArch64 currently has zero opaque effects but retains a required denominator.
+All 5 enforcing census tests pass, with the histogram reporter intentionally
+ignored by the ordinary gate. An exact-file isolated overlay at `d14748cf`
+passed `cargo test --features python-ext`: 3,068 library tests passed with 0
+failures and 3 ignored tests, followed by every integration target and doc
+test. This gate covers the combined ARM32 register-view, SSA-query, and census
+increments without relying on the concurrently modified live worktree.
+
+The next RED census used an empty raw-decoder exemption manifest. After the
+audit was restricted to the exact function-owned block ranges accepted by the
+lifter, it proved that no decoded instruction disappears entirely. It then
+failed on the 236 decoded instructions which reach only maximally opaque LLIR:
+194 i386 x87 instructions, 16 x86-64 trap/hint instructions, and 26 ARMv7
+system-call or predicated instructions. The reviewed raw manifest records the
+actual machine mnemonics independently of the normalized intrinsic names. Its
+gate rejects unreviewed mnemonics, overlapping patterns, stale entries, count
+growth, unknown targets, and empty review fields. The raw denominators are
+6,236 i386, 8,394 x86-64, 812 AArch64, and 228 ARMv7 decoded instructions;
+AArch64 has no opaque decoded instruction in this corpus. An exact-file
+isolated overlay at `d14748cf` passed the complete Rust gate with 3,069 library
+tests passed, 0 failed, and 3 ignored, followed by every integration target
+and doc test.
+
+Lane attribution is now enforced from committed provenance rather than filename
+guessing. Each of the 10 corpus entries carries an explicit compiler and
+optimisation identity sourced from its metadata sidecar and output path;
+cross-built artifacts with no recorded optimisation level remain `unknown`,
+and assembler output is `not-applicable`. A standing invariant rejects empty
+fields, duplicate paths, missing binaries, or an unreviewed inventory-size
+change. `effect_census_lane_baseline.json` splits the corpus into 10 actual
+target/mode/compiler/optimisation lanes—including separate A32 and Thumb rows
+from the mixed ARM binary—and requires each lane to retain its file, function,
+and decoded-instruction denominator while its opaque count may decrease but
+cannot grow silently. The exact-file isolated `d14748cf` overlay passed the
+complete Rust gate with 3,074 library tests passed, 0 failed, and 3 ignored,
+followed by every integration target and doc test.
 
 ### Implementation evidence - 2026-09-03 store-width demand
 
@@ -1286,6 +1460,7 @@ relevant ratchet's accepted-regression record.
 6. Define WP8 authority once in the session fact layer and expose conflicts
    through structured results plus an explicitly annotated analyst mode, while
    keeping scored text free of diagnostics.
-7. Inventory current register/ABI ownership for WP9 before introducing
-   `MachineModel`; use ARM32 register overlap and VFP pairing as the first
-   portability stress case.
+7. Implement the first WP9 slice from
+   `results/wp9-machine-model-inventory.md`: extend `TargetSpec` with ARM32 GP
+   and VFP register views, use VFP pairing as the portability stress case, and
+   preserve conservative fallback while the first consumer migrates.
