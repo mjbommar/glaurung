@@ -20,6 +20,76 @@ use super::{
     remove_redundant_return_constant_assignments, Function,
 };
 
+/// Remove comments that describe an already-consumed machine frame.
+///
+/// Prologue recovery has done its semantic job once stack slots, parameters,
+/// and returns have been reconstructed. Keeping its marker in source-oriented
+/// C makes an ordinary function look partly lowered. Other comments—including
+/// incompleteness, canary, exception, and unknown-instruction markers—remain.
+pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
+    fn is_frame_marker(text: &str) -> bool {
+        [
+            "x86-64 prologue:",
+            "x86-64 epilogue:",
+            "aarch64 prologue:",
+            "aarch64 epilogue:",
+            "arm32 prologue:",
+            "arm32 epilogue:",
+            "cdecl32 prologue:",
+            "cdecl32 epilogue:",
+        ]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+    }
+
+    for statement in body.iter_mut() {
+        match statement {
+            super::Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                drop_machine_frame_comments(then_body);
+                if let Some(else_body) = else_body {
+                    drop_machine_frame_comments(else_body);
+                }
+            }
+            super::Stmt::While { body, .. } | super::Stmt::DoWhile { body, .. } => {
+                drop_machine_frame_comments(body)
+            }
+            super::Stmt::For {
+                init, step, body, ..
+            } => {
+                if matches!(init.as_ref(), super::Stmt::Comment(text) if is_frame_marker(text)) {
+                    **init = super::Stmt::Nop;
+                }
+                drop_machine_frame_comments(body);
+                if matches!(step.as_ref(), super::Stmt::Comment(text) if is_frame_marker(text)) {
+                    **step = super::Stmt::Nop;
+                }
+            }
+            super::Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    drop_machine_frame_comments(body);
+                }
+                if let Some(default) = default {
+                    drop_machine_frame_comments(default);
+                }
+            }
+            super::Stmt::TryCatch { try_body, catches } => {
+                drop_machine_frame_comments(try_body);
+                for catch in catches {
+                    drop_machine_frame_comments(&mut catch.body);
+                }
+            }
+            _ => {}
+        }
+    }
+    body.retain(
+        |statement| !matches!(statement, super::Stmt::Comment(text) if is_frame_marker(text)),
+    );
+}
+
 /// Run copy propagation and constant folding to their bounded fixpoint.
 ///
 /// Copy propagation exposes algebraic flag identities, while folding those
@@ -168,6 +238,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::clear_return_values(&mut owned);
+        crate::ir::direct_output::prune_void_entry_result_restores(&mut owned);
     } else {
         crate::ir::direct_output::materialize_direct_output(&mut owned);
     }
@@ -188,7 +259,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     // Propagation can expose a casted result copy directly before its return.
     // Collapse it before exhaustive-switch joining so the lossless cast chain
     // can be carried into each arm instead of blocking source-level returns.
-    fold_returns(&mut owned.body);
+    // A proven-void function deliberately had its return operands erased
+    // above; folding here would recreate one from incidental ABI result-register
+    // plumbing such as Clang's `push rax` / `pop rax` stack adjustment.
+    if output_kind != crate::ir::types_recover::RecoveredOutputKind::Void {
+        fold_returns(&mut owned.body);
+    }
     // Copy propagation and the second constant fold can replace a flag read in
     // a condition with its recovered comparison. Prune the now-dead definition
     // before shape recovery: otherwise a redundant `sf_N = ...` remains before
@@ -284,5 +360,22 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::latch_predicate::fold_latched_predicates(&mut owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
+    drop_machine_frame_comments(&mut owned.body);
+    // A call result consumed exactly once by the immediately following scalar
+    // assignment is a source expression, not a standalone temporary. Move the
+    // call into that consumer after control flow is final so no transformation
+    // can duplicate or reorder the effect.
+    crate::ir::lazy_call_select::fold_adjacent_single_use_call_results(&mut owned, pointer_width);
+    // Calls are effects even when their ABI result is ignored. Remove only the
+    // unused destination identity so source output says `puts("...");` rather
+    // than inventing `var0 = puts("...");` and a declaration for `var0`.
+    crate::ir::dead_stores::drop_globally_unused_call_results(&mut owned);
+    // Clang -O0's unobserved `main` return slot is machine bookkeeping, not a
+    // source local. Drop only pure writes to unread anonymous promoted slots;
+    // authoritative debug locals remain protected.
+    crate::ir::direct_output::prune_unread_promoted_locals(&mut owned, protected_locals);
+    if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
+        crate::ir::direct_output::prune_void_fallthrough_return(&mut owned);
+    }
     owned
 }
