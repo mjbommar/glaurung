@@ -37,6 +37,280 @@ pub fn recognise_x86_prologue(f: &mut Function) {
     collapse_epilogue(&mut f.body);
 }
 
+/// Remove MinGW's implicit constructor-runtime initialization from source main.
+///
+/// GCC inserts `__main()` (spelled `___main` by 32-bit PE symbol decoration)
+/// before the first source statement. It is the PE analogue of ELF CRT work:
+/// required by the generated executable, but never an explicit C/C++ call.
+pub fn drop_implicit_main_runtime_call(f: &mut Function) {
+    if !matches!(f.name.as_str(), "main" | "_main") {
+        return;
+    }
+    f.body.retain(|statement| {
+        !matches!(
+            statement,
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                dst: None,
+                ..
+            } if matches!(name.as_str(), "__main" | "___main") && args.is_empty()
+        )
+    });
+}
+
+/// Remove balanced cdecl argument padding after arguments have been rebuilt.
+///
+/// GCC commonly lowers a one-argument call as `sub esp, 12; push arg; call;
+/// add esp, 16`. The reconstructed [`Stmt::Call`] already owns `arg`, so the
+/// surviving subtraction/addition are ABI alignment rather than C state. Only
+/// an adjacent, arity-exact pair is removed; dynamic stack use and mismatched
+/// cleanup remain visible.
+pub fn recognise_cdecl32_call_alignment(f: &mut Function) {
+    collapse_cdecl32_call_alignment_body(&mut f.body);
+    collapse_cdecl32_realign_frame(&mut f.body);
+}
+
+fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
+    let mut start = 0usize;
+    while start < body.len() && is_leading_frame_metadata(&body[start]) {
+        start += 1;
+    }
+    if body.len().saturating_sub(start) < 7 {
+        return;
+    }
+    let aligned = matches!(
+        &body[start],
+        Stmt::Assign {
+            dst,
+            src: Expr::Bin { op: BinOp::And, lhs, rhs },
+        } if is_rsp(dst)
+            && matches!(lhs.as_ref(), Expr::Reg(source) if source == dst)
+            && matches!(rhs.as_ref(), Expr::Const(-16))
+    );
+    if !aligned {
+        return;
+    }
+
+    let (prologue_end, saved_push_count, frame_allocation) = if matches!(
+        &body[start + 1],
+        Stmt::Assign { dst, src: Expr::Reg(source) }
+            if is_rbp(dst) && is_rsp(source)
+    ) && rsp_sub_width(&body[start + 2])
+        .is_some()
+    {
+        (start + 3, None, rsp_sub_width(&body[start + 2]))
+    } else if body.len().saturating_sub(start) >= 7
+        && matches!(&body[start + 1], Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved))
+        && matches!(&body[start + 2], Stmt::Push { value: Expr::Reg(saved) } if is_rbp(saved))
+        && matches!(&body[start + 3], Stmt::Assign { dst, src: Expr::Reg(source) } if is_rbp(dst) && is_rsp(source))
+    {
+        let pushes_start = start + 4;
+        let mut cursor = pushes_start;
+        while matches!(body.get(cursor), Some(Stmt::Push { .. })) {
+            cursor += 1;
+        }
+        let push_count = cursor - pushes_start;
+        if push_count == 0
+            || !matches!(&body[cursor - 1], Stmt::Push { value: Expr::StackAddr { object, .. } } if base_name_of_vreg(object) == Some("arg0"))
+        {
+            return;
+        }
+        let frame_allocation = body.get(cursor).and_then(rsp_sub_width);
+        if frame_allocation.is_some() {
+            cursor += 1;
+        }
+        (cursor, Some(push_count), frame_allocation)
+    } else {
+        return;
+    };
+
+    let return_index = body.len() - 1;
+    if !matches!(body[return_index], Stmt::Return { .. }) || return_index < 3 {
+        return;
+    }
+    let restore_stack_index = return_index - 1;
+    let restore_base_index = return_index - 2;
+    let mut teardown = restore_base_index;
+    while teardown > 0 && matches!(body[teardown - 1], Stmt::Pop { .. }) {
+        teardown -= 1;
+    }
+    let pop_count = restore_base_index - teardown;
+    if teardown == 0 {
+        return;
+    }
+    teardown -= 1;
+    let expected_reset = saved_push_count
+        .and_then(|count| i64::try_from(count).ok())
+        .and_then(|count| count.checked_mul(-4))
+        .unwrap_or(-12);
+    let frame_reset =
+        stack_adjust_from_base(&body[teardown], is_rsp, is_rbp) == Some(expected_reset);
+    let compact_single_save = saved_push_count == Some(1) && pop_count == 0;
+    let balanced_frame_release = compact_single_save
+        && frame_allocation.is_some()
+        && rsp_add_width(&body[teardown]) == frame_allocation;
+    if compact_single_save && !frame_reset && !balanced_frame_release {
+        teardown += 1;
+    }
+    let saved_base = match &body[restore_base_index] {
+        Stmt::Assign {
+            dst,
+            src: Expr::Reg(saved),
+        } if is_rbp(dst) && is_promoted_stack_slot(saved) => saved.clone(),
+        _ => return,
+    };
+    let entry_stack = match &body[restore_stack_index] {
+        Stmt::Assign {
+            dst,
+            src: Expr::Bin { lhs, .. },
+        } if is_rsp(dst) && stack_adjustment(&body[restore_stack_index]) == Some(-4) => {
+            match lhs.as_ref() {
+                Expr::Reg(saved) => saved.clone(),
+                _ => return,
+            }
+        }
+        _ => return,
+    };
+    if !frame_reset && !compact_single_save {
+        return;
+    }
+    if !compact_single_save && saved_push_count.is_some_and(|count| count != pop_count) {
+        return;
+    }
+    if pop_count > 0
+        && !matches!(&body[teardown + 1], Stmt::Pop { target } if target == &entry_stack)
+    {
+        return;
+    }
+
+    let mut candidate = body.clone();
+    candidate.drain(teardown..return_index);
+    candidate.drain(start..prologue_end);
+    let tracked = [
+        VReg::phys("rsp"),
+        VReg::phys("esp"),
+        VReg::phys("rbp"),
+        VReg::phys("ebp"),
+        saved_base,
+        entry_stack,
+    ];
+    if tracked.iter().any(|register| {
+        candidate
+            .iter()
+            .any(|statement| crate::ir::dead_stores::stmt_reads(statement, register))
+    }) {
+        return;
+    }
+    candidate.insert(
+        start,
+        Stmt::Comment("cdecl32 prologue: aligned entry frame".to_string()),
+    );
+    candidate.insert(
+        candidate.len() - 1,
+        Stmt::Comment("cdecl32 epilogue: restore entry stack".to_string()),
+    );
+    *body = candidate;
+}
+
+fn stack_adjustment(statement: &Stmt) -> Option<i64> {
+    match statement {
+        Stmt::Assign {
+            src: Expr::Bin { op, rhs, .. },
+            ..
+        } => match (op, rhs.as_ref()) {
+            (BinOp::Add, Expr::Const(amount)) => Some(*amount),
+            (BinOp::Sub, Expr::Const(amount)) => amount.checked_neg(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn stack_adjust_from_base(
+    statement: &Stmt,
+    destination: fn(&VReg) -> bool,
+    base: fn(&VReg) -> bool,
+) -> Option<i64> {
+    let Stmt::Assign {
+        dst,
+        src: Expr::Bin { lhs, .. },
+    } = statement
+    else {
+        return None;
+    };
+    (destination(dst) && matches!(lhs.as_ref(), Expr::Reg(source) if base(source)))
+        .then(|| stack_adjustment(statement))
+        .flatten()
+}
+
+fn collapse_cdecl32_call_alignment_body(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_cdecl32_call_alignment_body(then_body);
+                if let Some(else_body) = else_body {
+                    collapse_cdecl32_call_alignment_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collapse_cdecl32_call_alignment_body(body)
+            }
+            Stmt::For { body, .. } => collapse_cdecl32_call_alignment_body(body),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collapse_cdecl32_call_alignment_body(case_body);
+                }
+                if let Some(default) = default {
+                    collapse_cdecl32_call_alignment_body(default);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_cdecl32_call_alignment_body(try_body);
+                for catch in catches {
+                    collapse_cdecl32_call_alignment_body(&mut catch.body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut cursor = 0usize;
+    while cursor + 2 < body.len() {
+        let Some(padding) = rsp_sub_width(&body[cursor]) else {
+            cursor += 1;
+            continue;
+        };
+        let Stmt::Call { args, .. } = &body[cursor + 1] else {
+            cursor += 1;
+            continue;
+        };
+        let Some(cleanup) = rsp_add_width(&body[cursor + 2]) else {
+            cursor += 1;
+            continue;
+        };
+        let Ok(argument_count) = i64::try_from(args.len()) else {
+            cursor += 1;
+            continue;
+        };
+        let Some(argument_width) = argument_count.checked_mul(4) else {
+            cursor += 1;
+            continue;
+        };
+        if padding.checked_add(argument_width) != Some(cleanup) {
+            cursor += 1;
+            continue;
+        }
+        body.remove(cursor + 2);
+        body.remove(cursor);
+        cursor += 1;
+    }
+}
+
 #[derive(Clone)]
 struct SavedSlot {
     object: VReg,
@@ -178,6 +452,13 @@ fn is_leading_frame_metadata(statement: &Stmt) -> bool {
 
 fn base_name(name: &str) -> &str {
     name.split_once('#').map_or(name, |(base, _)| base)
+}
+
+fn base_name_of_vreg(register: &VReg) -> Option<&str> {
+    match register {
+        VReg::Phys(name) => Some(base_name(name)),
+        _ => None,
+    }
 }
 
 fn is_sysv_callee_saved(register: &VReg) -> bool {
@@ -545,6 +826,27 @@ fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
         dst,
         src: Expr::Bin {
             op: BinOp::Sub,
+            lhs,
+            rhs,
+        },
+    } = stmt
+    else {
+        return None;
+    };
+    if !is_rsp(dst) || !matches!(lhs.as_ref(), Expr::Reg(reg) if reg == dst) {
+        return None;
+    }
+    match rhs.as_ref() {
+        Expr::Const(width) if *width > 0 => Some(*width),
+        _ => None,
+    }
+}
+
+fn rsp_add_width(stmt: &Stmt) -> Option<i64> {
+    let Stmt::Assign {
+        dst,
+        src: Expr::Bin {
+            op: BinOp::Add,
             lhs,
             rhs,
         },
@@ -955,6 +1257,319 @@ mod tests {
                 rhs: Box::new(Expr::Const(n)),
             },
         }
+    }
+
+    fn add_rsp(n: i64) -> Stmt {
+        Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(n)),
+            },
+        }
+    }
+
+    #[test]
+    fn cdecl32_balanced_call_padding_collapses_at_top_level_and_in_loop() {
+        let call = || Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: "puts".into(),
+            },
+            args: vec![Expr::Reg(reg("arg0"))],
+            dst: None,
+            call_spec: None,
+        };
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                sub_rsp(12),
+                call(),
+                add_rsp(16),
+                Stmt::While {
+                    cond: Expr::Const(1),
+                    body: vec![sub_rsp(12), call(), add_rsp(16), Stmt::Break],
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_cdecl32_call_alignment(&mut f);
+
+        assert!(matches!(f.body.first(), Some(Stmt::Call { .. })));
+        let Stmt::While { body, .. } = &f.body[1] else {
+            panic!("expected loop")
+        };
+        assert!(matches!(body.first(), Some(Stmt::Call { .. })));
+        assert!(!f.body.iter().any(is_rsp_add));
+        assert!(!body.iter().any(is_rsp_add));
+    }
+
+    #[test]
+    fn cdecl32_mismatched_cleanup_is_left_visible() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                sub_rsp(8),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "callee".into(),
+                    },
+                    args: vec![Expr::Reg(reg("arg0"))],
+                    dst: None,
+                    call_spec: None,
+                },
+                add_rsp(16),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        let original = f.body.clone();
+        recognise_cdecl32_call_alignment(&mut f);
+        assert_eq!(f.body, original);
+    }
+
+    #[test]
+    fn cdecl32_gcc_realign_frame_collapses_only_with_matching_entry_stack_restore() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(-16)),
+                    },
+                },
+                mov_rbp_rsp(),
+                sub_rsp(28),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "work".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rbp"))),
+                        rhs: Box::new(Expr::Const(12)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_top")),
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("var17"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        recognise_cdecl32_call_alignment(&mut f);
+
+        assert!(
+            matches!(f.body.first(), Some(Stmt::Comment(text)) if text.starts_with("cdecl32 prologue:"))
+        );
+        assert!(matches!(f.body.get(1), Some(Stmt::Call { .. })));
+        assert!(
+            matches!(f.body.get(2), Some(Stmt::Comment(text)) if text.starts_with("cdecl32 epilogue:"))
+        );
+        assert!(matches!(f.body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn cdecl32_promoted_push_pop_realign_frame_collapses() {
+        let mut body = vec![Stmt::Comment("frame: 68 bytes".into())];
+        body.extend([
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::And,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(-16)),
+                },
+            },
+            Stmt::Push {
+                value: Expr::Reg(reg("stack_top")),
+            },
+            Stmt::Push {
+                value: Expr::Reg(reg("rbp")),
+            },
+            mov_rbp_rsp(),
+            Stmt::Push {
+                value: Expr::Reg(reg("var1")),
+            },
+            Stmt::Push {
+                value: Expr::StackAddr {
+                    object: reg("arg0"),
+                    size: 4,
+                },
+            },
+            Stmt::Call {
+                target: Expr::Named {
+                    va: 1,
+                    name: "work".into(),
+                },
+                args: vec![],
+                dst: None,
+                call_spec: None,
+            },
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("rbp"))),
+                    rhs: Box::new(Expr::Const(-8)),
+                },
+            },
+            Stmt::Pop {
+                target: reg("var17"),
+            },
+            Stmt::Pop {
+                target: reg("var18"),
+            },
+            Stmt::Assign {
+                dst: reg("rbp"),
+                src: Expr::Reg(reg("stack_top")),
+            },
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("var17"))),
+                    rhs: Box::new(Expr::Const(-4)),
+                },
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ]);
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body,
+        };
+        recognise_cdecl32_call_alignment(&mut f);
+        assert!(
+            !crate::ir::ast::render(&f).contains("%rsp"),
+            "{}",
+            crate::ir::ast::render(&f)
+        );
+    }
+
+    #[test]
+    fn cdecl32_single_saved_entry_stack_collapses_after_leave_lowering() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(-16)),
+                    },
+                },
+                Stmt::Push {
+                    value: Expr::Reg(reg("stack_top")),
+                },
+                Stmt::Push {
+                    value: Expr::Reg(reg("rbp")),
+                },
+                mov_rbp_rsp(),
+                Stmt::Push {
+                    value: Expr::StackAddr {
+                        object: reg("arg0"),
+                        size: 4,
+                    },
+                },
+                sub_rsp(16),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 1,
+                        name: "work".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+                add_rsp(16),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_top")),
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("local_4"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+        recognise_cdecl32_call_alignment(&mut f);
+        assert!(!crate::ir::ast::render(&f).contains("%rsp"));
+    }
+
+    #[test]
+    fn mingw_implicit_main_runtime_call_is_not_emitted_as_source() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x140001000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x140002000,
+                        name: "__main".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x140003000,
+                        name: "puts".into(),
+                    },
+                    args: vec![Expr::StringLit {
+                        value: "Hello, World!".into(),
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+        drop_implicit_main_runtime_call(&mut f);
+        let rendered = crate::ir::ast::render(&f);
+        assert!(!rendered.contains("__main"));
+        assert!(rendered.contains("puts"));
     }
 
     #[test]

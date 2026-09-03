@@ -816,15 +816,14 @@ fn resolve_pc_thunk_calls(
     thunk_register: impl Fn(u64) -> Option<String>,
 ) {
     for block in blocks.iter_mut() {
-        for index in 0..block.instrs.len() {
+        let mut index = 0usize;
+        while index < block.instrs.len() {
             let Op::Call {
                 target: CallTarget::Direct(target),
                 ..
             } = block.instrs[index].op
             else {
-                continue;
-            };
-            let Some(register) = thunk_register(target) else {
+                index += 1;
                 continue;
             };
             let va = block.instrs[index].va;
@@ -833,10 +832,61 @@ fn resolve_pc_thunk_calls(
                 .map(|instruction| instruction.va)
                 .find(|next| *next != va)
                 .unwrap_or(block.end_va);
+            if target == return_va {
+                let inline_pop = match block.instrs.get(index + 1..index + 3) {
+                    Some([load, adjust]) if load.va == target && adjust.va == target => {
+                        match (&load.op, &adjust.op) {
+                            (
+                                Op::Load {
+                                    dst,
+                                    addr:
+                                        MemOp {
+                                            base: Some(base),
+                                            index: None,
+                                            scale: 0,
+                                            disp: 0,
+                                            size: 4,
+                                            segment: None,
+                                            endian: Endian::Little,
+                                        },
+                                },
+                                Op::Bin {
+                                    dst: stack_dst,
+                                    op: BinOp::Add,
+                                    lhs: Value::Reg(stack_lhs),
+                                    rhs: Value::Const(4),
+                                },
+                            ) if base == &VReg::phys("esp")
+                                && stack_dst == base
+                                && stack_lhs == base
+                                && dst != base =>
+                            {
+                                Some(dst.clone())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(register) = inline_pop {
+                    block.instrs[index].op = Op::Assign {
+                        dst: register,
+                        src: Value::Addr(return_va),
+                    };
+                    block.instrs.drain(index + 1..index + 3);
+                    index += 1;
+                    continue;
+                }
+            }
+            let Some(register) = thunk_register(target) else {
+                index += 1;
+                continue;
+            };
             block.instrs[index].op = Op::Assign {
                 dst: VReg::phys(&register),
                 src: Value::Addr(return_va),
             };
+            index += 1;
         }
     }
 }
@@ -916,6 +966,60 @@ mod tests {
                 dst: VReg::phys("ebx"),
                 src: Value::Addr(0x11c5),
             }
+        );
+    }
+
+    #[test]
+    fn a_call_to_inline_pop_pc_thunk_becomes_the_return_address() {
+        let esp = VReg::phys("esp");
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x1190,
+            end_va: 0x11a3,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x1197,
+                    op: Op::Call {
+                        target: CallTarget::Direct(0x119c),
+                        effects: None,
+                    },
+                },
+                LlirInstr {
+                    va: 0x119c,
+                    op: Op::Load {
+                        dst: VReg::phys("ebx"),
+                        addr: MemOp {
+                            base: Some(esp.clone()),
+                            index: None,
+                            scale: 0,
+                            disp: 0,
+                            size: 4,
+                            segment: None,
+                            endian: Endian::Little,
+                        },
+                    },
+                },
+                LlirInstr {
+                    va: 0x119c,
+                    op: Op::Bin {
+                        dst: esp.clone(),
+                        op: BinOp::Add,
+                        lhs: Value::Reg(esp),
+                        rhs: Value::Const(4),
+                    },
+                },
+            ],
+            succs: vec![],
+        }];
+        resolve_pc_thunk_calls(&mut blocks, |_| None);
+        assert_eq!(
+            blocks[0].instrs,
+            vec![LlirInstr {
+                va: 0x1197,
+                op: Op::Assign {
+                    dst: VReg::phys("ebx"),
+                    src: Value::Addr(0x119c),
+                },
+            }]
         );
     }
 
