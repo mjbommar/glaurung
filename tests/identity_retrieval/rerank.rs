@@ -298,6 +298,17 @@ struct ScoredQuery {
 /// The twin join, the seeded negative draw and the pessimistic tie rule are
 /// `metrics.rs`'s, reached through [`sample_negatives`] rather than copied, so
 /// the two files cannot drift into sampling different negatives.
+///
+/// # One asymmetry to know about before raising `no_match_similarity`
+///
+/// The re-ranked side counts the "no match" node as a competitor for the twin's
+/// rank, and the baseline side has no such node. At the default threshold of
+/// `0.0` that costs nothing -- a twin scoring above zero always beats it, and
+/// the measured sweep found zero worsenings from it -- but a caller who raises
+/// the threshold is changing what the "after" column means, not only what the
+/// decode does. Every number in
+/// `docs/reference/function-identity-rerank.md#measured` was produced at `0.0`
+/// for that reason.
 #[allow(clippy::too_many_arguments)]
 pub fn compare_slices<S: Scheme>(
     scheme: &S,
