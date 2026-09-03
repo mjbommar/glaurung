@@ -494,8 +494,25 @@ fn width_inference_resolves_most_of_the_corpus() {
 /// machine and a failure is reproducible from the printed indices alone.
 #[test]
 fn the_induced_distance_satisfies_the_metric_axioms_on_real_functions() {
-    let Some((left, right, _)) = load_pair(("gcc", "O0"), ("gcc", "O2"), CfrSettings::default())
-    else {
+    check_metric_axioms(CfrSettings::default(), "unnormalised");
+}
+
+/// The same axioms with the peephole normaliser on.
+///
+/// The normaliser is unsound *as semantics*; it must not be unsound *as a
+/// metric*. It changes which features a function has and nothing about how two
+/// feature multisets are compared, so symmetry, identity on the quotient and
+/// the triangle inequality have to survive it exactly -- and a lane whose
+/// distance stopped being a metric would stop being indexable, which is the
+/// whole reason the CFR is a Weisfeiler-Lehman kernel rather than a graph edit
+/// distance.
+#[test]
+fn the_induced_distance_still_satisfies_the_metric_axioms_when_normalised() {
+    check_metric_axioms(normalized(), "normalised");
+}
+
+fn check_metric_axioms(settings: CfrSettings, label: &str) {
+    let Some((left, right, _)) = load_pair(("gcc", "O0"), ("gcc", "O2"), settings) else {
         return;
     };
     let mut population: Vec<&Func> = left.iter().chain(right.iter()).collect();
@@ -546,7 +563,7 @@ fn the_induced_distance_satisfies_the_metric_axioms_on_real_functions() {
         checked += 1;
     }
     eprintln!(
-        "metric axioms: {checked} triples over {} real functions",
+        "metric axioms ({label}): {checked} triples over {} real functions",
         population.len()
     );
 }
@@ -610,4 +627,296 @@ fn the_corpus_is_large_enough_to_measure() {
 #[allow(dead_code)]
 fn corpus_present() -> bool {
     Path::new(&build_dir()).is_dir()
+}
+
+// ===========================================================================
+// SECTION: the peephole normaliser (plan item 8)
+//
+// Every lane above, re-run with `CfrSettings::normalize` set, plus the two
+// diagnostics the plan asks for: how much of the corpus the normaliser moves
+// at all, and what each pass is worth on its own. The unnormalised numbers are
+// the floors directly above, measured on the same corpus, in the same process,
+// under the same filters -- so the delta is a delta and not two protocols.
+// ===========================================================================
+
+/// The settings the normalised lanes measure under.
+fn normalized() -> CfrSettings {
+    CfrSettings {
+        normalize: true,
+        ..CfrSettings::default()
+    }
+}
+
+/// `(hits, scored)` for a size-matched lane.
+///
+/// This is the body the size-matched tests share, extracted so a normalised
+/// lane cannot accidentally become a different protocol from the unnormalised
+/// one it is compared against.
+fn score_size_matched(queries: &[Func], pool: &[Func]) -> (usize, usize) {
+    let by_label: BTreeMap<(&str, &str), &Func> =
+        pool.iter().map(|func| (func.label(), func)).collect();
+    let (mut hits, mut scored) = (0usize, 0usize);
+    for query in queries {
+        let Some(positive) = by_label.get(&query.label()) else {
+            continue;
+        };
+        let negatives = size_matched_negatives(query, pool);
+        if negatives.len() < NEGATIVES {
+            continue;
+        }
+        scored += 1;
+        if positive_wins(query, positive, &negatives) {
+            hits += 1;
+        }
+    }
+    (hits, scored)
+}
+
+/// `(hits, scored)` with the whole pool slice as the candidate set.
+fn score_whole_slice(queries: &[Func], pool: &[Func]) -> (usize, usize) {
+    let by_label: BTreeMap<(&str, &str), &Func> =
+        pool.iter().map(|func| (func.label(), func)).collect();
+    let all: Vec<&Func> = pool.iter().collect();
+    let (mut hits, mut scored) = (0usize, 0usize);
+    for query in queries {
+        let Some(positive) = by_label.get(&query.label()) else {
+            continue;
+        };
+        scored += 1;
+        let negatives: Vec<&Func> = all
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.label() != query.label())
+            .collect();
+        if positive_wins(query, positive, &negatives) {
+            hits += 1;
+        }
+    }
+    (hits, scored)
+}
+
+/// Load a pair of slices, drop duplicates on both sides, score the size-matched
+/// lane. The unit both the normalised lanes and the ablation use.
+fn size_matched_lane(
+    query: (&str, &str),
+    candidate: (&str, &str),
+    settings: CfrSettings,
+) -> Option<(usize, usize, usize, usize)> {
+    let (queries, pool, _) = load_pair(query, candidate, settings)?;
+    let (queries, _) = drop_corpus_duplicates(queries);
+    let (pool, _) = drop_corpus_duplicates(pool);
+    let (hits, scored) = score_size_matched(&queries, &pool);
+    Some((hits, scored, queries.len(), pool.len()))
+}
+
+// ---------------------------------------------------------------------------
+// Measured ratchets under `normalize = true`.
+//
+// Read off a release run on 2026-09-02 before they were written down, exactly
+// as the unnormalised constants above were.
+// ---------------------------------------------------------------------------
+
+/// Recall@1, XO gcc -O0 -> gcc -O2, size-matched, **with the normaliser**.
+///
+/// **Measured 2026-09-02: 60/341 = 17.60%**, against 51/341 = 14.96%
+/// unnormalised on the same 341 queries in the same process. That is +2.64
+/// percentage points, or a 17.6% relative gain, on the lane the normaliser
+/// exists for -- and it is a gain in the *hardest* direction, because `-O0` to
+/// `-O2` changes the graph rather than its spelling.
+///
+/// See `docs/reference/function-identity-cfr.md`, "Normalisation", for the
+/// table this sits in and for the per-pass ablation.
+const MIN_RECALL_AT_1_CROSS_OPT_NORMALIZED: f64 = 0.1759;
+
+/// Recall@1, XC gcc -O2 -> clang -O2, size-matched, with the normaliser.
+///
+/// **Measured 2026-09-02: 155/309 = 50.16%**, against 148/309 = 47.90%
+/// unnormalised. +2.26 points. Smaller in relative terms than the XO gain,
+/// which is the expected shape: the projection already erases most of what
+/// separates gcc from clang at one optimisation level, so there is less left
+/// for a peephole rewriter to take.
+const MIN_RECALL_AT_1_CROSS_COMPILER_NORMALIZED: f64 = 0.5015;
+
+/// Recall@1, XO gcc -O0 -> gcc -O2, whole slice, with the normaliser.
+///
+/// **Measured 2026-09-02: 51/594 = 8.59%**, against 44/594 = 7.41%
+/// unnormalised, on 594 queries and 610 candidates. This is the number
+/// comparable with `tests/similarity_retrieval.rs`'s 0.32% for CTPH: the
+/// normalised CFR is now twenty-seven times the byte digest rather than
+/// twenty-three.
+const MIN_RECALL_AT_1_GLOBAL_POOL_NORMALIZED: f64 = 0.0858;
+
+/// Fraction of gcc -O0 functions whose feature multiset the normaliser moves.
+///
+/// **Measured 2026-09-02: 710/710 = 100.00%.** Cranelift measures 1.13 e-nodes
+/// per e-class after rewriting, which the research synthesis reads as "limited
+/// algebraic variation to recover" and uses to argue against building an
+/// e-graph canonicaliser. That prediction does not transfer: asked of a
+/// peephole rewriter over *lifted x86* rather than over a compiler's own SSA,
+/// the answer is that every single function of five blocks or more has
+/// something to normalise. The reason is that the two are not measuring the
+/// same thing -- Cranelift's number is about *algebraic* variation in an IR a
+/// compiler front end produced, and most of what fires here is lifter and
+/// calling-convention boilerplate: the `lea` expansion's constant seed, the
+/// stack round-trip every `-O0` local performs, the width-suffixed intrinsic
+/// name. A high changed-form fraction is therefore not the same claim as a
+/// high retrieval gain, and the two numbers above are the ones that say what
+/// the change is worth.
+///
+/// The floor is 0.99 rather than 1.0 so that adding one fixture whose only
+/// function normalises to itself is a fact rather than a failure.
+const MIN_CHANGED_FORM_FRACTION: f64 = 0.99;
+
+#[test]
+fn normalized_o0_functions_retrieve_their_o2_twin_against_size_matched_negatives() {
+    let Some((hits, scored, queries, pool)) =
+        size_matched_lane(("gcc", "O0"), ("gcc", "O2"), normalized())
+    else {
+        return;
+    };
+    eprintln!("pool: {queries} gcc -O0 queries, {pool} gcc -O2 candidates, normalised");
+    assert_ratchet(
+        "XO gcc -O0 -> gcc -O2, 1 + 100 candidates, NORMALISED",
+        hits,
+        scored,
+        1.0 / (NEGATIVES + 1) as f64,
+        MIN_RECALL_AT_1_CROSS_OPT_NORMALIZED,
+    );
+}
+
+#[test]
+fn normalized_gcc_functions_retrieve_their_clang_twin_against_size_matched_negatives() {
+    let Some((hits, scored, queries, pool)) =
+        size_matched_lane(("gcc", "O2"), ("clang", "O2"), normalized())
+    else {
+        return;
+    };
+    eprintln!("pool: {queries} gcc -O2 queries, {pool} clang -O2 candidates, normalised");
+    assert_ratchet(
+        "XC gcc -O2 -> clang -O2, 1 + 100 candidates, NORMALISED",
+        hits,
+        scored,
+        1.0 / (NEGATIVES + 1) as f64,
+        MIN_RECALL_AT_1_CROSS_COMPILER_NORMALIZED,
+    );
+}
+
+#[test]
+fn normalized_o0_functions_retrieve_their_o2_twin_from_the_whole_slice() {
+    let Some((queries, pool, _)) = load_pair(("gcc", "O0"), ("gcc", "O2"), normalized()) else {
+        return;
+    };
+    let (hits, scored) = score_whole_slice(&queries, &pool);
+    eprintln!(
+        "pool: {} gcc -O0 queries, {} gcc -O2 candidates, normalised",
+        queries.len(),
+        pool.len()
+    );
+    assert_ratchet(
+        "XO gcc -O0 -> gcc -O2, whole slice, NORMALISED",
+        hits,
+        scored,
+        1.0 / pool.len().max(1) as f64,
+        MIN_RECALL_AT_1_GLOBAL_POOL_NORMALIZED,
+    );
+}
+
+/// How much of the corpus the normaliser moves at all.
+///
+/// Compares the **feature multisets**, not the digests: the digest carries the
+/// settings word, so a normalised and an unnormalised signature of the same
+/// function differ in their digests whether or not a single feature moved.
+#[test]
+fn the_normaliser_moves_a_measured_fraction_of_the_corpus() {
+    let (Some((plain, _)), Some((canonical, _))) = (
+        load_slice("gcc", "O0", CfrSettings::default()),
+        load_slice("gcc", "O0", normalized()),
+    ) else {
+        eprintln!("SKIP: {} is empty or absent.", build_dir().display());
+        return;
+    };
+    let by_label: BTreeMap<(&str, &str), &Func> =
+        canonical.iter().map(|func| (func.label(), func)).collect();
+    let (mut moved, mut compared) = (0usize, 0usize);
+    for function in &plain {
+        let Some(other) = by_label.get(&function.label()) else {
+            continue;
+        };
+        compared += 1;
+        if function.signature.features != other.signature.features {
+            moved += 1;
+        }
+    }
+    let fraction = moved as f64 / compared.max(1) as f64;
+    eprintln!(
+        "normaliser moved the canonical form of {moved}/{compared} = {fraction:.4} of the \
+         gcc -O0 slice"
+    );
+    assert!(
+        fraction >= MIN_CHANGED_FORM_FRACTION,
+        "the normaliser moved {fraction:.4} of the corpus, below the \
+         {MIN_CHANGED_FORM_FRACTION:.4} ratchet -- the passes have stopped firing"
+    );
+}
+
+/// The per-pass ablation on the cross-optimisation lane, which is the lane the
+/// normaliser exists for.
+///
+/// Fourteen configurations: none, each pass alone, each pass removed from the
+/// full set, and the full set. Printed as a table with its denominators; the
+/// only assertion is that the "none" row reproduces the unnormalised floor
+/// exactly, which is what proves the ablation is measuring the passes rather
+/// than the harness.
+#[test]
+fn the_per_pass_ablation_on_the_cross_optimisation_lane() {
+    use glaurung::identity::cfr::normalize::{with_passes, Passes};
+
+    let Some((baseline_hits, baseline_scored, _, _)) =
+        size_matched_lane(("gcc", "O0"), ("gcc", "O2"), CfrSettings::default())
+    else {
+        return;
+    };
+
+    let mut rows: Vec<(String, usize, usize)> = Vec::new();
+    let measure = |label: String, passes: Passes, rows: &mut Vec<(String, usize, usize)>| {
+        let outcome = with_passes(passes, || {
+            size_matched_lane(("gcc", "O0"), ("gcc", "O2"), normalized())
+        });
+        if let Some((hits, scored, _, _)) = outcome {
+            rows.push((label, hits, scored));
+        }
+    };
+
+    measure("none".to_string(), Passes::NONE, &mut rows);
+    for (pass, name) in Passes::ALL {
+        measure(format!("only {name}"), pass, &mut rows);
+    }
+    for (pass, name) in Passes::ALL {
+        measure(
+            format!("all but {name}"),
+            Passes::everything().without(pass),
+            &mut rows,
+        );
+    }
+    measure("all".to_string(), Passes::everything(), &mut rows);
+
+    eprintln!(
+        "\nXO gcc -O0 -> gcc -O2, 1 + {NEGATIVES} candidates, per-pass ablation\n\
+         unnormalised baseline: {baseline_hits}/{baseline_scored} = {:.4}",
+        baseline_hits as f64 / baseline_scored.max(1) as f64
+    );
+    for (label, hits, scored) in &rows {
+        eprintln!(
+            "  {label:<20} {hits}/{scored} = {:.4}",
+            *hits as f64 / (*scored).max(1) as f64
+        );
+    }
+
+    let (_, none_hits, none_scored) = &rows[0];
+    assert_eq!(
+        (*none_hits, *none_scored),
+        (baseline_hits, baseline_scored),
+        "the empty pass set did not reproduce the unnormalised lane, so the \
+         ablation is measuring something other than the passes"
+    );
 }

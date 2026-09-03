@@ -1080,7 +1080,12 @@ fn chained_function() -> LlirFunction {
 /// removes everything no root depends on.
 #[test]
 fn the_passes_compose() {
-    let out = ops_of(&normalize_function(&chained_function()));
+    // Every pass, including the one `Passes::DEFAULT` leaves out: this test is
+    // about the pipeline composing, not about which configuration ships.
+    let out = ops_of(&normalize_function_with(
+        &chained_function(),
+        Passes::everything(),
+    ));
 
     assert_eq!(
         out[2],
@@ -1139,6 +1144,45 @@ fn no_passes_is_a_clone() {
         ops_of(&normalize_function_with(&function, Passes::NONE)),
         ops_of(&function)
     );
+}
+
+/// The thread-local default must be exactly the full set, spelled as a literal
+/// because a `const` initialiser cannot call [`Passes::everything`].
+#[test]
+fn the_thread_local_default_is_the_measured_pass_set() {
+    // The literal in the `const` initialiser and the pass table must agree:
+    // a `const` cannot call `everything()`, so the two are pinned here.
+    assert_eq!(
+        Passes::DEFAULT,
+        Passes::everything().without(Passes::STRENGTH),
+        "DEFAULT is (a) through (e); (f) is measured negative and excluded"
+    );
+    assert_eq!(Passes::everything().bits(), 0b11_1111);
+    // ...and the default really is what `normalize_function` uses.
+    let function = chained_function();
+    assert_eq!(
+        ops_of(&normalize_function(&function)),
+        ops_of(&normalize_function_with(&function, Passes::DEFAULT))
+    );
+    assert_ne!(
+        ops_of(&normalize_function(&function)),
+        ops_of(&normalize_function_with(&function, Passes::everything())),
+        "the excluded pass has to actually do something, or excluding it is \
+         not a decision"
+    );
+}
+
+#[test]
+fn narrowing_the_pass_set_is_scoped_and_restored() {
+    let function = chained_function();
+    let full = ops_of(&normalize_function(&function));
+    let narrowed = super::with_passes(Passes::OPCODES, || ops_of(&normalize_function(&function)));
+    assert_eq!(
+        narrowed,
+        ops_of(&normalize_function_with(&function, Passes::OPCODES))
+    );
+    assert_ne!(narrowed, full);
+    assert_eq!(ops_of(&normalize_function(&function)), full);
 }
 
 #[test]

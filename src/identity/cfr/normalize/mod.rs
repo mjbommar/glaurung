@@ -38,14 +38,19 @@
 //!
 //! # The passes
 //!
-//! | Bit | Module | Rule |
-//! |---|---|---|
-//! | (a) | [`opcodes`] | same-semantics opcode collapse |
-//! | (b) | [`constants`] | constant folding and copy propagation |
-//! | (c) | [`cse`] | local common-subexpression elimination |
-//! | (d) | [`redundancy`] | dead-store and redundant-write elimination |
-//! | (e) | [`polarity`] | comparison-polarity canonicalisation |
-//! | (f) | [`strength`] | strength-reduction canonical forms |
+//! | Bit | Module | Rule | In [`Passes::DEFAULT`]? |
+//! |---|---|---|---|
+//! | (a) | [`opcodes`] | same-semantics opcode collapse | yes |
+//! | (b) | [`constants`] | constant folding and copy propagation | yes |
+//! | (c) | [`cse`] | local common-subexpression elimination | yes |
+//! | (d) | [`redundancy`] | dead-store and redundant-write elimination | yes |
+//! | (e) | [`polarity`] | comparison-polarity canonicalisation | yes |
+//! | (f) | [`strength`] | strength-reduction canonical forms | **no -- measured negative** |
+//!
+//! The last row is the lane's one negative result and it is kept rather than
+//! deleted: the pass is implemented, tested and ablated, and the ablation says
+//! it costs recall in both possible directions. [`Passes::DEFAULT`] carries the
+//! numbers.
 //!
 //! The order is fixed and is the order of the table: (a) makes operators
 //! comparable so (b) can fold them, (b) exposes the operand identities (c) and
@@ -113,11 +118,35 @@ impl Passes {
         (Passes::STRENGTH, "strength"),
     ];
 
-    /// No pass at all -- the identity normaliser, used by the ablation as the
-    /// "all but the only one there is" endpoint.
+    /// No pass at all -- the identity normaliser, and the ablation's zero row.
     pub const NONE: Passes = Passes(0);
 
-    /// The full set.
+    /// The set [`super::CfrSettings::normalize`] turns on: (a) through (e).
+    ///
+    /// **(f) is implemented, measured and excluded.** The rule stated in
+    /// advance is that a pass whose *solo* row in the ablation is below the
+    /// unnormalised baseline does not ship in the default set. On XO
+    /// (gcc `-O0` -> gcc `-O2`, 341 scored queries, 1 + 100 candidates) the
+    /// unnormalised baseline is 51/341 = 0.1496 and every pass alone reaches
+    /// at least that -- except [`strength`], which reads 48/341 = 0.1408.
+    /// With it in the set the full pipeline reads 57/341 = 0.1672; without it,
+    /// 60/341 = 0.1760.
+    ///
+    /// The cost is entirely rule 1, the power-of-two collapse: with only rule 2
+    /// enabled, `only strength` returns to exactly the baseline 51/341, which
+    /// also says the magic-division recogniser never fires on this corpus. The
+    /// **opposite** direction was measured too -- `Shl x, k` to `Mul x, 2^k`,
+    /// which is the other way to make the two spellings one -- and is also a
+    /// loss: `only strength` 49/340 = 0.1441 and the full pipeline 59/340 =
+    /// 0.1735. Two spellings of a scaled index carry discrimination this corpus
+    /// wants kept, in both directions, so the pass stays out of the default set
+    /// rather than being tuned until it stops hurting.
+    ///
+    /// See `docs/reference/function-identity-cfr.md`, "Normalisation".
+    pub const DEFAULT: Passes = Passes(0b01_1111);
+
+    /// The full set, all six. The ablation's other endpoint, and not what the
+    /// settings flag turns on -- see [`Passes::DEFAULT`].
     pub fn everything() -> Passes {
         Passes::ALL
             .iter()
@@ -149,16 +178,48 @@ impl Passes {
 
 impl Default for Passes {
     fn default() -> Self {
-        Passes::everything()
+        Passes::DEFAULT
     }
 }
 
-/// Normalise a copy of `function` with every pass enabled.
+thread_local! {
+    /// The pass set [`normalize_function`] uses on this thread.
+    ///
+    /// [`Passes::DEFAULT`]. [`with_passes`] is the only thing that changes it, and
+    /// it exists for one reason: the ablation in `tests/identity_cfr_retrieval.rs`
+    /// has to score thirteen pass configurations through the *same* pipeline
+    /// `super::extract` runs, and `CfrSettings` deliberately carries one
+    /// `normalize` bit rather than six, because a settings word with a bit per
+    /// pass would make sixty-four incomparable quotients out of what should be
+    /// one.
+    ///
+    /// Thread-local rather than global: `cargo test` runs each test in its own
+    /// thread, so a measurement in one cannot perturb another, and the
+    /// signature loop in `super::extract` is serial within a thread.
+    static ACTIVE_PASSES: std::cell::Cell<Passes> =
+        const { std::cell::Cell::new(Passes::DEFAULT) };
+}
+
+/// Run `body` with only `passes` enabled on this thread, restoring the previous
+/// set afterwards even if `body` panics is **not** guaranteed -- a panicking
+/// measurement fails the test it is in and the thread ends with it.
+///
+/// Measurement only. Nothing in `src/` calls this.
+pub fn with_passes<T>(passes: Passes, body: impl FnOnce() -> T) -> T {
+    let previous = ACTIVE_PASSES.with(|active| active.replace(passes));
+    let outcome = body();
+    ACTIVE_PASSES.with(|active| active.set(previous));
+    outcome
+}
+
+/// Normalise a copy of `function` with the thread's active pass set, which is
+/// [`Passes::DEFAULT`] unless a measurement has changed it with
+/// [`with_passes`].
 ///
 /// The input is borrowed and never mutated: the caller's function is the one
 /// the decompiler may still be holding.
 pub fn normalize_function(function: &LlirFunction) -> LlirFunction {
-    normalize_function_with(function, Passes::everything())
+    normalize_function_with(function, ACTIVE_PASSES.with(std::cell::Cell::get))
 }
 
 /// Normalise a copy of `function` with the named passes only.
