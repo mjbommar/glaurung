@@ -119,6 +119,44 @@ The Rust-specific requirements on top of that:
   identical ids and every gate that is a diff stays a diff;
 * the arena is append-only during parsing.
 
+**Two vectors more than specced, and the reason is `REQ-SYN-7`.** The four
+above hold only the node's *defining* token, so a node's extent — its closing
+brace, say — is nowhere, and `span()` cannot be answered. Zig recovers extents
+with tag-dependent `firstToken`/`lastToken` walks, which this substrate may not
+write because it may not know what a tag means (`REQ-SYN-1`). The arena
+therefore keeps `first_token` and `end_token` as well: 8 bytes per node, in
+exchange for an exact O(1) span. `span()` takes the token spans as a parameter
+rather than importing the token buffer, so the layering holds.
+
+**Measured, again, and again smaller than the cited figure.** 250,000 nodes,
+capacity-exact vectors, debug build
+(`cargo test --features python-ext --lib syntax::tree::tests::soa_beats -- --nocapture`):
+
+```
+specced 4 fields: SoA 3500000 B (14 B/node)  AoS 4000000 B (16 B/node)  saving 12.50%
+actual  6 fields: SoA 5500000 B (22 B/node)  AoS 6000000 B (24 B/node)  saving  8.33%
+```
+
+The saving is exactly **2 bytes per node** in both configurations — the tail
+padding of three `u32`s plus a `u16` — so it *dilutes as fields are added*
+rather than scaling with them. Together with the token buffer's measured 25%
+(§2.1), that is two independent measurements well below the 37.5% this document
+originally quoted from Zig. **The memory case is roughly a third as strong for
+our field sets as that number implies, and it should not be read as a
+prediction.** The layout is still worth keeping — 500 KB per quarter-million
+nodes is free, and the parser's hot loop reads `tags` far more often than the
+rest — but the argument that carries the weight is cache locality, not
+alignment.
+
+**One capability deliberately absent: `precede`.** rust-analyzer can wrap an
+already-closed node in a new parent, which is how it parses left-associative
+constructs without lookahead. Doing that needs either an O(n) insert into the
+event buffer or a `forward_parent` field on `Open`, and the latter changes the
+`Event` enum in §3. Tag patching plus abandonment covers the
+declaration-versus-expression case C actually needs. A grammar that needs
+left-associative wrapping will have to add it, and adding it is an `Event`
+change, not a local one.
+
 ### 2.3 Interning and source positions
 
 `Symbol(u32)` into a `SymbolTable`; `Span { lo: u32, hi: u32 }` into a
@@ -153,6 +191,15 @@ grammar reuses every sink.
 tag only after consuming its first tokens rewrites the earlier `Open` rather
 than backtracking. This is what makes C's declaration-versus-expression
 ambiguity cheap to handle without a typedef table.
+
+**An honest note on the `Sink` trait.** Two implementations exist — the tree
+builder and a tag census that answers "how many nodes of each kind, how deep"
+in one pass without allocating an arena — and their cost profiles genuinely
+differ, which is the minimum bar for the indirection. But the trait is **not
+yet load-bearing**, because the CFG builder of §5 consumes the separate `Flow`
+vocabulary rather than these events. If that stays true, `Sink`'s second *real*
+consumer never arrives and the trait should be revisited rather than defended.
+Treat it as a design commitment being paid forward, not one already amortised.
 
 ## 4. The error model
 
@@ -272,8 +319,28 @@ Sizing bands match
 | SB-8 | Recovery primitives | synchronizing token sets as bitsets; depth counter; work budget | S | an adversarially nested input terminates with a diagnostic, does not abort |
 | SB-9 | CFG builder | `Flow` events, control context stack, label fixup list, chain-head coalescing | M | the structural invariants of `REQ-GEN-1`, plus one fixture per `Flow` variant |
 
-Total: roughly `S`+`M` sized throughout, no `L`, no `XL`. The substrate is small;
-the grammars are what is large.
+That estimate was wrong for two of the nine, and the miss is worth recording
+rather than quietly amending. Measured product lines once implemented (tests
+excluded, as the estate's own gate counts them):
+
+| component | estimated | actual | why |
+|---|---|---|---|
+| SB-4 `scan.rs` | `M` (300-800) | **1,202** | four independent scanner families — trivia, string/char literals, numeric literals, identifiers — each with a long tail of real edge cases (unbounded `\x` escapes, hex floats, digit separators) |
+| SB-9 `cfg.rs` | `M` (300-800) | **1,534** | the control context stack, label backpatching, chain coalescing and the `REQ-GEN-1` validators are four separable concerns that arrived as one file |
+| the other seven | `XS`-`M` | 91-745 | as estimated |
+
+Both exceed the 1,000-line threshold in
+`python/tests/test_large_module_review.py`, which is the estate's mechanism for
+asking exactly this question. Each is cohesive — one has a single reason to
+change per scanner family, the other per graph-construction phase — but "four
+separable concerns in one file" is the definition the threshold exists to
+catch, so **both are split candidates, not allowlist candidates**. The natural
+cuts are `scan/{trivia,literal,number,ident}.rs` and
+`cfg/{flow,build,coalesce,validate}.rs`.
+
+The claim that survives: the substrate is still far smaller than a grammar
+will be, and the seven components that were estimated correctly are the ones a
+second language reuses without modification.
 
 ## 8. Estate obligations
 
