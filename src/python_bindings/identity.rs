@@ -7,8 +7,9 @@
 //!
 //! # Section ownership
 //!
-//! This file is shared between the three identity lanes (`structural`, `warp`,
-//! `cfr`). Each keeps its additions inside its own clearly marked section, and
+//! This file is shared between the identity lanes (`structural`, `warp`,
+//! `cfr`, `gate`). Each keeps its additions inside its own clearly marked
+//! section, and
 //! [`register_identity_bindings`] registers each section's items in its own
 //! block, so two lanes adding functions at once is a trivial merge rather than
 //! a conflict in the middle of a function body.
@@ -882,6 +883,93 @@ fn register_cfr(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // ===========================================================================
+// SECTION: gate -- the BinaryFuse8 membership gate (src/identity/gate.rs)
+// ===========================================================================
+
+use pyo3::types::PyBytes;
+
+/// Build a serialized BinaryFuse8 membership gate over `identities`.
+///
+/// This is `identity_filter.filter` in
+/// `docs/history/program-measures-2026-09-02/03-schema.sql` section 7: one
+/// gate per `(scheme, architecture)`, built from every identity string a
+/// scheme produces (a `siglib_function.identity` column, or a survey's whole
+/// computed set). Duplicate strings are removed before construction.
+///
+/// Args:
+///     identities: The identity strings to build the gate from. Must be
+///         non-empty.
+///
+/// Returns:
+///     The serialized gate, in the format [`identity_gate_contains`] and
+///     `glaurung.analysis.identity_gate_n_keys` read: an 8-byte key count,
+///     then the xorf descriptor, then the fingerprint bytes.
+///
+/// Raises:
+///     ValueError: `identities` is empty, or xorf's construction failed
+///         (in practice, a `u64` hash collision between two distinct
+///         identity strings -- astronomically unlikely at any corpus size
+///         this project will reach).
+#[pyfunction]
+#[pyo3(name = "identity_gate_build", signature = (identities))]
+fn identity_gate_build_py<'py>(
+    py: Python<'py>,
+    identities: Vec<String>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let gate = py
+        .detach(|| crate::identity::gate::IdentityGate::build(identities))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(PyBytes::new(py, &gate.to_bytes()))
+}
+
+/// Query a serialized gate for `identity`, without copying its fingerprint
+/// bytes.
+///
+/// `False` is definitive: `identity` is not present in the set the gate was
+/// built from, and no exact or masked lookup is needed. `True` means "go do
+/// the real lookup" -- BinaryFuse8's published false-positive rate is under
+/// 0.4%, so a hit is not a match by itself.
+///
+/// Args:
+///     blob: A gate produced by [`identity_gate_build`].
+///     identity: The identity string to test.
+///
+/// Returns:
+///     Whether `identity` might be a member.
+///
+/// Raises:
+///     ValueError: `blob` is shorter than a valid gate can be.
+#[pyfunction]
+#[pyo3(name = "identity_gate_contains", signature = (blob, identity))]
+fn identity_gate_contains_py(blob: &[u8], identity: &str) -> PyResult<bool> {
+    let view = crate::identity::gate::IdentityGateRef::from_bytes(blob)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(view.contains(identity))
+}
+
+/// The number of distinct identities `blob` was built from, read from the
+/// gate's own header rather than recomputed.
+///
+/// Raises:
+///     ValueError: `blob` is shorter than a valid gate can be.
+#[pyfunction]
+#[pyo3(name = "identity_gate_n_keys", signature = (blob))]
+fn identity_gate_n_keys_py(blob: &[u8]) -> PyResult<usize> {
+    let view = crate::identity::gate::IdentityGateRef::from_bytes(blob)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(view.n_keys())
+}
+
+/// Register the membership-gate additions on `analysis_mod`.
+fn register_gate(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
+    analysis_mod.add_function(wrap_pyfunction!(identity_gate_build_py, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(identity_gate_contains_py, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(identity_gate_n_keys_py, analysis_mod)?)?;
+    analysis_mod.add("IDENTITY_GATE_KIND", crate::identity::gate::KIND)?;
+    Ok(())
+}
+
+// ===========================================================================
 // SECTION: registration
 // ===========================================================================
 
@@ -894,5 +982,6 @@ pub fn register_identity_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     register_structural(&analysis_mod)?;
     register_warp(&analysis_mod)?;
     register_cfr(&analysis_mod)?;
+    register_gate(&analysis_mod)?;
     Ok(())
 }

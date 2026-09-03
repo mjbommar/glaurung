@@ -35,6 +35,26 @@
 //! `propagated`. A false positive here does not degrade an answer, it
 //! outranks the correct one. Every ambiguity in this module therefore resolves
 //! to silence.
+//!
+//! # Evidence and the membership gate
+//!
+//! [`FlirtLibrary::match_at_with_evidence`] and
+//! [`match_functions_with_evidence`] are the KB-facing counterparts of
+//! [`FlirtLibrary::match_at`] and [`apply_flirt_overrides`]: same matcher,
+//! same escalation order, but the return value names *which* level resolved
+//! the match (`"flirt-L1"` pattern only, `"flirt-L2"` the CRC was needed,
+//! `"flirt-L4"` a referenced name broke a tie -- L3, the tail-byte
+//! discriminator, is schema-reserved and not implemented by this matcher) so
+//! `python/glaurung/llm/kb/siglib.py` can write an auditable `function_match`
+//! row rather than a bare rename. See
+//! `docs/history/program-measures-2026-09-02/03-schema.sql` section 8 and
+//! `docs/reference/function-signature-libraries.md`.
+//!
+//! [`FlirtLibrary::masked_pattern_identities`] is the identity string this
+//! module contributes to `crate::identity::gate`: the masked pattern, hex
+//! encoded with every variant byte forced to `0x00`, mirroring the ambiguity
+//! key `python/glaurung/tools/build_flirt_library.py::_masked_pattern`
+//! already uses to decide which signatures collide.
 
 pub mod archive;
 pub mod crc16;
@@ -60,6 +80,17 @@ pub struct FlirtReference {
     /// The symbol name the reference resolves to in the library.
     pub name: String,
 }
+
+/// The `crate::identity::gate` / `identity_filter.scheme` and
+/// `siglib_function.scheme` value for [`FlirtLibrary::masked_pattern_identities`].
+///
+/// Not a `function_identity` scheme: a masked pattern is not an equality key
+/// (two different functions routinely share one until the CRC and references
+/// disambiguate them), so it has no business in that table. It exists only as
+/// gate/provenance input -- "is this masked pattern used by any known
+/// signature at all" -- which tolerates the collision a gate's false-positive
+/// rate already tolerates.
+pub const MASKED_PATTERN_SCHEME: &str = "flirt-masked-pattern-v1";
 
 /// How a signature library is keyed.
 ///
@@ -200,6 +231,23 @@ impl FlirtSignature {
     pub fn leading_fixed(&self) -> usize {
         self.fixed.iter().take_while(|f| **f).count()
     }
+
+    /// The [`MASKED_PATTERN_SCHEME`] identity string: the pattern with every
+    /// variant byte forced to `0x00`, hex encoded. Two signatures that are
+    /// indistinguishable to [`Self::matches`] -- same fixed bytes, same
+    /// mask -- produce the same string here regardless of what their variant
+    /// bytes happened to record, which is exactly the equivalence
+    /// `python/glaurung/tools/build_flirt_library.py::_masked_pattern`
+    /// already uses to decide which signatures collide.
+    pub fn masked_pattern_hex(&self) -> String {
+        let masked: Vec<u8> = self
+            .pattern
+            .iter()
+            .zip(self.fixed.iter())
+            .map(|(&byte, &is_fixed)| if is_fixed { byte } else { 0 })
+            .collect();
+        hex::encode(masked)
+    }
 }
 
 /// The outcome of a lookup.
@@ -309,7 +357,7 @@ impl FlirtLibrary {
     /// `data` may be longer than [`Self::prologue_len`] -- and must be, for a
     /// signature that records a CRC.
     pub fn match_at(&self, data: &[u8]) -> FlirtMatch<'_> {
-        self.resolve(self.candidates(data), None)
+        self.resolve_with_evidence(self.candidates(data), None).0
     }
 
     /// Match `data`, using `resolver` to break ties.
@@ -328,7 +376,39 @@ impl FlirtLibrary {
         data: &[u8],
         resolver: &dyn Fn(u32) -> Option<String>,
     ) -> FlirtMatch<'_> {
-        self.resolve(self.candidates(data), Some(resolver))
+        self.resolve_with_evidence(self.candidates(data), Some(resolver))
+            .0
+    }
+
+    /// [`Self::match_at`] / [`Self::match_at_with_refs`], but also naming
+    /// *which* escalation level resolved a [`FlirtMatch::Unique`] verdict --
+    /// what a `function_match.evidence` column needs and what `match_at`
+    /// alone cannot report. `resolver` is optional so a caller with no
+    /// reference resolver wired up yet still gets L1/L2 evidence rather than
+    /// no evidence at all.
+    ///
+    /// The level is only meaningful for [`FlirtMatch::Unique`]: `None`
+    /// carries no level by definition, and `Ambiguous` is the schema's
+    /// `ambiguous = 1` case -- "no name beats a wrong name" means an
+    /// ambiguous verdict never gets a level attributed to it either, because
+    /// no level actually resolved it.
+    ///
+    /// | Returned level | What ran |
+    /// |---|---|
+    /// | `"flirt-L1"` | Masked pattern compare only; no signature in the surviving set records a CRC. |
+    /// | `"flirt-L2"` | At least one surviving signature's CRC was checked (`crc_len > 0`) before the pattern-only survivors collapsed to one name. |
+    /// | `"flirt-L4"` | Pattern and CRC left more than one name; `resolver` broke the tie. |
+    ///
+    /// L3 (FLIRT's single tail-byte discriminator) is schema-reserved
+    /// (`siglib_flirt.tail_offset`/`tail_byte`) but not implemented by this
+    /// matcher -- see `docs/reference/function-signature-libraries.md` --
+    /// and so never appears here.
+    pub fn match_at_with_evidence(
+        &self,
+        data: &[u8],
+        resolver: Option<&dyn Fn(u32) -> Option<String>>,
+    ) -> (FlirtMatch<'_>, Option<&'static str>) {
+        self.resolve_with_evidence(self.candidates(data), resolver)
     }
 
     /// v1 entry point: exact-length prologue in, name out, `None` on any
@@ -366,6 +446,24 @@ impl FlirtLibrary {
         &self.signatures
     }
 
+    /// The [`MASKED_PATTERN_SCHEME`] identity string of every compiled
+    /// signature: the pattern with each variant byte forced to `0x00`, hex
+    /// encoded. This is what a `crate::identity::gate::IdentityGate` is built
+    /// over for this library, and what `siglib_function.identity` stores
+    /// under that scheme -- see
+    /// `docs/history/program-measures-2026-09-02/03-schema.sql` section 7.
+    ///
+    /// Not deduplicated: a caller building a gate feeds this straight to
+    /// `IdentityGate::build`, which dedupes internally, and a caller counting
+    /// per-signature provenance rows wants one entry per signature, collision
+    /// or not.
+    pub fn masked_pattern_identities(&self) -> Vec<String> {
+        self.signatures
+            .iter()
+            .map(FlirtSignature::masked_pattern_hex)
+            .collect()
+    }
+
     /// Every signature whose pattern and CRC accept `data`.
     fn candidates(&self, data: &[u8]) -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
@@ -384,19 +482,34 @@ impl FlirtLibrary {
     }
 
     /// Turn surviving candidates into a verdict, collapsing candidates that
-    /// merely agree on the name.
-    fn resolve(
+    /// merely agree on the name, and name which escalation level resolved a
+    /// [`FlirtMatch::Unique`] verdict. See [`Self::match_at_with_evidence`]
+    /// for what each returned level means.
+    fn resolve_with_evidence(
         &self,
         candidates: Vec<usize>,
         resolver: Option<&dyn Fn(u32) -> Option<String>>,
-    ) -> FlirtMatch<'_> {
+    ) -> (FlirtMatch<'_>, Option<&'static str>) {
         if candidates.is_empty() {
-            return FlirtMatch::None;
+            return (FlirtMatch::None, None);
         }
         let mut surviving = candidates;
+        // Evidence is read off the candidate set BEFORE reference resolution
+        // runs: if the pattern (plus CRC, where recorded) already left only
+        // one name, references were never consulted and must not be credited
+        // with the resolution.
+        let mut level = if surviving.iter().any(|&i| self.signatures[i].crc_len > 0) {
+            "flirt-L2"
+        } else {
+            "flirt-L1"
+        };
         if surviving.len() > 1 {
             if let Some(resolve) = resolver {
-                surviving = self.rank_by_references(&surviving, resolve);
+                let refined = self.rank_by_references(&surviving, resolve);
+                if !refined.is_empty() {
+                    level = "flirt-L4";
+                }
+                surviving = refined;
             }
         }
         let mut names: Vec<&str> = surviving
@@ -406,9 +519,9 @@ impl FlirtLibrary {
         names.sort_unstable();
         names.dedup();
         match names.len() {
-            0 => FlirtMatch::None,
-            1 => FlirtMatch::Unique(names[0]),
-            _ => FlirtMatch::Ambiguous(names),
+            0 => (FlirtMatch::None, None),
+            1 => (FlirtMatch::Unique(names[0]), Some(level)),
+            _ => (FlirtMatch::Ambiguous(names), None),
         }
     }
 
@@ -651,6 +764,75 @@ pub fn apply_flirt_overrides(data: &[u8], functions: &mut [Function], lib: &Flir
     renamed
 }
 
+/// One function's FLIRT match, evidence-carrying and independent of whatever
+/// name (if any) the binary's own symbol table already gives it.
+///
+/// This is deliberately a different question from [`apply_flirt_overrides`]'s
+/// "should this function be renamed": that pass only ever touches `sub_*`
+/// placeholders, because renaming an already-named function is not this
+/// module's job. A `function_match` audit row is -- every candidate FLIRT can
+/// resolve or rule out, named or not, is evidence worth recording, which is
+/// exactly what lets `tests/flirt_signature_matching.rs`-style fixtures with
+/// intact symbol tables prove the matcher against ground truth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlirtEntryMatch {
+    /// The function's entry VA.
+    pub entry_va: u64,
+    /// One name if [`Self::ambiguous`] is `false`; every surviving candidate
+    /// name, sorted, if it is `true`. Always non-empty -- a function with no
+    /// surviving candidate at all is simply absent from the result list.
+    pub names: Vec<String>,
+    /// `true` when more than one name survived every filter. Per the module
+    /// docs, no name is ever picked in that case: [`Self::evidence`] is
+    /// `None` and a caller must not apply any of [`Self::names`].
+    pub ambiguous: bool,
+    /// Which escalation level resolved the match. `Some` if and only if
+    /// `ambiguous` is `false`.
+    pub evidence: Option<&'static str>,
+}
+
+/// Match every function in `functions` against `lib`, evidence-carrying.
+///
+/// Unlike [`apply_flirt_overrides`] this does not mutate `functions` and does
+/// not skip functions that already carry a real name: it is the read side
+/// `python/glaurung/llm/kb/siglib.py` drives to populate `function_match`
+/// rows, and an audit trail is not supposed to have a smaller domain than the
+/// rename pass it backs.
+pub fn match_functions_with_evidence(
+    data: &[u8],
+    functions: &[Function],
+    lib: &FlirtLibrary,
+) -> Vec<FlirtEntryMatch> {
+    let maps = build_va_map(data);
+    let mut out = Vec::new();
+    for f in functions {
+        let Some(foff) = va_to_file_off(&maps, f.entry_point.value) else {
+            continue;
+        };
+        if foff.saturating_add(lib.prologue_len) > data.len() {
+            continue;
+        }
+        let end = std::cmp::min(data.len(), foff.saturating_add(lib.match_window()));
+        let (verdict, evidence) = lib.match_at_with_evidence(&data[foff..end], None);
+        match verdict {
+            FlirtMatch::None => continue,
+            FlirtMatch::Unique(name) => out.push(FlirtEntryMatch {
+                entry_va: f.entry_point.value,
+                names: vec![name.to_string()],
+                ambiguous: false,
+                evidence,
+            }),
+            FlirtMatch::Ambiguous(names) => out.push(FlirtEntryMatch {
+                entry_va: f.entry_point.value,
+                names: names.into_iter().map(str::to_string).collect(),
+                ambiguous: true,
+                evidence: None,
+            }),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,5 +1064,106 @@ mod tests {
             arch: "x86_64".into(),
         };
         assert_eq!(key.as_provenance(), "mathlib/1.0.0/gcc-O2/x86_64");
+    }
+
+    // -----------------------------------------------------------------
+    // Evidence and the masked-pattern gate identity
+    // -----------------------------------------------------------------
+
+    /// A pattern-only match (no CRC recorded) is attributed to L1.
+    #[test]
+    fn evidence_is_flirt_l1_for_a_pattern_only_match() {
+        let lib = _tiny_library();
+        let proto = &[0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x10];
+        let (verdict, evidence) = lib.match_at_with_evidence(proto, None);
+        assert_eq!(verdict, FlirtMatch::Unique("expected_name"));
+        assert_eq!(evidence, Some("flirt-L1"));
+    }
+
+    /// A match that needed the CRC to be verified is attributed to L2, even
+    /// though the pattern alone already left exactly one candidate: the CRC
+    /// ran and was part of what made the verdict trustworthy.
+    #[test]
+    fn evidence_is_flirt_l2_when_a_crc_was_recorded() {
+        let lib = crc_library();
+        let right = [0x55u8, 0x48, 0x89, 0xe5, 0xaa, 0xbb, 0xcc, 0xdd];
+        let (verdict, evidence) = lib.match_at_with_evidence(&right, None);
+        assert_eq!(verdict, FlirtMatch::Unique("crc_fn"));
+        assert_eq!(evidence, Some("flirt-L2"));
+    }
+
+    /// A tie the pattern and CRC could not break, resolved only once a
+    /// referenced name confirms one candidate, is attributed to L4.
+    #[test]
+    fn evidence_is_flirt_l4_when_a_reference_breaks_the_tie() {
+        let lib = ambiguous_library();
+        let data = [0x55u8, 0x48, 0x89, 0xe5];
+        let resolver = |off: u32| (off == 16).then(|| "helper_b".to_string());
+        let (verdict, evidence) = lib.match_at_with_evidence(&data, Some(&resolver));
+        assert_eq!(verdict, FlirtMatch::Unique("beta"));
+        assert_eq!(evidence, Some("flirt-L4"));
+    }
+
+    /// "No name beats a wrong name": an ambiguous verdict never carries a
+    /// level, because no level actually resolved it.
+    #[test]
+    fn an_ambiguous_verdict_carries_no_evidence() {
+        let lib = ambiguous_library();
+        let data = [0x55u8, 0x48, 0x89, 0xe5];
+        let (verdict, evidence) = lib.match_at_with_evidence(&data, None);
+        assert!(matches!(verdict, FlirtMatch::Ambiguous(_)));
+        assert_eq!(evidence, None);
+    }
+
+    /// `match_at`/`match_at_with_refs` must keep behaving exactly as before:
+    /// the evidence-carrying entry point is additive, not a replacement that
+    /// silently changed what the old ones return.
+    #[test]
+    fn match_at_is_unchanged_by_the_evidence_refactor() {
+        let lib = ambiguous_library();
+        let data = [0x55u8, 0x48, 0x89, 0xe5];
+        assert_eq!(
+            lib.match_at(&data),
+            FlirtMatch::Ambiguous(vec!["alpha", "beta"])
+        );
+        let resolver = |off: u32| (off == 16).then(|| "helper_b".to_string());
+        assert_eq!(
+            lib.match_at_with_refs(&data, &resolver),
+            FlirtMatch::Unique("beta")
+        );
+    }
+
+    /// A masked signature's identity string zeroes exactly the variant bytes,
+    /// so it is the same string for every link layout that varies only in
+    /// those bytes -- what makes it usable as `identity_filter`/
+    /// `siglib_function` input in the first place.
+    #[test]
+    fn masked_pattern_identity_zeroes_the_variant_bytes() {
+        let lib = masked_library();
+        let ids = lib.masked_pattern_identities();
+        assert_eq!(ids.len(), 1);
+        // Pattern is `554889e5e8000000`, mask fixes the first 5 bytes:
+        // the last 3 bytes must read back as zero.
+        assert_eq!(ids[0], "554889e5e8000000");
+    }
+
+    /// Two signatures whose fixed bytes and mask agree are the same masked
+    /// identity even though their recorded variant bytes differ -- the
+    /// equivalence `build_flirt_library.py::_masked_pattern` already uses to
+    /// decide which signatures collide.
+    #[test]
+    fn masked_pattern_identity_collapses_across_differing_variant_bytes() {
+        let json = r#"{
+          "schema_version": "2", "arch": "x86_64", "prologue_len": 8,
+          "entries": [
+            {"name": "one", "prologue_hex": "554889e5e8000000",
+             "mask_hex": "ffffffffff000000", "source_binary": "a"},
+            {"name": "one", "prologue_hex": "554889e5e8912c01",
+             "mask_hex": "ffffffffff000000", "source_binary": "b"}
+          ], "index": {}
+        }"#;
+        let lib = FlirtLibrary::from_json(json).unwrap();
+        let ids = lib.masked_pattern_identities();
+        assert_eq!(ids[0], ids[1]);
     }
 }
