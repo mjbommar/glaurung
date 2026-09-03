@@ -56,6 +56,7 @@ record, carrying the commit for every landed item.
 
 | plan | workstream |
 |---|---|
+| [2026-09-02 review implementation plan](../../history/decompiler-review-2026-09-02/PLAN.md) | Detailed implementation and verification packages WP0-WP10; subordinate to this index and the execution ledger |
 | [test-inventory-authority.md](test-inventory-authority.md) | R0 — make the generated inventory reproducible and atomic |
 | [decbench-failure-remediation.md](decbench-failure-remediation.md) | R1 — the 217-row missing-body taxonomy, class by class |
 | [large-functions.md](large-functions.md) | R2 — size/shape ladder and phase telemetry |
@@ -103,6 +104,17 @@ R7's Go lanes are wired and **opt-in** behind `GLAURUNG_FIXTURE_GO`
 (`6660f1f7`); the manifest entries and four baseline refreshes they need are
 still open. R8 landed in five parts — see [R8 status](#r8-status) — and the
 never-executed-test pool reached zero (`3fb3184c`).
+
+The 2026-09-02 review implementation lane has additionally completed its
+minimal gate-integrity package, rejected MIR as the production definedness
+consumer after a bounded trial, put the replacement structurer and typed switch
+recovery into shadow/partial production use, and landed its first width-proved
+render idioms. A current uncommitted ABI/call-value increment repairs CFG-aware
+parameter evidence, exceptional and aggregate call results, non-C source to
+machine-ABI boundaries, and float-valued call rendering. It remains
+uncommitted evidence until ownership is reconciled and a revision is pinned;
+its bounded fixture results must not be read as cross-architecture or full-plan
+completion.
 
 ## Pinned evidence
 

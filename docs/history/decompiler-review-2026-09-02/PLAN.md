@@ -12,19 +12,20 @@ Scope: local Glaurung implementation, tests, measurements, and documentation
 
 ## Authority and relationship to the roadmaps
 
-`docs/design/decompiler-roadmap.md` remains the single canonical status
+`docs/development/roadmap/README.md` remains the canonical roadmap index, and
+`docs/development/test-estate/EXECUTION.md` remains its landed-work status
 tracker. This file does not create a third independent queue: it supplies the
 implementation detail, ordering, tests, measurements, and stop conditions for
 the recommendations accepted from this review. When work starts or its status
 changes here, the corresponding roadmap item must be added or updated in the
 same documentation increment and link back to the relevant work package.
 
-`docs/development/real-binary-decompiler-roadmap-2026-08-31.md` remains product
-sequencing evidence for real-binary priorities; it is not a second checkbox
-authority. Where its R0-R8 order conflicts with this plan, the canonical
-roadmap records the explicit scheduling decision. The dated review files and
-this plan provide evidence and implementation detail; the canonical roadmap
-answers what is actually active.
+`docs/development/roadmap/real-binary-decompiler.md` remains product sequencing
+evidence for real-binary priorities; it is not a second checkbox authority.
+Where its ordering conflicts with this plan, the canonical roadmap records the
+explicit scheduling decision. The dated review files and this plan provide
+evidence and implementation detail; the canonical roadmap answers what is
+actually active.
 
 ## 1. Objective
 
@@ -877,6 +878,51 @@ Validation at this increment:
   edit;
 - native stub freshness and focused Ruff checks: passed.
 
+### Implementation evidence — 2026-09-02 ABI and call-value increment
+
+Implemented locally in `src/ir/value_number/parameter_slots.rs`,
+`src/ir/call_contracts.rs`, `src/ir/call_result_split.rs`,
+`src/ir/dead_stores.rs`, `src/ir/ast/dec_render.rs`,
+`src/python_bindings/ir.rs`, and
+`src/python_bindings/ir/callee_contracts.rs`:
+
+- parameter-slot inference now follows reachable CFG paths instead of block
+  address/storage order, so a scratch definition in one switch arm cannot hide
+  a genuine live-in read in a sibling arm;
+- exceptional-control-flow calls retain a result whenever their call contract
+  proves one, while ordinary dead call results can still be discarded;
+- two-register aggregate-return evidence survives call-contract refinement and
+  result splitting instead of collapsing to a scalar carrier;
+- non-C source declarations cross an explicit machine-ABI boundary: scalar and
+  pointer aliases are normalized to representable C carriers, non-C aggregates
+  do not silently impose the platform C aggregate ABI, and a hidden result is
+  accepted only when the recovered void result, leading pointer, and exact
+  one-parameter arity difference agree; and
+- a call whose selected prototype returns `float` or `double` is rendered as a
+  numeric value, not reinterpreted as integer bits through a union.
+
+The parameter-slot algorithm is shared, but its register inventories remain
+explicitly ABI-bounded: SysV AMD64, Win64, cdecl32 stack arguments, AAPCS32
+soft/hard-float, and AAPCS64. This increment is therefore not evidence for
+unsupported decompiler architectures or arbitrary language ABIs.
+
+Validation used a freshly rebuilt release extension:
+
+- focused Rust tests covered CFG sibling paths and every supported
+  register-argument ABI;
+- the full `168_rust_enum_niche` family had no scoped regressions, including
+  the repaired `rustc:O2:rust_enum_discriminant` cell;
+- `10_cpp_runtime_shapes`, `129_struct_by_value`, `168_rust_enum_niche`,
+  `195_by_value_aggregates`, and `198_aggregate_return_edges` passed their
+  18-lane full matrix without scoped regressions;
+- `tools/dectest.py @calls @returns @structs` passed 36 of 838 selected lanes
+  without scoped regressions after the float-call repair; and
+- the four-lane default smoke selection passed without scoped regressions.
+
+Known baseline failures in those families remain open; these commands prove
+the bounded increment did not add regressions, not that aggregate, return, or
+Rust recovery is complete.
+
 Still open in WP8: defining authority in the session fact layer rather than at
 the binding boundary, and the explicitly annotated analyst render mode.
 
@@ -929,7 +975,7 @@ closed, and remove superseded code only after equivalence is demonstrated.
 
 ### Verification changes
 
-- [ ] Restore the independent LLIR invariants currently stranded in
+- [x] Restore the independent LLIR invariants currently stranded in
   `src/ir/verify.rs` by compiling the module or porting each invariant to its
   correct owner.
 - [ ] Complete goto-aware used-before-definition using the WP1 winner.
@@ -937,6 +983,29 @@ closed, and remove superseded code only after equivalence is demonstrated.
   constant-false live latches to fixture/release failures.
 - [ ] Preserve best-effort output with structured health/completeness metadata.
 - [ ] Add lane-keyed O2 closure and effect expectations.
+
+### Implementation evidence — 2026-09-02 LLIR verifier restoration
+
+`src/ir/verify.rs` existed with production-grade checks for invalid width
+changes, undefined temporaries, invalid memory access sizes, residual unknown
+instructions, and explicit undefined values, but `src/ir/mod.rs` did not
+compile the module. Restoring the module declaration turns those checks and
+their real lifted-binary test back into maintained code.
+
+Validation:
+
+- before restoration,
+  `cargo test --features python-ext ir::verify::tests -- --nocapture` selected
+  zero verifier tests;
+- `cargo check --features python-ext --lib` passed with the verifier compiled;
+  and
+- after restoration, the same focused test command ran all nine verifier
+  tests, including `real_lifted_functions_have_no_fatal_errors`: 9 passed,
+  0 failed.
+
+This closes only the stranded-module item. The verifier is a query API, not yet
+a release gate, and the remaining health promotion and lane-keyed expectations
+below stay open.
 
 ### Selective deletion checklist
 
@@ -1077,22 +1146,22 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Pin the latest intended code revision and record which existing committed
-   baselines apply; do not mix them with an older extension build.
-2. Implement the known-failure deduplication/language tests before changing the
-   generator.
-3. Add the Duff's-device `if (0)` strict xfail.
-4. Add the three-profile gate wrapper and its fail-closed tests.
-5. Start the WP4 shadow structurer and WP5 host jump-table vertical slice as
-   soon as WP0 is complete; do not wait for WP2 or WP3.
-6. Land or reject WP7A's typed literal and range-check increments independently.
-7. [x] The two-day MIR trial rejected production construction for the
-   definedness query at approximately +19.5% median wall time; its temporary
-   consumer was removed. Competing approaches are now unblocked.
-8. Begin WP2/WP3 as an independent architecture lane with the effort and
-   conservative-invalidation rules above.
-
-The first output-quality implementation is the shadow-mode total structurer,
-with typed jump-table evidence developed alongside it in week two. Full
-constraint typing and SSA-native idioms wait for stable SSA identity; the two
-narrow WP7A render-level improvements do not.
+1. Reconcile the current ABI/call-value increment with concurrent work, commit
+   only owned coherent hunks, and pin the resulting revision before broader
+   claims or measurements.
+2. Finish WP4 promotion evidence: execution differential, unexplained
+   block/edge accounting, pinned GED, structure-axis movement, and accepted
+   runtime/output-size budgets.
+3. Complete WP5's shared typed-case transport so discovery, accounting, both
+   structurers, and rendering consume one case/default/provenance object; add
+   malformed and truncated-table tests.
+4. Begin WP2/WP3 as an independent architecture lane, using conservative
+   invalidate-everything fallback while passes migrate incrementally.
+5. Start WP6 with the smallest stripped C signedness/width constraint slice;
+   keep Rust totals separate and do not wait for the full solver design.
+6. Define WP8 authority once in the session fact layer and expose conflicts
+   through structured results plus an explicitly annotated analyst mode, while
+   keeping scored text free of diagnostics.
+7. Inventory current register/ABI ownership for WP9 before introducing
+   `MachineModel`; use ARM32 register overlap and VFP pairing as the first
+   portability stress case.

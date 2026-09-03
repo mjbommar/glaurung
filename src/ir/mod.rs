@@ -104,6 +104,7 @@ pub mod value_number;
 pub mod value_split;
 pub mod variable_addresses;
 pub mod vector_copy;
+pub mod verify;
 pub mod verify_defs;
 pub mod widen;
 pub mod winapi_prototypes;
