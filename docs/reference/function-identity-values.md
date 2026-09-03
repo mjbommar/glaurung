@@ -231,16 +231,27 @@ Measured over the in-house corpus, release build, on a shared machine.
 | | |
 |---|---|
 | Extraction, cold, whole images | **732 to 766 us/function** (three runs; the per-scheme report line ranged 709 to 986 us on the same box, which is machine load, not the scheme) |
+| ...in the same release process, for comparison | `structural` **220 us**, CTPH **65 us**, `cfr` **4,088 us**, `cfr-normalized` **4,656 us** |
 | Instructions retired per function | **2,046**, summed over all three seeds |
 | Runs that hit the 20,000-instruction budget | **1.44%** |
 | Functions whose runs all hit the budget *before producing any value* | **0.00%** (0 of 1,787) |
 | Harvested values the address rules removed | **14.01%** |
 | Extraction on Cisco Dataset-1 | 12,129 us/function over 2,441 samples — Dataset-1's images are whole programs, and the per-image cost is amortised over far fewer sampled functions |
 
-For scale: the CFR reports 223 to 655 us/function in *debug* on this corpus and
-TikNib's published band is 20 to 1,030 us. Bounded execution is roughly the
-same order as a lift plus a graph hash, which is not the result one would
-predict from the words "run the function".
+**Bounded execution is five and a half times cheaper than the CFR here**, in
+the same process on the same rows -- 738 us against 4,088 us -- and inside
+TikNib's published 20 to 1,030 us band. That is not the result the words "run
+the function" predict, and the reason is that the CFR pays for SSA
+construction and three Weisfeiler-Lehman iterations over a whole-image graph
+while this pays for about two thousand interpreted instructions. It does mean
+the L3 rung is not the expensive one, which inverts the cost ordering the plan
+document assumed.
+
+One number in the JSON reports is **not** a measurement and should not be
+quoted: `values-weighted` records 0.5 us/function, because the weighted
+configuration is primed over the whole corpus before it is scored and its
+cache is therefore warm when the driver times it. `ValueScheme::prime` is a
+no-op for the unweighted configurations precisely so that theirs are real.
 
 ### Ablations
 

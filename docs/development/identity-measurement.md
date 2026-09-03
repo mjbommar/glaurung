@@ -419,11 +419,14 @@ schemes' on the same denominators.
    These are complementary rungs; the honest summary is that the values lane
    owns the optimisation axis and the CFR owns cross-compiler-at-fixed-`-O`.
 
-The **cost** is 732 to 766 us/function in release, which is the same order as
-the CFR's 223 to 655 us in *debug* and inside TikNib's published 20 to 1,030
-us band — not the result one would predict from the words "run the function".
-1.44% of runs hit the 20,000-instruction budget and **no** function (0 of
-1,787) hit it before producing a value.
+The **cost** is the surprise. 732 to 766 us/function cold in release, against
+the CFR's **4,088 us** measured in the same process on the same rows: bounded
+execution is five and a half times *cheaper* than building an SSA graph and
+running three Weisfeiler-Lehman iterations over it, and it sits inside
+TikNib's published 20 to 1,030 us band. The plan document assumed L3 would be
+the expensive rung; on this corpus it is not. 1.44% of runs hit the
+20,000-instruction budget and **no** function (0 of 1,787) hit it before
+producing a value.
 
 On **Dataset-1** this scheme runs the three x86-64 lanes only — XO AUC 0.9569
 / R@1 0.8000 over 50 scored, XC 0.9368 / 0.7846 over 65, XM 0.9516 / 0.7500
@@ -448,7 +451,8 @@ a long way below the point at which a few points mean anything.
 | XC-O2 MRR10 | 0.0084 | 0.2241 | 0.2381 | **0.5688** | 0.5654 |
 | XM MRR10 | 0.0058 | 0.0357 | 0.1117 | 0.1990 | **0.4937** |
 | XM R@1 | 0.0055 | 0.0165 | 0.0685 | 0.1342 | **0.4055** |
-| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) | 223-655 us (debug) | 732-766 us (release) |
+| Extraction (debug) | **41 us** | 25,500 us | 223-655 us | -- | -- |
+| Extraction (release, one process) | 65 us | -- | 220 us | 4,088 us | **738 us** |
 
 Every column is over the same tasks, the same tie rule and the same sampling.
 They are **not** over the same rows: the harnesses filter 1,787, 1,786 and
