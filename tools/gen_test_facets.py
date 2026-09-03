@@ -46,9 +46,14 @@ RULES: dict[str, re.Pattern[str]] = {
     # Invokes a compiler at test time (as opposed to reading a committed .so).
     "toolchain": re.compile(
         r"shutil\.which\(\s*[\"'](gcc|clang|cc|rustc|go|zig|arm-none-eabi-gcc|"
-        r"clang-cl|lld-link|i686-w64-mingw32-gcc)|"
+        r"aarch64-linux-gnu-gcc|arm-linux-gnueabihf-gcc|"
+        r"clang-cl|lld-link|i686-w64-mingw32-gcc|x86_64-w64-mingw32-gcc)|"
         r"subprocess\.run\(\s*\[\s*[\"'](gcc|clang|cc|rustc|zig|arm-none-eabi-gcc|"
-        r"clang-cl|lld-link)\b"
+        r"aarch64-linux-gnu-gcc|arm-linux-gnueabihf-gcc|clang-cl|lld-link|"
+        r"i686-w64-mingw32-gcc|x86_64-w64-mingw32-gcc)\b|"
+        r"[\"'](?:aarch64-linux-gnu-gcc|arm-linux-gnueabihf-gcc|"
+        r"i686-w64-mingw32-gcc|x86_64-w64-mingw32-gcc)[\"']|"
+        r"w64-mingw32-gcc"
     ),
     # Reads sample binaries, which are Git LFS objects: a checkout without
     # `lfs: true` sees 130-byte pointer files.
