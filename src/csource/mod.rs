@@ -10,3 +10,4 @@
 
 pub mod lex;
 pub mod normalize;
+pub mod parse;
