@@ -180,21 +180,10 @@ pub struct RerankSettings {
     pub normalization: Normalization,
 }
 
-/// The **measured** configuration, not the paper's: similarity and call
-/// agreement on, RevDecode's two provenance terms off.
-///
-/// The paper's own configuration is [`RerankSettings::revdecode_paper`], and it
-/// is not the default because it is measurably worse on both of our corpora --
-/// it moves 8 of 40 measured cells up and 31 down, by as much as 0.225 MRR10,
-/// against 16 up and 0 down for the call-agreement term.
-/// The reasons are in `docs/reference/function-identity-rerank.md`; the short
-/// version is that Alg. 1's 0.7 constant was calibrated for firmware-sized
-/// libraries against sigmoid-spread similarities, and neither holds here. A
-/// default that loses on thirty-one of forty measured cells is a trap, so the
-/// faithful configuration is available and named rather than automatic.
-///
-/// The call-agreement term, by contrast, did not cost a single query a rank in
-/// any of those forty cells.
+/// The default settings are the **measured** ones and not the paper's:
+/// similarity and call agreement on, RevDecode's two provenance terms off.
+/// See [`RerankSettings::revdecode_paper`] for the faithful configuration and
+/// for why it is available and named rather than automatic.
 impl Default for RerankSettings {
     fn default() -> Self {
         Self {
@@ -208,6 +197,16 @@ impl Default for RerankSettings {
 impl RerankSettings {
     /// RevDecode's own configuration: every term the paper has, at the paper's
     /// constants.
+    ///
+    /// It is deliberately **not** [`Default`], because it is measurably worse
+    /// on both of our corpora -- it moves 8 of 40 measured cells up and 31
+    /// down, by as much as 0.225 MRR10, against 16 up and 0 down for the
+    /// call-agreement term alone. The reasons are in
+    /// `docs/reference/function-identity-rerank.md`; the short version is that
+    /// Alg. 1's 0.7 constant was calibrated for firmware-sized libraries
+    /// against sigmoid-spread similarities, and neither holds here. A default
+    /// that loses on thirty-one of forty measured cells is a trap, so the
+    /// faithful configuration is available and named rather than automatic.
     ///
     /// Faithful, and measurably worse than [`Default`] on both of our corpora.
     /// Use it to reproduce the paper's design, or on a corpus whose libraries
