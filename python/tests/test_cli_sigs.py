@@ -292,6 +292,190 @@ def test_fetch_over_a_file_url(capsys, tmp_path, isolated_cache, monkeypatch):
     assert [row["key"] for row in listing["blobs"]] == ["libx/9.9/gcc-11-O2/x86_64"]
 
 
+def test_fetch_of_a_two_scheme_set_and_what_each_consumer_does_with_it(
+    capsys, tmp_path, isolated_cache, monkeypatch
+):
+    """A published set holds both identity schemes; this is the whole path.
+
+    Publish a set with one masked-pattern library and one WARP GUID library,
+    serve it from disk, fetch it through the real client, and then check the
+    two things that make the second scheme *usable* rather than merely
+    downloaded:
+
+    * the FLIRT matcher, pointed at the cache directory, loads the
+      masked-pattern blob and **skips the WARP one cleanly** -- before the
+      loader checked the scheme, a WARP blob sorting first would have set the
+      merge's window length to zero and silently dropped every real library
+      behind it;
+    * the knowledge base ingests the WARP container directly.
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "libx.flirt.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "2",
+                "arch": "x86_64",
+                "prologue_len": 8,
+                "entries": [
+                    {"name": f"x_{i:04d}", "prologue_hex": f"554889e5{i:08x}"}
+                    for i in range(30)
+                ],
+                "index": {},
+            }
+        )
+    )
+    (corpus / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "libraries": [
+                    {
+                        "key": "test.x86_64-linux-gnu.libx",
+                        "output": "libx.flirt.json",
+                        "library_name": "libx-dev",
+                        "library_version": "9.9",
+                        "variant": "gcc-11-O2",
+                        "arch": "x86_64",
+                        "image": "test",
+                        "unique_signatures": 30,
+                    }
+                ],
+            }
+        )
+    )
+
+    warp_dir = tmp_path / "warp"
+    warp_dir.mkdir()
+    fixture = ROOT / "tests/fixtures/flirt/gsig/warp_sample.x86_64.warp.json"
+    if not fixture.is_file():
+        pytest.skip(f"missing fixture {fixture}")
+    (warp_dir / "warp_sample-1.0.0-msvc.x86_64.warp.json").write_text(
+        fixture.read_text()
+    )
+    (warp_dir / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scheme": "warp-function-guid-v1",
+                "libraries": [
+                    {
+                        "file": "warp_sample-1.0.0-msvc.x86_64.warp.json",
+                        "module": "warp_sample",
+                        "version": "1.0.0",
+                        "variant": "msvc-14.20-b27412",
+                        "source": "corpus:test",
+                        "unique": 3,
+                    }
+                ],
+            }
+        )
+    )
+
+    out = tmp_path / "release"
+    key = tmp_path / "k.key"
+    published = subprocess.run(
+        [
+            sys.executable,
+            str(PUBLISH),
+            "--source",
+            f"{corpus}:*.flirt.json",
+            "--source",
+            f"{warp_dir}:*.warp.json:windows-warp:warp",
+            "--set",
+            "base",
+            "--set-version",
+            "2026.09.9",
+            "--serial",
+            "9",
+            "--out",
+            str(out),
+            "--secret-key",
+            str(key),
+            "--generate-key",
+            "--quiet",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert published.returncode == 0, published.stderr[-2000:]
+
+    manifest = Manifest.read(out / "manifest.json")
+    assert {blob.kind for blob in manifest.blobs} == {
+        "flirt-masked-pattern-v1",
+        "warp-function-guid-v1",
+    }
+    rewritten = manifest.with_blobs(
+        [
+            replace(blob, urls=((out / "blobs" / blob.sha256).as_uri(),))
+            for blob in manifest.blobs
+        ]
+    )
+    rewritten_path = rewritten.write(out / "manifest.json")
+    minisign.sign_file(
+        minisign.SecretKey.read(key),
+        rewritten_path,
+        trusted_comment=rewritten.trusted_comment(),
+    )
+    keys_dir = tmp_path / "keys"
+    keys_dir.mkdir()
+    (keys_dir / "test.pub").write_text(key.with_suffix(".pub").read_text())
+    monkeypatch.setenv(paths.ENV_KEYS_DIR, str(keys_dir))
+
+    code, payload = _json(
+        capsys, ["sigs", "fetch", "--manifest-url", (out / "manifest.json").as_uri()]
+    )
+    assert code == 0
+    assert sorted(payload["downloaded"]) == [
+        "libx/9.9/gcc-11-O2/x86_64",
+        "warp:warp_sample/1.0.0/msvc-14.20-b27412/x86_64",
+    ]
+    assert payload["by_scheme"] == {
+        "flirt-masked-pattern-v1": {"blobs": 1, "signatures": 30},
+        "warp-function-guid-v1": {"blobs": 1, "signatures": 3},
+    }
+
+    # The cache now holds one blob of each scheme, named by sha256 plus a
+    # catalog. Point the FLIRT loader at it.
+    import glaurung as g
+
+    cache = paths.cache_root()
+    monkeypatch.setenv("GLAURUNG_SIG_DIR", str(cache))
+    flirt_blob = next(
+        blob for blob in manifest.blobs if blob.kind == "flirt-masked-pattern-v1"
+    )
+    warp_blob = next(
+        blob for blob in manifest.blobs if blob.kind == "warp-function-guid-v1"
+    )
+    match = g.analysis.flirt_library_match_bytes(
+        str(paths.blob_path(flirt_blob.sha256, cache)),
+        bytes.fromhex("554889e500000000"),
+    )
+    assert match["names"] == ["x_0000"]
+
+    # The WARP blob is not a masked-pattern library and must be refused, not
+    # loaded as an empty one.
+    with pytest.raises(ValueError):
+        g.analysis.flirt_library_match_bytes(
+            str(paths.blob_path(warp_blob.sha256, cache)),
+            bytes.fromhex("554889e500000000"),
+        )
+
+    # ...and the knowledge base reads the container it was handed.
+    from glaurung.llm.kb import siglib
+    from glaurung.llm.kb.persistent import PersistentKnowledgeBase
+
+    binary = ROOT / "tests/fixtures/flirt/mathlib_link_a.x86_64.elf"
+    if not binary.is_file():
+        pytest.skip(f"missing fixture {binary}")
+    kb = PersistentKnowledgeBase.open(tmp_path / "kb.glaurung", binary_path=str(binary))
+    summary = siglib.ingest_warp_library_file(
+        kb, str(paths.blob_path(warp_blob.sha256, cache))
+    )
+    assert summary.functions_ingested == 4
+
+
 def test_fetch_of_an_uncached_set_offline_reports_an_error(capsys, monkeypatch):
     code = main(["sigs", "fetch", "--offline", "--set", "windows"])
     assert code == 2

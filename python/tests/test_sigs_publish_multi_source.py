@@ -244,6 +244,23 @@ def test_unsigned_refuses_to_upload(two_schemes):
     assert "mutually exclusive" in result.stderr
 
 
+def test_the_notice_describes_both_schemes(two_schemes):
+    """The NOTICE is the legal statement of what is being redistributed.
+
+    It described masked patterns only. A set that also ships 16-byte function
+    GUIDs and says nothing about them understates its own contents, which is
+    the one thing a takedown-honouring notice must not do.
+    """
+    flirt, warp, out = two_schemes
+    assert _publish(flirt, warp, out).returncode == 0
+    notice = (out / "NOTICE").read_text()
+    assert "flirt-masked-pattern-v1" in notice
+    assert "warp-function-guid-v1" in notice
+    assert "no byte from the original libraries" in notice
+    assert "one-way digest" in notice
+    assert "TAKEDOWN" in notice
+
+
 def test_convert_none_publishes_the_harvesters_own_bytes(two_schemes):
     """The escape hatch still works, and says so in `format`."""
     flirt, warp, out = two_schemes

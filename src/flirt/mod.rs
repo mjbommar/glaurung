@@ -949,13 +949,22 @@ fn flirt_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
 /// catalog-aware selection (e.g. by architecture) can replace this once the
 /// cache holds enough sets that loading all of them stops being free.
 fn cache_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
+    /// The cache is flat: blobs named by sha256 alongside the client's own
+    /// bookkeeping. None of these is a signature library, and handing one to
+    /// the loader costs a parse and an error that can mask a real one.
+    const NOT_A_LIBRARY: [&str; 3] = ["catalog.json", "manifest.json", "manifest.json.minisig"];
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_file() && p.file_name().and_then(|n| n.to_str()) != Some("catalog.json"))
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_none_or(|n| !NOT_A_LIBRARY.contains(&n))
+        })
         .collect();
     out.sort();
     out
@@ -970,7 +979,10 @@ fn cache_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
 /// 2. `GLAURUNG_SIG_DIR` -- every `*.flirt.json` and `*.gsig` in that
 ///    directory, merged (see [`flirt_files_in`]).
 /// 3. `~/.cache/glaurung/sigs/` -- the client download cache, read by
-///    [`cache_files_in`]: every file in the directory except `catalog.json`.
+///    [`cache_files_in`]: every file in the directory except the client's own
+///    bookkeeping. A cached set holds both identity schemes, and a WARP GUID
+///    blob is skipped by [`library_for_paths`] rather than compiled to an
+///    empty matcher.
 /// 4. The packaged `data/sigs/` ([`set_packaged_sig_dir`]), else `data/sigs/`
 ///    relative to the cwd, which is what a checkout has and what every
 ///    existing caller relied on.
@@ -2451,5 +2463,21 @@ mod tests {
         // And on its own it is an error, not an empty library that would
         // report "no signatures matched" forever.
         assert!(library_for_paths(&[guids]).is_err());
+    }
+
+    /// The download cache is flat -- sha256-named blobs beside the client's
+    /// own `catalog.json`, `manifest.json` and `manifest.json.minisig` -- and
+    /// none of the latter three is a signature library. Handing one to the
+    /// loader costs a parse and records an error that can mask a real one.
+    #[test]
+    fn the_cache_reader_skips_the_clients_own_bookkeeping() {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        for name in ["catalog.json", "manifest.json", "manifest.json.minisig"] {
+            std::fs::write(dir.join(name), b"{}").unwrap();
+        }
+        let blob = dir.join("a".repeat(64));
+        std::fs::write(&blob, b"{}").unwrap();
+        assert_eq!(cache_files_in(dir), vec![blob]);
     }
 }

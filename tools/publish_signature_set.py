@@ -148,21 +148,30 @@ NOTICE -- Glaurung signature set {set_name} {set_version} (serial {serial})
 
 WHAT THIS RELEASE CONTAINS
 
-  Function *signatures*: masked byte patterns, CRC16 values over a bounded
-  window, function names, and references by name and offset. It contains no
-  object code, no archives, and no library bytes. The format deliberately
-  splits pattern from mask so that a signature set is not a copy of the
-  library it describes; Hex-Rays states the same property of FLIRT, that a
-  signature file "contains no byte from the original libraries, except for
-  the names of the functions".
+  Function *signatures*, under two identity schemes.
+
+  `flirt-masked-pattern-v1`: masked byte patterns, CRC16 values over a
+  bounded window, function names, and references by name and offset. The
+  format deliberately splits pattern from mask so that a signature set is not
+  a copy of the library it describes; Hex-Rays states the same property of
+  FLIRT, that a signature file "contains no byte from the original libraries,
+  except for the names of the functions".
+
+  `warp-function-guid-v1`: a 16-byte UUID per function, computed as a
+  namespaced hash over the function's relocation-masked basic blocks, plus
+  the function's name, basic-block count and byte length, and the GUIDs of
+  related functions. A GUID is a one-way digest: the bytes it was computed
+  from cannot be recovered from it.
+
+  Neither scheme contains object code, archives, or library bytes.
 
 WHAT IT DOES NOT CONTAIN
 
-  No `.a`, `.o`, `.lib`, `.deb`, `.rpm` or `.apk` is redistributed here. Each
-  blob's `provenance` in manifest.json names the package, version,
-  architecture and input digest it was derived from, which is sufficient to
-  re-fetch the input from its original distributor and re-derive the blob
-  independently.
+  No `.a`, `.o`, `.lib`, `.exe`, `.dll`, `.sys`, `.deb`, `.rpm` or `.apk` is
+  redistributed here, and no debug information. Each blob's `provenance` in
+  manifest.json names the package or module, version, architecture and input
+  digest it was derived from, which is sufficient to re-fetch the input from
+  its original distributor and re-derive the blob independently.
 
 LICENCE POSITION
 
