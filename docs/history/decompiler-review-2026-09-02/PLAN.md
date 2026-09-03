@@ -1054,6 +1054,17 @@ its remaining score failure is return-width/type cleanup, not missing control
 flow. Exact proof conditions and gate limits are in
 `results/wp9-rust-vtable-tail-call.md`.
 
+### Implementation evidence - 2026-09-03 Rust scalar source types
+
+The DWARF-to-C rendering boundary now translates Rust's fixed-width scalar
+spellings into representation-preserving standalone C types. The real O0 and
+O2 `rust_dyn_apply` fixture lanes consequently render their exported boundary
+as `int rust_dyn_apply(unsigned int sel, int x)` instead of widening the return
+to `long`; the clean O2 snapshot retains the previously recovered virtual call.
+The conversion is deliberately outside the generic C catalog normalizer, so it
+does not reinterpret Rust pointers or aggregates. Exact RED/GREEN and isolated
+snapshot evidence is in `results/wp9-rust-scalar-source-types.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.

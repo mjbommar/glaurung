@@ -737,6 +737,36 @@ pub(super) fn dwarf_return_hint_with_env(
     }
 }
 
+/// Translate source-language scalar aliases into self-contained C spellings.
+///
+/// Rust DWARF retains names such as `i32` and `u32` even for an exported
+/// `extern "C"` function. Those names prove exact storage widths but are not C
+/// tokens. Keep this translation at the debug-to-render boundary so the
+/// generic C catalog normalizer does not accidentally reinterpret language
+/// pointers or aggregates.
+fn standalone_dwarf_type(source_type: &str) -> String {
+    let source_type = source_type.trim();
+    let rust_scalar = match source_type {
+        "u8" => Some("unsigned char"),
+        "i8" => Some("signed char"),
+        "u16" => Some("unsigned short"),
+        "i16" => Some("short"),
+        "u32" => Some("unsigned int"),
+        "i32" => Some("int"),
+        "u64" => Some("unsigned long long"),
+        "i64" => Some("long long"),
+        "usize" => Some("__SIZE_TYPE__"),
+        "isize" => Some("__PTRDIFF_TYPE__"),
+        "u128" => Some("unsigned __int128"),
+        "i128" => Some("__int128"),
+        _ => None,
+    };
+    rust_scalar.map(str::to_string).unwrap_or_else(|| {
+        crate::ir::call_contracts::standalone_c_type(source_type)
+            .unwrap_or_else(|| source_type.to_string())
+    })
+}
+
 pub(super) fn dwarf_render_prototype(
     declared: &DwarfPrototypeContract,
 ) -> Option<crate::ir::call_contracts::CallPrototype> {
@@ -745,14 +775,14 @@ pub(super) fn dwarf_render_prototype(
 
     let return_type = match &declared.return_type {
         DwarfReturnType::Void => "void".to_string(),
-        DwarfReturnType::Type(c_type) => c_type.clone(),
+        DwarfReturnType::Type(c_type) => standalone_dwarf_type(c_type),
         DwarfReturnType::Unknown => return None,
     };
     let parameter_types = declared
         .parameter_types
         .iter()
         .map(|parameter| match parameter {
-            DwarfParameterType::Type(c_type) => Some(c_type.clone()),
+            DwarfParameterType::Type(c_type) => Some(standalone_dwarf_type(c_type)),
             DwarfParameterType::Unknown => None,
         })
         .collect::<Option<Vec<_>>>()?;
@@ -762,4 +792,16 @@ pub(super) fn dwarf_render_prototype(
         variadic: false,
         authority: CallPrototypeAuthority::Authoritative,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rust_fixed_width_scalars_have_standalone_c_spellings() {
+        assert_eq!(super::standalone_dwarf_type("i32"), "int");
+        assert_eq!(super::standalone_dwarf_type("u32"), "unsigned int");
+        assert_eq!(super::standalone_dwarf_type("isize"), "__PTRDIFF_TYPE__");
+        assert_eq!(super::standalone_dwarf_type("usize"), "__SIZE_TYPE__");
+        assert_eq!(super::standalone_dwarf_type("struct Pair"), "struct Pair");
+    }
 }
