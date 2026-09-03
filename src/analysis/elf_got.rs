@@ -217,9 +217,137 @@ pub fn elf_got_target_map(data: &[u8]) -> Vec<(u64, u64)> {
             };
             out.push((offset, target));
         }
+
+        // `object::Section::relocations()` does not expose the dynamic
+        // R_AARCH64_RELATIVE records in current linked ELFs. Parse that one
+        // ABI-defined RELA shape from the section bytes so a file-only image
+        // can recover pointers such as crt1's GOT-held `main` address. Keep the
+        // architecture/type gate exact: other symbol-zero relocation kinds
+        // (notably IRELATIVE) are executable resolvers, not stored addends.
+        if obj.architecture() == object::Architecture::Aarch64
+            && name.eq_ignore_ascii_case(".rela.dyn")
+        {
+            let Ok(bytes) = section.uncompressed_data() else {
+                continue;
+            };
+            out.extend(aarch64_relative_relocations(&bytes, obj.is_little_endian()));
+        }
+        if obj.architecture() == object::Architecture::Arm && name.eq_ignore_ascii_case(".rel.dyn")
+        {
+            let Ok(bytes) = section.uncompressed_data() else {
+                continue;
+            };
+            out.extend(arm_relative_relocations(
+                &bytes,
+                obj.is_little_endian(),
+                |slot| {
+                    let offset = crate::analysis::entry::va_to_file_offset(data, slot)?;
+                    let raw: [u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+                    Some(if obj.is_little_endian() {
+                        u32::from_le_bytes(raw) as u64
+                    } else {
+                        u32::from_be_bytes(raw) as u64
+                    })
+                },
+            ));
+        }
     }
 
     out.sort_by_key(|(slot, _)| *slot);
     out.dedup_by_key(|(slot, _)| *slot);
     out
+}
+
+fn arm_relative_relocations(
+    bytes: &[u8],
+    little_endian: bool,
+    mut read_addend: impl FnMut(u64) -> Option<u64>,
+) -> Vec<(u64, u64)> {
+    const R_ARM_RELATIVE: u32 = 23;
+    let read_u32 = |raw: &[u8]| {
+        let array: [u8; 4] = raw.try_into().expect("exact ELF32 field width");
+        if little_endian {
+            u32::from_le_bytes(array)
+        } else {
+            u32::from_be_bytes(array)
+        }
+    };
+    bytes
+        .chunks_exact(8)
+        .filter_map(|entry| {
+            let offset = u64::from(read_u32(&entry[0..4]));
+            let info = read_u32(&entry[4..8]);
+            let symbol = info >> 8;
+            let relocation_type = info & 0xff;
+            if symbol != 0 || relocation_type != R_ARM_RELATIVE {
+                return None;
+            }
+            let addend = read_addend(offset)?;
+            (addend != 0).then_some((offset, addend))
+        })
+        .collect()
+}
+
+fn aarch64_relative_relocations(bytes: &[u8], little_endian: bool) -> Vec<(u64, u64)> {
+    const R_AARCH64_RELATIVE: u32 = 1027;
+    let read_u64 = |raw: &[u8]| {
+        let array: [u8; 8] = raw.try_into().expect("exact ELF64 field width");
+        if little_endian {
+            u64::from_le_bytes(array)
+        } else {
+            u64::from_be_bytes(array)
+        }
+    };
+    bytes
+        .chunks_exact(24)
+        .filter_map(|entry| {
+            let offset = read_u64(&entry[0..8]);
+            let info = read_u64(&entry[8..16]);
+            let addend = read_u64(&entry[16..24]);
+            let symbol = info >> 32;
+            let relocation_type = info as u32;
+            (symbol == 0 && relocation_type == R_AARCH64_RELATIVE && addend != 0)
+                .then_some((offset, addend))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod relative_relocation_tests {
+    use super::{aarch64_relative_relocations, arm_relative_relocations};
+
+    #[test]
+    fn aarch64_relative_rela_keeps_its_slot_and_addend() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x1fff0_u64.to_le_bytes());
+        bytes.extend_from_slice(&u64::from(1027_u32).to_le_bytes());
+        bytes.extend_from_slice(&0x7a8_u64.to_le_bytes());
+
+        assert_eq!(
+            aarch64_relative_relocations(&bytes, true),
+            vec![(0x1fff0, 0x7a8)]
+        );
+    }
+
+    #[test]
+    fn aarch64_irelative_is_not_mistaken_for_a_stored_pointer() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x1fff0_u64.to_le_bytes());
+        bytes.extend_from_slice(&u64::from(1032_u32).to_le_bytes());
+        bytes.extend_from_slice(&0x7a8_u64.to_le_bytes());
+
+        assert!(aarch64_relative_relocations(&bytes, true).is_empty());
+    }
+
+    #[test]
+    fn arm_rel_reads_its_addend_from_the_relocated_slot() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x1fff8_u32.to_le_bytes());
+        bytes.extend_from_slice(&23_u32.to_le_bytes());
+
+        assert_eq!(
+            arm_relative_relocations(&bytes, true, |slot| { (slot == 0x1fff8).then_some(0x505) }),
+            vec![(0x1fff8, 0x505)]
+        );
+    }
 }
