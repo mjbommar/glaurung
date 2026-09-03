@@ -196,10 +196,12 @@ ambiguity cheap to handle without a typedef table.
 builder and a tag census that answers "how many nodes of each kind, how deep"
 in one pass without allocating an arena — and their cost profiles genuinely
 differ, which is the minimum bar for the indirection. But the trait is **not
-yet load-bearing**, because the CFG builder of §5 consumes the separate `Flow`
-vocabulary rather than these events. If that stays true, `Sink`'s second *real*
-consumer never arrives and the trait should be revisited rather than defended.
-Treat it as a design commitment being paid forward, not one already amortised.
+yet load-bearing**, and that is now settled rather than suspected: the CFG
+builder of §5 landed consuming the separate `Flow` vocabulary, and reaches the
+graph through `Cfg::from_parts` and `ChainPartition` instead. So `Sink`'s only
+second consumer is the census. Treat the trait as a design commitment paid
+forward for a third front end that does not exist yet — and if a second
+language never arrives, delete it rather than defending it.
 
 ## 4. The error model
 
@@ -235,6 +237,21 @@ pub enum Flow {
 }
 ```
 
+**Two additions the implementation proved necessary**, both recorded here rather
+than left as drift. Every non-scoping variant carries a `Span`, because each one
+creates a node and `REQ-SYN-7` makes spans total. And a `LoopStep` scoping event
+exists, because without it a `for` loop's `continue` cannot reach the step
+region — which would violate `REQ-GEN-1`'s "`break` and `continue` target the
+enclosing construct" directly. The scoping vocabulary that landed is
+`Then` / `Else` / `LoopStep` / `EndScope`, with `Then` and `Else` kept separate
+so an `Else` with no `Then` is a *diagnosable* stream rather than a silently
+differently-shaped graph, and a single `EndScope` closing whichever construct is
+innermost because a typed close event could only ever disagree with the stack.
+
+A labelled construct needs no event of its own: a `Label` immediately followed by
+a construct-opening event names that construct, which covers `foo: while (...)`
+while leaving the label an ordinary `goto` target.
+
 and owns, once, for every language:
 
 * the **control context stack** — the current break target, continue target and
@@ -243,7 +260,14 @@ and owns, once, for every language:
   resolved in a second pass, exactly as an assembler resolves forward
   references;
 * **maximal-chain coalescing** — contract `src -> dst` when `outdeg(src) == 1`
-  and `indeg(dst) == 1`, in one pass over chain heads rather than to fixpoint;
+  and `indeg(dst) == 1`, in one pass over chain heads rather than to fixpoint.
+  The contractible edges form a *functional graph* — disjoint simple paths and
+  disjoint cycles, nothing else — which is why one pass suffices and no fixpoint
+  loop is needed; a purely contractible cycle has no head at all, so a second
+  sweep breaks it at its lowest node id. **Entry and exit anchors are excluded
+  as chain members**: the first two `REQ-GEN-1` invariants are stated in terms
+  of them, and whether a function-end node survives is precisely the parity
+  layer's decision, not this one's;
 * the **structural invariants** of `REQ-GEN-1`.
 
 What it does **not** own is Joern's granularity, Joern's funcend rule, or
