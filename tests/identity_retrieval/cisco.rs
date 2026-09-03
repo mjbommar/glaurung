@@ -768,6 +768,7 @@ fn load_image(
             bytes,
             blocks,
             edges,
+            callees: crate::corpus::sorted_callees(func),
         });
     }
     (out, counts, disagreements)

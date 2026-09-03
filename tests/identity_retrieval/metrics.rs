@@ -522,7 +522,7 @@ pub fn evaluate_slices<S: Scheme>(
 /// When the pool is smaller than the requested count, every usable candidate
 /// is returned and the caller's `sampled_pool_size` overstates the pool. That
 /// case is asserted against in `main.rs` rather than silently tolerated.
-fn sample_negatives(
+pub(crate) fn sample_negatives(
     task_name: &str,
     query_index: usize,
     query: &FunctionSample,
@@ -554,7 +554,7 @@ fn sample_negatives(
 }
 
 /// Recall@k: the fraction of queries whose twin ranked at `k` or better.
-fn recall(ranks: &[usize], k: usize) -> f64 {
+pub(crate) fn recall(ranks: &[usize], k: usize) -> f64 {
     if ranks.is_empty() {
         return 0.0;
     }
@@ -562,7 +562,7 @@ fn recall(ranks: &[usize], k: usize) -> f64 {
 }
 
 /// Mean reciprocal rank, truncated at `cutoff` (MRR10 for `cutoff = 10`).
-fn mrr(ranks: &[usize], cutoff: usize) -> f64 {
+pub(crate) fn mrr(ranks: &[usize], cutoff: usize) -> f64 {
     if ranks.is_empty() {
         return 0.0;
     }
