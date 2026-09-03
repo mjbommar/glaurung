@@ -14,6 +14,11 @@
 //!   feature multiset over the SSA dataflow graph and the degree-labelled CFG.
 //!   "Which library function is this, across compilers and optimisation
 //!   levels?"
+//! * `values` -- vSim-style value fingerprints: the multiset of numbers the
+//!   function computes under bounded execution. Same question as [`cfr`],
+//!   answered from what the code *does* rather than what it looks like.
+//!   Behind the `exec` feature, because it drives the interpreter; everything
+//!   above compiles without it.
 //!
 //! The design, the mask/keep list, the metric argument and the measurement
 //! protocol are in `docs/history/program-measures-2026-09-02.md`. Byte-level
@@ -22,4 +27,6 @@
 
 pub mod cfr;
 pub mod structural;
+#[cfg(feature = "exec")]
+pub mod values;
 pub mod warp;
