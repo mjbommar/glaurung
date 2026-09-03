@@ -116,7 +116,7 @@ use function_build::build_function;
 
 use image_view::{
     code_addr, in_exec_regions, indexed_code_offset, indirect_memory_target, parse_exec_regions,
-    parse_exec_regions_in, pe_va_to_file_off, ExecRegion,
+    parse_exec_regions_in, pe_va_to_file_off, read_pointer_at_va, ExecRegion,
 };
 
 use must_dataflow::validate_dispatch_edges;
@@ -124,8 +124,9 @@ use must_dataflow::validate_dispatch_edges;
 use pe_tables::{parse_pdata_function_starts, parse_pe_export_function_starts};
 
 use repair::{
-    apply_dwarf_overrides, apply_symbol_and_export_names, attach_exception_landing_pads,
-    merge_compiler_split_chunks,
+    apply_dwarf_overrides, apply_elf_startup_main_name, apply_pe_startup_main_name,
+    apply_symbol_and_export_names, attach_exception_landing_pads, elf_startup_main_candidate,
+    merge_compiler_split_chunks, pe_startup_main_candidate,
 };
 
 use scan::{
@@ -149,6 +150,38 @@ use worklist::{analyze_functions_unpacked, DiscoverySeedKind};
 pub fn analyze_functions_bytes(data: &[u8], budgets: &Budgets) -> (Vec<Function>, CallGraph) {
     let (functions, cg, _stats) = analyze_functions_bytes_with_stats(data, budgets);
     (functions, cg)
+}
+
+/// PE CRT-derived source/runtime names available independently of discovery budget.
+pub(crate) fn pe_runtime_function_names(data: &[u8]) -> Vec<(u64, String)> {
+    if !data.starts_with(b"MZ") {
+        return Vec::new();
+    }
+    let (regions, arch, _, _) = parse_exec_regions(data);
+    if !matches!(arch, BArch::X86 | BArch::X86_64) {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    if let Some(main) = pe_startup_main_candidate(None, data, arch, &regions) {
+        // PE32 COFF decorates the C symbol as `_main`; source C does not.
+        // The CRT relationship proves that this address is the hosted entry,
+        // so expose the source-level spelling on both x86 widths.
+        names.push((main, "main".to_string()));
+    }
+    if let Some(initializer) =
+        repair::pe_main_runtime_initializer_candidate(None, data, arch, &regions)
+    {
+        names.push((
+            initializer,
+            if arch == BArch::X86 {
+                "___main"
+            } else {
+                "__main"
+            }
+            .to_string(),
+        ));
+    }
+    names
 }
 
 /// Analyze bytes while treating caller-provided executable VAs as trusted

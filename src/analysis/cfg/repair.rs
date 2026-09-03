@@ -32,6 +32,658 @@ use super::*;
 
 use object::Object;
 
+/// Recover `main` from the x86-64/AArch64/ARM SysV glibc startup contract in a stripped ELF.
+///
+/// Current GCC and Clang crt1 load main's address into the first argument
+/// register and call `__libc_start_main`. All facts are relocation-backed: on
+/// x86-64 the indirect call's GOT slot names libc startup; on AArch64 a RELATIVE
+/// relocation names main and the direct branch reaches its named PLT stub. This
+/// is therefore ABI recovery, not a prologue/name heuristic.
+pub(super) fn apply_elf_startup_main_name(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    regions: &[ExecRegion],
+    functions: &mut [Function],
+) -> usize {
+    let Some(main_va) = elf_startup_main_candidate(image, data, arch, regions) else {
+        return 0;
+    };
+    let Some(function) = functions.iter_mut().find(|function| {
+        function.entry_point.value == main_va && function.name.starts_with("sub_")
+    }) else {
+        return 0;
+    };
+    function.name = "main".to_string();
+    1
+}
+
+pub(super) fn apply_pe_startup_main_name(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    regions: &[ExecRegion],
+    functions: &mut [Function],
+) -> usize {
+    let Some(main_va) = pe_startup_main_candidate(image, data, arch, regions) else {
+        return 0;
+    };
+    let mut renamed = 0;
+    for function in functions.iter_mut().filter(|function| {
+        function.entry_point.value == main_va
+            && (function.name.starts_with("sub_") || function.name == "_main")
+    }) {
+        // `_main` is the PE32 COFF decoration of source-level `main`. The CRT
+        // call proves the role, so keeping the underscore would leak object
+        // format spelling into otherwise canonical C.
+        function.name = "main".to_string();
+        renamed += 1;
+    }
+    if let Some(initializer_va) = pe_main_runtime_initializer_candidate(image, data, arch, regions)
+    {
+        for function in functions.iter_mut().filter(|function| {
+            function.entry_point.value == initializer_va && function.name.starts_with("sub_")
+        }) {
+            function.name = if arch == BArch::X86 {
+                "___main"
+            } else {
+                "__main"
+            }
+            .to_string();
+            renamed += 1;
+        }
+    }
+    renamed
+}
+
+/// Recover MinGW main from its CRT's call immediately after `__p___initenv`.
+///
+/// The imported runtime function is relocation-backed PE metadata. MinGW's
+/// startup stores the environment pointer it returns and then invokes the
+/// user entry with argc/argv[/envp]. We require one unique executable direct
+/// target following that imported call, so an unrelated nearby call cannot
+/// manufacture a main name.
+pub(super) fn pe_startup_main_candidate(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    regions: &[ExecRegion],
+) -> Option<u64> {
+    if !data.starts_with(b"MZ") || !matches!(arch, BArch::X86 | BArch::X86_64) {
+        return None;
+    }
+    let is_initenv_name =
+        |name: &str| matches!(name.trim_start_matches('_'), "initenv" | "p___initenv");
+    let iat_names = crate::analysis::pe_iat::pe_iat_map(data)
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    let init_thunks = crate::analysis::pe_iat::pe_import_thunk_map(data)
+        .into_iter()
+        .filter_map(|(va, name)| is_initenv_name(&name).then_some(va))
+        .collect::<std::collections::HashSet<_>>();
+
+    use iced_x86::{Decoder, DecoderOptions, FlowControl, OpKind};
+    let bitness = if arch == BArch::X86_64 { 64 } else { 32 };
+    let mut candidates = std::collections::BTreeSet::new();
+    for region in regions {
+        let Some(offset) = indexed_code_offset(image, data, region.start) else {
+            continue;
+        };
+        let region_len = usize::try_from(region.end.saturating_sub(region.start)).ok()?;
+        let end = offset.saturating_add(region_len).min(data.len());
+        let mut decoder = Decoder::with_ip(
+            bitness,
+            data.get(offset..end)?,
+            region.start,
+            DecoderOptions::NONE,
+        );
+        let mut after_initenv_until = None;
+        while decoder.can_decode() {
+            let instruction = decoder.decode();
+            if instruction.is_invalid() {
+                after_initenv_until = None;
+                continue;
+            }
+            if after_initenv_until.is_some_and(|limit| instruction.ip() > limit) {
+                after_initenv_until = None;
+            }
+            if instruction.flow_control() != FlowControl::Call
+                || !matches!(
+                    instruction.op0_kind(),
+                    OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+                )
+            {
+                continue;
+            }
+            let target = instruction.near_branch_target();
+            let is_initenv = init_thunks.contains(&target)
+                || pe_x64_initenv_accessor(image, data, arch, target, &iat_names);
+            if is_initenv {
+                after_initenv_until = instruction.next_ip().checked_add(64);
+                continue;
+            }
+            if after_initenv_until.is_some()
+                && !init_thunks.contains(&target)
+                && in_exec_regions(regions, target).is_some()
+            {
+                candidates.insert(code_addr(target, arch));
+                after_initenv_until = None;
+            }
+        }
+    }
+    (candidates.len() == 1).then(|| *candidates.first().expect("one candidate"))
+}
+
+fn pe_x64_initenv_accessor(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    target: u64,
+    iat_names: &std::collections::HashMap<u64, String>,
+) -> bool {
+    if arch != BArch::X86_64 {
+        return false;
+    }
+    use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+    let Some(offset) = indexed_code_offset(image, data, target) else {
+        return false;
+    };
+    let Some(bytes) = data.get(offset..offset.saturating_add(16).min(data.len())) else {
+        return false;
+    };
+    let mut decoder = Decoder::with_ip(64, bytes, target, DecoderOptions::NONE);
+    let first = decoder.decode();
+    let second = decoder.decode();
+    let third = decoder.decode();
+    if first.mnemonic() != Mnemonic::Mov
+        || first.op0_register() != Register::RAX
+        || first.op1_kind() != OpKind::Memory
+        || first.memory_base() != Register::RIP
+        || second.mnemonic() != Mnemonic::Mov
+        || second.op0_register() != Register::RAX
+        || second.op1_kind() != OpKind::Memory
+        || second.memory_base() != Register::RAX
+        || second.memory_displacement64() != 0
+        || third.mnemonic() != Mnemonic::Ret
+    {
+        return false;
+    }
+    let Some(iat_va) = read_pointer_at_va(image, data, first.ip_rel_memory_address(), 64) else {
+        return false;
+    };
+    iat_names
+        .get(&iat_va)
+        .is_some_and(|name| matches!(name.trim_start_matches('_'), "initenv" | "p___initenv"))
+}
+
+pub(crate) fn pe_main_runtime_initializer_candidate(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    regions: &[ExecRegion],
+) -> Option<u64> {
+    let initterm_thunks = crate::analysis::pe_iat::pe_import_thunk_map(data)
+        .into_iter()
+        .filter_map(|(va, name)| (name.trim_start_matches('_') == "initterm").then_some(va))
+        .collect::<std::collections::HashSet<_>>();
+    if initterm_thunks.is_empty() {
+        return None;
+    }
+    use iced_x86::{Decoder, DecoderOptions, FlowControl, OpKind};
+    let bitness = if arch == BArch::X86_64 { 64 } else { 32 };
+    let mut candidates = std::collections::BTreeSet::new();
+    for region in regions {
+        let offset = indexed_code_offset(image, data, region.start)?;
+        let len = usize::try_from(region.end.saturating_sub(region.start)).ok()?;
+        let end = offset.saturating_add(len).min(data.len());
+        let mut decoder = Decoder::with_ip(
+            bitness,
+            data.get(offset..end)?,
+            region.start,
+            DecoderOptions::NONE,
+        );
+        let mut after_initterm_until = None;
+        while decoder.can_decode() {
+            let instruction = decoder.decode();
+            if after_initterm_until.is_some_and(|limit| instruction.ip() > limit) {
+                after_initterm_until = None;
+            }
+            if instruction.flow_control() != FlowControl::Call
+                || !matches!(
+                    instruction.op0_kind(),
+                    OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+                )
+            {
+                continue;
+            }
+            let target = instruction.near_branch_target();
+            if initterm_thunks.contains(&target) {
+                after_initterm_until = instruction.next_ip().checked_add(16);
+            } else if after_initterm_until.is_some() && in_exec_regions(regions, target).is_some() {
+                candidates.insert(code_addr(target, arch));
+                after_initterm_until = None;
+            }
+        }
+    }
+    (candidates.len() == 1).then(|| *candidates.first().expect("one candidate"))
+}
+
+/// Return a CRT-proven `main` target suitable for discovery seeding.
+pub(super) fn elf_startup_main_candidate(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    regions: &[ExecRegion],
+) -> Option<u64> {
+    if !matches!(
+        arch,
+        BArch::X86 | BArch::X86_64 | BArch::AArch64 | BArch::ARM
+    ) || !data.starts_with(b"\x7fELF")
+    {
+        return None;
+    }
+    let object = crate::decompile::profile::parse_object(data).ok()?;
+    let entry = code_addr(object.entry(), arch);
+    if entry == 0 {
+        return None;
+    }
+    let offset = indexed_code_offset(image, data, entry)?;
+    let code = data.get(offset..offset.saturating_add(96).min(data.len()))?;
+    let main_va = match arch {
+        BArch::X86 => {
+            let plt = crate::analysis::elf_plt::elf_plt_map(data)
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let is_static = object.section_by_name(".interp").is_none();
+            i386_startup_main_candidate(
+                code,
+                entry,
+                &plt,
+                |slot| read_pointer_at_va(image, data, slot, 32),
+                |target| {
+                    let offset = indexed_code_offset(image, data, target)?;
+                    (data.get(offset..offset + 4)? == [0x8b, 0x1c, 0x24, 0xc3]).then_some(())
+                },
+                is_static,
+            )
+            .map(|candidate| i386_direct_jump_target(image, data, candidate).unwrap_or(candidate))
+        }
+        BArch::X86_64 => {
+            let got = crate::analysis::elf_got::elf_got_map(data)
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let is_static = object.section_by_name(".interp").is_none();
+            x86_64_startup_main_candidate(code, entry, &got, is_static)
+        }
+        BArch::AArch64 => {
+            let got_targets = crate::analysis::elf_got::elf_got_target_map(data)
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let plt = crate::analysis::elf_plt::elf_plt_map(data)
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
+                eprintln!("[startup-main] entry={entry:#x} got={got_targets:#x?} plt={plt:#x?}");
+            }
+            let is_static = object.section_by_name(".interp").is_none();
+            aarch64_startup_main_candidate(code, entry, &got_targets, &plt, is_static)
+        }
+        BArch::ARM if object.is_little_endian() => {
+            let got_targets = crate::analysis::elf_got::elf_got_target_map(data)
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let plt = crate::analysis::elf_plt::elf_plt_map(data)
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let is_static = object.section_by_name(".interp").is_none();
+            arm_thumb_startup_main_candidate(
+                code,
+                entry,
+                &got_targets,
+                &plt,
+                |slot| read_pointer_at_va(image, data, slot, 32),
+                is_static,
+            )
+        }
+        _ => None,
+    };
+    let main_va = code_addr(main_va?, arch);
+    let main_va = if arch == BArch::AArch64 {
+        aarch64_direct_branch_target(image, data, main_va).unwrap_or(main_va)
+    } else {
+        main_va
+    };
+    in_exec_regions(regions, main_va).map(|_| main_va)
+}
+
+fn aarch64_direct_branch_target(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    entry: u64,
+) -> Option<u64> {
+    let offset = indexed_code_offset(image, data, entry)?;
+    // Modern crt1 may pass a two-instruction landing thunk (`bti c; b main`)
+    // rather than main itself. Follow only an immediate unconditional branch
+    // in that tiny prefix; calls and register-indirect veneers are not proof.
+    for (index, bytes) in data
+        .get(offset..offset.saturating_add(8))?
+        .chunks_exact(4)
+        .enumerate()
+    {
+        let word = u32::from_le_bytes(bytes.try_into().ok()?);
+        if word & 0x7c00_0000 != 0x1400_0000 {
+            continue;
+        }
+        let pc = entry.checked_add(u64::try_from(index).ok()?.checked_mul(4)?)?;
+        let imm26 = i64::from(word & 0x03ff_ffff);
+        let displacement = (imm26 << 38) >> 36;
+        return Some(pc.wrapping_add_signed(displacement));
+    }
+    None
+}
+
+fn i386_direct_jump_target(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    entry: u64,
+) -> Option<u64> {
+    let offset = indexed_code_offset(image, data, entry)?;
+    let bytes = data.get(offset..offset + 5)?;
+    if bytes[0] != 0xe9 {
+        return None;
+    }
+    let displacement = i32::from_le_bytes(bytes[1..5].try_into().ok()?);
+    entry
+        .checked_add(5)?
+        .checked_add_signed(i64::from(displacement))
+}
+
+fn i386_startup_main_candidate(
+    code: &[u8],
+    entry: u64,
+    plt: &std::collections::HashMap<u64, String>,
+    mut read_slot: impl FnMut(u64) -> Option<u64>,
+    mut get_pc_thunk_bx: impl FnMut(u64) -> Option<()>,
+    allow_unnamed_static_start: bool,
+) -> Option<u64> {
+    use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+
+    let mut decoder = Decoder::with_ip(32, code, entry, DecoderOptions::NONE);
+    let mut ebx = None;
+    let mut eax_candidate = None;
+    let mut candidate = None;
+    let memory_target = |base: u64, instruction: &iced_x86::Instruction| {
+        base.wrapping_add_signed(i64::from(instruction.memory_displacement32() as i32))
+    };
+    while decoder.can_decode() {
+        let instruction = decoder.decode();
+        if instruction.is_invalid() {
+            return None;
+        }
+        if instruction.mnemonic() == Mnemonic::Call
+            && matches!(
+                instruction.op0_kind(),
+                OpKind::NearBranch16 | OpKind::NearBranch32
+            )
+        {
+            let target = instruction.near_branch_target();
+            if get_pc_thunk_bx(target).is_some() {
+                ebx = Some(instruction.next_ip());
+                continue;
+            }
+            let is_libc_start = plt.get(&target).is_some_and(|name| {
+                name.strip_suffix("@plt").unwrap_or(name).split('@').next()
+                    == Some("__libc_start_main")
+            });
+            return (is_libc_start || allow_unnamed_static_start)
+                .then_some(candidate)
+                .flatten();
+        }
+        if instruction.mnemonic() == Mnemonic::Add
+            && instruction.op0_kind() == OpKind::Register
+            && instruction.op0_register() == Register::EBX
+            && instruction.op1_kind() == OpKind::Immediate32
+        {
+            ebx = Some(ebx?.wrapping_add(u64::from(instruction.immediate32())));
+            continue;
+        }
+        if instruction.mnemonic() == Mnemonic::Lea
+            && instruction.op0_kind() == OpKind::Register
+            && instruction.op0_register() == Register::EAX
+            && instruction.op1_kind() == OpKind::Memory
+            && instruction.memory_base() == Register::EBX
+            && instruction.memory_index() == Register::None
+        {
+            eax_candidate = Some(memory_target(ebx?, &instruction));
+            continue;
+        }
+        if instruction.mnemonic() != Mnemonic::Push {
+            continue;
+        }
+        match instruction.op0_kind() {
+            OpKind::Register if instruction.op0_register() == Register::EAX => {
+                if eax_candidate.is_some() {
+                    candidate = eax_candidate;
+                }
+            }
+            OpKind::Memory
+                if instruction.memory_base() == Register::EBX
+                    && instruction.memory_index() == Register::None =>
+            {
+                let slot = memory_target(ebx?, &instruction);
+                candidate = read_slot(slot);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn arm_thumb_startup_main_candidate(
+    code: &[u8],
+    entry: u64,
+    got_targets: &std::collections::HashMap<u64, u64>,
+    plt: &std::collections::HashMap<u64, String>,
+    mut read_slot: impl FnMut(u64) -> Option<u64>,
+    allow_unnamed_static_start: bool,
+) -> Option<u64> {
+    use crate::core::address::{Address, AddressKind};
+    use crate::core::binary::Endianness;
+    use crate::core::disassembler::{Architecture, Disassembler};
+
+    let read_half = |offset: usize| {
+        Some(u16::from_le_bytes(
+            code.get(offset..offset + 2)?.try_into().ok()?,
+        ))
+    };
+    let read_word_va = |va: u64| {
+        let offset = usize::try_from(va.checked_sub(entry)?).ok()?;
+        Some(u32::from_le_bytes(
+            code.get(offset..offset + 4)?.try_into().ok()?,
+        ))
+    };
+    let mut got_literal = None;
+    let mut got_anchor = None;
+    let mut got_base = None;
+    let mut slot_offset = None;
+    let mut candidate = None;
+    let mut offset = 0usize;
+    while offset + 2 <= code.len() {
+        let half = read_half(offset)?;
+        let pc = entry.checked_add(u64::try_from(offset).ok()?)?;
+        let next_half = read_half(offset + 2);
+
+        // ldr.w r10, [pc, #imm12] -- crt1's GOT-base displacement literal.
+        if half == 0xf8df && next_half.is_some_and(|second| second >> 12 == 10) {
+            let second = next_half?;
+            let literal_va = ((pc + 4) & !3).checked_add(u64::from(second & 0x0fff))?;
+            got_literal = read_word_va(literal_va).map(u64::from);
+            offset += 4;
+            continue;
+        }
+        // ADR r3, imm8*4 followed by ADD r10,r3 constructs the GOT base.
+        if half & 0xf800 == 0xa000 && ((half >> 8) & 0x7) == 3 {
+            got_anchor = Some(((pc + 4) & !3).checked_add(u64::from(half & 0xff) * 4)?);
+            offset += 2;
+            continue;
+        }
+        if half == 0x449a {
+            got_base = Some(got_literal?.checked_add(got_anchor?)?);
+            offset += 2;
+            continue;
+        }
+        // ldr r0, [pc, #imm8*4] loads the offset of main's GOT slot.
+        if half & 0xf800 == 0x4800 && ((half >> 8) & 0x7) == 0 {
+            let literal_va = ((pc + 4) & !3).checked_add(u64::from(half & 0xff) * 4)?;
+            slot_offset = read_word_va(literal_va).map(u64::from);
+            offset += 2;
+            continue;
+        }
+        // ldr.w r0, [r10, r0] dereferences main's GOT slot. PIE records the
+        // target in R_ARM_RELATIVE; ET_EXEC writes the absolute code pointer
+        // into the slot at link time and needs no dynamic relocation.
+        if half == 0xf85a && next_half == Some(0x0000) {
+            let slot = got_base?.checked_add(slot_offset?)?;
+            candidate = got_targets.get(&slot).copied().or_else(|| read_slot(slot));
+            offset += 4;
+            continue;
+        }
+
+        // Decode only the call itself through the existing Thumb backend; its
+        // immediate operand is the absolute PLT target. Raw parsing above is
+        // retained for the literal/GOT arithmetic Capstone intentionally does
+        // not evaluate across instructions.
+        let mut decoder = crate::disasm::capstone::CapstoneDisassembler::new(
+            Architecture::ARM,
+            Endianness::Little,
+        )?;
+        decoder.set_thumb_mode(true).ok()?;
+        let address = Address::new(AddressKind::VA, pc, 32, None, None).ok()?;
+        let instruction = decoder
+            .disassemble_instruction(&address, code.get(offset..)?)
+            .ok()?;
+        if instruction.mnemonic == "bl" || instruction.mnemonic == "blx" {
+            let target = instruction.operands.first()?.immediate? as u64;
+            let is_libc_start = plt.get(&(target & !1)).is_some_and(|name| {
+                name.strip_suffix("@plt").unwrap_or(name).split('@').next()
+                    == Some("__libc_start_main")
+            });
+            if is_libc_start || allow_unnamed_static_start {
+                return candidate;
+            }
+        }
+        offset += usize::from(instruction.length);
+    }
+    None
+}
+
+fn aarch64_startup_main_candidate(
+    code: &[u8],
+    entry: u64,
+    got_targets: &std::collections::HashMap<u64, u64>,
+    plt: &std::collections::HashMap<u64, String>,
+    allow_unnamed_static_start: bool,
+) -> Option<u64> {
+    let mut x0_page = None;
+    let mut candidate = None;
+    for (index, bytes) in code.chunks_exact(4).enumerate() {
+        let word = u32::from_le_bytes(bytes.try_into().ok()?);
+        let pc = entry.checked_add(u64::try_from(index).ok()?.checked_mul(4)?)?;
+        // ADRP x0, page: signed imm21 assembled from immhi:immlo, scaled by 4K.
+        if word & 0x9f00_001f == 0x9000_0000 {
+            let imm21 = (((word >> 5) & 0x7ffff) << 2) | ((word >> 29) & 0x3);
+            let signed = ((i64::from(imm21) << 43) >> 43) << 12;
+            x0_page = Some((pc & !0xfff).wrapping_add_signed(signed));
+            continue;
+        }
+        // LDR x0, [x0, #imm12 * 8]. The slot's RELATIVE relocation states
+        // main's address even though the file's GOT bytes are not relocated.
+        if word & 0xffc0_03ff == 0xf940_0000 {
+            let slot = x0_page?.checked_add(u64::from((word >> 10) & 0xfff) * 8)?;
+            candidate = got_targets.get(&slot).copied();
+            continue;
+        }
+        // ADD x0, x0, #imm12[, LSL #12]. Non-PIE and static crt1 materialise
+        // main directly as ADRP+ADD instead of loading a relocated GOT slot.
+        if word & 0xffc0_03ff == 0x9100_0000 {
+            let shift = if word & (1 << 22) != 0 { 12 } else { 0 };
+            let offset = u64::from((word >> 10) & 0xfff) << shift;
+            candidate = x0_page?.checked_add(offset);
+            continue;
+        }
+        // BL imm26. Require the exact PLT target to be __libc_start_main.
+        if word & 0xfc00_0000 != 0x9400_0000 {
+            continue;
+        }
+        let imm26 = i64::from(word & 0x03ff_ffff);
+        let displacement = (imm26 << 38) >> 36;
+        let target = pc.wrapping_add_signed(displacement);
+        let is_libc_start = plt.get(&target).is_some_and(|name| {
+            name.strip_suffix("@plt").unwrap_or(name).split('@').next() == Some("__libc_start_main")
+        });
+        return (is_libc_start || allow_unnamed_static_start)
+            .then_some(candidate)
+            .flatten();
+    }
+    None
+}
+
+fn x86_64_startup_main_candidate(
+    code: &[u8],
+    entry: u64,
+    got: &std::collections::HashMap<u64, String>,
+    allow_unnamed_static_start: bool,
+) -> Option<u64> {
+    use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
+
+    let mut decoder = Decoder::with_ip(64, code, entry, DecoderOptions::NONE);
+    let mut candidate = None;
+    while decoder.can_decode() {
+        let instruction = decoder.decode();
+        if instruction.is_invalid() {
+            return None;
+        }
+        if instruction.mnemonic() == Mnemonic::Lea
+            && instruction.op0_kind() == OpKind::Register
+            && instruction.op0_register() == Register::RDI
+            && instruction.op1_kind() == OpKind::Memory
+            && instruction.memory_base() == Register::RIP
+        {
+            candidate = Some(instruction.ip_rel_memory_address());
+            continue;
+        }
+        if instruction.mnemonic() == Mnemonic::Mov
+            && instruction.op0_kind() == OpKind::Register
+            && instruction.op0_register() == Register::RDI
+            && matches!(
+                instruction.op1_kind(),
+                OpKind::Immediate32 | OpKind::Immediate32to64 | OpKind::Immediate64
+            )
+        {
+            candidate = Some(instruction.immediate64());
+            continue;
+        }
+        if instruction.mnemonic() != Mnemonic::Call {
+            continue;
+        }
+        if matches!(
+            instruction.op0_kind(),
+            OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+        ) {
+            return allow_unnamed_static_start.then_some(candidate).flatten();
+        }
+        if instruction.op0_kind() != OpKind::Memory || instruction.memory_base() != Register::RIP {
+            return None;
+        }
+        let slot = instruction.ip_rel_memory_address();
+        let is_libc_start = got
+            .get(&slot)
+            .is_some_and(|name| name.split('@').next() == Some("__libc_start_main"));
+        return is_libc_start.then_some(candidate).flatten();
+    }
+    None
+}
+
 /// Apply DWARF subprogram entries on top of heuristically-discovered
 /// functions. When a DWARF entry matches an existing Function by entry
 /// VA, we override the name and chunk list (DWARF wins) and bump the
@@ -744,6 +1396,340 @@ pub(super) fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usiz
 #[cfg(test)]
 mod chunk_tests {
     use super::*;
+
+    #[test]
+    fn relocation_proven_crt_call_recovers_the_main_argument() {
+        // lea rdi,[rip+0xf9] -> 0x1100
+        // call qword ptr [rip+0x1ff3] -> GOT slot 0x3000
+        let code = [
+            0x48, 0x8d, 0x3d, 0xf9, 0x00, 0x00, 0x00, 0xff, 0x15, 0xf3, 0x1f, 0x00, 0x00,
+        ];
+        let got =
+            std::collections::HashMap::from([(0x3000, "__libc_start_main@GLIBC_2.34".to_string())]);
+
+        assert_eq!(
+            x86_64_startup_main_candidate(&code, 0x1000, &got, false),
+            Some(0x1100)
+        );
+    }
+
+    #[test]
+    fn x86_64_nonpie_absolute_main_is_recovered() {
+        // mov rdi,0x401136; call qword ptr [rip+0x2f63]
+        let code = hex::decode("48c7c736114000ff15632f0000").expect("valid startup bytes");
+        let got = std::collections::HashMap::from([(
+            0x403fd8,
+            "__libc_start_main@GLIBC_2.34".to_string(),
+        )]);
+
+        assert_eq!(
+            x86_64_startup_main_candidate(&code, 0x401068, &got, false),
+            Some(0x401136)
+        );
+    }
+
+    #[test]
+    fn x86_64_static_startup_accepts_its_first_direct_runtime_call() {
+        // mov rdi,0x4018a5; addr32 call 0x404240
+        let code = hex::decode("48c7c7a518400067e89b2a0000").expect("valid startup bytes");
+        let got = std::collections::HashMap::new();
+
+        assert_eq!(
+            x86_64_startup_main_candidate(&code, 0x401798, &got, true),
+            Some(0x4018a5)
+        );
+        assert_eq!(
+            x86_64_startup_main_candidate(&code, 0x401798, &got, false),
+            None
+        );
+    }
+
+    #[test]
+    fn i386_pic_crt_sequence_recovers_got_held_main() {
+        let code = hex::decode(concat!(
+            "31ed5e89e183e4f0505452e81800000081c3682f00006a006a005156",
+            "ffb320000000e8a9fffffff4"
+        ))
+        .expect("valid i386 startup bytes");
+        let plt = std::collections::HashMap::from([(
+            0x1030,
+            "__libc_start_main@GLIBC_2.34@plt".to_string(),
+        )]);
+
+        assert_eq!(
+            i386_startup_main_candidate(
+                &code,
+                0x1060,
+                &plt,
+                |slot| (slot == 0x3ff8).then_some(0x118d),
+                |target| (target == 0x1088).then_some(()),
+                false,
+            ),
+            Some(0x118d)
+        );
+    }
+
+    #[test]
+    fn i386_exec_crt_sign_extends_main_lea_displacement() {
+        let code = hex::decode(concat!(
+            "31ed5e89e183e4f0505452e81900000081c3942f00006a006a005156",
+            "8d8389d0ffff50e8b8fffffff4"
+        ))
+        .expect("valid i386 startup bytes");
+        let plt = std::collections::HashMap::from([(
+            0x8049030,
+            "__libc_start_main@GLIBC_2.34@plt".to_string(),
+        )]);
+
+        assert_eq!(
+            i386_startup_main_candidate(
+                &code,
+                0x8049050,
+                &plt,
+                |_| None,
+                |target| (target == 0x8049079).then_some(()),
+                false,
+            ),
+            Some(0x804907d)
+        );
+    }
+
+    #[test]
+    fn unrelated_indirect_startup_call_does_not_invent_main() {
+        let code = [
+            0x48, 0x8d, 0x3d, 0xf9, 0x00, 0x00, 0x00, 0xff, 0x15, 0xf3, 0x1f, 0x00, 0x00,
+        ];
+        let got = std::collections::HashMap::from([(0x3000, "other_runtime".to_string())]);
+
+        assert_eq!(
+            x86_64_startup_main_candidate(&code, 0x1000, &got, false),
+            None
+        );
+    }
+
+    #[test]
+    fn aarch64_relocation_proven_crt_sequence_recovers_main() {
+        let code = [
+            0xd503245f_u32, // bti c
+            0xd280001d,     // mov x29, #0
+            0xd280001e,     // mov x30, #0
+            0xaa0003e5,     // mov x5, x0
+            0xf94003e1,     // ldr x1, [sp]
+            0x910023e2,     // add x2, sp, #8
+            0x910003e6,     // mov x6, sp
+            0xf00000e0,     // adrp x0, 0x1f000
+            0xf947f800,     // ldr x0, [x0, #4080] -> GOT 0x1fff0
+            0xd2800003,     // mov x3, #0
+            0xd2800004,     // mov x4, #0
+            0x97ffffd9,     // bl 0x610
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+        let got_targets = std::collections::HashMap::from([(0x1fff0, 0x7a8)]);
+        let plt = std::collections::HashMap::from([(
+            0x610,
+            "__libc_start_main@GLIBC_2.34@plt".to_string(),
+        )]);
+
+        assert_eq!(
+            aarch64_startup_main_candidate(&code, 0x680, &got_targets, &plt, false),
+            Some(0x7a8)
+        );
+    }
+
+    #[test]
+    fn aarch64_absolute_and_static_crt_sequences_recover_main() {
+        let code = [
+            0x90000000_u32, // adrp x0, 0x400000
+            0x9116d000,     // add x0, x0, #0x5b4
+            0x97ffffe1,     // bl 0x400530
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+        let plt = std::collections::HashMap::from([(
+            0x400528,
+            "__libc_start_main@GLIBC_2.34@plt".to_string(),
+        )]);
+        assert_eq!(
+            aarch64_startup_main_candidate(
+                &code,
+                0x40059c,
+                &std::collections::HashMap::new(),
+                &plt,
+                false,
+            ),
+            Some(0x4005b4)
+        );
+
+        let static_code = [
+            0x90000000_u32, // adrp x0, 0x400000
+            0x9117d000,     // add x0, x0, #0x5f4
+            0x94000166,     // bl unnamed static __libc_start_main
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+        assert_eq!(
+            aarch64_startup_main_candidate(
+                &static_code,
+                0x4005dc,
+                &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
+                true,
+            ),
+            Some(0x4005f4)
+        );
+    }
+
+    #[test]
+    fn arm_thumb_relocation_proven_crt_sequence_recovers_main() {
+        // GCC crt1 from a real stripped arm-linux-gnueabihf O0 executable.
+        // The trailing words are the PC-relative GOT-base and slot-offset
+        // literals consumed by the preceding Thumb instructions.
+        let code = hex::decode(concat!(
+            "4ff0000b4ff0000e02bc6a4604b401b4dff818a005a39a444ff0000308b4",
+            "04485af80000fff7ceeffff7e4ef98fb01002c000000"
+        ))
+        .expect("valid Thumb fixture bytes");
+        let got_targets = std::collections::HashMap::from([(0x1fff8, 0x505)]);
+        let plt = std::collections::HashMap::from([(0x3cc, "__libc_start_main@plt".to_string())]);
+
+        assert_eq!(
+            arm_thumb_startup_main_candidate(&code, 0x408, &got_targets, &plt, |_| None, false,),
+            Some(0x505)
+        );
+    }
+
+    #[test]
+    fn arm_thumb_link_time_got_pointer_recovers_nonpie_main() {
+        let code = hex::decode(concat!(
+            "4ff0000b4ff0000e02bc6a4604b401b4dff818a005a39a444ff0000308b4",
+            "04485af80000fff7ceeffff7e4ef98fb01002c000000"
+        ))
+        .expect("valid Thumb fixture bytes");
+        let plt = std::collections::HashMap::from([(0x3cc, "__libc_start_main@plt".to_string())]);
+
+        assert_eq!(
+            arm_thumb_startup_main_candidate(
+                &code,
+                0x408,
+                &std::collections::HashMap::new(),
+                &plt,
+                |slot| (slot == 0x1fff8).then_some(0x505),
+                false,
+            ),
+            Some(0x505)
+        );
+    }
+
+    #[test]
+    fn stripped_hosted_elf_keeps_its_runtime_proven_main_name() {
+        use std::process::Command;
+
+        if cfg!(not(all(target_os = "linux", target_arch = "x86_64"))) {
+            return;
+        }
+        let tmp = tempfile::tempdir().expect("temporary stripped-main directory");
+        let source = tmp.path().join("hello.c");
+        let binary = tmp.path().join("hello");
+        std::fs::write(
+            &source,
+            b"#include <stdio.h>\nint main(void) { puts(\"Hello, World!\"); return 0; }\n",
+        )
+        .expect("write stripped-main fixture");
+        let build = match Command::new("cc")
+            .args(["-O0", "-s", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("cc");
+                return;
+            }
+            Err(error) => panic!("launch cc: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile stripped hello: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let bytes = std::fs::read(binary).expect("read stripped hello");
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &bytes,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        assert!(
+            functions.iter().any(|function| function.name == "main"),
+            "the relocation-proven crt argument must name main: {functions:#?}"
+        );
+    }
+
+    #[test]
+    fn stripped_mingw_pe_keeps_its_runtime_proven_main_name() {
+        use std::process::Command;
+
+        for (compiler, strip, initializer) in [
+            (
+                "x86_64-w64-mingw32-gcc",
+                "x86_64-w64-mingw32-strip",
+                "__main",
+            ),
+            ("i686-w64-mingw32-gcc", "i686-w64-mingw32-strip", "___main"),
+        ] {
+            if Command::new(compiler).arg("--version").output().is_err()
+                || Command::new(strip).arg("--version").output().is_err()
+            {
+                continue;
+            }
+            let tmp = tempfile::tempdir().expect("temporary stripped PE main directory");
+            let source = tmp.path().join("hello.c");
+            let binary = tmp.path().join("hello.exe");
+            std::fs::write(
+                &source,
+                b"#include <stdio.h>\nint main(void) { puts(\"Hello, World!\"); return 0; }\n",
+            )
+            .expect("write MinGW hello source");
+            let build = Command::new(compiler)
+                .args(["-O0", "-o"])
+                .arg(&binary)
+                .arg(&source)
+                .output()
+                .expect("run MinGW compiler");
+            assert!(
+                build.status.success(),
+                "{}: {}",
+                compiler,
+                String::from_utf8_lossy(&build.stderr)
+            );
+            let stripped = Command::new(strip)
+                .args(["--strip-all"])
+                .arg(&binary)
+                .output()
+                .expect("strip MinGW hello");
+            assert!(stripped.status.success());
+
+            let bytes = std::fs::read(binary).expect("read stripped MinGW hello");
+            let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+                &bytes,
+                &crate::analysis::cfg::Budgets::default(),
+            );
+            assert!(
+                functions.iter().any(|function| function.name == "main"),
+                "{compiler}: the CRT call must expose source-level main: {functions:#?}"
+            );
+            assert!(
+                functions
+                    .iter()
+                    .any(|function| function.name == initializer),
+                "{compiler}: the initterm-adjacent helper must be named: {functions:#?}"
+            );
+        }
+    }
 
     fn _va_range(start: u64, size: u64) -> AddressRange {
         let s = Address::new(AddressKind::VA, start, 64, None, None).unwrap();

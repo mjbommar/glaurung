@@ -30,6 +30,8 @@ pub(super) enum DiscoverySeedKind {
     Requested,
     EntryPoint,
     Symbol,
+    /// `main` recovered from the platform CRT's relocation-backed startup ABI.
+    RuntimeMain,
     Flirt,
     Vtable,
     JumpTable,
@@ -68,6 +70,7 @@ impl DiscoverySeedKind {
             Self::Requested => "requested",
             Self::EntryPoint => "entrypoint",
             Self::Symbol => "symbol",
+            Self::RuntimeMain => "runtime_main",
             Self::Flirt => "flirt",
             Self::Vtable => "vtable",
             Self::JumpTable => "jump_table",
@@ -129,7 +132,7 @@ pub(super) fn analyze_functions_unpacked(
     // Every seed source, in the order that decides both budget priority and
     // body ownership. See `seeds` for what each phase contributes.
     let Seeds {
-        seeds,
+        mut seeds,
         mut known,
         mut seed_kind_by_va,
         flirt_library,
@@ -149,6 +152,32 @@ pub(super) fn analyze_functions_unpacked(
         deadline,
         &mut stats,
     );
+
+    // A stripped executable may contain no symbol/FDE/prologue seed for main.
+    // The CRT still supplies an authoritative one: its startup call passes a
+    // relocation-backed code pointer to __libc_start_main. Seed that target
+    // before heuristic scanners consume the function budget.
+    let runtime_main = elf_startup_main_candidate(image, data, arch, &regions)
+        .or_else(|| pe_startup_main_candidate(image, data, arch, &regions));
+    if let Some(main_va) = runtime_main {
+        if known.insert(main_va) {
+            if let Ok(addr) = Address::new(AddressKind::VA, main_va, bits, None, None) {
+                seeds.insert(1.min(seeds.len()), (addr, DiscoverySeedKind::RuntimeMain));
+                seed_kind_by_va.insert(main_va, DiscoverySeedKind::RuntimeMain);
+                record_seed_provenance(
+                    &mut stats,
+                    main_va,
+                    None,
+                    DiscoverySeedKind::RuntimeMain,
+                    if data.starts_with(b"MZ") {
+                        "pe_crt_startup"
+                    } else {
+                        "elf_crt_startup"
+                    },
+                );
+            }
+        }
+    }
 
     // Recursive multi-pass discovery. Each discovered function's
     // direct-call targets feed back as new seeds; without this the
@@ -329,6 +358,15 @@ pub(super) fn analyze_functions_unpacked(
     // Post-process: rename functions by matching defined symbol names at their
     // entry VAs, then let the repair chain build on those names.
     apply_symbol_and_export_names(data, arch, &regions, &mut functions);
+
+    // A fully stripped hosted ELF has no `main` symbol, but its ABI startup
+    // stub still passes main's exact address as argument zero to
+    // `__libc_start_main`. Recover that binary-stated relationship before the
+    // remaining name-based repairs run. The recogniser requires the ELF entry
+    // point, the architecture's first argument register, and relocation-proven
+    // GOT/PLT evidence; a nearby address load and call are deliberately not enough.
+    apply_elf_startup_main_name(image, data, arch, &regions, &mut functions);
+    apply_pe_startup_main_name(image, data, arch, &regions, &mut functions);
 
     // Fold compiler-emitted split chunks while the symbol-table suffixes are
     // still intact. A DWARF subprogram covers every range of the logical
