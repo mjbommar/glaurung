@@ -25,6 +25,7 @@ import json
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -146,12 +147,7 @@ def _rewrite_urls(out: Path, base_url: str, key_path: Path) -> Manifest:
     manifest = Manifest.read(out / "manifest.json")
     rewritten = manifest.with_blobs(
         [
-            type(blob)(
-                **{
-                    **{f: getattr(blob, f) for f in blob.__dataclass_fields__},
-                    "urls": (f"{base_url}/blobs/{blob.sha256}",),
-                }
-            )
+            replace(blob, urls=(f"{base_url}/blobs/{blob.sha256}",))
             for blob in manifest.blobs
         ]
     )
@@ -179,7 +175,8 @@ class _RangeHandler(http.server.SimpleHTTPRequestHandler):
         self.served = served if served is not None else []
         super().__init__(*args, **kwargs)
 
-    def log_message(self, *args):  # stdlib override; keep the test output clean
+    def log_message(self, format: str, *args) -> None:
+        """Silence the per-request line; keep the test output readable."""
         return
 
     def do_GET(self):  # noqa: N802 - stdlib naming
@@ -215,28 +212,39 @@ class _RangeHandler(http.server.SimpleHTTPRequestHandler):
         self.served.append((self.path, start, len(body), status))
 
 
-@pytest.fixture
-def serve():
-    """Serve a directory over localhost HTTP for the duration of one test.
+class _Servers:
+    """Start localhost servers, and keep the shared request log.
 
-    The returned callable yields the base URL; `serve.log` is the shared list
-    of `(path, range_start, bytes_sent, status)` tuples every request appends.
+    `log` holds `(path, range_start, bytes_sent, status)` per request, which
+    is what lets the resume test assert a 206 actually happened rather than
+    silently accepting a full re-download.
     """
-    servers: list[http.server.ThreadingHTTPServer] = []
-    log: list[tuple[str, int, int, int]] = []
 
-    def start(directory: Path) -> str:
-        handler = functools.partial(_RangeHandler, directory=str(directory), served=log)
+    def __init__(self) -> None:
+        self.servers: list[http.server.ThreadingHTTPServer] = []
+        self.log: list[tuple[str, int, int, int]] = []
+
+    def __call__(self, directory: Path) -> str:
+        handler = functools.partial(
+            _RangeHandler, directory=str(directory), served=self.log
+        )
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        servers.append(server)
+        self.servers.append(server)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return f"http://127.0.0.1:{server.server_address[1]}"
 
-    start.log = log
-    yield start
-    for server in servers:
-        server.shutdown()
-        server.server_close()
+    def close(self) -> None:
+        for server in self.servers:
+            server.shutdown()
+            server.server_close()
+
+
+@pytest.fixture
+def serve():
+    """Serve directories over localhost HTTP for the duration of one test."""
+    servers = _Servers()
+    yield servers
+    servers.close()
 
 
 @pytest.fixture
@@ -465,12 +473,8 @@ def test_an_expired_set_warns_but_still_works(tmp_path, serve):
     key_path = tmp_path / "keys" / "signing.key"
     _publish(corpus, out, key_path)
 
-    stale = Manifest.read(out / "manifest.json")
-    stale = type(stale)(
-        **{
-            **{f: getattr(stale, f) for f in stale.__dataclass_fields__},
-            "valid_until": "2000-01-01T00:00:00Z",
-        }
+    stale = replace(
+        Manifest.read(out / "manifest.json"), valid_until="2000-01-01T00:00:00Z"
     )
     stale.write(out / "manifest.json")
     base_url = serve(out)

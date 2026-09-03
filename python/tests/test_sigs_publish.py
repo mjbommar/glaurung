@@ -306,11 +306,25 @@ def test_a_dotted_library_name_survives_key_derivation(tmp_path):
         {"libm.flirt.json": json.dumps({"entries": ["m"] * 5})},
     )
     out = tmp_path / "out"
-    assert _run(
-        "--blobs", str(corpus), "--set", "base", "--set-version", "1",
-        "--serial", "1", "--out", str(out),
-        "--secret-key", str(tmp_path / "k.key"), "--generate-key", "--quiet",
-    ).returncode == 0
+    assert (
+        _run(
+            "--blobs",
+            str(corpus),
+            "--set",
+            "base",
+            "--set-version",
+            "1",
+            "--serial",
+            "1",
+            "--out",
+            str(out),
+            "--secret-key",
+            str(tmp_path / "k.key"),
+            "--generate-key",
+            "--quiet",
+        ).returncode
+        == 0
+    )
     keys = [blob.key for blob in Manifest.read(out / "manifest.json").blobs]
     assert keys == ["libm-2.36/2.36/alpine-3.20/aarch64"]
 
@@ -331,11 +345,25 @@ def test_the_archive_name_is_the_fallback_when_there_is_no_triplet(tmp_path):
         {"libz.flirt.json": json.dumps({"entries": ["z"] * 3})},
     )
     out = tmp_path / "out"
-    assert _run(
-        "--blobs", str(corpus), "--set", "base", "--set-version", "1",
-        "--serial", "1", "--out", str(out),
-        "--secret-key", str(tmp_path / "k.key"), "--generate-key", "--quiet",
-    ).returncode == 0
+    assert (
+        _run(
+            "--blobs",
+            str(corpus),
+            "--set",
+            "base",
+            "--set-version",
+            "1",
+            "--serial",
+            "1",
+            "--out",
+            str(out),
+            "--secret-key",
+            str(tmp_path / "k.key"),
+            "--generate-key",
+            "--quiet",
+        ).returncode
+        == 0
+    )
     keys = [blob.key for blob in Manifest.read(out / "manifest.json").blobs]
     assert keys == ["libz/1.2.11/gcc-11-O2/x86_64"]
 
@@ -380,9 +408,20 @@ def test_the_blob_directory_holds_exactly_what_the_manifest_names(simple):
     """
     corpus, out, key = simple
     args = [
-        "--blobs", str(corpus), "--set", "base", "--set-version", "1",
-        "--serial", "1", "--out", str(out), "--secret-key", str(key),
-        "--generate-key", "--quiet",
+        "--blobs",
+        str(corpus),
+        "--set",
+        "base",
+        "--set-version",
+        "1",
+        "--serial",
+        "1",
+        "--out",
+        str(out),
+        "--secret-key",
+        str(key),
+        "--generate-key",
+        "--quiet",
     ]
     assert _run(*args).returncode == 0
 
@@ -400,9 +439,20 @@ def test_the_blob_directory_holds_exactly_what_the_manifest_names(simple):
 def test_a_narrower_rerun_prunes_what_it_no_longer_publishes(simple):
     corpus, out, key = simple
     base = [
-        "--blobs", str(corpus), "--set", "base", "--set-version", "1",
-        "--serial", "1", "--out", str(out), "--secret-key", str(key),
-        "--generate-key", "--quiet",
+        "--blobs",
+        str(corpus),
+        "--set",
+        "base",
+        "--set-version",
+        "1",
+        "--serial",
+        "1",
+        "--out",
+        str(out),
+        "--secret-key",
+        str(key),
+        "--generate-key",
+        "--quiet",
     ]
     assert _run(*base).returncode == 0
     assert len(list((out / "blobs").iterdir())) == 2

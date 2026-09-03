@@ -32,7 +32,7 @@ def isolated_cache(tmp_path, monkeypatch):
     return tmp_path / "cache"
 
 
-def _json(capsys, argv: list[str]) -> tuple[int, object]:
+def _json(capsys, argv: list[str]) -> tuple[int, dict]:
     code = main([*argv, "--json"])
     out = capsys.readouterr().out
     return code, json.loads(out)
