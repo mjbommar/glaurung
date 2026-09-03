@@ -1,6 +1,6 @@
 {
  "note": "Declared #[test] attributes per module. A declaration count, not an execution count -- see never_executed.",
- "total_declared": 3771,
+ "total_declared": 3772,
  "never_executed_total": 0,
  "never_executed": {},
  "solver_gated_estimate": 92,
@@ -17,7 +17,7 @@
   "flirt": 47,
   "formats": 99,
   "hashing": 4,
-  "identity": 267,
+  "identity": 268,
   "io": 10,
   "ir": 2027,
   "logging": 4,

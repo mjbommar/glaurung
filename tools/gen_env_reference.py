@@ -313,6 +313,8 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_WINDOWS_ANALYSIS_CONFIG": "Path to the Windows analysis config JSON (default project/pdb settings).",
     "GLAURUNG_LIVE_LLM": "Opt a test into a live LLM call instead of a recorded/mocked one.",
     "GLAURUNG_RUN_NETWORK_TESTS": "Opt a test into making real network calls.",
+    "GLAURUNG_SIG_NETWORK": "Opt a test into fetching real Debian/Ubuntu/Alpine sources for the signature harvester.",
+    "GLAURUNG_WINDOWS_CORPUS": "Directory holding Windows binaries/patch-tuesday corpora for the WARP library measurements.",
     # --- Python: fixture / decompiler-test harness ----------------------
     "GLAURUNG_FIXTURE_GO": "Enable the Go-toolchain lane of the decompiler fixture matrix (opt-in).",
     "GLAURUNG_FIXTURE_JOBS": "Parallelism for the decompiler fixture build/run.",
