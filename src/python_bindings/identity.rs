@@ -7,8 +7,9 @@
 //!
 //! # Section ownership
 //!
-//! This file is shared between the three identity lanes (`structural`, `warp`,
-//! `cfr`). Each keeps its additions inside its own clearly marked section, and
+//! This file is shared between the four identity lanes (`structural`, `warp`,
+//! `cfr`, `rerank`). Each keeps its additions inside its own clearly marked
+//! section, and
 //! [`register_identity_bindings`] registers each section's items in its own
 //! block, so two lanes adding functions at once is a trivial merge rather than
 //! a conflict in the middle of a function body.
@@ -593,6 +594,150 @@ fn register_cfr(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // ===========================================================================
+// SECTION: rerank -- owned by the identity/rerank lane
+// ===========================================================================
+
+/// Re-rank per-function candidate lists using call-graph and library context.
+///
+/// The RevDecode decode (`glaurung::identity::rerank`, USENIX Security 2025):
+/// a Viterbi pass over a layered graph whose layers are the query binary's
+/// unknown functions and whose nodes are each function's top-K candidates. It
+/// is **not a matcher** -- it takes candidate lists some other scheme produced
+/// and returns better-ordered ones, so every identifier below is an opaque
+/// integer the caller assigns.
+///
+/// Args:
+///     queries: One entry per unknown function, as
+///         ``(query_id, order_key, [(reference_id, similarity), ...])``.
+///         ``order_key`` fixes the layer order -- pass the entry VA, which is
+///         what the paper orders on. ``similarity`` must be in ``[0, 1]``.
+///     query_calls: ``(caller_query_id, callee_query_id)`` pairs in the query
+///         binary. A missing edge is *no evidence*, never evidence against, so
+///         an incomplete call graph degrades the result rather than corrupting
+///         it.
+///     reference_calls: the same, between reference-corpus functions.
+///     reference_groups: ``(reference_id, group_id)``. A group is a library, a
+///         package or any partition whose members a compiler would emit
+///         together. A reference function with no group earns no adjacency
+///         reward and no library score.
+///     top_k: candidates per layer. Ties at the boundary are all admitted.
+///     similarity_weight, confidence_weight, library_weight, adjacency_weight,
+///         call_weight: per-term weights on the edge.
+///     adjacency_same_group: the reward for two candidates from one library.
+///         RevDecode Alg. 1's constant.
+///     no_match_similarity: the score a candidate must beat to outrank "no
+///         match", or ``None`` to leave that node out.
+///     sigmoid: re-spread the similarities through a logistic before they enter
+///         the weight. The paper does this; our similarities are already in
+///         ``[0, 1]``, so it is off by default.
+///
+/// Returns:
+///     One ``(query_id, [(reference_id, score), ...])`` per query, best first.
+///     A ``reference_id`` of ``None`` is the "no match" node: candidates below
+///     it have less contextual support than an empty answer.
+///
+/// **Read the measured table in ``docs/reference/function-identity-rerank.md``
+/// before changing a weight.** The call-graph term never cost a rank in any
+/// measured cell; the provenance terms (``adjacency_weight``,
+/// ``library_weight``), which are the paper's own, cost several points of
+/// MRR10 on both of our corpora, so they default to on for fidelity to the
+/// paper and should be turned off for our schemes.
+#[pyfunction]
+#[pyo3(name = "rerank_candidates")]
+#[pyo3(signature = (
+    queries,
+    query_calls = Vec::new(),
+    reference_calls = Vec::new(),
+    reference_groups = Vec::new(),
+    top_k = 10usize,
+    similarity_weight = 1.0,
+    confidence_weight = 1.0,
+    library_weight = 1.0,
+    adjacency_weight = 1.0,
+    call_weight = 1.0,
+    adjacency_same_group = 0.7,
+    no_match_similarity = Some(0.0),
+    sigmoid = None,
+))]
+#[allow(clippy::too_many_arguments)]
+fn rerank_candidates(
+    queries: Vec<(u32, u64, Vec<(u32, f64)>)>,
+    query_calls: Vec<(u32, u32)>,
+    reference_calls: Vec<(u32, u32)>,
+    reference_groups: Vec<(u32, u32)>,
+    top_k: usize,
+    similarity_weight: f64,
+    confidence_weight: f64,
+    library_weight: f64,
+    adjacency_weight: f64,
+    call_weight: f64,
+    adjacency_same_group: f64,
+    no_match_similarity: Option<f64>,
+    sigmoid: Option<(f64, f64)>,
+) -> Vec<(u32, Vec<(Option<u32>, f64)>)> {
+    use crate::identity::rerank;
+
+    let layered: Vec<rerank::QueryFunction> = queries
+        .into_iter()
+        .map(|(id, order_key, candidates)| rerank::QueryFunction {
+            id,
+            order_key,
+            candidates: candidates
+                .into_iter()
+                .map(|(reference, similarity)| rerank::Candidate::new(reference, similarity))
+                .collect(),
+        })
+        .collect();
+
+    let mut context = rerank::CallContext::new();
+    for (caller, callee) in query_calls {
+        context.add_query_call(caller, callee);
+    }
+    for (caller, callee) in reference_calls {
+        context.add_reference_call(caller, callee);
+    }
+    for (reference, group) in reference_groups {
+        context.set_reference_group(reference, group);
+    }
+
+    let settings = rerank::RerankSettings {
+        top_k,
+        similarity_weight,
+        confidence_weight,
+        library_weight,
+        adjacency_weight,
+        call_weight,
+        adjacency_same_group,
+        no_match_similarity,
+        normalization: match sigmoid {
+            Some((centre, steepness)) => rerank::Normalization::Sigmoid { centre, steepness },
+            None => rerank::Normalization::Identity,
+        },
+    };
+
+    rerank::rerank(&layered, &context, &settings)
+        .layers
+        .into_iter()
+        .map(|layer| {
+            (
+                layer.query,
+                layer
+                    .ranked
+                    .into_iter()
+                    .map(|c| (c.reference, c.score))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// Register the re-rank post-pass on `analysis_mod`.
+fn register_rerank(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
+    analysis_mod.add_function(wrap_pyfunction!(rerank_candidates, analysis_mod)?)?;
+    Ok(())
+}
+
+// ===========================================================================
 // SECTION: registration
 // ===========================================================================
 
@@ -605,5 +750,6 @@ pub fn register_identity_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     register_structural(&analysis_mod)?;
     register_warp(&analysis_mod)?;
     register_cfr(&analysis_mod)?;
+    register_rerank(&analysis_mod)?;
     Ok(())
 }
