@@ -139,7 +139,7 @@ records per-archive outcomes and never treats an empty result as success.
 | 5 | Matcher correctness: ambiguity key, resolver wiring, load-once | in flight | `siglib/matcher-correctness` | blocking before any publish |
 | 6 | `gsig/1` format and loader | in flight | `siglib/gsig-format` | JSON kept as import/export |
 | 7 | Harvester v1: Debian, Ubuntu, Alpine | merged (integration line) | `b480e04c` | 14 network cells, 561 archives indexed, 140 MB fetched |
-| 8 | Distribution: manifest, minisign, client cache, CLI | in flight | `siglib/distribution` | dry-run publish only; the human creates the release |
+| 8 | Distribution: manifest, minisign, client cache, CLI | merged (integration line) | `e0597778` | signed content-addressed manifest, minisign dev key `FA6FDB763B3E76EF` (to be replaced before a real release), `glaurung sigs list\|fetch\|verify\|status\|path`, publish dry run at `~/.cache/glaurung/release/2026.09.1`: 292 blobs, 211 MB, commands printed and unrun; `data/sigs` now packaged in the wheel |
 | 9 | Consume mandiant/siglib via lancelot-flirt | queued | | optional feature |
 | 10 | MSVC via xwin/vcpkg | queued | | NOTICE review first |
 | 11 | Rust sysroot harvester; gopclntab path for Go | queued | | |
