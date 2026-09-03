@@ -463,9 +463,17 @@ corpus (`cfr_significance_is_bounded_by_self_significance`).
 |---|---|
 | `cfr_weight_table` | one row per frozen table: `weights_id`, the CFR version triple, the corpus size, `top_k` |
 | `feature_weight` | `(weights_id, feature_hash) -> (doc_count, weight)` |
-| `feature_vector` | one row per **distinct canonical form**, keyed by the CFR digest, with the packed `(u32 hash, u16 count)` blob, the norm under the table, and a refcount |
+| `feature_vector` | one row per **distinct canonical form**, keyed by the CFR digest, with the packed `(u32 hash, u16 count)` blob, its self-significance under the table, and a refcount |
 | `function_vector` | `(binary_id, entry_va) -> vector_id` |
 | `feature_posting` | `(feature_hash, vector_id)` for each vector's **32 rarest** features |
+
+Two deliberate departures from the proposal's column list, both stated in the
+module docstring: `vector_hash` is the CFR's own 64-hex digest rather than a
+second 64-bit integer that could collide, and the proposal's `norm` is
+`self_significance`, which is what BSim's own embedded backend stores
+(`H2VectorTable`: `VectorStoreEntry(id, vec, count, getSelfSignificance(vec))`)
+and what lets a thresholded query skip a stored vector without reading its
+features at all.
 
 **Deduplicated and refcounted** is BSim's `vectable.count` / `desctable.id_signature`
 split. It is a large saving on a library-heavy corpus and it is also the cheapest

@@ -16,7 +16,22 @@ and :func:`query_cfr` calls ``glaurung.analysis.cfr_confidence``, so a
 stored score and a score computed in memory cannot drift apart.
 
 The schema is section 4 of
-``docs/history/program-measures-2026-09-02/03-schema.sql``.
+``docs/history/program-measures-2026-09-02/03-schema.sql``, with two
+deliberate departures, both stated here rather than left to be
+discovered:
+
+* ``feature_vector.vector_hash`` is the CFR's own 64-hex BLAKE3 digest
+  rather than the proposal's ``INTEGER``. The digest is already computed,
+  already covers the version triple, and is what ``function_identity``
+  stores, so a second 64-bit hash would be a second thing that can
+  collide.
+* the proposal's ``norm`` column is ``self_significance`` here, because
+  that is what is actually useful to store and what BSim's own embedded
+  backend stores (``H2VectorTable``: ``VectorStoreEntry(id, vec, count,
+  vectorFactory.getSelfSignificance(vec))``). It is the ceiling on any
+  match to that vector, so a query with a significance threshold can skip
+  a stored vector without reading its features at all -- the pre-filter
+  Ghidra's ``queryFunctions`` runs.
 
 Deduplicated and refcounted
 ---------------------------
@@ -130,7 +145,7 @@ CREATE TABLE IF NOT EXISTS feature_vector (
     vector_hash TEXT NOT NULL UNIQUE,
     n_features  INTEGER NOT NULL,
     total_count INTEGER NOT NULL,
-    norm        REAL NOT NULL,
+    self_significance REAL NOT NULL,
     weights_id  TEXT NOT NULL,
     features    BLOB NOT NULL,
     refcount    INTEGER NOT NULL DEFAULT 0
@@ -369,16 +384,16 @@ def build_cfr_index(
             if row is not None:
                 vector_id = int(row[0])
             else:
-                norm = signature.self_significance(weights)
+                self_significance = signature.self_significance(weights)
                 cur.execute(
                     "INSERT INTO feature_vector "
-                    "(vector_hash, n_features, total_count, norm, weights_id, "
-                    " features, refcount) VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    "(vector_hash, n_features, total_count, self_significance, "
+                    " weights_id, features, refcount) VALUES (?, ?, ?, ?, ?, ?, 0)",
                     (
                         digest,
                         len(signature.features),
                         int(signature.total_count()),
-                        float(norm),
+                        float(self_significance),
                         weights_id,
                         encode_features(signature.features),
                     ),
