@@ -1000,6 +1000,25 @@ into a standing test.
 - [ ] Ratchet `SILENT_REGISTER_WRITERS` toward zero.
 - [ ] Ensure `Op::Unknown` and generic intrinsic totals cannot silently grow.
 
+### Implementation evidence - 2026-09-03 target-aware register reads
+
+The production SSA path now distinguishes definition identity from read
+identity. This fixes x86-64 partial reads such as `ax` observing the current
+`rax` value, carries the exact SSA base through value numbering and MIR storage
+inventory, and improves `cpp_template_int16:gcc:O2` from fail to pass without a
+scoped x86-64 regression.
+
+The required i386 sweep rejected an attempted standalone IA-32 register-view
+model with 241 regressions across 410 lanes. That experiment was removed and an
+explicit compatibility boundary retains historical i386 identity until the
+lifter and all downstream consumers migrate together. The attempt, focused and
+full-gate results, artifact hash, concurrent-worktree limitations, and remaining
+three unaccepted i386 baseline regressions are recorded in
+`results/wp9-target-aware-register-reads.md`.
+
+This is one bounded WP9 increment. It does not close the shared `MachineModel`,
+ARM32/VFP, capability-census, or whole-architecture exit criteria below.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.

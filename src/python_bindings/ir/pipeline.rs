@@ -359,9 +359,10 @@ fn normalize_definedness_and_compute_ssa(
     function: &mut crate::ir::types::LlirFunction,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     cc: crate::ir::call_args::CallConv,
+    target: crate::target::TargetSpec,
 ) -> crate::ir::ssa::SsaInfo {
     let graph = crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let initial_ssa = crate::ir::ssa::compute_ssa(&graph);
+    let initial_ssa = crate::ir::ssa::compute_ssa_for_target(&graph, target);
     let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, &initial_ssa, cc);
     if crate::ir::definedness::erase_unobserved_masked_inputs(function, &initial_ssa, &oracle) == 0
     {
@@ -369,7 +370,7 @@ fn normalize_definedness_and_compute_ssa(
     }
     let normalized_graph =
         crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    crate::ir::ssa::compute_ssa(&normalized_graph)
+    crate::ir::ssa::compute_ssa_for_target(&normalized_graph, target)
 }
 
 /// One shared LLIR preparation pipeline for every decompilation entry point.
@@ -486,7 +487,8 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     prepare_shadow_v2: bool,
 ) -> PreparedLlir {
-    let mut ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
+    let mut ssa =
+        normalize_definedness_and_compute_ssa(function, exception_sites, cc, *image.target());
     let provisional_slots = if recover_semantic_prototype {
         crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc).2
     } else {
@@ -528,7 +530,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     if prototype.as_ref().is_some_and(|prototype| {
         crate::ir::types_recover::materialize_return_values(function, cc, prototype) != 0
     }) {
-        ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
+        ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc, *image.target());
     }
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== prototype-resolved LLIR =====");
