@@ -59,6 +59,29 @@ def _load_publish_module():
     return module
 
 
+def _library_body(n: int, tag: str = "fn") -> str:
+    """A *real* masked-pattern library with ``n`` entries.
+
+    Not a placeholder: the publisher rewrites every blob as a ``gsig/1``
+    container through the Rust writer, so a body that is merely
+    JSON-shaped fails to convert. Using a real library here is also the
+    only way these tests can assert the published size, which is now the
+    container's size and not the JSON's.
+    """
+    entries = [
+        {"name": f"{tag}_{i:04d}", "prologue_hex": f"554889e5{i:08x}"} for i in range(n)
+    ]
+    return json.dumps(
+        {
+            "schema_version": "2",
+            "arch": "x86_64",
+            "prologue_len": 8,
+            "entries": entries,
+            "index": {},
+        }
+    )
+
+
 def _corpus(directory: Path, records: list[dict], bodies: dict[str, str]) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     for name, body in bodies.items():
@@ -104,9 +127,9 @@ def simple(tmp_path):
             _record("empty.flirt.json", library="empty", signatures=0),
         ],
         {
-            "libz.flirt.json": json.dumps({"entries": ["z"] * 109}),
-            "libm.flirt.json": json.dumps({"entries": ["m"] * 42}),
-            "empty.flirt.json": json.dumps({"entries": []}),
+            "libz.flirt.json": _library_body(109, "z"),
+            "libm.flirt.json": _library_body(42, "m"),
+            "empty.flirt.json": _library_body(0, "e"),
         },
     )
     return corpus, tmp_path / "out", tmp_path / "keys" / "k.key"
@@ -333,7 +356,7 @@ def test_a_dotted_library_name_survives_key_derivation(tmp_path):
     corpus = _corpus(
         tmp_path / "corpus",
         [record],
-        {"libm.flirt.json": json.dumps({"entries": ["m"] * 5})},
+        {"libm.flirt.json": _library_body(5, "m")},
     )
     out = tmp_path / "out"
     assert (
@@ -372,7 +395,7 @@ def test_the_archive_name_is_the_fallback_when_there_is_no_triplet(tmp_path):
     corpus = _corpus(
         tmp_path / "corpus",
         [record],
-        {"libz.flirt.json": json.dumps({"entries": ["z"] * 3})},
+        {"libz.flirt.json": _library_body(3, "z")},
     )
     out = tmp_path / "out"
     assert (
@@ -750,8 +773,8 @@ def test_a_key_collision_is_a_hard_failure(tmp_path):
             _record("b.flirt.json", library="libz", image="linux-arm64"),
         ],
         {
-            "a.flirt.json": json.dumps({"entries": ["a"], "built_on": "amd64"}),
-            "b.flirt.json": json.dumps({"entries": ["b"], "built_on": "arm64"}),
+            "a.flirt.json": _library_body(1, "amd64"),
+            "b.flirt.json": _library_body(1, "arm64"),
         },
     )
     result = _run(
@@ -782,8 +805,8 @@ def test_prefer_image_resolves_a_collision_deterministically(tmp_path):
             _record("b.flirt.json", library="libz", image="linux-arm64"),
         ],
         {
-            "a.flirt.json": json.dumps({"entries": ["a"], "built_on": "amd64"}),
-            "b.flirt.json": json.dumps({"entries": ["b"], "built_on": "arm64"}),
+            "a.flirt.json": _library_body(1, "amd64"),
+            "b.flirt.json": _library_body(1, "arm64"),
         },
     )
     out = tmp_path / "out"
@@ -812,13 +835,15 @@ def test_prefer_image_resolves_a_collision_deterministically(tmp_path):
         assert result.returncode == 0, result.stderr[-1000:]
         manifest = Manifest.read(out / "manifest.json")
         assert len(manifest.blobs) == 1
-        body = (out / "blobs" / manifest.blobs[0].sha256).read_text()
-        assert expected in body
+        # The published blob is a `gsig/1` container, so which source won is
+        # read off the provenance the manifest recorded rather than by
+        # grepping bytes.
+        assert manifest.blobs[0].provenance.image == f"linux-{expected}"
 
 
 def test_identical_bytes_under_one_key_deduplicate_instead_of_colliding(tmp_path):
     """The 26-43 percent cross-release overlap is free at the blob level."""
-    same = json.dumps({"entries": ["same"]})
+    same = _library_body(1, "same")
     corpus = _corpus(
         tmp_path / "corpus",
         [
@@ -1096,7 +1121,7 @@ def test_signature_refuses_if_blobs_changed_since_it_was_signed(simple, monkeypa
     monkeypatch.setenv(paths.ENV_KEYS_DIR, str(trusted_dir))
 
     # The corpus changes (a new library appears) before the second run.
-    (corpus / "extra.flirt.json").write_text(json.dumps({"entries": ["e"] * 20}))
+    (corpus / "extra.flirt.json").write_text(_library_body(20, "x"))
     index = json.loads((corpus / "index.json").read_text())
     index["libraries"].append(
         _record("extra.flirt.json", library="extra", signatures=20)

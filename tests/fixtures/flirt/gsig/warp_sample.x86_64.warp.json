@@ -1,0 +1,84 @@
+{
+  "entries": [
+    {
+      "ambiguous": false,
+      "base_name": "sample_add",
+      "block_count": 1,
+      "byte_len": 24,
+      "constraints": [],
+      "guid": "00062565-9d18-555b-835c-b886e4f81697",
+      "name": "sample_add",
+      "occurrences": 1
+    },
+    {
+      "ambiguous": true,
+      "base_name": "sample_scale",
+      "block_count": 4,
+      "byte_len": 197,
+      "constraints": [
+        {
+          "guid": "0e8af237-b832-5ff0-8810-775c54171f14",
+          "kind": "callee",
+          "offset": 0
+        },
+        {
+          "guid": "890825ad-f093-5365-bd4b-06f77b38d29d",
+          "kind": "caller",
+          "offset": null
+        },
+        {
+          "guid": "241faf34-5403-5c8c-a8f9-d82f9f3604df",
+          "kind": "adjacent",
+          "offset": 67
+        }
+      ],
+      "guid": "e6fa87c0-e14d-537a-8cca-5e7e5137be42",
+      "name": "sample_scale",
+      "occurrences": 1
+    },
+    {
+      "ambiguous": true,
+      "base_name": "sample_scale_alias",
+      "block_count": 4,
+      "byte_len": 197,
+      "constraints": [],
+      "guid": "e6fa87c0-e14d-537a-8cca-5e7e5137be42",
+      "name": "sample_scale_alias",
+      "occurrences": 2
+    },
+    {
+      "ambiguous": false,
+      "base_name": "sample_reduce",
+      "block_count": 12,
+      "byte_len": 4096,
+      "constraints": [],
+      "guid": "e710e8ce-8210-50f2-9c17-0e6371d0efe7",
+      "name": "sample_reduce",
+      "occurrences": 1
+    }
+  ],
+  "library": {
+    "arch": "x86_64",
+    "name": "warp_sample",
+    "platform": "windows",
+    "variant": "msvc-14.20-b27412",
+    "version": "1.0.0"
+  },
+  "schema_version": "1",
+  "scheme": "warp-function-guid-v1",
+  "sources": [
+    {
+      "functions": 4,
+      "named": 4,
+      "path": "warp_sample.dll",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "stats": {
+    "constraints_mode": "ambiguous",
+    "entries": 4,
+    "guids": 3,
+    "guids_ambiguous": 1,
+    "guids_unique": 2
+  }
+}

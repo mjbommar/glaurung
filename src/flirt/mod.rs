@@ -533,6 +533,20 @@ impl FlirtLibrary {
     }
 
     fn from_gsig_library(loaded: &gsig::GsigLibrary) -> Result<Self, gsig::GsigError> {
+        // A `gsig/1` container can hold either identity scheme, and a
+        // `GLAURUNG_SIG_DIR` holding a published set holds both. A WARP GUID
+        // library has no patterns and no `prologue_len`, so compiling one as
+        // a masked-pattern matcher yields an empty library with
+        // `prologue_len == 0` -- and [`library_for_paths`] takes its window
+        // length from the *first* file it loads, so one WARP blob sorting
+        // first would silently skip every real FLIRT library behind it.
+        // Refuse here instead; the caller skips the file and keeps the rest.
+        if loaded.scheme() != gsig::Scheme::FlirtMaskedPatternV1 {
+            return Err(gsig::GsigError::WrongScheme {
+                want: MASKED_PATTERN_SCHEME,
+                got: loaded.scheme().as_str(),
+            });
+        }
         let prologue_len = loaded.prologue_len();
         let mut signatures = Vec::with_capacity(loaded.records().len());
         for record in loaded.records() {
@@ -935,13 +949,22 @@ fn flirt_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
 /// catalog-aware selection (e.g. by architecture) can replace this once the
 /// cache holds enough sets that loading all of them stops being free.
 fn cache_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
+    /// The cache is flat: blobs named by sha256 alongside the client's own
+    /// bookkeeping. None of these is a signature library, and handing one to
+    /// the loader costs a parse and an error that can mask a real one.
+    const NOT_A_LIBRARY: [&str; 3] = ["catalog.json", "manifest.json", "manifest.json.minisig"];
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_file() && p.file_name().and_then(|n| n.to_str()) != Some("catalog.json"))
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_none_or(|n| !NOT_A_LIBRARY.contains(&n))
+        })
         .collect();
     out.sort();
     out
@@ -956,7 +979,10 @@ fn cache_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
 /// 2. `GLAURUNG_SIG_DIR` -- every `*.flirt.json` and `*.gsig` in that
 ///    directory, merged (see [`flirt_files_in`]).
 /// 3. `~/.cache/glaurung/sigs/` -- the client download cache, read by
-///    [`cache_files_in`]: every file in the directory except `catalog.json`.
+///    [`cache_files_in`]: every file in the directory except the client's own
+///    bookkeeping. A cached set holds both identity schemes, and a WARP GUID
+///    blob is skipped by [`library_for_paths`] rather than compiled to an
+///    empty matcher.
 /// 4. The packaged `data/sigs/` ([`set_packaged_sig_dir`]), else `data/sigs/`
 ///    relative to the cwd, which is what a checkout has and what every
 ///    existing caller relied on.
@@ -1097,7 +1123,9 @@ impl From<LoadError> for LibraryLoadError {
 /// "library at this path" and gets an `Arc<FlirtLibrary>`, and dispatching on
 /// the file's magic happens here rather than in the analysis pass. Nothing
 /// outside this function needs to learn a second format.
-pub fn library_for(path: &std::path::Path) -> Result<std::sync::Arc<FlirtLibrary>, LibraryLoadError> {
+pub fn library_for(
+    path: &std::path::Path,
+) -> Result<std::sync::Arc<FlirtLibrary>, LibraryLoadError> {
     library_for_paths(std::slice::from_ref(&path.to_path_buf()))
 }
 
@@ -1449,13 +1477,7 @@ fn relocated_field_offset(data: &[u8], off: usize) -> Option<u32> {
 /// An ambiguous match renames nothing: `set_by=flirt` outranks `auto`, so a
 /// coin flip here is strictly worse than leaving the placeholder in place.
 pub fn apply_flirt_overrides(data: &[u8], functions: &mut [Function], lib: &FlirtLibrary) -> usize {
-    apply_flirt_overrides_with_refs(
-        data,
-        functions,
-        lib,
-        std::iter::empty(),
-        &HashMap::new(),
-    )
+    apply_flirt_overrides_with_refs(data, functions, lib, std::iter::empty(), &HashMap::new())
 }
 
 /// [`apply_flirt_overrides`] with FLIRT's referenced-name level wired in.
@@ -2144,7 +2166,10 @@ mod tests {
             .iter()
             .map(|g| g.iter().map(|i| file.entries[*i].name.as_str()).collect())
             .collect();
-        assert!(named.is_empty(), "{path:?} holds indistinguishable entries: {named:?}");
+        assert!(
+            named.is_empty(),
+            "{path:?} holds indistinguishable entries: {named:?}"
+        );
     }
 
     // -- reference sites -----------------------------------------------------
@@ -2154,11 +2179,20 @@ mod tests {
         // e8 <rel32>: the relocation covers bytes 1..5.
         assert_eq!(relocated_field_offset(&[0xe8, 0, 0, 0, 0], 0), Some(1));
         // 48 e8 ...: a REX prefix shifts it.
-        assert_eq!(relocated_field_offset(&[0x48, 0xe8, 0, 0, 0, 0], 0), Some(2));
+        assert_eq!(
+            relocated_field_offset(&[0x48, 0xe8, 0, 0, 0, 0], 0),
+            Some(2)
+        );
         // 0f 84 <rel32>: jcc.
-        assert_eq!(relocated_field_offset(&[0x0f, 0x84, 0, 0, 0, 0], 0), Some(2));
+        assert_eq!(
+            relocated_field_offset(&[0x0f, 0x84, 0, 0, 0, 0], 0),
+            Some(2)
+        );
         // ff 15 <disp32>: an indirect call through a RIP-relative slot.
-        assert_eq!(relocated_field_offset(&[0xff, 0x15, 0, 0, 0, 0], 0), Some(2));
+        assert_eq!(
+            relocated_field_offset(&[0xff, 0x15, 0, 0, 0, 0], 0),
+            Some(2)
+        );
         // A fixed-width instruction word is its own field; the caller then
         // uses the raw offset.
         assert_eq!(relocated_field_offset(&[0x94, 0x00, 0x00, 0x00], 0), None);
@@ -2209,9 +2243,8 @@ mod tests {
         let sites = FlirtReferenceSites::from_call_sites(&[], [(0x1000, 0x1010, 0x2000)]);
         let mut names: HashMap<u64, String> = HashMap::new();
         names.insert(0x2000, "helper_b".to_string());
-        let resolve = |offset: u32| -> Option<String> {
-            names.get(&sites.target(0x1000, offset)?).cloned()
-        };
+        let resolve =
+            |offset: u32| -> Option<String> { names.get(&sites.target(0x1000, offset)?).cloned() };
         // The site is at offset 0x10 = 16, which is where both signatures
         // record their reference.
         let data = [0x55u8, 0x48, 0x89, 0xe5];
@@ -2371,5 +2404,80 @@ mod tests {
         let merged = library_for_paths(&[four, also_four, eight]).unwrap();
         assert_eq!(merged.prologue_len, 4);
         assert_eq!(merged.signature_count(), 2);
+    }
+
+    /// A published set holds both identity schemes, and `GLAURUNG_SIG_DIR`
+    /// hands the FLIRT loader every `*.gsig` in it. A WARP GUID library has
+    /// no patterns, so it compiles to an empty matcher with `prologue_len`
+    /// zero -- and the merge takes its window length from the *first* file it
+    /// loads. Sorted by name, `a-guids.gsig` comes first, so before
+    /// `from_gsig_library` checked the scheme this test's FLIRT library was
+    /// silently skipped and the matcher was empty.
+    #[test]
+    fn merging_skips_a_warp_blob_and_still_loads_the_flirt_libraries() {
+        use crate::flirt::gsig::{
+            warp_library_to_gsig, WarpEntry, WarpLibraryFile, WarpLibraryKey, WriteOptions,
+        };
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let guids = dir.join("a-guids.gsig");
+        let patterns = dir.join("z-patterns.flirt.json");
+        let warp = WarpLibraryFile {
+            schema_version: "1".to_string(),
+            scheme: crate::identity::warp::SCHEME.to_string(),
+            library: WarpLibraryKey {
+                name: "afd.sys".to_string(),
+                version: "10.0.19041.1766".to_string(),
+                variant: "msvc-14.20-b27412".to_string(),
+                arch: "x86_64".to_string(),
+                platform: Some("windows".to_string()),
+            },
+            sources: serde_json::Value::Null,
+            stats: serde_json::Value::Null,
+            entries: vec![WarpEntry {
+                guid: "00062565-9d18-555b-835c-b886e4f81697".to_string(),
+                name: "AfdEnqueueTPacketsIrp".to_string(),
+                base_name: "AfdEnqueueTPacketsIrp".to_string(),
+                block_count: 9,
+                byte_len: 197,
+                occurrences: 1,
+                ambiguous: false,
+                constraints: Vec::new(),
+            }],
+        };
+        std::fs::write(
+            &guids,
+            warp_library_to_gsig(&warp, &WriteOptions::default()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &patterns,
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":4,
+                "entries":[{"name":"a","prologue_hex":"f30f1efa"}],"index":{}}"#,
+        )
+        .unwrap();
+        let merged = library_for_paths(&[guids.clone(), patterns]).unwrap();
+        assert_eq!(merged.prologue_len, 4);
+        assert_eq!(merged.signature_count(), 1);
+
+        // And on its own it is an error, not an empty library that would
+        // report "no signatures matched" forever.
+        assert!(library_for_paths(&[guids]).is_err());
+    }
+
+    /// The download cache is flat -- sha256-named blobs beside the client's
+    /// own `catalog.json`, `manifest.json` and `manifest.json.minisig` -- and
+    /// none of the latter three is a signature library. Handing one to the
+    /// loader costs a parse and records an error that can mask a real one.
+    #[test]
+    fn the_cache_reader_skips_the_clients_own_bookkeeping() {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        for name in ["catalog.json", "manifest.json", "manifest.json.minisig"] {
+            std::fs::write(dir.join(name), b"{}").unwrap();
+        }
+        let blob = dir.join("a".repeat(64));
+        std::fs::write(&blob, b"{}").unwrap();
+        assert_eq!(cache_files_in(dir), vec![blob]);
     }
 }

@@ -27,6 +27,27 @@ def _human(size: int) -> str:
     return f"{value:.1f} GiB"
 
 
+def _scheme_rollup(rows: list[dict[str, Any]]) -> list[str]:
+    """`N blob(s), M signature(s)` per identity scheme, for the plain output.
+
+    A published set is not one kind of thing: masked FLIRT patterns and
+    exact-match WARP GUIDs ship side by side, index differently, and are used
+    by different code paths. Reporting only a grand total hides which of the
+    two a fetch actually delivered.
+    """
+    if len({row["kind"] for row in rows}) < 2:
+        return []
+    totals: dict[str, tuple[int, int]] = {}
+    for row in rows:
+        blobs, sigs = totals.get(row["kind"], (0, 0))
+        totals[row["kind"]] = (blobs + 1, sigs + int(row["signatures"]))
+    out = ["", "by scheme:"]
+    for kind in sorted(totals):
+        blobs, sigs = totals[kind]
+        out.append(f"  {kind:<34}{blobs:>6} blob(s){sigs:>10} signature(s)")
+    return out
+
+
 class SigsCommand(BaseCommand):
     """Manage the signed, content-addressed signature-library cache."""
 
@@ -232,13 +253,13 @@ class SigsCommand(BaseCommand):
         lines = [
             f"set {manifest.set_name} {manifest.set_version} "
             f"(serial {manifest.serial}, from {source})",
-            f"{'':<2}{'KEY':<48}{'SIGS':>8}{'SIZE':>12}  ARCH",
+            f"{'':<2}{'KEY':<48}{'SIGS':>8}{'SIZE':>12}  {'ARCH':<10}KIND",
         ]
         for row in rows:
             mark = "*" if row["cached"] else " "
             lines.append(
                 f"{mark} {row['key']:<48}{row['signatures']:>8}"
-                f"{_human(row['size_bytes']):>12}  {row['arch']}"
+                f"{_human(row['size_bytes']):>12}  {row['arch']:<10}{row['kind']}"
             )
         cached_count = sum(1 for row in rows if row["cached"])
         lines.append("")
@@ -246,6 +267,11 @@ class SigsCommand(BaseCommand):
             f"{len(rows)} blob(s), {cached_count} cached "
             f"(* = present locally). Cache root: {root}"
         )
+        # A set holds more than one identity scheme -- masked FLIRT patterns
+        # and exact-match WARP GUIDs -- and they are consumed by different
+        # code paths, so "how many of each did I get" is the first question a
+        # reader of this table has.
+        lines.extend(_scheme_rollup(rows))
         formatter.output_plain("\n".join(lines))
         return 0
 
@@ -257,6 +283,23 @@ class SigsCommand(BaseCommand):
             only=args.only,
             timeout=args.timeout,
         )
+        # A set spans identity schemes, and a caller has to know which ones it
+        # now holds: a WARP GUID blob is ingested into the knowledge base,
+        # while a masked-pattern blob is loaded by the FLIRT matcher, and the
+        # two never substitute for each other.
+        present = set(result.downloaded) | set(result.already_cached)
+        rows = [
+            {"kind": blob.kind, "signatures": blob.signatures}
+            for blob in result.manifest.blobs
+            if blob.key in present
+        ]
+        by_scheme: dict[str, dict[str, int]] = {}
+        for row in rows:
+            entry = by_scheme.setdefault(
+                str(row["kind"]), {"blobs": 0, "signatures": 0}
+            )
+            entry["blobs"] += 1
+            entry["signatures"] += int(row["signatures"])
         payload = {
             "set": result.manifest.set_name,
             "set_version": result.manifest.set_version,
@@ -268,6 +311,7 @@ class SigsCommand(BaseCommand):
             "already_cached": result.already_cached,
             "skipped": result.skipped,
             "bytes_downloaded": result.bytes_downloaded,
+            "by_scheme": by_scheme,
             "warnings": result.warnings,
         }
         if formatter.format_type in (OutputFormat.JSON, OutputFormat.JSONL):
@@ -285,6 +329,7 @@ class SigsCommand(BaseCommand):
         ]
         if result.skipped:
             lines.append(f"  skipped    {len(result.skipped)} blob(s)")
+        lines.extend(_scheme_rollup(rows))
         for warning in result.warnings:
             lines.append(f"  warning:   {warning}")
         formatter.output_plain("\n".join(lines))

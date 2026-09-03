@@ -17,7 +17,8 @@ use std::path::Path;
 
 use super::codec::decompress_into;
 use super::wire::{
-    string_at, unpack_bitmap, IndexKind, WireIndexBucket, WireMeta, WireRecord, FLAG_HAS_CRC16,
+    string_at, unpack_bitmap, unpack_constraint, IndexKind, WireGuidRecord, WireIndexBucket,
+    WireMeta, WireRecord, CONSTRAINT_LEN, FLAG_GUID_AMBIGUOUS, FLAG_HAS_CRC16,
     FLAG_HAS_FUNCTION_LEN, FLAG_HAS_MASK, NO_STRING,
 };
 use super::{
@@ -52,6 +53,44 @@ pub struct GsigRecord {
     pub n_refs: u32,
 }
 
+/// One WARP constraint, as the container stores it.
+///
+/// `kind` is a string id rather than an enum: a constraint kind a future
+/// producer invents must survive a round trip through a reader that has never
+/// heard of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GsigConstraint {
+    /// The constraint GUID.
+    pub guid: u128,
+    /// String id of the kind (`callee`, `caller`, `adjacent`, ...).
+    pub kind: u32,
+    /// Byte offset, when the kind carries one. `None` is not `Some(0)`.
+    pub offset: Option<i64>,
+}
+
+/// One exact-match GUID record, inflated.
+///
+/// The [`super::Scheme::WarpFunctionGuidV1`] counterpart of [`GsigRecord`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GsigGuidRecord {
+    /// The function GUID.
+    pub guid: u128,
+    /// String id of the function name.
+    pub name: u32,
+    /// String id of the base name.
+    pub base_name: u32,
+    /// Basic blocks the GUID was computed over.
+    pub block_count: u32,
+    /// The function's length in bytes.
+    pub byte_len: u64,
+    /// How many times the producer saw this `(guid, name)` pair.
+    pub occurrences: u32,
+    /// Whether the producer judged this GUID ambiguous within the library.
+    pub ambiguous: bool,
+    /// The constraints this record claimed, in the producer's order.
+    pub constraints: Vec<GsigConstraint>,
+}
+
 /// A loaded `.gsig`.
 ///
 /// The match indices are **rebuilt at load**, not serialised: `fast-flirt`
@@ -72,6 +111,9 @@ pub struct GsigLibrary {
     refs: Box<[(u32, u32)]>,
     /// Sorted `(guid, string id)`, for [`Scheme::WarpFunctionGuidV1`].
     by_guid: Option<Box<[(u128, u32)]>>,
+    /// The GUID records, in the producer's order — parallel to the Guids
+    /// section, not to the sorted [`Self::by_guid`].
+    guid_records: Box<[GsigGuidRecord]>,
     /// First fixed pattern byte to record indices. Records whose first byte
     /// is variant are in [`Self::always_try`] instead.
     by_first_byte: HashMap<u8, Vec<u32>>,
@@ -228,10 +270,20 @@ impl GsigLibrary {
         let mask_base = spans[&(ChunkKind::Masks as u8)].off;
         let mask_cap = spans[&(ChunkKind::Masks as u8)].len;
 
-        let mut records = Vec::with_capacity(header.n_signatures as usize);
+        // A GUID library's `n_signatures` counts *its* records, which live in
+        // the GuidRecords section; its Signatures section is empty. Walking
+        // the masked-pattern stream `n_signatures` times would fail on the
+        // first `take_from_bytes`, so dispatch on the scheme first -- which
+        // is the whole reason the header carries one.
+        let n_masked = if header.scheme == Scheme::WarpFunctionGuidV1 {
+            0
+        } else {
+            header.n_signatures
+        };
+        let mut records = Vec::with_capacity(n_masked as usize);
         let mut rest: &[u8] = spans[&(ChunkKind::Signatures as u8)].slice(&arena);
         let (mut pat_at, mut mask_at, mut ref_at) = (0usize, 0usize, 0u32);
-        for i in 0..header.n_signatures {
+        for i in 0..n_masked {
             let (wire, tail) = postcard::take_from_bytes::<WireRecord>(rest)
                 .map_err(|e| GsigError::Decode(format!("record {i}: {e}")))?;
             rest = tail;
@@ -282,6 +334,57 @@ impl GsigLibrary {
             return Err(GsigError::RecordOverrun(header.n_signatures, "refs"));
         }
 
+        // ---- guid records ----------------------------------------------
+        // Parallel to the Guids section and consuming the Constraints
+        // section in order, exactly as the masked records consume Patterns
+        // and Refs. An older GUID library (written by `write_guid_library`,
+        // which stores only `(guid, name)`) carries no GuidRecords section at
+        // all and lands here as an empty list rather than an error.
+        let record_span = &spans[&(ChunkKind::GuidRecords as u8)];
+        let constraint_bytes = spans[&(ChunkKind::Constraints as u8)].slice(&arena);
+        let guid_pairs = spans[&(ChunkKind::Guids as u8)].slice(&arena);
+        let mut guid_records: Vec<GsigGuidRecord> = Vec::new();
+        if record_span.len > 0 {
+            let mut rest: &[u8] = record_span.slice(&arena);
+            let mut at = 0usize;
+            let mut i = 0u32;
+            while !rest.is_empty() {
+                let (wire, tail) = postcard::take_from_bytes::<WireGuidRecord>(rest)
+                    .map_err(|e| GsigError::Decode(format!("guid record {i}: {e}")))?;
+                rest = tail;
+                let start = (i as usize) * 20;
+                if start + 20 > guid_pairs.len() {
+                    return Err(GsigError::RecordOverrun(i, "guids"));
+                }
+                let mut raw = [0u8; 16];
+                raw.copy_from_slice(&guid_pairs[start..start + 16]);
+                let n = wire.n_constraints as usize;
+                let need = n * CONSTRAINT_LEN;
+                if at + need > constraint_bytes.len() {
+                    return Err(GsigError::RecordOverrun(i, "constraints"));
+                }
+                let constraints = constraint_bytes[at..at + need]
+                    .chunks_exact(CONSTRAINT_LEN)
+                    .map(|c| {
+                        let (guid, kind, offset) = unpack_constraint(c);
+                        GsigConstraint { guid, kind, offset }
+                    })
+                    .collect();
+                at += need;
+                guid_records.push(GsigGuidRecord {
+                    guid: u128::from_le_bytes(raw),
+                    name: wire.name,
+                    base_name: wire.base_name,
+                    block_count: wire.block_count,
+                    byte_len: wire.byte_len,
+                    occurrences: wire.occurrences,
+                    ambiguous: wire.flags & FLAG_GUID_AMBIGUOUS != 0,
+                    constraints,
+                });
+                i += 1;
+            }
+        }
+
         // ---- guids -----------------------------------------------------
         let guid_span = &spans[&(ChunkKind::Guids as u8)];
         let by_guid = (guid_span.len > 0).then(|| {
@@ -327,6 +430,7 @@ impl GsigLibrary {
             records: records.into_boxed_slice(),
             refs: refs.into_boxed_slice(),
             by_guid,
+            guid_records: guid_records.into_boxed_slice(),
             by_first_byte: HashMap::new(),
             always_try: Vec::new(),
             schema_version,
@@ -382,6 +486,25 @@ impl GsigLibrary {
     /// The parsed header.
     pub fn header(&self) -> &GsigHeader {
         &self.header
+    }
+
+    /// The exact-match GUID records, in the producer's order.
+    ///
+    /// Empty for a masked-pattern library, and for a GUID library written by
+    /// [`super::write_guid_library`], which stores only `(guid, name)` and no
+    /// record stream.
+    pub fn guid_records(&self) -> &[GsigGuidRecord] {
+        &self.guid_records
+    }
+
+    /// The WARP envelope this file's meta record carries: `platform`,
+    /// `sources` and `stats`.
+    pub(super) fn warp_envelope(&self) -> Result<super::warp::WarpEnvelope, GsigError> {
+        if self.stats.is_null() {
+            return Ok(super::warp::WarpEnvelope::default());
+        }
+        serde_json::from_value(self.stats.clone())
+            .map_err(|e| GsigError::Decode(format!("warp envelope: {e}")))
     }
 
     /// The exact architecture string the JSON carried.

@@ -457,6 +457,56 @@ surfaces. The matcher (`FlirtLibrary::from_path`, and every Python entry point
 that takes a library path) dispatches on the file's first four bytes, so a
 caller never has to say which format it is holding.
 
+### The second scheme: `warp-function-guid-v1` blobs
+
+Added 2026-09-03, for the published set: a `gsig/1` container carries **either**
+identity scheme, and the header's `scheme` field says which. The two share the
+header, the chunk table and the interned string table, and nothing else --
+a masked pattern is a *filter* that still needs a CRC and referenced names to
+resolve, while a WARP GUID is a plain equality key. A GUID library fills three
+sections and leaves Signatures, Patterns, Masks and Refs empty:
+
+| Section | Kind | Encoding |
+|---|---|---|
+| `guids` | 6 | `(u128 guid, u32 name string id)`, 20 bytes each, in the producer's record order |
+| `guid_records` | 8 | `postcard` `WireGuidRecord`: name and base name (string ids), `block_count`, `byte_len`, `occurrences`, an ambiguity flag, and how many constraints it claims |
+| `constraints` | 9 | 28 bytes each: `u128` GUID, `u32` kind string id, `i64` offset with `i64::MIN` meaning **absent** |
+
+Three details are load-bearing.
+
+* `offset` is `Option<i64>`, not `i64`. A `callee` constraint at offset 0 and a
+  `caller` constraint with no offset are different facts, and 39,175 of the
+  corpus's 368,870 entries carry constraints at all.
+* The library's `platform`, `sources` and `stats` ride in the meta record's
+  `stats_json` envelope rather than as new `WireMeta` fields. Adding a field to
+  `WireMeta` would change the `postcard` encoding of *every* library including
+  every masked-pattern one, and `tests/flirt_gsig_golden.rs` exists to stop
+  exactly that. The FLIRT golden hash is unchanged by this work.
+* Entries keep the producer's order rather than being sorted by GUID. The
+  reader sorts its own lookup array at load and never trusts a producer's
+  ordering for correctness, which is what lets the writer stay lossless for any
+  input order -- and a lossy round trip is not a round trip.
+
+`python -m glaurung.tools.sig_convert --scheme {auto,flirt,warp}` handles both;
+`auto` reads the container header, or a JSON library's top-level `scheme` key,
+which only the WARP builder writes. `glaurung.analysis.warp_gsig_write_from_json_str`
+and `warp_library_to_json_str` are the Python surfaces, and
+`glaurung.llm.kb.siglib.ingest_warp_library_file` accepts either format.
+
+**Reading a container under the wrong scheme is an error, never an empty
+result.** `FlirtLibrary::from_gsig_library` refuses anything that is not
+`flirt-masked-pattern-v1` and `warp_library_from_gsig` refuses anything that is
+not `warp-function-guid-v1`. That is not defensiveness: a WARP library read as
+FLIRT compiles to an empty matcher with `prologue_len == 0`, and
+`library_for_paths` takes its window length from the *first* file it loads --
+so one WARP blob sorting first in a `GLAURUNG_SIG_DIR` would have silently
+skipped every real library behind it. An empty signature library is
+indistinguishable from a legitimately empty harvest, which is the worst failure
+mode a signature corpus has.
+
+The golden fixtures for both schemes are in `tests/fixtures/flirt/gsig/`; the
+WARP one is deliberately synthetic, and its README says why.
+
 ### Crates
 
 Verified against the crates.io API on 2026-09-03 (see

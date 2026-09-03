@@ -59,6 +59,86 @@ pub struct WireRecord {
     pub n_refs: u32,
 }
 
+/// `flags` bit on a [`WireGuidRecord`]: the GUID names more than one function
+/// in this library, so a match on it alone resolves nothing.
+///
+/// Kept as a flag rather than derived from the Guids section at load, because
+/// the producer's own judgement is the evidence: `ingest_warp_library_file`
+/// files an ambiguous entry deliberately, so that a *later* single-named
+/// library cannot claim the GUID unopposed.
+pub const FLAG_GUID_AMBIGUOUS: u8 = 1 << 0;
+
+/// The `offset` sentinel meaning "this constraint records no offset".
+///
+/// WARP's `caller` and `adjacent` constraints carry `null` where a `callee`
+/// carries a byte offset, and `null` is not zero: a callee at offset 0 is a
+/// different fact from a caller with no offset at all.
+pub const NO_CONSTRAINT_OFFSET: i64 = i64::MIN;
+
+/// One exact-match GUID record, on the wire — [`super::Scheme::WarpFunctionGuidV1`].
+///
+/// The GUID itself is **not** here: it lives in the Guids section, 16 bytes
+/// wide and sorted, so the reader can binary search it in place without
+/// walking a `postcard` stream. This struct is the parallel array of
+/// everything else, in the same order, exactly as [`WireRecord`] is parallel
+/// to the Patterns section.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireGuidRecord {
+    /// String id of the function name.
+    pub name: u32,
+    /// String id of the demangled or de-suffixed base name. Interned
+    /// separately rather than derived, because the producer's rule for it is
+    /// not reproducible from the mangled name alone.
+    pub base_name: u32,
+    /// How many basic blocks the function's GUID was computed over. This is
+    /// the `n_units` a `siglib_function` row records.
+    pub block_count: u32,
+    /// The function's length in bytes.
+    pub byte_len: u64,
+    /// How many times the producer saw this `(guid, name)` pair.
+    pub occurrences: u32,
+    /// [`FLAG_GUID_AMBIGUOUS`].
+    pub flags: u8,
+    /// How many entries this record claims from the Constraints section.
+    pub n_constraints: u32,
+}
+
+/// Bytes one constraint occupies in the Constraints section.
+///
+/// Fixed width, like Refs and Guids: `guid` (16, little-endian `u128`),
+/// `kind` (4, string id), `offset` (8, little-endian `i64`, or
+/// [`NO_CONSTRAINT_OFFSET`]).
+pub const CONSTRAINT_LEN: usize = 28;
+
+/// Pack one constraint into its [`CONSTRAINT_LEN`] bytes.
+pub fn pack_constraint(guid: u128, kind: u32, offset: Option<i64>) -> [u8; CONSTRAINT_LEN] {
+    let mut out = [0u8; CONSTRAINT_LEN];
+    out[..16].copy_from_slice(&guid.to_le_bytes());
+    out[16..20].copy_from_slice(&kind.to_le_bytes());
+    out[20..28].copy_from_slice(&offset.unwrap_or(NO_CONSTRAINT_OFFSET).to_le_bytes());
+    out
+}
+
+/// Unpack one [`CONSTRAINT_LEN`]-byte constraint.
+///
+/// # Panics
+///
+/// If `bytes` is shorter than [`CONSTRAINT_LEN`]. Callers slice with
+/// `chunks_exact(CONSTRAINT_LEN)`, which cannot produce a short tail.
+pub fn unpack_constraint(bytes: &[u8]) -> (u128, u32, Option<i64>) {
+    let mut guid = [0u8; 16];
+    guid.copy_from_slice(&bytes[..16]);
+    let kind = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let raw = i64::from_le_bytes([
+        bytes[20], bytes[21], bytes[22], bytes[23], bytes[24], bytes[25], bytes[26], bytes[27],
+    ]);
+    (
+        u128::from_le_bytes(guid),
+        kind,
+        (raw != NO_CONSTRAINT_OFFSET).then_some(raw),
+    )
+}
+
 /// Library-level metadata: the one thing in the file that is not per record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireMeta {
@@ -270,5 +350,36 @@ mod tests {
         let (back, rest) = postcard::take_from_bytes::<WireRecord>(&bytes).unwrap();
         assert_eq!(back, record);
         assert!(rest.is_empty());
+    }
+
+    /// The same pin for the GUID record. Its field order and varint widths
+    /// are as load-bearing as [`WireRecord`]'s: a drift here silently
+    /// invalidates every published WARP blob.
+    #[test]
+    fn a_guid_record_encodes_to_the_expected_bytes() {
+        let record = WireGuidRecord {
+            name: 3,
+            base_name: 3,
+            block_count: 9,
+            byte_len: 197,
+            occurrences: 1,
+            flags: FLAG_GUID_AMBIGUOUS,
+            n_constraints: 2,
+        };
+        let bytes = postcard::to_stdvec(&record).unwrap();
+        assert_eq!(bytes, vec![0x03, 0x03, 0x09, 0xc5, 0x01, 0x01, 0x01, 0x02]);
+        let (back, rest) = postcard::take_from_bytes::<WireGuidRecord>(&bytes).unwrap();
+        assert_eq!(back, record);
+        assert!(rest.is_empty());
+    }
+
+    /// `null` and `0` are different facts, so the sentinel must survive.
+    #[test]
+    fn a_constraint_round_trips_including_the_absent_offset() {
+        for offset in [Some(0i64), Some(67), Some(-1), None] {
+            let packed = pack_constraint(0x0192_a179u128, 7, offset);
+            assert_eq!(packed.len(), CONSTRAINT_LEN);
+            assert_eq!(unpack_constraint(&packed), (0x0192_a179u128, 7, offset));
+        }
     }
 }

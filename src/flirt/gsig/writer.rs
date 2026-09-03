@@ -9,9 +9,11 @@
 use std::collections::HashMap;
 
 use super::codec::Encoder;
+use super::warp::WarpLibraryFile;
 use super::wire::{
-    pack_bitmap, IndexKind, StringTableBuilder, WireIndexBucket, WireMeta, WireRecord,
-    FLAG_HAS_CRC16, FLAG_HAS_FUNCTION_LEN, FLAG_HAS_MASK, NO_STRING,
+    pack_bitmap, pack_constraint, IndexKind, StringTableBuilder, WireGuidRecord, WireIndexBucket,
+    WireMeta, WireRecord, FLAG_GUID_AMBIGUOUS, FLAG_HAS_CRC16, FLAG_HAS_FUNCTION_LEN,
+    FLAG_HAS_MASK, NO_STRING,
 };
 use super::{
     Arch, ChunkEntry, ChunkKind, GsigError, GsigHeader, Scheme, CHUNK_ENTRY_LEN, CHUNK_SIZE,
@@ -201,6 +203,8 @@ struct Sections {
     refs: Vec<u8>,
     guids: Vec<u8>,
     index: Vec<u8>,
+    guid_records: Vec<u8>,
+    constraints: Vec<u8>,
 }
 
 impl Sections {
@@ -214,6 +218,8 @@ impl Sections {
             ChunkKind::Refs => &self.refs,
             ChunkKind::Guids => &self.guids,
             ChunkKind::Index => &self.index,
+            ChunkKind::GuidRecords => &self.guid_records,
+            ChunkKind::Constraints => &self.constraints,
         }
     }
 }
@@ -429,6 +435,128 @@ pub fn write_guid_library(
         arch: Arch::from_name(arch),
         scheme: Scheme::WarpFunctionGuidV1,
         n_signatures: 0,
+        n_strings: u32::try_from(strings.len())
+            .map_err(|_| GsigError::TooLarge("strings", strings.len()))?,
+        dict_id: options.dict_id,
+        chunk_count: 0,
+        header_len: HEADER_LEN as u32,
+    };
+    assemble(header, &sections, options)
+}
+
+/// Serialize a WARP function-GUID library — [`Scheme::WarpFunctionGuidV1`].
+///
+/// The same container as the masked-pattern path, different sections: no
+/// patterns, no masks, no CRCs. The Guids section holds `(guid, name string
+/// id)` in **record order**, `GuidRecords` holds the parallel `postcard`
+/// stream, and `Constraints` holds fixed-width triples the records claim in
+/// order. The reader sorts its own lookup array at load, so a producer's
+/// ordering is never trusted for correctness — which is what lets this writer
+/// preserve the producer's entry order and stay lossless.
+pub fn write_warp_library(
+    file: &WarpLibraryFile,
+    options: &WriteOptions,
+) -> Result<Vec<u8>, GsigError> {
+    let mut table = StringTableBuilder::default();
+    table.add("");
+    table.add(&file.schema_version);
+    for field in [
+        &file.library.name,
+        &file.library.version,
+        &file.library.variant,
+        &file.library.arch,
+    ] {
+        table.add(field);
+    }
+    for entry in &file.entries {
+        table.add(&entry.name);
+        table.add(&entry.base_name);
+        for constraint in &entry.constraints {
+            table.add(&constraint.kind);
+        }
+    }
+    let envelope = super::warp::WarpEnvelope {
+        platform: file.library.platform.clone(),
+        sources: file.sources.clone(),
+        stats: file.stats.clone(),
+    };
+    let envelope_json = serde_json::to_string(&envelope)
+        .map_err(|e| GsigError::Encode(format!("warp envelope: {e}")))?;
+    // An envelope with nothing in it serializes to `{}`; store the empty
+    // string instead, so this and the reader's "no stats" path agree.
+    let envelope_json = if envelope_json == "{}" {
+        String::new()
+    } else {
+        envelope_json
+    };
+    table.add(&envelope_json);
+    let (strings, string_id) = table.finish();
+    let id_of = |s: &str| -> u32 { string_id.get(s).copied().unwrap_or(NO_STRING) };
+
+    let mut guids = Vec::with_capacity(file.entries.len() * 20);
+    let mut records: Vec<u8> = Vec::new();
+    let mut constraints = Vec::new();
+    for entry in &file.entries {
+        let guid = super::warp::guid_to_u128(&entry.guid)?;
+        guids.extend_from_slice(&guid.to_le_bytes());
+        guids.extend_from_slice(&id_of(&entry.name).to_le_bytes());
+        for constraint in &entry.constraints {
+            constraints.extend_from_slice(&pack_constraint(
+                super::warp::guid_to_u128(&constraint.guid)?,
+                id_of(&constraint.kind),
+                constraint.offset,
+            ));
+        }
+        let wire = WireGuidRecord {
+            name: id_of(&entry.name),
+            base_name: id_of(&entry.base_name),
+            block_count: entry.block_count,
+            byte_len: entry.byte_len,
+            occurrences: entry.occurrences,
+            flags: if entry.ambiguous {
+                FLAG_GUID_AMBIGUOUS
+            } else {
+                0
+            },
+            n_constraints: u32::try_from(entry.constraints.len())
+                .map_err(|_| GsigError::TooLarge("constraints", entry.constraints.len()))?,
+        };
+        records = append(records, &wire)?;
+    }
+
+    let meta = encode(&WireMeta {
+        schema_version: id_of(&file.schema_version),
+        arch: id_of(&file.library.arch),
+        prologue_len: 0,
+        library: [
+            id_of(&file.library.name),
+            id_of(&file.library.version),
+            id_of(&file.library.variant),
+            id_of(&file.library.arch),
+        ],
+        stats_json: id_of(&envelope_json),
+        index_kind: IndexKind::Derived as u8,
+    })?;
+    let sections = Sections {
+        meta,
+        strings: encode(&strings)?,
+        guids,
+        guid_records: records,
+        constraints,
+        ..Default::default()
+    };
+    let header = GsigHeader {
+        format_version: FORMAT_VERSION,
+        reader_min: READER_VERSION,
+        arch: Arch::from_name(&file.library.arch),
+        scheme: Scheme::WarpFunctionGuidV1,
+        // `n_signatures` counts the records the file carries, whichever
+        // scheme they are under: a publisher's "signatures" column and the
+        // header must not disagree about how big a blob is. The reader
+        // dispatches on `scheme` before it walks any record stream, so this
+        // is never mistaken for a count of masked patterns.
+        n_signatures: u32::try_from(file.entries.len())
+            .map_err(|_| GsigError::TooLarge("entries", file.entries.len()))?,
         n_strings: u32::try_from(strings.len())
             .map_err(|_| GsigError::TooLarge("strings", strings.len()))?,
         dict_id: options.dict_id,
