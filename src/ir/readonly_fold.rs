@@ -13,7 +13,7 @@
 //! conditional operator evaluates only the selected arm, so every in-range load
 //! is portable while an unproved index keeps the original machine expression.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use object::{Object, ObjectSection};
 
@@ -40,6 +40,10 @@ pub struct ReadonlyData {
     /// places are deliberately absent from `regions`, so the integer path
     /// cannot reach them and cannot turn a reference into a number.
     slots: BTreeMap<u64, String>,
+    /// Proven in-image address held by each relocation-fixed pointer slot.
+    /// Unlike the string view above, this retains pointers to readonly scalar
+    /// objects so a guarded `*table[index]` can be materialised as values.
+    pointer_targets: BTreeMap<u64, u64>,
     /// Pointer width in bytes for the resolved slots. Zero until
     /// [`Self::resolve_relocated_slots`] runs, which keeps the reference path
     /// inert for every caller that supplies no reference evidence.
@@ -157,6 +161,9 @@ impl ReadonlyData {
                 if let InterpretationKind::StringLiteral { text, .. } = interpretation.kind() {
                     self.slots.insert(place, text.clone());
                 }
+                if let Some(target) = interpretation.kind().address() {
+                    self.pointer_targets.insert(place, target);
+                }
             }
         }
     }
@@ -168,6 +175,12 @@ impl ReadonlyData {
             .then(|| self.slots.get(&address))
             .flatten()
             .map(String::as_str)
+    }
+
+    fn read_pointer_target(&self, address: u64, width: u8) -> Option<u64> {
+        (self.pointer_width != 0 && width == self.pointer_width)
+            .then(|| self.pointer_targets.get(&address).copied())
+            .flatten()
     }
 
     fn read_integer(&self, address: u64, width: u8) -> Option<i64> {
@@ -211,6 +224,7 @@ pub fn fold_guarded_readonly_lookups(function: &mut Function, data: &ReadonlyDat
         data,
         &HashMap::new(),
         &HashMap::new(),
+        &HashSet::new(),
         None,
     );
 }
@@ -220,10 +234,12 @@ fn fold_body(
     data: &ReadonlyData,
     inherited_aliases: &HashMap<String, String>,
     inherited_bounds: &HashMap<String, usize>,
+    inherited_nonnegative: &HashSet<String>,
     active_guard: Option<&Guard>,
 ) {
     let mut aliases = inherited_aliases.clone();
     let mut bounds = inherited_bounds.clone();
+    let mut nonnegative = inherited_nonnegative.clone();
     let mut current_guard = active_guard.cloned();
     for statement in body {
         match statement {
@@ -233,6 +249,9 @@ fn fold_body(
             } => {
                 fold_expr(src, data, &aliases, &bounds, current_guard.as_ref());
                 let source_bound = proven_index_max(src, &aliases, &bounds, current_guard.as_ref());
+                let source_nonnegative = source_register(src)
+                    .map(|source| resolve_alias(source, &aliases))
+                    .is_some_and(|root| nonnegative.contains(&root));
                 if let Some(source) = source_register(src) {
                     aliases.insert(dst.clone(), resolve_alias(source, &aliases));
                 } else {
@@ -242,6 +261,11 @@ fn fold_body(
                     bounds.insert(dst.clone(), inclusive_max);
                 } else {
                     bounds.remove(dst);
+                }
+                if source_nonnegative {
+                    nonnegative.insert(resolve_alias(dst, &aliases));
+                } else {
+                    nonnegative.remove(dst);
                 }
                 if current_guard
                     .as_ref()
@@ -267,6 +291,7 @@ fn fold_body(
                 if let Some(VReg::Phys(dst)) = dst {
                     aliases.remove(dst);
                     bounds.remove(dst);
+                    nonnegative.remove(dst);
                     if current_guard
                         .as_ref()
                         .is_some_and(|guard| guard.index_root == *dst)
@@ -290,7 +315,10 @@ fn fold_body(
                 let terminating_fallthrough = else_body.is_none()
                     && crate::ir::control_semantics::straight_line_return_body(then_body);
                 let fallthrough_guard = terminating_fallthrough
-                    .then(|| bounded_fallthrough_guard(cond, &aliases))
+                    .then(|| bounded_fallthrough_guard(cond, &aliases, &nonnegative))
+                    .flatten();
+                let fallthrough_nonnegative = terminating_fallthrough
+                    .then(|| nonnegative_fallthrough(cond, &aliases))
                     .flatten();
                 let guard = bounded_guard(cond, &aliases, &bounds);
                 fold_body(
@@ -298,21 +326,33 @@ fn fold_body(
                     data,
                     &aliases,
                     &bounds,
+                    &nonnegative,
                     guard.as_ref().or(current_guard.as_ref()),
                 );
                 if let Some(else_body) = else_body {
-                    fold_body(else_body, data, &aliases, &bounds, current_guard.as_ref());
+                    fold_body(
+                        else_body,
+                        data,
+                        &aliases,
+                        &bounds,
+                        &nonnegative,
+                        current_guard.as_ref(),
+                    );
                 }
                 if terminating_fallthrough {
                     // The taken arm cannot reach the following statement, so
                     // the incoming state still describes the false path. An
                     // inverted unsigned guard may additionally bound it.
                     current_guard = fallthrough_guard.or(current_guard);
+                    if let Some(root) = fallthrough_nonnegative {
+                        nonnegative.insert(root);
+                    }
                 } else {
                     // Definitions in either branch need a join proof before
                     // aliases or an enclosing bound can be reused.
                     aliases.clear();
                     bounds.clear();
+                    nonnegative.clear();
                     current_guard = None;
                 }
             }
@@ -320,9 +360,17 @@ fn fold_body(
                 fold_expr(cond, data, &aliases, &bounds, current_guard.as_ref());
                 // A loop body can change its index before a later iteration's
                 // lookup. Only guards recovered inside that iteration may fold.
-                fold_body(body, data, &HashMap::new(), &HashMap::new(), None);
+                fold_body(
+                    body,
+                    data,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashSet::new(),
+                    None,
+                );
                 aliases.clear();
                 bounds.clear();
+                nonnegative.clear();
                 current_guard = None;
             }
             Stmt::For {
@@ -336,19 +384,29 @@ fn fold_body(
                     data,
                     &aliases,
                     &bounds,
+                    &nonnegative,
                     None,
                 );
                 fold_expr(cond, data, &aliases, &bounds, None);
-                fold_body(body, data, &HashMap::new(), &HashMap::new(), None);
+                fold_body(
+                    body,
+                    data,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashSet::new(),
+                    None,
+                );
                 fold_body(
                     std::slice::from_mut(step.as_mut()),
                     data,
                     &aliases,
                     &bounds,
+                    &nonnegative,
                     None,
                 );
                 aliases.clear();
                 bounds.clear();
+                nonnegative.clear();
                 current_guard = None;
             }
             Stmt::Switch {
@@ -366,13 +424,28 @@ fn fold_body(
                 for (_, case) in cases {
                     // Cases can fall through, so a sibling's writes make inherited
                     // alias/guard state unsafe without explicit case-edge SSA.
-                    fold_body(case, data, &HashMap::new(), &HashMap::new(), None);
+                    fold_body(
+                        case,
+                        data,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &HashSet::new(),
+                        None,
+                    );
                 }
                 if let Some(default) = default {
-                    fold_body(default, data, &HashMap::new(), &HashMap::new(), None);
+                    fold_body(
+                        default,
+                        data,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &HashSet::new(),
+                        None,
+                    );
                 }
                 aliases.clear();
                 bounds.clear();
+                nonnegative.clear();
                 current_guard = None;
             }
             Stmt::Pop {
@@ -380,6 +453,7 @@ fn fold_body(
             } => {
                 aliases.remove(dst);
                 bounds.remove(dst);
+                nonnegative.remove(dst);
                 if current_guard
                     .as_ref()
                     .is_some_and(|guard| guard.index_root == *dst)
@@ -390,6 +464,7 @@ fn fold_body(
             Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break => {
                 aliases.clear();
                 bounds.clear();
+                nonnegative.clear();
                 current_guard = None;
             }
             Stmt::Return { value: None }
@@ -410,6 +485,12 @@ fn fold_expr(
     bounds: &HashMap<String, usize>,
     active_guard: Option<&Guard>,
 ) {
+    if let Some(replacement) =
+        fold_indirect_readonly_lookup(expression, data, aliases, bounds, active_guard)
+    {
+        *expression = replacement;
+        return;
+    }
     match expression {
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, bounds, active_guard);
@@ -521,6 +602,62 @@ fn fold_expr(
     }
 }
 
+/// Materialise a guarded `*pointer_table[index]` when relocations prove every
+/// pointer target and each target is an exactly readable readonly scalar.
+fn fold_indirect_readonly_lookup(
+    expression: &Expr,
+    data: &ReadonlyData,
+    aliases: &HashMap<String, String>,
+    bounds: &HashMap<String, usize>,
+    active_guard: Option<&Guard>,
+) -> Option<Expr> {
+    let Expr::Deref {
+        addr: outer_addr,
+        size: value_width,
+    } = expression
+    else {
+        return None;
+    };
+    let Expr::Deref {
+        addr: table_addr,
+        size: pointer_width,
+    } = outer_addr.as_ref()
+    else {
+        return None;
+    };
+    if *pointer_width != data.pointer_width || data.pointer_width == 0 {
+        return None;
+    }
+    let (base, index) = indexed_address(table_addr, *pointer_width)?;
+    let inclusive_max = proven_index_max(&index, aliases, bounds, active_guard)?;
+    let count = inclusive_max.checked_add(1)?;
+    if count == 0 || count > MAX_GUARDED_ENTRIES {
+        return None;
+    }
+
+    let mut values = Vec::with_capacity(count);
+    for slot in 0..count {
+        let place = base.checked_add((slot as u64).checked_mul(u64::from(*pointer_width))?)?;
+        let target = data.read_pointer_target(place, *pointer_width)?;
+        values.push(Expr::Const(data.read_integer(target, *value_width)?));
+    }
+
+    let mut replacement = expression.clone();
+    for (slot, value) in values.into_iter().enumerate().rev() {
+        replacement = Expr::Select {
+            cond: Box::new(Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(index.clone()),
+                rhs: Box::new(Expr::Const(slot as i64)),
+            }),
+            if_true: Box::new(value),
+            if_false: Box::new(replacement),
+            width: *value_width,
+        };
+    }
+    Some(replacement)
+}
+
 fn bounded_guard(
     condition: &Expr,
     aliases: &HashMap<String, String>,
@@ -566,13 +703,75 @@ fn bounded_guard(
 /// Only unsigned comparisons are sound here: the false path of a signed upper
 /// bound can still contain negative indices and therefore does not prove a
 /// safe table extent.
-fn bounded_fallthrough_guard(condition: &Expr, aliases: &HashMap<String, String>) -> Option<Guard> {
+fn bounded_fallthrough_guard(
+    condition: &Expr,
+    aliases: &HashMap<String, String>,
+    nonnegative: &HashSet<String>,
+) -> Option<Guard> {
     let Expr::Cmp { op, lhs, rhs } = condition else {
         return None;
     };
     let (index, inclusive_max) = match op {
         CmpOp::Ult => (source_register(rhs)?, constant_usize(lhs)?),
         CmpOp::Ule => (source_register(rhs)?, constant_usize(lhs)?.checked_sub(1)?),
+        // Clang keeps `if (limit <= index) return` as a signed comparison at
+        // O0. Its false edge proves `index < limit` only after an earlier
+        // guard has independently excluded negative indices.
+        CmpOp::Sle => {
+            let index = source_register(rhs)?;
+            if !nonnegative.contains(&resolve_alias(index, aliases)) {
+                return None;
+            }
+            (index, constant_usize(lhs)?.checked_sub(1)?)
+        }
+        // Likewise, false(`limit < index`) proves `index <= limit` once the
+        // lower bound is known.
+        CmpOp::Slt => {
+            let index = source_register(rhs)?;
+            if !nonnegative.contains(&resolve_alias(index, aliases)) {
+                return None;
+            }
+            (index, constant_usize(lhs)?)
+        }
+        // GCC and Clang commonly lower signed `index > max` to
+        // `!((index == max) | (index < max))`. On a path already proven
+        // nonnegative, the false edge proves the same safe table bound as an
+        // unsigned comparison.
+        CmpOp::Eq if constant_u64(rhs) == Some(0) => {
+            let Expr::Bin {
+                op: BinOp::Or,
+                lhs: equal,
+                rhs: less,
+            } = strip_casts(lhs)
+            else {
+                return None;
+            };
+            let Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: equal_lhs,
+                rhs: equal_rhs,
+            } = strip_casts(equal)
+            else {
+                return None;
+            };
+            let Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: less_lhs,
+                rhs: less_rhs,
+            } = strip_casts(less)
+            else {
+                return None;
+            };
+            let index = source_register(equal_lhs)?;
+            let inclusive_max = constant_usize(equal_rhs)?;
+            if source_register(less_lhs)? != index
+                || constant_usize(less_rhs)? != inclusive_max
+                || !nonnegative.contains(&resolve_alias(index, aliases))
+            {
+                return None;
+            }
+            (index, inclusive_max)
+        }
         _ => return None,
     };
     if inclusive_max >= MAX_GUARDED_ENTRIES {
@@ -582,6 +781,21 @@ fn bounded_fallthrough_guard(condition: &Expr, aliases: &HashMap<String, String>
         index_root: resolve_alias(index, aliases),
         inclusive_max,
     })
+}
+
+/// The false edge of `if (index < 0) return` proves `index >= 0`.
+fn nonnegative_fallthrough(condition: &Expr, aliases: &HashMap<String, String>) -> Option<String> {
+    let Expr::Cmp {
+        op: CmpOp::Slt,
+        lhs,
+        rhs,
+    } = strip_casts(condition)
+    else {
+        return None;
+    };
+    (constant_u64(rhs) == Some(0))
+        .then(|| source_register(lhs).map(|name| resolve_alias(name, aliases)))
+        .flatten()
 }
 
 fn proven_index_max(
@@ -624,6 +838,18 @@ fn known_register_bound(
 }
 
 fn indexed_address(address: &Expr, width: u8) -> Option<(u64, Expr)> {
+    if let Expr::Lea {
+        base: None,
+        index: Some(index),
+        scale,
+        disp,
+        segment: None,
+    } = address
+    {
+        if *scale == width && *disp >= 0 {
+            return Some((*disp as u64, Expr::Reg(index.clone())));
+        }
+    }
     let Expr::Bin {
         op: BinOp::Add,
         lhs,
@@ -754,6 +980,75 @@ mod tests {
                 value: Some(Expr::Const(32)),
             }],
             "a direct .rodata load must not survive as an absolute process address"
+        );
+    }
+
+    #[test]
+    fn guarded_relocated_pointer_table_materialises_pointed_to_scalars() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&7u32.to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&9u32.to_le_bytes());
+        let data = ReadonlyData {
+            regions: vec![ReadonlyRegion {
+                base: 0x2000,
+                bytes,
+            }],
+            little_endian: true,
+            pointer_targets: BTreeMap::from([(0x3000, 0x2000), (0x3008, 0x2004), (0x3010, 0x2008)]),
+            pointer_width: 8,
+            ..ReadonlyData::default()
+        };
+        let mut expression = Expr::Deref {
+            addr: Box::new(Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: None,
+                    index: Some(VReg::phys("which")),
+                    scale: 8,
+                    disp: 0x3000,
+                    segment: None,
+                }),
+                size: 8,
+            }),
+            size: 4,
+        };
+        let original = expression.clone();
+
+        fold_expr(
+            &mut expression,
+            &data,
+            &HashMap::new(),
+            &HashMap::from([("which".to_string(), 2)]),
+            None,
+        );
+
+        let rendered = crate::ir::ast::render(&Function {
+            name: "lookup".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(expression),
+            }],
+        });
+        for value in ["7", "8", "9"] {
+            assert!(rendered.contains(value), "missing {value}:\n{rendered}");
+        }
+        assert!(rendered.contains('?'), "{rendered}");
+
+        let mut missing_target = original.clone();
+        let incomplete = ReadonlyData {
+            pointer_targets: BTreeMap::from([(0x3000, 0x2000), (0x3008, 0x2004)]),
+            ..data
+        };
+        fold_expr(
+            &mut missing_target,
+            &incomplete,
+            &HashMap::new(),
+            &HashMap::from([("which".to_string(), 2)]),
+            None,
+        );
+        assert_eq!(
+            missing_target, original,
+            "an incomplete table must fail closed"
         );
     }
 

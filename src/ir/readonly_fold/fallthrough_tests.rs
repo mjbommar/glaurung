@@ -109,3 +109,147 @@ fn terminating_upper_bound_guard_materialises_the_fallthrough_lookup() {
         "a signed guard cannot exclude negative table indices:\n{signed}"
     );
 }
+
+#[test]
+fn nonnegative_then_signed_inclusive_guard_bounds_a_readonly_lookup() {
+    let data = ReadonlyData {
+        regions: vec![ReadonlyRegion {
+            base: 0x2000,
+            bytes: [0u32, 10, 30, 0, 50, 0]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect(),
+        }],
+        little_endian: true,
+        ..ReadonlyData::default()
+    };
+    let index = || Expr::Reg(VReg::phys("index"));
+    let early_return = |cond| Stmt::If {
+        cond,
+        then_body: vec![Stmt::Return {
+            value: Some(Expr::Const(-1)),
+        }],
+        else_body: None,
+    };
+    let negative = early_return(Expr::Cmp {
+        op: CmpOp::Slt,
+        lhs: Box::new(index()),
+        rhs: Box::new(Expr::Const(0)),
+    });
+    let too_large = early_return(Expr::Cmp {
+        op: CmpOp::Eq,
+        lhs: Box::new(Expr::Bin {
+            op: BinOp::Or,
+            lhs: Box::new(Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(index()),
+                rhs: Box::new(Expr::Const(5)),
+            }),
+            rhs: Box::new(Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(index()),
+                rhs: Box::new(Expr::Const(5)),
+            }),
+        }),
+        rhs: Box::new(Expr::Const(0)),
+    });
+    let lookup = Stmt::Return {
+        value: Some(Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Addr(0x2000)),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(index()),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 4,
+        }),
+    };
+    let mut proven = Function {
+        name: "designated_array".into(),
+        entry_va: 0,
+        body: vec![negative, too_large.clone(), lookup.clone()],
+    };
+    let mut missing_lower_bound = Function {
+        name: "signed_only".into(),
+        entry_va: 0,
+        body: vec![too_large, lookup],
+    };
+
+    fold_guarded_readonly_lookups(&mut proven, &data);
+    fold_guarded_readonly_lookups(&mut missing_lower_bound, &data);
+
+    assert!(
+        crate::ir::ast::render(&proven).contains('?'),
+        "two-sided proof did not materialise the table: {proven:#?}"
+    );
+    assert!(
+        !crate::ir::ast::render(&missing_lower_bound).contains('?'),
+        "a signed upper guard without nonnegative proof was trusted"
+    );
+}
+
+#[test]
+fn nonnegative_then_direct_signed_limit_guard_bounds_a_readonly_lookup() {
+    let data = ReadonlyData {
+        regions: vec![ReadonlyRegion {
+            base: 0x2020,
+            bytes: [10u32, 20, 30, 40, 50]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect(),
+        }],
+        little_endian: true,
+        ..ReadonlyData::default()
+    };
+    let index = || Expr::Reg(VReg::phys("opcode"));
+    let early_return = |cond| Stmt::If {
+        cond,
+        then_body: vec![Stmt::Return {
+            value: Some(Expr::Const(-1)),
+        }],
+        else_body: None,
+    };
+    let negative = early_return(Expr::Cmp {
+        op: CmpOp::Slt,
+        lhs: Box::new(index()),
+        rhs: Box::new(Expr::Const(0)),
+    });
+    let too_large = early_return(Expr::Cmp {
+        op: CmpOp::Sle,
+        lhs: Box::new(Expr::Const(5)),
+        rhs: Box::new(index()),
+    });
+    let lookup = Stmt::Return {
+        value: Some(Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Addr(0x2020)),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(index()),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 4,
+        }),
+    };
+    let mut proven = Function {
+        name: "clang_direct_guard".into(),
+        entry_va: 0,
+        body: vec![negative, too_large.clone(), lookup.clone()],
+    };
+    let mut missing_lower_bound = Function {
+        name: "signed_only".into(),
+        entry_va: 0,
+        body: vec![too_large, lookup],
+    };
+
+    fold_guarded_readonly_lookups(&mut proven, &data);
+    fold_guarded_readonly_lookups(&mut missing_lower_bound, &data);
+
+    assert!(crate::ir::ast::render(&proven).contains('?'));
+    assert!(!crate::ir::ast::render(&missing_lower_bound).contains('?'));
+}
