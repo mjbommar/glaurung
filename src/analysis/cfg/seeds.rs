@@ -64,7 +64,7 @@ pub(super) struct Seeds {
     pub(super) seed_kind_by_va: std::collections::HashMap<u64, DiscoverySeedKind>,
     /// The signature library, loaded once and reused for post-discovery
     /// overrides.
-    pub(super) flirt_library: Option<FlirtLibrary>,
+    pub(super) flirt_library: Option<std::sync::Arc<FlirtLibrary>>,
     /// `va -> name` for every FLIRT prologue match, applied after DWARF and
     /// symbol renaming so it only touches functions still named `sub_*`.
     pub(super) flirt_name_by_va: std::collections::HashMap<u64, String>,
@@ -130,7 +130,10 @@ pub(super) fn collect_seeds(
     // regions for FLIRT prologue matches and seed those VAs too. A name
     // mapping is also kept so we can rename `sub_*` → real_name once
     // discovery completes (see post-processing below).
-    let flirt_library: Option<FlirtLibrary> = load_default_library();
+    // Loaded through `flirt::library_for`, which parses a given library file
+    // at most once per process: this call used to re-read and re-parse the
+    // whole JSON on every `analyze()`.
+    let flirt_library: Option<std::sync::Arc<FlirtLibrary>> = load_default_library();
     let flirt_seeds: Vec<(u64, String)> = if let Some(ref lib) = flirt_library {
         scan_within(deadline, stats, || {
             discover_flirt_seeds(data, discovered, lib)

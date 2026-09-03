@@ -50,6 +50,17 @@
 //! `docs/history/program-measures-2026-09-02/03-schema.sql` section 8 and
 //! `docs/reference/function-signature-libraries.md`.
 //!
+//! # Loading
+//!
+//! [`library_for`] is the only way a path becomes a matcher, and it parses at
+//! most once per `(path, mtime, size)` per process. Everything else --
+//! [`load_default_library`], the Python binding -- goes through it, so a
+//! second `analyze()` in one process re-uses the first one's parse instead of
+//! re-reading megabytes of JSON. [`default_library_paths`] is the resolution
+//! order (`GLAURUNG_FLIRT_LIB`, `GLAURUNG_SIG_DIR`, `~/.cache/glaurung/sigs/`,
+//! the packaged `data/sigs/`), and [`set_packaged_sig_dir`] is how the
+//! installed location gets told to Rust at all.
+//!
 //! # The builder's duplicate key is this file's business
 //!
 //! [`FlirtLibraryFile::matcher_key_collisions`] states the invariant a
@@ -757,35 +768,267 @@ fn hex_to_bytes(s: &str) -> Result<Vec<u8>, &'static str> {
 /// byte.
 pub const MAX_CRC_LEN: usize = 255;
 
-/// Look up the default library file. Search order:
-///   1. `GLAURUNG_FLIRT_LIB` env var (single file).
-///   2. `data/sigs/glaurung-base.<arch>.flirt.json` relative to the cwd.
-///   3. `data/sigs/glaurung-base.x86_64.flirt.json` as a final fallback.
+/// Where the packaged `data/sigs/` directory is, once something has been able
+/// to say. See [`set_packaged_sig_dir`].
+static PACKAGED_SIG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record where the *installed* `data/sigs/` lives.
 ///
-/// Returns `None` if no library is reachable — that's fine, the matcher
-/// pass becomes a no-op when no library is available.
-pub fn default_library_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("GLAURUNG_FLIRT_LIB") {
+/// A wheel's signature libraries sit beside the Python package, and pure Rust
+/// has no way to find that: the process is `python`, not us, so
+/// `current_exe()` points at the interpreter and a cwd-relative `data/sigs`
+/// only works when the cwd happens to be a checkout. `data/types/*.json` has
+/// the same problem and solves it the same way -- `include_str!` where the
+/// bundle is small enough to compile in (`src/ir/call_contracts.rs`), and a
+/// path derived from `__file__` where it is not
+/// (`python/glaurung/llm/kb/type_db.py::_stdlib_bundle_dir`). A signature
+/// corpus is far too large to compile in, so `src/python_bindings/flirt.rs`
+/// derives this from the extension module's own `__file__` at registration
+/// time and calls this once.
+///
+/// Ignored after the first call: the answer is a property of the
+/// installation, not of a request.
+pub fn set_packaged_sig_dir(dir: PathBuf) {
+    let _ = PACKAGED_SIG_DIR.set(dir);
+}
+
+/// The packaged `data/sigs/`, if [`set_packaged_sig_dir`] named one that
+/// exists.
+pub fn packaged_sig_dir() -> Option<&'static std::path::Path> {
+    PACKAGED_SIG_DIR
+        .get()
+        .map(PathBuf::as_path)
+        .filter(|p| p.is_dir())
+}
+
+/// Every `*.flirt.json` in `dir`, sorted, so the merge order is a property of
+/// the directory rather than of the filesystem's readdir order.
+fn flirt_files_in(dir: &std::path::Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.to_string_lossy().ends_with(".flirt.json"))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The library files to load, in resolution order. The **first rung that
+/// yields anything wins**; rungs are not merged with each other.
+///
+/// 1. `GLAURUNG_FLIRT_LIB` -- one explicit file. An override is an override:
+///    naming a file must not silently pull in a directory's worth of others.
+/// 2. `GLAURUNG_SIG_DIR` -- every `*.flirt.json` in that directory, merged.
+///    (`*.gsig` joins this rung when the `gsig/1` reader lands; see
+///    [`library_for`].)
+/// 3. `~/.cache/glaurung/sigs/` -- the client download cache.
+/// 4. The packaged `data/sigs/` ([`set_packaged_sig_dir`]), else `data/sigs/`
+///    relative to the cwd, which is what a checkout has and what every
+///    existing caller relied on.
+///
+/// Empty means no library is reachable, which is fine: the matcher pass
+/// becomes a no-op.
+pub fn default_library_paths() -> Vec<PathBuf> {
+    resolve_library_paths(
+        std::env::var("GLAURUNG_FLIRT_LIB").ok().as_deref(),
+        std::env::var("GLAURUNG_SIG_DIR").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        packaged_sig_dir(),
+        std::env::current_dir().ok().as_deref(),
+    )
+}
+
+/// [`default_library_paths`] with the environment passed in, so the order can
+/// be tested without mutating a process-global that other tests are reading
+/// concurrently.
+fn resolve_library_paths(
+    flirt_lib: Option<&str>,
+    sig_dir: Option<&str>,
+    home: Option<&str>,
+    packaged: Option<&std::path::Path>,
+    cwd: Option<&std::path::Path>,
+) -> Vec<PathBuf> {
+    if let Some(p) = flirt_lib {
         let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
+        if pb.is_file() {
+            return vec![pb];
         }
     }
-    let cwd = std::env::current_dir().ok()?;
-    let candidate = cwd.join("data/sigs/glaurung-base.x86_64.flirt.json");
-    if candidate.exists() {
-        return Some(candidate);
+    let rungs = [
+        sig_dir.map(PathBuf::from),
+        home.map(|h| PathBuf::from(h).join(".cache/glaurung/sigs")),
+        packaged.map(std::path::Path::to_path_buf),
+        cwd.map(|c| c.join("data/sigs")),
+    ];
+    for dir in rungs.into_iter().flatten() {
+        let found = flirt_files_in(&dir);
+        if !found.is_empty() {
+            return found;
+        }
     }
-    None
+    Vec::new()
+}
+
+/// The first path [`default_library_paths`] resolves to, kept for callers that
+/// want to name the library in provenance rather than load it.
+pub fn default_library_path() -> Option<PathBuf> {
+    default_library_paths().into_iter().next()
+}
+
+/// What identifies a file well enough to reuse a parse of it: the path, the
+/// modification time in nanoseconds since the epoch, and the length.
+type FileStamp = (PathBuf, u128, u64);
+
+fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((path.to_path_buf(), mtime, meta.len()))
+}
+
+#[allow(clippy::type_complexity)]
+static LIBRARY_CACHE: std::sync::OnceLock<
+    std::sync::RwLock<HashMap<Vec<FileStamp>, std::sync::Arc<FlirtLibrary>>>,
+> = std::sync::OnceLock::new();
+
+fn library_cache(
+) -> &'static std::sync::RwLock<HashMap<Vec<FileStamp>, std::sync::Arc<FlirtLibrary>>> {
+    LIBRARY_CACHE.get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+}
+
+/// Why a signature library could not be loaded.
+#[derive(Debug)]
+pub enum LibraryLoadError {
+    /// The file could not be read.
+    Io(std::io::Error),
+    /// The file was read but is not a signature library.
+    Parse(serde_json::Error),
+}
+
+impl std::fmt::Display for LibraryLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Parse(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for LibraryLoadError {}
+
+/// **The one entry point for turning a path into a matcher.** Parses at most
+/// once per `(path, mtime, size)` per process and hands every later caller the
+/// same `Arc`.
+///
+/// The cost this removes is not hypothetical: `load_default_library` used to
+/// re-read and re-parse the JSON on *every* `analyze()`, and a seven-library
+/// set built from this box's own archives is 15,538 signatures over 19 MB of
+/// JSON. The key includes mtime and length so a rebuilt library is picked up
+/// without a restart -- a tool that rebuilds and immediately re-analyses is
+/// the normal way this code is used -- while a re-analysis of an unchanged
+/// file costs a hash lookup.
+///
+/// This is also the seam the `gsig/1` reader plugs into: a caller says
+/// "library at this path" and gets an `Arc<FlirtLibrary>`, and dispatching on
+/// the file's magic happens here rather than in the analysis pass. Nothing
+/// outside this function needs to learn a second format.
+pub fn library_for(path: &std::path::Path) -> Result<std::sync::Arc<FlirtLibrary>, LibraryLoadError> {
+    library_for_paths(std::slice::from_ref(&path.to_path_buf()))
+}
+
+/// [`library_for`] over several files, merged into one matcher.
+///
+/// Merging is concatenation: a signature carries its own pattern, mask and
+/// CRC, so two libraries have nothing to reconcile. Files whose
+/// `prologue_len` disagrees with the first are **skipped**, because the
+/// matcher indexes and compares one window length -- silently comparing 32
+/// bytes of a 64-byte signature would be a false-positive generator.
+pub fn library_for_paths(
+    paths: &[PathBuf],
+) -> Result<std::sync::Arc<FlirtLibrary>, LibraryLoadError> {
+    let stamps: Vec<FileStamp> = paths
+        .iter()
+        .map(|p| {
+            file_stamp(p).unwrap_or_else(|| (p.clone(), 0, u64::MAX)) // uncacheable-but-keyed
+        })
+        .collect();
+    if let Some(hit) = library_cache()
+        .read()
+        .ok()
+        .and_then(|guard| guard.get(&stamps).cloned())
+    {
+        return Ok(hit);
+    }
+
+    let mut merged: Option<FlirtLibraryFile> = None;
+    let mut first_error: Option<LibraryLoadError> = None;
+    for path in paths {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                first_error.get_or_insert(LibraryLoadError::Io(e));
+                continue;
+            }
+        };
+        let file: FlirtLibraryFile = match serde_json::from_str(&text) {
+            Ok(f) => f,
+            Err(e) => {
+                first_error.get_or_insert(LibraryLoadError::Parse(e));
+                continue;
+            }
+        };
+        match &mut merged {
+            None => merged = Some(file),
+            Some(acc) => {
+                if file.prologue_len == acc.prologue_len {
+                    acc.entries.extend(file.entries);
+                }
+            }
+        }
+    }
+    let Some(file) = merged else {
+        return Err(first_error.unwrap_or_else(|| {
+            LibraryLoadError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no signature library files given",
+            ))
+        }));
+    };
+    // A merged set has no single provenance key; drop it rather than claim the
+    // first file's.
+    let library = std::sync::Arc::new(FlirtLibrary::from_file(if paths.len() > 1 {
+        FlirtLibraryFile {
+            library: None,
+            ..file
+        }
+    } else {
+        file
+    }));
+    if let Ok(mut guard) = library_cache().write() {
+        guard.insert(stamps, std::sync::Arc::clone(&library));
+    }
+    Ok(library)
 }
 
 /// Try to load the default FLIRT library. Returns `None` silently if no
 /// library is available; analysis falls back to whatever DWARF and
 /// symbol-table renaming already accomplished.
-pub fn load_default_library() -> Option<FlirtLibrary> {
-    let path = default_library_path()?;
-    let text = std::fs::read_to_string(&path).ok()?;
-    FlirtLibrary::from_json(&text).ok()
+///
+/// Loads through [`library_for_paths`], so the second `analyze()` in a process
+/// re-uses the first one's parse.
+pub fn load_default_library() -> Option<std::sync::Arc<FlirtLibrary>> {
+    let paths = default_library_paths();
+    if paths.is_empty() {
+        return None;
+    }
+    library_for_paths(&paths).ok()
 }
 
 /// Build a (vm_start, vm_size, file_offset) → (vm_start, vm_size, file_offset)
@@ -1824,5 +2067,143 @@ mod tests {
         let renamed = apply_flirt_overrides(&[], &mut functions, &lib);
         assert_eq!(renamed, 0);
         assert_eq!(functions[0].name, "my_own_name");
+    }
+
+    // -- resolution order ----------------------------------------------------
+
+    fn touch(dir: &std::path::Path, name: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, "{}").unwrap();
+        p
+    }
+
+    #[test]
+    fn resolution_order_prefers_the_explicit_file_then_the_dir_then_the_cache() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().to_path_buf();
+        let explicit = touch(&root.join("explicit"), "one.flirt.json");
+        let sig_dir = root.join("sigdir");
+        let a = touch(&sig_dir, "a.flirt.json");
+        let b = touch(&sig_dir, "b.flirt.json");
+        touch(&sig_dir, "notes.txt");
+        let home = root.join("home");
+        let cached = touch(&home.join(".cache/glaurung/sigs"), "cached.flirt.json");
+        let cwd = root.join("checkout");
+        let shipped = touch(&cwd.join("data/sigs"), "base.flirt.json");
+
+        let sig_dir_s = sig_dir.to_string_lossy().into_owned();
+        let home_s = home.to_string_lossy().into_owned();
+        let explicit_s = explicit.to_string_lossy().into_owned();
+
+        // 1. the explicit file wins outright, and pulls in nothing else.
+        assert_eq!(
+            resolve_library_paths(
+                Some(&explicit_s),
+                Some(&sig_dir_s),
+                Some(&home_s),
+                None,
+                Some(&cwd)
+            ),
+            vec![explicit.clone()]
+        );
+        // 2. the directory, sorted, and only its `*.flirt.json`.
+        assert_eq!(
+            resolve_library_paths(None, Some(&sig_dir_s), Some(&home_s), None, Some(&cwd)),
+            vec![a, b]
+        );
+        // 3. the download cache.
+        assert_eq!(
+            resolve_library_paths(None, None, Some(&home_s), None, Some(&cwd)),
+            vec![cached]
+        );
+        // 4. the packaged directory, then the cwd-relative checkout.
+        let packaged = root.join("packaged");
+        let installed = touch(&packaged, "installed.flirt.json");
+        assert_eq!(
+            resolve_library_paths(None, None, None, Some(&packaged), Some(&cwd)),
+            vec![installed]
+        );
+        assert_eq!(
+            resolve_library_paths(None, None, None, None, Some(&cwd)),
+            vec![shipped]
+        );
+        // An unreachable rung is skipped rather than ending the search.
+        assert_eq!(
+            resolve_library_paths(
+                Some("/nonexistent/lib.flirt.json"),
+                Some("/nonexistent/dir"),
+                None,
+                None,
+                Some(&cwd)
+            ),
+            vec![root.join("checkout/data/sigs/base.flirt.json")]
+        );
+    }
+
+    // -- the load cache ------------------------------------------------------
+
+    #[test]
+    fn one_path_is_parsed_once_per_process() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("lib.flirt.json");
+        std::fs::write(
+            &path,
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":4,
+                "entries":[{"name":"a","prologue_hex":"f30f1efa"}],"index":{}}"#,
+        )
+        .unwrap();
+
+        let first = library_for(&path).unwrap();
+        let second = library_for(&path).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "the second load re-parsed the file"
+        );
+
+        // A rewrite with new content invalidates the entry: a tool that
+        // rebuilds a library and immediately re-analyses must not match
+        // against the old one.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(
+            &path,
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":4,
+                "entries":[{"name":"a","prologue_hex":"f30f1efa"},
+                           {"name":"b","prologue_hex":"554889e5"}],"index":{}}"#,
+        )
+        .unwrap();
+        let third = library_for(&path).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, &third));
+        assert_eq!(third.signature_count(), 2);
+    }
+
+    #[test]
+    fn merging_skips_a_library_with_a_different_pattern_length() {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let four = dir.join("four.flirt.json");
+        let also_four = dir.join("also-four.flirt.json");
+        let eight = dir.join("eight.flirt.json");
+        std::fs::write(
+            &four,
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":4,
+                "entries":[{"name":"a","prologue_hex":"f30f1efa"}],"index":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &also_four,
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":4,
+                "entries":[{"name":"b","prologue_hex":"554889e5"}],"index":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &eight,
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":8,
+                "entries":[{"name":"c","prologue_hex":"f30f1efa554889e5"}],"index":{}}"#,
+        )
+        .unwrap();
+        let merged = library_for_paths(&[four, also_four, eight]).unwrap();
+        assert_eq!(merged.prologue_len, 4);
+        assert_eq!(merged.signature_count(), 2);
     }
 }

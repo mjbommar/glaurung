@@ -388,6 +388,11 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_ORDERED_TRACE_DIR": "Directory ordered symbolic traces are written to/read from.",
     "GLAURUNG_SYMBOLIC_CVE_OBJECT_ID": "Object identifier for the `linux_symbolic_cve` example run.",
     "GLAURUNG_FLIRT_LIB": "Path to a FLIRT signature library override.",
+    "GLAURUNG_SIG_DIR": (
+        "Directory of signature libraries (`*.flirt.json`, merged). Consulted "
+        "after `GLAURUNG_FLIRT_LIB` and before `~/.cache/glaurung/sigs/` and "
+        "the packaged `data/sigs/`."
+    ),
     "IOCTLANCE_ANNOTATE_CONFIDENCE": "Annotate IOCTL findings with the confidence-partition label (see reference/docs on taint provenance).",
     "IOCTLANCE_ALL": "Report every candidate IOCTL finding, not just high-confidence ones.",
     "IOCTLANCE_HOPS": "Max call-graph hops the `ioctlance` example explores from an entry point.",

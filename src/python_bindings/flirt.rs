@@ -119,8 +119,9 @@ fn flirt_match_functions_with_evidence_path_py<'py>(
     library_path: &str,
 ) -> PyResult<Bound<'py, PyList>> {
     let data = std::fs::read(path)?;
-    let library_text = std::fs::read_to_string(library_path)?;
-    let lib = crate::flirt::FlirtLibrary::from_json(&library_text)
+    // Through the process-level cache, so a caller matching many binaries
+    // against one library parses that library once.
+    let lib = crate::flirt::library_for(std::path::Path::new(library_path))
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     let mut matches = py.detach(|| {
@@ -142,10 +143,49 @@ fn flirt_match_functions_with_evidence_path_py<'py>(
     Ok(rows)
 }
 
+/// Tell `crate::flirt` where the installed `data/sigs/` is.
+///
+/// Rust cannot work this out: the running executable is `python`, so
+/// `current_exe()` is useless and a cwd-relative `data/sigs` only resolves
+/// inside a checkout. The extension module's own `__file__` *is* the anchor --
+/// it sits at `<package root>/glaurung/_native.<abi>.so` in a wheel and at
+/// `<repo>/python/glaurung/_native.<abi>.so` after `maturin develop` -- so
+/// both `glaurung/data/sigs` (packaged) and `<repo>/data/sigs` (checkout) are
+/// one relative step from it. This mirrors
+/// `python/glaurung/llm/kb/type_db.py::_stdlib_bundle_dir`, which resolves
+/// `data/types/` from `__file__` for the same reason.
+///
+/// Best effort and silent: a missing `__file__` leaves the cwd-relative
+/// fallback in `crate::flirt::default_library_paths` in force, which is what
+/// every caller had before.
+fn register_packaged_sig_dir(m: &Bound<'_, PyModule>) {
+    let Ok(file) = m.filename() else {
+        return;
+    };
+    let path = std::path::PathBuf::from(file.to_string_lossy().as_ref());
+    let Some(package_dir) = path.parent() else {
+        return;
+    };
+    // Installed: `<site-packages>/glaurung/data/sigs`.
+    let packaged = package_dir.join("data/sigs");
+    if packaged.is_dir() {
+        crate::flirt::set_packaged_sig_dir(packaged);
+        return;
+    }
+    // Checkout: the module lives at `<repo>/python/glaurung/`.
+    if let Some(repo) = package_dir.parent().and_then(std::path::Path::parent) {
+        let in_repo = repo.join("data/sigs");
+        if in_repo.is_dir() {
+            crate::flirt::set_packaged_sig_dir(in_repo);
+        }
+    }
+}
+
 /// Register the FLIRT bindings onto the existing `analysis` submodule.
 ///
 /// Must run **after** `analysis::register_analysis_bindings`.
 pub fn register_flirt_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    register_packaged_sig_dir(m);
     let analysis_mod = m.getattr("analysis")?;
     let analysis_mod = analysis_mod.downcast::<PyModule>()?;
     analysis_mod.add_function(wrap_pyfunction!(
