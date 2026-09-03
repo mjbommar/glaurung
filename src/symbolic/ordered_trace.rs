@@ -1535,8 +1535,8 @@ mod tests {
     }
 
     fn reference_validator_status(trace: &Path) -> std::process::ExitStatus {
-        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tools/axeyum/validate_ordered_trace.py");
+        let validator =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/axeyum/validate_ordered_trace.py");
         Command::new("python3")
             .arg(validator)
             .arg(trace)
@@ -1763,8 +1763,8 @@ mod tests {
             .iter()
             .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2));
 
-        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tools/axeyum/validate_ordered_trace.py");
+        let validator =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/axeyum/validate_ordered_trace.py");
         let status = Command::new("python3")
             .arg(validator)
             .arg(&published)
@@ -1864,8 +1864,8 @@ mod tests {
             .expect("assertion path");
         let bytes = fs::read_to_string(published.join(path)).expect("assertion bytes");
         assert_eq!(bytes, "(assert (distinct sym0_64 (_ bv0 64)))\n");
-        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tools/axeyum/validate_ordered_trace.py");
+        let validator =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/axeyum/validate_ordered_trace.py");
         let status = Command::new("python3")
             .arg(validator)
             .arg(&published)
@@ -1934,8 +1934,8 @@ mod tests {
             );
         }
 
-        let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tools/axeyum/validate_ordered_trace.py");
+        let validator =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/axeyum/validate_ordered_trace.py");
         let status = Command::new("python3")
             .arg(validator)
             .arg(&published)

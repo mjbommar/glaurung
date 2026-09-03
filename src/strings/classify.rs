@@ -185,10 +185,7 @@ fn is_valid_network_ipv4(ip: &Ipv4Addr) -> bool {
     // step, so `254.255.0.1` was rejected as a "sequential pattern" when it is
     // nothing of the kind. `checked_add` is `None` at 255 and therefore never
     // matches, which is both panic-free and the behaviour the check describes.
-    if octets
-        .windows(2)
-        .all(|w| w[0].checked_add(1) == Some(w[1]))
-    {
+    if octets.windows(2).all(|w| w[0].checked_add(1) == Some(w[1])) {
         return false;
     }
 

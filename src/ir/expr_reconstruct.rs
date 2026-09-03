@@ -1264,7 +1264,6 @@ mod tests {
         }
     }
 
-
     /// The census may over-count; it must never under-count.
     ///
     /// `reconstruct_body` uses `count_temp_reads_in_body(..) <= 1` as a licence

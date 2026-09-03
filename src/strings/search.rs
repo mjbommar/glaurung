@@ -82,9 +82,7 @@ pub fn scan_text(text: &str, budget: &SearchBudget) -> Vec<TextMatch> {
         if out.len() >= budget.max_matches_total {
             return;
         }
-        if budget.time_guard_ms > 0
-            && start.elapsed().as_millis() as u64 > budget.time_guard_ms
-        {
+        if budget.time_guard_ms > 0 && start.elapsed().as_millis() as u64 > budget.time_guard_ms {
             return;
         }
         for m in cap(re.find_iter(text), budget.max_matches_per_kind) {
@@ -229,8 +227,7 @@ pub fn scan_bytes(data: &[u8], cfg: &StringsConfig, budget: &SearchBudget) -> Ve
             if out.len() >= budget.max_matches_total {
                 break;
             }
-            if budget.time_guard_ms > 0
-                && start.elapsed().as_millis() as u64 > budget.time_guard_ms
+            if budget.time_guard_ms > 0 && start.elapsed().as_millis() as u64 > budget.time_guard_ms
             {
                 break;
             }
