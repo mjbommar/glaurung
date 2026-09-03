@@ -8,6 +8,7 @@
 //! Plan: `docs/design/static-c-analysis/roadmap.md`. Contract:
 //! `docs/design/static-c-analysis/requirements.md`.
 
+pub mod cfg;
 pub mod lex;
 pub mod normalize;
 pub mod parse;
