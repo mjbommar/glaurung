@@ -743,13 +743,11 @@ pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
             cond,
             target,
             inverted,
-        } => {
-            Stmt::If {
-                cond: predicate_expr(cond, *inverted),
-                then_body: vec![Stmt::Goto { target: *target }],
-                else_body: None,
-            }
-        }
+        } => Stmt::If {
+            cond: predicate_expr(cond, *inverted),
+            then_body: vec![Stmt::Goto { target: *target }],
+            else_body: None,
+        },
         Op::CondReturn { cond, inverted } => Stmt::If {
             cond: predicate_expr(cond, *inverted),
             then_body: vec![Stmt::Return { value: None }],
@@ -999,9 +997,74 @@ pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
     }
 }
 
+/// Lower one LLIR operation without collapsing independent definitions.
+///
+/// Most LLIR operations have one source-level statement. Architectural query
+/// intrinsics are the first production multi-output family: keeping only
+/// output zero would make the remaining architectural register definitions
+/// disappear between LLIR and the AST.
+pub(super) fn lower_op_stmts(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
+    if let Op::Intrinsic {
+        name, ins, outs, ..
+    } = op
+    {
+        if matches!(
+            name.as_str(),
+            "x86.cpuid" | "x86.rdtsc" | "x86.rdtscp" | "x86.xgetbv"
+        ) && outs.len() > 1
+        {
+            let call = if ins.is_empty() {
+                name.clone()
+            } else {
+                format!("{}(...)", name)
+            };
+            return outs
+                .iter()
+                .enumerate()
+                .map(|(index, (dst, _))| Stmt::Assign {
+                    dst: dst.clone(),
+                    src: Expr::Unknown(format!("{call}.out{index}")),
+                })
+                .collect();
+        }
+    }
+    vec![lower_op_stmt(op, lower_scalar_float)]
+}
+
 /// The `Vec` shape of [`lower_op_stmt`], retained for the tests that assert on
 /// `statements.as_slice()`. Product code lowers a block statement by statement.
 #[cfg(test)]
 pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
-    vec![lower_op_stmt(op, lower_scalar_float)]
+    lower_op_stmts(op, lower_scalar_float)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opaque_multi_output_intrinsic_preserves_every_declared_definition() {
+        let outputs = [
+            (VReg::Temp(20), Width::W32),
+            (VReg::Temp(21), Width::W32),
+            (VReg::Temp(22), Width::W32),
+            (VReg::Temp(23), Width::W32),
+        ];
+        let statements = lower_op(
+            &Op::Intrinsic {
+                name: "x86.cpuid".into(),
+                ins: vec![Value::Reg(VReg::phys("eax")), Value::Reg(VReg::phys("ecx"))],
+                outs: outputs.to_vec(),
+                reads_mem: false,
+                writes_mem: false,
+            },
+            false,
+        );
+        assert_eq!(statements.len(), outputs.len());
+        for ((expected, _), statement) in outputs.iter().zip(&statements) {
+            assert!(
+                matches!(statement, Stmt::Assign { dst, src: Expr::Unknown(_) } if dst == expected)
+            );
+        }
+    }
 }
