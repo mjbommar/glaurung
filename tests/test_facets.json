@@ -2,7 +2,7 @@
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
   "core": 315,
-  "lfs": 112,
+  "lfs": 113,
   "toolchain": 34,
   "fixtures": 33,
   "docker": 18,
@@ -460,6 +460,9 @@
   ],
   "test_flirt_cortex_m_fixture.py": [
    "core"
+  ],
+  "test_flirt_gsig.py": [
+   "lfs"
   ],
   "test_flirt_library_builder.py": [
    "lfs"
