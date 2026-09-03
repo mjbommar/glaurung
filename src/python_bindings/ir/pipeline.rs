@@ -175,6 +175,7 @@ pub(super) fn run_ast_passes(
         crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
         crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
         crate::ir::call_args::recover_resolved_tail_calls(f, cc);
+        crate::ir::call_args::recover_proven_vtable_tail_calls(f, cc, &callee_facts.prototypes);
     });
     pass!("reconstruct_args", {
         crate::ir::call_args::reconstruct_args_with_layouts_and_strings(

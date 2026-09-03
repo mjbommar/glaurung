@@ -1043,6 +1043,17 @@ crash and three scalar C++ regressions in the concurrent snapshot, none of which
 crossed this new carrier path. Exact evidence and limits are in
 `results/wp9-interprocedural-integer-pair.md`.
 
+### Implementation evidence - 2026-09-03 Rust vtable tail calls
+
+Prototype-backed tail-call recovery now joins the proven two-word callee result
+with the exact terminal Rust vtable-slot load before converting an indirect
+jump. O2 `rust_dyn_apply` consequently emits the real virtual call and return
+instead of an unrecovered terminal jump, while four negative proof shapes stay
+fail-closed. The complete Rust trait-object O0/O2 slice remains baseline-stable;
+its remaining score failure is return-width/type cleanup, not missing control
+flow. Exact proof conditions and gate limits are in
+`results/wp9-rust-vtable-tail-call.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
