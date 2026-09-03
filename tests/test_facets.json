@@ -2,7 +2,7 @@
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
   "core": 308,
-  "lfs": 110,
+  "lfs": 111,
   "toolchain": 34,
   "fixtures": 33,
   "docker": 18,
@@ -933,6 +933,9 @@
   ],
   "test_segment.py": [
    "core"
+  ],
+  "test_signature_source_harvest.py": [
+   "lfs"
   ],
   "test_src_dependency_boundaries.py": [
    "core"

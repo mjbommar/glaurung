@@ -85,7 +85,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Protocol, Sequence
+from typing import Any, Iterable, Iterator, Literal, Protocol, Sequence
 
 #: Matches ``samples/docker/harvest_system_archives.py``. The two harvesters
 #: write the same manifest shape on purpose: one catalogue, two producers.
@@ -600,16 +600,21 @@ def elf_comment(data: bytes) -> str:
 
 
 def _elf_section_extent(
-    data: bytes, shoff: int, shentsize: int, index: int, is64: bool, order: str
+    data: bytes,
+    shoff: int,
+    shentsize: int,
+    index: int,
+    is64: bool,
+    order: Literal["little", "big"],
 ) -> tuple[int, int]:
     """Return ``(sh_offset, sh_size)`` of one section header."""
     hdr = shoff + index * shentsize
     if is64:
-        off = int.from_bytes(data[hdr + 0x18 : hdr + 0x20], order)  # type: ignore[arg-type]
-        size = int.from_bytes(data[hdr + 0x20 : hdr + 0x28], order)  # type: ignore[arg-type]
+        off = int.from_bytes(data[hdr + 0x18 : hdr + 0x20], order)
+        size = int.from_bytes(data[hdr + 0x20 : hdr + 0x28], order)
     else:
-        off = int.from_bytes(data[hdr + 0x10 : hdr + 0x14], order)  # type: ignore[arg-type]
-        size = int.from_bytes(data[hdr + 0x14 : hdr + 0x18], order)  # type: ignore[arg-type]
+        off = int.from_bytes(data[hdr + 0x10 : hdr + 0x14], order)
+        size = int.from_bytes(data[hdr + 0x14 : hdr + 0x18], order)
     return off, size
 
 

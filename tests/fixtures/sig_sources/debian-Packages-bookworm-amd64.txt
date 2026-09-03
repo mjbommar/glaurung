@@ -1,0 +1,195 @@
+Package: g++
+Source: gcc-defaults (1.203)
+Version: 4:12.2.0-3
+Installed-Size: 14
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c++-compiler, g++-x86-64-linux-gnu (= 4:12.2.0-3)
+Depends: cpp (= 4:12.2.0-3), gcc (= 4:12.2.0-3), g++-12 (>= 12.2.0-1~), gcc-12 (>= 12.2.0-1~)
+Suggests: g++-multilib
+Description: GNU C++ compiler
+Description-md5: 4d44b18774ae5123b7c3f70d940cf655
+Build-Essential: yes
+Tag: devel::compiler, devel::lang:c, devel::lang:c++, devel::library,
+implemented-in::c, interface::commandline, role::devel-lib,
+role::dummy, role::metapackage, role::program, suite::gnu,
+works-with::software:source
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-defaults/g++_12.2.0-3_amd64.deb
+Size: 1356
+MD5sum: ee1214564633e8a0ec102e218b4c66ca
+SHA256: 26c451a660728cf7c15548a281e17eef2f36fab28499371e83fc2d3accb499d7
+
+Package: gcc
+Source: gcc-defaults (1.203)
+Version: 4:12.2.0-3
+Installed-Size: 47
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c-compiler, gcc-x86-64-linux-gnu (= 4:12.2.0-3)
+Depends: cpp (= 4:12.2.0-3), gcc-12 (>= 12.2.0-1~)
+Recommends: libc6-dev | libc-dev
+Suggests: gcc-multilib, make, manpages-dev, autoconf, automake, libtool, flex, bison, gdb, gcc-doc
+Conflicts: gcc-doc (<< 1:2.95.3)
+Description: GNU C compiler
+Description-md5: c7efd71c7c651a9ac8b2adf36b137790
+Build-Essential: yes
+Tag: devel::compiler, devel::lang:c, devel::library, implemented-in::c,
+interface::commandline, role::devel-lib, role::metapackage,
+role::program, suite::gnu, works-with::software:source
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-defaults/gcc_12.2.0-3_amd64.deb
+Size: 5216
+MD5sum: f3dcf34728690484124bce954cc2c734
+SHA256: bb63b0fb2797e2a3a294dab8a02614930c557ec1f4ea96637c244b8b5f87e630
+
+Package: g++-12
+Source: gcc-12
+Version: 12.2.0-14+deb12u1
+Installed-Size: 36161
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c++-compiler, c++abi2-dev
+Depends: gcc-12-base (= 12.2.0-14+deb12u1), gcc-12 (= 12.2.0-14+deb12u1), libstdc++-12-dev (= 12.2.0-14+deb12u1), libc6 (>= 2.36), libgmp10 (>= 2:6.2.1+dfsg1), libisl23 (>= 0.15), libmpc3 (>= 1.1.0), libmpfr6 (>= 3.1.3), libzstd1 (>= 1.5.2), zlib1g (>= 1:1.1.4)
+Suggests: g++-12-multilib, gcc-12-doc (>= 12)
+Description: GNU C++ compiler
+Homepage: http://gcc.gnu.org/
+Description-md5: 0a3fad3367cb994bd16c61b0e16a8b9c
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-12/g++-12_12.2.0-14+deb12u1_amd64.deb
+Size: 10694076
+MD5sum: ede728f14f007baad34334025a28ffb4
+SHA256: 68b182badae4ace7d472f1393c559d3532a95a2d70817498b10bb481d2627251
+
+Package: gcc-12
+Version: 12.2.0-14+deb12u1
+Installed-Size: 68236
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Replaces: cpp-12 (<< 7.1.1-8)
+Provides: c-compiler
+Depends: cpp-12 (= 12.2.0-14+deb12u1), gcc-12-base (= 12.2.0-14+deb12u1), libcc1-0 (>= 12.2.0-14+deb12u1), binutils (>= 2.40), libgcc-12-dev (= 12.2.0-14+deb12u1), libc6 (>= 2.36), libgcc-s1 (>= 3.0), libgmp10 (>= 2:6.2.1+dfsg1), libisl23 (>= 0.15), libmpc3 (>= 1.1.0), libmpfr6 (>= 3.1.3), libstdc++6 (>= 5), libzstd1 (>= 1.5.2), zlib1g (>= 1:1.1.4)
+Recommends: libc6-dev (>= 2.23-1~)
+Suggests: gcc-12-multilib, gcc-12-doc (>= 12), gcc-12-locales (>= 12)
+Description: GNU C compiler
+Homepage: http://gcc.gnu.org/
+Description-md5: 394374e688b1afb3af5f419895d29698
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-12/gcc-12_12.2.0-14+deb12u1_amd64.deb
+Size: 19268852
+MD5sum: eb52b5c2f20f71ec79f8858c97f43cf7
+SHA256: b46f33cc2ec245e435e043807038cecf4b201ef004800e9dfc1455240360e49d
+
+Package: gcc-12-base
+Source: gcc-12
+Version: 12.2.0-14+deb12u1
+Installed-Size: 100
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Breaks: gnat (<< 7)
+Description: GCC, the GNU Compiler Collection (base package)
+Multi-Arch: same
+Homepage: http://gcc.gnu.org/
+Description-md5: b6e93638a6d08ea7a18929d7cf078e5d
+Tag: role::shared-lib
+Section: libs
+Priority: optional
+Filename: pool/main/g/gcc-12/gcc-12-base_12.2.0-14+deb12u1_amd64.deb
+Size: 37596
+MD5sum: 8e7e741807b1e1939df8f58323affdcb
+SHA256: 1896a2aacf4ad681ff5eacc24a5b0ca4d5d9c9b9c9e4b6de5197bc1e116ea619
+
+Package: libstdc++-12-dev
+Source: gcc-12
+Version: 12.2.0-14+deb12u1
+Installed-Size: 19446
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: libstdc++-dev
+Depends: gcc-12-base (= 12.2.0-14+deb12u1), libgcc-12-dev (= 12.2.0-14+deb12u1), libstdc++6 (>= 12.2.0-14+deb12u1), libc6-dev (>= 2.23-1~)
+Suggests: libstdc++-12-doc
+Description: GNU Standard C++ Library v3 (development files)
+Multi-Arch: same
+Homepage: http://gcc.gnu.org/
+Description-md5: a197f2aec835e5fc6f8f76039d8a7c4e
+Tag: devel::library, role::devel-lib
+Section: libdevel
+Priority: optional
+Filename: pool/main/g/gcc-12/libstdc++-12-dev_12.2.0-14+deb12u1_amd64.deb
+Size: 2047292
+MD5sum: ccfa30fe6dbebb57c4b486233250f574
+SHA256: d28def6c23630432b57cb38a4c2fd67a79d4e0484027386ca6e8d6005c3d7a73
+
+Package: libstdc++6
+Source: gcc-12
+Version: 12.2.0-14+deb12u1
+Installed-Size: 2686
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Replaces: libstdc++6-12-dbg (<< 4.9.0-3)
+Depends: gcc-12-base (= 12.2.0-14+deb12u1), libc6 (>= 2.36), libgcc-s1 (>= 4.2)
+Conflicts: scim (<< 1.4.2-1)
+Breaks: gcc-4.3 (<< 4.3.6-1), gcc-4.4 (<< 4.4.6-4), gcc-4.5 (<< 4.5.3-2)
+Description: GNU Standard C++ Library v3
+Multi-Arch: same
+Homepage: http://gcc.gnu.org/
+Description-md5: 724ab84919e0e220afb960e36463914d
+Tag: role::shared-lib
+Section: libs
+Priority: optional
+Filename: pool/main/g/gcc-12/libstdc++6_12.2.0-14+deb12u1_amd64.deb
+Size: 612604
+MD5sum: d5a137316d9551b28daed14e209d5538
+SHA256: 5cd3171216d4ab0fc911cfe9c35509bf2dd8f47761c43b7f6a4296701551a24d
+
+Package: libc6-dev
+Source: glibc
+Version: 2.36-9+deb12u14
+Installed-Size: 11975
+Maintainer: GNU Libc Maintainers <debian-glibc@lists.debian.org>
+Architecture: amd64
+Replaces: libc6 (<= 2.32-1)
+Provides: libc-dev (= 2.36-9+deb12u14)
+Depends: libc6 (= 2.36-9+deb12u14), libc-dev-bin (= 2.36-9+deb12u14), linux-libc-dev, libcrypt-dev, libnsl-dev, rpcsvc-proto
+Suggests: glibc-doc, manpages-dev
+Conflicts: libc0.1-dev, libc0.3-dev, libc6.1-dev
+Breaks: binutils (<< 2.38), catch (<< 1.12.2-0.1), heimdal-multidev (<= 7.7.0+dfsg-4), igblast (<= 1.19.0-1), libassimp-dev (<= 5.2.4~ds0-1), libasyncns-dev (<= 0.8-6+b2), libatm1-dev (<= 1:2.5.1-4), libaws20-dev (<= 20.2-2+b1), libboinc-app-dev (<= 7.20.2+dfsg-1), libbson-dev (<= 1.22.0-1), libc6-dev-amd64-cross (<< 2.36~), libcups2-dev (<= 2.4.2-1), libdeal.ii-dev (<= 9.4.0-1), libdkim-dev (<= 1:1.0.21-4+b2), libdolfin-dev-common (<= 2019.2.0~git20220407.d29e24d-5), libeckit-dev (<= 1.20.0-1), libfclib-dev (<= 3.1.0+dfsg-2), libfltk1.3-dev (<= 1.3.8-4+b1), libgcc-10-dev (<< 10-20200321-1~), libgcc-7-dev (<< 7.5.0-6~), libgcc-8-dev (<< 8.4.0-2~), libgcc-9-dev (<< 9.3.0-5~), libghc-resolv-dev (<= 0.1.2.0-3), libghc-resolv-prof (<= 0.1.2.0-3), libglib2.0-dev (<= 2.72.3-1), libgloox-dev (<= 1.0.24-2+b1), libhesiod-dev (<= 3.2.1-3.1+b1), libinfinity-0.7-dev (<= 0.7.2-1+b1), libinsighttoolkit4-dev (<= 4.13.3withdata-dfsg2-3+b1), libinsighttoolkit5-dev (<= 5.2.1-5+b1), libismrmrd-dev (<= 1.8.0-2), libldap-dev (<= 2.5.12+dfsg-2), liblog4cplus-dev (<= 2.0.7-1), libloudmouth1-dev (<= 1.5.4-1), libmgl-dev (<= 8.0.1-2), libmimalloc2.0 (<= 2.0.6+ds-1), libminc-dev (<= 2.4.03-5), libmongoc-dev (<= 1.22.1-1), libmrpt-ros1bridge-dev (<= 1:2.4.9+ds-4+b2), libmysqlclient-dev (<= 8.0.29-1), libnetcdf-dev (<= 1:4.9.0-3), libnetcdf-mpi-dev (<= 1:4.9.0-1), libnetcdf-pnetcdf-dev (<= 1:4.9.0-1), libnfsidmap-dev (<= 1:2.6.1-2), libns3-dev (<= 3.36.1+dfsg-4), libola-dev (<= 0.10.8.nojsmin-2), libopenafs-dev (<= 1.8.8.1-3), libopendkim-dev (<= 2.11.0~beta2-7), libopendmarc-dev (<= 1.4.2-1), libopenms-dev (<= 2.6.0+cleaned1-3+b1), libopenzwave1.6-dev (<= 1.6.1914+ds-1), libperl5.26 (<< 5.26.1-3), libpg-query-dev (<= 13-2.1.2-2), librbl-dev (<= 2.11.0~beta2-7), libre-dev (<= 1.1.0-1+b1), libshishi-dev (<= 1.0.2-11), libslurm-dev (<= 21.08.8.2-1), libsocksd0-dev (<= 1.4.2+dfsg-7+b4), libspf2-dev (<= 1.2.10-7.1+b1), libstrophe-dev (<= 0.12.1-2), libtaningia-dev (<= 0.2.2-2+b1), libtrilinos-amesos-dev (<= 13.2.0-3), libtrilinos-amesos2-dev (<= 13.2.0-3), libtrilinos-anasazi-dev (<= 13.2.0-3), libtrilinos-aztecoo-dev (<= 13.2.0-3), libtrilinos-belos-dev (<= 13.2.0-3), libtrilinos-epetra-dev (<= 13.2.0-3), libtrilinos-epetraext-dev (<= 13.2.0-3), libtrilinos-galeri-dev (<= 13.2.0-3), libtrilinos-ifpack-dev (<= 13.2.0-3), libtrilinos-ifpack2-dev (<= 13.2.0-3), libtrilinos-intrepid-dev (<= 13.2.0-3), libtrilinos-intrepid2-dev (<= 13.2.0-3), libtrilinos-isorropia-dev (<= 13.2.0-3), libtrilinos-kokkos-dev (<= 13.2.0-3), libtrilinos-kokkos-kernels-dev (<= 13.2.0-3), libtrilinos-komplex-dev (<= 13.2.0-3), libtrilinos-ml-dev (<= 13.2.0-3), libtrilinos-moertel-dev (<= 13.2.0-3), libtrilinos-muelu-dev (<= 13.2.0-3), libtrilinos-nox-dev (<= 13.2.0-3), libtrilinos-phalanx-dev (<= 13.2.0-3), libtrilinos-pike-dev (<= 13.2.0-3), libtrilinos-piro-dev (<= 13.2.0-3), libtrilinos-pliris-dev (<= 13.2.0-3), libtrilinos-rol-dev (<= 13.2.0-3), libtrilinos-rtop-dev (<= 13.2.0-3), libtrilinos-rythmos-dev (<= 13.2.0-3), libtrilinos-sacado-dev (<= 13.2.0-3), libtrilinos-shylu-dev (<= 13.2.0-3), libtrilinos-stokhos-dev (<= 13.2.0-3), libtrilinos-stratimikos-dev (<= 13.2.0-3), libtrilinos-teko-dev (<= 13.2.0-3), libtrilinos-teuchos-dev (<= 13.2.0-3), libtrilinos-thyra-dev (<= 13.2.0-3), libtrilinos-tpetra-dev (<= 13.2.0-3), libtrilinos-trilinoscouplings-dev (<= 13.2.0-3), libtrilinos-triutils-dev (<= 13.2.0-3), libtrilinos-xpetra-dev (<= 13.2.0-3), libtrilinos-zoltan2-dev (<= 13.2.0-3), libvbr-dev (<= 2.11.0~beta2-7), libvisp-dev (<= 3.5.0-2+b1), libvotca-dev (<= 2022-3), libvtk6-dev (<= 6.3.0+dfsg2-8.1+b1), libvtk7-dev (<= 7.1.1+dfsg2-10.2), open-vm-tools-dev (<= 2:12.0.5-2), pidgin-librvp (<= 0.9.7cvs-3), proftpd-dev (<= 1.3.7d+dfsg-2), python3.7 (<< 3.7.7-1+b1), python3.8 (<< 3.8.2-1+b1), slurm-wlm-basic-plugins-dev (<= 21.08.8.2-1)
+Description: GNU C Library: Development Libraries and Header Files
+Multi-Arch: same
+Homepage: https://www.gnu.org/software/libc/libc.html
+Description-md5: 1bbdc717d9acdb44db940928d570e749
+Build-Essential: yes
+Tag: devel::lang:c, devel::library, implemented-in::c, role::devel-lib,
+suite::gnu
+Section: libdevel
+Priority: optional
+Filename: pool/main/g/glibc/libc6-dev_2.36-9+deb12u14_amd64.deb
+Size: 1903668
+MD5sum: 7b7c52938e39827b7bfd99ab986b2a32
+SHA256: 0218fc2befcd784c1b0c6292c0a137ce89fad054efaa579ad083bee0f2c01aae
+
+Package: zlib1g-dev
+Source: zlib
+Version: 1:1.2.13.dfsg-1
+Installed-Size: 1310
+Maintainer: Mark Brown <broonie@debian.org>
+Architecture: amd64
+Provides: libz-dev
+Depends: zlib1g (= 1:1.2.13.dfsg-1), libc6-dev | libc-dev
+Conflicts: zlib1-dev
+Description: compression library - development
+Multi-Arch: same
+Homepage: http://zlib.net/
+Description-md5: d7f4e8a626131fc83c643c5d59096290
+Tag: devel::library, role::devel-lib, role::program, use::compressing
+Section: libdevel
+Priority: optional
+Filename: pool/main/z/zlib/zlib1g-dev_1.2.13.dfsg-1_amd64.deb
+Size: 916272
+MD5sum: 1786e234d8245882ccac5a8defa5ff5f
+SHA256: f9ce531f60cbd5df37996af9370e0171be96902a17ec2bdbd8d62038c354094f
+
