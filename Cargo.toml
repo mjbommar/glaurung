@@ -169,6 +169,10 @@ harness = false
 name = "decompile_pipeline"
 harness = false
 
+[[bench]]
+name = "source_parse"
+harness = false
+
 # Examples that drive the symbolic engine only build with its feature enabled,
 # so `cargo build --all-targets` under default features skips them cleanly.
 [[example]]
