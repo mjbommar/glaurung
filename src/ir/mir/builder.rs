@@ -386,6 +386,9 @@ fn is_partial_register_write(target: TargetSpec, register: &VReg) -> bool {
     let VReg::Phys(name) = register else {
         return false;
     };
+    if let Some(view) = target.register_view(name) {
+        return !view.is_complete_write();
+    }
     let Some(arch) = regview_arch(target) else {
         return false;
     };
@@ -393,9 +396,8 @@ fn is_partial_register_write(target: TargetSpec, register: &VReg) -> bool {
         && crate::ir::regview::parent_of(arch, name).is_some_and(|parent| parent != name)
 }
 
-/// The register-view namespace of a target, for targets that have sub-register
-/// views at all. ARM32 has none, so it is deliberately absent rather than
-/// borrowing the AArch64 table.
+/// Compatibility register-view namespace for targets not yet migrated into
+/// `TargetSpec`. ARM32 is queried above through its target-owned view model.
 fn regview_arch(target: TargetSpec) -> Option<crate::ir::regview::Arch> {
     match target.id() {
         crate::target::TargetId::X86_64 => Some(crate::ir::regview::Arch::X86_64),

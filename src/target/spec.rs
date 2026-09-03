@@ -2,6 +2,7 @@
 
 use crate::core::binary::{Arch, Endianness, Format};
 use crate::target::abi::CallConv;
+use crate::target::register_views::{self, RegisterView};
 use crate::target::registers::RegisterRoles;
 
 /// Internal decompiler target identity.
@@ -191,6 +192,26 @@ impl TargetSpec {
     /// Architecture-qualified special-register roles.
     pub fn registers(self) -> RegisterRoles {
         self.registers
+    }
+
+    /// Architecture-qualified view of one physical register spelling.
+    ///
+    /// Register-view migration is incremental. ARM32 is target-owned now;
+    /// existing x86-64 and AArch64 consumers continue through the compatibility
+    /// facade in `crate::ir::regview` until their fact class moves here.
+    pub fn register_view(self, name: &str) -> Option<RegisterView> {
+        register_views::view(self.id, name)
+    }
+
+    /// Canonical storage parent when writing `name` replaces every parent bit.
+    ///
+    /// Partial views deliberately return `None`: callers performing SSA
+    /// definition canonicalization must not turn an `s0` or `d0` write into a
+    /// complete definition of the overlapping ARM32 `q0` storage family.
+    pub fn complete_register_write_parent(self, name: &str) -> Option<&'static str> {
+        self.register_view(name)
+            .filter(|view| view.is_complete_write())
+            .map(RegisterView::parent)
     }
 
     /// Minimum byte alignment of an instruction start in `mode`, if the mode

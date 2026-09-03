@@ -8,9 +8,11 @@
 pub mod abi;
 #[cfg(test)]
 mod conformance_tests;
+mod register_views;
 mod registers;
 mod spec;
 
 pub use abi::CallConv;
+pub use register_views::{RegisterBank, RegisterView};
 pub use registers::RegisterRoles;
 pub use spec::{CodeMode, OsAbi, PcRule, TargetId, TargetSpec};

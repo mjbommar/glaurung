@@ -343,6 +343,67 @@ fn expected_call_conv(arch: Arch, os_abi: OsAbi, hard_float: bool) -> Option<Cal
         .map(|(_, _, _, cc)| *cc)
 }
 
+#[test]
+fn arm32_core_and_vfp_views_are_target_qualified() {
+    let soft = TargetSpec::from_image_metadata(Arch::ARM, Endianness::Little, Format::ELF, false);
+    let hard = TargetSpec::from_image_metadata(Arch::ARM, Endianness::Little, Format::ELF, true);
+    let x86 = TargetSpec::from_image_metadata(Arch::X86_64, Endianness::Little, Format::ELF, false);
+
+    let r0 = soft.register_view("r0").expect("ARM32 r0 view");
+    assert_eq!(
+        (
+            r0.name(),
+            r0.parent(),
+            r0.offset(),
+            r0.width(),
+            r0.parent_width(),
+            r0.bank()
+        ),
+        ("r0", "r0", 0, 32, 32, RegisterBank::Core)
+    );
+    assert!(r0.is_complete_write());
+    assert_eq!(soft.register_view("a1"), Some(r0));
+    assert_eq!(soft.complete_register_write_parent("a1"), Some("r0"));
+
+    let s0 = soft.register_view("s0").expect("ARM32 s0 view");
+    let s1 = soft.register_view("s1").expect("ARM32 s1 view");
+    let d0 = soft.register_view("d0").expect("ARM32 d0 view");
+    let q0 = soft.register_view("q0").expect("ARM32 q0 view");
+    assert_eq!((s0.parent(), s0.offset(), s0.width()), ("q0", 0, 32));
+    assert_eq!((s1.parent(), s1.offset(), s1.width()), ("q0", 32, 32));
+    assert_eq!((d0.parent(), d0.offset(), d0.width()), ("q0", 0, 64));
+    assert_eq!((q0.parent(), q0.offset(), q0.width()), ("q0", 0, 128));
+    assert_eq!(s0.bank(), RegisterBank::Vfp);
+    let s31 = soft.register_view("s31").expect("last scalar VFP view");
+    assert_eq!((s31.parent(), s31.offset()), ("q7", 96));
+    let d31 = soft.register_view("d31").expect("last double VFP view");
+    assert_eq!((d31.parent(), d31.offset()), ("q15", 64));
+    assert!(soft
+        .register_view("q15")
+        .expect("last NEON quad view")
+        .is_complete_write());
+    assert!(!s0.is_complete_write());
+    assert!(!s1.is_complete_write());
+    assert!(!d0.is_complete_write());
+    assert!(q0.is_complete_write());
+    assert_eq!(soft.complete_register_write_parent("s0"), None);
+    assert_eq!(soft.complete_register_write_parent("d0"), None);
+    assert_eq!(soft.complete_register_write_parent("q0"), Some("q0"));
+    assert_ne!(
+        r0.parent(),
+        q0.parent(),
+        "core and VFP banks must not alias"
+    );
+
+    assert_eq!(soft.register_view("s0"), hard.register_view("s0"));
+    assert_ne!(soft.calling_convention(), hard.calling_convention());
+    assert_eq!(
+        x86.register_view("s0"),
+        None,
+        "ARM spelling must be target-qualified"
+    );
+}
+
 /// Walk the whole `Arch x Format x Endianness x hard_float` cross product.
 ///
 /// Every assertion names the exact spec that produced it, because a failure

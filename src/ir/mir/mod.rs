@@ -224,6 +224,56 @@ mod tests {
         assert_eq!(lane, VReg::phys("xmm0_d0"));
     }
 
+    /// ARM32 scalar VFP registers overlap the double register bank: writing
+    /// `s0` defines only the low half of `d0`. MIR must not advertise the
+    /// instruction as a complete register effect merely because ARM32 used to
+    /// have no register-view profile.
+    #[test]
+    fn an_arm32_scalar_vfp_write_is_an_incomplete_register_effect() {
+        let llir = function(vec![(
+            0x2200,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("s0"),
+                    src: Value::Const(1),
+                },
+                Op::Assign {
+                    dst: VReg::phys("d0"),
+                    src: Value::Const(2),
+                },
+                Op::Assign {
+                    dst: VReg::phys("r0"),
+                    src: Value::Const(3),
+                },
+                Op::Assign {
+                    dst: VReg::phys("q0"),
+                    src: Value::Const(4),
+                },
+            ],
+            vec![],
+        )]);
+        let mir = lower_verified(&llir, target(Arch::ARM)).expect("ARM MIR");
+        assert_eq!(
+            mir.instructions()[0].register_effects,
+            EffectCompleteness::Opaque,
+            "s0 leaves the high half of d0 in its previous state"
+        );
+        assert_eq!(
+            mir.instructions()[1].register_effects,
+            EffectCompleteness::Opaque,
+            "d0 leaves the upper half of q0 in its previous state"
+        );
+        assert_eq!(
+            mir.instructions()[2].register_effects,
+            EffectCompleteness::Complete
+        );
+        assert_eq!(
+            mir.instructions()[3].register_effects,
+            EffectCompleteness::Complete,
+            "q0 replaces the complete 128-bit storage family"
+        );
+    }
+
     #[test]
     fn poison_on_one_diamond_arm_is_not_all_paths_defined() {
         let llir = function(vec![

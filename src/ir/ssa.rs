@@ -229,7 +229,8 @@ impl SsaInfo {
     /// rather than by hashing the address: renaming writes both from one
     /// `new_version`, so they agree by construction.
     pub fn def_version(&self, lf: &LlirFunction, addr: InstrAddr) -> u32 {
-        self.def_value_ref(lf, addr).map_or(0, |value| value.version)
+        self.def_value_ref(lf, addr)
+            .map_or(0, |value| value.version)
     }
 
     /// The version read at source-order use `use_index`, or 0. See
@@ -324,11 +325,7 @@ fn write_regs(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg) -> Vec<VReg> {
 
 /// Canonicalized reads of `op`, appended to `out`. See [`write_regs_into`] for
 /// why this borrows instead of collecting twice.
-fn uses_of_op_canonical_into(
-    op: &Op,
-    canonicalize: &impl Fn(&VReg) -> VReg,
-    out: &mut Vec<VReg>,
-) {
+fn uses_of_op_canonical_into(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg, out: &mut Vec<VReg>) {
     out.clear();
     for_each_use(op, |register| out.push(canonicalize(register)));
 }
@@ -348,25 +345,7 @@ pub fn canon_gpr_for_target(target: TargetSpec, value: &VReg) -> VReg {
     let parent = match target.id() {
         TargetId::X86_64 => regview::ssa_parent(regview::Arch::X86_64, name),
         TargetId::AArch64 => regview::ssa_parent(regview::Arch::AArch64, name),
-        TargetId::Arm32 => match name.as_str() {
-            "a1" => Some("r0"),
-            "a2" => Some("r1"),
-            "a3" => Some("r2"),
-            "a4" => Some("r3"),
-            "v1" => Some("r4"),
-            "v2" => Some("r5"),
-            "v3" => Some("r6"),
-            "v4" => Some("r7"),
-            "v5" => Some("r8"),
-            "v6" | "sb" => Some("r9"),
-            "v7" | "sl" => Some("r10"),
-            "v8" | "fp" => Some("r11"),
-            "ip" => Some("r12"),
-            "r13" | "sp" => Some("sp"),
-            "r14" | "lr" => Some("lr"),
-            "r15" | "pc" => Some("pc"),
-            _ => None,
-        },
+        TargetId::Arm32 => target.complete_register_write_parent(name),
         TargetId::X86_32 => unreachable!("handled by compatibility branch above"),
         TargetId::Unsupported(_) => None,
     };
@@ -682,8 +661,7 @@ fn rename(
     // Exact capacities from the operand counts already computed above. Growing
     // these incrementally made `reserve_rehash` 3.9% of the dataflow phase on
     // `07_packet_parser::parse_packet`.
-    let mut def_versions: HashMap<InstrAddr, u32> =
-        HashMap::with_capacity(def_values_all.len());
+    let mut def_versions: HashMap<InstrAddr, u32> = HashMap::with_capacity(def_values_all.len());
     let mut use_versions: HashMap<(InstrAddr, usize), u32> =
         HashMap::with_capacity(use_values_all.len());
     // Phi results and incoming version slots, filled in as we rename.
@@ -1333,5 +1311,31 @@ mod tests {
         assert_eq!(canon_gpr(&VReg::phys("fp")), VReg::phys("fp"));
         assert_eq!(parent64("x29"), Some("x29"));
         assert_eq!(parent64("x30"), Some("x30"));
+    }
+
+    #[test]
+    fn arm32_ssa_canonicalizes_only_complete_target_owned_writes() {
+        use crate::core::binary::{Arch, Endianness, Format};
+
+        let target =
+            TargetSpec::from_image_metadata(Arch::ARM, Endianness::Little, Format::ELF, false);
+        assert_eq!(
+            canon_gpr_for_target(target, &VReg::phys("a1")),
+            VReg::phys("r0")
+        );
+        assert_eq!(
+            canon_gpr_for_target(target, &VReg::phys("s0")),
+            VReg::phys("s0"),
+            "a partial scalar write must not manufacture a complete q0 definition"
+        );
+        assert_eq!(
+            canon_gpr_for_target(target, &VReg::phys("d0")),
+            VReg::phys("d0"),
+            "a partial double write must not manufacture a complete q0 definition"
+        );
+        assert_eq!(
+            canon_gpr_for_target(target, &VReg::phys("q0")),
+            VReg::phys("q0")
+        );
     }
 }
