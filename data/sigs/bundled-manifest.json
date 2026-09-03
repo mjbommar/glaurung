@@ -22,9 +22,8 @@
       "size_bytes": 69783,
       "uncompressed_bytes": 69783,
       "urls": [
-        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351",
-        "https://sigs.glaurung.dev/blob/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351",
-        "hf://datasets/glaurung/sigs/blobs/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351"
+        "https://assets.glaurung.dev/sigs/blob/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351.gsig.zst",
+        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351"
       ]
     },
     {
@@ -43,22 +42,21 @@
         "variant": "gcc-15.2.0-O2",
         "version": "1.0.0"
       },
-      "sha256": "8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474",
+      "sha256": "659d91e047af323b19a05e99a891eb1436d802df41275443115441c8988c31f7",
       "signatures": 16,
-      "size_bytes": 6631,
-      "uncompressed_bytes": 6631,
+      "size_bytes": 6682,
+      "uncompressed_bytes": 6682,
       "urls": [
-        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474",
-        "https://sigs.glaurung.dev/blob/8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474",
-        "hf://datasets/glaurung/sigs/blobs/8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474"
+        "https://assets.glaurung.dev/sigs/blob/659d91e047af323b19a05e99a891eb1436d802df41275443115441c8988c31f7.gsig.zst",
+        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/659d91e047af323b19a05e99a891eb1436d802df41275443115441c8988c31f7"
       ]
     }
   ],
-  "built_utc": "2026-09-03T13:02:48Z",
+  "built_utc": "2026-09-03T19:45:44Z",
   "min_glaurung_version": "0.1.0",
   "schema_version": 1,
   "serial": 1,
   "set": "base",
   "set_version": "2026.09.1-bundled",
-  "valid_until": "2027-03-02T13:02:48Z"
+  "valid_until": "2027-03-02T19:45:44Z"
 }

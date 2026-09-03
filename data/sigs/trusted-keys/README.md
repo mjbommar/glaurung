@@ -28,7 +28,7 @@ the passphrase on its controlling terminal):
 
 ```bash
 minisign -Sm <out>/manifest.json -s <path to glaurung-sigs.key> \
-    -t "<set_version> serial=<serial>"
+    -t "<the manifest's canonical trusted comment, printed by the publish tool>"
 ```
 
 `tools/publish_signature_set.py` prints this exact command (with the real
@@ -48,29 +48,16 @@ day. To rotate: add the new `.pub` here first (commit it), keep the old
 `.pub` in place until every manifest it ever signed has passed its
 `valid_until`, then delete the old `.pub` in a later commit.
 
-## `glaurung-sigs-dev.pub` — a DEVELOPMENT key, not yet retired
+## The development key is retired
 
-Key id `FA6FDB763B3E76EF`, generated on 2026-09-03 by
-`tools/publish_signature_set.py --generate-key` to make the distribution
-channel testable end to end before the production key above existed.
-
-**Its secret half lives outside this repository, on one development machine,
-and has signed nothing that was ever published.** It is still trusted here,
-alongside the production key, for one reason only:
-`data/sigs/bundled-manifest.json` (the wheel's offline fallback) is still
-signed with it, and removing it from this directory before that manifest is
-re-signed would make a fresh, network-less install's own bundled fallback
-fail its own trust check — a worse outcome than a development key staying
-trusted a little longer for an unpublished set. Retiring it needs, in order:
-
-1. Re-sign `data/sigs/bundled-manifest.json` with the production key — see
-   the "Rebuilding the bundled set" section of `data/sigs/README.md`. This
-   needs the production secret key and must be done by the maintainer; no
-   tool in this repository can do it.
-2. Move `glaurung-sigs-dev.pub` out of this directory (a test fixture
-   location, e.g. `tests/fixtures/sigs/dev-key/`, for whatever test still
-   wants to exercise a locally-generated, locally-trusted key) so a shipped
-   client trusts only the production key.
+Key id `FA6FDB763B3E76EF` was generated on 2026-09-03 by
+`tools/publish_signature_set.py --generate-key` to make the channel testable
+end to end before the production key existed. It signed nothing that was ever
+published. On 2026-09-03 the maintainer re-signed
+`data/sigs/bundled-manifest.json` with the production key, and the
+development public key moved to `tests/fixtures/sigs/dev-key/` for tests that
+exercise a locally-generated, locally-trusted key. A shipped client trusts
+only the production key above.
 
 ## Why a directory and not one embedded key
 
