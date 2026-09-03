@@ -502,7 +502,54 @@ build_library_variants() {
     fi
 }
 
+# --- System static archives -------------------------------------------------
+# The input to a FLIRT-style signature library is an *unlinked* `ar` archive:
+# only a relocatable object carries the relocation table that says which bytes
+# the linker is going to rewrite, and masking exactly those is what makes a
+# signature survive a relink. So the distribution's own static archives are
+# harvested, with their dpkg provenance, rather than rebuilt from source.
+#
+# Off by default: a plain image build exports exactly what it exported before.
+# Enable with HARVEST_SYSTEM_ARCHIVES=1, or run this script as
+#     build-platform.sh --harvest-only [OUTPUT_DIR]
+# against a bind-mounted output directory. The implementation is
+# samples/docker/harvest_system_archives.py; see
+# docs/reference/sample-corpus.md, "System archives".
+harvest_system_archives() {
+    local out_dir="${1:-$BINARIES_DIR/system-libs}"
+    local script=""
+    if [ -f /usr/local/bin/harvest_system_archives.py ]; then
+        script=/usr/local/bin/harvest_system_archives.py
+    elif [ -f "$SCRIPT_DIR/harvest_system_archives.py" ]; then
+        script="$SCRIPT_DIR/harvest_system_archives.py"
+    fi
+
+    if [ -z "$script" ]; then
+        warn "harvest_system_archives.py not found, skipping system archives"
+        return 0
+    fi
+    if ! command -v python3 &> /dev/null; then
+        warn "python3 not found, skipping system archives"
+        return 0
+    fi
+
+    log "Harvesting system static archives -> $out_dir"
+    python3 "$script" \
+        --output "$out_dir" \
+        --image-base "${HARVEST_IMAGE_BASE:-ubuntu:22.04}" \
+        --image-name "${HARVEST_IMAGE_NAME:-${TARGET_OS:-linux}-${TARGET_ARCH:-unknown}}" \
+        --target-os "${TARGET_OS:-linux}" \
+        --target-arch "${TARGET_ARCH:-unknown}" \
+        || warn "system archive harvest failed"
+}
+
 main() {
+    if [ "${1:-}" = "--harvest-only" ]; then
+        shift
+        harvest_system_archives "$@"
+        return 0
+    fi
+
     log "Starting Linux sample builds"
     log "Source: $SOURCE_DIR"
     log "Output: $BINARIES_DIR"
@@ -545,6 +592,10 @@ main() {
     if [ -f "$SOURCE_DIR/c/pe_tls.c" ] && command -v x86_64-w64-mingw32-gcc &> /dev/null; then
         compile_binary "$SOURCE_DIR/c/pe_tls.c" x86_64-w64-mingw32-gcc "$BINARIES_DIR/cross/windows-x86_64" \
             "pe_tls_callbacks-x86_64-mingw.exe" "-O2 -Wall" "Windows PE with TLS callback (MinGW-w64)"
+    fi
+
+    if [ "${HARVEST_SYSTEM_ARCHIVES:-0}" = "1" ]; then
+        harvest_system_archives
     fi
 
     log "Linux builds completed successfully"
