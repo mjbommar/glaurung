@@ -322,9 +322,17 @@ pub fn evaluate<S: Scheme>(scheme: &S, corpus: &Corpus, tasks: &[Task]) -> Schem
         corpus_root: corpus.root.clone(),
         corpus_load_seconds: corpus.load_seconds,
         corpus_filters: corpus.filters,
+        // The JSON field this becomes is named `compiler`, so it holds the
+        // compiler and not `Slice::label()` ("gcc/O0"), which is what it used
+        // to hold. `test_python_and_rust_harnesses_agree_on_the_corpus` joins
+        // the two harnesses' populations on `(compiler, opt)` and could never
+        // match a key; the check that exists to notice the two lanes filtering
+        // different populations could not itself run. `cisco.rs` builds its
+        // own `slice_sizes` and is unaffected -- there a slice really is
+        // identified by its five-dimensional label.
         slice_sizes: corpus
             .slices()
-            .map(|s| (s.label(), s.opt.to_string(), s.samples.len()))
+            .map(|s| (s.compiler.to_string(), s.opt.to_string(), s.samples.len()))
             .collect(),
         corpus_name: "glaurung fixture matrix (tests/decompiler_fixtures/build)".to_string(),
         unsupported_tasks: UNSUPPORTED_TASKS
