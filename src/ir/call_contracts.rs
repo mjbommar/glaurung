@@ -919,11 +919,16 @@ fn apply_recovered_body(body: &mut [Stmt], prototypes: &HashMap<u64, CallPrototy
     }
 }
 
-fn recovered_callee_from_spec(call_spec: &Option<CallSiteSpec>) -> Option<CallPrototype> {
+/// Retain the callee-owned fact while rebuilding the call-site view.
+///
+/// A local definition can contribute either machine-recovered evidence or an
+/// authoritative DWARF declaration.  Refreshing the site must preserve both;
+/// the catalog lookup inside `recover_call_site_spec_with_types` still wins
+/// when it has a declaration for the same symbol.
+fn direct_callee_from_spec(call_spec: &Option<CallSiteSpec>) -> Option<CallPrototype> {
     call_spec
         .as_ref()
         .and_then(|spec| spec.callee_prototype.as_ref())
-        .filter(|prototype| prototype.authority == CallPrototypeAuthority::Recovered)
         .cloned()
 }
 
@@ -936,7 +941,7 @@ fn refine_body(body: &mut [Stmt], types: Option<&TypeMap>) {
                 dst,
                 call_spec,
             } => {
-                let recovered_callee = recovered_callee_from_spec(call_spec);
+                let recovered_callee = direct_callee_from_spec(call_spec);
                 *call_spec = Some(recover_call_site_spec_with_types(
                     target,
                     args,
@@ -997,7 +1002,7 @@ fn apply_body(body: &mut [Stmt]) {
                         }
                     }
                 }
-                let recovered_callee = recovered_callee_from_spec(call_spec);
+                let recovered_callee = direct_callee_from_spec(call_spec);
                 *call_spec = Some(recover_call_site_spec_with_types(
                     target,
                     args,
@@ -1459,6 +1464,43 @@ mod tests {
             types.get(&VReg::phys("s0")),
             Some(TypeHint::Float { width: 4 })
         );
+    }
+
+    #[test]
+    fn authoritative_direct_callee_prototype_survives_contract_refresh() {
+        let mut function = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "local_wide_result@plt".into(),
+                },
+                args: vec![Expr::Reg(VReg::phys("rdi"))],
+                dst: Some(VReg::phys("rax")),
+                call_spec: None,
+            }],
+        };
+        let authoritative = CallPrototype {
+            return_type: "unsigned __int128".into(),
+            parameter_types: vec!["int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let prototypes = std::collections::HashMap::from([(0x2000, authoritative.clone())]);
+
+        super::apply_recovered_callee_prototypes(&mut function, &prototypes);
+        apply_known_call_contracts(&mut function);
+
+        let Stmt::Call {
+            call_spec: Some(call_spec),
+            ..
+        } = &function.body[0]
+        else {
+            panic!("expected a direct-callee call specification")
+        };
+        assert_eq!(call_spec.callee_prototype, Some(authoritative));
+        assert_eq!(call_spec.call_prototype.return_type, "unsigned __int128");
     }
 
     #[test]

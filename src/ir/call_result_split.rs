@@ -189,14 +189,50 @@ impl Splitter {
         VReg::phys(format!("{high_register}#call_lifetime_high_{index}"))
     }
 
+    /// Materialize result storage only when the callee itself proves a result.
+    ///
+    /// Call-site liveness normally supplies `dst`, but exceptional CFG edges can
+    /// hide the first post-call read from that attribution pass.  A callee-owned
+    /// non-void prototype is still sufficient to seed the ABI result bank; the
+    /// later unused-result pass removes the destination when no read consumes it.
+    fn declared_result_register(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> Option<VReg> {
+        let prototype = call_spec?.callee_prototype.as_ref()?;
+        if prototype.return_type.trim().eq_ignore_ascii_case("void") {
+            return None;
+        }
+        let register = match crate::ir::call_contracts::call_return_hint(&prototype.return_type) {
+            Some(crate::ir::types_recover::TypeHint::Float { .. }) => {
+                crate::ir::abi::float_return_registers(self.cc)
+                    .first()
+                    .copied()?
+            }
+            _ => crate::ir::abi::return_register(self.cc),
+        };
+        Some(VReg::phys(register))
+    }
+
     fn wide_result_pair(
         &self,
         call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
     ) -> Option<(&'static str, &'static str)> {
-        let width = crate::ir::call_contracts::integer_c_type_width(
-            &call_spec?.call_prototype.return_type,
-            crate::ir::abi::machine_word_bytes(self.cc),
-        )?;
+        let call_spec = call_spec?;
+        // The callee-wide contract can be stronger than a still-incomplete
+        // site inference. Preserve the widest integer storage fact: using the
+        // narrower site spelling here drops the high ABI result register even
+        // though the declaration already proves the pair.
+        let pointer_width = crate::ir::abi::machine_word_bytes(self.cc);
+        let width = std::iter::once(&call_spec.call_prototype)
+            .chain(call_spec.callee_prototype.iter())
+            .filter_map(|prototype| {
+                crate::ir::call_contracts::integer_c_type_width(
+                    &prototype.return_type,
+                    pointer_width,
+                )
+            })
+            .max()?;
         crate::ir::abi::wide_integer_return_pair(self.cc, width)
     }
 
@@ -620,9 +656,13 @@ impl Splitter {
                     *dst = None;
                     return Vec::new();
                 }
-                let Some(original) = dst.clone() else {
+                let Some(original) = dst
+                    .clone()
+                    .or_else(|| self.declared_result_register(call_spec.as_ref()))
+                else {
                     return Vec::new();
                 };
+                *dst = Some(original.clone());
                 // A result the ABI put in BOTH SSE result registers is not one
                 // scalar in one register, so it does not get a scalar
                 // destination — and it is checked BEFORE the scalar storage
@@ -1044,6 +1084,115 @@ mod tests {
                 "wide call did not define its high ABI part from the scalar result: {function:#?}"
             );
         }
+    }
+
+    #[test]
+    fn a_wide_callee_contract_repairs_a_narrow_call_site_result() {
+        let callee = CallPrototype {
+            return_type: "unsigned __int128".to_string(),
+            parameter_types: vec!["int".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let site = CallPrototype {
+            return_type: "long".to_string(),
+            parameter_types: vec!["long".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let mut function = Function {
+            name: "quad_roundtrip".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "make_quad".to_string(),
+                    },
+                    args: vec![Expr::Reg(reg("rdi"))],
+                    dst: Some(reg("rax")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(callee),
+                        call_prototype: site,
+                    }),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("low_slot")),
+                    src: Expr::Reg(reg("rax")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("high_slot")),
+                    src: Expr::Reg(reg("rdx")),
+                    size: 8,
+                },
+            ],
+        };
+
+        split_call_result_lifetimes(&mut function, CallConv::SysVAmd64);
+
+        assert!(
+            function.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign {
+                    src: Expr::Cast { expr, .. },
+                    ..
+                } if matches!(
+                    expr.as_ref(),
+                    Expr::Bin { op: BinOp::Shr, rhs, .. } if rhs.as_ref() == &Expr::Const(64)
+                )
+            )),
+            "the callee's wide result did not define the high bank: {function:#?}"
+        );
+    }
+
+    #[test]
+    fn a_nonvoid_callee_recovers_a_missing_consumed_result_destination() {
+        let prototype = CallPrototype {
+            return_type: "int".to_string(),
+            parameter_types: vec!["int".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let mut function = Function {
+            name: "exceptional_caller".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "may_throw".to_string(),
+                    },
+                    args: vec![Expr::Reg(reg("rdi"))],
+                    dst: None,
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(prototype.clone()),
+                        call_prototype: prototype,
+                    }),
+                },
+                Stmt::Assign {
+                    dst: reg("out"),
+                    src: Expr::Reg(reg("rax")),
+                },
+            ],
+        };
+
+        split_call_result_lifetimes(&mut function, CallConv::SysVAmd64);
+
+        let Stmt::Call {
+            dst: Some(call_result),
+            ..
+        } = &function.body[0]
+        else {
+            panic!("the proven non-void call did not recover its result")
+        };
+        assert!(matches!(
+            &function.body[1],
+            Stmt::Assign {
+                src: Expr::Reg(value),
+                ..
+            } if value == call_result
+        ));
     }
 
     /// AAPCS64's register-pair result, and the argument leak that not modelling
