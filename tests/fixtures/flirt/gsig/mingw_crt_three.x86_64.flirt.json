@@ -1,0 +1,215 @@
+{
+  "arch": "x86_64",
+  "entries": [
+    {
+      "crc16": 2939,
+      "crc_len": 48,
+      "function_len": 80,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_FindPESection",
+      "prologue_hex": "4863413c4801c80fb748066685c9743d440fb7401483e901488d0c894a8d4400",
+      "refs": [],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!_FindPESection"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 171,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffff00000000ffffffffffffffffff",
+      "name": "_FindPESectionByName",
+      "prologue_hex": "5541545756534883ec20488d6c24204889cfe8000000004883f808770e488b05",
+      "refs": [
+        {
+          "name": "strlen",
+          "offset": 19
+        },
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 32
+        },
+        {
+          "name": "strncmp",
+          "offset": 141
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!_FindPESectionByName"
+    },
+    {
+      "crc16": 47855,
+      "crc_len": 94,
+      "function_len": 126,
+      "mask_hex": "ffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_FindPESectionExec",
+      "prologue_hex": "4c8b050000000031c0664181384d5a750f4963503c4c01c2813a504500007408",
+      "refs": [
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 3
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!_FindPESectionExec"
+    },
+    {
+      "crc16": 48341,
+      "crc_len": 27,
+      "function_len": 59,
+      "mask_hex": "ffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_GetPEImageBase",
+      "prologue_hex": "488b050000000031d26681384d5a750f4863483c4801c1813950450000740948",
+      "refs": [
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 3
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!_GetPEImageBase"
+    },
+    {
+      "crc16": 58393,
+      "crc_len": 108,
+      "function_len": 140,
+      "mask_hex": "ffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_IsNonwritableInCurrentImage",
+      "prologue_hex": "488b150000000031c066813a4d5a75104c63423c4901d0418138504500007408",
+      "refs": [
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 3
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!_IsNonwritableInCurrentImage"
+    },
+    {
+      "crc16": 14869,
+      "crc_len": 15,
+      "function_len": 47,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_ValidateImageBase",
+      "prologue_hex": "31c06681394d5a750f4863513c4801d18139504500007408c30f1f8000000000",
+      "refs": [],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!_ValidateImageBase"
+    },
+    {
+      "crc16": 40215,
+      "crc_len": 27,
+      "function_len": 59,
+      "mask_hex": "ffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "__mingw_GetSectionCount",
+      "prologue_hex": "488b050000000031c96681384d5a750f4863503c4801d0813850450000740989",
+      "refs": [
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 3
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!__mingw_GetSectionCount"
+    },
+    {
+      "crc16": 52791,
+      "crc_len": 96,
+      "function_len": 128,
+      "mask_hex": "ffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "__mingw_GetSectionForAddress",
+      "prologue_hex": "488b150000000031c066813a4d5a75104c63423c4901d0418138504500007408",
+      "refs": [
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 3
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!__mingw_GetSectionForAddress"
+    },
+    {
+      "crc16": 46855,
+      "crc_len": 150,
+      "function_len": 182,
+      "mask_hex": "ffffff00000000ffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "__mingw_enum_import_library_names",
+      "prologue_hex": "4c8b1d000000004531c06641813b4d5a750f4963533c4c01da813a5045000074",
+      "refs": [
+        {
+          "name": ".refptr.__ImageBase",
+          "offset": 3
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-pesect.o!__mingw_enum_import_library_names"
+    },
+    {
+      "crc16": 28771,
+      "crc_len": 251,
+      "function_len": 283,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "__rshift_D2A",
+      "prologue_hex": "5541554154575653488d2c244c63591489d34989c9c1fb054139db7f2341c741",
+      "refs": [],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingwex_a-gmisc.o!__rshift_D2A"
+    },
+    {
+      "crc16": 59226,
+      "crc_len": 34,
+      "function_len": 66,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "__trailz_D2A",
+      "prologue_hex": "48635114488d4118488d0c9031d24839c87219eb2a66662e0f1f840000000000",
+      "refs": [],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingwex_a-gmisc.o!__trailz_D2A"
+    },
+    {
+      "crc16": 24294,
+      "crc_len": 7,
+      "function_len": 248,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_matherr",
+      "prologue_hex": "5556534883ec70488d6c24400f1175000f117d10440f1145208339060f87ca00",
+      "refs": [
+        {
+          "name": "__acrt_iob_func",
+          "offset": 89
+        },
+        {
+          "name": "fprintf",
+          "offset": 129
+        }
+      ],
+      "source_binary": "/home/mjbommar/.cache/glaurung/tmp/tmp.cJUaXJmI1d/sub/lib64_libmingw32_a-merr.o!_matherr"
+    }
+  ],
+  "index": {
+    "31c06681": [
+      5
+    ],
+    "4863413c": [
+      0
+    ],
+    "48635114": [
+      10
+    ],
+    "55415457": [
+      1
+    ],
+    "55415541": [
+      9
+    ],
+    "55565348": [
+      11
+    ]
+  },
+  "library": {
+    "arch": "x86_64",
+    "name": "mingw_crt_three",
+    "variant": "mingw-w64-gcc",
+    "version": "13.0.0"
+  },
+  "prologue_len": 32,
+  "schema_version": "2",
+  "stats": {
+    "aliases_coalesced": 0,
+    "archive": "tests/fixtures/flirt/coff/mingw_crt_three.msvc.lib",
+    "dropped_ambiguous": 0,
+    "raw_signatures": 12,
+    "signatures_with_crc": 11,
+    "signatures_with_masked_bytes": 7,
+    "signatures_with_refs": 8,
+    "unique_signatures": 12
+  }
+}
