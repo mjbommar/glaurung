@@ -125,6 +125,7 @@ class WarpFunction:
     """One function's WARP identity."""
 
     block_guids: Any
+    byte_len: Any
     constraints: Any
     entry_va: Any
     guid: Any

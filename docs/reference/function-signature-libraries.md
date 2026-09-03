@@ -318,3 +318,311 @@ construction, a member.
   work once a library is large enough that a linear in-memory scan stops
   being the cheaper option (see the schema survey's "flat scan until 1e5"
   guidance).
+
+---
+
+## Windows: WARP libraries from PE + PDB
+
+Everything above is about FLIRT, which wants an `ar` archive of unlinked `.o`
+members because their relocation tables say which bytes the linker will
+rewrite. **For Windows system code that input does not exist.** Microsoft ships
+no `.lib` or `.obj` for `ntdll` or `ntoskrnl` -- not in the SDK, not in the WDK,
+not on the symbol server -- and there is none anywhere in the corpus. What
+Microsoft does publish is the linked image and a PDB full of names for it.
+
+That pair is exactly WARP's input. Its GUID is a UUIDv5 over
+relocation-*masked* instruction bytes, and the masking is derived by decoding
+the image rather than by reading a relocation table, so a linked PE is a
+first-class input rather than the contaminated one
+([`function-identity-warp.md`](function-identity-warp.md)). So on Windows the
+scheme is WARP and the ladder starts at L0, not at FLIRT.
+
+`python/glaurung/tools/build_warp_library.py` builds them;
+`siglib.ingest_warp_library_file` records one in the KB so `function_match`
+provenance works, and the builder's `--kb` does both in one command;
+`python/tests/test_warp_windows_libraries.py` pins every number below.
+
+### The key
+
+`(name, version, variant, arch, platform)`, read off the PE itself rather than
+off the path it was found at:
+
+| Field | Source | Example |
+|---|---|---|
+| `name` | The module file name, lowercased | `ntdll.dll` |
+| `version` | `VS_FIXEDFILEINFO`'s `FileVersion`, from the `RT_VERSION` resource -- the field Microsoft increments per servicing build. Falls back to `cv-<GUID+age>` when a module has no version resource | `10.0.22621.2428` |
+| `variant` | Optional-header linker version + the Rich header's toolset build id | `msvc-14.30-b30795` |
+| `arch` | COFF machine | `x86_64` |
+| `platform` | Constant | `windows` |
+
+The Rich header's build id is taken as *the build number appearing in the most
+`(product, build, count)` triples*: a Visual Studio release stamps the same
+number from its compiler, assembler, CVTRES and linker, while a stale object
+linked in from an older toolset contributes one lonely triple with an older
+one. **The `msvc-` prefix is claimed only when a Rich header is present**,
+because the Rich header is written by the Microsoft linker and by nothing else;
+a MinGW or `lld` image gets `link-<major>.<minor>`, which does not assert a
+compiler that never touched it.
+
+### ICF and the ambiguity rule
+
+The MSVC linker folds identical functions (`/OPT:ICF`) and Windows system DLLs
+are full of the result, and WARP deliberately never prunes a colliding GUID
+either. The builder therefore emits **one entry per `(guid, name)` pair** --
+exactly what `siglib_function`'s `UNIQUE (siglib_id, scheme, identity, name)`
+stores -- and flags every entry whose GUID carries more than one name
+`ambiguous`. It never picks one, `ingest_warp_library_file` never drops one
+(dropping would leave the GUID looking unique to the next library that claimed
+it), and `match_warp_library` applies no name to one. Across the 82 libraries
+below, **2.13%** of GUIDs are ambiguous (7,169 of 336,864).
+
+### The evidence floor, measured
+
+A WARP GUID over a very short function is exact and worthless. The extreme case
+is `jmp qword [rip+disp32]`, the import thunk: six bytes, of which WARP masks
+four, so **every import thunk in every PE ever linked carries one GUID**. That
+is not a hash collision, it is the scheme correctly reporting that six masked
+bytes are six masked bytes.
+
+Measured against 48 MinGW-built PEs in `samples/binaries/platforms/windows/`
+(6,368 functions, sharing no code at all with Windows) using a union library of
+226,346 GUIDs from all 82 libraries, so every hit is a false positive:
+
+| `min_bytes` | False positives | Recall, `ntoskrnl.exe` PT pair |
+|---|---|---|
+| 0 | 2,396 | 0.905 |
+| 8 | 130 | 0.900 |
+| 16 | **4** | 0.890 |
+| 24 | 2 | 0.872 |
+| 48 | 0 | 0.797 |
+
+2,070 of the 2,396 unfloored hits are six-byte functions. 16 is where the curve
+turns -- it removes 99.8% of the false positives for about one point of recall,
+where 48 buys the last four for eleven -- and it is
+`build_warp_library.MIN_EVIDENCE_BYTES`. It is applied at *match* time, to both
+sides, rather than at build time: the library records `byte_len` per entry, so
+a consumer can always raise the bar, whereas a builder that dropped small
+entries would have destroyed the evidence needed to lower it again. The number
+landing on FLIRT's own measured `min_fixed_bytes` floor is two different
+mechanisms arriving at the same place, not one rule.
+
+### Built, 2026-09-03
+
+83 inputs -- every Microsoft-authored module in `windows-8-pro-x64`,
+`windows-10-x64`, `windows-11-x64` and `patch-tuesday` whose PDB is in the
+cache (see [`../development/corpora.md`](../development/corpora.md)) -- across
+40 distinct modules, producing **82 libraries**: `ndfltr.sys` is byte-identical
+and identically versioned in the Windows 10 and Windows 11 trees, so the key
+correctly collapses the two into one. 411,124 functions discovered, 368,870
+entries, 336,864 GUIDs, 142 MB of JSON, **152 seconds** total, release build.
+Ingesting all 82 into one KB adds 368,870 `siglib_function` rows in 225 s and
+164 MB of SQLite. A representative slice of the Windows 11 lane:
+
+| Module | Version | Functions | Entries | Unique GUIDs | Ambiguous | PDB-resolved | Build | JSON |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `ntoskrnl.exe` | 10.0.22621.2428 | 28,970 | 27,240 | 25,297 | 383 | 0.940 | 16.3 s | 9.1 MB |
+| `KernelBase.dll` | 10.0.22621.2428 | 17,107 | 7,172 | 3,846 | 205 | **0.419** | 2.0 s | 3.5 MB |
+| `combase.dll` | 10.0.22621.2215 | 15,735 | 15,109 | 12,141 | 587 | 0.960 | 3.8 s | 8.6 MB |
+| `win32kfull.sys` | 10.0.22621.2428 | 9,119 | 8,030 | 7,567 | 105 | 0.881 | 2.4 s | 2.9 MB |
+| `win32kbase.sys` | 10.0.22621.2428 | 8,362 | 7,699 | 6,864 | 172 | 0.921 | 2.0 s | 3.2 MB |
+| `ole32.dll` | 10.0.22621.2428 | 5,878 | 5,565 | 4,371 | 208 | 0.947 | 1.0 s | 2.6 MB |
+| `tcpip.sys` | 10.0.22621.2428 | 5,778 | 5,497 | 5,226 | 91 | 0.951 | 1.6 s | 1.7 MB |
+| `ntdll.dll` | 10.0.22621.2428 | 4,558 | 4,100 | 3,794 | 77 | 0.898 | 0.8 s | 1.3 MB |
+| `http.sys` | 10.0.22621.2428 | 3,521 | 3,424 | 3,344 | 30 | 0.972 | 0.9 s | 1.0 MB |
+| `rpcrt4.dll` | 10.0.22621.2428 | 3,373 | 3,152 | 2,741 | 78 | 0.934 | 0.9 s | 1.3 MB |
+| `ucrtbase_clr0400.dll` | 14.32.31326.0 | 2,698 | 2,128 | 1,372 | 210 | 0.789 | 0.6 s | 1.2 MB |
+| `kernel32.dll` | 10.0.22621.2428 | 2,622 | 2,407 | 1,357 | 61 | 0.918 | 0.5 s | 1.0 MB |
+| `msvcp140_clr0400.dll` | 14.32.31326.0 | 1,675 | 1,507 | 755 | 217 | 0.900 | 0.7 s | 1.2 MB |
+| `win32u.dll` | 10.0.22621.2428 | 1,481 | 1,481 | 1,461 | 2 | 0.999 | 0.3 s | 0.4 MB |
+| `afd.sys` | 10.0.22621.2215 | 1,177 | 1,035 | 1,011 | 11 | 0.879 | 0.3 s | 0.3 MB |
+| `vcruntime140_clr0400.dll` | 14.32.31326.0 | 332 | 272 | 238 | 12 | 0.819 | 0.3 s | 0.1 MB |
+
+PDB-resolved fraction is `functions whose entry VA the PDB names / functions
+discovered`; the median across all 82 libraries is **0.920**.
+`KernelBase.dll`'s 0.419 is the low outlier and is not a defect in the PDB:
+that module is mostly forwarders and API-set thunks that discovery finds and
+the PDB's public stream does not name.
+
+**The PDB cache is the binding constraint, not the corpus.** Of 4,212 / 5,273 /
+5,408 PEs in the three build trees, only **30 / 117 / 169** resolve a PDB in
+the 7.3 GB cache, and only 30 modules resolve one in all three -- of which just
+ten are Microsoft-authored (`afd`, `clfs`, `dxgkrnl`, `fltMgr`, `mrxsmb`,
+`ntfs`, `ntoskrnl`, `srvnet`, `tcpip`, `win32k`); the rest are third-party IHV
+drivers. `ntdll`, `kernel32`, `KernelBase`, `combase`, `ole32` and `rpcrt4`
+have a PDB for the Windows 11 build only, and `advapi32`, `user32`, `gdi32`,
+`msvcrt`, `ucrtbase`, `ws2_32`, `crypt32`, `bcrypt`, `shell32` and `oleaut32`
+have none for any of the three. Widening this needs `glaurung.pdb_fetch`
+pointed at `msdl.microsoft.com`, not more binaries.
+
+### Cross-build recall
+
+The measurement: build the library from build A, run the GUID matcher over
+build B **without consulting B's PDB**, then read B's PDB afterwards purely to
+grade what the library said. `scored` is the population B's PDB names, which is
+the only population on which correct and wrong can be told apart. Ambiguous
+hits apply no name and are therefore neither. `GUID-shared` is the fraction of
+*all* of B's functions whose GUID also occurs in A -- how much of the module is
+byte-identical after masking.
+
+**One servicing build to the next** (`patch-tuesday`, one Patch Tuesday apart):
+
+| Module | From -> to | Scored | Correct | Wrong | Ambiguous | Unmatched | Recall | GUID-shared |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `afd.sys` | .8328 -> .8457 | 1,118 | 1,023 | 3 | 44 | 23 | **0.915** | 0.845 |
+| `afd.sys` | .8521 -> .8655 | 1,130 | 1,031 | 0 | 58 | 16 | **0.912** | 0.851 |
+| `tcpip.sys` | .8328 -> .8457 | 5,828 | 5,263 | 0 | 308 | 92 | **0.903** | 0.906 |
+| `tcpip.sys` | .8521 -> .8655 | 5,832 | 5,313 | 0 | 310 | 44 | **0.911** | 0.914 |
+| `clfs.sys` | .8328 -> .8457 | 1,265 | 1,047 | 0 | 63 | 30 | 0.828 | 0.680 |
+| `cldflt.sys` | .8328 -> .8457 | 1,047 | 889 | 3 | 54 | 60 | 0.849 | 0.847 |
+| `ntoskrnl.exe` | .8328 -> .8457 | 29,499 | 26,245 | 0 | 1,937 | 285 | **0.890** | 0.900 |
+| `win32kfull.sys` | .8328 -> .8457 | 8,989 | 8,212 | 3 | 476 | 80 | **0.914** | 0.868 |
+| `http.sys` | .8521 -> .8655 | 3,843 | 3,612 | 0 | 63 | 121 | **0.940** | 0.877 |
+| `dhcpcore.dll` | .8521 -> .8655 | 1,041 | 859 | 0 | 110 | 7 | 0.825 | 0.848 |
+| `dwmcore.dll` | .8521 -> .8655 | 11,317 | 9,204 | 0 | 984 | 21 | 0.813 | 0.852 |
+
+**One Windows release to the next** (10.0.19041 -> 10.0.22621), two years
+apart. Same code, same measurement:
+
+| Module | Scored | Correct | Wrong | Ambiguous | Recall | GUID-shared |
+|---|---:|---:|---:|---:|---:|---:|
+| `srvnet.sys` | 859 | 318 | 5 | 19 | 0.370 | 0.382 |
+| `mrxsmb.sys` | 1,019 | 343 | 0 | 10 | 0.337 | 0.321 |
+| `fltMgr.sys` | 1,025 | 337 | 3 | 59 | 0.329 | 0.375 |
+| `afd.sys` | 1,035 | 321 | 3 | 14 | 0.310 | 0.287 |
+| `clfs.sys` | 938 | 280 | 3 | 31 | 0.299 | 0.255 |
+| `tcpip.sys` | 5,497 | 1,483 | 21 | 155 | 0.270 | 0.287 |
+| `ntoskrnl.exe` | 27,237 | 6,263 | 80 | 1,081 | 0.230 | 0.256 |
+| `ntfs.sys` | 2,816 | 457 | 3 | 11 | 0.162 | 0.111 |
+| `dxgkrnl.sys` | 7,074 | 817 | 50 | 301 | 0.115 | 0.146 |
+| `win32k.sys` | 4,629 | 197 | **1,199** | 1,327 | 0.043 | 0.588 |
+
+**Windows 8 to Windows 10** (6.2.9200 -> 10.0.19041), for the shape of the
+curve: `afd.sys` 0.012, `clfs.sys` 0.015, `tcpip.sys` 0.012, `ntoskrnl.exe`
+0.013, `ntfs.sys` 0.003, `srvnet.sys` 0.006, `win32k.sys` 0.000. Eight years is
+a different program.
+
+**Read the three together.** WARP carries ~90% of a Windows module across a
+Patch Tuesday, ~30% across a release, and ~1% across eight years, and that is
+the scheme working as specified rather than failing: it is invariant to address
+and relocation and to nothing else. A library is worth building per servicing
+build, and a library from the wrong release is nearly worthless. The `wrong`
+column is the reassuring one -- 0 or 3 almost everywhere, because a GUID that
+does not match simply does not match.
+
+### `win32k.sys`: the failure mode a floor cannot fix
+
+The one exception, worth stating plainly because it is the limit of exact
+matching. `win32k.sys` on Windows 10/11 is the syscall shim layer: 1,316 of its
+functions (1,456 in the Windows 11 build) are 165-byte `_stub_*` bodies that
+differ **only in a syscall index**. An index is an immediate, not a pointer
+into a mapped region, so WARP correctly keeps it -- and the GUID therefore ends
+up keyed on the *index* rather than on the function. Windows reassigns those
+indices between releases, and the reassignment is a reshuffle rather than a
+shift (at best 202 of 1,316 names stay in order at any single offset), so the
+library hands out **1,199 confidently wrong names**.
+
+Neither available mitigation touches it:
+
+- The **evidence floor** does nothing: the bodies are 165 bytes, ten times the
+  floor. At `min_bytes=64` the wrong count is still 1,199.
+- **WARP constraints** do nothing either, measured rather than assumed: of the
+  2,397 GUID-level wrong verdicts, requiring the callee-constraint set to agree
+  rescues **0** and rejects **0**, because the stubs' callee sets are identical
+  too. That is a real result for the schema-reserved `warp-constraint` level --
+  it is not the answer to this case.
+
+The honest reading is that "identical bytes" and "identical function" come
+apart wherever code is generated from a table, and no equality scheme can tell
+the difference. Detecting *that a module is table-generated* -- a large
+population of same-size, same-block-count functions -- and declining to name it
+is the cheap guard, and is not implemented.
+
+### False positives
+
+The union of all 82 libraries -- 252,702 `(guid, name)` pairs over 226,346
+GUIDs -- against the 48 MinGW-built PEs in
+`samples/binaries/platforms/windows/`, which share no code with Windows at all:
+
+| Measurement | Result |
+|---|---|
+| Functions examined | 6,368 |
+| GUID hits at `min_bytes=16` | **4** |
+| Of those, unambiguous | **0** |
+| **Names applied** | **0** |
+| GUID hits at `min_bytes=0` | 2,396 |
+
+All four surviving hits are in `hello-cpp-mingw64-O1.exe` and all four are
+ambiguous, so the ambiguity rule alone would have refused them even without the
+floor. Names applied to unrelated code: zero.
+
+### Third-party binaries with a statically linked CRT
+
+`/nas4/data/binary-analysis/windows-drivers.sqfs` **was not mounted** and this
+lane does not mount it, so the intended vendor-driver sample was replaced by 20
+vendor binaries drawn (seeded, `random.Random(20260903)`) from the 4,400-file
+`binaries/windows-update` tree -- AMD, Intel, Realtek, Synaptics, ASUS and
+Kaspersky driver packages. Against the union of the `ucrtbase`, `vcruntime140`,
+`msvcp140`, `msvcp120` and `msvcr120` libraries:
+
+| Measurement | Result |
+|---|---|
+| Binaries | 20 |
+| Functions | 68,105 |
+| GUID hits | 7,791 |
+| Unambiguously named | **5,338** (7.8%) |
+| Ambiguous | 2,453 |
+
+Spot-checked, the names are real CRT and STL code -- `__acrt_thread_detach`,
+`_strtoi64_l`, `__crt_stdio_output::type_case_integer<>` instantiations,
+`std::exception` vtable deleting destructors -- and the distribution is what
+the premise predicts. Per binary, as `hits (named) / functions`:
+
+| Binary | Hits | Named | Functions |
+|---|---:|---:|---:|
+| `RsDMFT64.dll` | 1,804 | 1,219 | 15,826 |
+| `IntelIhvRouter08.dll` | 1,662 | 1,127 | 8,648 |
+| `SynCOM.dll` | 1,189 | 886 | 4,337 |
+| `MonoSeparationEnrollDll.dll` | 263 | 207 | 1,759 |
+| `Dptf.dll` | 136 | 90 | 13,986 |
+| `klflt.sys` | 5 | 5 | 1,317 |
+| `ibtusb.sys` | 3 | 3 | 525 |
+| `AsusPTPFilter.sys` | 2 | 2 | 519 |
+| `klwtp.sys` | 2 | 2 | 1,006 |
+| `AdbWinApi.dll` | 0 | 0 | 345 |
+
+The user-mode DLLs statically link a large chunk of the CRT; the `.sys` drivers
+link essentially none of it, because a kernel driver does not use the user-mode
+CRT. (The sampled 20 files are 16 distinct names -- `IntelIhvRouter08.dll`
+appears in three vendor packages and `klwtp.sys` and `ibtusb.sys` in two each,
+at different versions. That is the corpus, not a sampling bug, and the repeats
+were kept rather than deduplicated because a redistributed DLL appearing many
+times is exactly what a signature library meets in the field.) Just under a
+third of the hits are ambiguous and name nothing, which is the ICF rule doing
+its job on a runtime full of one-line template instantiations.
+
+### Licence
+
+A library file holds **GUIDs, names, sizes and constraint GUIDs -- no Microsoft
+bytes**. Not a prologue, not a mask, not a pattern; unlike a FLIRT signature it
+does not even carry variant bytes. That is the property that makes a
+FLIRT-family signature set redistributable, and it is asserted rather than
+merely claimed: `test_entries_are_deterministic_and_carry_no_bytes` pins the
+exact key set an entry may have. The *names* are Microsoft's and are reproduced
+from public PDBs the symbol server serves without restriction. The libraries
+themselves are written to `$HOME/.cache/glaurung/system-libs/warp/` and are not
+committed, because 142 MB of derived data is not repository content.
+
+### Not done here, for Windows
+
+- **No PDB fetching.** The measurement is bounded by a 7.3 GB local cache, not
+  by the corpus. `glaurung.pdb_fetch.ensure_pdb_cached` already speaks the
+  symbol-server protocol; pointing it at `msdl.microsoft.com` for the ~5,000
+  cache misses is the single highest-value follow-up.
+- **No membership gate over these libraries.** `identity_gate_build` would take
+  337,257 GUIDs to roughly 380 KB, and `match_warp_library` already consults a
+  gate when one exists; none is built here.
+- **Constraint-based disambiguation** is measured to be useless for the one
+  case that motivates it (above), and remains unimplemented.
+- **x86-32 and ARM64 Windows.** `warp_functions_from_bytes` raises
+  `UnsupportedArchitecture` for AArch64, so the ARM64 Windows images in the
+  corpus produce nothing.

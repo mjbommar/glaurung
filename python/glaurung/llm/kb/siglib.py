@@ -1018,3 +1018,93 @@ def ingest_warp_library(
         )
         ingested += 1
     return ingested
+
+
+def ingest_warp_library_file(
+    kb: PersistentKnowledgeBase,
+    warp_library_path: str,
+    *,
+    source_sha256: Optional[str] = None,
+) -> IngestSummary:
+    """Record a WARP JSON library file's provenance in the KB.
+
+    The file-shaped counterpart of :func:`ingest_warp_library`, which seeds
+    identities directly from a symbolised binary. This one reads what
+    ``glaurung.tools.build_warp_library`` wrote -- GUIDs, names and sizes, no
+    bytes -- so a library built once on a machine with the PE and PDB corpus
+    can be shipped to a machine that has neither and still name functions.
+
+    The ``library`` key becomes the ``siglib`` row
+    ``(name, version, variant, architecture, platform)``; every entry becomes
+    one ``siglib_function`` row under :data:`WARP_FUNCTION_GUID_V1`.
+
+    **An entry marked ambiguous is ingested, not dropped.** The
+    ``UNIQUE (siglib_id, scheme, identity, name)`` key already stores one row
+    per candidate name, and :func:`match_warp_library` is what decides that a
+    GUID with more than one row names nothing. Dropping them here would throw
+    away the evidence that the collision exists and let a *later*, single-named
+    library claim the GUID unopposed.
+
+    Args:
+        kb: The knowledge base to write into.
+        warp_library_path: Path to a ``*.warp.json`` file.
+        source_sha256: Override the recorded hash of the library file. Computed
+            from the file's own bytes when omitted.
+
+    Returns:
+        An :class:`IngestSummary`. ``functions_skipped`` counts entries with no
+        ``guid`` or no ``name``, which a hand-edited file can contain.
+
+    Raises:
+        ValueError: the file has no ``library`` key, or its ``scheme`` is not
+            :data:`WARP_FUNCTION_GUID_V1` -- filing a FLIRT masked pattern
+            under a GUID scheme would make the two indistinguishable at lookup.
+    """
+    import hashlib
+    import json
+    from pathlib import Path
+
+    text = Path(warp_library_path).read_text()
+    data = json.loads(text)
+    library = data.get("library")
+    if not library:
+        raise ValueError(f"{warp_library_path} carries no 'library' key")
+    scheme = data.get("scheme", WARP_FUNCTION_GUID_V1)
+    if scheme != WARP_FUNCTION_GUID_V1:
+        raise ValueError(
+            f"{warp_library_path} declares scheme {scheme!r}, not "
+            f"{WARP_FUNCTION_GUID_V1!r}"
+        )
+    if source_sha256 is None:
+        source_sha256 = hashlib.sha256(text.encode()).hexdigest()
+
+    siglib_id = get_or_create_siglib(
+        kb,
+        name=library["name"],
+        version=library.get("version"),
+        variant=library.get("variant"),
+        architecture=library["arch"],
+        platform=library.get("platform"),
+        source_sha256=source_sha256,
+    )
+
+    summary = IngestSummary(siglib_id=siglib_id)
+    for entry in data.get("entries", []):
+        guid = entry.get("guid")
+        name = entry.get("name")
+        if not guid or not name:
+            summary.functions_skipped += 1
+            continue
+        add_siglib_function(
+            kb,
+            siglib_id,
+            scheme=WARP_FUNCTION_GUID_V1,
+            identity=guid,
+            name=name,
+            base_name=entry.get("base_name") or base_name_of(name),
+            n_units=entry.get("block_count"),
+            n_bytes=entry.get("byte_len"),
+            occurrences=int(entry.get("occurrences", 1)),
+        )
+        summary.functions_ingested += 1
+    return summary
