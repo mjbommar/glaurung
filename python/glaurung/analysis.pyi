@@ -17,8 +17,10 @@
 
 from glaurung._native import analysis as _mod
 
+CFR_CONFIDENT_SIGNIFICANCE = _mod.CFR_CONFIDENT_SIGNIFICANCE
 CFR_SCHEME = _mod.CFR_SCHEME
 CfrSignature = _mod.CfrSignature
+CfrWeights = _mod.CfrWeights
 STRUCTURAL_SCHEME = _mod.STRUCTURAL_SCHEME
 StructuralSignature = _mod.StructuralSignature
 WarpConstraint = _mod.WarpConstraint
@@ -27,6 +29,8 @@ analyze_functions_bytes = _mod.analyze_functions_bytes
 analyze_functions_bytes_with_stats = _mod.analyze_functions_bytes_with_stats
 analyze_functions_path = _mod.analyze_functions_path
 analyze_functions_path_with_stats = _mod.analyze_functions_path_with_stats
+cfr_build_weights = _mod.cfr_build_weights
+cfr_confidence = _mod.cfr_confidence
 cfr_distance = _mod.cfr_distance
 cfr_signatures_path = _mod.cfr_signatures_path
 cfr_similarity = _mod.cfr_similarity
