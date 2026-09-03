@@ -68,6 +68,33 @@ fn first_instruction_decodes(data: &[u8], va: u64, end: Endianness, thumb: bool)
     backend.disassemble_instruction(&address, bytes).is_ok()
 }
 
+fn first_word_is_a32_frame_entry(data: &[u8], va: u64, end: Endianness) -> bool {
+    if va & 3 != 0 {
+        return false;
+    }
+    let Some(offset) = va_to_code_file_offset(data, va) else {
+        return false;
+    };
+    let Some(raw) = data.get(offset..offset + 4) else {
+        return false;
+    };
+    let bytes: [u8; 4] = raw.try_into().expect("exact A32 instruction width");
+    let word = match end {
+        Endianness::Little => u32::from_le_bytes(bytes),
+        Endianness::Big => u32::from_be_bytes(bytes),
+    };
+    // STMDB sp!, {...,lr} (`push`) is the canonical A32 hosted-C frame
+    // entry. Requiring LR in the register list prevents an arbitrary store
+    // multiple from deciding the mode. This disambiguates stripped mixed-mode
+    // ELF where the same four bytes also form two individually valid Thumb
+    // instructions and mapping symbols are no longer present.
+    word_is_a32_frame_entry(word)
+}
+
+fn word_is_a32_frame_entry(word: u32) -> bool {
+    word & 0x0fff_0000 == 0x092d_0000 && word & (1 << 14) != 0
+}
+
 /// Select the instruction encoding at an ARM32 function entry.
 pub(crate) fn mode_at(data: &[u8], va: u64, end: Endianness) -> Arm32Mode {
     if va & 1 != 0 {
@@ -75,6 +102,9 @@ pub(crate) fn mode_at(data: &[u8], va: u64, end: Endianness) -> Arm32Mode {
     }
     if let Some(mode) = mapping_symbol_mode(data, va) {
         return mode;
+    }
+    if first_word_is_a32_frame_entry(data, va, end) {
+        return Arm32Mode::A32;
     }
 
     let a32 = first_instruction_decodes(data, va, end, false);
@@ -151,5 +181,14 @@ mod tests {
         assert_eq!(mode_at(&data, 0x3f4, Endianness::Little), Arm32Mode::A32);
         assert_eq!(mode_at(&data, 0x46c, Endianness::Little), Arm32Mode::Thumb);
         assert_eq!(mode_at(&data, 0x4fc, Endianness::Little), Arm32Mode::A32);
+    }
+
+    #[test]
+    fn a32_push_with_lr_is_a_strong_mode_discriminator() {
+        // e92d4800: push {fp, lr}, the first instruction emitted by Clang for
+        // hosted ARM-mode main. Its little-endian halves also decode as Thumb,
+        // so one-instruction decode success alone cannot select the mode.
+        assert!(word_is_a32_frame_entry(0xe92d_4800));
+        assert!(!word_is_a32_frame_entry(0xe92d_0800));
     }
 }
