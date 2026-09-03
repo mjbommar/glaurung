@@ -158,18 +158,84 @@ def test_archive_builder_keeps_public_name_for_same_address_aliases(
     )
 
     built = build_library_from_archive(
-        Path("libc.a"), library_name="glibc", version="test", variant="test", arch="armv7"
+        Path("libc.a"),
+        library_name="glibc",
+        version="test",
+        variant="test",
+        arch="armv7",
     )
 
     assert [entry["name"] for entry in built["entries"]] == ["puts"]
     assert built["stats"]["aliases_coalesced"] == 1
-    assert built["stats"]["dropped_ambiguous"] == 0
+    assert built["stats"]["ambiguous_keys"] == 0
+    assert "alternatives" not in built["entries"][0]
 
 
-def test_archive_builder_preserves_same_pattern_at_distinct_lengths(
+def test_archive_builder_prefers_the_aeabi_alias_over_the_shorter_libgcc_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The matcher can resolve this collision from an exact function boundary."""
+    """ARM EABI libgcc double-precision helpers alias the *generic* GCC
+    libcall name (``__adddf3``) with the RTABI-mandated name
+    (``__aeabi_dadd``) at the same address in the same ``.o`` -- measured in
+    ``lib/gcc/arm-none-eabi/13.2.1/thumb/v7e-m+fp/hard/libgcc.a``'s
+    ``_arm_addsubdf3.o``. Both names have two leading underscores, so the
+    pre-existing tie-break (fewer leading underscores, then shorter name)
+    picks ``__adddf3`` -- the wrong one. Every real Cortex-M firmware that
+    calls these routines does so through the RTABI name, so ``__adddf3``
+    named nothing while ``__aeabi_dadd`` would have named it correctly in
+    every firmware measured against `rt-libopencm3`
+    (`docs/reference/function-signature-libraries.md`, "Cortex-M (bare
+    metal)"): 21 of 21 wrong names in that measurement were exactly this
+    alias-selection bug on ``__aeabi_d*``/``__aeabi_f*`` pairs.
+    """
+    base = {
+        "prologue_hex": "aa" * 32,
+        "mask_hex": "ff" * 32,
+        "crc16": 7,
+        "crc_len": 4,
+        "function_len": 630,
+        "refs": [],
+        "member": "_arm_addsubdf3.o",
+        "address": 12,
+        "masked_bytes": 0,
+    }
+    rows = [
+        {**base, "name": "__adddf3", "source_binary": "_arm_addsubdf3.o!__adddf3"},
+        {
+            **base,
+            "name": "__aeabi_dadd",
+            "source_binary": "_arm_addsubdf3.o!__aeabi_dadd",
+        },
+    ]
+    monkeypatch.setattr(
+        g.analysis, "flirt_signatures_from_archive_path", lambda *_args: rows
+    )
+
+    built = build_library_from_archive(
+        Path("libgcc.a"),
+        library_name="libgcc",
+        version="13.2.1",
+        variant="test",
+        arch="armv7",
+    )
+
+    assert [entry["name"] for entry in built["entries"]] == ["__aeabi_dadd"]
+    assert built["stats"]["aliases_coalesced"] == 1
+    assert built["stats"]["ambiguous_keys"] == 0
+
+
+def test_archive_builder_collapses_same_pattern_at_distinct_lengths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two names the matcher cannot separate are ONE entry, not two.
+
+    `match_at` compares the masked pattern, the mask and the CRC, and these two
+    rows agree on all three -- the differing `function_len` is invisible to it.
+    Emitting two entries would put two candidates in front of every input that
+    reaches this pattern and guarantee a permanent `Ambiguous`. One entry with
+    an alternative says the same thing, costs half as much, and keeps the
+    length where a matcher that *does* have a discovered boundary can use it.
+    """
     base = {
         "prologue_hex": "aa" * 32,
         "mask_hex": "ff" * 32,
@@ -207,11 +273,14 @@ def test_archive_builder_preserves_same_pattern_at_distinct_lengths(
         arch="aarch64",
     )
 
-    assert [(entry["name"], entry["function_len"]) for entry in built["entries"]] == [
-        ("other", 664),
-        ("puts", 628),
+    assert len(built["entries"]) == 1
+    entry = built["entries"][0]
+    assert (entry["name"], entry["function_len"]) == ("puts", 628)
+    assert [(a["name"], a["function_len"]) for a in entry["alternatives"]] == [
+        ("other", 664)
     ]
-    assert built["stats"]["dropped_ambiguous"] == 0
+    assert built["stats"]["ambiguous_keys"] == 1
+    assert built["stats"]["ambiguous_names"] == 2
 
 
 def test_the_shipped_library_is_what_the_builder_produces(library: dict) -> None:

@@ -313,6 +313,8 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_WINDOWS_ANALYSIS_CONFIG": "Path to the Windows analysis config JSON (default project/pdb settings).",
     "GLAURUNG_LIVE_LLM": "Opt a test into a live LLM call instead of a recorded/mocked one.",
     "GLAURUNG_RUN_NETWORK_TESTS": "Opt a test into making real network calls.",
+    "GLAURUNG_SIG_NETWORK": "Opt a test into fetching real Debian/Ubuntu/Alpine sources for the signature harvester.",
+    "GLAURUNG_WINDOWS_CORPUS": "Directory holding Windows binaries/patch-tuesday corpora for the WARP library measurements.",
     # --- Python: fixture / decompiler-test harness ----------------------
     "GLAURUNG_FIXTURE_GO": "Enable the Go-toolchain lane of the decompiler fixture matrix (opt-in).",
     "GLAURUNG_FIXTURE_JOBS": "Parallelism for the decompiler fixture build/run.",
@@ -388,6 +390,16 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_ORDERED_TRACE_DIR": "Directory ordered symbolic traces are written to/read from.",
     "GLAURUNG_SYMBOLIC_CVE_OBJECT_ID": "Object identifier for the `linux_symbolic_cve` example run.",
     "GLAURUNG_FLIRT_LIB": "Path to a FLIRT signature library override.",
+    "GLAURUNG_SIG_DIR": (
+        "Directory of signature libraries: every `*.flirt.json` and `*.gsig` "
+        "file in it is loaded and merged. Consulted after `GLAURUNG_FLIRT_LIB` "
+        "and before `~/.cache/glaurung/sigs/` and the packaged `data/sigs/`; "
+        "read by both the Python fetch client and the Rust loader."
+    ),
+    "GLAURUNG_SIGS_OFFLINE": "`1`/`true`/`yes`/`on` forbids every network call in the signature-set fetch path; the cache and the bundled `base` set are used instead.",
+    "GLAURUNG_SIGS_MANIFEST_URL": "Where the signed signature-set manifest is fetched from: a mirror, or a `file://` URL.",
+    "GLAURUNG_SIGS_TRUSTED_KEYS": "Directory of trusted minisign `*.pub` keys, replacing the set bundled in `data/sigs/trusted-keys/`.",
+    "GLAURUNG_SIGS_DATA_DIR": "The bundled read-only signature data directory, overriding the `data/sigs/` that ships with the distribution.",
     "IOCTLANCE_ANNOTATE_CONFIDENCE": "Annotate IOCTL findings with the confidence-partition label (see reference/docs on taint provenance).",
     "IOCTLANCE_ALL": "Report every candidate IOCTL finding, not just high-confidence ones.",
     "IOCTLANCE_HOPS": "Max call-graph hops the `ioctlance` example explores from an entry point.",
@@ -404,6 +416,9 @@ PURPOSES: dict[str, str] = {
     "CARGO_FEATURE_SOLVER_BITWUZLA": "Set automatically by Cargo when the `solver-bitwuzla` feature is enabled; `build.rs` reads it to decide whether to run the Bitwuzla link step at all.",
     "CARGO_TARGET_DIR": "Cargo's build-output directory; the identity-retrieval protocol test reads it to place its evaluation artifacts beside the build rather than in the source tree.",
     "GLAURUNG_IDENTITY_CORPUS": "Path to a populated `tests/decompiler_fixtures/build` -- the matched-build corpus the function-identity lanes score against, so a worktree can point at a checkout that has one. Unset and absent in-tree, those lanes skip loudly. The *external* corpus (Cisco Talos Dataset-1) is `GLAURUNG_CISCO_CORPUS`, which this table cannot see: it is read from `tests/identity_retrieval/cisco.rs` and the Rust walk covers `src, benches, examples, fuzz` only. See `docs/development/identity-measurement.md` and `docs/development/corpora.md`.",
+    "GLAURUNG_RUST_SYSROOT": "Root of a Rust sysroot (`lib/rustlib/<triple>/lib/*.rlib`) for `python/glaurung/tools/harvest_rust_sysroot.py` and its gated test, which skips loudly when unset. Feeds the Rust standard-library signature libraries; see `docs/reference/signature-sources.md#rust`.",
+    "RUSTUP_HOME": "Honoured by `harvest_rust_sysroot.py` to locate installed toolchains; defaults to `~/.rustup` when unset (the same convention as rustup itself).",
+    "GLAURUNG_ARMTC": "Root of an `arm-gnu-toolchain-*-arm-none-eabi` extraction (e.g. release 13.2.Rel1), read by `tools/harvest_armtc.py --toolchain-root` and by the live-toolchain check in `python/tests/test_flirt_cortex_m_fixture.py`, which skips loudly when unset. Feeds the Cortex-M FLIRT signature libraries; see `docs/reference/function-signature-libraries.md#cortex-m-bare-metal` and `docs/development/corpora.md`.",
     # --- CI workflow env: blocks -----------------------------------------
     "REGISTRY": "Container registry host for the samples-docker publish workflow.",
     "IMAGE_NAME": "Container image name/tag prefix for the samples-docker publish workflow.",

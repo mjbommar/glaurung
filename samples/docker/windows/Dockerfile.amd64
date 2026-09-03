@@ -35,6 +35,20 @@ RUN apt-get update && apt-get install -y \
     binutils-mingw-w64 \
     binutils-mingw-w64-i686 \
     mingw-w64-tools \
+    # Static -dev archives, harvested by harvest_system_archives
+    zlib1g-dev \
+    libssl-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libzstd-dev \
+    libsqlite3-dev \
+    libpcre2-dev \
+    libxml2-dev \
+    libcurl4-openssl-dev \
+    libffi-dev \
+    libgmp-dev \
+    musl-dev \
+    musl-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Optionally install additional JDKs if available
@@ -43,6 +57,9 @@ RUN set -eux; apt-get update; \
       if apt-cache show "$pkg" >/dev/null 2>&1; then apt-get install -y --no-install-recommends "$pkg"; fi; \
     done; \
     rm -rf /var/lib/apt/lists/*
+
+# Recorded verbatim in the harvest manifest as image.base.
+ENV HARVEST_IMAGE_BASE=ubuntu:22.04
 
 # Set environment variables for Windows targeting
 ENV TARGET_OS=windows
@@ -64,6 +81,11 @@ COPY source/ ./source/
 
 # Copy build script
 COPY docker/build-windows.sh /usr/local/bin/build-platform.sh
+
+# The system-archive harvester (samples/docker/harvest_system_archives.py).
+# Signature libraries are built from unlinked .a members, so the image has to
+# be able to export its own static archives with dpkg provenance.
+COPY docker/harvest_system_archives.py /usr/local/bin/harvest_system_archives.py
 RUN chmod +x /usr/local/bin/build-platform.sh
 
 # Build stage

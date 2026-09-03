@@ -415,7 +415,32 @@ pub(super) fn analyze_functions_unpacked(
         }
     }
     if let Some(ref lib) = flirt_library {
-        apply_flirt_overrides(data, &mut functions, lib);
+        // FLIRT's referenced-name level. A signature with no CRC -- 17.6% of
+        // what a real archive yields -- matches on pattern alone, and the only
+        // thing left to separate two such candidates is what the body calls.
+        // The call xrefs collected above are exactly that evidence: this pass
+        // reconstructs each call site's relocated-field offset (what a
+        // signature records) and answers with the callee's established name,
+        // from the symbol table, the PLT, or an earlier FLIRT hit.
+        // No PLT/import names yet. `analysis::elf_plt::elf_plt_map` is the only
+        // source of them and it parses the whole object again -- a parse this
+        // pass is measured on
+        // (`program::session_tests::discovery_parse_count_does_not_scale_with_the_number_of_functions`
+        // asserts a ceiling), and nothing in this lane measured a name it would
+        // have recovered: the corpus is statically linked, where there is no
+        // PLT at all. It belongs here once `ProgramImage` caches a PLT-name
+        // index the way it already caches `relocated_symbol_slots`, so the
+        // parse is paid once per image rather than once per discovery.
+        let plt_names: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+        apply_flirt_overrides_with_refs(
+            data,
+            &mut functions,
+            lib,
+            calls_all
+                .iter()
+                .map(|(caller, xref)| (*caller, xref.callsite_va, xref.target_va)),
+            &plt_names,
+        );
     }
 
     let shape_stats = classify_function_shapes(data, arch, &mut functions);

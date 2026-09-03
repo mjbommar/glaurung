@@ -200,8 +200,10 @@
   "prologue_len": 32,
   "schema_version": "2",
   "stats": {
+    "aliases_coalesced": 0,
+    "ambiguous_keys": 0,
+    "ambiguous_names": 0,
     "archive": "samples/binaries/platforms/linux/amd64/libraries/static/libmathlib.a",
-    "dropped_ambiguous": 0,
     "raw_signatures": 16,
     "signatures_with_crc": 14,
     "signatures_with_masked_bytes": 16,

@@ -1,0 +1,274 @@
+Package: g++
+Source: gcc-defaults (1.220)
+Version: 4:14.2.0-1
+Installed-Size: 13
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c++-compiler
+Depends: cpp (= 4:14.2.0-1), cpp-x86-64-linux-gnu (= 4:14.2.0-1), gcc (= 4:14.2.0-1), g++-14 (>= 14.2.0-6~), g++-x86-64-linux-gnu (= 4:14.2.0-1), gcc-14 (>= 14.2.0-6~)
+Suggests: g++-multilib
+Description: GNU C++ compiler
+Description-md5: 4d44b18774ae5123b7c3f70d940cf655
+Build-Essential: yes
+Tag: devel::compiler, devel::lang:c, devel::lang:c++, devel::library,
+implemented-in::c, interface::commandline, role::devel-lib,
+role::dummy, role::metapackage, role::program, suite::gnu,
+works-with::software:source
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-defaults/g++_14.2.0-1_amd64.deb
+Size: 1344
+MD5sum: 995fd0e145217384a37c334812e51f27
+SHA256: f86661c021ab2acb39ceb87315e7c2d4d420fdadc19945d5d589f3953410445c
+
+Package: gcc
+Source: gcc-defaults (1.220)
+Version: 4:14.2.0-1
+Installed-Size: 36
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c-compiler
+Depends: cpp (= 4:14.2.0-1), cpp-x86-64-linux-gnu (= 4:14.2.0-1), gcc-14 (>= 14.2.0-6~), gcc-x86-64-linux-gnu (= 4:14.2.0-1)
+Recommends: libc6-dev | libc-dev
+Suggests: gcc-multilib, make, manpages-dev, autoconf, automake, libtool, flex, bison, gdb, gcc-doc
+Conflicts: gcc-doc (<< 1:2.95.3)
+Description: GNU C compiler
+Description-md5: c7efd71c7c651a9ac8b2adf36b137790
+Build-Essential: yes
+Tag: devel::compiler, devel::lang:c, devel::library, implemented-in::c,
+interface::commandline, role::devel-lib, role::metapackage,
+role::program, suite::gnu, works-with::software:source
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-defaults/gcc_14.2.0-1_amd64.deb
+Size: 5136
+MD5sum: 222be33eae2b6768bbbedd4ef959fa3e
+SHA256: eee65c41a441c57c05f754ced1b9d093956966a1c7da9938c3ec00d3dc2f905d
+
+Package: g++-14
+Source: gcc-14
+Version: 14.2.0-19
+Installed-Size: 35
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c++-compiler, c++abi2-dev
+Depends: g++-14-x86-64-linux-gnu (= 14.2.0-19), gcc-14-base (= 14.2.0-19), gcc-14 (= 14.2.0-19)
+Suggests: g++-14-multilib, gcc-14-doc (>= 14)
+Description: GNU C++ compiler
+Homepage: http://gcc.gnu.org/
+Description-md5: 0a3fad3367cb994bd16c61b0e16a8b9c
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-14/g++-14_14.2.0-19_amd64.deb
+Size: 22544
+MD5sum: 89a1ca982d17942fea5d8a5a6c9faeca
+SHA256: 4706ab29eab3d81e93582b45b229fdedc71f1eec3071996a448cf2c8beb83f3a
+
+Package: g++-x86-64-linux-gnu
+Source: gcc-defaults (1.220)
+Version: 4:14.2.0-1
+Installed-Size: 11
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Replaces: g++ (<< 4:13.2.0-3)
+Depends: cpp-x86-64-linux-gnu (= 4:14.2.0-1), gcc-x86-64-linux-gnu (= 4:14.2.0-1), g++-14-x86-64-linux-gnu (>= 14.2.0-6~)
+Breaks: g++ (<< 4:13.2.0-3)
+Description: GNU C++ compiler for the amd64 architecture
+Multi-Arch: foreign
+Description-md5: 07c4d20f560a847a660e3374549f85e8
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-defaults/g++-x86-64-linux-gnu_14.2.0-1_amd64.deb
+Size: 1200
+MD5sum: 1b29d910e99e16e9750f80d93af8a40a
+SHA256: 15e10fc3948ec76be8d51b23e75ad9df9c39588c94f1f47059cee02c117c7583
+
+Package: gcc-14
+Version: 14.2.0-19
+Installed-Size: 622
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Replaces: cpp-14 (<< 7.1.1-8)
+Provides: c-compiler
+Depends: gcc-14-x86-64-linux-gnu (= 14.2.0-19), gcc-14-base (= 14.2.0-19), cpp-14 (= 14.2.0-19), binutils (>= 2.39)
+Recommends: libc6-dev (>= 2.23-1~)
+Suggests: gcc-14-multilib, gcc-14-doc (>= 14), gcc-14-locales (>= 14)
+Description: GNU C compiler
+Homepage: http://gcc.gnu.org/
+Description-md5: 394374e688b1afb3af5f419895d29698
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-14/gcc-14_14.2.0-19_amd64.deb
+Size: 540064
+MD5sum: 7b5c03a14224798e9ef3151c46fba48e
+SHA256: 21500408b5019d8d29f70ce58488e2eea469a1adb4b5fd7db45e819b5efcac4e
+
+Package: gcc-x86-64-linux-gnu
+Source: gcc-defaults (1.220)
+Version: 4:14.2.0-1
+Installed-Size: 23
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Replaces: gcc (<< 4:13.2.0-3)
+Depends: cpp-x86-64-linux-gnu (= 4:14.2.0-1), gcc-14-x86-64-linux-gnu (>= 14.2.0-6~)
+Recommends: libc6-dev, libc-dev
+Suggests: make, manpages-dev, autoconf, automake, libtool, flex, bison, gdb-x86-64-linux-gnu, gcc-doc
+Breaks: gcc (<< 4:13.2.0-3)
+Description: GNU C compiler for the amd64 architecture
+Multi-Arch: foreign
+Description-md5: 74fd7698add747ec9f3ca61030b62c40
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-defaults/gcc-x86-64-linux-gnu_14.2.0-1_amd64.deb
+Size: 1436
+MD5sum: 70a7403639e33049a8f87ad2833aee04
+SHA256: 04c28c2760b0094b3d7758154ac095303dd00599b63ebad4086a325b607308b7
+
+Package: g++-14-x86-64-linux-gnu
+Source: gcc-14
+Version: 14.2.0-19
+Installed-Size: 36931
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c++-compiler-x86-64-linux-gnu
+Depends: gcc-14-base (= 14.2.0-19), gcc-14-x86-64-linux-gnu (= 14.2.0-19), libstdc++-14-dev (= 14.2.0-19), libc6 (>= 2.38), libgmp10 (>= 2:6.3.0+dfsg), libisl23 (>= 0.15), libmpc3 (>= 1.1.0), libmpfr6 (>= 3.1.3), libzstd1 (>= 1.5.5), zlib1g (>= 1:1.2.2)
+Suggests: gcc-14-doc (>= 14)
+Description: GNU C++ compiler for x86_64-linux-gnu architecture
+Multi-Arch: foreign
+Homepage: http://gcc.gnu.org/
+Description-md5: f28641d421c551d47a5e989009efe119
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-14/g++-14-x86-64-linux-gnu_14.2.0-19_amd64.deb
+Size: 12114812
+MD5sum: 1c4594673a37b71eef6efd8d0875a27c
+SHA256: c66b009fedd340520279d1af2f91d0668e9f64f0c08fe62179ca1c75e556be58
+
+Package: gcc-14-base
+Source: gcc-14
+Version: 14.2.0-19
+Installed-Size: 112
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Breaks: gnat (<< 7)
+Description: GCC, the GNU Compiler Collection (base package)
+Multi-Arch: same
+Homepage: http://gcc.gnu.org/
+Description-md5: b6e93638a6d08ea7a18929d7cf078e5d
+Section: libs
+Priority: optional
+Filename: pool/main/g/gcc-14/gcc-14-base_14.2.0-19_amd64.deb
+Size: 49432
+MD5sum: 8c82dcf89447f04e600379a1a1871f3b
+SHA256: 5b6825de4263824b78c4c51f6476414f3b4e89c2ab63e81dc8b9b5501e867cf6
+
+Package: gcc-14-x86-64-linux-gnu
+Source: gcc-14
+Version: 14.2.0-19
+Installed-Size: 68460
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: c-compiler-x86-64-linux-gnu
+Depends: cpp-14-x86-64-linux-gnu (= 14.2.0-19), gcc-14-base (= 14.2.0-19), libcc1-0 (>= 14.2.0-19), binutils-x86-64-linux-gnu (>= 2.39), libgcc-14-dev (= 14.2.0-19), libc6 (>= 2.38), libgcc-s1 (>= 3.0), libgmp10 (>= 2:6.3.0+dfsg), libisl23 (>= 0.15), libmpc3 (>= 1.1.0), libmpfr6 (>= 3.1.3), libstdc++6 (>= 5), libzstd1 (>= 1.5.5), zlib1g (>= 1:1.1.4)
+Recommends: libc6-dev (>= 2.23-1~)
+Suggests: gcc-14-doc (>= 14), gcc-14-locales (>= 14)
+Description: GNU C compiler for the x86_64-linux-gnu architecture
+Multi-Arch: foreign
+Homepage: http://gcc.gnu.org/
+Description-md5: 7bf4c826102db622ef3a4d867a96ef4e
+Section: devel
+Priority: optional
+Filename: pool/main/g/gcc-14/gcc-14-x86-64-linux-gnu_14.2.0-19_amd64.deb
+Size: 21389968
+MD5sum: ba8b61619308e4877d6609025c874e23
+SHA256: a17ef039f1ba482051c3efb5c2c24070002e60dd0bd09fd456ec31481a11b725
+
+Package: libstdc++-14-dev
+Source: gcc-14
+Version: 14.2.0-19
+Installed-Size: 22065
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Provides: libstdc++-dev
+Depends: gcc-14-base (= 14.2.0-19), libgcc-14-dev (= 14.2.0-19), libstdc++6 (>= 14.2.0-19), libc6-dev (>= 2.23-1~)
+Suggests: libstdc++-14-doc
+Description: GNU Standard C++ Library v3 (development files)
+Multi-Arch: same
+Homepage: http://gcc.gnu.org/
+Description-md5: a197f2aec835e5fc6f8f76039d8a7c4e
+Section: libdevel
+Priority: optional
+Filename: pool/main/g/gcc-14/libstdc++-14-dev_14.2.0-19_amd64.deb
+Size: 2375760
+MD5sum: 43bb5c62f553c0241d0ea1e2388397cf
+SHA256: 4b962fac5f1af0bd8b1b3f97e0f47b9d8e9a79e88802143f00ebfbd78ad87a7b
+
+Package: libstdc++6
+Source: gcc-14
+Version: 14.2.0-19
+Installed-Size: 3019
+Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+Architecture: amd64
+Replaces: libstdc++6-14-dbg (<< 4.9.0-3)
+Depends: gcc-14-base (= 14.2.0-19), libc6 (>= 2.38), libgcc-s1 (>= 4.3)
+Conflicts: scim (<< 1.4.2-1)
+Breaks: gcc-4.3 (<< 4.3.6-1), gcc-4.4 (<< 4.4.6-4), gcc-4.5 (<< 4.5.3-2)
+Description: GNU Standard C++ Library v3
+Multi-Arch: same
+Homepage: http://gcc.gnu.org/
+Description-md5: 724ab84919e0e220afb960e36463914d
+Tag: role::shared-lib
+Section: libs
+Priority: optional
+Filename: pool/main/g/gcc-14/libstdc++6_14.2.0-19_amd64.deb
+Size: 713628
+MD5sum: 8954f7d89eb15031f88e9f3047be059e
+SHA256: ab1fa05837aa7a92aae748fd07a18a35f7d18bb4a71c4724fe2bbf0e32089de0
+
+Package: libc6-dev
+Source: glibc
+Version: 2.41-12+deb13u3
+Installed-Size: 12542
+Maintainer: GNU Libc Maintainers <debian-glibc@lists.debian.org>
+Architecture: amd64
+Replaces: libc6 (<= 2.32-1)
+Provides: libc-dev (= 2.41-12+deb13u3)
+Depends: libc6 (= 2.41-12+deb13u3), libc-dev-bin (= 2.41-12+deb13u3), linux-libc-dev, libcrypt-dev, rpcsvc-proto
+Suggests: glibc-doc, manpages-dev
+Conflicts: libc0.3-dev, libc6.1-dev
+Breaks: binutils (<< 2.38), catch (<< 1.12.2-0.1), heimdal-multidev (<= 7.7.0+dfsg-4), igblast (<= 1.19.0-1), libassimp-dev (<= 5.2.4~ds0-1), libasyncns-dev (<= 0.8-6+b2), libatm1-dev (<= 1:2.5.1-4), libaws20-dev (<= 20.2-2+b1), libboinc-app-dev (<= 7.20.2+dfsg-1), libbson-dev (<= 1.22.0-1), libc6-dev-amd64-cross (<< 2.41~), libcups2-dev (<= 2.4.2-1), libdeal.ii-dev (<= 9.4.0-1), libdkim-dev (<= 1:1.0.21-4+b2), libdolfin-dev-common (<= 2019.2.0~git20220407.d29e24d-5), libdpkg-perl (<< 1.22.22), libeckit-dev (<= 1.20.0-1), libfclib-dev (<= 3.1.0+dfsg-2), libfltk1.3-dev (<= 1.3.8-4+b1), libghc-resolv-dev (<= 0.1.2.0-3), libghc-resolv-prof (<= 0.1.2.0-3), libglib2.0-dev (<= 2.72.3-1), libgloox-dev (<= 1.0.24-2+b1), libhesiod-dev (<= 3.2.1-3.1+b1), libinfinity-0.7-dev (<= 0.7.2-1+b1), libinsighttoolkit4-dev (<= 4.13.3withdata-dfsg2-3+b1), libinsighttoolkit5-dev (<= 5.2.1-5+b1), libismrmrd-dev (<= 1.8.0-2), libldap-dev (<= 2.5.12+dfsg-2), liblog4cplus-dev (<= 2.0.7-1), libloudmouth1-dev (<= 1.5.4-1), libmgl-dev (<= 8.0.1-2), libmimalloc2.0 (<= 2.0.6+ds-1), libminc-dev (<= 2.4.03-5), libmongoc-dev (<= 1.22.1-1), libmrpt-ros1bridge-dev (<= 1:2.4.9+ds-4+b2), libmysqlclient-dev (<= 8.0.29-1), libnetcdf-dev (<= 1:4.9.0-3), libnetcdf-mpi-dev (<= 1:4.9.0-1), libnetcdf-pnetcdf-dev (<= 1:4.9.0-1), libnfsidmap-dev (<= 1:2.6.1-2), libns3-dev (<= 3.36.1+dfsg-4), libola-dev (<= 0.10.8.nojsmin-2), libopenafs-dev (<= 1.8.8.1-3), libopendkim-dev (<= 2.11.0~beta2-7), libopendmarc-dev (<= 1.4.2-1), libopenms-dev (<= 2.6.0+cleaned1-3+b1), libopenzwave1.6-dev (<= 1.6.1914+ds-1), libpg-query-dev (<= 13-2.1.2-2), librbl-dev (<= 2.11.0~beta2-7), libre-dev (<= 1.1.0-1+b1), libshishi-dev (<= 1.0.2-11), libslurm-dev (<= 21.08.8.2-1), libsocksd0-dev (<= 1.4.2+dfsg-7+b4), libspf2-dev (<= 1.2.10-7.1+b1), libstrophe-dev (<= 0.12.1-2), libtaningia-dev (<= 0.2.2-2+b1), libtrilinos-amesos-dev (<= 13.2.0-3), libtrilinos-amesos2-dev (<= 13.2.0-3), libtrilinos-anasazi-dev (<= 13.2.0-3), libtrilinos-aztecoo-dev (<= 13.2.0-3), libtrilinos-belos-dev (<= 13.2.0-3), libtrilinos-epetra-dev (<= 13.2.0-3), libtrilinos-epetraext-dev (<= 13.2.0-3), libtrilinos-galeri-dev (<= 13.2.0-3), libtrilinos-ifpack-dev (<= 13.2.0-3), libtrilinos-ifpack2-dev (<= 13.2.0-3), libtrilinos-intrepid-dev (<= 13.2.0-3), libtrilinos-intrepid2-dev (<= 13.2.0-3), libtrilinos-isorropia-dev (<= 13.2.0-3), libtrilinos-kokkos-dev (<= 13.2.0-3), libtrilinos-kokkos-kernels-dev (<= 13.2.0-3), libtrilinos-komplex-dev (<= 13.2.0-3), libtrilinos-ml-dev (<= 13.2.0-3), libtrilinos-moertel-dev (<= 13.2.0-3), libtrilinos-muelu-dev (<= 13.2.0-3), libtrilinos-nox-dev (<= 13.2.0-3), libtrilinos-phalanx-dev (<= 13.2.0-3), libtrilinos-pike-dev (<= 13.2.0-3), libtrilinos-piro-dev (<= 13.2.0-3), libtrilinos-pliris-dev (<= 13.2.0-3), libtrilinos-rol-dev (<= 13.2.0-3), libtrilinos-rtop-dev (<= 13.2.0-3), libtrilinos-rythmos-dev (<= 13.2.0-3), libtrilinos-sacado-dev (<= 13.2.0-3), libtrilinos-shylu-dev (<= 13.2.0-3), libtrilinos-stokhos-dev (<= 13.2.0-3), libtrilinos-stratimikos-dev (<= 13.2.0-3), libtrilinos-teko-dev (<= 13.2.0-3), libtrilinos-teuchos-dev (<= 13.2.0-3), libtrilinos-thyra-dev (<= 13.2.0-3), libtrilinos-tpetra-dev (<= 13.2.0-3), libtrilinos-trilinoscouplings-dev (<= 13.2.0-3), libtrilinos-triutils-dev (<= 13.2.0-3), libtrilinos-xpetra-dev (<= 13.2.0-3), libtrilinos-zoltan2-dev (<= 13.2.0-3), libvbr-dev (<= 2.11.0~beta2-7), libvisp-dev (<= 3.5.0-2+b1), libvotca-dev (<= 2022-3), libvtk6-dev (<= 6.3.0+dfsg2-8.1+b1), libvtk7-dev (<= 7.1.1+dfsg2-10.2), open-vm-tools-dev (<= 2:12.0.5-2), pidgin-librvp (<= 0.9.7cvs-3), proftpd-dev (<= 1.3.7d+dfsg-2), slurm-wlm-basic-plugins-dev (<= 21.08.8.2-1)
+Description: GNU C Library: Development Libraries and Header Files
+Multi-Arch: same
+Homepage: https://www.gnu.org/software/libc/libc.html
+Description-md5: 1bbdc717d9acdb44db940928d570e749
+Build-Essential: yes
+Tag: devel::lang:c, devel::library, implemented-in::c, role::devel-lib,
+suite::gnu
+Section: libdevel
+Priority: optional
+Filename: pool/main/g/glibc/libc6-dev_2.41-12+deb13u3_amd64.deb
+Size: 1992332
+MD5sum: 8216d95a967ba64cc7a45dcb697d1f53
+SHA256: 53a9b789bb02415d758f652ef5ac913d89fed29782610e9fe0fd2488e4f2e465
+
+Package: zlib1g-dev
+Source: zlib (1:1.3.dfsg+really1.3.1-1)
+Version: 1:1.3.dfsg+really1.3.1-1+b1
+Installed-Size: 1317
+Maintainer: Mark Brown <broonie@debian.org>
+Architecture: amd64
+Provides: libz-dev
+Depends: zlib1g (= 1:1.3.dfsg+really1.3.1-1+b1), libc6-dev | libc-dev
+Conflicts: zlib1-dev
+Description: compression library - development
+Multi-Arch: same
+Homepage: http://zlib.net/
+Description-md5: d7f4e8a626131fc83c643c5d59096290
+Tag: devel::library, role::devel-lib, role::program, use::compressing
+Section: libdevel
+Priority: optional
+Filename: pool/main/z/zlib/zlib1g-dev_1.3.dfsg+really1.3.1-1+b1_amd64.deb
+Size: 919744
+MD5sum: 7aae72d49ea07a191cdb37b3980f3aff
+SHA256: 76ed5c858e1aef38b7be93acce5910e457e77bd6271471b9d05fb42e78826224
+

@@ -382,6 +382,12 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     # Which FLIRT signature library to consult; has a documented cwd-relative
     # default and a `None` (no-op) fallback if nothing is reachable.
     ("flirt/mod.rs", '"GLAURUNG_FLIRT_LIB"'): "resource",
+    # The directory rung below it: every `*.flirt.json` in one directory,
+    # merged. Same fallback chain, same no-op when nothing is reachable.
+    ("flirt/mod.rs", '"GLAURUNG_SIG_DIR"'): "resource",
+    # `~/.cache/glaurung/sigs/`, the client download cache, is one rung further
+    # down that chain; `HOME` is read only to spell it.
+    ("flirt/mod.rs", '"HOME"'): "resource",
     # -- symbolic-execution engine (out of decompiler scope, still in src/) --
     ("symbolic/solver/mod.rs", '"GLAURUNG_FAIR_SHADOW"'): "diagnostic",
     ("symbolic/solver/mod.rs", '"GLAURUNG_DUMP_QUERIES"'): "diagnostic",

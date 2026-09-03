@@ -29,6 +29,16 @@ window is an absolute the linker chose. It emits schema version ``1``
 (exact byte equality), and the matcher still reads that -- an absent mask
 means every byte is fixed.
 
+**The duplicate key is the matcher's, not the builder's.**
+``FlirtLibrary::match_at`` compares the masked pattern, the mask, the CRC16
+and the CRC length, so those four are the key here. Names that share one key
+cannot be separated by any input, and they are written as **one** entry
+carrying ``alternatives`` -- FLIRT's own tree keeps several modules on a leaf
+for the same reason. ``match_at`` still names none of them, but an exact
+function length or a referenced name can still choose, and only if the
+alternatives were written down. See
+``docs/reference/function-signature-libraries.md``.
+
 A library is keyed by ``(name, version, variant, arch)``. No exact or
 masked scheme crosses an optimisation level, so a corpus spanning gcc and
 clang across ``-O0`` to ``-O3`` is not one library; it is N libraries
@@ -48,6 +58,16 @@ Usage:
         --output data/sigs/glaurung-base.x86_64.flirt.json \\
         --arch x86_64 \\
         samples/binaries/platforms/linux/amd64/export/native/clang/debug
+
+    # ...as the binary container a corpus ships in, ~25x smaller:
+    python -m glaurung.tools.build_flirt_library --archive libc.a \\
+        --library-name c --arch x86_64 --format gsig \\
+        --output data/sigs/c.x86_64.flirt.gsig
+
+``--format`` defaults to ``json`` and will keep doing so until the
+distribution lane flips it; the matcher already reads both, dispatching on
+the file's magic bytes rather than its name. ``glaurung.tools.sig_convert``
+converts an existing library either way.
 """
 
 from __future__ import annotations
@@ -68,6 +88,19 @@ SCHEMA_VERSION = "1"
 
 #: Masks, CRC16 and referenced names. What the archive path produces.
 SCHEMA_VERSION_MASKED = "2"
+
+#: The interchange format: reviewable, diffable, ~1,330 bytes per signature.
+FORMAT_JSON = "json"
+
+#: The distribution container: ~46 bytes per signature over a merged corpus.
+#: See ``docs/reference/function-signature-libraries.md``.
+FORMAT_GSIG = "gsig"
+
+#: ``--format`` stays ``json`` until the distribution lane flips it: every
+#: existing caller, fixture and committed library is JSON, and a builder that
+#: silently changed what it wrote would break all of them at once. The
+#: matcher already reads both.
+DEFAULT_FORMAT = FORMAT_JSON
 
 _EXEC_MAGICS = (
     b"\x7fELF",
@@ -258,23 +291,53 @@ def build_library_from_archive(
         str(archive), prologue_len, min_function_len, min_fixed_bytes
     )
 
-    # Two functions that are indistinguishable to the matcher -- same *masked*
-    # pattern, same mask, same CRC -- but carrying different names are dropped,
-    # both of them. A FLIRT hit writes a name at `set_by=flirt`, which outranks
-    # `auto`; a coin flip there is worse than no name at all.
+    # ---- the duplicate key is exactly what the matcher compares --------------
     #
-    # The key is the masked pattern, not the raw one. Variant bytes are never
+    # `FlirtLibrary::match_at` compares the masked pattern, the mask, the CRC16
+    # and the CRC length, and nothing else. So that is the key here. Keying on
+    # anything further -- this function keyed on `function_len` until
+    # 2026-09-03 -- leaves in the file entries that no input can ever separate:
+    # every one of them becomes a candidate together and the verdict is a
+    # permanent `Ambiguous`. Measured over a seven-library set built from this
+    # box's own libc, libm, libstdc++, libcrypto, libssl, libz and Rust
+    # sysroot: **276 such keys covering 594 of 15,538 entries.**
+    #
+    # The key is the *masked* pattern, not the raw one. Variant bytes are never
     # compared, so two signatures that differ only there are the same signature
-    # as far as matching is concerned -- and keying on the raw hex would let
-    # both into the library and let whichever came first win.
-    by_key: dict[tuple[str, str, object, int, object], dict] = {}
-    ambiguous: set[tuple[str, str, object, int, object]] = set()
+    # as far as matching is concerned.
+    #
+    # Names that survive one key are not dropped -- they become one entry with
+    # `alternatives`, which is how FLIRT's own tree holds several modules on
+    # one leaf. `match_at` still refuses to name any of them, but an exact
+    # function length or a referenced name can still choose, and that
+    # information is only available if it was written down.
+    by_key: dict[tuple[str, str, object, int], list[dict]] = {}
     aliases_coalesced = 0
 
-    def public_alias_rank(row: dict) -> tuple[int, int, str]:
-        """Prefer the public C spelling among proven same-address aliases."""
+    def public_alias_rank(row: dict) -> tuple[int, int, int, str]:
+        """Prefer the public spelling among proven same-address aliases.
+
+        The leading-underscore count is the primary tier: it is what makes
+        ``puts`` beat ``_IO_puts``. It does not, however, distinguish between
+        two *equally* underscore-prefixed names, and ARM EABI's libgcc ships
+        exactly that case: ``__aeabi_dadd`` (the RTABI-mandated helper name
+        every AAPCS-conformant compiler actually calls) aliases the generic
+        GCC libcall name ``__adddf3`` at the same address in the same ``.o``
+        -- measured in ``lib/gcc/arm-none-eabi/13.2.1/.../libgcc.a``'s
+        ``_arm_addsubdf3.o``. Both have two leading underscores, so a
+        length-only tie-break picks the shorter, generic name and every
+        Cortex-M firmware that calls the RTABI name goes unnamed -- measured
+        as 21 of 21 wrong names in the `rt-libopencm3` validation
+        (`docs/reference/function-signature-libraries.md`, "Cortex-M (bare
+        metal)"). ``__aeabi_`` is a reserved namespace the ARM RTABI
+        specification assigns to exactly these compiler helper entry points,
+        so it is the public spelling for this family the same way an
+        unprefixed name is for libc's.
+        """
         name = str(row["name"])
-        return (len(name) - len(name.lstrip("_")), len(name), name)
+        leading_underscores = len(name) - len(name.lstrip("_"))
+        not_aeabi = 0 if name.startswith("__aeabi_") else 1
+        return (leading_underscores, not_aeabi, len(name), name)
 
     for row in raw:
         key = (
@@ -282,45 +345,74 @@ def build_library_from_archive(
             row["mask_hex"] or "",
             row["crc16"],
             int(row["crc_len"]),
-            row["function_len"],
         )
-        if key in ambiguous:
-            continue
-        prior = by_key.get(key)
-        if prior is not None:
-            if prior["name"] != row["name"]:
-                same_symbol = (
-                    prior["member"] == row["member"]
-                    and int(prior["address"]) == int(row["address"])
-                )
-                if same_symbol:
-                    aliases_coalesced += 1
-                    by_key[key] = min((prior, row), key=public_alias_rank)
-                else:
-                    ambiguous.add(key)
-                    del by_key[key]
-            continue
-        by_key[key] = row
+        by_key.setdefault(key, []).append(row)
+
+    def collapse(rows: list[dict]) -> list[dict]:
+        """One row per distinct name on a leaf, best spelling first.
+
+        Two rows at the same `(member, address)` are the *same code* under two
+        symbols -- `_IO_puts` and `puts` -- and only the public spelling is
+        kept. Two rows at different addresses are different functions that
+        happen to be indistinguishable, and both are kept as alternatives.
+        """
+        nonlocal aliases_coalesced
+        by_symbol: dict[tuple[str, int], dict] = {}
+        for row in rows:
+            symbol = (str(row["member"]), int(row["address"]))
+            prior = by_symbol.get(symbol)
+            if prior is None:
+                by_symbol[symbol] = row
+            elif prior["name"] != row["name"]:
+                aliases_coalesced += 1
+                by_symbol[symbol] = min((prior, row), key=public_alias_rank)
+        seen: set[str] = set()
+        out: list[dict] = []
+        for row in sorted(by_symbol.values(), key=public_alias_rank):
+            if row["name"] in seen:
+                continue
+            seen.add(row["name"])
+            out.append(row)
+        return out
+
+    collapsed = {key: collapse(rows) for key, rows in by_key.items()}
+    ambiguous_keys = sum(1 for rows in collapsed.values() if len(rows) > 1)
+    ambiguous_names = sum(len(rows) for rows in collapsed.values() if len(rows) > 1)
 
     entries: list[dict[str, Any]] = []
     index: dict[str, list[int]] = {}
-    for row in sorted(by_key.values(), key=lambda r: (r["name"], r["prologue_hex"])):
+    for rows in sorted(
+        collapsed.values(), key=lambda r: (r[0]["name"], r[0]["prologue_hex"])
+    ):
+        row = rows[0]
         pattern_hex = str(row["prologue_hex"])
         mask_hex = str(row["mask_hex"]) if row["mask_hex"] else None
-        entries.append(
-            {
-                "name": row["name"],
-                "prologue_hex": pattern_hex,
-                "source_binary": row["source_binary"],
-                "mask_hex": mask_hex,
-                "crc16": row["crc16"],
-                "crc_len": int(row["crc_len"]),
-                "function_len": row["function_len"],
-                "refs": [
-                    {"offset": int(r["offset"]), "name": r["name"]} for r in row["refs"]
-                ],
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": row["name"],
+            "prologue_hex": pattern_hex,
+            "source_binary": row["source_binary"],
+            "mask_hex": mask_hex,
+            "crc16": row["crc16"],
+            "crc_len": int(row["crc_len"]),
+            "function_len": row["function_len"],
+            "refs": [
+                {"offset": int(r["offset"]), "name": r["name"]} for r in row["refs"]
+            ],
+        }
+        if len(rows) > 1:
+            entry["alternatives"] = [
+                {
+                    "name": alt["name"],
+                    "function_len": alt["function_len"],
+                    "refs": [
+                        {"offset": int(r["offset"]), "name": r["name"]}
+                        for r in alt["refs"]
+                    ],
+                    "source_binary": alt["source_binary"],
+                }
+                for alt in rows[1:]
+            ]
+        entries.append(entry)
         # The prefix index keys on the first four bytes, so it is only usable
         # when those four are fixed. An entry whose prologue starts variant is
         # left out of the index rather than filed under bytes that will change.
@@ -344,7 +436,12 @@ def build_library_from_archive(
             "archive": str(archive),
             "raw_signatures": len(raw),
             "unique_signatures": len(entries),
-            "dropped_ambiguous": len(ambiguous),
+            # Leaves the pattern and the CRC cannot resolve, and how many names
+            # sit on them. Nothing is *dropped* any more: an unresolvable leaf
+            # is one entry carrying every name, so a later level still has
+            # something to choose between.
+            "ambiguous_keys": ambiguous_keys,
+            "ambiguous_names": ambiguous_names,
             "aliases_coalesced": aliases_coalesced,
             "signatures_with_masked_bytes": masked,
             "signatures_with_crc": sum(1 for e in entries if int(e["crc_len"]) > 0),
@@ -374,15 +471,35 @@ def _expand_roots(roots: list[Path]) -> list[Path]:
     return out
 
 
-def _write(output: Path, lib: dict) -> None:
-    """Write a library file deterministically.
+def _write(
+    output: Path, lib: dict, fmt: str = FORMAT_JSON, codec: str = "zstd"
+) -> None:
+    """Write a library file deterministically, in ``fmt``.
 
-    ``sort_keys`` plus a trailing newline so a rebuild that changed nothing
-    produces a zero-line diff, which is what makes the committed library
-    reviewable.
+    JSON gets ``sort_keys`` plus a trailing newline so a rebuild that changed
+    nothing produces a zero-line diff, which is what makes the committed
+    library reviewable. ``gsig`` is deterministic by construction -- see
+    ``src/flirt/gsig`` -- so the same input gives the same bytes and therefore
+    the same sha256, which is what a content-addressed distribution needs.
+
+    Args:
+        output: Where to write.
+        lib: The library, as :func:`build_library` and
+            :func:`build_library_from_archive` return it.
+        fmt: :data:`FORMAT_JSON` or :data:`FORMAT_GSIG`.
+        codec: The ``gsig`` chunk codec; ignored for JSON.
+
+    Raises:
+        ValueError: ``fmt`` is neither format, or the container rejects the
+            library.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(lib, indent=2, sort_keys=True) + "\n")
+    if fmt == FORMAT_JSON:
+        output.write_text(json.dumps(lib, indent=2, sort_keys=True) + "\n")
+        return
+    if fmt != FORMAT_GSIG:
+        raise ValueError(f"unknown output format {fmt!r}")
+    g.analysis.flirt_gsig_write_from_json_str(json.dumps(lib), str(output), codec)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -438,8 +555,25 @@ def main(argv: list[str] | None = None) -> int:
             "functions that cannot be identified by their bytes."
         ),
     )
+    p.add_argument("--output", type=Path, required=True, help="Library output path.")
     p.add_argument(
-        "--output", type=Path, required=True, help="JSON library output path."
+        "--format",
+        choices=(FORMAT_JSON, FORMAT_GSIG),
+        default=DEFAULT_FORMAT,
+        help=(
+            "Output format. 'json' (default) is the reviewable interchange "
+            "form; 'gsig' is the chunked binary container a corpus ships in, "
+            "roughly 25x smaller. The matcher reads both, dispatching on the "
+            "file's magic bytes."
+        ),
+    )
+    p.add_argument(
+        "--codec",
+        default="zstd",
+        help=(
+            "gsig chunk codec: 'zstd' (default, pure Rust), 'store', or "
+            "'zstd-max' when the crate was built with the gsig-zstd feature."
+        ),
     )
     p.add_argument("--arch", default="x86_64", help="Target architecture tag.")
     p.add_argument("--quiet", action="store_true")
@@ -471,14 +605,15 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
-        _write(args.output, lib)
+        _write(args.output, lib, args.format, args.codec)
         if not args.quiet:
             s = lib["stats"]
             print(
                 f"wrote {args.output}  "
                 f"(raw={s['raw_signatures']}, "
                 f"unique={s['unique_signatures']}, "
-                f"dropped_ambiguous={s['dropped_ambiguous']}, "
+                f"ambiguous_keys={s['ambiguous_keys']}, "
+                f"ambiguous_names={s['ambiguous_names']}, "
                 f"masked={s['signatures_with_masked_bytes']}, "
                 f"with_crc={s['signatures_with_crc']}, "
                 f"with_refs={s['signatures_with_refs']})",
@@ -494,7 +629,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(f"harvesting from {len(binaries)} binaries…", file=sys.stderr)
     lib = build_library(binaries, args.arch)
-    _write(args.output, lib)
+    _write(args.output, lib, args.format, args.codec)
     if not args.quiet:
         s = lib["stats"]
         print(

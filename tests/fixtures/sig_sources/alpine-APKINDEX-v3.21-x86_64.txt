@@ -1,0 +1,140 @@
+C:Q1wuXFYVY/eNNALoZeyIR8ZfV1LMQ=
+P:g++
+V:14.2.0-r4
+A:x86_64
+S:16683543
+I:43443144
+T:GNU C++ standard library and compiler
+U:https://gcc.gnu.org
+L:GPL-2.0-or-later AND LGPL-2.1-or-later
+o:gcc
+m:Ariadne Conill <ariadne@dereferenced.org>
+t:1729197826
+c:1a03a2a9c9e77f1a07d48b6f6805e72c8c63c03f
+D:libstdc++-dev=14.2.0-r4 gcc=14.2.0-r4 musl-dev libstdc++=14.2.0-r4 so:libc.musl-x86_64.so.1 so:libgmp.so.10 so:libisl.so.23 so:libmpc.so.3 so:libmpfr.so.6 so:libz.so.1
+p:cmd:c++=14.2.0-r4 cmd:g++=14.2.0-r4 cmd:x86_64-alpine-linux-musl-c++=14.2.0-r4 cmd:x86_64-alpine-linux-musl-g++=14.2.0-r4
+
+C:Q1so4Nwbpz4Vh1odkv4QnWrBBtaLE=
+P:gcc
+V:14.2.0-r4
+A:x86_64
+S:53056269
+I:144103593
+T:The GNU Compiler Collection
+U:https://gcc.gnu.org
+L:GPL-2.0-or-later AND LGPL-2.1-or-later
+o:gcc
+m:Ariadne Conill <ariadne@dereferenced.org>
+t:1729197826
+c:1a03a2a9c9e77f1a07d48b6f6805e72c8c63c03f
+D:binutils libgomp=14.2.0-r4 libatomic=14.2.0-r4 libgomp=14.2.0-r4 so:libc.musl-x86_64.so.1 so:libgcc_s.so.1 so:libgmp.so.10 so:libisl.so.23 so:libmpc.so.3 so:libmpfr.so.6 so:libstdc++.so.6 so:libz.so.1
+p:so:libcc1.so.0=0.0.0 so:libitm.so.1=1.0.0 cmd:c89=14.2.0-r4 cmd:c99=14.2.0-r4 cmd:cc=14.2.0-r4 cmd:cpp=14.2.0-r4 cmd:gcc-ar=14.2.0-r4 cmd:gcc-nm=14.2.0-r4 cmd:gcc-ranlib=14.2.0-r4 cmd:gcc=14.2.0-r4 cmd:gcov-dump=14.2.0-r4 cmd:gcov-tool=14.2.0-r4 cmd:gcov=14.2.0-r4 cmd:lto-dump=14.2.0-r4 cmd:x86_64-alpine-linux-musl-cc=14.2.0-r4 cmd:x86_64-alpine-linux-musl-gcc-14.2.0=14.2.0-r4 cmd:x86_64-alpine-linux-musl-gcc-ar=14.2.0-r4 cmd:x86_64-alpine-linux-musl-gcc-nm=14.2.0-r4 cmd:x86_64-alpine-linux-musl-gcc-ranlib=14.2.0-r4 cmd:x86_64-alpine-linux-musl-gcc=14.2.0-r4
+
+C:Q1OjH10Hhk6gsyOjxtdjrmB57xyR8=
+P:libstdc++
+V:14.2.0-r4
+A:x86_64
+S:942494
+I:2771336
+T:GNU C++ standard runtime library
+U:https://gcc.gnu.org
+L:GPL-2.0-or-later AND LGPL-2.1-or-later
+o:gcc
+m:Ariadne Conill <ariadne@dereferenced.org>
+t:1729197826
+c:1a03a2a9c9e77f1a07d48b6f6805e72c8c63c03f
+D:so:libc.musl-x86_64.so.1 so:libgcc_s.so.1
+p:so:libstdc++.so.6=6.0.33
+
+C:Q1i7rNn8WORMYTwGD3LvbxyMuMjtM=
+P:libstdc++-dev
+V:14.2.0-r4
+A:x86_64
+S:3989583
+I:22224115
+T:GNU C++ standard runtime library (development files)
+U:https://gcc.gnu.org
+L:GPL-2.0-or-later AND LGPL-2.1-or-later
+o:gcc
+m:Ariadne Conill <ariadne@dereferenced.org>
+t:1729197826
+c:1a03a2a9c9e77f1a07d48b6f6805e72c8c63c03f
+D:libstdc++=14.2.0-r4
+
+C:Q1KuzxE7sFBvldrt+RbsBErcpFyrM=
+P:musl
+V:1.2.5-r11
+A:x86_64
+S:412204
+I:662120
+T:the musl c library (libc) implementation
+U:https://musl.libc.org/
+L:MIT
+o:musl
+m:Natanael Copa <ncopa@alpinelinux.org>
+t:1775835421
+c:21cafa1183cf7501d3f1744994d221c038436e45
+p:so:libc.musl-x86_64.so.1=1
+
+C:Q1wUlCOIuDUtbMTXswEWsLET42K2o=
+P:musl-dev
+V:1.2.5-r11
+A:x86_64
+S:3428687
+I:9914883
+T:the musl c library (libc) implementation (development files)
+U:https://musl.libc.org/
+L:MIT
+o:musl
+m:Natanael Copa <ncopa@alpinelinux.org>
+t:1775835421
+c:21cafa1183cf7501d3f1744994d221c038436e45
+D:musl=1.2.5-r11
+p:libc-dev=1.2.5-r11
+
+C:Q15POhMWEXF6pu93I94TNaex+/BSM=
+P:zlib
+V:1.3.2-r0
+A:x86_64
+S:55393
+I:104280
+T:A compression/decompression Library
+U:https://zlib.net/
+L:Zlib
+o:zlib
+m:Natanael Copa <ncopa@alpinelinux.org>
+t:1776179882
+c:2b38f55109add14f4f99a974c2fdf421b6b9e9e9
+D:so:libc.musl-x86_64.so.1
+p:so:libz.so.1=1.3.2
+
+C:Q1ctbTKg6sZ0YPT/xVpX9I1ABISAY=
+P:zlib-dev
+V:1.3.2-r0
+A:x86_64
+S:34380
+I:121035
+T:A compression/decompression Library (development files)
+U:https://zlib.net/
+L:Zlib
+o:zlib
+m:Natanael Copa <ncopa@alpinelinux.org>
+t:1776179882
+c:2b38f55109add14f4f99a974c2fdf421b6b9e9e9
+D:pkgconfig zlib=1.3.2-r0
+p:pc:zlib=1.3.2
+
+C:Q1yBU32V5wlfDrLgECda4RCU55GRU=
+P:zlib-static
+V:1.3.2-r0
+A:x86_64
+S:60906
+I:139262
+T:A compression/decompression Library (static library)
+U:https://zlib.net/
+L:Zlib
+o:zlib
+m:Natanael Copa <ncopa@alpinelinux.org>
+t:1776179882
+c:2b38f55109add14f4f99a974c2fdf421b6b9e9e9
+

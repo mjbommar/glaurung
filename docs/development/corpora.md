@@ -11,7 +11,7 @@
 
 ## Why this page exists
 
-Three corpora feed Glaurung's measurement work and none of them can be
+Four corpora feed Glaurung's measurement work and none of them can be
 committed:
 
 * `tests/decompiler_fixtures/build/` — **built locally**, gitignored, ~40
@@ -19,6 +19,13 @@ committed:
 * `samples/` — **checked in**, small, documented in
   [`samples/README.md`](../../samples/README.md).
 * Published research corpora — **downloaded**, tens of gigabytes, this page.
+* NAS-mounted corpora — **read-only, never copied or downloaded**, this page.
+  Large, pre-built binary/toolchain trees that live on `/nas4` and are
+  referenced by path plus sha256 rather than fetched, because copying them
+  would just duplicate bytes an agent must not write to `/nas4` to produce in
+  the first place. Windows system binaries and their PDBs are one such tree,
+  hundreds of gigabytes and not downloadable as one artifact; the ARM GNU
+  Toolchain and Cortex-M validation firmware are another.
 
 A downloaded corpus is only useful as evidence if a later reader can tell that
 they have the same bytes. So each entry below records the exact source, the
@@ -38,7 +45,10 @@ repository, never in `/tmp` (which is a shared quota'd tmpfs here — see
 export TMPDIR="$HOME/.cache/glaurung/tmp"; mkdir -p "$TMPDIR"
 ```
 
-Current total: **17 GB**, all of it Cisco Dataset-1.
+Current total under `$HOME`: **17 GB**, all of it Cisco Dataset-1. The Windows
+corpus below is not copied there at all — it is read in place from the NAS,
+which is read-only, and the libraries derived from it go to
+`$HOME/.cache/glaurung/system-libs/warp/`.
 
 ---
 
@@ -171,6 +181,138 @@ nothing. See [`identity-measurement.md`](identity-measurement.md#cisco-dataset-1
 for what is measured and what the numbers are.
 
 ---
+
+## Windows system binaries and their PDBs
+
+**Not downloaded and not downloadable as one artifact**, which is why this
+entry looks different from the one above: it is a NAS-resident collection
+assembled from Windows installation media, Patch Tuesday servicing packages and
+Windows Update driver packages, plus a Microsoft-symbol-server PDB cache
+populated alongside it. There is no upstream URL or checksum to compare
+against; what is recorded here is what a reader needs to tell whether they are
+looking at the same bytes.
+
+**Why it exists.** It is the only corpus that pairs *linked Microsoft PEs* with
+*Microsoft's own names for them*, which is the input WARP signature libraries
+need and the only input available: Microsoft ships no `.lib` or `.obj` for
+system code, so the FLIRT path has nothing to read. See
+[`../reference/function-signature-libraries.md`](../reference/function-signature-libraries.md#windows-warp-libraries-from-pe--pdb).
+
+**Licence: Microsoft, all rights reserved.** These are unmodified Microsoft
+binaries and debug symbols. Nothing derived from them is committed except
+GUIDs, names and sizes -- no bytes -- and the built libraries live under
+`$HOME/.cache/glaurung/system-libs/warp/`.
+
+### What is there
+
+Read on 2026-09-03 under `/nas4/data/binary-analysis/glaurung/`:
+
+| Path | Contents |
+|---|---|
+| `binaries/windows-8-pro-x64/` | 4,212 PEs from a Windows 8 Pro x64 image (`6.2.9200.16384`) |
+| `binaries/windows-10-x64/` | 5,273 PEs, `10.0.19041.*` |
+| `binaries/windows-11-x64/` | 5,408 PEs, `10.0.22621.*` |
+| `binaries/windows-11-25h2-nucbox/` | a 25H2 install captured from real hardware |
+| `binaries/windows-update/` | 17 GB, 4,400 files: **third-party IHV driver packages** (AMD, Intel, Realtek, Synaptics, Kaspersky), not Microsoft servicing packages |
+| `patch-tuesday/` | 25 files: 9 modules (`afd`, `cldflt`, `clfs`, `dhcpcore`, `dwmcore`, `http`, `ntoskrnl`, `tcpip`, `win32kfull`) as **old/new pairs** at `10.0.26100.{8328,8457,8521,8655}` |
+| `dataset.json`, `manifest.jsonl` | provenance; `manifest.jsonl` covers `binaries-small/` and the malware trees, **not** the `windows-*` build trees |
+| `/nas4/data/symbol-cache/microsoft/` | 7.3 GB, 5,369 PDBs in symbol-server layout `<pdbname>.pdb/<GUID+AGE>/<pdbname>.pdb` |
+
+`patch-tuesday/` is the corpus for cross-build measurement, not
+`binaries/windows-update/`: the latter is vendor driver packages and contains
+no Microsoft system DLLs beyond redistributable `msvcp140`/`vcruntime140`
+copies.
+
+**The PDB cache is the binding constraint.** Only 30 / 117 / 169 of the PEs in
+the three build trees resolve a PDB in it, and only ten Microsoft-authored
+modules resolve one in all three (`afd`, `clfs`, `dxgkrnl`, `fltMgr`, `mrxsmb`,
+`ntfs`, `ntoskrnl`, `srvnet`, `tcpip`, `win32k`). `ntdll`, `kernel32`,
+`KernelBase`, `combase`, `ole32` and `rpcrt4` resolve for Windows 11 only;
+`advapi32`, `user32`, `gdi32`, `msvcrt`, `ucrtbase`, `ws2_32`, `crypt32` and
+`shell32` resolve for none. Widening it means running
+`glaurung.pdb_fetch.ensure_pdb_cached` against `msdl.microsoft.com`, not
+collecting more binaries.
+
+`/nas4/data/binary-analysis/windows-drivers.sqfs` (419 GB) exists but was
+**not mounted** on 2026-09-03, and nothing here mounts it.
+
+### Who reads it
+
+`python/tests/test_warp_windows_libraries.py`, via two variables:
+
+* **`GLAURUNG_WINDOWS_CORPUS`** -- the directory holding `binaries/` and
+  `patch-tuesday/` (i.e. `/nas4/data/binary-analysis/glaurung`).
+* **`GLAURUNG_PDB_CACHE`** -- a Microsoft-style symbol cache. This is the same
+  variable `glaurung.pdb_fetch.default_cache_dir` already reads, so setting it
+  also makes `glaurung kickoff` name Windows functions from PDBs.
+
+With either unset, every measurement in that file skips loudly and asserts
+nothing; the mechanism half of the file still runs, on the repository's own
+MinGW samples.
+
+```bash
+export GLAURUNG_WINDOWS_CORPUS=/nas4/data/binary-analysis/glaurung
+export GLAURUNG_PDB_CACHE=/nas4/data/symbol-cache/microsoft
+uv run pytest python/tests/test_warp_windows_libraries.py -q
+
+# Rebuild the library set (82 libraries, ~152 s, 142 MB) and record it in a
+# knowledge base, so a later `function_match` row can name which library
+# resolved a hit. `--skip-without-pdb` is what keeps this to the 169 modules
+# whose PDB is actually cached rather than all 5,408 PEs.
+uv run python -m glaurung.tools.build_warp_library \
+  --pdb-cache "$GLAURUNG_PDB_CACHE" \
+  --output-dir "$HOME/.cache/glaurung/system-libs/warp" \
+  --kb "$HOME/.cache/glaurung/system-libs/warp/warp.glaurung" \
+  --skip-without-pdb --index \
+  "$GLAURUNG_WINDOWS_CORPUS/binaries/windows-11-x64"
+```
+
+---
+
+## ARM GNU Toolchain (`armtc`) and Cortex-M validation firmware — NAS, read-only
+
+Three trees under `/nas4/data/binary-analysis/`, used together to build and
+validate the Cortex-M FLIRT signature libraries in
+[`function-signature-libraries.md`](../reference/function-signature-libraries.md#cortex-m-bare-metal).
+None of them is downloaded or copied anywhere by this repository's tooling;
+`tools/harvest_armtc.py` records NAS path plus sha256 and nothing else.
+
+**`armtc/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/`** — the
+prebuilt ARM GNU Toolchain release (`arm-none-eabi-gcc 13.2.1 20231009`,
+newlib `4.3.0`), 780 static archives (`libc.a`, `libc_nano.a`, `libg.a`,
+`libm.a`, `libstdc++.a`, `libstdc++_nano.a`, `libsupc++.a`, `libnosys.a`,
+`librdimon*.a`, `libgcov.a`, `libcaf_single.a`) across 39 multilibs under
+`arm-none-eabi/lib/{arm,thumb}/**` plus `libgcc.a` under
+`lib/gcc/arm-none-eabi/13.2.1/**`. Licence: newlib/libgloss is BSD-style
+(the toolchain's own `license.txt`, lines 8721-10644); libgcc/libstdc++ are
+GPLv3 plus the GCC Runtime Library Exception. Read by
+`GLAURUNG_ARMTC` (Python-side only, e.g.
+`tools/harvest_armtc.py --toolchain-root "$GLAURUNG_ARMTC"`, and
+`python/tests/test_flirt_cortex_m_fixture.py`'s live-toolchain check).
+
+**`rt-libopencm3/`** — 20 real STM32F4 firmwares from the `libopencm3`
+example tree (`blink`, `usart-stdio`, `lcd-dma`, ...), each with a `stripped/`
+and an `asrun/` (unstripped, DWARF-carrying) copy at three optimisation
+levels (`O0`, `O2`, `O2-noinline`), plus `addr2name.json` (decimal VA -> name
+ground truth, some addresses carrying the Thumb bit) and `srcloc.json`. Built
+with the *same* toolchain release above (`arm-none-eabi-gcc 13.2.1
+20231009`, confirmed from each firmware's `.comment` section) and a gcc14
+variant not used by this measurement.
+
+**`decbench-holdout-source-rebuild-2026-08-06/{O0,O2,O2-noinline}/<project>/{compiled,stripped}/`**
+— DecBench holdout projects rebuilt from source, several of them bare-metal
+ARM EABI5 statically linked firmware: `libopencm3`, `chibios`, `freertos`,
+`nuttx`, `riot-os`, `betaflight`, `cleanflight`, `crazyflie`. **Recorded
+defect:** for every ARM project checked (`freertos`, `nuttx`, `betaflight`),
+`stripped/<binary>` is byte-**identical** to `compiled/<binary>` (sha256
+verified) — the corpus's strip step is a no-op for these targets, so there is
+no separately-stripped ARM binary to test blind recovery against in this
+holdout set. Ground truth for the ARM validation table is read directly off
+the binary's own symbol table (`arm-none-eabi-nm -S --defined-only`) rather
+than from a separate stripped/unstripped pair.
+
+None of these three trees count toward the "current total" above — they are
+never copied into `$HOME/.cache/glaurung/`, only read in place.
 
 ## Not ingested, and why
 

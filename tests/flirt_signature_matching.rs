@@ -1592,3 +1592,63 @@ fn the_same_mingw_library_without_masks_does_not_survive_the_relink() {
          reaches {masked_both})"
     );
 }
+
+/// Every `*.flirt.json` a library directory holds must be free of entries the
+/// matcher cannot tell apart.
+///
+/// `FlirtLibrary::match_at` compares the masked pattern, the mask, the CRC16
+/// and the CRC length. Two entries agreeing on all four are a permanent
+/// `Ambiguous`: no input can reach one without reaching the other, so the
+/// second name is storage the library can never spend. Until 2026-09-03
+/// `build_flirt_library.py` keyed its duplicate check on `function_len` as
+/// well, and a seven-library set built from this box's own `libc.a`, `libm`,
+/// `libstdc++`, `libcrypto`, `libssl`, `libz` and Rust sysroot carried **276
+/// such keys covering 594 of 15,538 entries** (3.8%), 20 of them spanning two
+/// libraries. Those names now share one entry as `alternatives`.
+///
+/// Scope: the repository's own `data/sigs/` always, plus every library in
+/// `GLAURUNG_SIG_DIR` when one is set -- which is how the real glibc and
+/// libstdc++ set is run through this assertion without committing 19 MB of
+/// JSON to the tree.
+#[test]
+fn no_library_holds_entries_the_matcher_cannot_tell_apart() {
+    let mut dirs = vec![repo_root().join("data/sigs")];
+    if let Ok(dir) = std::env::var("GLAURUNG_SIG_DIR") {
+        dirs.push(PathBuf::from(dir));
+    }
+
+    let mut checked = 0usize;
+    let mut entries_total = 0usize;
+    for dir in dirs {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut paths: Vec<PathBuf> = read
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with(".flirt.json"))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let text = std::fs::read_to_string(&path).expect("library is readable");
+            let file: FlirtLibraryFile = serde_json::from_str(&text).expect("library parses");
+            let groups = file.matcher_key_collisions();
+            let named: Vec<Vec<&str>> = groups
+                .iter()
+                .take(5)
+                .map(|g| g.iter().map(|i| file.entries[*i].name.as_str()).collect())
+                .collect();
+            assert!(
+                groups.is_empty(),
+                "{}: {} matcher-key collisions covering {} entries; first few: {named:?}",
+                path.display(),
+                groups.len(),
+                groups.iter().map(Vec::len).sum::<usize>(),
+            );
+            checked += 1;
+            entries_total += file.entries.len();
+        }
+    }
+    assert!(checked > 0, "no signature library was reachable to check");
+    eprintln!("matcher-key collisions: 0 over {checked} libraries, {entries_total} entries");
+}

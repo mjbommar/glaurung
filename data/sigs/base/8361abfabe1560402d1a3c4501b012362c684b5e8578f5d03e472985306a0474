@@ -1,0 +1,211 @@
+{
+  "arch": "x86_64",
+  "entries": [
+    {
+      "crc16": 46863,
+      "crc_len": 28,
+      "function_len": 60,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_add",
+      "prologue_hex": "f30f1efa8305000000000185f67e19baffffff7f31c029f239fa7c048d043ec3",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_add"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 27,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffff0000000000",
+      "name": "mathlib_apply_operation",
+      "prologue_hex": "f30f1efa830500000000014885f67408ffe6660f1f44000089f8c30f1f440000",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_apply_operation"
+    },
+    {
+      "crc16": 31728,
+      "crc_len": 41,
+      "function_len": 78,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffff00000000ffff",
+      "name": "mathlib_array_average",
+      "prologue_hex": "f30f1efa8b05000000004885ff743185f67e2d83c00231d289050000000031c0",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_array_average"
+    },
+    {
+      "crc16": 5075,
+      "crc_len": 46,
+      "function_len": 78,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_array_max",
+      "prologue_hex": "f30f1efa830500000000014885ff743685f67e32448b0783fe0174268d56fe48",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_array_max"
+    },
+    {
+      "crc16": 35993,
+      "crc_len": 58,
+      "function_len": 90,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_array_min",
+      "prologue_hex": "f30f1efa830500000000014885ff744085f67e3c448b0783fe0174268d56fe48",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_array_min"
+    },
+    {
+      "crc16": 24129,
+      "crc_len": 23,
+      "function_len": 55,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_array_sum",
+      "prologue_hex": "f30f1efa830500000000014885ff742085f67e1c31c04531c00f1f8000000000",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_array_sum"
+    },
+    {
+      "crc16": 24935,
+      "crc_len": 8,
+      "function_len": 40,
+      "mask_hex": "ffffffffffffffffffff00000000ffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_divide",
+      "prologue_hex": "f30f1efa660fefdb83050000000001660f2ecb7a06660fefd27408660f28d0f2",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_divide"
+    },
+    {
+      "crc16": 18878,
+      "crc_len": 42,
+      "function_len": 74,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_factorial",
+      "prologue_hex": "f30f1efa8305000000000185ff783241b80100000083ff017e23b81400000039",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_factorial"
+    },
+    {
+      "crc16": 54860,
+      "crc_len": 22,
+      "function_len": 54,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_fibonacci",
+      "prologue_hex": "f30f1efa8305000000000131c085ff7e24b80100000083ff01741aba02000000",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_fibonacci"
+    },
+    {
+      "crc16": 29956,
+      "crc_len": 31,
+      "function_len": 63,
+      "mask_hex": "ffffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_gcd",
+      "prologue_hex": "f30f1efa89f88305000000000189f2f7d80f48c7f7da0f48d685f6741b0f1f00",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_gcd"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 25,
+      "mask_hex": "ffffffffffff00000000ffffffffffff00000000ffffffffff00000000000000",
+      "name": "mathlib_init",
+      "prologue_hex": "f30f1efac7050000000039300000c7050000000000000000c300000000000000",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_init"
+    },
+    {
+      "crc16": 49886,
+      "crc_len": 163,
+      "function_len": 195,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_is_prime",
+      "prologue_hex": "f30f1efa8305000000000189f931d283ff010f8ea8000000ba0100000083ff03",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_is_prime"
+    },
+    {
+      "crc16": 1863,
+      "crc_len": 26,
+      "function_len": 58,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_multiply",
+      "prologue_hex": "f30f1efa8305000000000185ff74214189f189f9b8ffffff7f41f7d9440f48ce",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_multiply"
+    },
+    {
+      "crc16": 20725,
+      "crc_len": 44,
+      "function_len": 86,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_point_distance",
+      "prologue_hex": "f30f1efa830500000000014885ff74384885f67433f20f1006f20f104e08f20f",
+      "refs": [
+        {
+          "name": ".LC2",
+          "offset": 76
+        },
+        {
+          "name": "sqrt",
+          "offset": 82
+        }
+      ],
+      "source_binary": "mathlib.o!mathlib_point_distance"
+    },
+    {
+      "crc16": 33527,
+      "crc_len": 5,
+      "function_len": 72,
+      "mask_hex": "ffffffffffff00000000ffffffffffff00000000ffffffffffffffffffffffff",
+      "name": "mathlib_random",
+      "prologue_hex": "f30f1efa6915000000006d4ec6418305000000000181c23930000081e2ffffff",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_random"
+    },
+    {
+      "crc16": 62749,
+      "crc_len": 21,
+      "function_len": 53,
+      "mask_hex": "ffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "mathlib_subtract",
+      "prologue_hex": "f30f1efa8305000000000185f67819740c8d960000008031c039fa7f0489f829",
+      "refs": [],
+      "source_binary": "mathlib.o!mathlib_subtract"
+    }
+  ],
+  "index": {
+    "f30f1efa": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ]
+  },
+  "library": {
+    "arch": "x86_64",
+    "name": "mathlib",
+    "variant": "gcc-15.2.0-O2",
+    "version": "1.0.0"
+  },
+  "prologue_len": 32,
+  "schema_version": "2",
+  "stats": {
+    "archive": "samples/binaries/platforms/linux/amd64/libraries/static/libmathlib.a",
+    "dropped_ambiguous": 0,
+    "raw_signatures": 16,
+    "signatures_with_crc": 14,
+    "signatures_with_masked_bytes": 16,
+    "signatures_with_refs": 1,
+    "unique_signatures": 16
+  }
+}

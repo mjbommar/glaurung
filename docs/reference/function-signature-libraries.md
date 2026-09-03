@@ -7,6 +7,13 @@
 See [`data/sigs/README.md`](../../data/sigs/README.md) for what the shipped
 library contains and how to rebuild it.
 
+**How a library reaches a user's machine** is a separate mechanism, and it has
+its own page: [signature-set distribution](signature-distribution.md) covers
+the signed content-addressed manifest, the `glaurung sigs` cache commands, the
+offline fallback bundled in the wheel, and the step-by-step release recipe.
+This page is about what a signature *is*; that one is about how a set of them
+is published, fetched and verified.
+
 This page is about the mechanism. It covers what changed on 2026-09-02, why
 `lancelot-flirt` was priced and declined, and what the matcher does now.
 
@@ -55,6 +62,8 @@ three reasons in descending weight:
    `auto`; the ambiguity policy ("no name beats a wrong name") is ours and has
    to be enforced at our boundary regardless of who does the comparing.
 
+**Third-party signature sets are not consumed** (decision 2026-09-03): every shipped signature is derived by this repository from a named, re-fetchable archive. The paragraph below is kept as the record of why the crate was priced.
+
 **It remains the right answer to a different question.** The day we want to
 *consume* third-party `.sig`/`.pat` libraries -- which is the only way to get
 libc and MSVC coverage without building those toolchains ourselves -- that is
@@ -82,7 +91,10 @@ exactly.
     "crc16": 46863, "crc_len": 28,       // over bytes [32, 32+28)
     "function_len": 60,
     "refs": [{"offset": 14, "name": ".LC0"}],
-    "source_binary": "mathlib.o!mathlib_add"
+    "source_binary": "mathlib.o!mathlib_add",
+    // Present only on a leaf the pattern and the CRC cannot resolve.
+    "alternatives": [{"name": "mathlib_add_alias", "function_len": 64,
+                      "refs": [], "source_binary": "other.o!..."}]
   }]
 }
 ```
@@ -97,7 +109,8 @@ deliberately so a signature set is not a copy of the library it describes.
 |---|---|
 | `mask_hex` | The `.o`'s relocation table: `[offset, offset + size/8)` for each relocation, clamped to the pattern. **Plus** every byte at or beyond `function_len`, because a short symbol's 32-byte window runs into whatever the linker placed next and that is a different neighbour in every link. |
 | `crc16` / `crc_len` | IDA's exact CRC16 (`src/flirt/crc16.rs`), over the bytes following the pattern, stopping at the first variant byte, the end of the function, or 255 bytes -- whichever comes first. |
-| `refs` | Every relocation inside the function that names a symbol other than the function itself, at its offset from the entry. |
+| `refs` | Every relocation inside the function that names a symbol other than the function itself, at its offset from the entry. **The offset is the relocated field's, not the instruction's** -- for `call rel32` that is one byte past the opcode. |
+| `alternatives` | The other names that share this entry's matcher key. See [The ambiguity rule](#the-ambiguity-rule). |
 | `library` | Given on the command line. |
 
 ### Why the CRC is not a generic CRC-16
@@ -124,14 +137,72 @@ matches are in the README too, so bytes `[32, 64)` of that buffer must hash to
    answers "what is the name of the thing this function references `offset`
    bytes in?". `None` means unknown and never eliminates a candidate; a name
    that disagrees with a candidate's recorded reference does. Survivors are
-   ranked by how many references were positively confirmed.
+   ranked by how many references were positively confirmed, **and the winning
+   score must be non-zero** -- see [A contradiction alone does not
+   decide](#a-contradiction-alone-does-not-decide).
 
 `Ambiguous` is never collapsed to a name. A FLIRT hit is written at
 `set_by=flirt`, which `provenance.py` ranks at 50, above `auto` and
 `propagated` -- a false positive here does not degrade an answer, it *outranks*
-the correct one. The builder applies the same rule at build time: two functions
-whose **masked** patterns, masks and CRCs all agree but whose names differ are
-both dropped.
+the correct one.
+
+### The ambiguity rule
+
+**The builder's duplicate key is the matcher's key, exactly.** `match_at`
+compares the masked pattern, the mask, the CRC16 and the CRC length. Two
+entries agreeing on all four accept exactly the same bytes: nothing can ever
+reach one without reaching the other, so both become candidates together and
+the verdict is a permanent `Ambiguous`.
+
+Until 2026-09-03 `build_flirt_library.py` keyed on `function_len` as well,
+which the matcher does not read. Measured over a seven-library set built from
+this box's own `libc.a`, `libm-2.43.a`, `libstdc++.a`, `libcrypto.a`,
+`libssl.a`, `libz.a` and the Rust 1.97.1 sysroot `libstd`:
+
+| | before | after |
+|---|--:|--:|
+| entries | 15,538 | 16,329 |
+| names carried | 15,538 | 19,729 |
+| raw signatures dropped as ambiguous | 1,179 | **0** |
+| per-library entry pairs `match_at` cannot separate | 276 keys / 594 entries | **0 / 0** |
+| merged-set keys carrying more than one name | 268 / 576 names | 1,247 / 4,681 names |
+
+Reproduce with `FlirtLibraryFile::matcher_key_collisions()`; the assertion is
+`tests/flirt_signature_matching.rs::no_library_holds_entries_the_matcher_cannot_tell_apart`,
+which checks `data/sigs/` always and `GLAURUNG_SIG_DIR` when one is set.
+
+Names that genuinely cannot be separated are **not dropped**. They become one
+entry with `alternatives`, which is how FLIRT's own tree holds several modules
+on a leaf: `FlirtLibrary::from_file` compiles one `FlirtSignature` per name,
+`match_at` still reports `Ambiguous` and names none of them, and a level that
+*can* tell them apart -- an exact `function_len`, a referenced name -- still
+has something to choose between. Before this change those names were thrown
+away at build time and the choice could never be made.
+
+The invariant is **per file**. Two independently built libraries can still
+collide with each other; the matcher handles that correctly at match time
+(identical names collapse to one verdict, differing names report `Ambiguous`),
+and merging does not rewrite entries. On the seven-library set, 38 merged keys
+collide across files and 36 of those are the same function appearing in two
+archives (glibc's `libm` symbols are in `libc.a` too).
+
+### A contradiction alone does not decide
+
+Eliminating every candidate but one and naming that one looks like sound
+elimination. It is not, because **a library records one spelling of an aliased
+symbol** -- the builder keeps the public one, so `pthread_mutex_lock` is stored
+and `__pthread_mutex_lock` is not -- and a resolver reporting the other
+spelling contradicts a signature that is in fact correct.
+
+Measured: with elimination-only allowed, the four `gcc -O2 -static` binaries
+below gained 16 wrong names, all of them the same shape. `__dlsym` and
+`__dlvsym` share a pattern and a CRC and call the same four helpers at offsets
+four bytes apart; resolving `__pthread_mutex_lock` to its public alias
+contradicted the *correct* candidate at each address and left the other
+standing alone, so the pair was named as each other, and `dlsym`/`dlvsym` with
+them. Requiring at least one positively confirmed reference takes that to zero
+while keeping every name the confirmations earned. Every candidate being
+contradicted is still `None` -- there is nothing left to name either way.
 
 ### Signatures the builder declines to make
 
@@ -151,8 +222,71 @@ honest thing to do with it is decline. Raising the floor to 16 drops exactly
 those four plus one other (nothing in this archive sits between 11 and 17
 fixed bytes) and takes the false-positive count to zero. FLIRT's answer to the
 same problem is to match such functions only as *referenced* names from a
-caller, never standalone; that is available here through
-`match_at_with_refs` once a resolver is wired in.
+caller, never standalone; `match_at_with_refs` is the same idea from the other
+side, and it is now wired into the analysis pass -- see
+[Referenced names in the analysis pass](#referenced-names-in-the-analysis-pass).
+
+## Referenced names in the analysis pass
+
+**17.6% of the signatures a real archive yields record no CRC at all**
+(`crc_len == 0`, measured over the seven-library set: 2,732 of 15,538), plus a
+further 8% with a range of one to three bytes. Those match on pattern alone --
+exactly the leaves FLIRT expects the caller-name discriminator to finish. Until
+2026-09-03 `apply_flirt_overrides` called the bare `match_at` and every such
+tie stayed a tie.
+
+`apply_flirt_overrides_with_refs(data, functions, lib, sites, extra_names)` is
+the wired version. `src/analysis/cfg/worklist.rs` builds `sites` from the call
+xrefs the discovery pass already collected. `extra_names` -- PLT stub and
+import-thunk names, which a dynamically linked binary's references would
+depend on -- is passed empty for now: `analysis::elf_plt::elf_plt_map` is the
+only source of them and it parses the whole object again, and
+`program::session_tests::discovery_parse_count_does_not_scale_with_the_number_of_functions`
+asserts a ceiling on how many parses one discovery may cost. Nothing in the
+measured corpus below needed it either -- all four binaries are
+`-static`, so there is no PLT to name. It belongs here once `ProgramImage`
+caches a PLT-name index the way it already caches `relocated_symbol_slots`, so
+the parse is paid once per image rather than once per discovery.
+
+**The offset has to be reconstructed.** A signature records a reference at the
+*relocation's* offset from the entry -- the field the linker rewrites, not the
+instruction containing it. A linked image has no relocation table, so
+`FlirtReferenceSites::from_call_sites` reads the opcode at each call site and
+files the target under the one offset that opcode implies: `+1` for `call
+rel32` / `jmp rel32`, `+2` for `jcc rel32` and for `ff /2`, `ff /4` through a
+RIP-relative slot, and the instruction offset itself where no field can be
+placed -- which is the correct answer on the fixed-width architectures, where
+the instruction *is* the field. One offset, never two: a spare registration
+answers a different signature's reference and a wrong answer can eliminate the
+correct candidate.
+
+**Multi-pass**, as FLIRT is: naming a function makes it usable as evidence for
+its neighbours, so the loop repeats until a pass renames nothing (bounded at
+four).
+
+### Measured
+
+Four `gcc -O2 -static` binaries built from `samples/source/c/` (`hello`,
+`vulnparse`, `c2_demo`, `suspicious_linux`), stripped, matched against the
+merged seven-library set. Truth is `nm` on the unstripped twin keeping `T`,
+`t`, `W` and `i` symbols, with all aliases at one address accepted.
+**Denominator: 4,429 discovered functions, 4,357 truth symbols.**
+
+| | named | correct | wrong | ambiguous rows |
+|---|--:|--:|--:|--:|
+| before (no resolver, old library) | 2,951 | 2,931 | 12 | 64 |
+| resolver only (old library) | 2,967 | 2,947 | 12 | 64 |
+| resolver + `alternatives` | **2,999** | **2,979** | **12** | 315 |
+
+**+48 correct names, zero new wrong.** The 12 "wrong" are identical in all
+three rows and are one pre-existing pair: libgcc's `unwind-pe.h` is compiled
+into both `libc.a` and `libstdc++.a`, so `read_encoded_value_with_base` and
+`base_of_encoded_value` are named with libstdc++'s mangled C++ spelling of the
+same code. They are the same function; the comparison is string equality
+against `nm`, which does not know that.
+
+The `named` column is larger than `correct` by the eight functions FLIRT named
+at an address `nm` has no symbol for, plus the 12 above.
 
 ## COFF archives (MinGW-w64 `.a`, MSVC `.lib`)
 
@@ -288,6 +422,200 @@ code generation. `.text$mn` COMDAT handling in particular is argued from the
 code path -- the builder never looks at a section's name -- rather than
 measured. That is the first thing to check the day a real `.lib` is to hand.
 
+## The gsig/1 container
+
+Added 2026-09-03 (`src/flirt/gsig/`), from
+`docs/design/signature-library-program-2026-09-03.md` Decision 2 and its
+`sourcing-and-distribution.md` §Q3 struct sketch -- both landed on
+`origin/master` after this work started and are not yet a link target from
+this page for that reason, not because they do not exist. JSON is a fine
+interchange format -- reviewable, diffable,
+`git`-mergeable -- and an impossible *distribution* one: at the corpus scale
+this project is aiming at (10^5 to 10^6 signatures, one library per
+`(distro, release, arch, package version)`), it is gigabytes of text re-parsed
+from scratch on every load.
+
+`gsig/1` is a chunked binary container carrying the same content: a fixed
+64-byte uncompressed header (`b"GSIG"`, `format_version`, `reader_min`, `arch`,
+`scheme`, counts, `dict_id`, `chunk_count`, `header_len`), a chunk table
+(`kind`, `compression`, `compressed_size`, `uncompressed_size`, `file_offset`;
+an unknown `kind` is skipped by its recorded size), and eight columnar
+sections -- `postcard`-encoded records over an interned, sorted string table,
+masks as bitmaps (one bit per pattern byte, not one byte), 64 KiB
+independently zstd-compressed chunks. Records are sorted by `(name, pattern)`.
+Nothing about the bytes depends on a hash map's iteration order, a timestamp,
+or a path, so two writes of one input are identical -- the property a
+content-addressed distribution needs. `src/flirt/gsig/mod.rs`'s module docs
+carry the full layout table and the versioning rules; this section is the
+measurements and the commands that produced them.
+
+JSON stays the import/export format -- what a harvester writes and a reviewer
+diffs. `python -m glaurung.tools.sig_convert` converts either way and proves
+the round trip lossless; `glaurung.analysis.flirt_library_info_path` and
+`glaurung.tools.build_flirt_library --format gsig` are the two other new
+surfaces. The matcher (`FlirtLibrary::from_path`, and every Python entry point
+that takes a library path) dispatches on the file's first four bytes, so a
+caller never has to say which format it is holding.
+
+### Crates
+
+Verified against the crates.io API on 2026-09-03 (see
+`sourcing-and-distribution.md` §3.5 for the full survey):
+
+| Crate | Version | Licence | Last release | Role |
+|---|---|---|---|---|
+| `postcard` | 1.1.3 | MIT OR Apache-2.0 | 2025-07-24 | Record encoding. Varint, no struct-evolution story of its own -- versioning lives in the container. |
+| `ruzstd` | 0.9.0 | MIT | 2026-07-26 | Pure-Rust Zstandard, **shipped reader and default writer**. Since 0.9 it compresses (`Fastest` level only) as well as decompresses, so the wheel needs no C toolchain to read a library. |
+| `zstd` | 0.13.3 | MIT | 2025-02-20 | Reference C zstd at level 19, **builder-only**, behind the `gsig-zstd` cargo feature (`dep:zstd`, pulls in `zstd-sys`). Never the shipped reader's codec, and never the writer's *default* codec -- enabling the feature adds a codec, it does not move the golden hash. |
+
+`memmap2` (0.9.4, already a dependency) backs the reader's `open()`. Not used:
+`bincode` (Glaurung already depends on 2.0.1 elsewhere, but 3.0.0 is a
+deliberate tombstone -- `compile_error!` in `lib.rs` -- and this format does
+not build on a dead crate), `rkyv`/FlatBuffers (rejected in the design doc: a
+zero-copy format's alignment or schema-compiler cost buys back a load-time
+saving that measures at a few hundred milliseconds per 10^6 records, once per
+process).
+
+### Measured: bytes per signature
+
+`python -m glaurung.tools.sig_convert roundtrip ~/.cache/glaurung/system-libs/sigs/`,
+561 harvested libraries (Debian, Ubuntu, Alpine, MinGW; i386/x86_64/aarch64/arm/riscv64),
+222,339 signatures, release build:
+
+| Encoding | Total bytes | Bytes/signature | vs. JSON |
+|---|--:|--:|--:|
+| JSON (current interchange format) | 294,902,199 | 1,326 | 1.0x |
+| `gsig/1`, `store` codec (packed, uncompressed) | 50,984,619 | 229 | 5.8x smaller |
+| `gsig/1`, `zstd` codec (default, `ruzstd` `Fastest`) | 22,543,729 | 101 | **13.1x smaller** |
+
+0 round-trip failures across all 561 libraries in both directions (JSON to
+gsig to JSON byte-identical after canonical sorting; gsig to gsig
+byte-identical). The 12-signature committed fixture
+(`tests/fixtures/flirt/gsig/`) is the golden-hash tripwire for this property in
+CI; this command is the corpus-scale version, run by hand against a machine's
+local harvest -- `~/.cache/glaurung/system-libs/sigs/` is not part of this
+repository.
+
+### Measured: load time to first match
+
+`glaurung.analysis.flirt_library_match_bytes(path, data)` -- load the file,
+build the index, answer one 32-byte lookup -- median of 7 runs, same machine:
+
+| Library | Format | Debug | Release |
+|---|---|--:|--:|
+| glibc alone (2,563 sigs, this box's `libc6-dev` 2.35) | JSON | 33.8 ms | 3.24 ms |
+| glibc alone | gsig (zstd) | 16.2 ms | 2.34 ms |
+| merged x86_64 (116,593 sigs, every harvested x86_64 library concatenated) | JSON (91 MB) | 1,374.6 ms | 153.6 ms |
+| merged x86_64 | gsig (zstd, 4.9 MB) | 602.7 ms | 81.1 ms |
+
+`gsig` loads 1.4-1.9x faster than JSON at both scales and both profiles --
+smaller to parse, no hex decoding, no `serde_json::Value` intermediate. The
+debug/release gap (roughly 9x) is the same effect
+[`docs/development/traps.md`](../development/traps.md) records elsewhere:
+`uv run maturin develop` builds debug by default, and a number without a
+build label is not a measurement.
+
+### Measured: write time
+
+`glaurung.analysis.flirt_gsig_write_from_json_str`, default `zstd` codec,
+release build:
+
+| Library | Signatures | Write time |
+|---|--:|--:|
+| glibc alone | 2,563 | 13.2 ms |
+| merged x86_64 | 116,593 | 501.2 ms |
+
+### Measured: resident memory
+
+Peak RSS delta (`resource.getrusage(RUSAGE_SELF).ru_maxrss`) around one
+`flirt_library_match_bytes` call in a fresh interpreter, release build:
+
+| Library | Format | RSS delta |
+|---|---|--:|
+| glibc alone | JSON | 11.3 MiB |
+| glibc alone | gsig | 10.5 MiB |
+| merged x86_64 | JSON | 296.3 MiB |
+| merged x86_64 | gsig | **134.3 MiB, 2.2x less** |
+
+The ratio widens with scale: at glibc's size, fixed per-process overhead
+(interpreter, extension, libc) dominates both numbers; at the merged corpus's
+size, the difference is almost entirely the format -- `serde_json::Value` plus
+`FlirtLibraryFile`'s owned `String`s and `Vec`s per entry, against one arena
+allocation plus fixed-size records.
+
+### What this is not
+
+Not zero-copy, deliberately -- see `src/flirt/gsig/mod.rs`'s module docs and
+the design doc's §3.3. The reader `mmap`s the file, parses the header and
+chunk table without inflating anything, then inflates the sections it needs
+into one arena allocation and rebuilds `by_first_byte` (and, for a WARP-GUID
+library, a sorted `u128` array for binary search) from scratch every load.
+
+## Loading
+
+### Once per process
+
+`flirt::library_for(path) -> Result<Arc<FlirtLibrary>>` is the **only** way a
+path becomes a matcher. It parses at most once per `(path, mtime, size)` per
+process and hands every later caller the same `Arc`;
+`library_for_paths(&[..])` is the same over several files, merged.
+`load_default_library()` and the Python binding both go through it.
+
+Before 2026-09-03 `load_default_library()` re-read and re-parsed the JSON on
+**every** `analyze()`. Measured, release build, 16,329-entry / 13.2 MB library,
+`glaurung.analysis.flirt_match_functions_with_evidence_path` over a 16 kB
+binary so the analysis part is a small constant, best of five:
+
+| | per call |
+|---|--:|
+| same library path again (cached) | **0.002 s** |
+| a byte-identical copy at another path (re-parsed) | 0.022 s |
+
+So the cache removes ~20 ms of parse and index construction from every
+`analyze()` after the first, for a library of this size. The key includes mtime
+and length, so a tool that rebuilds a library and immediately re-analyses
+picks up the new one without a restart.
+
+`library_for`/`library_for_paths` are also the seam the second on-disk format
+plugs into: each resolved path is loaded through `FlirtLibrary::from_path`,
+which dispatches on the file's first four bytes, so a rung that resolves to a
+mix of `*.flirt.json` and `*.gsig` files loads and merges correctly -- the
+dispatch happens per file, not per rung.
+
+**Merging** is concatenation of the already-compiled signatures -- a signature
+carries its own pattern, mask and CRC, so two libraries have nothing to
+reconcile. A file whose `prologue_len` disagrees with the first is skipped: the
+matcher indexes one window length, and silently comparing 32 bytes of a
+64-byte signature would be a false-positive generator. A merged set records no
+`library` provenance key, because it has none.
+
+### Resolution order
+
+`flirt::default_library_paths()`. The **first rung that yields anything wins**;
+rungs are not merged with each other.
+
+| # | Rung | Notes |
+|---|---|---|
+| 1 | `GLAURUNG_FLIRT_LIB` | One explicit file, either format. An override is an override: naming a file must not silently pull in a directory's worth of others. |
+| 2 | `GLAURUNG_SIG_DIR` | Every `*.flirt.json` and `*.gsig` in that directory, sorted, merged. |
+| 3 | `~/.cache/glaurung/sigs/` | The client download cache (`python/glaurung/sigs/`), written as sha256-named blobs plus a `catalog.json` index. The loader does not yet consult the catalog to pick a subset -- it loads every file in the directory except `catalog.json`. A catalog-aware selection can replace this once the cache holds enough sets that loading all of them stops being free. |
+| 4 | The packaged `data/sigs/`, else `data/sigs/` relative to the cwd | See below. |
+
+Nothing reachable means no library, which is fine: the matcher pass becomes a
+no-op and analysis falls back to DWARF and the symbol table.
+
+**Finding the packaged directory is not something Rust can do on its own.** The
+running executable is `python`, so `current_exe()` is useless, and the
+cwd-relative `data/sigs` only resolves inside a checkout. The extension
+module's own `__file__` is the anchor: `src/python_bindings/flirt.rs` derives
+`<package>/data/sigs` (installed) or `<repo>/data/sigs` (after `maturin
+develop`) from it at registration time and calls
+`flirt::set_packaged_sig_dir` once. This mirrors
+`python/glaurung/llm/kb/type_db.py::_stdlib_bundle_dir`, which resolves
+`data/types/` from `__file__` for exactly the same reason. Getting `data/sigs`
+*into* the wheel is `pyproject.toml`'s `[tool.maturin] include`, and is the
+distribution lane's job.
+
 ## Keying
 
 A library is `(name, version, variant, arch)`. **No exact or masked scheme
@@ -296,6 +624,71 @@ so -- and a corpus spanning gcc and clang across `-O0` to `-O3` is not one
 library but N libraries sharing a name. The variant is part of the identity,
 not metadata about it. Cross-variant matching is the CFR rung's job; see
 [`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md).
+
+## Sources: where the archives come from
+
+The `--archive` input is not this repository's own corpus. Until 2026-09-03 the
+only `.a` this builder had ever been pointed at was
+`samples/binaries/platforms/linux/amd64/libraries/static/libmathlib.a` --
+twenty functions of fixture C, which is enough to prove the mechanism and
+nothing else. A library that names anything an analyst will meet has to come
+from the distribution's own static archives, and those already exist inside the
+`samples/docker` build images along with the `dpkg` database that says where
+each one came from.
+
+`samples/docker/harvest_system_archives.py` exports them with exactly the
+provenance the key `(name, version, variant, arch)` needs: the **owning
+package** and its version become the library name and version, the image's
+distribution and compiler driver become the variant, and the target triplet
+fixes the arch. `tools/build_signature_set.py` then drives one
+`build_flirt_library --archive` per archive and records what each produced.
+
+Read [the sample corpus page](sample-corpus.md), section "System archives", for
+the allowlist, the manifest schema, the licence position -- the archives are
+distribution packages under their own licences and are never checked in, only
+the derived signatures are redistributable -- and the measured table.
+
+**The first real set, 2026-09-03.** Three build images (`linux/amd64`,
+`windows/amd64`, and `linux/arm64` under qemu) yielded **419 archives,
+508.6 MB, across 11 distinct target triplets and 37 distinct Debian
+packages**. `libcrypto.a` alone contributes 6,042 unique signatures and
+glibc's `libc.a` 2,563, against the 16 this repository's own `libmathlib.a`
+produces.
+
+**Re-measured against `5e882019`, "flirt: build signatures from COFF
+archives."** The number above was first taken against an extension built from
+`935b7db1`, where `src/flirt/archive.rs` read ELF and Mach-O relocations only,
+so all 120 MinGW-w64 rows (the `i686-w64-mingw32` and `x86_64-w64-mingw32`
+triplets, present in every one of the three images) scored zero. Rebuilding
+against `5e882019` and re-running `tools/build_signature_set.py` over the same
+419 archives (39.5 s, 0 failures) gives **147,733 unique signatures** from
+235,043 raw, with 11,696 dropped as ambiguous -- **299 of 419 archives** now
+produce at least one signature, up from 203, entirely the 120 MinGW-w64 rows
+(each triplet: 16 of 20 archives sign; the remaining four -- `libdelayimp.a`,
+`libm.a`, `libmoldname.a`, `libssp_nonshared.a` -- are empty or import-only by
+construction). The nine non-MinGW `(image, triplet)` groups also gained a
+handful of raw signatures each, because the same size-derivation fix ("extent
+= next symbol in the section, or the section end") applies to any format
+reporting `size() == 0`, not only COFF, and a few ELF assembly symbols with no
+`.size` directive newly qualify. See the [sample corpus
+page](sample-corpus.md), section "System archives", for the full re-measured
+table.
+
+None of these libraries is shipped in `data/sigs/` yet; keying,
+deduplication across variants and a shipping policy for a set this size are
+the next question, not this lane's.
+
+**The other axis: the network harvest, 2026-09-03.** The Docker harvest above
+gives breadth of *build image*; it does not give breadth of *distro release*,
+because one image is one build point. `python/glaurung/tools/harvest_sources.py`
+fetches the `base` matrix directly from Debian (`snapshot.debian.org`), Ubuntu
+(Launchpad) and Alpine (APKINDEX + CDN) without a container at all, and writes
+into the same `index.json` this section describes. See
+[Signature sources: the `base` matrix](signature-sources.md) for the fetch
+mechanics, the network manners, the licence position, and the measured
+cross-release overlap table -- including the two rows where the network and
+Docker harvesters reach the same package versions by different paths and agree
+on every signature byte for byte.
 
 ## Measured
 
@@ -437,11 +830,14 @@ construction, a member.
 
 - **Consuming third-party `.sig`/`.pat`.** See the `lancelot-flirt` decision
   above. This is the path to libc and MSVC coverage.
-- **Referenced-name resolution wired into the analysis pass.**
-  `match_at_with_refs` exists and is tested, but `apply_flirt_overrides` calls
-  `match_at`: the pass has no resolver to hand it yet, because that needs the
-  PLT and symbol maps threaded through. Until then a tie stays a tie and
-  nothing is named, which is the safe direction.
+- **PLT/import names in the referenced-name resolver.** Established names
+  (symbol table, DWARF, an earlier FLIRT hit) are wired into
+  `apply_flirt_overrides_with_refs`; PLT stub and import-thunk names are not
+  yet, because their only source (`elf_plt_map`) parses the whole object
+  again and the discovery pass has an asserted parse-count ceiling. Needed for
+  dynamically linked binaries, where a reference to an external symbol resolves
+  through the PLT rather than to a defined function -- the measured corpus is
+  `-static` and does not exercise this gap.
 - **FLIRT's L3 tail-byte discriminator and WARP constraint-based
   disambiguation.** Both are schema-reserved (`siglib_flirt.tail_offset`/
   `tail_byte`, `siglib_reference`) but not implemented by either matcher; a
@@ -452,3 +848,568 @@ construction, a member.
   work once a library is large enough that a linear in-memory scan stops
   being the cheaper option (see the schema survey's "flat scan until 1e5"
   guidance).
+
+---
+
+## Windows: WARP libraries from PE + PDB
+
+Everything above is about FLIRT, which wants an `ar` archive of unlinked `.o`
+members because their relocation tables say which bytes the linker will
+rewrite. **For Windows system code that input does not exist.** Microsoft ships
+no `.lib` or `.obj` for `ntdll` or `ntoskrnl` -- not in the SDK, not in the WDK,
+not on the symbol server -- and there is none anywhere in the corpus. What
+Microsoft does publish is the linked image and a PDB full of names for it.
+
+That pair is exactly WARP's input. Its GUID is a UUIDv5 over
+relocation-*masked* instruction bytes, and the masking is derived by decoding
+the image rather than by reading a relocation table, so a linked PE is a
+first-class input rather than the contaminated one
+([`function-identity-warp.md`](function-identity-warp.md)). So on Windows the
+scheme is WARP and the ladder starts at L0, not at FLIRT.
+
+`python/glaurung/tools/build_warp_library.py` builds them;
+`siglib.ingest_warp_library_file` records one in the KB so `function_match`
+provenance works, and the builder's `--kb` does both in one command;
+`python/tests/test_warp_windows_libraries.py` pins every number below.
+
+### The key
+
+`(name, version, variant, arch, platform)`, read off the PE itself rather than
+off the path it was found at:
+
+| Field | Source | Example |
+|---|---|---|
+| `name` | The module file name, lowercased | `ntdll.dll` |
+| `version` | `VS_FIXEDFILEINFO`'s `FileVersion`, from the `RT_VERSION` resource -- the field Microsoft increments per servicing build. Falls back to `cv-<GUID+age>` when a module has no version resource | `10.0.22621.2428` |
+| `variant` | Optional-header linker version + the Rich header's toolset build id | `msvc-14.30-b30795` |
+| `arch` | COFF machine | `x86_64` |
+| `platform` | Constant | `windows` |
+
+The Rich header's build id is taken as *the build number appearing in the most
+`(product, build, count)` triples*: a Visual Studio release stamps the same
+number from its compiler, assembler, CVTRES and linker, while a stale object
+linked in from an older toolset contributes one lonely triple with an older
+one. **The `msvc-` prefix is claimed only when a Rich header is present**,
+because the Rich header is written by the Microsoft linker and by nothing else;
+a MinGW or `lld` image gets `link-<major>.<minor>`, which does not assert a
+compiler that never touched it.
+
+### ICF and the ambiguity rule
+
+The MSVC linker folds identical functions (`/OPT:ICF`) and Windows system DLLs
+are full of the result, and WARP deliberately never prunes a colliding GUID
+either. The builder therefore emits **one entry per `(guid, name)` pair** --
+exactly what `siglib_function`'s `UNIQUE (siglib_id, scheme, identity, name)`
+stores -- and flags every entry whose GUID carries more than one name
+`ambiguous`. It never picks one, `ingest_warp_library_file` never drops one
+(dropping would leave the GUID looking unique to the next library that claimed
+it), and `match_warp_library` applies no name to one. Across the 82 libraries
+below, **2.13%** of GUIDs are ambiguous (7,169 of 336,864).
+
+### The evidence floor, measured
+
+A WARP GUID over a very short function is exact and worthless. The extreme case
+is `jmp qword [rip+disp32]`, the import thunk: six bytes, of which WARP masks
+four, so **every import thunk in every PE ever linked carries one GUID**. That
+is not a hash collision, it is the scheme correctly reporting that six masked
+bytes are six masked bytes.
+
+Measured against 48 MinGW-built PEs in `samples/binaries/platforms/windows/`
+(6,368 functions, sharing no code at all with Windows) using a union library of
+226,346 GUIDs from all 82 libraries, so every hit is a false positive:
+
+| `min_bytes` | False positives | Recall, `ntoskrnl.exe` PT pair |
+|---|---|---|
+| 0 | 2,396 | 0.905 |
+| 8 | 130 | 0.900 |
+| 16 | **4** | 0.890 |
+| 24 | 2 | 0.872 |
+| 48 | 0 | 0.797 |
+
+2,070 of the 2,396 unfloored hits are six-byte functions. 16 is where the curve
+turns -- it removes 99.8% of the false positives for about one point of recall,
+where 48 buys the last four for eleven -- and it is
+`build_warp_library.MIN_EVIDENCE_BYTES`. It is applied at *match* time, to both
+sides, rather than at build time: the library records `byte_len` per entry, so
+a consumer can always raise the bar, whereas a builder that dropped small
+entries would have destroyed the evidence needed to lower it again. The number
+landing on FLIRT's own measured `min_fixed_bytes` floor is two different
+mechanisms arriving at the same place, not one rule.
+
+### Built, 2026-09-03
+
+83 inputs -- every Microsoft-authored module in `windows-8-pro-x64`,
+`windows-10-x64`, `windows-11-x64` and `patch-tuesday` whose PDB is in the
+cache (see [`../development/corpora.md`](../development/corpora.md)) -- across
+40 distinct modules, producing **82 libraries**: `ndfltr.sys` is byte-identical
+and identically versioned in the Windows 10 and Windows 11 trees, so the key
+correctly collapses the two into one. 411,124 functions discovered, 368,870
+entries, 336,864 GUIDs, 142 MB of JSON, **152 seconds** total, release build.
+Ingesting all 82 into one KB adds 368,870 `siglib_function` rows in 225 s and
+164 MB of SQLite. A representative slice of the Windows 11 lane:
+
+| Module | Version | Functions | Entries | Unique GUIDs | Ambiguous | PDB-resolved | Build | JSON |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `ntoskrnl.exe` | 10.0.22621.2428 | 28,970 | 27,240 | 25,297 | 383 | 0.940 | 16.3 s | 9.1 MB |
+| `KernelBase.dll` | 10.0.22621.2428 | 17,107 | 7,172 | 3,846 | 205 | **0.419** | 2.0 s | 3.5 MB |
+| `combase.dll` | 10.0.22621.2215 | 15,735 | 15,109 | 12,141 | 587 | 0.960 | 3.8 s | 8.6 MB |
+| `win32kfull.sys` | 10.0.22621.2428 | 9,119 | 8,030 | 7,567 | 105 | 0.881 | 2.4 s | 2.9 MB |
+| `win32kbase.sys` | 10.0.22621.2428 | 8,362 | 7,699 | 6,864 | 172 | 0.921 | 2.0 s | 3.2 MB |
+| `ole32.dll` | 10.0.22621.2428 | 5,878 | 5,565 | 4,371 | 208 | 0.947 | 1.0 s | 2.6 MB |
+| `tcpip.sys` | 10.0.22621.2428 | 5,778 | 5,497 | 5,226 | 91 | 0.951 | 1.6 s | 1.7 MB |
+| `ntdll.dll` | 10.0.22621.2428 | 4,558 | 4,100 | 3,794 | 77 | 0.898 | 0.8 s | 1.3 MB |
+| `http.sys` | 10.0.22621.2428 | 3,521 | 3,424 | 3,344 | 30 | 0.972 | 0.9 s | 1.0 MB |
+| `rpcrt4.dll` | 10.0.22621.2428 | 3,373 | 3,152 | 2,741 | 78 | 0.934 | 0.9 s | 1.3 MB |
+| `ucrtbase_clr0400.dll` | 14.32.31326.0 | 2,698 | 2,128 | 1,372 | 210 | 0.789 | 0.6 s | 1.2 MB |
+| `kernel32.dll` | 10.0.22621.2428 | 2,622 | 2,407 | 1,357 | 61 | 0.918 | 0.5 s | 1.0 MB |
+| `msvcp140_clr0400.dll` | 14.32.31326.0 | 1,675 | 1,507 | 755 | 217 | 0.900 | 0.7 s | 1.2 MB |
+| `win32u.dll` | 10.0.22621.2428 | 1,481 | 1,481 | 1,461 | 2 | 0.999 | 0.3 s | 0.4 MB |
+| `afd.sys` | 10.0.22621.2215 | 1,177 | 1,035 | 1,011 | 11 | 0.879 | 0.3 s | 0.3 MB |
+| `vcruntime140_clr0400.dll` | 14.32.31326.0 | 332 | 272 | 238 | 12 | 0.819 | 0.3 s | 0.1 MB |
+
+PDB-resolved fraction is `functions whose entry VA the PDB names / functions
+discovered`; the median across all 82 libraries is **0.920**.
+`KernelBase.dll`'s 0.419 is the low outlier and is not a defect in the PDB:
+that module is mostly forwarders and API-set thunks that discovery finds and
+the PDB's public stream does not name.
+
+**The PDB cache is the binding constraint, not the corpus.** Of 4,212 / 5,273 /
+5,408 PEs in the three build trees, only **30 / 117 / 169** resolve a PDB in
+the 7.3 GB cache, and only 30 modules resolve one in all three -- of which just
+ten are Microsoft-authored (`afd`, `clfs`, `dxgkrnl`, `fltMgr`, `mrxsmb`,
+`ntfs`, `ntoskrnl`, `srvnet`, `tcpip`, `win32k`); the rest are third-party IHV
+drivers. `ntdll`, `kernel32`, `KernelBase`, `combase`, `ole32` and `rpcrt4`
+have a PDB for the Windows 11 build only, and `advapi32`, `user32`, `gdi32`,
+`msvcrt`, `ucrtbase`, `ws2_32`, `crypt32`, `bcrypt`, `shell32` and `oleaut32`
+have none for any of the three. Widening this needs `glaurung.pdb_fetch`
+pointed at `msdl.microsoft.com`, not more binaries.
+
+### Cross-build recall
+
+The measurement: build the library from build A, run the GUID matcher over
+build B **without consulting B's PDB**, then read B's PDB afterwards purely to
+grade what the library said. `scored` is the population B's PDB names, which is
+the only population on which correct and wrong can be told apart. Ambiguous
+hits apply no name and are therefore neither. `GUID-shared` is the fraction of
+*all* of B's functions whose GUID also occurs in A -- how much of the module is
+byte-identical after masking.
+
+**One servicing build to the next** (`patch-tuesday`, one Patch Tuesday apart):
+
+| Module | From -> to | Scored | Correct | Wrong | Ambiguous | Unmatched | Recall | GUID-shared |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `afd.sys` | .8328 -> .8457 | 1,118 | 1,023 | 3 | 44 | 23 | **0.915** | 0.845 |
+| `afd.sys` | .8521 -> .8655 | 1,130 | 1,031 | 0 | 58 | 16 | **0.912** | 0.851 |
+| `tcpip.sys` | .8328 -> .8457 | 5,828 | 5,263 | 0 | 308 | 92 | **0.903** | 0.906 |
+| `tcpip.sys` | .8521 -> .8655 | 5,832 | 5,313 | 0 | 310 | 44 | **0.911** | 0.914 |
+| `clfs.sys` | .8328 -> .8457 | 1,265 | 1,047 | 0 | 63 | 30 | 0.828 | 0.680 |
+| `cldflt.sys` | .8328 -> .8457 | 1,047 | 889 | 3 | 54 | 60 | 0.849 | 0.847 |
+| `ntoskrnl.exe` | .8328 -> .8457 | 29,499 | 26,245 | 0 | 1,937 | 285 | **0.890** | 0.900 |
+| `win32kfull.sys` | .8328 -> .8457 | 8,989 | 8,212 | 3 | 476 | 80 | **0.914** | 0.868 |
+| `http.sys` | .8521 -> .8655 | 3,843 | 3,612 | 0 | 63 | 121 | **0.940** | 0.877 |
+| `dhcpcore.dll` | .8521 -> .8655 | 1,041 | 859 | 0 | 110 | 7 | 0.825 | 0.848 |
+| `dwmcore.dll` | .8521 -> .8655 | 11,317 | 9,204 | 0 | 984 | 21 | 0.813 | 0.852 |
+
+**One Windows release to the next** (10.0.19041 -> 10.0.22621), two years
+apart. Same code, same measurement:
+
+| Module | Scored | Correct | Wrong | Ambiguous | Recall | GUID-shared |
+|---|---:|---:|---:|---:|---:|---:|
+| `srvnet.sys` | 859 | 318 | 5 | 19 | 0.370 | 0.382 |
+| `mrxsmb.sys` | 1,019 | 343 | 0 | 10 | 0.337 | 0.321 |
+| `fltMgr.sys` | 1,025 | 337 | 3 | 59 | 0.329 | 0.375 |
+| `afd.sys` | 1,035 | 321 | 3 | 14 | 0.310 | 0.287 |
+| `clfs.sys` | 938 | 280 | 3 | 31 | 0.299 | 0.255 |
+| `tcpip.sys` | 5,497 | 1,483 | 21 | 155 | 0.270 | 0.287 |
+| `ntoskrnl.exe` | 27,237 | 6,263 | 80 | 1,081 | 0.230 | 0.256 |
+| `ntfs.sys` | 2,816 | 457 | 3 | 11 | 0.162 | 0.111 |
+| `dxgkrnl.sys` | 7,074 | 817 | 50 | 301 | 0.115 | 0.146 |
+| `win32k.sys` | 4,629 | 197 | **1,199** | 1,327 | 0.043 | 0.588 |
+
+**Windows 8 to Windows 10** (6.2.9200 -> 10.0.19041), for the shape of the
+curve: `afd.sys` 0.012, `clfs.sys` 0.015, `tcpip.sys` 0.012, `ntoskrnl.exe`
+0.013, `ntfs.sys` 0.003, `srvnet.sys` 0.006, `win32k.sys` 0.000. Eight years is
+a different program.
+
+**Read the three together.** WARP carries ~90% of a Windows module across a
+Patch Tuesday, ~30% across a release, and ~1% across eight years, and that is
+the scheme working as specified rather than failing: it is invariant to address
+and relocation and to nothing else. A library is worth building per servicing
+build, and a library from the wrong release is nearly worthless. The `wrong`
+column is the reassuring one -- 0 or 3 almost everywhere, because a GUID that
+does not match simply does not match.
+
+### `win32k.sys`: the failure mode a floor cannot fix
+
+The one exception, worth stating plainly because it is the limit of exact
+matching. `win32k.sys` on Windows 10/11 is the syscall shim layer: 1,316 of its
+functions (1,456 in the Windows 11 build) are 165-byte `_stub_*` bodies that
+differ **only in a syscall index**. An index is an immediate, not a pointer
+into a mapped region, so WARP correctly keeps it -- and the GUID therefore ends
+up keyed on the *index* rather than on the function. Windows reassigns those
+indices between releases, and the reassignment is a reshuffle rather than a
+shift (at best 202 of 1,316 names stay in order at any single offset), so the
+library hands out **1,199 confidently wrong names**.
+
+Neither available mitigation touches it:
+
+- The **evidence floor** does nothing: the bodies are 165 bytes, ten times the
+  floor. At `min_bytes=64` the wrong count is still 1,199.
+- **WARP constraints** do nothing either, measured rather than assumed: of the
+  2,397 GUID-level wrong verdicts, requiring the callee-constraint set to agree
+  rescues **0** and rejects **0**, because the stubs' callee sets are identical
+  too. That is a real result for the schema-reserved `warp-constraint` level --
+  it is not the answer to this case.
+
+The honest reading is that "identical bytes" and "identical function" come
+apart wherever code is generated from a table, and no equality scheme can tell
+the difference. Detecting *that a module is table-generated* -- a large
+population of same-size, same-block-count functions -- and declining to name it
+is the cheap guard, and is not implemented.
+
+### False positives
+
+The union of all 82 libraries -- 252,702 `(guid, name)` pairs over 226,346
+GUIDs -- against the 48 MinGW-built PEs in
+`samples/binaries/platforms/windows/`, which share no code with Windows at all:
+
+| Measurement | Result |
+|---|---|
+| Functions examined | 6,368 |
+| GUID hits at `min_bytes=16` | **4** |
+| Of those, unambiguous | **0** |
+| **Names applied** | **0** |
+| GUID hits at `min_bytes=0` | 2,396 |
+
+All four surviving hits are in `hello-cpp-mingw64-O1.exe` and all four are
+ambiguous, so the ambiguity rule alone would have refused them even without the
+floor. Names applied to unrelated code: zero.
+
+### Third-party binaries with a statically linked CRT
+
+`/nas4/data/binary-analysis/windows-drivers.sqfs` **was not mounted** and this
+lane does not mount it, so the intended vendor-driver sample was replaced by 20
+vendor binaries drawn (seeded, `random.Random(20260903)`) from the 4,400-file
+`binaries/windows-update` tree -- AMD, Intel, Realtek, Synaptics, ASUS and
+Kaspersky driver packages. Against the union of the `ucrtbase`, `vcruntime140`,
+`msvcp140`, `msvcp120` and `msvcr120` libraries:
+
+| Measurement | Result |
+|---|---|
+| Binaries | 20 |
+| Functions | 68,105 |
+| GUID hits | 7,791 |
+| Unambiguously named | **5,338** (7.8%) |
+| Ambiguous | 2,453 |
+
+Spot-checked, the names are real CRT and STL code -- `__acrt_thread_detach`,
+`_strtoi64_l`, `__crt_stdio_output::type_case_integer<>` instantiations,
+`std::exception` vtable deleting destructors -- and the distribution is what
+the premise predicts. Per binary, as `hits (named) / functions`:
+
+| Binary | Hits | Named | Functions |
+|---|---:|---:|---:|
+| `RsDMFT64.dll` | 1,804 | 1,219 | 15,826 |
+| `IntelIhvRouter08.dll` | 1,662 | 1,127 | 8,648 |
+| `SynCOM.dll` | 1,189 | 886 | 4,337 |
+| `MonoSeparationEnrollDll.dll` | 263 | 207 | 1,759 |
+| `Dptf.dll` | 136 | 90 | 13,986 |
+| `klflt.sys` | 5 | 5 | 1,317 |
+| `ibtusb.sys` | 3 | 3 | 525 |
+| `AsusPTPFilter.sys` | 2 | 2 | 519 |
+| `klwtp.sys` | 2 | 2 | 1,006 |
+| `AdbWinApi.dll` | 0 | 0 | 345 |
+
+The user-mode DLLs statically link a large chunk of the CRT; the `.sys` drivers
+link essentially none of it, because a kernel driver does not use the user-mode
+CRT. (The sampled 20 files are 16 distinct names -- `IntelIhvRouter08.dll`
+appears in three vendor packages and `klwtp.sys` and `ibtusb.sys` in two each,
+at different versions. That is the corpus, not a sampling bug, and the repeats
+were kept rather than deduplicated because a redistributed DLL appearing many
+times is exactly what a signature library meets in the field.) Just under a
+third of the hits are ambiguous and name nothing, which is the ICF rule doing
+its job on a runtime full of one-line template instantiations.
+
+### Licence
+
+A library file holds **GUIDs, names, sizes and constraint GUIDs -- no Microsoft
+bytes**. Not a prologue, not a mask, not a pattern; unlike a FLIRT signature it
+does not even carry variant bytes. That is the property that makes a
+FLIRT-family signature set redistributable, and it is asserted rather than
+merely claimed: `test_entries_are_deterministic_and_carry_no_bytes` pins the
+exact key set an entry may have. The *names* are Microsoft's and are reproduced
+from public PDBs the symbol server serves without restriction. The libraries
+themselves are written to `$HOME/.cache/glaurung/system-libs/warp/` and are not
+committed, because 142 MB of derived data is not repository content.
+
+### Not done here, for Windows
+
+- **No PDB fetching.** The measurement is bounded by a 7.3 GB local cache, not
+  by the corpus. `glaurung.pdb_fetch.ensure_pdb_cached` already speaks the
+  symbol-server protocol; pointing it at `msdl.microsoft.com` for the ~5,000
+  cache misses is the single highest-value follow-up.
+- **No membership gate over these libraries.** `identity_gate_build` would take
+  337,257 GUIDs to roughly 380 KB, and `match_warp_library` already consults a
+  gate when one exists; none is built here.
+- **Constraint-based disambiguation** is measured to be useless for the one
+  case that motivates it (above), and remains unimplemented.
+- **x86-32 and ARM64 Windows.** `warp_functions_from_bytes` raises
+  `UnsupportedArchitecture` for AArch64, so the ARM64 Windows images in the
+  corpus produce nothing.
+
+## Cortex-M (bare metal)
+
+Measured 2026-09-03 against the ARM GNU Toolchain 13.2.Rel1
+(`arm-none-eabi-gcc 13.2.1 20231009`, newlib `4.3.0`), on
+`/nas4/data/binary-analysis/armtc/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/`
+(read-only; never copied). This is the same builder and matcher documented
+above, aimed at bare-metal ARM (Cortex-M) instead of a hosted libc: no ELF
+dynamic section, no PLT, one statically linked image per firmware, Thumb-2
+throughout.
+
+### Source and harvest
+
+`tools/harvest_armtc.py` inventories the toolchain's static archives by NAS
+path plus sha256 -- it does not copy them, the same "unit of distribution is
+a blob plus provenance" policy the design doc states for the wider program.
+Output: `$HOME/.cache/glaurung/system-libs/armtc-13.2.1/manifest.json`, one
+entry per `.a` under `arm-none-eabi/lib/{arm,thumb}/**` and
+`lib/gcc/arm-none-eabi/13.2.1/**`, keyed by `multilib_path` (e.g.
+`thumb/v7e-m+fp/hard`) and `lib_root`. Measured: **780 of 780** archives on
+the box inventoried (39 multilibs x 20 archive basenames each), 752,307,272
+bytes, in well under a second (hashing dominates). Licence: newlib/libgloss
+is BSD-style (Red Hat/Cygnus plus a University of California, Berkeley
+notice; the toolchain's `license.txt` lines 8721-10644); libgcc, libstdc++
+and libsupc++ carry GPLv3 plus the GCC Runtime Library Exception, which
+permits linking without imposing the GPL on the linked program -- the same
+legal position as the rest of this page applies here unchanged: only masked
+patterns, CRCs and names are ever redistributed, never archive or object
+bytes.
+
+### Keying and multilibs built
+
+`tools/build_armtc_signatures.py` drives `build_flirt_library.py --archive`
+once per `(multilib, component)` pair for the six multilibs bare-metal
+firmware actually links (`thumb/v6-m/nofp`, `thumb/v7-m/nofp`,
+`thumb/v7e-m/nofp`, `thumb/v7e-m+fp/hard`, `thumb/v7e-m+dp/hard`,
+`thumb/v8-m.main/nofp`) and eight components each (`newlib`, `newlib-nano`,
+`newlib-libm`, `libgcc`, `libstdc++`, `libstdc++-nano`, `libsupc++`,
+`libnosys`). Keyed `(name, version, variant, arch)` exactly as the rest of
+this page: `variant = arm-gnu-<gcc-version>-<multilib-with-dashes>` (e.g.
+`newlib/4.3.0/arm-gnu-13.2.1-thumb-v7e-m+fp-hard/armv7`) -- no masked scheme
+crosses a multilib any more than it crosses an optimisation level, because
+the ABI, FPU and instruction-set variant all change the code the compiler
+emits. `--arch armv7` throughout: `object`'s `Architecture` enum does not
+distinguish M-profile sub-variants, so `src/flirt/archive.rs::arch_tag` maps
+every 32-bit ARM object to `"armv7"` regardless of Thumb-1/Thumb-2/v6-M/v8-M
+-- the profile lives in the *variant* string, which is why it has to be part
+of the key. (The task brief's illustrative key used `newlib/4.4.0/...`; the
+toolchain's actual newlib is measured at `4.3.0`, used throughout.)
+
+**All 48 libraries yielded signatures -- zero archives yielded nothing.**
+32,812 unique signatures total, 63,210 raw, 5,109 dropped ambiguous, built in
+3.2 seconds, 36.3 MB of JSON. Per-multilib totals are nearly identical (the
+six multilibs disagree only in FPU/architecture-dependent codegen, not in
+which symbols exist), so one representative row (`thumb/v7e-m+fp/hard`, the
+STM32F4 multilib both validations below actually exercise) stands for all
+six; the full 48-row table is `tools/build_armtc_signatures.py`'s own
+`index.json` output.
+
+| component | raw | unique | ambiguous | masked | with CRC | with refs | JSON bytes | build |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `newlib` | 825 | 588 | 59 | 482 | 451 | 467 | 498,669 | 63 ms |
+| `newlib-nano` | 723 | 563 | 36 | 500 | 385 | 440 | 403,293 | 60 ms |
+| `newlib-libm` | 298 | 212 | 39 | 171 | 164 | 173 | 288,080 | 52 ms |
+| `libgcc` | 562 | 337 | 75 | 311 | 176 | 113 | 172,781 | 51 ms |
+| `libstdc++` | 4,220 | 1,984 | 313 | 2,737 | 1,601 | 1,798 | 2,641,613 | 98 ms |
+| `libstdc++-nano` | 3,798 | 1,657 | 334 | 3,063 | 1,151 | 1,438 | 1,809,132 | 92 ms |
+| `libsupc++` | 160 | 141 | 3 | 99 | 104 | 120 | 121,437 | 48 ms |
+| `libnosys` | 1 | 1 | 0 | 1 | 0 | 1 | 1,065 | 53 ms |
+
+**`libnosys` yielding 1 of 23 candidate symbols is correct, not a defect.**
+Every syscall stub (`_read`, `_write`, `_close`, `_lseek`, `_fstat`,
+`_isatty`, `_kill`, `_getpid`, `_open`, `_link`, ...) is 16 bytes with only
+12 fixed after masking -- boilerplate "set `errno`, return -1" identical in
+shape across every stub, correctly declined by the same `min_fixed_bytes=16`
+floor documented above (measured directly: re-running the extractor with
+both floors at 0 recovers all 23, all but `_sbrk` at 12 fixed bytes).
+`_sbrk` alone (28 bytes, 20 fixed) clears the floor and is the one signature
+kept.
+
+### Validation: `rt-libopencm3` (20 STM32F4 firmwares, three optimisation levels)
+
+`/nas4/data/binary-analysis/rt-libopencm3/` -- built with this exact
+toolchain (`GCC: (15:13.2.rel1-2) 13.2.1 20231009`, confirmed from each
+firmware's own `.comment` section), `addr2name.json` ground truth (decimal
+VA, some carrying the Thumb bit -- cleared with `addr & ~1` on both the
+truth and the matcher's `entry_va` before comparing). Every firmware in the
+corpus reports `Tag_CPU_arch: v7E-M`, `Tag_FP_arch: VFPv4-D16`,
+`Tag_ABI_HardFP_use: SP only` in its own `.ARM.attributes` -- i.e. all 20 are
+`thumb/v7e-m+fp/hard`, read off the binary rather than inferred from a board
+name (`tools/validate_cortex_m_signatures.py::infer_multilib`). Matched with
+`glaurung.analysis.flirt_match_functions_with_evidence_path` against the
+`newlib` + `libgcc` + `libstdc++` + `libsupc++` + `libnosys` components
+merged (the non-nano set: this corpus's DWARF producer strings carry no
+`--specs=nano.specs`, and its `printf` pulls the full `_dtoa_r` double
+formatter, which newlib-nano does not build by default) -- **function
+discovery on a stripped, statically linked, bare-metal Thumb-2 ELF works
+with no changes**, which was the open risk item this measurement was meant
+to settle.
+
+| firmware | opt | in truth | named | correct | wrong | ambiguous |
+|---|---|--:|--:|--:|--:|--:|
+| adc-dac-printf | O0 | 167 | 34 | 34 | 0 | 0 |
+| lcd-dma | O0 | 192 | 36 | 36 | 0 | 0 |
+| lcd-serial | O0 | 115 | 8 | 8 | 0 | 0 |
+| usart-stdio | O0 | 147 | 35 | 34 | 1 | 0 |
+| usart_irq_console | O0 | 89 | 1 | 1 | 0 | 0 |
+| adc-dac-printf | O2 | 148 | 34 | 34 | 0 | 0 |
+| 15 more firmwares (blink, button, cdcacm, cryptobasic, dac-dma, fancyblink, mandel, miniblink, msc, random, sdram, tick_blink, timer, usart, usart_console, usart_irq, usbmidi) at O0/O2/O2-noinline | -- | 1,044 | 0 | 0 | 0 | 0 |
+| **total, 28 (firmware, opt) cells** | | **1,902** | **148** | **147** | **1** | **0** |
+
+The fifteen zero rows are correctly zero, not a matcher failure: those
+firmwares call nothing from newlib/libgcc/libstdc++ beyond what already
+matched in the rows above (they are pure `libopencm3` register-poking code,
+which this library was never built to know), and the point of the "wrong"
+column is that it stayed at **1 of 148** (0.7%) rather than that recall is
+high -- most of a Cortex-M firmware's text is project and HAL code no
+toolchain signature library can ever name.
+
+**Defect found and fixed: the archive builder's same-address alias
+tie-break picked the wrong ARM EABI name, every time.** Before the fix,
+`wrong` was **21 of 148** (14%), every single one a libgcc IEEE-754 helper:
+ARM's RTABI mandates helper names like `__aeabi_dadd`, and GCC's libgcc
+defines that symbol as a same-address alias of the *generic* portable
+libcall name (`__adddf3`) inside one object
+(`_arm_addsubdf3.o`, confirmed with
+`glaurung.analysis.flirt_signatures_from_archive_path`: both names, same
+`member`, same `address`, same bytes). `build_flirt_library.py`'s
+`public_alias_rank` (added for glibc's `puts`/`_IO_puts`, where the
+unprefixed name is public) broke the tie by length alone once leading-
+underscore counts matched, which always picked the shorter, non-RTABI name
+-- and every Cortex-M firmware calls the RTABI name, so it never matched.
+Fixed in `python/glaurung/tools/build_flirt_library.py::public_alias_rank`
+by adding an `__aeabi_`-prefix tier between the underscore-count tier and
+the length tie-break; a new test,
+`test_archive_builder_prefers_the_aeabi_alias_over_the_shorter_libgcc_name`
+in `python/tests/test_flirt_library_builder.py`, reproduces the exact
+`_arm_addsubdf3.o` case. The existing x86_64 `mathlib` library is
+unaffected (rebuild is still byte-identical; no `__aeabi_`-prefixed name
+exists in that archive).
+
+**Residual "wrong" (1 of 148): `usart-stdio`'s `fflush` names as
+`fflush_unlocked`, and this one is not fixable at the archive level.**
+`libc_a-fflush.o`'s own `fflush` is 116 bytes (`crc16=9051`); the function
+the firmware actually calls "fflush" is 72 bytes and byte-identical to
+`libc_a-fflush_u.o`'s `fflush_unlocked` (confirmed by reading both the
+signature patterns and the real firmware bytes at the call site: the first
+32 bytes match `fflush_unlocked`'s pattern exactly and diverge from
+`fflush`'s at byte 0). `nm` on the unstripped image shows only one name,
+`fflush`, at that address -- not the two-names-one-address case documented
+below for the holdout corpus. The most likely explanation is newlib's own
+weak-alias resolution across `fflush.o`/`fflush_u.o` selecting a definition
+this archive-only, unlinked-object analysis cannot see: which of several
+same-named implementations across different translation units in one static
+archive a specific link resolves to depends on link order and what else in
+the program references, which is invisible without simulating the link.
+FLIRT and Ghidra FunctionID share this exact blind spot for any archive with
+more than one body under a name. Not fixed; reported per the task brief's
+instruction to stop and report rather than paper over an archive-level
+defect.
+
+### Validation: `decbench-holdout` (3 of 8 available ARM EABI5 projects)
+
+`/nas4/data/binary-analysis/decbench-holdout-source-rebuild-2026-08-06/O0/`,
+all three built with the identical toolchain (`.comment`:
+`GCC: (15:13.2.rel1-2) 13.2.1 20231009`). Chosen for multilib diversity, read
+off `.ARM.attributes` the same way: `freertos/RTOSDemo.out` is `v7`/`7-M`
+(no FPU) -> `thumb/v7-m/nofp`; `nuttx/nuttx` is `v7E-M` with no `Tag_FP_arch`
+-> `thumb/v7e-m/nofp`; `betaflight/betaflight_STM32F405.elf` is `v7E-M` +
+`VFPv4-D16` + `HardFP SP only` -> `thumb/v7e-m+fp/hard`, same as the whole
+`rt-libopencm3` corpus. **Ground truth is `arm-none-eabi-nm -S
+--defined-only` on the binary itself, as a set of names per address, not
+`addr2name.json`**: this corpus's own `stripped/` output is
+byte-**identical** to `compiled/` for every ARM project checked (sha256
+verified for `freertos`, `betaflight` and `nuttx`) -- a real defect in that
+corpus's rebuild pipeline, recorded here because it means there is no
+separately-stripped ARM binary in that corpus to test against; the matcher
+itself does not care, since `flirt_match_functions_with_evidence_path` names
+functions from CFG discovery, never from the symbol table.
+
+| project | multilib | in truth | named | correct | wrong | ambiguous |
+|---|---|--:|--:|--:|--:|--:|
+| freertos | thumb/v7-m/nofp | 150 | 6 | 6 | 0 | 0 |
+| nuttx | thumb/v7e-m/nofp | 1,026 | 11 | 11 | 0 | 0 |
+| betaflight | thumb/v7e-m+fp/hard | 4,544 | 45 | 45 | 0 | 0 |
+| **total** | | **5,720** | **62** | **62** | **0** | **0** |
+
+**Zero wrong, and the reason it is not a coincidence is worth recording.**
+The first run, before the alias-set fix below, reported 23 wrong -- all the
+same libgcc IEEE-754 pairs as `rt-libopencm3`, but in the *opposite*
+direction (`got '__aeabi_d2uiz', truth '__fixunsdfsi'`). `nm -S` on both
+`nuttx` and `betaflight` shows **both** names at the same address for every
+one of these (`0801ff50 00000040 T __aeabi_d2uiz` and
+`0801ff50 00000040 T __fixunsdfsi` in the same `nm` listing) -- a genuine
+weak-alias pair present simultaneously in the final binary, unlike
+`usart-stdio`'s `fflush` above. Scoring against a single arbitrarily-chosen
+`nm` line would have manufactured 23 "wrong" verdicts out of what is
+actually 23 correct ones under a name the truth extraction happened not to
+prefer. `tools/validate_cortex_m_signatures.py::truth_from_nm` was changed
+to collect every name at an address into a set and accept membership, which
+is the same "no name beats a wrong name, but two names can both be right"
+principle the matcher itself already applies to `warp-guid` ambiguity.
+
+### Summary
+
+| corpus | cells | functions in truth | named | correct | wrong | ambiguous |
+|---|--:|--:|--:|--:|--:|--:|
+| `rt-libopencm3` | 28 (firmware x opt) | 1,902 | 148 | 147 | 1 | 0 |
+| `decbench-holdout` | 3 projects | 5,720 | 62 | 62 | 0 | 0 |
+| **total** | | **7,622** | **210** | **209** | **1** | **0** |
+
+Recall (named / in truth) is low in absolute terms -- **2.8%** -- because
+the denominator is *every* function in a firmware, and the overwhelming
+majority of a Cortex-M firmware's text is the RTOS/HAL/application code no
+toolchain signature library was ever going to name (`libopencm3`, ChibiOS,
+NuttX and application logic itself). Precision is what this measurement was
+actually for, and it holds: **209 of 210 named functions were correct**, and
+the one exception is a documented, reproducible archive-level limitation
+rather than a false positive from an under-specified pattern.
+
+### Reproduction
+
+```bash
+export GLAURUNG_ARMTC=/nas4/data/binary-analysis/armtc/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi
+uv run python tools/harvest_armtc.py --toolchain-root "$GLAURUNG_ARMTC" \
+    --output ~/.cache/glaurung/system-libs/armtc-13.2.1/manifest.json
+uv run python tools/build_armtc_signatures.py \
+    --manifest ~/.cache/glaurung/system-libs/armtc-13.2.1/manifest.json \
+    --output ~/.cache/glaurung/system-libs/armtc-13.2.1/sigs
+uv run python tools/validate_cortex_m_signatures.py \
+    --sigs-dir ~/.cache/glaurung/system-libs/armtc-13.2.1/sigs
+```
+
+Not shipped in `data/sigs/`, same as every other harvested set on this page:
+keying, deduplication and a shipping policy at this scale are the wider
+program's open questions, not this measurement's.
+
+## Rust standard library
+
+Ledger item 11 (Rust half) of the signature-library program.
+`python/glaurung/tools/harvest_rust_sysroot.py` reads a rustup toolchain's
+`lib/rustlib/<target>/lib/*.rlib` directly -- no distribution package manager
+involved, keyed by `rustc -vV`'s release, commit hash and channel rather than
+a package version. The archive builder needed no change: `.rlib` is an `ar`
+archive whose non-object members (`lib.rmeta`, `lib.rmeta-link`) are already
+skipped by `flirt_signatures_from_archive_path`, and its one `*.rcgu.o`
+member reads exactly like a distro `.o`. Measured, same-toolchain recall on
+two small stripped Rust binaries is 47-48% of every defined text symbol
+(limited mostly by application/non-priority-crate code the library was never
+going to name); cross-toolchain recall is **exactly 0 correct in every
+measured cell**, driven first by the mangling scheme itself (`1.88.0` uses
+legacy Itanium `_ZN...`, `1.97.1` uses v0 `_R...`) and second by codegen. See
+"Rust" in [Signature sources](signature-sources.md) for the full harvest and
+build tables, the per-crate zero-signature diagnosis (`unwind`: an object
+with zero defined symbols of any kind, confirmed with `nm`), and the
+monomorphization-hash-suffix caveat on "wrong" counts. Go is out of scope for
+signatures entirely -- `gopclntab` recovery is the design's answer there.

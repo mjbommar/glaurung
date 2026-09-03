@@ -486,6 +486,10 @@ pub fn signatures_from_object(
                 crc_len,
                 function_len: u32::try_from(size).ok(),
                 refs,
+                // The extractor emits one signature per symbol; deciding which
+                // of them share a matcher key is the builder's job, not the
+                // reader's.
+                alternatives: Vec::new(),
             },
             member: member.to_string(),
             address,

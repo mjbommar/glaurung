@@ -265,7 +265,54 @@ build_fortran_windows() {
     fi
 }
 
+# --- System static archives -------------------------------------------------
+# The input to a FLIRT-style signature library is an *unlinked* `ar` archive:
+# only a relocatable object carries the relocation table that says which bytes
+# the linker is going to rewrite, and masking exactly those is what makes a
+# signature survive a relink. So the distribution's own static archives are
+# harvested, with their dpkg provenance, rather than rebuilt from source.
+#
+# Off by default: a plain image build exports exactly what it exported before.
+# Enable with HARVEST_SYSTEM_ARCHIVES=1, or run this script as
+#     build-platform.sh --harvest-only [OUTPUT_DIR]
+# against a bind-mounted output directory. The implementation is
+# samples/docker/harvest_system_archives.py; see
+# docs/reference/sample-corpus.md, "System archives".
+harvest_system_archives() {
+    local out_dir="${1:-$BINARIES_DIR/system-libs}"
+    local script=""
+    if [ -f /usr/local/bin/harvest_system_archives.py ]; then
+        script=/usr/local/bin/harvest_system_archives.py
+    elif [ -f "$SCRIPT_DIR/harvest_system_archives.py" ]; then
+        script="$SCRIPT_DIR/harvest_system_archives.py"
+    fi
+
+    if [ -z "$script" ]; then
+        warn "harvest_system_archives.py not found, skipping system archives"
+        return 0
+    fi
+    if ! command -v python3 &> /dev/null; then
+        warn "python3 not found, skipping system archives"
+        return 0
+    fi
+
+    log "Harvesting system static archives -> $out_dir"
+    python3 "$script" \
+        --output "$out_dir" \
+        --image-base "${HARVEST_IMAGE_BASE:-ubuntu:22.04}" \
+        --image-name "${HARVEST_IMAGE_NAME:-${TARGET_OS:-windows}-${TARGET_ARCH:-unknown}}" \
+        --target-os "${TARGET_OS:-windows}" \
+        --target-arch "${TARGET_ARCH:-unknown}" \
+        || warn "system archive harvest failed"
+}
+
 main() {
+    if [ "${1:-}" = "--harvest-only" ]; then
+        shift
+        harvest_system_archives "$@"
+        return 0
+    fi
+
     log "Starting Windows cross-compilation builds"
     log "Source: $SOURCE_DIR"
     log "Output: $BINARIES_DIR"
@@ -292,6 +339,10 @@ main() {
     [ -f "$SOURCE_DIR/java/HelloWorld.java" ] && build_java_variants "$SOURCE_DIR/java/HelloWorld.java"
     # Build C# with Mono (platform-independent IL/PE)
     [ -f "$SOURCE_DIR/csharp/Hello.cs" ] && build_csharp_windows "$SOURCE_DIR/csharp/Hello.cs"
+
+    if [ "${HARVEST_SYSTEM_ARCHIVES:-0}" = "1" ]; then
+        harvest_system_archives
+    fi
 
     log "Windows cross-compilation builds completed successfully"
 }

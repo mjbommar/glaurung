@@ -20,6 +20,16 @@ error() { echo -e "${RED}[ERROR] $1${NC}" >&2; }
 warn() { echo -e "${YELLOW}[WARN] $1${NC}"; }
 info() { echo -e "${BLUE}[INFO] $1${NC}"; }
 
+# Packages whose static archives the signature-library harvest reads. Kept in
+# step with ARCHIVE_NAMES in docker/harvest_system_archives.py: an archive that
+# is not installed is silently absent from the manifest, and that looks exactly
+# like an archive that does not exist.
+HARVEST_DEV_PACKAGES=(
+    zlib1g-dev libssl-dev libbz2-dev liblzma-dev libzstd-dev
+    libsqlite3-dev libpcre2-dev libxml2-dev libcurl4-openssl-dev
+    libffi-dev libgmp-dev musl-dev musl-tools
+)
+
 check_docker() {
     if ! command -v docker &> /dev/null; then
         error "Docker is not installed or not in PATH"
@@ -98,6 +108,48 @@ check_build_scripts() {
     return 0
 }
 
+check_harvest_wiring() {
+    local ok=true
+    local harvester="$DOCKER_DIR/harvest_system_archives.py"
+    local script dockerfile pkg
+
+    if [ ! -f "$harvester" ]; then
+        error "System archive harvester not found: $harvester"
+        return 1
+    fi
+
+    for script in "$DOCKER_DIR/build-linux.sh" "$DOCKER_DIR/build-windows.sh"; do
+        if ! grep -q '^harvest_system_archives()' "$script"; then
+            error "harvest_system_archives() is not defined in $script"
+            ok=false
+        fi
+        if ! grep -q -- '--harvest-only' "$script"; then
+            error "$script has no --harvest-only entry point"
+            ok=false
+        fi
+    done
+
+    for dockerfile in "$DOCKER_DIR"/linux/Dockerfile.*; do
+        for pkg in "${HARVEST_DEV_PACKAGES[@]}"; do
+            if ! grep -qE "^[[:space:]]+${pkg} \\\\$" "$dockerfile"; then
+                error "$(basename "$dockerfile") does not install $pkg"
+                ok=false
+            fi
+        done
+        if ! grep -q 'harvest_system_archives.py' "$dockerfile"; then
+            error "$(basename "$dockerfile") does not copy the harvester"
+            ok=false
+        fi
+    done
+
+    if [ "$ok" != true ]; then
+        return 1
+    fi
+
+    log "✓ System archive harvest is wired into the scripts and Linux images"
+    return 0
+}
+
 test_basic_build() {
     local os="$1" arch="$2"
     local dockerfile="$DOCKER_DIR/${os}/Dockerfile.${arch}"
@@ -161,6 +213,7 @@ Tested Components:
 ✓ Platform configuration (platforms.json)
 ✓ Dockerfile presence and basic syntax
 ✓ Build script availability
+✓ System archive harvest wiring (harvest_system_archives)
 
 Next Steps:
 1. Run actual builds: ./build-multiplatform.sh linux/amd64
@@ -190,6 +243,10 @@ main() {
     fi
 
     if ! check_build_scripts; then
+        tests_passed=false
+    fi
+
+    if ! check_harvest_wiring; then
         tests_passed=false
     fi
 
