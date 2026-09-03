@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 309,
+  "core": 310,
   "lfs": 109,
   "fixtures": 32,
   "toolchain": 28,
@@ -896,6 +896,9 @@
   ],
   "test_rename_rerender.py": [
    "lfs"
+  ],
+  "test_rerank_candidates.py": [
+   "core"
   ],
   "test_roundtrip_review.py": [
    "core"

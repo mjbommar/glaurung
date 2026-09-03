@@ -245,6 +245,20 @@ pub struct FunctionSample {
     /// sorted and deduped. An edge leaving the function (a tail call) lands on
     /// `usize::MAX`.
     pub edges: Vec<(usize, usize)>,
+    /// Entry VAs this function was seen to call, sorted and deduped.
+    ///
+    /// Straight from `Function::callees`, which discovery fills in only when it
+    /// **resolves** a target, so this is a lower bound: an unresolved indirect
+    /// call contributes nothing and an empty list does not prove a leaf. The
+    /// same promise `glaurung::program::call_graph` makes about the same data.
+    /// A VA here is meaningful only against `image_path`; two samples from
+    /// different images can carry the same number and mean nothing by it.
+    ///
+    /// This is the input the RevDecode-style re-rank stage
+    /// (`glaurung::identity::rerank`, plan item 10) needs and no per-function
+    /// scheme does: a scheme sees one function, and the whole point of the
+    /// re-rank is context a scheme cannot see.
+    pub callees: Vec<u64>,
 }
 
 impl FunctionSample {
@@ -650,10 +664,23 @@ fn load_image(
             bytes: symbol.bytes,
             blocks,
             edges,
+            callees: sorted_callees(func),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     (out, counts)
+}
+
+/// The resolved call targets of one discovered function, sorted and deduped.
+///
+/// `Function::callees` is a `HashSet<Address>`; sorting here rather than at the
+/// use site is what keeps a `FunctionSample` byte-identical across runs, which
+/// every ratchet in this harness depends on.
+pub(crate) fn sorted_callees(func: &Function) -> Vec<u64> {
+    let mut callees: Vec<u64> = func.callees.iter().map(|a| a.value).collect();
+    callees.sort_unstable();
+    callees.dedup();
+    callees
 }
 
 /// Reduce a discovered `Function` to sorted blocks and index-form edges.

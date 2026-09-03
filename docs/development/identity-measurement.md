@@ -208,6 +208,11 @@ cargo test --release --features python-ext --test identity_retrieval -- \
 GLAURUNG_CISCO_CORPUS=... cargo test --release --features python-ext \
   --test identity_retrieval -- --ignored --nocapture cisco_cfr_full_sweep
 
+# The re-rank ablation grid: five presets x two candidate lanes x two schemes,
+# both corpora. Under a minute once the corpora are loaded.
+cargo test --release --features python-ext --test identity_retrieval -- \
+  --ignored --nocapture rerank_full_sweep
+
 # --- Python: the production structural fingerprint. ~70s, `slow`-marked.
 uv run pytest python/tests/test_identity_retrieval_protocol.py -q
 ```
@@ -669,6 +674,38 @@ cross-compiler Recall@1 by a wide margin -- by a wider one still once its
 levers are on -- and `values` holds everything with the optimisation level
 free. That is the shape the identity ladder was designed for, different rungs
 answering different questions, rather than a replacement.
+
+### The re-rank post-pass — `glaurung::identity::rerank`
+
+Not a scheme and not in the table above: a **post-pass** that re-orders the
+candidate lists a scheme already produced, using the query and reference call
+graphs and the reference corpus's library partition. RevDecode (USENIX Security
+2025), plan item 10. It is scored by `tests/identity_retrieval/rerank.rs`
+against the same twin join, the same seeded negative draw and the same
+pessimistic tie rule as everything above, and
+`the_rerank_is_a_no_op_without_context` asserts that its baseline column is
+rank-for-rank the one `metrics::evaluate_slices` computes.
+
+The full grid — five settings presets, two candidate lanes, two schemes, both
+corpora — lives on the reference page,
+[Context re-ranking](../reference/function-identity-rerank.md#measured). The two
+results that matter here:
+
+| | Effect |
+|---|---|
+| Call-agreement term (ours) | **0 queries worsened in any of the 40 cells**; 16 cells up, 24 unchanged; up to +0.0177 MRR10 / +0.0213 R@1 (Dataset-1 XA-arm64) and +0.0128 / +0.0185 (in-house XC-O0, `structural`) |
+| RevDecode's adjacency + library terms | 8 cells up, **31 down**; the gains are all `structural` (best XC-O0 +0.094 MRR10), the losses reach −0.225 on Dataset-1 XA-arm64 |
+
+Read 2026-09-03, release build. Two additions to the protocol were needed and
+both are stated on the reference page: a **global candidate lane** (every layer
+ranked against the whole pool slice, which is RevDecode's own setting, beside
+Marcelli's per-query 101-candidate draw), and `FunctionSample::callees` —
+discovery's resolved call targets, the one input a per-function scheme has no
+use for.
+
+The measured recommendation is what `RerankSettings::default()` now does; the
+paper's own configuration is `RerankSettings::revdecode_paper()`, named rather
+than automatic for the reason in the table above.
 
 ## Cisco Dataset-1
 
@@ -1225,6 +1262,9 @@ under `harness_budgets()` is expected to reproduce bit for bit.
   — the design, the identity ladder, and the four literature surveys behind it.
 * [`docs/development/corpora.md`](corpora.md) — provenance for every
   downloaded corpus: URLs, sizes, SHA-256s, licences, and how to fetch again.
+* [`docs/reference/function-identity-rerank.md`](../reference/function-identity-rerank.md)
+  — the RevDecode-style re-rank measured by this harness's `rerank.rs` lane,
+  its departures from the paper, and the full ablation grid.
 * [`docs/development/decompiler-testing.md`](decompiler-testing.md) — how the
   fixture corpus this harness reads is built.
 * `tests/similarity_retrieval.rs` — the earlier, narrower CTPH measurement.

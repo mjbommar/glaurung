@@ -25,6 +25,11 @@
 //! pair, so "is this in any known library" can be answered before an exact or
 //! masked lookup runs at all.
 //!
+//! [`rerank`] is not a rung. It is a post-pass over any of them: given the
+//! candidate lists a scheme produced for every function in one binary, it picks
+//! the globally most consistent assignment using call-graph and library
+//! context. "Which of these candidate lists agree with each other?"
+//!
 //! The design, the mask/keep list, the metric argument and the measurement
 //! protocol are in `docs/history/program-measures-2026-09-02.md`. Byte-level
 //! digests (`crate::similarity`) keep one role, file-level near-duplicates;
@@ -32,6 +37,7 @@
 
 pub mod cfr;
 pub mod gate;
+pub mod rerank;
 pub mod structural;
 #[cfg(feature = "exec")]
 pub mod values;

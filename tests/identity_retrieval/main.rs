@@ -63,6 +63,7 @@
 mod cisco;
 mod corpus;
 mod metrics;
+mod rerank;
 mod scheme;
 mod tasks;
 
@@ -3197,6 +3198,338 @@ fn cisco_values_x86_64_lanes() {
                  scheme cannot fingerprint it",
                 result.task_name, result.scored
             );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The RevDecode-style re-rank (plan item 10).
+//
+// Not a scheme -- a post-pass over the candidate lists a scheme produced, so it
+// is scored by `rerank.rs` against the same twin join, the same seeded negative
+// draw and the same pessimistic tie rule, before and after. Every constant
+// below was read off a run before it was written down.
+// ---------------------------------------------------------------------------
+
+use glaurung::identity::rerank::RerankSettings;
+use rerank::{PoolLane, RerankReport};
+
+/// Run one `(scheme, settings, lane)` triple over the in-house tasks and print
+/// it.
+fn rerank_report<S: Scheme>(
+    scheme: &S,
+    settings: &RerankSettings,
+    label: &str,
+    lane: PoolLane,
+) -> Option<RerankReport> {
+    let corpus = load()?;
+    let report = rerank::evaluate(scheme, corpus, TASKS, settings, label, lane);
+    eprintln!(
+        "\n=== rerank: {} / {} / {} lane -- {} ({}) ===",
+        report.scheme,
+        report.settings_label,
+        report.lane.label(),
+        report.corpus_name,
+        report.profile
+    );
+    for comparison in &report.comparisons {
+        eprintln!("{}", comparison.line());
+    }
+    if let Some(path) = report.write_json(&metrics::report_dir()) {
+        eprintln!("report: {}", path.display());
+    }
+    Some(report)
+}
+
+/// The null hypothesis, asserted rather than assumed.
+///
+/// With every context term off and the "no match" node removed, the decode must
+/// return the underlying scheme's own ordering, rank for rank -- and those ranks
+/// must be the ones `metrics::evaluate_slices` computes, because the two files
+/// implement the same twin join twice and a drift between them would show up as
+/// a re-rank "improvement".
+///
+/// This is the test that makes every other number on this lane attributable. If
+/// the machinery moved rankings on its own, nothing measured under the full
+/// settings could be blamed on context.
+#[test]
+fn the_rerank_is_a_no_op_without_context() {
+    let Some(corpus) = load() else { return };
+    let Some(baseline) = structural_report() else {
+        return;
+    };
+    let settings = RerankSettings {
+        no_match_similarity: None,
+        ..RerankSettings::similarity_only()
+    };
+    let report = rerank::evaluate(
+        &StructuralScheme::default(),
+        corpus,
+        TASKS,
+        &settings,
+        "similarity-only",
+        PoolLane::Sampled,
+    );
+    assert!(!report.comparisons.is_empty(), "no tasks ran");
+    for comparison in &report.comparisons {
+        let reference = baseline
+            .result(&comparison.task_name)
+            .expect("every task in TASKS is scored by both drivers");
+        assert_eq!(
+            comparison.scored,
+            reference.scored,
+            "{}: the re-rank driver scored a different population than \
+             metrics::evaluate_slices ({} vs {}). The two reimplement the same \
+             twin join; a difference here invalidates every before/after number \
+             on this lane.\n{}",
+            comparison.task_name,
+            comparison.scored,
+            reference.scored,
+            comparison.line()
+        );
+        assert!(
+            (comparison.baseline_mrr10 - reference.mrr10).abs() < 1e-12,
+            "{}: baseline MRR10 {:.9} from rerank.rs vs {:.9} from metrics.rs",
+            comparison.task_name,
+            comparison.baseline_mrr10,
+            reference.mrr10
+        );
+        assert!(
+            (comparison.baseline_recall_at_1 - reference.recall(1)).abs() < 1e-12,
+            "{}: baseline R@1 {:.9} from rerank.rs vs {:.9} from metrics.rs",
+            comparison.task_name,
+            comparison.baseline_recall_at_1,
+            reference.recall(1)
+        );
+        assert_eq!(
+            comparison.improved,
+            0,
+            "{}: {} queries improved with every context term OFF. The decode is \
+             moving rankings on its own, so nothing it does with context on can \
+             be attributed to context.\n{}",
+            comparison.task_name,
+            comparison.improved,
+            comparison.line()
+        );
+        assert_eq!(
+            comparison.worsened,
+            0,
+            "{}: {} queries worsened with every context term off.\n{}",
+            comparison.task_name,
+            comparison.worsened,
+            comparison.line()
+        );
+    }
+}
+
+/// The context the decode gets to see, measured before any ranking is.
+///
+/// A re-rank that improves nothing because the graph it was handed was empty
+/// and one that improves nothing because context does not help look identical
+/// in an MRR10 column. This asserts the graph is not empty: the corpus's
+/// discovered call edges reach the scored population, and layer-adjacent pairs
+/// with a call relation between them exist at all.
+#[test]
+fn the_decode_sees_a_non_empty_call_graph() {
+    let Some(report) = rerank_report(
+        &StructuralScheme::default(),
+        &RerankSettings::call_graph_only(),
+        "call-graph-only",
+        PoolLane::Sampled,
+    ) else {
+        return;
+    };
+    let xo = report.comparison("XO-gcc").expect("XO-gcc ran");
+    eprintln!("{}", xo.line());
+    assert!(
+        xo.query_call_edges >= RERANK_XO_GCC_MIN_QUERY_CALL_EDGES,
+        "XO-gcc: only {} call edges between scored query functions, floor {}. \
+         The decode's call term cannot fire on a graph this thin, so a null \
+         result on this lane would say nothing about the algorithm.\n{}",
+        xo.query_call_edges,
+        RERANK_XO_GCC_MIN_QUERY_CALL_EDGES,
+        xo.line()
+    );
+    assert!(
+        xo.reference_call_edges >= RERANK_XO_GCC_MIN_REFERENCE_CALL_EDGES,
+        "XO-gcc: only {} call edges in the reference pool, floor {}.\n{}",
+        xo.reference_call_edges,
+        RERANK_XO_GCC_MIN_REFERENCE_CALL_EDGES,
+        xo.line()
+    );
+}
+
+/// Call edges between two *scored query* functions on XO-gcc. Read off a run
+/// (10 on 2026-09-03), floored well below it: this is a "the graph is not
+/// empty" assertion, not a measurement of the corpus.
+const RERANK_XO_GCC_MIN_QUERY_CALL_EDGES: usize = 1;
+/// Call edges between two pool functions on XO-gcc. Read off a run (15).
+const RERANK_XO_GCC_MIN_REFERENCE_CALL_EDGES: usize = 1;
+
+/// **The measured property that decides how this stage should be configured.**
+///
+/// The call-agreement term did not cost a single query a rank in any of the 40
+/// `(scheme x task x corpus x lane)` cells swept on 2026-09-03 -- two schemes,
+/// eight in-house tasks and four Dataset-1 tasks, on both the sampled and the
+/// global candidate lane. RevDecode's own provenance terms did, heavily; the
+/// measured table in `docs/reference/function-identity-rerank.md` has both.
+///
+/// This is an empirical property and not a theorem: a call reward can in
+/// principle promote a wrong candidate over a correct one. Which is exactly why
+/// it is a test. If it fires, the finding has changed and the reference page
+/// needs re-measuring -- do not relax the assertion.
+#[test]
+fn the_call_graph_term_never_costs_a_rank() {
+    for lane in [PoolLane::Sampled, PoolLane::Global] {
+        let Some(report) = rerank_report(
+            &StructuralScheme::default(),
+            &RerankSettings::call_graph_only(),
+            "call-graph-only",
+            lane,
+        ) else {
+            return;
+        };
+        for comparison in &report.comparisons {
+            assert_eq!(
+                comparison.worsened,
+                0,
+                "{} ({} lane): the call-agreement term demoted {} of {} twins. \
+                 That has never happened in a measured sweep; the reference \
+                 page's recommendation to run this term by default rests on \
+                 it.\n{}",
+                comparison.task_name,
+                lane.label(),
+                comparison.worsened,
+                comparison.scored,
+                comparison.line()
+            );
+        }
+    }
+}
+
+/// The one lane the call graph measurably moves, ratcheted.
+///
+/// XC-O0 is where the in-house corpus has call edges to spare (50 between
+/// scored query functions, against 5 on most other tasks), and it is the only
+/// in-house row where the term moves more than a couple of queries. Both
+/// numbers were read off a release run on 2026-09-03 and are the same in debug:
+/// the decode is integer- and total-order-driven, so only the extraction cost
+/// differs between profiles.
+#[test]
+fn structural_rerank_ratchets() {
+    let Some(report) = rerank_report(
+        &StructuralScheme::default(),
+        &RerankSettings::call_graph_only(),
+        "call-graph-only",
+        PoolLane::Sampled,
+    ) else {
+        return;
+    };
+    let xc = report.comparison("XC-O0").expect("XC-O0 ran");
+    assert_ratchet(
+        "XC-O0 re-ranked MRR10",
+        xc.reranked_mrr10,
+        RERANK_STRUCTURAL_XC_O0_MIN_MRR10,
+        &xc.line(),
+    );
+    assert_ratchet(
+        "XC-O0 re-ranked R@1",
+        xc.reranked_recall_at_1,
+        RERANK_STRUCTURAL_XC_O0_MIN_RECALL_AT_1,
+        &xc.line(),
+    );
+    assert!(
+        xc.reranked_mrr10 > xc.baseline_mrr10,
+        "XC-O0: the decode did not beat its own input ({:.6} -> {:.6}). A \
+         re-rank that cannot improve the row it was measured on is not a \
+         re-rank.\n{}",
+        xc.baseline_mrr10,
+        xc.reranked_mrr10,
+        xc.line()
+    );
+}
+
+/// `structural` XC-O0, sampled lane, call-graph-only, from 0.582359.
+const RERANK_STRUCTURAL_XC_O0_MIN_MRR10: f64 = 0.595187;
+/// ...and its Recall@1, from 0.472279.
+const RERANK_STRUCTURAL_XC_O0_MIN_RECALL_AT_1: f64 = 0.490759;
+
+/// The full re-rank sweep: every scheme, every ablation, both corpora.
+///
+/// `cargo test --release --features python-ext --test identity_retrieval -- \
+///   --ignored --nocapture rerank_full_sweep`
+#[test]
+#[ignore = "full re-rank sweep: every scheme x every ablation. Minutes."]
+fn rerank_full_sweep() {
+    let presets: [(&str, RerankSettings); 5] = [
+        ("similarity-only", RerankSettings::similarity_only()),
+        ("call-graph-only", RerankSettings::call_graph_only()),
+        ("adjacency-only", RerankSettings::adjacency_only()),
+        ("paper", RerankSettings::revdecode_paper()),
+        // The paper normalises raw similarities with a sigmoid before they
+        // enter the weight, and its adjacency constant (0.7) is calibrated
+        // against scores spread over the whole of [0, 1] by that step. Our
+        // similarities are already in [0, 1] but occupy a narrow band, so the
+        // same constant is a far larger prior here than there. This preset is
+        // the experiment that says whether re-spreading the scores recovers
+        // the paper's balance -- see the measured table in
+        // docs/reference/function-identity-rerank.md.
+        (
+            "paper-sigmoid",
+            RerankSettings {
+                normalization: glaurung::identity::rerank::Normalization::Sigmoid {
+                    centre: 0.5,
+                    steepness: 8.0,
+                },
+                ..RerankSettings::revdecode_paper()
+            },
+        ),
+    ];
+
+    let lanes = [PoolLane::Sampled, PoolLane::Global];
+
+    eprintln!("\n--- in-house fixture matrix ---");
+    for lane in lanes {
+        for (label, settings) in &presets {
+            rerank_report(&StructuralScheme::default(), settings, label, lane);
+        }
+        for (label, settings) in &presets {
+            rerank_report(&CfrScheme::plain(), settings, label, lane);
+        }
+    }
+
+    let Some(cisco_corpus) = cisco::corpus() else {
+        eprintln!("SKIP: no Cisco corpus; set GLAURUNG_CISCO_CORPUS.");
+        return;
+    };
+    let cisco_tasks: Vec<cisco::CiscoTask> = cisco::TASKS
+        .iter()
+        .filter(|t| matches!(t.name, "XO" | "XC" | "XB" | "XA-arm64"))
+        .copied()
+        .collect();
+    eprintln!("\n--- Cisco Talos Dataset-1 ---");
+    for lane in lanes {
+        for (label, settings) in &presets {
+            let report = rerank::evaluate_cisco(
+                &StructuralScheme::default(),
+                cisco_corpus,
+                &cisco_tasks,
+                settings,
+                label,
+                lane,
+            );
+            eprintln!(
+                "\n=== rerank: {} / {} / {} lane -- {} ({}) ===",
+                report.scheme,
+                report.settings_label,
+                report.lane.label(),
+                report.corpus_name,
+                report.profile
+            );
+            for comparison in &report.comparisons {
+                eprintln!("{}", comparison.line());
+            }
+            report.write_json(&metrics::report_dir());
         }
     }
 }

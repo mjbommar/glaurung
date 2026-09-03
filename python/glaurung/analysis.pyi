@@ -66,6 +66,7 @@ pe_list_resources_bytes = _mod.pe_list_resources_bytes
 pe_list_resources_path = _mod.pe_list_resources_path
 pe_tls_path = _mod.pe_tls_path
 pe_view_resource_path = _mod.pe_view_resource_path
+rerank_candidates = _mod.rerank_candidates
 structural_ranking_similarity = _mod.structural_ranking_similarity
 structural_signatures_path = _mod.structural_signatures_path
 va_to_file_offset_path = _mod.va_to_file_offset_path
