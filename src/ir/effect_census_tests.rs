@@ -11,55 +11,100 @@
 //! cargo test --features python-ext effect_census -- --ignored --nocapture
 //! ```
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use serde::Deserialize;
+
 use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
-use crate::core::binary::Arch;
+use crate::analysis::entry::va_to_code_file_offset;
+use crate::core::address::{Address, AddressKind};
+use crate::core::binary::{Arch, Endianness};
+use crate::core::disassembler::Disassembler;
+use crate::core::function::FunctionFlags;
+use crate::disasm::registry;
 use crate::ir::effect_census::{census_into, EffectCensus};
 use crate::ir::lift_function::lift_function_from_bytes;
+use crate::ir::types::{LlirFunction, Op};
 
-/// A cross-section of the committed sample corpus: two ISAs, three languages,
-/// hand-written assembly, and both optimisation extremes.
-const CORPUS: &[(&str, Arch)] = &[
-    (
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-c-gcc-O0",
-        Arch::X86_64,
-    ),
-    (
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
-        Arch::X86_64,
-    ),
-    (
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/c2_demo-gcc-O2",
-        Arch::X86_64,
-    ),
-    (
-        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2",
-        Arch::X86_64,
-    ),
-    (
-        "samples/binaries/platforms/linux/amd64/rust/hello-rust-release",
-        Arch::X86_64,
-    ),
-    (
-        "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
-        Arch::AArch64,
-    ),
-    (
-        "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-asm-arm64-as",
-        Arch::AArch64,
-    ),
-    (
-        "samples/binaries/platforms/linux/arm64/export/native/gcc/O1/hello-cpp-g++-O1",
-        Arch::AArch64,
-    ),
-    (
-        "samples/binaries/platforms/linux/arm64/export/cross/armhf/hello-armhf-gcc",
-        Arch::ARM,
-    ),
+/// One evidence lane. Compiler identity comes from the committed metadata
+/// sidecar. Optimisation is taken from its output path when present; artifacts
+/// which do not record a level say `unknown` rather than guessing one.
+#[derive(Debug, Clone, Copy)]
+struct CorpusSample {
+    path: &'static str,
+    arch: Arch,
+    compiler: &'static str,
+    optimization: &'static str,
+}
+
+/// A cross-section of the committed sample corpus: four lifted targets,
+/// multiple compilers, hand-written assembly, and several optimisation modes.
+const CORPUS: &[CorpusSample] = &[
+    CorpusSample {
+        path:
+            "samples/binaries/platforms/windows/i386/export/windows/i686/O2/hello-c-mingw32-O2.exe",
+        arch: Arch::X86,
+        compiler: "i686-w64-mingw32-gcc",
+        optimization: "O2",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-c-gcc-O0",
+        arch: Arch::X86_64,
+        compiler: "gcc",
+        optimization: "O0",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+        arch: Arch::X86_64,
+        compiler: "g++",
+        optimization: "O2",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/c2_demo-gcc-O2",
+        arch: Arch::X86_64,
+        compiler: "gcc",
+        optimization: "O2",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2",
+        arch: Arch::X86_64,
+        compiler: "g++",
+        optimization: "O2",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/amd64/rust/hello-rust-release",
+        arch: Arch::X86_64,
+        compiler: "rustc",
+        optimization: "release",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
+        arch: Arch::AArch64,
+        compiler: "aarch64-linux-gnu-gcc",
+        optimization: "unknown",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-asm-arm64-as",
+        arch: Arch::AArch64,
+        compiler: "aarch64-linux-gnu-as",
+        optimization: "not-applicable",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/arm64/export/native/gcc/O1/hello-cpp-g++-O1",
+        arch: Arch::AArch64,
+        compiler: "g++",
+        optimization: "O1",
+    },
+    CorpusSample {
+        path: "samples/binaries/platforms/linux/arm64/export/cross/armhf/hello-armhf-gcc",
+        arch: Arch::ARM,
+        compiler: "arm-linux-gnueabihf-gcc",
+        optimization: "unknown",
+    },
 ];
 
-fn corpus_census() -> (EffectCensus, usize, usize) {
+fn census_corpus(only_arch: Option<Arch>) -> (EffectCensus, usize, usize) {
     let budgets = Budgets {
         max_functions: 96,
         max_blocks: 512,
@@ -70,8 +115,11 @@ fn corpus_census() -> (EffectCensus, usize, usize) {
     let mut total = EffectCensus::default();
     let mut files = 0usize;
     let mut functions = 0usize;
-    for (relative, arch) in CORPUS {
-        let path = Path::new(relative);
+    for sample in CORPUS {
+        if only_arch.is_some_and(|selected| selected != sample.arch) {
+            continue;
+        }
+        let path = Path::new(sample.path);
         if !path.exists() {
             continue;
         }
@@ -79,13 +127,484 @@ fn corpus_census() -> (EffectCensus, usize, usize) {
         let data = std::fs::read(path).expect("read sample");
         let (discovered, _call_graph) = analyze_functions_bytes(&data, &budgets);
         for function in &discovered {
-            if let Ok(lifted) = lift_function_from_bytes(&data, function, *arch) {
+            if let Ok(lifted) = lift_function_from_bytes(&data, function, sample.arch) {
                 census_into(&lifted, &mut total);
                 functions += 1;
             }
         }
     }
     (total, files, functions)
+}
+
+fn corpus_census() -> (EffectCensus, usize, usize) {
+    census_corpus(None)
+}
+
+fn corpus_census_for_arch(arch: Arch) -> (EffectCensus, usize, usize) {
+    census_corpus(Some(arch))
+}
+
+#[test]
+fn every_corpus_sample_has_an_explicit_provenance_lane() {
+    let mut paths = BTreeSet::new();
+    for sample in CORPUS {
+        assert!(
+            paths.insert(sample.path),
+            "duplicate census path: {}",
+            sample.path
+        );
+        assert!(
+            !sample.compiler.trim().is_empty(),
+            "missing compiler: {sample:?}"
+        );
+        assert!(
+            !sample.optimization.trim().is_empty(),
+            "missing optimization provenance: {sample:?}"
+        );
+        assert!(
+            Path::new(sample.path).is_file(),
+            "provenance lane has no committed binary: {sample:?}"
+        );
+    }
+    assert_eq!(
+        paths.len(),
+        10,
+        "census lane inventory changed without review"
+    );
+}
+
+/// Every architecture the LLIR decompiler claims must have a real corpus
+/// denominator. A zero row is not a good score: it means the census measured
+/// nothing and therefore cannot detect a coverage regression for that target.
+#[test]
+fn every_lifted_architecture_has_a_nonempty_census_denominator() {
+    for arch in [Arch::X86, Arch::X86_64, Arch::ARM, Arch::AArch64] {
+        let (census, files, functions) = corpus_census_for_arch(arch);
+        assert!(files > 0, "{arch:?} has no committed census sample");
+        assert!(functions > 0, "{arch:?} lifted no census function");
+        assert!(
+            census.instructions > 0,
+            "{arch:?} produced no census instructions"
+        );
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpaqueExemption {
+    target: String,
+    mnemonic_or_family: String,
+    observed_count: usize,
+    reason: String,
+    semantic_risk: String,
+    owner: String,
+    removal_condition: String,
+}
+
+fn exemption_arch(target: &str) -> Option<Arch> {
+    match target {
+        "i386" => Some(Arch::X86),
+        "x86_64" => Some(Arch::X86_64),
+        "armv7" => Some(Arch::ARM),
+        "aarch64" => Some(Arch::AArch64),
+        _ => None,
+    }
+}
+
+fn exemption_matches(pattern: &str, mnemonic: &str) -> bool {
+    pattern
+        .strip_suffix('*')
+        .map_or(pattern == mnemonic, |prefix| mnemonic.starts_with(prefix))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecodedLiftExemption {
+    target: String,
+    mnemonic_or_family: String,
+    observed_count: usize,
+    reason: String,
+    semantic_risk: String,
+    owner: String,
+    removal_condition: String,
+}
+
+fn decoded_function_coverage(
+    data: &[u8],
+    function: &crate::core::function::Function,
+    arch: Arch,
+    lifted: &LlirFunction,
+) -> (BTreeMap<String, usize>, usize) {
+    let modelled_vas: BTreeSet<u64> = lifted
+        .blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter())
+        .filter(|instruction| {
+            !matches!(
+                &instruction.op,
+                Op::Intrinsic {
+                    ins,
+                    outs,
+                    reads_mem: true,
+                    writes_mem: true,
+                    ..
+                } if ins.is_empty() && outs.is_empty()
+            )
+        })
+        .map(|instruction| instruction.va)
+        .collect();
+    let disasm_arch: crate::core::disassembler::Architecture = arch.into();
+    let mut backend = registry::for_arch(disasm_arch, Endianness::Little)
+        .expect("lifted architecture must have a decoder");
+    backend
+        .set_thumb_mode(function.flags & FunctionFlags::IS_THUMB)
+        .expect("validated ARM mode must be selectable");
+    let mut missing = BTreeMap::new();
+    let mut decoded = 0usize;
+
+    for block in &lifted.blocks {
+        let start = block.start_va;
+        let end = block.end_va;
+        let Some(file_offset) = va_to_code_file_offset(data, start) else {
+            continue;
+        };
+        let available = data.len().saturating_sub(file_offset);
+        let block_len = usize::try_from(end.saturating_sub(start))
+            .unwrap_or(usize::MAX)
+            .min(available);
+        let bytes = &data[file_offset..file_offset + block_len];
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let va = start + offset as u64;
+            let address = Address::new(AddressKind::VA, va, disasm_arch.address_bits(), None, None)
+                .expect("valid decoded instruction address");
+            let Ok(instruction) = backend.disassemble_instruction(&address, &bytes[offset..])
+            else {
+                break;
+            };
+            decoded += 1;
+            if !modelled_vas.contains(&va) {
+                *missing.entry(instruction.mnemonic.clone()).or_default() += 1;
+            }
+            let length = usize::from(instruction.length);
+            assert!(
+                length > 0,
+                "decoder returned a zero-length instruction at {va:#x}"
+            );
+            offset = offset.saturating_add(length);
+        }
+    }
+
+    (missing, decoded)
+}
+
+/// Decode every discovered basic block independently of the LLIR lifter and
+/// return decoded mnemonics for which that lifter emitted either no op or only
+/// maximally opaque ops at the source address. This is deliberately
+/// address-based: one machine instruction may expand into several LLIR ops;
+/// it is modelled when at least one of them declares narrower semantics.
+fn decoded_requiring_exemption(arch: Arch) -> (BTreeMap<String, usize>, usize) {
+    let budgets = Budgets {
+        max_functions: 96,
+        max_blocks: 512,
+        max_instructions: 60_000,
+        timeout_ms: 4000,
+        total_timeout_ms: 0,
+    };
+    let mut missing = BTreeMap::new();
+    let mut decoded = 0usize;
+
+    for sample in CORPUS {
+        if sample.arch != arch {
+            continue;
+        }
+        let data = std::fs::read(sample.path).expect("read census sample");
+        let (functions, _) = analyze_functions_bytes(&data, &budgets);
+        for function in &functions {
+            let Ok(lifted) = lift_function_from_bytes(&data, function, arch) else {
+                continue;
+            };
+            let (function_missing, function_decoded) =
+                decoded_function_coverage(&data, function, arch, &lifted);
+            decoded += function_decoded;
+            for (mnemonic, count) in function_missing {
+                *missing.entry(mnemonic).or_default() += count;
+            }
+        }
+    }
+
+    (missing, decoded)
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LaneMeasurement {
+    files: usize,
+    functions: usize,
+    decoded: usize,
+    opaque: usize,
+    intrinsics: usize,
+}
+
+fn target_lane_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::X86 => "i386",
+        Arch::X86_64 => "x86_64",
+        Arch::ARM => "armv7",
+        Arch::AArch64 => "aarch64",
+        _ => panic!("unsupported census architecture: {arch:?}"),
+    }
+}
+
+fn instruction_mode_name(arch: Arch, flags: FunctionFlags) -> &'static str {
+    match arch {
+        Arch::X86 => "x86-32",
+        Arch::X86_64 => "x86-64",
+        Arch::AArch64 => "aarch64",
+        Arch::ARM if flags & FunctionFlags::IS_THUMB => "thumb",
+        Arch::ARM => "a32",
+        _ => panic!("unsupported census architecture: {arch:?}"),
+    }
+}
+
+fn measured_lanes() -> BTreeMap<String, LaneMeasurement> {
+    let budgets = Budgets {
+        max_functions: 96,
+        max_blocks: 512,
+        max_instructions: 60_000,
+        timeout_ms: 4000,
+        total_timeout_ms: 0,
+    };
+    let mut lanes = BTreeMap::<String, LaneMeasurement>::new();
+
+    for sample in CORPUS {
+        let data = std::fs::read(sample.path).expect("read census lane sample");
+        let (functions, _) = analyze_functions_bytes(&data, &budgets);
+        let mut file_lanes = BTreeSet::new();
+        for function in &functions {
+            let Ok(lifted) = lift_function_from_bytes(&data, function, sample.arch) else {
+                continue;
+            };
+            let key = format!(
+                "{}/{}/{}/{}",
+                target_lane_name(sample.arch),
+                instruction_mode_name(sample.arch, function.flags),
+                sample.compiler,
+                sample.optimization
+            );
+            let (_, decoded) = decoded_function_coverage(&data, function, sample.arch, &lifted);
+            let mut effects = EffectCensus::default();
+            census_into(&lifted, &mut effects);
+            let lane = lanes.entry(key.clone()).or_default();
+            lane.functions += 1;
+            lane.decoded += decoded;
+            lane.opaque += effects.opaque();
+            lane.intrinsics +=
+                effects.opaque() + effects.modelled_intrinsic.values().sum::<usize>();
+            file_lanes.insert(key);
+        }
+        for key in file_lanes {
+            lanes.get_mut(&key).expect("function created lane").files += 1;
+        }
+    }
+    lanes
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LaneBaseline {
+    key: String,
+    minimum_files: usize,
+    minimum_functions: usize,
+    minimum_decoded: usize,
+    maximum_opaque: usize,
+    maximum_intrinsics: usize,
+}
+
+#[test]
+fn every_provenance_lane_has_a_ratchet() {
+    let baselines: Vec<LaneBaseline> = serde_json::from_str(include_str!(
+        "../../tests/decompiler_fixtures/effect_census_lane_baseline.json"
+    ))
+    .expect("parse effect census lane baseline");
+    let measured = measured_lanes();
+    let baseline_keys: BTreeSet<_> = baselines.iter().map(|row| row.key.as_str()).collect();
+    let measured_keys: BTreeSet<_> = measured.keys().map(String::as_str).collect();
+    assert_eq!(
+        baseline_keys, measured_keys,
+        "census lane set changed; measured={measured:#?}"
+    );
+    for baseline in baselines {
+        let current = measured[&baseline.key];
+        assert!(
+            current.files >= baseline.minimum_files,
+            "{} lost a file denominator: {current:?}",
+            baseline.key
+        );
+        assert!(
+            current.functions >= baseline.minimum_functions,
+            "{} lost function coverage: {current:?}",
+            baseline.key
+        );
+        assert!(
+            current.decoded >= baseline.minimum_decoded,
+            "{} lost decoded coverage: {current:?}",
+            baseline.key
+        );
+        assert!(
+            current.opaque <= baseline.maximum_opaque,
+            "{} gained opaque instructions: {current:?}",
+            baseline.key
+        );
+        assert!(
+            current.intrinsics <= baseline.maximum_intrinsics,
+            "{} gained generic intrinsics: {current:?}",
+            baseline.key
+        );
+    }
+}
+
+/// A decoded machine instruction must either produce at least one LLIR op at
+/// its source address or appear in the reviewed silent-lift manifest. Opaque
+/// LLIR is governed separately; this gate catches instructions that disappear
+/// before the effect census can see them at all.
+#[test]
+fn every_decoded_instruction_reaches_llir_or_has_a_reviewed_exemption() {
+    let exemptions: Vec<DecodedLiftExemption> = serde_json::from_str(include_str!(
+        "../../tests/decompiler_fixtures/decoded_lift_exemptions.json"
+    ))
+    .expect("parse reviewed decoded-to-LLIR exemptions");
+    let census = [
+        ("i386", Arch::X86),
+        ("x86_64", Arch::X86_64),
+        ("armv7", Arch::ARM),
+        ("aarch64", Arch::AArch64),
+    ]
+    .map(|(target, arch)| {
+        let (missing, decoded) = decoded_requiring_exemption(arch);
+        (target, arch, missing, decoded)
+    });
+    let mut covered = BTreeSet::new();
+
+    for exemption in &exemptions {
+        let arch = exemption_arch(&exemption.target)
+            .unwrap_or_else(|| panic!("unknown exemption target: {}", exemption.target));
+        assert!(
+            exemption.observed_count > 0,
+            "zero-count exemption is stale"
+        );
+        for (field, value) in [
+            ("reason", &exemption.reason),
+            ("semantic_risk", &exemption.semantic_risk),
+            ("owner", &exemption.owner),
+            ("removal_condition", &exemption.removal_condition),
+        ] {
+            assert!(!value.trim().is_empty(), "empty {field}: {exemption:?}");
+        }
+        let (_, _, missing, decoded) = census
+            .iter()
+            .find(|(_, census_arch, _, _)| *census_arch == arch)
+            .expect("recognized target must have a census row");
+        assert!(
+            *decoded > 0,
+            "{} has no decoded denominator",
+            exemption.target
+        );
+        let observed: usize = missing
+            .iter()
+            .filter(|(mnemonic, _)| exemption_matches(&exemption.mnemonic_or_family, mnemonic))
+            .map(|(mnemonic, count)| {
+                assert!(
+                    covered.insert((exemption.target.clone(), mnemonic.clone())),
+                    "decoded mnemonic {mnemonic} matched more than one exemption"
+                );
+                *count
+            })
+            .sum();
+        assert!(observed > 0, "exemption no longer fires: {exemption:?}");
+        assert!(
+            observed <= exemption.observed_count,
+            "silent-lift count grew from {} to {observed}: {exemption:?}",
+            exemption.observed_count
+        );
+    }
+
+    let mut unreviewed = BTreeMap::new();
+    for (target, _arch, missing, decoded) in census {
+        assert!(decoded > 0, "{target} has no decoded denominator");
+        for mnemonic in missing.keys() {
+            if !covered.contains(&(target.to_string(), mnemonic.clone())) {
+                unreviewed
+                    .entry(target.to_string())
+                    .or_insert_with(BTreeMap::new)
+                    .insert(mnemonic.clone(), missing[mnemonic]);
+            }
+        }
+    }
+    assert!(
+        unreviewed.is_empty(),
+        "decoded instructions reached no modelled LLIR op: {unreviewed:#?}"
+    );
+}
+
+#[test]
+fn every_opaque_census_entry_has_one_live_reviewed_exemption() {
+    let exemptions: Vec<OpaqueExemption> = serde_json::from_str(include_str!(
+        "../../tests/decompiler_fixtures/effect_census_exemptions.json"
+    ))
+    .expect("parse reviewed opaque-effect exemptions");
+
+    let mut covered = std::collections::BTreeSet::new();
+    for exemption in &exemptions {
+        let arch = exemption_arch(&exemption.target)
+            .unwrap_or_else(|| panic!("unknown exemption target: {}", exemption.target));
+        assert!(
+            exemption.observed_count > 0,
+            "zero-count exemption is stale"
+        );
+        for (field, value) in [
+            ("reason", &exemption.reason),
+            ("semantic_risk", &exemption.semantic_risk),
+            ("owner", &exemption.owner),
+            ("removal_condition", &exemption.removal_condition),
+        ] {
+            assert!(!value.trim().is_empty(), "empty {field}: {exemption:?}");
+        }
+
+        let (census, _, _) = corpus_census_for_arch(arch);
+        let observed: usize = census
+            .opaque_intrinsic
+            .iter()
+            .filter(|(mnemonic, _)| exemption_matches(&exemption.mnemonic_or_family, mnemonic))
+            .map(|(mnemonic, count)| {
+                assert!(
+                    covered.insert((exemption.target.clone(), mnemonic.clone())),
+                    "opaque mnemonic {mnemonic} matched more than one exemption"
+                );
+                *count
+            })
+            .sum();
+        assert!(observed > 0, "exemption no longer fires: {exemption:?}");
+        assert!(
+            observed <= exemption.observed_count,
+            "opaque count grew from {} to {observed}: {exemption:?}",
+            exemption.observed_count
+        );
+    }
+
+    for (target, arch) in [
+        ("i386", Arch::X86),
+        ("x86_64", Arch::X86_64),
+        ("armv7", Arch::ARM),
+        ("aarch64", Arch::AArch64),
+    ] {
+        let (census, _, _) = corpus_census_for_arch(arch);
+        for mnemonic in census.opaque_intrinsic.keys() {
+            assert!(
+                covered.contains(&(target.to_string(), mnemonic.clone())),
+                "unreviewed opaque effect on {target}: {mnemonic}"
+            );
+        }
+    }
 }
 
 /// Nothing that reaches a dataflow consumer may declare *no* footprint.
@@ -196,11 +715,11 @@ fn no_arm32_data_processing_mnemonic_is_opaque() {
     };
     let mut census = EffectCensus::default();
     let mut lifted_any = false;
-    for (relative, arch) in CORPUS {
-        if *arch != Arch::ARM {
+    for sample in CORPUS {
+        if sample.arch != Arch::ARM {
             continue;
         }
-        let path = Path::new(relative);
+        let path = Path::new(sample.path);
         if !path.exists() {
             continue;
         }
@@ -245,37 +764,21 @@ fn no_arm32_data_processing_mnemonic_is_opaque() {
 #[test]
 #[ignore = "reporting, not checking: prints the census"]
 fn report_effect_census() {
-    for arch in [Arch::X86_64, Arch::AArch64, Arch::ARM] {
-        let mut per_arch = EffectCensus::default();
-        let budgets = Budgets {
-            max_functions: 96,
-            max_blocks: 512,
-            max_instructions: 60_000,
-            timeout_ms: 4000,
-            total_timeout_ms: 0,
-        };
-        for (relative, entry_arch) in CORPUS {
-            if *entry_arch != arch {
-                continue;
-            }
-            let path = Path::new(relative);
-            if !path.exists() {
-                continue;
-            }
-            let data = std::fs::read(path).expect("read sample");
-            let (discovered, _call_graph) = analyze_functions_bytes(&data, &budgets);
-            for function in &discovered {
-                if let Ok(lifted) = lift_function_from_bytes(&data, function, arch) {
-                    census_into(&lifted, &mut per_arch);
-                }
-            }
-        }
+    println!("provenance lanes:");
+    for (key, measured) in measured_lanes() {
+        println!("  {key}: {measured:?}");
+    }
+    for arch in [Arch::X86, Arch::X86_64, Arch::AArch64, Arch::ARM] {
+        let (per_arch, files, functions) = corpus_census_for_arch(arch);
+        let (decoded_opaque, decoded) = decoded_requiring_exemption(arch);
         println!(
-            "{arch:?}: instrs={} opaque={} {:?}",
+            "{arch:?}: files={files} functions={functions} instrs={} opaque={} decoded={decoded} decoded_opaque={} {:?}",
             per_arch.instructions,
             per_arch.opaque(),
+            decoded_opaque.values().sum::<usize>(),
             per_arch.opaque_intrinsic
         );
+        println!("  decoded opaque: {decoded_opaque:?}");
     }
     let (total, files, functions) = corpus_census();
     println!(

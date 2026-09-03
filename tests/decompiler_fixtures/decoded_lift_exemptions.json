@@ -1,0 +1,101 @@
+[
+  {
+    "target": "i386",
+    "mnemonic_or_family": "f*",
+    "observed_count": 191,
+    "reason": "The i386 corpus exercises x87 stack operations whose current fallback is a maximally opaque LLIR intrinsic.",
+    "semantic_risk": "Floating-point values, x87 stack depth, status flags, and memory effects are not represented precisely.",
+    "owner": "src/ir/lift_x86.rs and src/ir/x87.rs",
+    "removal_condition": "Remove or narrow this family as each x87 mnemonic gains a non-opaque LLIR model."
+  },
+  {
+    "target": "i386",
+    "mnemonic_or_family": "wait",
+    "observed_count": 3,
+    "reason": "The x87 wait instruction currently reaches the same conservative x87 fallback as the associated floating-point operations.",
+    "semantic_risk": "Pending x87 exception synchronization is not represented.",
+    "owner": "src/ir/lift_x86.rs and src/ir/x87.rs",
+    "removal_condition": "Remove when WAIT/FWAIT has an explicit LLIR effect model."
+  },
+  {
+    "target": "x86_64",
+    "mnemonic_or_family": "hlt",
+    "observed_count": 5,
+    "reason": "Privileged halt has no user-space value semantics in the current decompiler pipeline.",
+    "semantic_risk": "Control termination and privilege behavior are represented only conservatively.",
+    "owner": "src/ir/lift_x86.rs",
+    "removal_condition": "Remove when HLT has an explicit terminal or privileged-effect LLIR operation."
+  },
+  {
+    "target": "x86_64",
+    "mnemonic_or_family": "pause",
+    "observed_count": 4,
+    "reason": "The spin-loop hint is intentionally retained as a conservative intrinsic pending a dedicated hint/no-value-effect representation.",
+    "semantic_risk": "Scheduling and timing intent is not represented, although architectural data state is not fabricated.",
+    "owner": "src/ir/lift_x86.rs",
+    "removal_condition": "Remove when PAUSE is represented by an explicit non-opaque hint operation."
+  },
+  {
+    "target": "x86_64",
+    "mnemonic_or_family": "ud2",
+    "observed_count": 7,
+    "reason": "The guaranteed-invalid opcode is not yet represented as an explicit trap terminator.",
+    "semantic_risk": "Control flow after a guaranteed trap remains only conservatively described.",
+    "owner": "src/ir/lift_x86.rs",
+    "removal_condition": "Remove when UD2 lowers to an explicit non-returning trap operation."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "bleq",
+    "observed_count": 4,
+    "reason": "Conditionally executed control effects are conservatively opaque until predication is carried into LLIR.",
+    "semantic_risk": "The equality guard and conditional control transfer are not represented precisely.",
+    "owner": "src/ir/lift_arm32.rs",
+    "removal_condition": "Remove when ARM predicated branch-with-link semantics reach LLIR."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "ldrdeq",
+    "observed_count": 2,
+    "reason": "Conditionally executed doubleword loads are conservatively opaque until predication and paired-register effects are modelled together.",
+    "semantic_risk": "The equality guard, two-register write, and memory read are not represented precisely.",
+    "owner": "src/ir/lift_arm32.rs",
+    "removal_condition": "Remove when predicated LDRD has explicit paired-register LLIR semantics."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "stcle",
+    "observed_count": 2,
+    "reason": "A conditionally executed coprocessor store is conservatively opaque because the coprocessor state contract is not modelled.",
+    "semantic_risk": "The less-than-or-equal guard and coprocessor memory effects are not represented precisely.",
+    "owner": "src/ir/lift_arm32.rs",
+    "removal_condition": "Remove when predicated STC and its coprocessor state have explicit LLIR semantics."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "strdeq",
+    "observed_count": 4,
+    "reason": "Conditionally executed doubleword stores are conservatively opaque until predication and paired-register effects are modelled together.",
+    "semantic_risk": "The equality guard, two-register read, and memory write are not represented precisely.",
+    "owner": "src/ir/lift_arm32.rs",
+    "removal_condition": "Remove when predicated STRD has explicit paired-register LLIR semantics."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "svc",
+    "observed_count": 12,
+    "reason": "Supervisor calls require an OS-specific syscall contract that the current target model does not provide.",
+    "semantic_risk": "Arguments, result registers, clobbers, memory effects, and exceptional control flow are only conservative.",
+    "owner": "src/ir/lift_arm32.rs and src/target/",
+    "removal_condition": "Remove when the target ABI supplies an explicit SVC effect contract."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "svclt",
+    "observed_count": 2,
+    "reason": "A conditionally executed supervisor call needs both ARM predication and an OS-specific syscall contract.",
+    "semantic_risk": "The less-than guard plus syscall arguments, results, clobbers, memory effects, and control behavior are only conservative.",
+    "owner": "src/ir/lift_arm32.rs and src/target/",
+    "removal_condition": "Remove when predication and the target ABI's SVC effect contract both reach LLIR."
+  }
+]

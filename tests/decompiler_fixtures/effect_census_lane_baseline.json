@@ -1,0 +1,82 @@
+[
+  {
+    "key": "aarch64/aarch64/aarch64-linux-gnu-as/not-applicable",
+    "minimum_files": 1,
+    "minimum_functions": 14,
+    "minimum_decoded": 102,
+    "maximum_opaque": 0,
+    "maximum_intrinsics": 0
+  },
+  {
+    "key": "aarch64/aarch64/aarch64-linux-gnu-gcc/unknown",
+    "minimum_files": 1,
+    "minimum_functions": 17,
+    "minimum_decoded": 149,
+    "maximum_opaque": 0,
+    "maximum_intrinsics": 0
+  },
+  {
+    "key": "aarch64/aarch64/g++/O1",
+    "minimum_files": 1,
+    "minimum_functions": 39,
+    "minimum_decoded": 561,
+    "maximum_opaque": 0,
+    "maximum_intrinsics": 0
+  },
+  {
+    "key": "armv7/a32/arm-linux-gnueabihf-gcc/unknown",
+    "minimum_files": 1,
+    "minimum_functions": 6,
+    "minimum_decoded": 127,
+    "maximum_opaque": 26,
+    "maximum_intrinsics": 26
+  },
+  {
+    "key": "armv7/thumb/arm-linux-gnueabihf-gcc/unknown",
+    "minimum_files": 1,
+    "minimum_functions": 7,
+    "minimum_decoded": 101,
+    "maximum_opaque": 0,
+    "maximum_intrinsics": 0
+  },
+  {
+    "key": "i386/x86-32/i686-w64-mingw32-gcc/O2",
+    "minimum_files": 1,
+    "minimum_functions": 95,
+    "minimum_decoded": 6236,
+    "maximum_opaque": 194,
+    "maximum_intrinsics": 214
+  },
+  {
+    "key": "x86_64/x86-64/g++/O2",
+    "minimum_files": 2,
+    "minimum_functions": 122,
+    "minimum_decoded": 1184,
+    "maximum_opaque": 2,
+    "maximum_intrinsics": 2
+  },
+  {
+    "key": "x86_64/x86-64/gcc/O0",
+    "minimum_files": 1,
+    "minimum_functions": 18,
+    "minimum_decoded": 147,
+    "maximum_opaque": 1,
+    "maximum_intrinsics": 1
+  },
+  {
+    "key": "x86_64/x86-64/gcc/O2",
+    "minimum_files": 1,
+    "minimum_functions": 18,
+    "minimum_decoded": 159,
+    "maximum_opaque": 1,
+    "maximum_intrinsics": 1
+  },
+  {
+    "key": "x86_64/x86-64/rustc/release",
+    "minimum_files": 1,
+    "minimum_functions": 96,
+    "minimum_decoded": 6904,
+    "maximum_opaque": 12,
+    "maximum_intrinsics": 66
+  }
+]

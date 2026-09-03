@@ -1,0 +1,56 @@
+[
+  {
+    "target": "i386",
+    "mnemonic_or_family": "x87.*",
+    "observed_count": 194,
+    "reason": "The i386 corpus exercises x87 stack instructions whose exact register-stack and status effects are not yet represented for every encoding in LLIR.",
+    "semantic_risk": "Maximal opaque effects preserve soundness but sever floating-point value and stack dataflow, reducing recovered expressions and prototypes.",
+    "owner": "src/ir/x87.rs",
+    "removal_condition": "Remove or narrow this family when every observed x87 mnemonic has an exact typed footprint and the measured opaque count falls."
+  },
+  {
+    "target": "x86_64",
+    "mnemonic_or_family": "hlt",
+    "observed_count": 5,
+    "reason": "HLT is a privileged stop instruction and currently has no dedicated terminal LLIR operation.",
+    "semantic_risk": "Treating HLT as a maximal opaque effect can obscure termination and blocks dataflow across padding or privileged code.",
+    "owner": "src/ir/lift_x86.rs",
+    "removal_condition": "Remove when HLT lowers to an explicit non-fallthrough system or trap operation."
+  },
+  {
+    "target": "x86_64",
+    "mnemonic_or_family": "pause",
+    "observed_count": 4,
+    "reason": "PAUSE is an execution hint and the current LLIR has no explicit hint operation carrying its non-memory footprint.",
+    "semantic_risk": "The opaque form invents maximal memory effects and can inhibit loop and value simplification.",
+    "owner": "src/ir/lift_x86.rs",
+    "removal_condition": "Remove when PAUSE lowers to a reviewed hint or no-op representation with exact effects."
+  },
+  {
+    "target": "x86_64",
+    "mnemonic_or_family": "ud2",
+    "observed_count": 7,
+    "reason": "UD2 intentionally traps and currently has no dedicated non-returning trap operation in LLIR.",
+    "semantic_risk": "The opaque form does not state non-returning control flow, which can retain unreachable paths and degrade structuring.",
+    "owner": "src/ir/lift_x86.rs",
+    "removal_condition": "Remove when UD2 lowers to an explicit non-returning trap operation."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "predicated control effect",
+    "observed_count": 14,
+    "reason": "ARM predication cannot yet express every conditional control effect without a first-class guarded terminator.",
+    "semantic_risk": "The maximal effect is sound but loses the guarded control-flow fact and may block value propagation and structuring.",
+    "owner": "src/ir/lift_arm32/predication.rs",
+    "removal_condition": "Remove when every observed predicated control instruction lowers to an exact guarded control-flow representation."
+  },
+  {
+    "target": "armv7",
+    "mnemonic_or_family": "svc",
+    "observed_count": 12,
+    "reason": "SVC crosses an operating-system ABI boundary whose register and memory effects are not established from the instruction alone.",
+    "semantic_risk": "Maximal effects are sound but erase syscall argument and result dataflow when the surrounding platform ABI is knowable.",
+    "owner": "src/ir/lift_arm32.rs",
+    "removal_condition": "Remove or specialize when TargetSpec exposes a platform syscall contract and SVC is annotated through it."
+  }
+]
