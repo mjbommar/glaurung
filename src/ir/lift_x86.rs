@@ -61,7 +61,8 @@ use packed::{
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
     packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_qword_binary_ops,
-    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops, xorps_ops,
+    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops,
+    vex_packed_dword_binary_ops, vex_ymm_dword_move_ops, xorps_ops,
 };
 use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
@@ -75,7 +76,9 @@ use scalar_float::{
     scalar_convert_ops, scalar_convert_source_bytes, scalar_float_binary_ops,
     scalar_float_compare_ops, scalar_move_ops,
 };
-use string_ops::{movs_ops, movs_width, pop_ops, push_ops, stos_ops};
+use string_ops::{
+    movs_ops, movs_width, pop_flags_ops, pop_ops, push_flags_ops, push_ops, stos_ops,
+};
 use wide_arith::{bit_scan_ops, cmpxchg_ops, double_shift_ops, wide_div_ops, wide_mul_ops};
 use xmm_views::{split_xmm_scalar_view, synchronise_xmm_views};
 // `x87`'s `fcomi`/`fucomi` share the SSE four-outcome flag model verbatim; the
@@ -254,6 +257,49 @@ fn partial_write_ops(v: regview::RegView, src: Value) -> Vec<Op> {
         lhs: Value::Reg(p),
         rhs: positioned,
     });
+    ops
+}
+
+/// Preserve the dataflow of environment-dependent architectural queries.
+/// Their values are not predictable from the binary, but their architectural
+/// inputs and complete 32-bit outputs are. Model the unknown computation as an
+/// intrinsic and then apply x86-64's zero-extending subregister write rule.
+fn architectural_query_ops(bits: u32, name: &str, inputs: &[&str], outputs: &[&str]) -> Vec<Op> {
+    let results: Vec<(VReg, Width)> = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, _)| (VReg::Temp(20 + index as u32), Width::W32))
+        .collect();
+    let mut ops = vec![Op::Intrinsic {
+        name: name.into(),
+        ins: inputs
+            .iter()
+            .map(|register| Value::Reg(VReg::phys(*register)))
+            .collect(),
+        outs: results.clone(),
+        reads_mem: false,
+        writes_mem: false,
+    }];
+    for ((result, _), output) in results.into_iter().zip(outputs) {
+        if bits == 64 {
+            let Some(view) = zero_extending_gp_view(output, bits) else {
+                return vec![Op::Unknown {
+                    mnemonic: name.trim_start_matches("x86.").into(),
+                }];
+            };
+            ops.push(Op::ZExt {
+                dst: VReg::phys(view.parent),
+                src: Value::Reg(result),
+                from: Width::W32,
+                to: Width::W64,
+            });
+        } else {
+            ops.push(Op::Assign {
+                dst: VReg::phys(*output),
+                src: Value::Reg(result),
+            });
+        }
+    }
     ops
 }
 
@@ -1174,6 +1220,20 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // `__builtin_popcount` at the encoded width.
         Mnemonic::Tzcnt => count_trailing_zeros_ops(instr),
         Mnemonic::Popcnt => population_count_ops(instr),
+        // These query processor or platform state. Their numeric results are
+        // deliberately opaque, but all inputs and register definitions are
+        // architectural and must remain visible to SSA and dataflow.
+        Mnemonic::Cpuid => architectural_query_ops(
+            bits,
+            "x86.cpuid",
+            &["eax", "ecx"],
+            &["eax", "ebx", "ecx", "edx"],
+        ),
+        Mnemonic::Rdtsc => architectural_query_ops(bits, "x86.rdtsc", &[], &["eax", "edx"]),
+        Mnemonic::Rdtscp => {
+            architectural_query_ops(bits, "x86.rdtscp", &[], &["eax", "ecx", "edx"])
+        }
+        Mnemonic::Xgetbv => architectural_query_ops(bits, "x86.xgetbv", &["ecx"], &["eax", "edx"]),
         // `rcr reg, 1` — the only rotate-through-carry width this IR can state
         // exactly; see `bit_ops::rotate_carry_right_ops`.
         Mnemonic::Rcr => rotate_carry_right_ops(instr, bits),
@@ -1656,8 +1716,29 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             }]
         }
         Mnemonic::Neg => {
-            if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
-                let r = VReg::phys(reg_name(instr.op_register(0)));
+            if instr.op_count() == 1 {
+                let (r, mut preamble, store) = match instr.op_kind(0) {
+                    OpKind::Register => {
+                        (VReg::phys(reg_name(instr.op_register(0))), Vec::new(), None)
+                    }
+                    OpKind::Memory => {
+                        let addr = mem_op_of(instr);
+                        let r = VReg::Temp(10);
+                        (
+                            r.clone(),
+                            vec![Op::Load {
+                                dst: r,
+                                addr: addr.clone(),
+                            }],
+                            Some(addr),
+                        )
+                    }
+                    _ => {
+                        return vec![Op::Unknown {
+                            mnemonic: "neg".into(),
+                        }];
+                    }
+                };
                 // `neg` sets SF from the sign of the result and ZF from whether it is
                 // zero. Leaving them undefined made a following `cmovs`/`js` read
                 // either nothing or a stale flag from an unrelated comparison — the
@@ -1741,11 +1822,18 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         "x86 NEG defines AF, but its exact low-bit borrow expression is not modelled",
                     ),
                     Op::Assign {
-                        dst: r,
+                        dst: r.clone(),
                         src: Value::Reg(t),
                     },
                 ]);
-                return ops;
+                preamble.extend(ops);
+                if let Some(addr) = store {
+                    preamble.push(Op::Store {
+                        addr,
+                        src: Value::Reg(r),
+                    });
+                }
+                return preamble;
             }
             vec![Op::Unknown {
                 mnemonic: "neg".into(),
@@ -1764,6 +1852,8 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Bsr => bit_scan_ops(instr, false),
         Mnemonic::Bsf => bit_scan_ops(instr, true),
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
+        Mnemonic::Vpxor => vex_packed_dword_binary_ops(instr, BinOp::Xor),
+        Mnemonic::Vmovdqu => vex_ymm_dword_move_ops(instr),
         Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
         Mnemonic::Pandn => packed_dword_and_not_ops(instr),
         Mnemonic::Por => packed_dword_binary_ops(instr, BinOp::Or),
@@ -1816,6 +1906,8 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
+        Mnemonic::Pushfq => push_flags_ops(bits),
+        Mnemonic::Popfq => pop_flags_ops(bits),
         Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd | Mnemonic::Stosq => {
             stos_ops(instr, mnem, bits)
         }
@@ -2274,6 +2366,10 @@ mod tests {
 
     fn lift64(bytes: &[u8]) -> Vec<LlirInstr> {
         lift_bytes(bytes, 0x1000, 64)
+    }
+
+    fn lift32(bytes: &[u8]) -> Vec<LlirInstr> {
+        lift_bytes(bytes, 0x1000, 32)
     }
 
     /// `lift64` without the whole-register views [`synchronise_xmm_views`]
@@ -2888,6 +2984,31 @@ mod tests {
                 || matches!(&i.op, Op::Assign { dst: VReg::Phys(n), .. } if n == "edx")
         });
         assert!(defines_dst, "neg must write %edx, got {ops:#?}");
+    }
+
+    #[test]
+    fn memory_neg_is_an_exact_load_negate_store() {
+        // `neg DWORD PTR [rbp-0xc]` is GCC's ordinary -O0 spelling for
+        // negating a spilled local. Dropping the memory form left the source
+        // assignment as an `asm: neg` comment and silently changed results.
+        let ops = lift64(&[0xf7, 0x5d, 0xf4]);
+        assert!(matches!(
+            ops.first().map(|ins| &ins.op),
+            Some(Op::Load { .. })
+        ));
+        assert!(
+            ops.iter()
+                .any(|ins| matches!(ins.op, Op::Un { op: UnOp::Neg, .. })),
+            "memory neg must negate its loaded value: {ops:#?}"
+        );
+        assert!(matches!(
+            ops.last().map(|ins| &ins.op),
+            Some(Op::Store { .. })
+        ));
+        assert!(
+            !ops.iter().any(|ins| matches!(ins.op, Op::Unknown { .. })),
+            "memory neg must not decline: {ops:#?}"
+        );
     }
 
     #[test]
@@ -5122,7 +5243,19 @@ mod tests {
                     let value = read(&state, src);
                     state.insert(dst.clone(), value);
                 }
-                Op::Assign { .. } | Op::Nop => {}
+                Op::Intrinsic {
+                    name, ins, outs, ..
+                } if name.starts_with("x86.clz.") && ins.len() == 1 && outs.len() == 1 => {
+                    let value = read(&state, &ins[0]);
+                    let width = outs[0].1.bits();
+                    let count = match width {
+                        64 => value.leading_zeros() as u64,
+                        32 => (value as u32).leading_zeros() as u64,
+                        _ => ((value as u32) & ((1u32 << width) - 1)).leading_zeros() as u64,
+                    };
+                    state.insert(outs[0].0.clone(), count);
+                }
+                Op::Assign { .. } | Op::Cmp { .. } | Op::Nop => {}
                 // The poisoned flags. This is about the value.
                 Op::Undef { dst, .. } if matches!(dst, VReg::Flag(_)) => {}
                 other => panic!("unsupported op in a double shift: {other:#?}"),
@@ -5385,23 +5518,194 @@ mod tests {
         );
     }
 
-    /// The 16-bit form is real, but `ast::write_wide_arithmetic_dec` spells any
-    /// sub-64-bit count as `__builtin_clz((unsigned int)(x))` — a count over 32
-    /// bits — so `x86.clz.16` would answer 16 too high. Refuse it rather than
-    /// emit a wrong index.
+    /// The 16-bit form widens its source to 32 bits for CLZ and writes the
+    /// result back through the destination's bit-preserving register view.
     #[test]
-    fn a_sixteen_bit_bit_scan_is_not_guessed() {
+    fn a_sixteen_bit_bit_scan_preserves_both_register_parents() {
         // 66 0f bd c8 -> bsr cx, ax
         let ops: Vec<Op> = lift64(&[0x66, 0x0f, 0xbd, 0xc8])
             .into_iter()
             .map(|i| i.op)
             .collect();
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::Unknown { .. })),
+            "16-bit BSR must be modelled: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, outs, .. }
+                    if name == "x86.clz.32" && outs[0].1 == Width::W32
+            )),
+            "the zero-extended word must use 32-bit CLZ: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst: VReg::Phys(parent), op: BinOp::And, .. }
+                    if parent == "rcx"
+            )) && ops.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst: VReg::Phys(parent), op: BinOp::Or, .. }
+                    if parent == "rcx"
+            )),
+            "writing cx must preserve the upper bits of rcx: {ops:#?}"
+        );
+        let state = evaluate_integer_ops(
+            &ops,
+            &[
+                ("rax", 0xabcd_0000_0000_0800),
+                ("rcx", 0xfeed_face_cafe_beef),
+            ],
+        );
         assert_eq!(
-            ops,
-            vec![Op::Unknown {
-                mnemonic: "bsr".into()
-            }],
-            "got: {ops:#?}"
+            state[&VReg::phys("rcx")],
+            0xfeed_face_cafe_000b,
+            "BSR must read only ax, return bit 11, and preserve rcx[63:16]"
+        );
+    }
+
+    #[test]
+    fn architectural_queries_expose_every_gp_input_and_output() {
+        let cases: &[(&[u8], &str, &[&str], &[&str])] = &[
+            (
+                &[0x0f, 0xa2],
+                "x86.cpuid",
+                &["eax", "ecx"],
+                &["rax", "rbx", "rcx", "rdx"],
+            ),
+            (&[0x0f, 0x31], "x86.rdtsc", &[], &["rax", "rdx"]),
+            (
+                &[0x0f, 0x01, 0xf9],
+                "x86.rdtscp",
+                &[],
+                &["rax", "rcx", "rdx"],
+            ),
+            (&[0x0f, 0x01, 0xd0], "x86.xgetbv", &["ecx"], &["rax", "rdx"]),
+        ];
+
+        for (bytes, expected_name, expected_inputs, expected_parents) in cases {
+            let ops: Vec<Op> = lift64(bytes)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                !ops.iter().any(|op| matches!(op, Op::Unknown { .. })),
+                "{expected_name} must not silently discard its outputs: {ops:#?}"
+            );
+            let intrinsic = ops.iter().find_map(|op| match op {
+                Op::Intrinsic {
+                    name, ins, outs, ..
+                } if name == expected_name => Some((ins, outs)),
+                _ => None,
+            });
+            let Some((inputs, outputs)) = intrinsic else {
+                panic!("missing {expected_name} intrinsic: {ops:#?}");
+            };
+            assert_eq!(
+                inputs,
+                &expected_inputs
+                    .iter()
+                    .map(|name| Value::Reg(VReg::phys(*name)))
+                    .collect::<Vec<_>>(),
+                "wrong inputs for {expected_name}"
+            );
+            assert_eq!(outputs.len(), expected_parents.len());
+            for parent in *expected_parents {
+                assert!(
+                    ops.iter().any(|op| matches!(
+                        op,
+                        Op::Assign { dst: VReg::Phys(name), .. }
+                            | Op::ZExt { dst: VReg::Phys(name), .. }
+                            if name == parent
+                    )),
+                    "{expected_name} must explicitly define {parent}: {ops:#?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn architectural_query_outputs_are_complete_i386_registers() {
+        let cases: &[(&[u8], &[&str])] = &[
+            (&[0x0f, 0xa2], &["eax", "ebx", "ecx", "edx"]),
+            (&[0x0f, 0x31], &["eax", "edx"]),
+            (&[0x0f, 0x01, 0xf9], &["eax", "ecx", "edx"]),
+            (&[0x0f, 0x01, 0xd0], &["eax", "edx"]),
+        ];
+        for (bytes, outputs) in cases {
+            let ops: Vec<Op> = lift32(bytes)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(!ops.iter().any(|op| matches!(op, Op::Unknown { .. })));
+            for output in *outputs {
+                assert!(
+                    ops.iter().any(|op| matches!(
+                        op,
+                        Op::Assign { dst: VReg::Phys(name), .. } if name == *output
+                    )),
+                    "i386 query must define {output}: {ops:#?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pushfq_and_popfq_preserve_stack_and_modelled_flag_dataflow() {
+        let pushed: Vec<Op> = lift64(&[0x9c])
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            pushed.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, ins, outs, .. }
+                    if name == "x86.pack_rflags"
+                        && ins.len() == 7
+                        && outs == &vec![(VReg::Temp(12), Width::W64)]
+            )),
+            "PUSHFQ must explicitly consume every represented flag: {pushed:#?}"
+        );
+        assert!(
+            pushed.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst: VReg::Phys(sp), op: BinOp::Sub, .. } if sp == "rsp"
+            )) && pushed.iter().any(|op| matches!(op, Op::Store { .. })),
+            "PUSHFQ must update the stack and store the packed word: {pushed:#?}"
+        );
+
+        let popped: Vec<Op> = lift64(&[0x9d])
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            matches!(popped.first(), Some(Op::Load { .. })),
+            "POPFQ must load the packed word: {popped:#?}"
+        );
+        for flag in [
+            Flag::C,
+            Flag::P,
+            Flag::A,
+            Flag::Z,
+            Flag::S,
+            Flag::D,
+            Flag::O,
+        ] {
+            assert!(
+                popped.iter().any(|op| matches!(
+                    op,
+                    Op::Extract { dst: VReg::Flag(actual), .. } if *actual == flag
+                )),
+                "POPFQ must define {flag:?}: {popped:#?}"
+            );
+        }
+        assert!(
+            popped.iter().any(|op| matches!(
+                op,
+                Op::Bin { dst: VReg::Phys(sp), op: BinOp::Add, .. } if sp == "rsp"
+            )),
+            "POPFQ must release its stack word: {popped:#?}"
         );
     }
 
@@ -7875,10 +8179,6 @@ mod tests {
             /// No dispatch arm exists at all. A register the ISA writes that
             /// this lifter has never had an opinion about. The prize category.
             NoArm,
-            /// An arm exists and REFUSES this encoding, for a stated reason,
-            /// rather than guessing. The answer is absent on purpose -- though
-            /// absent invisibly, which is why these are still counted.
-            FormRefused,
             /// x87. [`lift_bytes_with_x87`] is the pipeline's real entry point
             /// for these and emits `Op::opaque("x87.<mnemonic>")` whenever the
             /// stack depth is unproven, so the pipeline tells the same lie
@@ -7906,11 +8206,12 @@ mod tests {
             NoStateThisIrModels,
         }
 
-        /// The allowlist: 28 mnemonics, 1,130 occurrences over the committed
+        /// The allowlist: 16 mnemonics over the committed
         /// corpus. Every entry is a register definition the LLIR does not have;
         /// the reason says whether that is a gap or a boundary.
         ///
-        /// Occurrence counts, for whoever ranks what to fix next: `syscall` 310,
+        /// Original-audit occurrence counts, retained to explain prioritisation:
+        /// `syscall` 310,
         /// `movsb` 242, `aesenc` 222, `movsq` 134, `vmovdqu` 58, `fstp` 34,
         /// `vzeroupper` 26, `fxch` 14, `fmul` 12, `vpcmpeqb` 12, `fchs` 10,
         /// `vpmovmskb` 8, `cpuid` 6, `fadd` 6, `bsr` 4, `fsubp` 4, `shrd` 4,
@@ -7927,46 +8228,28 @@ mod tests {
         /// 2026-08-19 were chosen that way rather than by the counts above:
         /// `tzcnt` was 130 here and 139 there across 27 fixture functions,
         /// while `syscall` is 310 here and 0 there.
-        const SILENT_REGISTER_WRITERS: &[(&str, Silence)] = &[
-            // `Bsr_r16_rm16` only, all four of them: the 16-bit form is the one
-            // `bit_scan_ops` declines. Its stated reason (that a 16-bit count
-            // would need an `x86.clz.16` answering 16 too high) does not hold --
-            // `bsr16(x) = 31 - clz32(zext16(x))` is exact with today's renderer;
-            // the real blocker is that both operands are bit-preserving partial
-            // views and the lowering writes neither through its parent.
-            ("bsr", Silence::FormRefused),
-            ("cpuid", Silence::NoArm),
-            ("fadd", Silence::X87Stack),
-            ("faddp", Silence::X87Stack),
-            ("fchs", Silence::X87Stack),
-            ("fisub", Silence::X87Stack),
-            ("fmul", Silence::X87Stack),
-            ("fstp", Silence::X87Stack),
-            ("fsub", Silence::X87Stack),
-            ("fsubp", Silence::X87Stack),
-            ("fxch", Silence::X87Stack),
-            ("popfq", Silence::NoArm),
-            ("pushfq", Silence::NoArm),
-            ("rdtsc", Silence::NoArm),
-            ("rdtscp", Silence::NoArm),
+        const SILENT_REGISTER_WRITERS: &[(&str, Silence, usize)] = &[
+            ("fadd", Silence::X87Stack, 6),
+            ("faddp", Silence::X87Stack, 2),
+            ("fchs", Silence::X87Stack, 10),
+            ("fisub", Silence::X87Stack, 2),
+            ("fmul", Silence::X87Stack, 12),
+            ("fstp", Silence::X87Stack, 34),
+            ("fsub", Silence::X87Stack, 2),
+            ("fsubp", Silence::X87Stack, 4),
+            ("fxch", Silence::X87Stack, 14),
             // Writes RCX and R11 (the return address and RFLAGS). RAX is the
             // kernel's doing, not the instruction's, and iced does not claim it.
-            ("syscall", Silence::NoArm),
-            ("vmovdqu", Silence::WiderThanTheLaneModel),
-            ("vpand", Silence::WiderThanTheLaneModel),
-            ("vpbroadcastb", Silence::WiderThanTheLaneModel),
-            ("vpcmpeqb", Silence::WiderThanTheLaneModel),
+            ("syscall", Silence::NoArm, 310),
+            ("vpand", Silence::WiderThanTheLaneModel, 2),
+            ("vpbroadcastb", Silence::WiderThanTheLaneModel, 2),
+            ("vpcmpeqb", Silence::WiderThanTheLaneModel, 12),
             // `VEX_Vpmovmskb_r32_ymm`: the DESTINATION is an ordinary GP
             // register, but the source is a 256-bit `ymm` this IR cannot spell,
             // so the mask has no expression to be. The 128-bit `pmovmskb` is
             // lifted.
-            ("vpmovmskb", Silence::WiderThanTheLaneModel),
-            // Not a width problem: `VEX_Vpxor_xmm_xmm_xmmm128` is 128 bits and
-            // the SSE `pxor` spelling IS lifted. The VEX encoding simply has no
-            // arm.
-            ("vpxor", Silence::NoArm),
-            ("vzeroupper", Silence::NoStateThisIrModels),
-            ("xgetbv", Silence::NoArm),
+            ("vpmovmskb", Silence::WiderThanTheLaneModel, 8),
+            ("vzeroupper", Silence::NoStateThisIrModels, 26),
         ];
 
         // The comparison below is by name in sorted order, so a duplicate or a
@@ -8022,17 +8305,64 @@ mod tests {
         let observed: Vec<&str> = silent.keys().map(String::as_str).collect();
         let allowed: Vec<&str> = SILENT_REGISTER_WRITERS
             .iter()
-            .map(|(mnemonic, _)| *mnemonic)
+            .map(|(mnemonic, _, _)| *mnemonic)
             .collect();
         assert_eq!(
             observed, allowed,
             "an unmodelled instruction with a register destination declares no \
              write at all, so its destination silently keeps its previous value. \
-             An `Op::Unknown` and an `Op::opaque` that nothing else in the lift \
+            An `Op::Unknown` and an `Op::opaque` that nothing else in the lift \
              covers count the same here, because register dataflow cannot tell \
              them apart. A mnemonic ADDED to this diff is a new hole and needs \
              a lift, not an allowlist entry; a mnemonic REMOVED is one that was \
              just fixed, and its entry goes with it. Occurrences: {silent:?}"
+        );
+        for (mnemonic, _, maximum) in SILENT_REGISTER_WRITERS {
+            assert!(
+                silent[*mnemonic] <= *maximum,
+                "silent register-writer count grew for {mnemonic}: {} > {maximum}",
+                silent[*mnemonic]
+            );
+        }
+    }
+
+    #[test]
+    fn remaining_simd_silence_is_pinned_by_exact_encoding_form() {
+        use iced_x86::{Decoder, DecoderOptions};
+
+        let corpus = census_corpus();
+        if corpus.is_empty() {
+            eprintln!("sample corpus missing; nothing to sweep");
+            return;
+        }
+        let watched = ["vpand", "vpbroadcastb", "vpcmpeqb", "vpmovmskb"];
+        let mut forms: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for (data, ranges) in &corpus {
+            for (start, end) in ranges {
+                let mut decoder =
+                    Decoder::with_ip(64, &data[*start..*end], 0x1000, DecoderOptions::NONE);
+                for instruction in decoder.iter() {
+                    let mnemonic = format!("{:?}", instruction.mnemonic()).to_ascii_lowercase();
+                    if watched.contains(&mnemonic.as_str())
+                        && hides_its_register_writes(&lift_one(&instruction, 64))
+                    {
+                        *forms
+                            .entry(format!("{:?}", instruction.code()))
+                            .or_default() += 1;
+                    }
+                }
+            }
+        }
+        let expected = std::collections::BTreeMap::from([
+            ("VEX_Vpand_ymm_ymm_ymmm256".to_string(), 2),
+            ("VEX_Vpbroadcastb_ymm_xmmm8".to_string(), 2),
+            ("VEX_Vpcmpeqb_ymm_ymm_ymmm256".to_string(), 12),
+            ("VEX_Vpmovmskb_r32_ymm".to_string(), 8),
+        ]);
+        assert_eq!(
+            forms, expected,
+            "remaining SIMD silence changed form or count; a new 128-bit form must be lifted"
         );
     }
 
@@ -8716,6 +9046,190 @@ mod tests {
             )),
             "pxor must define the whole-register view: {ops:#?}"
         );
+    }
+
+    #[test]
+    fn vpxor_xmm_uses_both_sources_and_defines_the_whole_destination() {
+        // c5 f1 ef c2 -> vpxor xmm0,xmm1,xmm2
+        let ops = lift64(&[0xc5, 0xf1, 0xef, 0xc2]);
+        assert!(
+            !ops.iter()
+                .any(|instruction| matches!(instruction.op, Op::Unknown { .. })),
+            "128-bit VPXOR must be modelled: {ops:#?}"
+        );
+        for lane in 0..4 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Bin {
+                        dst: VReg::Phys(dst),
+                        op: BinOp::Xor,
+                        lhs: Value::Reg(VReg::Phys(lhs)),
+                        rhs: Value::Reg(VReg::Phys(rhs)),
+                    } if dst == &format!("xmm0_d{lane}")
+                        && lhs == &format!("xmm1_d{lane}")
+                        && rhs == &format!("xmm2_d{lane}")
+                )),
+                "lane {lane} lost a VPXOR operand: {ops:#?}"
+            );
+        }
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign { dst: VReg::Phys(dst), .. }
+                    | Op::Concat { dst: VReg::Phys(dst), .. } if dst == "xmm0"
+            )),
+            "VPXOR must redefine the whole XMM view: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn vpxor_xmm_supports_memory_and_source_self_zeroing() {
+        // c5 f1 ef 00 -> vpxor xmm0,xmm1,[rax]
+        let memory = lift64(&[0xc5, 0xf1, 0xef, 0x00]);
+        assert_eq!(
+            memory
+                .iter()
+                .filter(|instruction| matches!(instruction.op, Op::Load { .. }))
+                .count(),
+            4,
+            "a 128-bit source must load four dword lanes: {memory:#?}"
+        );
+        assert_eq!(
+            memory
+                .iter()
+                .filter(|instruction| matches!(instruction.op, Op::Bin { op: BinOp::Xor, .. }))
+                .count(),
+            4,
+            "every destination lane must combine the register and memory sources: {memory:#?}"
+        );
+
+        // c5 f1 ef c1 -> vpxor xmm0,xmm1,xmm1
+        let zero = lift64(&[0xc5, 0xf1, 0xef, 0xc1]);
+        for lane in 0..4 {
+            assert!(
+                zero.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign { dst: VReg::Phys(dst), src: Value::Const(0) }
+                        if dst == &format!("xmm0_d{lane}")
+                )),
+                "source self-XOR must zero lane {lane}: {zero:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vpand_ymm_uses_all_eight_lanes_of_both_register_sources() {
+        // c5 f5 db c2 -> vpand ymm0,ymm1,ymm2
+        let ops = lift64_lanes(&[0xc5, 0xf5, 0xdb, 0xc2]);
+        assert_eq!(ops.len(), 8, "got: {ops:#?}");
+        for lane in 0..8 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Bin {
+                        dst: VReg::Phys(dst),
+                        op: BinOp::And,
+                        lhs: Value::Reg(VReg::Phys(lhs)),
+                        rhs: Value::Reg(VReg::Phys(rhs)),
+                    } if dst == &format!("ymm0_d{lane}")
+                        && lhs == &format!("ymm1_d{lane}")
+                        && rhs == &format!("ymm2_d{lane}")
+                )),
+                "lane {lane} lost a VPAND operand: {ops:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vpand_ymm_memory_source_loads_and_combines_all_eight_lanes() {
+        // c5 f5 db 00 -> vpand ymm0,ymm1,[rax]
+        let ops = lift64_lanes(&[0xc5, 0xf5, 0xdb, 0x00]);
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Load { .. }))
+                .count(),
+            8,
+            "a 256-bit source must load eight dword lanes: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Bin { op: BinOp::And, .. }))
+                .count(),
+            8,
+            "every destination lane must combine both sources: {ops:#?}"
+        );
+        for (lane, instruction) in ops
+            .iter()
+            .filter(|instruction| matches!(instruction.op, Op::Load { .. }))
+            .enumerate()
+        {
+            match &instruction.op {
+                Op::Load { addr, .. } => {
+                    assert_eq!(addr.size, 4);
+                    assert_eq!(addr.disp, (lane * 4) as i64);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn vmovdqu_ymm_register_move_preserves_all_eight_dword_lanes() {
+        // c5 fe 6f c1 -> vmovdqu ymm0,ymm1. This is an exact fixed-width bit
+        // transport, so it fits the scalar LLIR as eight independent lanes;
+        // it is not evidence for generic 256-bit vector operations.
+        let ops = lift64_lanes(&[0xc5, 0xfe, 0x6f, 0xc1]);
+        assert_eq!(ops.len(), 8, "got: {ops:#?}");
+        for lane in 0..8 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign {
+                        dst: VReg::Phys(dst),
+                        src: Value::Reg(VReg::Phys(src)),
+                    } if dst == &format!("ymm0_d{lane}") && src == &format!("ymm1_d{lane}")
+                )),
+                "lane {lane} was not transported exactly: {ops:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vmovdqu_ymm_memory_forms_transport_exactly_thirty_two_bytes() {
+        // c5 fe 6f 00 -> vmovdqu ymm0,[rax]
+        let loads = lift64_lanes(&[0xc5, 0xfe, 0x6f, 0x00]);
+        assert_eq!(loads.len(), 8, "got: {loads:#?}");
+        for (lane, instruction) in loads.iter().enumerate() {
+            match &instruction.op {
+                Op::Load {
+                    dst: VReg::Phys(dst),
+                    addr,
+                } => {
+                    assert_eq!(dst, &format!("ymm0_d{lane}"));
+                    assert_eq!(addr.size, 4);
+                    assert_eq!(addr.disp, (lane * 4) as i64);
+                }
+                other => panic!("expected lane load, got {other:?}"),
+            }
+        }
+
+        // c5 fe 7f 00 -> vmovdqu [rax],ymm0
+        let stores = lift64_lanes(&[0xc5, 0xfe, 0x7f, 0x00]);
+        assert_eq!(stores.len(), 8, "got: {stores:#?}");
+        for (lane, instruction) in stores.iter().enumerate() {
+            match &instruction.op {
+                Op::Store {
+                    addr,
+                    src: Value::Reg(VReg::Phys(src)),
+                } => {
+                    assert_eq!(src, &format!("ymm0_d{lane}"));
+                    assert_eq!(addr.size, 4);
+                    assert_eq!(addr.disp, (lane * 4) as i64);
+                }
+                other => panic!("expected lane store, got {other:?}"),
+            }
+        }
     }
 
     /// PIN — the remaining root cause, stated against the register-view model.

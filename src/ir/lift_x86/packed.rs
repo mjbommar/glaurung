@@ -31,6 +31,12 @@ pub(super) fn is_xmm_register(register: Register) -> bool {
         .is_some_and(|index| index.parse::<u8>().is_ok())
 }
 
+fn is_ymm_register(register: Register) -> bool {
+    reg_name(register)
+        .strip_prefix("ymm")
+        .is_some_and(|index| index.parse::<u8>().is_ok())
+}
+
 /// Define both scalar-LLIR views of a zeroed XMM register. Scalar floating
 /// moves consume the whole-register name while packed operations consume four
 /// dword lanes; a self-XOR proves all five values simultaneously.
@@ -87,6 +93,56 @@ pub(super) fn packed_dword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
         }
         _ => vec![Op::Unknown {
             mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }],
+    }
+}
+
+/// Lower the fixed-width 256-bit VMOVDQU forms as eight lossless dword lanes.
+///
+/// This deliberately accepts only YMM forms. A move does not interpret its
+/// bits, so lane decomposition is exact; accepting other AVX operations here
+/// would falsely imply that the scalar LLIR models their vector semantics.
+pub(super) fn vex_ymm_dword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2 {
+        return vec![Op::Unknown {
+            mnemonic: "vmovdqu".into(),
+        }];
+    }
+    match (instr.op_kind(0), instr.op_kind(1)) {
+        (OpKind::Register, OpKind::Memory) if is_ymm_register(instr.op_register(0)) => (0..8)
+            .map(|lane| {
+                let mut addr = mem_op_of(instr);
+                addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                addr.size = 4;
+                Op::Load {
+                    dst: packed_dword_lane(instr.op_register(0), lane),
+                    addr,
+                }
+            })
+            .collect(),
+        (OpKind::Memory, OpKind::Register) if is_ymm_register(instr.op_register(1)) => (0..8)
+            .map(|lane| {
+                let mut addr = mem_op_of(instr);
+                addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                addr.size = 4;
+                Op::Store {
+                    addr,
+                    src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+                }
+            })
+            .collect(),
+        (OpKind::Register, OpKind::Register)
+            if is_ymm_register(instr.op_register(0)) && is_ymm_register(instr.op_register(1)) =>
+        {
+            (0..8)
+                .map(|lane| Op::Assign {
+                    dst: packed_dword_lane(instr.op_register(0), lane),
+                    src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+                })
+                .collect()
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: "vmovdqu".into(),
         }],
     }
 }
@@ -240,6 +296,63 @@ pub(super) fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) 
             op,
             lhs: Value::Reg(dst),
             rhs: source,
+        });
+    }
+    ops
+}
+
+/// Lift a 128-bit three-operand VEX packed-dword operation.
+///
+/// VEX makes the old destination an explicit first source: `dst = lhs op rhs`.
+/// Keeping that distinction matters whenever `dst != lhs`; routing this
+/// through the two-operand SSE helper would silently read stale destination
+/// lanes instead.
+pub(super) fn vex_packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> {
+    if instr.op_count() != 3
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }];
+    }
+    let destination = instr.op_register(0);
+    let lhs = instr.op_register(1);
+    if op == BinOp::Xor && instr.op_kind(2) == OpKind::Register && instr.op_register(2) == lhs {
+        return xmm_zero_ops(destination);
+    }
+    let mut ops = Vec::new();
+    let rhs: Vec<Value> = match instr.op_kind(2) {
+        OpKind::Register if is_xmm_register(instr.op_register(2)) => (0..4)
+            .map(|lane| Value::Reg(packed_dword_lane(instr.op_register(2), lane)))
+            .collect(),
+        OpKind::Memory => (0..4)
+            .map(|lane| {
+                let temporary = VReg::Temp(96 + lane as u32);
+                let mut address = mem_op_of(instr);
+                address.disp = address.disp.saturating_add((lane * 4) as i64);
+                address.size = 4;
+                ops.push(Op::Load {
+                    dst: temporary.clone(),
+                    addr: address,
+                });
+                Value::Reg(temporary)
+            })
+            .collect(),
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+            }];
+        }
+    };
+    for (lane, rhs) in rhs.into_iter().enumerate() {
+        ops.push(Op::Bin {
+            dst: packed_dword_lane(destination, lane),
+            op,
+            lhs: Value::Reg(packed_dword_lane(lhs, lane)),
+            rhs,
         });
     }
     ops

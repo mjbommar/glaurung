@@ -278,17 +278,35 @@ pub(super) fn bit_scan_ops(instr: &iced_x86::Instruction, forward: bool) -> Vec<
     let Some(width) = phys_reg_width(&dst_name) else {
         return unsupported();
     };
-    if !matches!(width, Width::W32 | Width::W64) {
+    if !matches!(width, Width::W16 | Width::W32 | Width::W64) {
         return unsupported();
     }
+    let destination_view = if width == Width::W16 {
+        let Some(view) = partial_gp_view(&dst_name) else {
+            return unsupported();
+        };
+        Some(view)
+    } else {
+        None
+    };
 
     let mut ops = Vec::new();
     let source = match instr.op_kind(1) {
         OpKind::Register => {
-            if phys_reg_width(&reg_name(instr.op_register(1))) != Some(width) {
+            let source_name = reg_name(instr.op_register(1));
+            if phys_reg_width(&source_name) != Some(width) {
                 return unsupported();
             }
-            Value::Reg(VReg::phys(reg_name(instr.op_register(1))))
+            if width == Width::W16 {
+                let Some(view) = partial_gp_view(&source_name) else {
+                    return unsupported();
+                };
+                let snapshot = VReg::Temp(10);
+                ops.extend(read_view_ops(view, snapshot.clone()));
+                Value::Reg(snapshot)
+            } else {
+                Value::Reg(VReg::phys(source_name))
+            }
         }
         OpKind::Memory => {
             if Width::from_bytes(instr.memory_size().size() as u16) != width {
@@ -308,8 +326,14 @@ pub(super) fn bit_scan_ops(instr: &iced_x86::Instruction, forward: bool) -> Vec<
     // lives in a 64-bit parent whose high half this IR never clears, so both
     // the zero test and the leading-zero count have to name the encoded width.
     let operand = unsigned_cmp_value(source, width, VReg::Temp(1), &mut ops);
-    let bits = i64::from(width.bits());
-    let dst = VReg::phys(dst_name);
+    // Rust/C expose 16-bit CLZ through a 32-bit operand. Zero-extending the
+    // encoded word makes `31 - clz32(word)` exactly the 16-bit BSR index.
+    let scan_width = if width == Width::W16 {
+        Width::W32
+    } else {
+        width
+    };
+    let bits = i64::from(scan_width.bits());
 
     // ZF is the one flag x86 defines here, and it is defined for BOTH cases.
     ops.push(Op::Cmp {
@@ -344,7 +368,7 @@ pub(super) fn bit_scan_ops(instr: &iced_x86::Instruction, forward: bool) -> Vec<
     ops.push(Op::Intrinsic {
         name: format!("x86.clz.{bits}"),
         ins: vec![scanned],
-        outs: vec![(index.clone(), width)],
+        outs: vec![(index.clone(), scan_width)],
         reads_mem: false,
         writes_mem: false,
     });
@@ -370,10 +394,14 @@ pub(super) fn bit_scan_ops(instr: &iced_x86::Instruction, forward: bool) -> Vec<
     // ZF above still distinguishes the two cases exactly, which is what callers
     // actually branch on. The zero case yields `bits - 1 - clz(0)`, a defined and
     // deterministic value where the architecture permits any.
-    ops.push(Op::Assign {
-        dst,
-        src: Value::Reg(index),
-    });
+    if let Some(view) = destination_view {
+        ops.extend(partial_write_ops(view, Value::Reg(index)));
+    } else {
+        ops.push(Op::Assign {
+            dst: VReg::phys(dst_name),
+            src: Value::Reg(index),
+        });
+    }
     append_undef_flags(
         &mut ops,
         &[Flag::C, Flag::O, Flag::S, Flag::P, Flag::A],

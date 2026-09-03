@@ -130,6 +130,95 @@ pub(super) fn pop_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     ]
 }
 
+pub(super) fn push_flags_ops(bits: u32) -> Vec<Op> {
+    let sp = VReg::phys(if bits == 64 { "rsp" } else { "esp" });
+    let width = if bits == 64 { Width::W64 } else { Width::W32 };
+    let bytes = width.bytes() as u8;
+    let packed = VReg::Temp(12);
+    vec![
+        // The IR represents the status bits listed here but not the complete
+        // architectural flags word. Keep that full word unknown-valued while
+        // exposing every represented input to dataflow.
+        Op::Intrinsic {
+            name: "x86.pack_rflags".into(),
+            ins: [
+                Flag::C,
+                Flag::P,
+                Flag::A,
+                Flag::Z,
+                Flag::S,
+                Flag::D,
+                Flag::O,
+            ]
+            .into_iter()
+            .map(|flag| Value::Reg(VReg::Flag(flag)))
+            .collect(),
+            outs: vec![(packed.clone(), width)],
+            reads_mem: false,
+            writes_mem: false,
+        },
+        Op::Bin {
+            dst: sp.clone(),
+            op: BinOp::Sub,
+            lhs: Value::Reg(sp.clone()),
+            rhs: Value::Const(i64::from(bytes)),
+        },
+        Op::Store {
+            addr: MemOp {
+                base: Some(sp),
+                index: None,
+                scale: 0,
+                disp: 0,
+                size: bytes,
+                segment: None,
+                endian: Endian::Little,
+            },
+            src: Value::Reg(packed),
+        },
+    ]
+}
+
+pub(super) fn pop_flags_ops(bits: u32) -> Vec<Op> {
+    let sp = VReg::phys(if bits == 64 { "rsp" } else { "esp" });
+    let bytes = if bits == 64 { 8 } else { 4 };
+    let packed = VReg::Temp(12);
+    let mut ops = vec![Op::Load {
+        dst: packed.clone(),
+        addr: MemOp {
+            base: Some(sp.clone()),
+            index: None,
+            scale: 0,
+            disp: 0,
+            size: bytes,
+            segment: None,
+            endian: Endian::Little,
+        },
+    }];
+    for (flag, bit) in [
+        (Flag::C, 0),
+        (Flag::P, 2),
+        (Flag::A, 4),
+        (Flag::Z, 6),
+        (Flag::S, 7),
+        (Flag::D, 10),
+        (Flag::O, 11),
+    ] {
+        ops.push(Op::Extract {
+            dst: VReg::Flag(flag),
+            src: Value::Reg(packed.clone()),
+            hi: bit + 1,
+            lo: bit,
+        });
+    }
+    ops.push(Op::Bin {
+        dst: sp.clone(),
+        op: BinOp::Add,
+        lhs: Value::Reg(sp),
+        rhs: Value::Const(i64::from(bytes)),
+    });
+    ops
+}
+
 pub(super) fn stos_ops(instr: &iced_x86::Instruction, mnem: Mnemonic, bits: u32) -> Vec<Op> {
     let Some(width) = stos_width(mnem) else {
         return vec![Op::Unknown {
