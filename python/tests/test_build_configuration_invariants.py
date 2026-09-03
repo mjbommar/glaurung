@@ -526,27 +526,7 @@ def test_recovered_arity_matches_the_source_in_every_configuration(
 # --------------------------------------------------------------------------
 # 3. Interface invariance, types included.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "config",
-    _configs_xfail(
-        {"lto"},
-        "OPEN DEFECT (-flto): every recovered return type collapses to `void` "
-        "and every parameter type degrades to its register width (`int` -> "
-        "`long`, `const unsigned char *` -> `char *`) — five functions out of "
-        "five. Mechanism: GCC's LTO splits each `DW_TAG_subprogram` into an "
-        "ABSTRACT instance carrying the name, `DW_AT_type` and the formal "
-        "parameters, emitted in the source CU, and a CONCRETE instance carrying "
-        "`DW_AT_low_pc` and a `DW_AT_abstract_origin` back-reference, emitted in "
-        "the artificial LTRANS CU. The two live in different compilation units, "
-        "so the back-reference is a section-relative `DW_FORM_ref_addr`. "
-        "`src/debug/dwarf_signatures.rs::inherited` matches only "
-        "`AttributeValue::UnitRef` and returns `None` for anything else, so the "
-        "chain is never followed and the DIE at `low_pc` — which has no name and "
-        "no type of its own — is all the signature recovery ever sees. This is "
-        "not LTO-specific in principle: `DW_AT_abstract_origin` is the standard "
-        "encoding for out-of-line instances of an abstract instance root.",
-    ),
-)
+@pytest.mark.parametrize("config", CONFIG_NAMES)
 def test_the_recovered_interface_is_identical_in_every_configuration(
     built, recovered, config
 ) -> None:
