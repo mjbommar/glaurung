@@ -15,11 +15,14 @@
 //! # Adding a scheme
 //!
 //! Implement [`Scheme`] over your signature type and add a test that calls
-//! `crate::metrics::evaluate`. Three are implemented -- [`CtphScheme`],
-//! [`StructuralScheme`] and [`CfrScheme`] -- and the comment at the foot of
-//! this file says what the one still to come should write.
+//! `crate::metrics::evaluate`. Four are implemented -- [`CtphScheme`],
+//! [`StructuralScheme`], [`CfrScheme`] and `ValueScheme` (the last behind the
+//! `exec` feature, because it drives the interpreter) -- and the comment at
+//! the foot of this file says what the one still to come should write.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use glaurung::identity::structural::code_facts_from_function_bytes;
 
@@ -707,6 +710,283 @@ where
     Some(builder.build(1))
 }
 
+// ===========================================================================
+// SECTION: values (L3) -- owned by the identity/values lane
+// ===========================================================================
+
+/// L3, vSim-style value fingerprints (`glaurung::identity::values`): the
+/// multiset of numbers a function computes under bounded execution of the
+/// LLIR, compared by weighted Jaccard.
+///
+/// # What this scheme sees, and what it costs
+///
+/// Like [`CfrScheme`] it needs the whole image, and for more reasons: the
+/// lifter, the PLT map that names an external callee, whether an address is
+/// mapped (filter rules F1/F2), and the read-only bytes an initialised load
+/// should read. So it opens the image the sample came from and asks
+/// `glaurung::identity::values::fingerprints_for_path` for every function in
+/// it at once, then answers by entry address.
+///
+/// Unlike [`CfrScheme`] the cache is **unbounded**, deliberately. A cache miss
+/// here is not a lift, it is `seeds x max_steps` interpreted instructions for
+/// every function in the image; at four cached images a task that interleaves
+/// query and pool slices would re-run the interpreter over whole binaries. The
+/// fingerprints themselves are small (a sorted `(u64, u32)` list), so holding
+/// one image's worth per fixture is cheaper in every dimension.
+///
+/// # x86-64 only
+///
+/// `fingerprints_for_path` refuses anything else, so on Cisco Dataset-1 the
+/// ARM, MIPS and 32-bit x86 slices fail extraction with a [`SchemeError`]
+/// naming the architecture. That is counted and printed rather than scored,
+/// which is the whole reason `extract` is fallible.
+#[cfg(feature = "exec")]
+pub struct ValueScheme {
+    settings: glaurung::identity::values::ValueSettings,
+    name: String,
+    description: String,
+    /// vSim's Equation 2 is over element *sets*; the multiset form uses the
+    /// counts. Which one is right is a measurement, so it is a field.
+    use_counts: bool,
+    /// Document-frequency weights, present only after [`ValueScheme::prime`].
+    weights: std::cell::RefCell<Option<glaurung::identity::values::OccurrenceWeights>>,
+    weighted: bool,
+    cache: std::cell::RefCell<
+        std::collections::HashMap<
+            PathBuf,
+            Result<BTreeMap<u64, glaurung::identity::values::ValueFingerprint>, String>,
+        >,
+    >,
+}
+
+#[cfg(feature = "exec")]
+impl ValueScheme {
+    /// The default rule set, unweighted, vSim's set-form Jaccard. The floor.
+    pub fn plain() -> Self {
+        Self::with(
+            glaurung::identity::values::ValueSettings::default(),
+            "values",
+            false,
+            false,
+        )
+    }
+
+    /// The same fingerprints, weighted by corpus document frequency. Needs
+    /// [`ValueScheme::prime`] before it is scored; without it the weights stay
+    /// uniform.
+    pub fn weighted() -> Self {
+        Self::with(
+            glaurung::identity::values::ValueSettings::default(),
+            "values-weighted",
+            false,
+            true,
+        )
+    }
+
+    /// The ablation vSim's Table IV reports at 0.09 Recall@1: the address
+    /// filters off, everything else identical.
+    pub fn unfiltered() -> Self {
+        Self::with(
+            glaurung::identity::values::ValueSettings {
+                filter: false,
+                ..Default::default()
+            },
+            "values-unfiltered",
+            false,
+            false,
+        )
+    }
+
+    /// An arbitrary configuration, for the exploratory sweep.
+    pub fn tuned(
+        settings: glaurung::identity::values::ValueSettings,
+        name: &str,
+        use_counts: bool,
+    ) -> Self {
+        Self::with(settings, name, use_counts, false)
+    }
+
+    fn with(
+        settings: glaurung::identity::values::ValueSettings,
+        name: &str,
+        use_counts: bool,
+        weighted: bool,
+    ) -> Self {
+        let description = format!(
+            "L3 value fingerprints: bounded concrete execution over the LLIR, \
+             {} seeds x {} steps, site cap {}, filter {}, branch conditions {}, \
+             {} weighted Jaccard (glaurung::identity::values)",
+            settings.seed_count(),
+            settings.max_steps,
+            settings.site_cap_used(),
+            if settings.filter { "on" } else { "OFF" },
+            if settings.branch_conditions {
+                "on"
+            } else {
+                "off"
+            },
+            if use_counts { "multiset" } else { "set" },
+        );
+        ValueScheme {
+            settings,
+            name: name.to_string(),
+            description,
+            use_counts,
+            weights: std::cell::RefCell::new(None),
+            weighted,
+            cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Extract every sample once and build the document-frequency table.
+    ///
+    /// Explicit rather than lazy, and called by the driver before scoring,
+    /// because a table that filled up as `evaluate` walked the corpus would
+    /// make every score depend on the order the driver happened to visit
+    /// samples in. That is the class of hidden order dependence this harness
+    /// already had to remove once, from CFG discovery.
+    pub fn prime<'a>(&self, samples: impl Iterator<Item = &'a FunctionSample>) {
+        // A no-op for the unweighted configurations, and that is load-bearing:
+        // priming warms the image cache, so a scheme that did not need weights
+        // and was primed anyway would report an extraction cost of a Vec clone
+        // instead of the interpreter run it actually pays.
+        if !self.weighted {
+            return;
+        }
+        let fingerprints: Vec<glaurung::identity::values::ValueFingerprint> = samples
+            .filter_map(|sample| self.extract(sample).ok())
+            .collect();
+        *self.weights.borrow_mut() = Some(
+            glaurung::identity::values::OccurrenceWeights::from_fingerprints(fingerprints.iter()),
+        );
+    }
+
+    /// Extraction coverage over a set of samples, for the cost table.
+    ///
+    /// Returns `(functions measured, mean instructions retired per function,
+    /// fraction of runs that hit the instruction budget, fraction of functions
+    /// whose runs ALL hit it before producing a value, fraction of harvested
+    /// values the address rules removed)`. The middle two are different
+    /// questions: a long function that hits the budget after harvesting two
+    /// hundred values is a fingerprint, and one that hits it having harvested
+    /// nothing is a hole. The last one is what says whether the filter
+    /// ablation could have moved anything.
+    pub fn coverage<'a>(
+        &self,
+        samples: impl Iterator<Item = &'a FunctionSample>,
+    ) -> (usize, f64, f64, f64, f64) {
+        let budgets = crate::corpus::harness_budgets();
+        let mut measured = 0usize;
+        let mut steps = 0u64;
+        let mut runs = 0u64;
+        let mut budget_hits = 0u64;
+        let mut observed = 0u64;
+        let mut addresses = 0u64;
+        let mut starved = 0usize;
+        let mut by_va: BTreeMap<(PathBuf, u64), glaurung::identity::values::HarvestStats> =
+            BTreeMap::new();
+        let mut seen_images: std::collections::BTreeSet<PathBuf> =
+            std::collections::BTreeSet::new();
+        for sample in samples {
+            if seen_images.insert(sample.image_path.clone()) {
+                let Ok(rows) = glaurung::identity::values::fingerprints_for_path(
+                    &sample.image_path,
+                    self.settings,
+                    &budgets,
+                ) else {
+                    continue;
+                };
+                for row in rows {
+                    by_va.insert((sample.image_path.clone(), row.entry_va), row.stats);
+                }
+            }
+            if let Some(stats) = by_va.get(&(sample.image_path.clone(), sample.va)) {
+                measured += 1;
+                steps += stats.steps;
+                runs += u64::from(stats.seeds);
+                budget_hits += u64::from(stats.budget_exhausted);
+                observed += stats.filter.seen as u64;
+                addresses += stats.filter.addresses_removed() as u64;
+                if stats.budget_exhausted_before_any_value {
+                    starved += 1;
+                }
+            }
+        }
+        if measured == 0 {
+            return (0, 0.0, 0.0, 0.0, 0.0);
+        }
+        (
+            measured,
+            steps as f64 / measured as f64,
+            budget_hits as f64 / runs.max(1) as f64,
+            starved as f64 / measured as f64,
+            addresses as f64 / observed.max(1) as f64,
+        )
+    }
+}
+
+#[cfg(feature = "exec")]
+impl Scheme for ValueScheme {
+    type Sig = glaurung::identity::values::ValueFingerprint;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn extract(&self, sample: &FunctionSample) -> Result<Self::Sig, SchemeError> {
+        let mut cache = self.cache.borrow_mut();
+        if !cache.contains_key(&sample.image_path) {
+            let entry = glaurung::identity::values::fingerprints_for_path(
+                &sample.image_path,
+                self.settings,
+                &crate::corpus::harness_budgets(),
+            )
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| (row.entry_va, row.fingerprint))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .map_err(|error| format!("{}: {error}", sample.image_path.display()));
+            cache.insert(sample.image_path.clone(), entry);
+        }
+        match cache.get(&sample.image_path).expect("just inserted above") {
+            Err(reason) => Err(SchemeError::new(reason.clone())),
+            Ok(by_va) => match by_va.get(&sample.va) {
+                // An empty fingerprint compares as "no answer" to everything,
+                // which is indistinguishable from a function that genuinely
+                // computes nothing; say so instead.
+                Some(fingerprint) if !fingerprint.is_empty() => Ok(fingerprint.clone()),
+                Some(_) => Err(SchemeError::new(format!(
+                    "no values harvested at {:#x} in {}",
+                    sample.va,
+                    sample.image_path.display()
+                ))),
+                None => Err(SchemeError::new(format!(
+                    "discovery found no function at {:#x} in {}",
+                    sample.va,
+                    sample.image_path.display()
+                ))),
+            },
+        }
+    }
+
+    fn similarity(&self, a: &Self::Sig, b: &Self::Sig) -> f64 {
+        let table = self.weights.borrow();
+        let weights: Option<&dyn glaurung::identity::values::Weights> = table
+            .as_ref()
+            .map(|w| w as &dyn glaurung::identity::values::Weights);
+        if self.use_counts {
+            glaurung::identity::values::weighted_jaccard(a, b, weights)
+        } else {
+            glaurung::identity::values::weighted_jaccard_set(a, b, weights)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Slot for the scheme still to come.
 //
@@ -726,5 +1006,11 @@ where
 //
 // * `cfr` -- **landed**, above: one [`CfrScheme`] over two independent levers,
 //   which is four scored configurations (plain, normalised, weighted,
-//   normalised+weighted) rather than four impls.
+//   normalised+weighted) rather than four impls. The TF-IDF table it takes is
+//   a second pass over the slice before scoring, done in that impl
+//   (`cfr_train_weights`) rather than in the driver.
+//
+// * `values` -- **landed**, above: `ValueScheme`, which takes the same kind of
+//   second pass (`ValueScheme::prime`) and is the other worked example of
+//   where corpus weights belong.
 // ---------------------------------------------------------------------------
