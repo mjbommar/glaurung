@@ -75,10 +75,23 @@ STRUCTURAL_V1 = "glaurung-structural-v1"
 #: the right behaviour for both schemes.
 WARP_FUNCTION_GUID_V1 = "warp-function-guid-v1"
 
+#: The Canonical Function Representation (the L2 rung): a
+#: Weisfeiler-Lehman feature multiset over the SSA dataflow graph and the
+#: degree-labelled CFG, digested to hex. Unlike :data:`STRUCTURAL_V1` it
+#: is computed in Rust (``glaurung.analysis.cfr_signatures_path``) and it
+#: answers a different question -- not "did this function change between
+#: two builds" but "which library function is this, across compilers and
+#: optimisation levels".
+#:
+#: Stored under its own scheme rather than replacing anything: a function
+#: may carry several identities at once, and the primary key is
+#: ``(binary_id, entry_va, scheme)``.
+CFR_V1 = "glaurung-cfr-v1"
+
 #: Every scheme this build can compute. Storing another one is still
 #: allowed -- :func:`set_function_identity` takes any string -- but
 #: :func:`compute_identities` will not invent it.
-COMPUTABLE_SCHEMES = (STRUCTURAL_V1, WARP_FUNCTION_GUID_V1)
+COMPUTABLE_SCHEMES = (STRUCTURAL_V1, WARP_FUNCTION_GUID_V1, CFR_V1)
 
 #: Names that encode the address they were generated at. Porting one to
 #: a different build produces a name that is not merely useless but
@@ -178,6 +191,12 @@ def compute_identities(
     """
     if scheme == WARP_FUNCTION_GUID_V1:
         return compute_warp_identities(binary_path)
+    if scheme == CFR_V1:
+        # Default settings only. A caller who needs ``nosize`` calls
+        # :func:`compute_cfr_identities` directly: the flag is part of the
+        # signature's version triple, and a keyword here would apply to
+        # exactly one of the three schemes.
+        return compute_cfr_identities(binary_path)
     if scheme != STRUCTURAL_V1:
         raise ValueError(
             f"unknown identity scheme {scheme!r}; this build can compute "
@@ -338,6 +357,90 @@ def index_function_identities(
     """
     _ensure(kb._conn)
     identities = compute_identities(binary_path, scheme=scheme)
+    now = int(time.time())
+    cur = kb._conn.cursor()
+    cur.executemany(
+        "INSERT OR REPLACE INTO function_identity "
+        "(binary_id, entry_va, scheme, identity, n_blocks, set_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (kb.binary_id, r.entry_va, r.scheme, r.identity, r.n_blocks, now)
+            for r in identities.values()
+        ],
+    )
+    kb._conn.commit()
+    return len(identities)
+
+
+def compute_cfr_identities(
+    binary_path: str,
+    *,
+    nosize: bool = False,
+) -> Dict[int, FunctionIdentity]:
+    """Compute the :data:`CFR_V1` identity of every function in ``binary_path``.
+
+    Returns ``{entry_va: FunctionIdentity}`` with ``binary_id`` left at
+    ``0`` -- these are not yet bound to a KB row.
+
+    Args:
+        binary_path: The binary to sign.
+        nosize: Collapse every width class of four bytes and up, which is
+            the one switch that lets a 32-bit build match its 64-bit
+            sibling. It is part of the signature's version triple, so
+            identities computed with it are **not** comparable with
+            identities computed without it -- and because the scheme name
+            is the same either way, a KB that mixes the two is a KB whose
+            rows silently disagree. Pick one per project.
+
+    Returns:
+        A mapping from entry VA to its identity. Functions the lifter
+        could not process, and functions with no features, are absent
+        rather than present with an empty identity.
+    """
+    import glaurung as g
+
+    signatures = g.analysis.cfr_signatures_path(str(binary_path), nosize=nosize)
+    out: Dict[int, FunctionIdentity] = {}
+    for signature in signatures:
+        if not signature.digest:
+            continue
+        entry_va = int(signature.entry_va)
+        out[entry_va] = FunctionIdentity(
+            binary_id=0,
+            entry_va=entry_va,
+            scheme=CFR_V1,
+            identity=signature.digest,
+            n_blocks=int(signature.block_count),
+        )
+    return out
+
+
+def index_cfr_identities(
+    kb: PersistentKnowledgeBase,
+    binary_path: str,
+    *,
+    nosize: bool = False,
+) -> int:
+    """Compute and store a :data:`CFR_V1` identity for every function.
+
+    The CFR counterpart of :func:`index_function_identities`, written as a
+    separate entry point rather than as another ``scheme`` branch inside
+    it: the two are computed by different engines with different
+    arguments, and folding them together would put a ``nosize`` keyword on
+    a function that cannot use it.
+
+    Idempotent: re-running refreshes the rows in place.
+
+    Args:
+        kb: The knowledge base, open on ``binary_path``'s binary.
+        binary_path: The binary to sign.
+        nosize: See :func:`compute_cfr_identities`.
+
+    Returns:
+        The number of identities stored.
+    """
+    _ensure(kb._conn)
+    identities = compute_cfr_identities(binary_path, nosize=nosize)
     now = int(time.time())
     cur = kb._conn.cursor()
     cur.executemany(
