@@ -19,6 +19,8 @@ from glaurung._native import analysis as _mod
 
 CFR_SCHEME = _mod.CFR_SCHEME
 CfrSignature = _mod.CfrSignature
+FLIRT_MASKED_PATTERN_SCHEME = _mod.FLIRT_MASKED_PATTERN_SCHEME
+IDENTITY_GATE_KIND = _mod.IDENTITY_GATE_KIND
 STRUCTURAL_SCHEME = _mod.STRUCTURAL_SCHEME
 StructuralSignature = _mod.StructuralSignature
 WarpConstraint = _mod.WarpConstraint
@@ -38,8 +40,12 @@ elf_got_map_path = _mod.elf_got_map_path
 elf_plt_map_path = _mod.elf_plt_map_path
 find_code_pointers_bytes = _mod.find_code_pointers_bytes
 find_code_pointers_path = _mod.find_code_pointers_path
+flirt_match_functions_with_evidence_path = _mod.flirt_match_functions_with_evidence_path
 flirt_signatures_from_archive_path = _mod.flirt_signatures_from_archive_path
 gopclntab_names_path = _mod.gopclntab_names_path
+identity_gate_build = _mod.identity_gate_build
+identity_gate_contains = _mod.identity_gate_contains
+identity_gate_n_keys = _mod.identity_gate_n_keys
 index_java_archive_bytes = _mod.index_java_archive_bytes
 index_java_archive_path = _mod.index_java_archive_path
 ioctl_surface_map_bytes = _mod.ioctl_surface_map_bytes

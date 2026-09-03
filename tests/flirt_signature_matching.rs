@@ -1142,6 +1142,73 @@ fn one_archive_linked_two_ways_is_named_in_both() {
     );
 }
 
+/// The evidence a match carries -- which escalation level resolved it -- is
+/// item 7's requirement for an auditable `function_match` row. It must be a
+/// property of the signature and the bytes compared against it, not of which
+/// link produced those bytes: the same archive, the same masked pattern, must
+/// report the same level in link A and in link B.
+#[test]
+fn evidence_agrees_across_both_link_layouts() {
+    let lib_path = repo_root().join("data/sigs/glaurung-base.x86_64.flirt.json");
+    let text = std::fs::read_to_string(&lib_path).expect("shipped library must be readable");
+    let lib = FlirtLibrary::from_json(&text).expect("shipped library must parse");
+    let window = lib.match_window();
+
+    let a = mathlib_functions(&relink_fixture("mathlib_link_a.x86_64.elf"), window);
+    let b = mathlib_functions(&relink_fixture("mathlib_link_b.x86_64.elf"), window);
+    let signed: BTreeSet<String> = lib.signatures().iter().map(|s| s.name.clone()).collect();
+
+    let mut compared = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+    let mut evidence_seen: BTreeSet<&'static str> = BTreeSet::new();
+    for (name, (_va_a, bytes_a)) in &a {
+        let Some((_va_b, bytes_b)) = b.get(name) else {
+            continue;
+        };
+        if !signed.contains(name) {
+            continue;
+        }
+        let (verdict_a, evidence_a) = lib.match_at_with_evidence(bytes_a, None);
+        let (verdict_b, evidence_b) = lib.match_at_with_evidence(bytes_b, None);
+        assert_eq!(
+            verdict_a.unique(),
+            Some(name.as_str()),
+            "link A must still name {name} under the evidence-carrying entry point"
+        );
+        assert_eq!(
+            verdict_b.unique(),
+            Some(name.as_str()),
+            "link B must still name {name} under the evidence-carrying entry point"
+        );
+        compared += 1;
+        if let Some(level) = evidence_a {
+            evidence_seen.insert(level);
+        }
+        if evidence_a != evidence_b {
+            mismatches.push(format!(
+                "  {name}: link A evidence={evidence_a:?}, link B evidence={evidence_b:?}"
+            ));
+        }
+    }
+
+    assert!(
+        compared >= 15,
+        "only {compared} functions were compared; the fixtures or the library shrank"
+    );
+    assert!(
+        mismatches.is_empty(),
+        "{} function(s) got different evidence in the two link layouts, which \
+         means the evidence depends on link-specific bytes rather than on the \
+         signature match itself:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+    eprintln!(
+        "evidence: {compared} functions compared across both link layouts, \
+         levels observed = {evidence_seen:?}"
+    );
+}
+
 /// The same measurement with the masks stripped, which is what v1 was.
 ///
 /// Without this the test above proves only that *something* works. With it,

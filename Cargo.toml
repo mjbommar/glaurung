@@ -38,6 +38,15 @@ goblin = { version = "0.10.1", optional = true, default-features = true }
 pelite = { version = "0.10", optional = true }
 iced-x86 = "1.20"
 capstone = "0.12"
+# BinaryFuse8 membership gate over known function identities (item 7 of
+# docs/history/program-measures-2026-09-02.md). Default features are
+# NON-DETERMINISTIC: `uniform-random` fills unused filter slots with entropy
+# from `rand`'s thread RNG, so two builds over identical keys produce
+# different bytes (measured in the survey, docs/history/
+# program-measures-2026-09-02/03-signature-schemas-and-indexes.md). Disabling
+# defaults and taking only `binary-fuse` + `serde` removes that RNG dependency
+# entirely and is byte-identical at unchanged FPR.
+xorf = { version = "0.13.0", default-features = false, features = ["binary-fuse", "serde"] }
 
 # Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
 z3 = { version = "0.12", optional = true }
