@@ -34,6 +34,38 @@ pub fn recognise_arm64_prologue(f: &mut Function) {
 }
 
 fn collapse_prologue(body: &mut Vec<Stmt>) {
+    // Stack-object recovery can fold the pre-indexed STP and its writeback
+    // before this pass runs.  The same frame record then has this stronger,
+    // address-explicit spelling:
+    //
+    //   *(u64 *)&frame[0] = fp;
+    //   *(u64 *)&frame[8] = lr;
+    //   fp = &frame[0];
+    //
+    // Both architectural saves plus the frame-pointer anchor distinguish the
+    // record from a source object.  Recognise it before the older scalar-slot
+    // spelling below; otherwise the record becomes an artificial byte array in
+    // emitted C.
+    if let [fp_save, lr_save, fp_set, ..] = body.as_slice() {
+        let fp_object = frame_record_store(fp_save, "fp", 0);
+        let lr_object = frame_record_store(lr_save, "lr", 8);
+        let set_object = match fp_set {
+            Stmt::Assign {
+                dst: VReg::Phys(fp),
+                src,
+            } if fp == "fp" || fp == "x29" => stack_object_at(src, 0),
+            _ => None,
+        };
+        if fp_object.is_some() && fp_object == lr_object && fp_object == set_object {
+            body.drain(0..3);
+            body.insert(
+                0,
+                Stmt::Comment("aarch64 prologue: save fp/lr in promoted frame record".into()),
+            );
+            return;
+        }
+    }
+
     // Look for up to the first ~6 statements matching the prologue shape.
     let mut end = 0usize;
     let mut saw_fp_save = false;
@@ -52,6 +84,12 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
                     saw_fp_save = true;
                 } else if reg == "lr" || reg == "x30" {
                     saw_lr_save = true;
+                } else {
+                    // The first source-level spills usually follow the frame
+                    // record at -O0 (notably argc/argv). They are not part of
+                    // the prologue merely because stack promotion gave them
+                    // the same `stack_*` namespace.
+                    break;
                 }
                 end = i + 1;
             }
@@ -156,15 +194,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         }
         // 2. Walk back over a contiguous run of stack-restore assigns.
         let mut run_start = ret_idx;
-        while run_start > 0
-            && matches!(
-                &body[run_start - 1],
-                Stmt::Assign {
-                    dst: VReg::Phys(_),
-                    src: Expr::Reg(VReg::Phys(s)),
-                } if s.starts_with("stack_")
-            )
-        {
+        while run_start > 0 && is_stack_restore(&body[run_start - 1]) {
             run_start -= 1;
         }
         let run = &body[run_start..ret_idx];
@@ -190,6 +220,55 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             );
         }
     }
+}
+
+fn stack_object_at(expr: &Expr, expected_offset: i64) -> Option<&VReg> {
+    match (expr, expected_offset) {
+        (Expr::StackAddr { object, .. }, 0) => Some(object),
+        (
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            },
+            offset,
+        ) if matches!(rhs.as_ref(), Expr::Const(value) if *value == offset) => {
+            stack_object_at(lhs, 0)
+        }
+        _ => None,
+    }
+}
+
+fn frame_record_store<'a>(statement: &'a Stmt, register: &str, offset: i64) -> Option<&'a VReg> {
+    match statement {
+        Stmt::Store {
+            addr,
+            src: Expr::Reg(VReg::Phys(source)),
+            size: 8,
+        } if source == register
+            || (register == "fp" && source == "x29")
+            || (register == "lr" && source == "x30") =>
+        {
+            stack_object_at(addr, offset)
+        }
+        _ => None,
+    }
+}
+
+fn is_stack_restore(statement: &Stmt) -> bool {
+    matches!(
+        statement,
+        Stmt::Assign {
+            dst: VReg::Phys(_),
+            src: Expr::Reg(VReg::Phys(source)),
+        } if source.starts_with("stack_")
+    ) || matches!(
+        statement,
+        Stmt::Assign {
+            dst: VReg::Phys(_),
+            src: Expr::Deref { addr, size: 8 },
+        } if stack_object_at(addr, 0).is_some() || stack_object_at(addr, 8).is_some()
+    )
 }
 
 fn is_sp(v: &VReg) -> bool {
@@ -260,6 +339,34 @@ mod tests {
         // The stmts after the prologue must be preserved.
         assert!(matches!(&f.body[1], Stmt::Nop));
         assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn prologue_does_not_consume_following_argument_spills() {
+        let argument_spill = Stmt::Store {
+            addr: Expr::Reg(reg("stack_2")),
+            src: Expr::Reg(reg("arg0")),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                store("stack_0", "fp"),
+                store("stack_1", "lr"),
+                sp_sub(48),
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Reg(reg("sp")),
+                },
+                argument_spill.clone(),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_arm64_prologue(&mut f);
+
+        assert!(f.body.contains(&argument_spill), "{:#?}", f.body);
     }
 
     #[test]
@@ -411,5 +518,71 @@ mod tests {
         assert_eq!(f.body.len(), 2);
         assert!(matches!(&f.body[0], Stmt::Nop));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn promoted_frame_record_collapses_before_it_becomes_a_c_array() {
+        let frame = reg("stack_0");
+        let address = |offset| {
+            if offset == 0 {
+                Expr::StackAddr {
+                    object: frame.clone(),
+                    size: 16,
+                }
+            } else {
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::StackAddr {
+                        object: frame.clone(),
+                        size: 16,
+                    }),
+                    rhs: Box::new(Expr::Const(offset)),
+                }
+            }
+        };
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: address(0),
+                    src: Expr::Reg(reg("fp")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: address(8),
+                    src: Expr::Reg(reg("lr")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: address(0),
+                },
+                Stmt::Nop,
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Deref {
+                        addr: Box::new(address(0)),
+                        size: 8,
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("lr"),
+                    src: Expr::Deref {
+                        addr: Box::new(address(8)),
+                        size: 8,
+                    },
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_arm64_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 4, "{:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("prologue")));
+        assert!(matches!(&f.body[1], Stmt::Nop));
+        assert!(matches!(&f.body[2], Stmt::Comment(text) if text.contains("epilogue")));
+        assert!(matches!(&f.body[3], Stmt::Return { .. }));
     }
 }

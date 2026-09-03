@@ -11,7 +11,13 @@ use crate::ir::types::{BinOp, VReg};
 #[derive(Debug)]
 struct SavedRegister {
     name: String,
-    slot: VReg,
+    slot: StackLocation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StackLocation {
+    object: VReg,
+    offset: i64,
 }
 
 #[derive(Debug)]
@@ -85,7 +91,7 @@ pub fn recognise_arm32_frame(f: &mut Function) {
 
 fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
     let mut start = 0;
-    while matches!(body.get(start), Some(Stmt::Nop)) {
+    while matches!(body.get(start), Some(Stmt::Nop | Stmt::Label(_))) {
         start += 1;
     }
 
@@ -106,6 +112,36 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
                 break;
             }
         }
+        // A32 `push {fp, lr}; add fp, sp, #4` can reach stack promotion with
+        // the incoming fp already rewritten as the address of its own save
+        // slot. Recover that first word only when the next word is a proven LR
+        // save and the immediately following setup uses the same address.
+        if registers.is_empty() {
+            if let Some((fp_slot, saved_fp_address)) =
+                body.get(group_cursor).and_then(aliased_frame_pointer_store)
+            {
+                if let Some((lr_slot, lr_name, lr_size)) =
+                    body.get(group_cursor + 1).and_then(saved_register_store)
+                {
+                    let setup_matches = body
+                        .get(group_cursor + 2)
+                        .and_then(frame_pointer_setup)
+                        .is_some_and(|location| location == saved_fp_address);
+                    if lr_name == "lr" && lr_size == 4 && width == 8 && setup_matches {
+                        registers.push(SavedRegister {
+                            name: "fp".to_string(),
+                            slot: fp_slot,
+                        });
+                        registers.push(SavedRegister {
+                            name: lr_name,
+                            slot: lr_slot,
+                        });
+                        stored_width = 8;
+                        group_cursor += 2;
+                    }
+                }
+            }
+        }
         if registers.is_empty() || stored_width != width {
             break;
         }
@@ -122,11 +158,42 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
         return None;
     }
 
+    // A32 establishes fp immediately after the push, whereas Thumb commonly
+    // allocates locals first and then establishes r7. Accept both exact
+    // orderings.
+    if body.get(cursor).is_some_and(|statement| {
+        frame_pointer_setup(statement).is_some_and(|location| {
+            save_groups
+                .iter()
+                .flat_map(|group| group.registers.iter())
+                .any(|saved| saved.slot.object == location.object)
+        })
+    }) {
+        cursor += 1;
+    }
+
     let local_width = body
         .get(cursor)
         .and_then(|statement| sp_adjust(statement, BinOp::Sub))
         .unwrap_or(0);
     if local_width > 0 {
+        cursor += 1;
+    }
+
+    // Stack promotion represents Thumb's `add r7, sp, #0` as the address of
+    // the promoted frame-record object. It is part of the machine frame, not
+    // a source assignment. Require that address to name storage already
+    // proven by the save group so an arbitrary source pointer assignment is
+    // never consumed.
+    if body.get(cursor).is_some_and(|statement| {
+        frame_pointer_setup(statement).is_some_and(|location| {
+            local_width > 0
+                || save_groups
+                    .iter()
+                    .flat_map(|group| group.registers.iter())
+                    .any(|saved| saved.slot.object == location.object)
+        })
+    }) {
         cursor += 1;
     }
 
@@ -138,21 +205,26 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
     })
 }
 
-fn saved_register_store(statement: &Stmt) -> Option<(VReg, String, u8)> {
+fn saved_register_store(statement: &Stmt) -> Option<(StackLocation, String, u8)> {
     let Stmt::Store {
-        addr: Expr::Reg(slot),
+        addr,
         src: Expr::Reg(register),
         size,
     } = statement
     else {
         return None;
     };
-    if !is_promoted_stack_slot(slot) {
-        return None;
-    }
+    let slot = stack_location(addr)?;
     let name = canonical_saved_register(register)?;
     let expected_size = if name.starts_with('d') { 8 } else { 4 };
-    (*size == expected_size).then(|| (slot.clone(), name, *size))
+    (*size == expected_size).then(|| (slot, name, *size))
+}
+
+fn aliased_frame_pointer_store(statement: &Stmt) -> Option<(StackLocation, StackLocation)> {
+    let Stmt::Store { addr, src, size: 4 } = statement else {
+        return None;
+    };
+    Some((stack_location(addr)?, stack_location(src)?))
 }
 
 fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize> {
@@ -205,36 +277,32 @@ fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize>
 }
 
 fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Option<usize> {
-    let mut suffix_width = frame.local_width;
-    for group in &frame.save_groups {
-        suffix_width += group.width;
-    }
-
-    // The exact suffix contains only stack increments and restored saved
-    // registers. Locate its start using the proven total width, then validate
-    // the precise group order below.
+    // Locate the contiguous machine-only suffix, then validate its exact order
+    // below. Large GCC frames restore SP from the frame pointer rather than by
+    // adding the allocation width, so a numeric-width sum is not sufficient.
     let mut start = return_index;
-    let mut observed_width = 0i64;
     while start > 0 {
         match &body[start - 1] {
-            statement if sp_adjust(statement, BinOp::Add).is_some() => {
-                observed_width += sp_adjust(statement, BinOp::Add)?;
-                start -= 1;
-            }
+            statement if sp_adjust(statement, BinOp::Add).is_some() => start -= 1,
             statement if restored_register(statement).is_some() => start -= 1,
+            statement if frame_deallocation_piece(statement, frame) => start -= 1,
             _ => break,
         }
     }
-    if observed_width != suffix_width {
-        return None;
-    }
 
     let mut cursor = start;
+    let a32_restores_sp_from_fp = body.get(cursor).is_some_and(|statement| {
+        matches!(
+            statement,
+            Stmt::Assign {
+                dst,
+                src: Expr::Reg(source),
+            } if is_sp(dst)
+                && canonical_saved_register(source).as_deref() == Some("fp")
+        )
+    });
     if frame.local_width > 0 {
-        if sp_adjust(body.get(cursor)?, BinOp::Add)? != frame.local_width {
-            return None;
-        }
-        cursor += 1;
+        cursor = match_frame_deallocation(body, cursor, frame)?;
     }
 
     for group in frame.save_groups.iter().rev() {
@@ -252,7 +320,12 @@ fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Opt
                 continue;
             }
             let (name, slot) = body.get(cursor).and_then(restored_register)?;
-            if name != saved.name || slot != saved.slot {
+            let promoted_stack_top_alias = a32_restores_sp_from_fp
+                && saved.name == "fp"
+                && first_saved_slot(frame) == Some(&saved.slot)
+                && slot.offset == 0
+                && matches!(&slot.object, VReg::Phys(name) if base_name(name) == "stack_top");
+            if name != saved.name || (slot != saved.slot && !promoted_stack_top_alias) {
                 return None;
             }
             cursor += 1;
@@ -266,18 +339,136 @@ fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Opt
     (cursor == return_index).then_some(start)
 }
 
-fn restored_register(statement: &Stmt) -> Option<(String, VReg)> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Reg(slot),
-    } = statement
-    else {
+fn first_saved_slot(frame: &Arm32Frame) -> Option<&StackLocation> {
+    frame
+        .save_groups
+        .first()
+        .and_then(|group| group.registers.first())
+        .map(|saved| &saved.slot)
+}
+
+fn frame_deallocation_piece(statement: &Stmt, frame: &Arm32Frame) -> bool {
+    match statement {
+        Stmt::Assign { dst, src } if is_sp(dst) => {
+            matches!(src, Expr::Reg(register) if matches!(canonical_saved_register(register).as_deref(), Some("r7" | "fp")))
+                || matches!(
+                    src,
+                    Expr::Bin { op: BinOp::Sub, lhs, rhs }
+                        if matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register).as_deref() == Some("fp"))
+                            && matches!(rhs.as_ref(), Expr::Const(4))
+                )
+        }
+        Stmt::Assign { dst, src } => {
+            canonical_saved_register(dst).as_deref() == Some("r7")
+                && stack_location(src).as_ref() == first_saved_slot(frame)
+        }
+        _ => false,
+    }
+}
+
+fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) -> Option<usize> {
+    if sp_adjust(body.get(cursor)?, BinOp::Add) == Some(frame.local_width) {
+        return Some(cursor + 1);
+    }
+
+    // Clang A32 commonly establishes `fp = sp` after the save and tears local
+    // storage down with the exact inverse `sp = fp`.
+    if matches!(
+        body.get(cursor),
+        Some(Stmt::Assign {
+            dst,
+            src: Expr::Reg(source),
+        }) if is_sp(dst)
+            && canonical_saved_register(source).as_deref() == Some("fp")
+    ) {
+        return Some(cursor + 1);
+    }
+
+    // Thumb: `add r7, sp, #0` established the bottom of the local allocation;
+    // GCC tears it down as `mov sp, r7`, which promotion spells by first
+    // rematerialising the saved-frame object address into r7.
+    if let (
+        Some(Stmt::Assign { dst: anchor, src }),
+        Some(Stmt::Assign {
+            dst,
+            src: Expr::Reg(source),
+        }),
+    ) = (body.get(cursor), body.get(cursor + 1))
+    {
+        if canonical_saved_register(anchor).as_deref() == Some("r7")
+            && stack_location(src).as_ref() == first_saved_slot(frame)
+            && is_sp(dst)
+            && source == anchor
+        {
+            return Some(cursor + 2);
+        }
+    }
+
+    // A32: `add fp, sp, #4` makes the first pushed word live at `fp - 4`.
+    if matches!(
+        body.get(cursor),
+        Some(Stmt::Assign {
+            dst,
+            src: Expr::Bin { op: BinOp::Sub, lhs, rhs },
+        }) if is_sp(dst)
+            && matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register).as_deref() == Some("fp"))
+            && matches!(rhs.as_ref(), Expr::Const(4))
+    ) {
+        return Some(cursor + 1);
+    }
+
+    None
+}
+
+fn restored_register(statement: &Stmt) -> Option<(String, StackLocation)> {
+    let Stmt::Assign { dst, src } = statement else {
         return None;
     };
-    if !is_promoted_stack_slot(slot) {
-        return None;
+    let slot = match src {
+        Expr::Reg(slot) if is_promoted_stack_slot(slot) => StackLocation {
+            object: slot.clone(),
+            offset: 0,
+        },
+        Expr::Deref { addr, size } if *size == 4 || *size == 8 => stack_location(addr)?,
+        _ => return None,
+    };
+    canonical_saved_register(dst).map(|name| (name, slot))
+}
+
+fn stack_location(expression: &Expr) -> Option<StackLocation> {
+    match expression {
+        Expr::Reg(slot) if is_promoted_stack_slot(slot) => Some(StackLocation {
+            object: slot.clone(),
+            offset: 0,
+        }),
+        Expr::StackAddr { object, .. } => Some(StackLocation {
+            object: object.clone(),
+            offset: 0,
+        }),
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => match rhs.as_ref() {
+            Expr::Const(offset) => {
+                let mut location = stack_location(lhs)?;
+                location.offset = location.offset.checked_add(*offset)?;
+                Some(location)
+            }
+            _ => None,
+        },
+        _ => None,
     }
-    canonical_saved_register(dst).map(|name| (name, slot.clone()))
+}
+
+fn frame_pointer_setup(statement: &Stmt) -> Option<StackLocation> {
+    let Stmt::Assign { dst, src } = statement else {
+        return None;
+    };
+    let name = canonical_saved_register(dst)?;
+    ((name == "r7" || name == "fp") && stack_location(src).is_some())
+        .then(|| stack_location(src))
+        .flatten()
 }
 
 fn sp_adjust(statement: &Stmt, expected_op: BinOp) -> Option<i64> {
@@ -307,6 +498,9 @@ fn canonical_saved_register(register: &VReg) -> Option<String> {
     let name = base_name(name);
     if name == "lr" || name == "r14" {
         return Some("lr".to_string());
+    }
+    if name == "fp" || name == "r11" {
+        return Some("fp".to_string());
     }
     let core = name
         .strip_prefix('r')
@@ -475,6 +669,22 @@ mod tests {
         }
     }
 
+    fn object_addr(object: &str, offset: i64) -> Expr {
+        let base = Expr::StackAddr {
+            object: reg(object),
+            size: 8,
+        };
+        if offset == 0 {
+            base
+        } else {
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(base),
+                rhs: Box::new(Expr::Const(offset)),
+            }
+        }
+    }
+
     fn function(body: Vec<Stmt>) -> Function {
         Function {
             name: "fixture".into(),
@@ -637,6 +847,111 @@ mod tests {
 
         assert!(!f.body.iter().any(mentions_sp), "{:#?}", f.body);
         assert!(matches!(f.body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn promoted_thumb_frame_record_object_collapses_as_one_machine_save() {
+        let mut f = function(vec![
+            sp_sub(8),
+            Stmt::Store {
+                addr: object_addr("local_8", 0),
+                src: Expr::Reg(reg("r7")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: object_addr("local_8", 4),
+                src: Expr::Reg(reg("lr")),
+                size: 4,
+            },
+            Stmt::Assign {
+                dst: reg("r7#1"),
+                src: object_addr("local_8", 0),
+            },
+            Stmt::Nop,
+            Stmt::Assign {
+                dst: reg("r7#2"),
+                src: Expr::Deref {
+                    addr: Box::new(object_addr("local_8", 0)),
+                    size: 4,
+                },
+            },
+            sp_add(8),
+            Stmt::Return { value: None },
+        ]);
+
+        recognise_arm32_frame(&mut f);
+
+        assert!(matches!(
+            f.body.first(),
+            Some(Stmt::Comment(text))
+                if text == "arm32 prologue: save r7/lr, frame 8 bytes"
+        ));
+        assert!(matches!(f.body.get(1), Some(Stmt::Nop)));
+        assert!(matches!(
+            f.body.get(2),
+            Some(Stmt::Comment(text)) if text == "arm32 epilogue: restore machine frame"
+        ));
+        assert!(matches!(f.body.last(), Some(Stmt::Return { value: None })));
+        assert!(
+            !format!("{:#?}", f.body).contains("local_8"),
+            "promoted frame record leaked after collapse: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn clang_a32_fp_frame_record_collapses_as_machine_bookkeeping() {
+        let mut f = function(vec![
+            sp_sub(8),
+            Stmt::Store {
+                addr: object_addr("local_8", 0),
+                src: Expr::Reg(reg("r11")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: object_addr("local_8", 4),
+                src: Expr::Reg(reg("lr")),
+                size: 4,
+            },
+            Stmt::Assign {
+                dst: reg("fp"),
+                src: object_addr("local_8", 0),
+            },
+            sp_sub(8),
+            Stmt::Nop,
+            Stmt::Assign {
+                dst: reg("sp"),
+                src: Expr::Reg(reg("r11#1")),
+            },
+            Stmt::Assign {
+                dst: reg("fp"),
+                src: Expr::Reg(reg("stack_top")),
+            },
+            sp_add(8),
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ]);
+
+        recognise_arm32_frame(&mut f);
+
+        assert!(matches!(
+            f.body.first(),
+            Some(Stmt::Comment(text))
+                if text == "arm32 prologue: save fp/lr, frame 16 bytes"
+        ));
+        assert!(matches!(f.body.get(1), Some(Stmt::Nop)));
+        assert!(matches!(
+            f.body.get(2),
+            Some(Stmt::Comment(text)) if text == "arm32 epilogue: restore machine frame"
+        ));
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Return {
+                value: Some(Expr::Const(0))
+            })
+        ));
+        assert!(!format!("{:#?}", f.body).contains("local_8"));
     }
 
     #[test]
