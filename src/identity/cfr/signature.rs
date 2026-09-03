@@ -33,19 +33,35 @@ pub struct CfrSettings {
     /// present from day one because retrofitting a setting to a populated
     /// corpus means recomputing the corpus.
     pub nosize: bool,
+
+    /// Run [`super::normalize`], the unsound local peephole normaliser, over a
+    /// copy of the lifted function before the graph is built.
+    ///
+    /// **Off by default, and it must stay off by default.** The normaliser is
+    /// a deliberately unsound canonicaliser for similarity; its output is a
+    /// different quotient, which is why it is a settings bit rather than an
+    /// unconditional stage. Two signatures whose `normalize` differs are not
+    /// comparable, exactly as for `nosize`.
+    pub normalize: bool,
 }
 
 impl CfrSettings {
     /// Bit position of [`CfrSettings::nosize`] in the packed settings word.
     pub const NOSIZE_BIT: u32 = 1 << 0;
 
+    /// Bit position of [`CfrSettings::normalize`] in the packed settings word.
+    pub const NORMALIZE_BIT: u32 = 1 << 1;
+
     /// The packed settings word stored in the version triple.
     pub fn bits(self) -> u32 {
+        let mut bits = 0;
         if self.nosize {
-            Self::NOSIZE_BIT
-        } else {
-            0
+            bits |= Self::NOSIZE_BIT;
         }
+        if self.normalize {
+            bits |= Self::NORMALIZE_BIT;
+        }
+        bits
     }
 
     /// Recover settings from a packed word. Unknown bits are ignored, which is
@@ -54,6 +70,7 @@ impl CfrSettings {
     pub fn from_bits(bits: u32) -> Self {
         CfrSettings {
             nosize: bits & Self::NOSIZE_BIT != 0,
+            normalize: bits & Self::NORMALIZE_BIT != 0,
         }
     }
 }
@@ -193,7 +210,10 @@ mod tests {
         let plain =
             CfrSignature::from_features(CfrVersion::current(CfrSettings::default()), &[1, 2, 3]);
         let nosize = CfrSignature::from_features(
-            CfrVersion::current(CfrSettings { nosize: true }),
+            CfrVersion::current(CfrSettings {
+                nosize: true,
+                ..CfrSettings::default()
+            }),
             &[1, 2, 3],
         );
         assert_eq!(plain.features, nosize.features);
@@ -203,7 +223,10 @@ mod tests {
     #[test]
     fn versions_across_a_settings_change_are_not_comparable() {
         let plain = CfrVersion::current(CfrSettings::default());
-        let nosize = CfrVersion::current(CfrSettings { nosize: true });
+        let nosize = CfrVersion::current(CfrSettings {
+            nosize: true,
+            ..CfrSettings::default()
+        });
         assert!(plain.is_comparable_with(plain));
         assert!(!plain.is_comparable_with(nosize));
     }

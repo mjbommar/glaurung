@@ -9,8 +9,14 @@
 //!    effects, so a call participates in def/use like any other instruction.
 //!    Without it a call defines nothing and every post-call read reaches a
 //!    stale value.
-//! 3. [`crate::ir::ssa::compute_ssa_for_target`] -- SSA identities.
-//! 4. CFR-G, CFR-C, the feature multiset.
+//! 3. [`super::normalize`] -- **only when [`CfrSettings::normalize`] is set**,
+//!    which it is not by default. An unsound local peephole normaliser over a
+//!    *copy* of the function. With the flag off this step does not exist and
+//!    every signature byte is what it was before the normaliser was written,
+//!    which `super::normalize::tests` pins against digests measured on the
+//!    commit before it.
+//! 4. [`crate::ir::ssa::compute_ssa_for_target`] -- SSA identities.
+//! 5. CFR-G, CFR-C, the feature multiset.
 //!
 //! It stops there on purpose. Structuring (`structure_v2`) introduces
 //! `BinOp::LogicalAnd` and `BinOp::LogicalOr`, which are source-level
@@ -123,6 +129,14 @@ pub fn signature_for_function(
         return None;
     }
     crate::ir::abi::annotate_calls(&mut llir, cc);
+    // The peephole normaliser is opt-in and runs on a COPY. Its output feeds
+    // the signature and nothing else; the decompiler never sees it. See
+    // `super::normalize`.
+    let llir = if settings.normalize {
+        super::normalize::normalize_function(&llir)
+    } else {
+        llir
+    };
     let ssa = compute_ssa_for_target(&llir, *image.target());
     let is_mapped = |address: u64| image.memory_kind_at(address).is_some();
     let context = GraphContext {

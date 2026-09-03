@@ -513,6 +513,16 @@ impl From<crate::identity::cfr::FunctionCfr> for CfrSignature {
 /// version triple, so signatures computed with it are not comparable with
 /// signatures computed without it.
 ///
+/// `normalize` runs the unsound local peephole normaliser
+/// (`src/identity/cfr/normalize/`) over a **copy** of each lifted function
+/// before hashing: opcode collapse, constant folding and copy propagation,
+/// local CSE, dead-store and redundant-write elimination, comparison-polarity
+/// canonicalisation and strength-reduction canonical forms. It closes part of
+/// the cross-optimisation gap and is off by default. Like `nosize` it is a bit
+/// in the version triple, so a normalised signature answers `0.0` against an
+/// unnormalised one rather than a low score. Nothing it computes reaches the
+/// decompiler.
+///
 /// The remaining arguments are the ordinary function-discovery budgets, spelled
 /// the same way `analyze_functions_path` spells them -- with one deliberate
 /// difference. `timeout_ms` is a *wall clock* on one function's block walk, and
@@ -523,10 +533,11 @@ impl From<crate::identity::cfr::FunctionCfr> for CfrSignature {
 /// bounded answer than a reproducible one passes a real number and gets one.
 #[pyfunction]
 #[pyo3(name = "cfr_signatures_path")]
-#[pyo3(signature = (path, nosize=false, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=3_600_000u64, total_timeout_ms=0u64))]
+#[pyo3(signature = (path, nosize=false, normalize=false, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=3_600_000u64, total_timeout_ms=0u64))]
 fn cfr_signatures_path(
     path: String,
     nosize: bool,
+    normalize: bool,
     max_functions: usize,
     max_blocks: usize,
     max_instructions: usize,
@@ -540,7 +551,7 @@ fn cfr_signatures_path(
         timeout_ms,
         total_timeout_ms,
     };
-    let settings = crate::identity::cfr::CfrSettings { nosize };
+    let settings = crate::identity::cfr::CfrSettings { nosize, normalize };
     let signatures =
         crate::identity::cfr::signatures_for_path(std::path::Path::new(&path), settings, &budgets)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;

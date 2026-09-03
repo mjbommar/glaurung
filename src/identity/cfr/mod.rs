@@ -29,6 +29,14 @@
 //! one-sided: different features prove a difference, identical features prove
 //! only that the canonical forms agree.
 //!
+//! # The optional normaliser
+//!
+//! [`normalize`] is an opt-in, deliberately **unsound** local peephole
+//! canonicaliser that runs over a *copy* of the lifted function before the
+//! graph is built. It is off by default ([`CfrSettings::normalize`]), it is a
+//! bit in the version triple so a normalised vector is never compared with an
+//! unnormalised one, and nothing it produces ever reaches the decompiler.
+//!
 //! # Order of the stages
 //!
 //! Canonicalisation happens **before** structuring. `crate::ir::structure_v2`
@@ -55,6 +63,7 @@ pub mod dominators;
 pub mod extract;
 pub mod graph;
 pub mod labels;
+pub mod normalize;
 mod operands;
 mod prune;
 pub mod signature;

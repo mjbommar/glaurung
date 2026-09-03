@@ -286,7 +286,10 @@ fn nosize_collapses_thirty_two_and_sixty_four_bit_widths() {
     let wide = load_of_width(8);
     assert_ne!(sign(&narrow).digest, sign(&wide).digest);
 
-    let settings = CfrSettings { nosize: true };
+    let settings = CfrSettings {
+        nosize: true,
+        ..CfrSettings::default()
+    };
     assert_eq!(
         sign_with(&narrow, settings).digest,
         sign_with(&wide, settings).digest
@@ -296,7 +299,10 @@ fn nosize_collapses_thirty_two_and_sixty_four_bit_widths() {
 /// ...but not below four bytes: a byte and a halfword stay apart under `nosize`.
 #[test]
 fn nosize_keeps_one_and_two_byte_widths_apart() {
-    let settings = CfrSettings { nosize: true };
+    let settings = CfrSettings {
+        nosize: true,
+        ..CfrSettings::default()
+    };
     assert_ne!(
         sign_with(&load_of_width(1), settings).digest,
         sign_with(&load_of_width(2), settings).digest

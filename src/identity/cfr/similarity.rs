@@ -189,7 +189,10 @@ mod tests {
     fn incomparable_versions_answer_zero_rather_than_a_low_score() {
         let plain = signature(&[1, 2, 3]);
         let nosize = CfrSignature::from_features(
-            CfrVersion::current(CfrSettings { nosize: true }),
+            CfrVersion::current(CfrSettings {
+                nosize: true,
+                ..CfrSettings::default()
+            }),
             &[1, 2, 3],
         );
         assert_eq!(cosine(&plain, &nosize, None), 0.0);
