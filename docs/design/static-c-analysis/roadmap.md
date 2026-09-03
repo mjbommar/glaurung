@@ -159,8 +159,35 @@ the lexer survives Ghidra or IDA text, which is the input the loss rates in
 needs a corpus with other decompilers' columns in it, and until then the
 decompiled-side half of this gate is untested against its hardest case.
 
-What remains for S1 is the parser (`F-5`..`F-7`); the lexer alone does not
-satisfy the stage.
+**S1 is complete.** The parser (`F-5`..`F-7`) landed too, and clears the same
+gate on the same corpora:
+
+```
+in-repo:    210 files, 21296 lines, 930 functions, 0 errors, 0 empty files
+decompiled:  14 files, 62716 lines, 1558 functions, 0 errors
+full sweep: 1606 files, 11917994 lines, 188716 functions, 0 errors, 7.4 s
+```
+
+```bash
+cargo test --features python-ext --lib csource::parse -- --nocapture
+GLAURUNG_PARSE_FULL_CORPUS=1 cargo test --release --features python-ext \
+  --lib csource::parse -- --nocapture      # the 1,606-file sweep
+```
+
+The sweep is behind a demand switch so the ordinary lane stays at about a
+second, and it paid for itself: it took the parser from 1,410 errors to 8 to 0
+across two tightenings of one shape test.
+
+Two results worth carrying forward. **No typedef table was needed** — §9's open
+question 1 predicted this and the corpora confirm it, with the falsifier
+written down (`a * b(c);`, a discarded call, would force a typedef *name set*
+into `look.rs`). And **there is no native recursion anywhere in the front end**:
+the parser is one loop over a task stack, tested at 20,000 levels of nesting
+across five shapes plus 50,000 unbalanced openers, with no abort and no hang.
+
+The same honesty caveat attaches to the sweep as to the lexer's: every artifact
+in it is Glaurung's own output, so zero errors per KLOC measures a well-formed
+emitter rather than an adversarial one.
 
 ## 4. S2 — The general source CFG
 
