@@ -43,13 +43,13 @@ is not written down is indistinguishable from a bug.
 
 | | vSim | Here |
 |---|---|---|
-| Engine | angr, under-constrained symbolic execution over VEX | `crate::exec`, the in-tree **concrete** interpreter over LLIR, unmodified |
+| Engine | angr, under-constrained symbolic execution over VEX | `src/exec/`, the in-tree **concrete** interpreter over LLIR, unmodified |
 | Granularity | one basic block at a time, fresh symbols per block | one whole function per run, following real control flow |
 | Trial values | symbolic variables, substituted afterwards with a five-element array `A = [57, 44, 13, 81, 52]` | the substitution happens *during* execution: each run fixes one element of that same array as the value of every uninitialised read |
 | Runs per function | one symbolic pass, then `alpha!` evaluations per expression (`alpha <= beta = 6`) | `seeds` concrete runs, three by default |
 | Stack | base and stack pointers concretized before the run | identical; `STACK_BASE = 0x7fff_0000_0000` |
 | Initial memory | uninitialised except read-only sections | identical: an initialised, read-only image VA reads its real bytes, everything else reads the run's trial scalar |
-| Bound | none stated (block granularity bounds it) | `max_steps` retired LLIR instructions per run, 20,000 by default, counted by `crate::exec::Budget`. **No wall clock**, so a fingerprint does not depend on how busy the machine was |
+| Bound | none stated (block granularity bounds it) | `max_steps` retired LLIR instructions per run, 20,000 by default, counted by `exec::Budget`. **No wall clock**, so a fingerprint does not depend on how busy the machine was |
 | Calls | replaced by summaries where modelled; the address set is extended with `malloc`-shaped returns | a registered SimProcedure where one exists, otherwise the return register takes a deterministic sentinel keyed on the callee's **external name** (`internal` / `indirect` when there is none). No execution into the callee |
 | Unmodelled values | symbolised | `Op::Undef` writes the run's trial scalar instead of poisoning the register, so an unmodelled flag does not stop the run |
 
@@ -322,14 +322,14 @@ Stated here rather than discovered later.
    inlining (the field's unsolved failure mode: roughly 82 to 84 per cent of
    failures in the best tools involve it). It needs a call graph and a bounded
    fixpoint over it, neither of which this slice has.
-2. **AArch64 and the other architectures.** `crate::exec::Machine::new_with_arch`
+2. **AArch64 and the other architectures.** `glaurung::exec::Machine::new_with_arch`
    already takes `RegArch::AArch64`, so the interpreter is not the blocker;
    what is missing is the seeded-register list in `seeds.rs`, a return-register
    choice per ABI, and the decision about whether one fingerprint should be
    comparable across architectures at all (the width-free normal form says it
    could be). MIPS and PowerPC have no lifter, so they are out regardless.
 3. **F5, the symbolic address rules.** They need expression provenance, which
-   means either a symbolic domain (`crate::exec` has one behind the `symbolic`
+   means either a symbolic domain (`src/symbolic/` has one behind the `symbolic`
    feature) or a taint bit threaded through the concrete run. The second is
    cheap and would recover the "a pointer that was computed but never
    dereferenced" case F4 misses.
