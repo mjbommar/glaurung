@@ -102,9 +102,13 @@ def _publish(
     *,
     serial: int = 1,
     set_version: str = "2026.09.1",
-    base_url: str = "http://127.0.0.1:0",
 ) -> Manifest:
-    """Run tools/publish_signature_set.py for real, as a subprocess."""
+    """Run tools/publish_signature_set.py for real, as a subprocess.
+
+    Whatever URLs it bakes in (assets.glaurung.dev, then GitHub Releases) are
+    replaced wholesale by `_rewrite_urls` below, which points every blob at
+    the live test server instead -- so no mirror flag is needed here.
+    """
     result = subprocess.run(
         [
             sys.executable,
@@ -122,10 +126,6 @@ def _publish(
             "--secret-key",
             str(key_path),
             "--generate-key",
-            "--r2-base",
-            base_url,
-            "--hf-repo",
-            "",
             "--quiet",
         ],
         capture_output=True,

@@ -69,7 +69,11 @@ ENV_KEYS_DIR = "GLAURUNG_SIGS_TRUSTED_KEYS"
 
 #: Where the human publishes. Only a default: `--manifest-url`, the env var
 #: above, and every mirror URL inside the manifest all override it.
-DEFAULT_MANIFEST_URL = "https://github.com/glaurung-re/glaurung-sigs/releases/latest/download/manifest.json"
+#: `assets.glaurung.dev` (S3 behind CloudFront, origin access control, the
+#: maintainer's personal AWS account) is the primary distribution host as of
+#: 2026-09-03; GitHub Releases remains the secondary family and is still
+#: what each blob's `urls[]` falls back to.
+DEFAULT_MANIFEST_URL = "https://assets.glaurung.dev/sigs/v1/manifest.json"
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 

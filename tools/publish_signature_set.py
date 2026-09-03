@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build a signed, content-addressed signature-set release. Never publishes it.
+"""Build a signed, content-addressed signature-set release.
 
 Input is a directory of signature blobs plus the harvester's `index.json`,
 which carries the per-library provenance (package, version, arch, variant,
-archive sha256) this tool copies into the manifest. Output is a directory a
-human can hand to `gh release create` unchanged:
+archive sha256) this tool copies into the manifest. Output is a directory:
 
     <out>/blobs/<sha256>            one file per blob, named by its digest
     <out>/manifest.json             the signed document
@@ -12,10 +11,21 @@ human can hand to `gh release create` unchanged:
     <out>/SHA256SUMS                so a mirror can be checked without us
     <out>/NOTICE                    the licence position, per blob
 
-The last step prints the exact `gh release create` and mirror-upload commands
-and stops. It does not run them, and it has no network code at all: this
-repository's contribution rules put the upstream publish on a human, and a
-tool that *could* publish is one keystroke from publishing.
+Two publish paths follow, and they are deliberately not symmetric:
+
+* **GitHub Releases** (secondary) is always print-only. This tool prints the
+  exact `gh release create` / `upload` / `edit` commands and never runs them:
+  this repository's contribution rules put an upstream publish action on a
+  human, and a tool that *could* run it is one keystroke from running it.
+* **S3** (`assets.glaurung.dev`, primary) is dry-run *by default*; `--upload`
+  makes it real. Unlike GitHub Releases this is the maintainer's own bucket
+  in their own AWS account (CLI profile `personal-sso`), not an upstream
+  project, so `--upload` shells out to the `aws` CLI directly. Blobs are
+  uploaded first, then the detached signature, then the manifest last, so a
+  client can never observe a manifest whose blobs are not there yet. Every
+  blob key is checked with `aws s3api head-object` first and is never
+  overwritten if found: the store is content-addressed and immutable, so an
+  existing key already holds the right bytes.
 
 Example (the dry run recorded in docs/reference/signature-distribution.md)::
 
@@ -37,6 +47,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -54,16 +65,32 @@ from glaurung.sigs.manifest import (  # noqa: E402
     Provenance,
     validate_against_schema,
 )
+from glaurung.sigs.paths import keys_dir  # noqa: E402
 
-#: The GitHub repository the release goes to. Only used to *print* commands.
+#: The GitHub repository the (secondary) release goes to. Only used to
+#: *print* commands -- this tool never runs `gh` itself.
 DEFAULT_REPO = "glaurung-re/glaurung-sigs"
 
-#: Mirror roots, in the order the manifest lists them per blob. GitHub
-#: Releases is primary (2 GiB per asset, no bandwidth cap); R2 is the
-#: contractual `$0`-egress fallback that has to exist *before* GitHub's
-#: acceptable-use throttling makes it necessary.
-DEFAULT_R2_BASE = "https://sigs.glaurung.dev/blob"
-DEFAULT_HF_REPO = "datasets/glaurung/sigs"
+#: The primary distribution bucket: private, versioned, us-east-1, sitting
+#: behind a CloudFront distribution with origin access control in the
+#: maintainer's personal AWS account. Its name doubles as the public
+#: hostname (`https://assets.glaurung.dev/...`), which is why
+#: `--blob-base-url` defaults to `https://<--s3-bucket>` rather than to a
+#: hardcoded string.
+DEFAULT_S3_BUCKET = "assets.glaurung.dev"
+
+#: The `aws` CLI profile that can write to that bucket.
+DEFAULT_AWS_PROFILE = "personal-sso"
+
+#: Object layout under the bucket (docs/reference/signature-distribution.md):
+#: blobs are immutable and long-TTL, the manifest and its signature are
+#: rewritten every release and served with a short TTL.
+S3_BLOB_PREFIX = "sigs/blob"
+S3_MANIFEST_KEY = "sigs/v1/manifest.json"
+S3_SIGNATURE_KEY = "sigs/v1/manifest.json.minisig"
+
+S3_BLOB_CACHE_CONTROL = "public, max-age=31536000, immutable"
+S3_MANIFEST_CACHE_CONTROL = "public, max-age=300"
 
 #: The container format the current harvester emits. `gsig/1` replaces this
 #: once the chunked container lands; the field exists so a client can tell.
@@ -321,21 +348,28 @@ def _provenance(record: dict[str, Any]) -> Provenance:
     )
 
 
-def _urls(digest: str, *, repo: str, tag: str, r2_base: str, hf_repo: str) -> list[str]:
-    """Mirrors in preference order. An empty option drops that mirror.
+def _blob_key(digest: str) -> str:
+    """The S3 object key a blob is uploaded to and served from."""
+    return f"{S3_BLOB_PREFIX}/{digest}.gsig.zst"
 
-    Empty is meaningful, not a mistake: a set published to a private mirror
-    only, or a release built for a test to serve from disk, has no GitHub
-    asset and must not claim one -- a URL that cannot answer costs every
-    client a failed request before it reaches the mirror that can.
+
+def _urls(digest: str, *, repo: str, tag: str, blob_base_url: str) -> list[str]:
+    """Mirrors in preference order. An empty option drops that family.
+
+    `assets.glaurung.dev` (S3 behind CloudFront) is primary and listed
+    first; GitHub Releases is the secondary family. Hugging Face and
+    Cloudflare R2 were dropped on 2026-09-03 -- the maintainer has AWS only.
+
+    Empty is meaningful, not a mistake: a release built for a test to serve
+    from disk has no GitHub asset and must not claim one -- a URL that
+    cannot answer costs every client a failed request before it reaches the
+    mirror that can.
     """
     urls = []
+    if blob_base_url:
+        urls.append(f"{blob_base_url}/{_blob_key(digest)}")
     if repo:
         urls.append(f"https://github.com/{repo}/releases/download/{tag}/{digest}")
-    if r2_base:
-        urls.append(f"{r2_base}/{digest}")
-    if hf_repo:
-        urls.append(f"hf://{hf_repo}/blobs/{digest}")
     return urls
 
 
@@ -349,8 +383,7 @@ def build_manifest(
     valid_days: int,
     min_version: str,
     repo: str,
-    r2_base: str,
-    hf_repo: str,
+    blob_base_url: str,
     licence: str,
     blob_format: str,
     kind: str,
@@ -391,8 +424,7 @@ def build_manifest(
                     digest,
                     repo=repo,
                     tag=release_tag or set_version,
-                    r2_base=r2_base,
-                    hf_repo=hf_repo,
+                    blob_base_url=blob_base_url,
                 )
             ),
         )
@@ -476,15 +508,18 @@ def write_notice(out: Path, manifest: Manifest) -> Path:
     return path
 
 
-def publish_commands(
-    out: Path, manifest: Manifest, *, repo: str, r2_bucket: str, hf_repo: str
-) -> list[str]:
-    """The exact commands a human runs next. Printed, never executed."""
+def publish_commands(out: Path, manifest: Manifest, *, repo: str) -> list[str]:
+    """The exact GitHub Releases (secondary) commands. Printed, never executed.
+
+    This tool never runs `gh` itself, regardless of `--upload` -- `--upload`
+    only drives the S3 (primary) upload, below. See `s3_dry_run_lines` /
+    `execute_s3_upload`.
+    """
     tag = manifest.set_version
     return [
-        "# 1. GitHub Releases (primary). Immutable releases require",
-        "#    create-draft, upload, then publish: an asset uploaded after",
-        "#    publication returns 422.",
+        "# GitHub Releases (secondary). Immutable releases require",
+        "# create-draft, upload, then publish: an asset uploaded after",
+        "# publication returns 422.",
         f"gh release create {tag} --repo {repo} --draft \\",
         f"    --title 'glaurung signature set {manifest.set_name} {tag}' \\",
         f"    --notes-file {out / 'NOTICE'}",
@@ -494,24 +529,194 @@ def publish_commands(
         f"gh release upload {tag} --repo {repo} {out / 'blobs'}/*",
         f"gh release edit {tag} --repo {repo} --draft=false",
         "",
-        "# 2. Cloudflare R2 mirror ($0 egress). Must exist BEFORE GitHub's",
-        "#    acceptable-use throttling makes it necessary.",
-        f"rclone copy {out / 'blobs'} r2:{r2_bucket}/blob --checksum --transfers 8",
-        f"rclone copy {out / 'manifest.json'} r2:{r2_bucket}/v1/",
-        f"rclone copy {out / 'manifest.json.minisig'} r2:{r2_bucket}/v1/",
-        "",
-        "# 3. Hugging Face mirror (optional second mirror; anonymous",
-        "#    resolver limit is 3,000 requests per 5-minute window per IP,",
-        "#    which is why it is a mirror and not the primary).",
-        f"huggingface-cli upload {hf_repo} {out} . --repo-type dataset",
-        "",
-        "# 4. Verify from outside, with stock minisign and sha256sum:",
-        f"minisign -Vm manifest.json -p data/sigs/trusted-keys/*.pub",
+        "# Verify from outside, with stock minisign and sha256sum:",
+        "minisign -Vm manifest.json -p data/sigs/trusted-keys/*.pub",
         "sha256sum -c SHA256SUMS",
     ]
 
 
+# --- S3 (assets.glaurung.dev), primary ---------------------------------------
+
+
+def _aws_base_args(profile: str) -> list[str]:
+    return ["aws", "--profile", profile] if profile else ["aws"]
+
+
+def _head_object_args(bucket: str, key: str, profile: str) -> list[str]:
+    return _aws_base_args(profile) + [
+        "s3api",
+        "head-object",
+        "--bucket",
+        bucket,
+        "--key",
+        key,
+    ]
+
+
+def _blob_cp_args(local: Path, bucket: str, key: str, profile: str) -> list[str]:
+    return _aws_base_args(profile) + [
+        "s3",
+        "cp",
+        str(local),
+        f"s3://{bucket}/{key}",
+        "--cache-control",
+        S3_BLOB_CACHE_CONTROL,
+        "--content-type",
+        "application/octet-stream",
+    ]
+
+
+def _manifest_cp_args(local: Path, bucket: str, key: str, profile: str) -> list[str]:
+    # `--metadata-directive REPLACE` only matters for an S3-to-S3 copy (it
+    # picks the new call's headers over the source object's); a local-file
+    # upload always sets fresh metadata with a plain PutObject. It is passed
+    # anyway so the command stays correct if this ever becomes a copy (e.g.
+    # promoting a staged object), and so the intent -- these headers always
+    # win -- is documented at the call site rather than only in prose.
+    return _aws_base_args(profile) + [
+        "s3",
+        "cp",
+        str(local),
+        f"s3://{bucket}/{key}",
+        "--cache-control",
+        S3_MANIFEST_CACHE_CONTROL,
+        "--metadata-directive",
+        "REPLACE",
+    ]
+
+
+def _format_args(args: Sequence[str]) -> str:
+    return " ".join(args)
+
+
+def s3_dry_run_lines(
+    out: Path, manifest: Manifest, *, bucket: str, profile: str
+) -> list[str]:
+    """The exact `aws` commands `--upload` would run. Printed only, here.
+
+    Order matters: blobs first, then the signature, then the manifest last,
+    so a client can never fetch a manifest naming a blob that is not there
+    yet. Every blob key is checked with `head-object` first and is skipped
+    if it already exists -- the store is content-addressed and immutable, so
+    an existing key already holds the right bytes and must never be
+    overwritten. `--upload` performs that check for real; a dry run only
+    names it.
+    """
+    lines = [
+        "# S3 (assets.glaurung.dev), primary. Requires --upload; this is a dry run.",
+        "# Blobs first, then the signature, then the manifest -- a client must",
+        "# never see a manifest whose blobs are missing. Each blob key is",
+        "# checked with head-object first and is never overwritten if found.",
+    ]
+    for blob in manifest.blobs:
+        key = _blob_key(blob.sha256)
+        local = out / "blobs" / blob.sha256
+        lines.append(
+            _format_args(_head_object_args(bucket, key, profile))
+            + "  # skip the upload below if this succeeds (never overwrite)"
+        )
+        lines.append(_format_args(_blob_cp_args(local, bucket, key, profile)))
+    lines.append(
+        _format_args(
+            _manifest_cp_args(
+                out / "manifest.json.minisig", bucket, S3_SIGNATURE_KEY, profile
+            )
+        )
+    )
+    lines.append(
+        _format_args(
+            _manifest_cp_args(out / "manifest.json", bucket, S3_MANIFEST_KEY, profile)
+        )
+    )
+    return lines
+
+
+def execute_s3_upload(
+    out: Path, manifest: Manifest, *, bucket: str, profile: str
+) -> None:
+    """Actually run the `aws` CLI. Never overwrites an existing blob key.
+
+    Blobs first, then the signature, then the manifest last -- the same
+    order `s3_dry_run_lines` prints, so a client can never observe a
+    manifest whose blobs are missing.
+    """
+    for blob in manifest.blobs:
+        key = _blob_key(blob.sha256)
+        check = subprocess.run(
+            _head_object_args(bucket, key, profile), capture_output=True, text=True
+        )
+        if check.returncode == 0:
+            print(f"  exists, not overwritten: s3://{bucket}/{key}")
+            continue
+        local = out / "blobs" / blob.sha256
+        result = subprocess.run(
+            _blob_cp_args(local, bucket, key, profile), capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise SystemExit(f"upload failed for {key}:\n{result.stderr}")
+        print(f"  uploaded: s3://{bucket}/{key}")
+
+    for local_name, key in (
+        ("manifest.json.minisig", S3_SIGNATURE_KEY),
+        ("manifest.json", S3_MANIFEST_KEY),
+    ):
+        result = subprocess.run(
+            _manifest_cp_args(out / local_name, bucket, key, profile),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise SystemExit(f"upload failed for {key}:\n{result.stderr}")
+        print(f"  uploaded: s3://{bucket}/{key}")
+
+
 # --- CLI ---------------------------------------------------------------------
+
+
+def sign_command(manifest_path: Path, secret_key: Path, manifest: Manifest) -> str:
+    """The exact interactive `minisign` command that produces a valid signature.
+
+    This is the **normal** production flow: the maintainer's real key is
+    password-protected, and `glaurung.sigs.minisign.SecretKey` only reads
+    minisign's password-less form -- correctly, since decrypting a
+    scrypt-protected key needs a passphrase this tool must never see or ask
+    for. `--secret-key`/`--generate-key` (below) remain the local-testing
+    flow only, for a throwaway password-less dev key.
+    """
+    return (
+        f"minisign -Sm {manifest_path} -s {secret_key} "
+        f'-t "{manifest.set_version} serial={manifest.serial}"'
+    )
+
+
+def _load_trusted_keys(directory: Path | None = None) -> list[minisign.PublicKey]:
+    """Every `*.pub` under the trusted-key directory (default: the shipped one).
+
+    Duplicated in miniature from `glaurung.sigs.client.load_trusted_keys`
+    rather than imported from it: `client.py` is the module that speaks HTTP,
+    and this tool's whole point is that it does not import anything that can.
+    """
+    source = directory or keys_dir()
+    if not source.is_dir():
+        return []
+    keys: list[minisign.PublicKey] = []
+    for path in sorted(source.glob("*.pub")):
+        keys.append(minisign.PublicKey.read(path))
+    return keys
+
+
+def _manifest_bodies_agree(a: Manifest, b: Manifest) -> bool:
+    """Same manifest, ignoring the two fields that legitimately vary by run.
+
+    `built_utc`/`valid_until` are computed at build time, so a manifest
+    rebuilt from the same `--blobs`/`--set`/`--serial` a second time is
+    byte-different from the one a maintainer already signed externally, even
+    though nothing about the release changed. Everything else must match
+    exactly, or reusing the already-signed copy would silently publish
+    different blobs under an old signature's authority.
+    """
+    fields = ("set_name", "set_version", "serial", "min_glaurung_version", "blobs")
+    return all(getattr(a, f) == getattr(b, f) for f in fields)
 
 
 def _resolve_key(path: Path, generate: bool) -> minisign.SecretKey:
@@ -568,7 +773,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--generate-key",
         action="store_true",
-        help="Create the keypair if --secret-key does not exist",
+        help="Create the keypair if --secret-key does not exist. Local-"
+        "testing flow only -- see --signature for the production flow.",
+    )
+    parser.add_argument(
+        "--signature",
+        type=Path,
+        default=None,
+        help=f"Path to a manifest.json.minisig produced externally (stock "
+        f"minisign, a password-protected production key -- the normal "
+        f"publish flow). Verified against {keys_dir()}/*.pub before "
+        f"anything is printed or uploaded; refuses to proceed if it is "
+        f"missing or does not verify. When --out already holds a "
+        f"manifest.json built from the same --blobs/--set/--serial, that "
+        f"exact copy is kept so the externally-produced signature stays "
+        f"valid.",
     )
     parser.add_argument(
         "--release-tag",
@@ -581,10 +800,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--valid-days", type=int, default=180)
     parser.add_argument("--min-glaurung-version", default="0.1.0")
-    parser.add_argument("--repo", default=DEFAULT_REPO)
-    parser.add_argument("--r2-base", default=DEFAULT_R2_BASE)
-    parser.add_argument("--r2-bucket", default="glaurung-sigs")
-    parser.add_argument("--hf-repo", default=DEFAULT_HF_REPO)
+    parser.add_argument(
+        "--repo", default=DEFAULT_REPO, help="GitHub Releases repo (secondary)"
+    )
+    parser.add_argument(
+        "--s3-bucket",
+        default=DEFAULT_S3_BUCKET,
+        help="Primary S3 bucket (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--aws-profile",
+        default=DEFAULT_AWS_PROFILE,
+        help="aws CLI profile used for --upload (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--blob-base-url",
+        default=None,
+        help="Base URL blobs and the manifest are served from (default: "
+        "https://<--s3-bucket>). Empty string drops the assets.glaurung.dev "
+        "URL family entirely; only tests should need that.",
+    )
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="Actually run the S3 upload via the aws CLI, instead of "
+        "printing the commands. GitHub Releases always stays print-only.",
+    )
     parser.add_argument("--licence", default=DEFAULT_LICENCE)
     parser.add_argument("--format", dest="blob_format", default=DEFAULT_FORMAT)
     parser.add_argument("--kind", default=DEFAULT_KIND)
@@ -618,7 +859,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"--blobs {blobs_dir} is not a directory")
     out: Path = args.out.expanduser()
 
-    secret = _resolve_key(args.secret_key.expanduser(), args.generate_key)
+    secret_key_path = args.secret_key.expanduser()
+    blob_base_url = (
+        args.blob_base_url
+        if args.blob_base_url is not None
+        else f"https://{args.s3_bucket}"
+    )
 
     sources, rejected = collect(
         blobs_dir,
@@ -639,8 +885,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         valid_days=args.valid_days,
         min_version=args.min_glaurung_version,
         repo=args.repo,
-        r2_base=args.r2_base,
-        hf_repo=args.hf_repo,
+        blob_base_url=blob_base_url,
         licence=args.licence,
         blob_format=args.blob_format,
         kind=args.kind,
@@ -654,22 +899,80 @@ def main(argv: Sequence[str] | None = None) -> int:
             + "\n  ".join(schema_errors)
         )
 
+    # An externally-produced --signature was made against a manifest.json
+    # some earlier invocation already wrote; keep that exact copy (including
+    # its built_utc/valid_until) rather than overwriting it with a fresh
+    # timestamp, which would silently invalidate the signature. Anything
+    # other than the timestamps must match, or this is a different release
+    # wearing an old one's signature.
+    existing_path = out / "manifest.json"
+    if args.signature is not None and existing_path.is_file():
+        existing = Manifest.read(existing_path)
+        if _manifest_bodies_agree(manifest, existing):
+            manifest = existing
+        else:
+            raise SystemExit(
+                f"{existing_path} does not match what --blobs/--set/--serial "
+                "would build now (only built_utc/valid_until may legitimately "
+                "differ). Rebuild without --signature, sign the fresh "
+                "manifest.json, then re-run with --signature."
+            )
     manifest_path = manifest.write(out / "manifest.json")
-    signature_path = minisign.sign_file(
-        secret,
-        manifest_path,
-        trusted_comment=manifest.trusted_comment(),
-        untrusted_comment=(
-            f"glaurung signature set {manifest.set_name} {manifest.set_version}"
-        ),
-    )
     sums_path = write_sha256sums(out, manifest)
     notice_path = write_notice(out, manifest)
+    sign_cmd = sign_command(manifest_path, secret_key_path, manifest)
 
-    # Prove what we just wrote actually verifies, with the *public* half only,
-    # before telling anyone to publish it.
-    public = secret.public_key()
-    minisign.verify_file(manifest_path, signature_path, [public])
+    if args.signature is not None:
+        signature_source = Path(args.signature).expanduser()
+        if not signature_source.is_file():
+            raise SystemExit(
+                f"--signature {signature_source} does not exist; run:\n  {sign_cmd}"
+            )
+        signature_path = out / "manifest.json.minisig"
+        if signature_source != signature_path:
+            signature_path.write_bytes(signature_source.read_bytes())
+        trusted = _load_trusted_keys()
+        if not trusted:
+            raise SystemExit(f"no trusted public keys under {keys_dir()}")
+        try:
+            key = minisign.verify_file(manifest_path, signature_path, trusted)
+        except minisign.MinisignError as exc:
+            raise SystemExit(
+                f"--signature does not verify against a trusted key under "
+                f"{keys_dir()}: {exc}"
+            )
+        comment = minisign.Signature.read(signature_path).trusted_comment
+        if (
+            manifest.set_version not in comment
+            or f"serial={manifest.serial}" not in comment
+        ):
+            raise SystemExit(
+                "--signature's trusted comment does not name this set's "
+                f"version ({manifest.set_version!r}) and serial "
+                f"({manifest.serial}); refusing to publish: {comment!r}"
+            )
+        signed_by = (
+            f"{signature_path}  (externally signed, key {key.key_id_hex}, verified)"
+        )
+    else:
+        # Local-testing flow only: a throwaway password-less key this tool
+        # can read and sign with itself.
+        secret = _resolve_key(secret_key_path, args.generate_key)
+        signature_path = minisign.sign_file(
+            secret,
+            manifest_path,
+            trusted_comment=manifest.trusted_comment(),
+            untrusted_comment=(
+                f"glaurung signature set {manifest.set_name} {manifest.set_version}"
+            ),
+        )
+        # Prove what was just written actually verifies, with the *public*
+        # half only, before telling anyone to publish it.
+        public = secret.public_key()
+        minisign.verify_file(manifest_path, signature_path, [public])
+        signed_by = (
+            f"{signature_path}  (key {public.key_id_hex}, local dev/testing key)"
+        )
 
     if not args.quiet:
         for blob in manifest.blobs:
@@ -689,14 +992,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"  signatures {manifest.total_signatures}\n"
         f"  bytes      {manifest.total_bytes}\n"
         f"  manifest   {manifest_path}\n"
-        f"  signature  {signature_path}  (key {public.key_id_hex})\n"
+        f"  signature  {signed_by}\n"
         f"  checksums  {sums_path}\n"
         f"  notice     {notice_path}"
     )
-    print("\n--- DRY RUN: nothing was published. Run these by hand: ---\n")
-    for line in publish_commands(
-        out, manifest, repo=args.repo, r2_bucket=args.r2_bucket, hf_repo=args.hf_repo
-    ):
+    print(
+        f"\nTo (re-)sign {manifest_path} by hand with a production key "
+        f"(the normal flow -- see docs/reference/signature-distribution.md):"
+        f"\n  {sign_cmd}\n"
+        f"Then re-run this exact command with "
+        f"--signature {out / 'manifest.json.minisig'} added."
+    )
+    if args.upload:
+        print(
+            "\n--- Uploading to S3 (assets.glaurung.dev) now. GitHub Releases "
+            "still requires the manual commands below. ---\n"
+        )
+        execute_s3_upload(
+            out, manifest, bucket=args.s3_bucket, profile=args.aws_profile
+        )
+        print()
+    else:
+        print("\n--- DRY RUN: nothing was published. Run these by hand: ---\n")
+        for line in s3_dry_run_lines(
+            out, manifest, bucket=args.s3_bucket, profile=args.aws_profile
+        ):
+            print(line)
+        print()
+
+    for line in publish_commands(out, manifest, repo=args.repo):
         print(line)
     return 0
 

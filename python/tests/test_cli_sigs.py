@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from glaurung.cli.main import main
-from glaurung.sigs import paths
+from glaurung.sigs import minisign, paths
+from glaurung.sigs.manifest import Manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISH = ROOT / "tools" / "publish_signature_set.py"
@@ -230,20 +232,31 @@ def test_fetch_over_a_file_url(capsys, tmp_path, isolated_cache, monkeypatch):
             str(key),
             "--generate-key",
             "--quiet",
-            # Serve the blobs from disk and claim no other mirror: a URL that
-            # cannot answer would cost a real network attempt in a test.
-            "--repo",
-            "",
-            "--hf-repo",
-            "",
-            "--r2-base",
-            (out / "blobs").as_uri(),
         ],
         capture_output=True,
         text=True,
         cwd=ROOT,
     )
     assert published.returncode == 0, published.stderr[-2000:]
+
+    # Whatever mirror URLs the tool baked in (assets.glaurung.dev, then
+    # GitHub Releases) cannot answer in a test; point every blob at the local
+    # copy on disk instead, and re-sign -- the same technique
+    # test_sigs_client.py uses, so the client is exercised on a validly
+    # signed manifest rather than only ever the failure path.
+    manifest = Manifest.read(out / "manifest.json")
+    rewritten = manifest.with_blobs(
+        [
+            replace(blob, urls=((out / "blobs" / blob.sha256).as_uri(),))
+            for blob in manifest.blobs
+        ]
+    )
+    rewritten_path = rewritten.write(out / "manifest.json")
+    minisign.sign_file(
+        minisign.SecretKey.read(key),
+        rewritten_path,
+        trusted_comment=rewritten.trusted_comment(),
+    )
 
     # Trust the key that signed it, and point the client at the local copy.
     keys_dir = tmp_path / "keys"
