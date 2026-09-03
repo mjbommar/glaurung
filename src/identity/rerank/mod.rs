@@ -95,8 +95,8 @@
 //! 7. **The default turns the paper's two provenance terms off.** Not a change
 //!    to the algorithm -- both are implemented, and
 //!    [`RerankSettings::revdecode_paper`] runs them -- but a change to what a
-//!    caller gets without asking, and it is measured rather than assumed. See
-//!    the note on [`Default`].
+//!    caller gets without asking, and it is measured rather than assumed. The
+//!    numbers are on [`RerankSettings::revdecode_paper`].
 //!
 //! # Cost
 //!

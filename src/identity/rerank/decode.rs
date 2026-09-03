@@ -43,7 +43,9 @@ pub struct RankedCandidate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayerRanking {
     pub query: QueryId,
-    /// Best first, under the total order in [`compare_nodes`].
+    /// Best first, under the total order `compare_nodes` in this module:
+    /// score, then the matcher's own similarity, then the reference id, with
+    /// the "no match" node last among equals.
     pub ranked: Vec<RankedCandidate>,
 }
 
