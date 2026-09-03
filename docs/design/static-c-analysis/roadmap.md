@@ -134,6 +134,34 @@ target with no visible path to closing it, the difficulty really was Eclipse
 CDT's error recovery rather than C. Reconsider: take `tree-sitter-c` and accept
 the C dependency, or stop the programme.
 
+**Status: the substrate and the lexer have landed, and the lexer clears the
+gate.** `src/syntax/` implements `SB-1`..`SB-9`; `src/csource/lex/` implements
+`F-4` on top of it.
+
+```
+in-repo corpus: 210 files, 21296 lines, 123409 tokens, 0 diagnostics
+decompiled:     534 files, 2726306 lines, 26172752 tokens, 0 diagnostics
+```
+
+```bash
+cargo test --features python-ext --lib csource::lex -- --nocapture
+```
+
+The committed test keeps a 14-file slice so the ordinary lane stays fast; the
+534-file sweep was run ad hoc, in a debug build, in 11.4 seconds.
+
+**That second row is weaker than it looks, and the weakness is the point.** The
+materialized tree holds only Glaurung's *own* decompiler output — generated C
+with no stray bytes; `grep -rl 'undefined4\|__usercall'` over it returns
+nothing. Zero diagnostics per KLOC there is real but is **not** evidence that
+the lexer survives Ghidra or IDA text, which is the input the loss rates in
+[`joern-behavior.md`](joern-behavior.md) §5 were measured on. Closing that gap
+needs a corpus with other decompilers' columns in it, and until then the
+decompiled-side half of this gate is untested against its hardest case.
+
+What remains for S1 is the parser (`F-5`..`F-7`); the lexer alone does not
+satisfy the stage.
+
 ## 4. S2 — The general source CFG
 
 **Deliverable.** `src/csource/cfg` — a **correct** control-flow graph: real
