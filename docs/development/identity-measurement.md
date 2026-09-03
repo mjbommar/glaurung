@@ -432,7 +432,9 @@ Marcelli's per-query 101-candidate draw), and `FunctionSample::callees` —
 discovery's resolved call targets, the one input a per-function scheme has no
 use for.
 
-The measured recommendation is `RerankSettings::call_graph_only()`.
+The measured recommendation is what `RerankSettings::default()` now does; the
+paper's own configuration is `RerankSettings::revdecode_paper()`, named rather
+than automatic for the reason in the table above.
 
 ## Cisco Dataset-1
 
