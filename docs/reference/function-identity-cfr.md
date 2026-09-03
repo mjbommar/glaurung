@@ -15,7 +15,8 @@ peephole normaliser ([Normalisation](#normalisation)) changes the
 whichever representation they were counted on. Both are off in
 `CfrSettings::default()` and in the default `cosine(a, b, None)`, so the numbers
 in [Measured numbers](#measured-numbers) are what the representation does with
-neither. The research
+neither, and [The two levers together](#the-two-levers-together) is the 2x2 over
+one population. The research
 synthesis this implements is
 [`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md)
 and its four source reports in
@@ -966,6 +967,102 @@ pass is kept rather than deleted.
 - **No architecture but x86.** The rules that name an intrinsic name
   (`x86.smul_hi`, `x86.sdiv_quot`) are x86-only; every other rule is
   architecture-neutral, and none of them has been measured on ARM.
+
+## The two levers together
+
+The normaliser (above) and the TF-IDF weighting
+([Weighting](#weighting-the-corpus-tf-idf-table)) landed on separate branches
+and are independent by construction: `normalize` rewrites the lifted function
+before the graph is built, so it changes the **representation**; a weight table
+changes the **metric** over whichever representation it was counted on. Nothing
+about either mechanism says how they compose. Normalisation folds local variation
+into fewer, commoner features, which is exactly the material a rarity weighting
+trades on, so the interaction could plausibly have been sub-additive.
+
+It is not. Measured, not argued.
+
+### The 2x2
+
+`tests/identity_retrieval/main.rs::the_two_cfr_levers_compose`, in-house fixture
+corpus, **held-out half** throughout, release build,
+`cargo test --release --features python-ext --test identity_retrieval -- --nocapture cfr`.
+
+All four cells are scored on the held-out half -- including the two unweighted
+ones, which would not otherwise need a split -- because a four-cell table whose
+cells sat on different populations could not be read for the interaction at all.
+The `scored` column is identical across the four cells by assertion. Each
+weighted cell uses a table counted over the training half **under its own
+settings**: `cfr-1.0-s0-idf512-48359a7a35563d79` (910 documents, 39,969 weighted
+features) for the unnormalised rows and `cfr-1.0-s2-idf512-03df27b6e0d4283f`
+(910 documents, 39,031 features) for the normalised ones. Applying the plain
+table across the lever would weight a vocabulary the normalised representation
+does not produce.
+
+**AUC**
+
+| Task | Scored | Pool (sampled / global) | plain | normalised | weighted | normalised + weighted |
+|---|---|---|---|---|---|---|
+| XO-gcc | 187 | 101 / 200 | 0.7800 | 0.7769 | 0.8592 | **0.8717** |
+| XO-clang | 178 | 101 / 184 | 0.7419 | 0.7442 | 0.8152 | **0.8342** |
+| XC-O0 | 241 | 101 / 243 | 0.9679 | 0.9675 | 0.9938 | **0.9942** |
+| XC-O2 | 172 | 101 / 184 | 0.8935 | 0.8848 | 0.9461 | **0.9487** |
+| XM | 177 | 101 / 184 | 0.7625 | 0.7679 | 0.8131 | **0.8390** |
+
+**MRR10 and Recall@1**, same four cells:
+
+| Task | MRR10 plain | MRR10 norm | MRR10 wtd | MRR10 norm+wtd | R@1 plain | R@1 norm | R@1 wtd | R@1 norm+wtd |
+|---|---|---|---|---|---|---|---|---|
+| XO-gcc | 0.2549 | 0.2777 | **0.5080** | 0.4928 | 0.1872 | 0.2086 | **0.4064** | 0.3904 |
+| XO-clang | 0.1829 | 0.1963 | 0.3729 | **0.3919** | 0.1124 | 0.1292 | 0.2809 | **0.2921** |
+| XC-O0 | 0.9501 | 0.9445 | 0.9557 | **0.9581** | 0.9253 | 0.9129 | 0.9253 | **0.9336** |
+| XC-O2 | 0.5681 | 0.5823 | 0.6549 | **0.6723** | 0.5116 | 0.5233 | 0.5698 | **0.5930** |
+| XM | 0.1984 | 0.2035 | 0.4232 | **0.4405** | 0.1243 | 0.1186 | 0.3333 | **0.3503** |
+
+### Reading it
+
+**The weighting is the larger lever, by a wide margin.** On XO-gcc it is worth
++0.079 AUC and +0.253 MRR10 on its own; the normaliser on the same cell is worth
+-0.003 AUC and +0.023 MRR10. Anyone choosing one lever should choose the
+weighting.
+
+**They compose on AUC, on all five tasks, and super-additively.** XO-gcc: the
+weighting alone is +0.0792, the normaliser alone is -0.0031, and together they
+are +0.0917 -- more than the sum of the parts by 0.0156. XM is the same shape
+(+0.0506, +0.0054, together +0.0765). The mechanism is the one each section
+already gives separately: the normaliser folds lifter boilerplate into fewer,
+commoner features, and an IDF table is precisely the thing that stops common
+features from costing anything. Each lever removes some of the noise the other
+one has to survive, so the normaliser is worth more in the presence of the
+weighting than alone.
+
+**One cell does not compose, and it is the headline cell.** On XO-gcc the
+combined row's *ranking* metrics are slightly worse than the weighting alone --
+MRR10 0.5080 -> 0.4928, Recall@1 0.4064 -> 0.3904, which is three fewer
+functions retrieved at rank 1 out of 187 -- while its AUC is better. That is the
+same divergence the normaliser lane already recorded on XC-O2 unweighted, in the
+other direction, and it reads the same way: AUC is whole-distribution separation
+and Recall@1 is the top of the ranking, and a rewrite that pulls the bulk of the
+negatives further away can still reshuffle the first few candidates. Four of the
+five tasks improve on every metric. This one does not, on a difference of three
+functions, and a summary that quoted only AUC would be choosing its evidence.
+
+**The extraction cost is the normaliser's, unchanged by the weighting.** 1,514
+us/function unnormalised against 2,113 normalised, release, over 1,787 samples
+-- the +39% the [Normalisation](#normalisation) section already reports. A
+weight table costs nothing at extraction time and a bounded merge-join at query
+time; it is the cheaper lever as well as the larger one.
+
+### What is deliberately not here
+
+- **No Dataset-1 row for the combination.** Both levers have Dataset-1 rows of
+  their own, from lanes that cost minutes each and are `#[ignore]`d
+  (`cisco_cfr_retrieval_ratchets` for the weighting,
+  `cisco_cfr_xo_xc_xm` for the normaliser). The 2x2 there is four more of those
+  runs and has not been made.
+- **No claim that the interaction generalises.** Five tasks on one 1,787-sample
+  in-house corpus, whose compiler and optimisation axes are the only ones free.
+  The super-additivity is consistent across all five, which is more than one
+  observation, and it is still one corpus.
 
 ## Known gaps
 

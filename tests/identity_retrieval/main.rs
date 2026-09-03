@@ -362,6 +362,68 @@ const CFR_WEIGHTED_MIN_AUC: &[(&str, f64)] = &[
     ("XM", 0.806000),
 ];
 
+/// The **normalised AND weighted** CFR's AUC floor per task, on the held-out
+/// half: the fourth cell of the 2x2, and the row this integration branch
+/// exists to produce.
+///
+/// The two levers were built on separate branches and are independent by
+/// construction -- `normalize` rewrites the lifted function before the graph is
+/// built, so it changes the REPRESENTATION; a TF-IDF table changes the METRIC
+/// over whichever representation it was counted on. Nothing about either
+/// mechanism predicts how they compose, which is why the cell is measured
+/// rather than argued: a weighting counted over normalised vectors is counting
+/// a different feature vocabulary, and normalisation collapses some rare
+/// features into common ones, which is exactly the sort of interaction that can
+/// eat a rarity weighting's advantage.
+///
+/// The weight table for this row is counted over the training half **with the
+/// normaliser on**, under its own `CfrVersion` -- see
+/// `scheme::cfr_train_weights`. Applying the unnormalised table here would
+/// weight a vocabulary the normalised representation does not produce.
+///
+/// Floors read off the release run of 2026-09-02 recorded in
+/// `docs/reference/function-identity-cfr.md`, on the same held-out population
+/// as `CFR_WEIGHTED_MIN_AUC` (identical `scored` counts, asserted by
+/// `the_two_cfr_levers_compose`), so the two tables are directly comparable.
+///
+/// What that run says, weighted -> normalised+weighted:
+///
+/// | Task | AUC | MRR10 | R@1 |
+/// |---|---|---|---|
+/// | XO-gcc | 0.8592 -> 0.8717 (+0.013) | 0.5080 -> 0.4928 (-0.015) | 0.4064 -> 0.3904 (-0.016) |
+/// | XO-clang | 0.8152 -> 0.8342 (+0.019) | 0.3729 -> 0.3919 (+0.019) | 0.2809 -> 0.2921 (+0.011) |
+/// | XC-O0 | 0.9938 -> 0.9942 (+0.000) | 0.9557 -> 0.9581 (+0.002) | 0.9253 -> 0.9336 (+0.008) |
+/// | XC-O2 | 0.9461 -> 0.9487 (+0.003) | 0.6549 -> 0.6723 (+0.017) | 0.5698 -> 0.5930 (+0.023) |
+/// | XM | 0.8131 -> 0.8390 (+0.026) | 0.4232 -> 0.4405 (+0.017) | 0.3333 -> 0.3503 (+0.017) |
+///
+/// **The levers compose on AUC on all five tasks, and the sum is smaller than
+/// the parts.** The weighting alone is worth +0.079 AUC on XO-gcc and the
+/// normaliser alone is worth -0.003 on the same cell; together they are +0.092,
+/// so the normaliser's contribution is larger in the presence of the weighting
+/// than on its own. The mechanism is the one the weighting section already
+/// describes: normalisation folds lifter boilerplate into fewer, commoner
+/// features, and an IDF table is exactly the thing that stops common features
+/// from costing anything -- so each lever removes some of the noise the other
+/// one has to survive.
+///
+/// **And the one cell where they do not compose is recorded rather than
+/// dropped.** On XO-gcc the combined row's *ranking* metrics are slightly
+/// worse than the weighting alone (MRR10 -0.015, R@1 -0.016: three fewer
+/// functions retrieved at rank 1 of 187) while its AUC is better. That is the
+/// same shape the normaliser lane already reported on XC-O2 unweighted, in the
+/// other direction, and it has the same reading: AUC is whole-distribution
+/// separation and R@1 is the top of the ranking, and a rewrite that pulls the
+/// bulk of the negatives away can still shuffle the first few candidates. Four
+/// of the five tasks improve on every metric; this one does not, and a summary
+/// that quoted only AUC would be choosing its evidence.
+const CFR_NORM_WEIGHTED_MIN_AUC: &[(&str, f64)] = &[
+    ("XO-gcc", 0.864000),
+    ("XO-clang", 0.827000),
+    ("XC-O0", 0.988000),
+    ("XC-O2", 0.941000),
+    ("XM", 0.832000),
+];
+
 /// The CFR's measured Dataset-1 AUC floor per task, uniform weights over the
 /// whole corpus.
 ///
@@ -1577,21 +1639,27 @@ fn assert_ratchet(what: &str, measured: f64, floor: f64, context: &str) {
 // L2, the Canonical Function Representation, plan items 4, 5 and 8 of
 // `docs/history/program-measures-2026-09-02.md`.
 //
-// TWO independent levers. Two whole-corpus rows, comparable with the CTPH and
-// `structural` rows above, and two held-out rows that isolate the weighting:
+// TWO independent levers, so six scored rows -- two whole-corpus rows that are
+// comparable with the CTPH and `structural` rows above, and a 2x2 over one
+// population that is the actual experiment:
 //
 //   whole corpus, comparable with the schemes above
 //     `cfr`                       no normaliser, uniform weights
 //     `cfr-normalized`            normaliser on, uniform weights
 //
-//   held-out half, where the weighting is measured
+//   held-out half, the 2x2 -- one population, four cells
 //     `cfr-heldout`               no normaliser, uniform weights   (control)
+//     `cfr-normalized-heldout`    normaliser on,  uniform weights
 //     `cfr-weighted`              no normaliser, TF-IDF
+//     `cfr-normalized-weighted`   normaliser on,  TF-IDF
 //
-// The weighted row is scored on the held-out half, and so is its control: a
-// weighted number on half a corpus set beside an unweighted number on all of
-// it is not a delta -- the pools differ, the negatives differ, and the twin
-// joins differ.
+// The 2x2 is scored on the held-out half throughout, including the two
+// unweighted cells that would not otherwise need a split. That is deliberate:
+// a weighted number on half a corpus set beside an unweighted number on all of
+// it is not a delta -- the pools differ, the negatives differ, the twin joins
+// differ -- and a four-cell table whose cells sat on two different populations
+// would be worse still, because the interaction is the one thing it is being
+// read for.
 // ---------------------------------------------------------------------------
 
 /// Score the unweighted CFR over the whole corpus, once.
@@ -1620,32 +1688,80 @@ fn cfr_normalized_report() -> Option<&'static SchemeReport> {
         .as_ref()
 }
 
-/// Score the two held-out rows, once: the unweighted control and the weighted
-/// treatment, over the identical population.
-fn cfr_weighted_reports() -> Option<&'static (SchemeReport, SchemeReport)> {
+/// The four held-out rows: the 2x2 over `(normalize, weights)`.
+///
+/// One population, four cells, so every pairwise difference in the table is
+/// the lever(s) that moved and not the denominator.
+pub struct CfrLeverMatrix {
+    /// No normaliser, uniform weights. The control.
+    pub plain: SchemeReport,
+    /// Normaliser on, uniform weights.
+    pub normalized: SchemeReport,
+    /// No normaliser, TF-IDF over the training half.
+    pub weighted: SchemeReport,
+    /// Both levers: normaliser on, TF-IDF counted over normalised vectors.
+    pub normalized_weighted: SchemeReport,
+}
+
+/// Score all four held-out rows, once.
+///
+/// Two weight tables, not one. The `normalize` bit is part of `CfrVersion` and
+/// therefore of `weights_id`, so a table counted over unnormalised vectors
+/// describes a different feature vocabulary than the normalised representation
+/// produces; applying it across the lever would weight features that are no
+/// longer there and leave the ones that replaced them unweighted. Each
+/// weighted cell gets the table counted under its own settings, over the same
+/// training half.
+fn cfr_lever_matrix() -> Option<&'static CfrLeverMatrix> {
     use std::sync::OnceLock;
-    static REPORTS: OnceLock<Option<(SchemeReport, SchemeReport)>> = OnceLock::new();
+    static REPORTS: OnceLock<Option<CfrLeverMatrix>> = OnceLock::new();
     REPORTS
         .get_or_init(|| {
             let corpus = load()?;
-            let settings = glaurung::identity::cfr::CfrSettings::default();
-            let weights = scheme::cfr_train_weights(
+            let plain_settings = glaurung::identity::cfr::CfrSettings::default();
+            let norm_settings = CfrScheme::normalized_settings();
+            let plain_weights = scheme::cfr_train_weights(
                 corpus.slices().flat_map(|slice| slice.samples.iter()),
-                settings,
+                plain_settings,
             )?;
-            eprintln!(
-                "\n=== CFR weight table {} : {} documents (training half), {} \
-                 weighted features ===",
-                weights.weights_id(),
-                weights.documents(),
-                weights.len()
-            );
-            let control = CfrScheme::unweighted_held_out(settings);
-            let treatment = CfrScheme::weighted(settings, weights);
-            Some((
-                print_report(metrics::evaluate(&control, corpus, TASKS)),
-                print_report(metrics::evaluate(&treatment, corpus, TASKS)),
-            ))
+            let norm_weights = scheme::cfr_train_weights(
+                corpus.slices().flat_map(|slice| slice.samples.iter()),
+                norm_settings,
+            )?;
+            for (what, table) in [
+                ("unnormalised", &plain_weights),
+                ("normalised", &norm_weights),
+            ] {
+                eprintln!(
+                    "\n=== CFR weight table ({what}) {} : {} documents (training \
+                     half), {} weighted features ===",
+                    table.weights_id(),
+                    table.documents(),
+                    table.len()
+                );
+            }
+            Some(CfrLeverMatrix {
+                plain: print_report(metrics::evaluate(
+                    &CfrScheme::unweighted_held_out(plain_settings),
+                    corpus,
+                    TASKS,
+                )),
+                normalized: print_report(metrics::evaluate(
+                    &CfrScheme::unweighted_held_out(norm_settings),
+                    corpus,
+                    TASKS,
+                )),
+                weighted: print_report(metrics::evaluate(
+                    &CfrScheme::weighted(plain_settings, plain_weights),
+                    corpus,
+                    TASKS,
+                )),
+                normalized_weighted: print_report(metrics::evaluate(
+                    &CfrScheme::weighted(norm_settings, norm_weights),
+                    corpus,
+                    TASKS,
+                )),
+            })
         })
         .as_ref()
 }
@@ -1883,9 +1999,10 @@ fn cfr_retrieval_ratchets() {
 /// which no per-task floor would catch on its own.
 #[test]
 fn cfr_weighting_ratchets() {
-    let Some((control, weighted)) = cfr_weighted_reports() else {
+    let Some(matrix) = cfr_lever_matrix() else {
         return;
     };
+    let (control, weighted) = (&matrix.plain, &matrix.weighted);
 
     for (task, floor) in CFR_WEIGHTED_MIN_AUC {
         let r = weighted
@@ -2036,6 +2153,154 @@ fn the_normaliser_is_not_a_regression_on_the_cross_optimisation_lane() {
     );
 }
 
+/// **The 2x2**: what the two levers are worth apart, and what they are worth
+/// together, over one population.
+///
+/// This is the row the integration branch exists to produce. The two lanes were
+/// developed separately -- the normaliser changes the representation, the
+/// TF-IDF table changes the metric -- and nothing about either mechanism says
+/// how they compose. Normalisation collapses rare features into common ones,
+/// which is precisely the material a rarity weighting trades on, so the
+/// interaction could plausibly be sub-additive; it is measured here rather than
+/// assumed.
+///
+/// The floors in [`CFR_NORM_WEIGHTED_MIN_AUC`] are read off a run. The extra
+/// assertion is that the combined cell is not *worse* than either single lever
+/// by more than [`RATCHET_SLACK`] -- the failure a bad interaction would
+/// actually produce, and one no per-task floor catches on its own.
+#[test]
+fn the_two_cfr_levers_compose() {
+    let Some(matrix) = cfr_lever_matrix() else {
+        return;
+    };
+
+    eprintln!("\n--- CFR lever 2x2, held-out half, in-house corpus ---");
+    eprintln!(
+        "| Task | Scored | Pool (sampled / global) | AUC plain | AUC norm | \
+         AUC wtd | AUC norm+wtd |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|");
+    for result in &matrix.plain.results {
+        let task = &result.task_name;
+        let (Some(n), Some(w), Some(nw)) = (
+            matrix.normalized.result(task),
+            matrix.weighted.result(task),
+            matrix.normalized_weighted.result(task),
+        ) else {
+            continue;
+        };
+        eprintln!(
+            "| {} | {} | {} / {} | {:.4} | {:.4} | {:.4} | {:.4} |{}",
+            task,
+            result.scored,
+            result.sampled_pool_size,
+            result.global_pool_size,
+            result.auc,
+            n.auc,
+            w.auc,
+            nw.auc,
+            if result.underpowered() {
+                "  (underpowered)"
+            } else {
+                ""
+            }
+        );
+    }
+    eprintln!(
+        "\n| Task | MRR10 plain | MRR10 norm | MRR10 wtd | MRR10 norm+wtd | \
+         R@1 plain | R@1 norm | R@1 wtd | R@1 norm+wtd |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|---|---|");
+    for result in &matrix.plain.results {
+        let task = &result.task_name;
+        let (Some(n), Some(w), Some(nw)) = (
+            matrix.normalized.result(task),
+            matrix.weighted.result(task),
+            matrix.normalized_weighted.result(task),
+        ) else {
+            continue;
+        };
+        eprintln!(
+            "| {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            task,
+            result.mrr10,
+            n.mrr10,
+            w.mrr10,
+            nw.mrr10,
+            result.recall(1),
+            n.recall(1),
+            w.recall(1),
+            nw.recall(1),
+        );
+    }
+
+    // Every cell must score the identical population, or none of the above is
+    // a comparison.
+    for result in &matrix.plain.results {
+        let task = &result.task_name;
+        for (label, other) in [
+            ("cfr-normalized-heldout", &matrix.normalized),
+            ("cfr-weighted", &matrix.weighted),
+            ("cfr-normalized-weighted", &matrix.normalized_weighted),
+        ] {
+            let Some(other) = other.result(task) else {
+                continue;
+            };
+            assert_eq!(
+                result.scored, other.scored,
+                "{task}: {label} scored {} queries against the control's {}; \
+                 four cells over four populations is not a 2x2",
+                other.scored, result.scored
+            );
+        }
+    }
+
+    for (task, floor) in CFR_NORM_WEIGHTED_MIN_AUC {
+        let r = matrix
+            .normalized_weighted
+            .result(task)
+            .unwrap_or_else(|| panic!("{task} did not run"));
+        assert!(
+            !r.underpowered(),
+            "{task} is ratcheted but scored only {} queries, below {}.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+        assert_ratchet(
+            &format!("cfr-normalized-weighted {task} AUC"),
+            r.auc,
+            *floor,
+            &r.line(),
+        );
+    }
+
+    let mut regressed = Vec::new();
+    for (task, _) in CFR_NORM_WEIGHTED_MIN_AUC {
+        let Some(both) = matrix.normalized_weighted.result(task) else {
+            continue;
+        };
+        for (label, single) in [
+            ("the weighting alone", matrix.weighted.result(task)),
+            ("the normaliser alone", matrix.normalized.result(task)),
+        ] {
+            let Some(single) = single else { continue };
+            if both.auc < single.auc - RATCHET_SLACK {
+                regressed.push(format!(
+                    "{task}: {label} reads AUC {:.6}, both levers {:.6}",
+                    single.auc, both.auc
+                ));
+            }
+        }
+    }
+    assert!(
+        regressed.is_empty(),
+        "composing the two levers cost more than {RATCHET_SLACK} against a \
+         single lever on: {}",
+        regressed.join("; ")
+    );
+}
+
 /// Every CFR number on the in-house corpus, no ratchet in the way, with the
 /// weighted-vs-unweighted deltas printed as markdown rows for the docs.
 ///
@@ -2049,11 +2314,20 @@ fn cfr_full_sweep() {
     if let Some(normalized) = cfr_normalized_report() {
         print_markdown_rows("cfr-normalized (uniform weights, whole corpus)", normalized);
     }
-    let Some((control, weighted)) = cfr_weighted_reports() else {
+    let Some(matrix) = cfr_lever_matrix() else {
         return;
     };
+    let (control, weighted) = (&matrix.plain, &matrix.weighted);
     print_markdown_rows("cfr-heldout (uniform weights, held-out half)", control);
+    print_markdown_rows(
+        "cfr-normalized-heldout (normalised, uniform weights, held-out half)",
+        &matrix.normalized,
+    );
     print_markdown_rows("cfr-weighted (TF-IDF, held-out half)", weighted);
+    print_markdown_rows(
+        "cfr-normalized-weighted (normalised + TF-IDF, held-out half)",
+        &matrix.normalized_weighted,
+    );
 
     eprintln!("\n| Task | Scored | Pool | AUC unw. | AUC wtd. | d AUC | MRR10 unw. | MRR10 wtd. | d MRR10 | R@1 unw. | R@1 wtd. | d R@1 |");
     eprintln!("|---|---|---|---|---|---|---|---|---|---|---|---|");

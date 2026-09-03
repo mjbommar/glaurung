@@ -19,9 +19,7 @@
 //! [`StructuralScheme`] and [`CfrScheme`] -- and the comment at the foot of
 //! this file says what the one still to come should write.
 
-use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
 
 use glaurung::identity::structural::code_facts_from_function_bytes;
 

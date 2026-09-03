@@ -564,21 +564,25 @@ and unratcheted for exactly that reason.
 
 ### Head to head
 
-| | CTPH | Python structural fingerprint | `structural` (L1) | `cfr` (L2) | `cfr` weighted |
-|---|---|---|---|---|---|
-| XO-gcc AUC | 0.5015 | 0.5825 | 0.7536 | 0.7569 | **0.8592**\* |
-| XC-O0 AUC | -- | -- | 0.9387 | 0.9663 | **0.9938**\* |
-| XC-O2 AUC | 0.5030 | 0.7287 | 0.7238 | 0.8921 | **0.9461**\* |
-| XM AUC | 0.5025 | 0.5150 | 0.7026 | 0.7296 | **0.8131**\* |
-| XC-O2 MRR10 | 0.0084 | 0.2241 | 0.2381 | 0.5688 | **0.6549**\* |
-| XM MRR10 | 0.0058 | 0.0357 | 0.1117 | 0.1990 | **0.4232**\* |
-| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) | 1,810 us (release) | 1,810 us (release) |
+| | CTPH | Python structural fingerprint | `structural` (L1) | `cfr` (L2) | `cfr` weighted | `cfr` normalised + weighted |
+|---|---|---|---|---|---|---|
+| XO-gcc AUC | 0.5015 | 0.5825 | 0.7536 | 0.7569 | 0.8592\* | **0.8717**\* |
+| XC-O0 AUC | -- | -- | 0.9387 | 0.9663 | 0.9938\* | **0.9942**\* |
+| XC-O2 AUC | 0.5030 | 0.7287 | 0.7238 | 0.8921 | 0.9461\* | **0.9487**\* |
+| XM AUC | 0.5025 | 0.5150 | 0.7026 | 0.7296 | 0.8131\* | **0.8390**\* |
+| XC-O2 MRR10 | 0.0084 | 0.2241 | 0.2381 | 0.5688 | 0.6549\* | **0.6723**\* |
+| XM MRR10 | 0.0058 | 0.0357 | 0.1117 | 0.1990 | 0.4232\* | **0.4405**\* |
+| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) | 1,810 us (release) | 1,810 us (release) | 2,113 us (release) |
 
-\*The weighted column is scored on the **held-out half** of the corpus (187-241
-queries against the others' 357-487), so it is not on the same denominators as
-the four columns to its left. The comparison it belongs in is with `cfr-heldout`,
-which is in the weighted section above; it is here so the shape of the ladder is
-visible in one place.
+\*The two rightmost columns are scored on the **held-out half** of the corpus
+(187-241 queries against the others' 357-487), so they are not on the same
+denominators as the four columns to their left. The comparison they belong in is
+with `cfr-heldout`, which is in the weighted section above; they are here so the
+shape of the ladder is visible in one place. The last column turns both levers
+on at once -- the peephole normaliser and a TF-IDF table counted over normalised
+vectors -- and the 2x2 that separates them, with the one cell where they do not
+compose, is in
+[`reference/function-identity-cfr.md`](../reference/function-identity-cfr.md#the-two-levers-together).
 
 The first four columns are over the same tasks, the same tie rule and the same
 sampling. They are **not** over the same rows: the harnesses filter 1,787,
