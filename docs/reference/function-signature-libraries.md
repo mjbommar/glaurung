@@ -340,6 +340,18 @@ None of these libraries is shipped in `data/sigs/` yet; keying,
 deduplication across variants and a shipping policy for a set this size are
 the next question, not this lane's.
 
+**The other axis: the network harvest, 2026-09-03.** The Docker harvest above
+gives breadth of *build image*; it does not give breadth of *distro release*,
+because one image is one build point. `python/glaurung/tools/harvest_sources.py`
+fetches the `base` matrix directly from Debian (`snapshot.debian.org`), Ubuntu
+(Launchpad) and Alpine (APKINDEX + CDN) without a container at all, and writes
+into the same `index.json` this section describes. See
+[Signature sources: the `base` matrix](signature-sources.md) for the fetch
+mechanics, the network manners, the licence position, and the measured
+cross-release overlap table -- including the two rows where the network and
+Docker harvesters reach the same package versions by different paths and agree
+on every signature byte for byte.
+
 ## Measured
 
 `tests/flirt_signature_matching.rs`, 2026-09-02, against two images that link

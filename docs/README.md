@@ -45,6 +45,7 @@ and troubleshooting live in the [development setup guide](development/setup.md).
 | Tell which functions changed between two builds | [Structural function identity](reference/function-identity-structural.md) — the L1 control-flow invariants `glaurung diff` ranks by |
 | Recognise an exact known build of a known function | [WARP function GUIDs](reference/function-identity-warp.md) — the L0 rung: a UUIDv5 over relocation-masked basic-block bytes |
 | Name library functions in a stripped binary | [FLIRT-style signature libraries](reference/function-signature-libraries.md) — how the masked-byte library is built from `.a` relocations, and what it matches |
+| Harvest distro packages for signature libraries over the network | [Signature sources: the `base` matrix](reference/signature-sources.md) — Debian, Ubuntu and Alpine fetch mechanics, network manners, and the cross-release overlap table |
 | Recognise the same function across compilers and optimisation levels | [The Canonical Function Representation](reference/function-identity-cfr.md) — the L2 rung: a Weisfeiler-Lehman feature multiset over the SSA dataflow graph |
 | Recognise the same function across optimisation levels by what it computes | [Value fingerprints](reference/function-identity-values.md) — the L3 rung: bounded execution over the LLIR, weighted Jaccard over the values harvested |
 | Improve any matcher's candidate lists using the call graph | [Context re-ranking](reference/function-identity-rerank.md) — the RevDecode Viterbi decode over a layered candidate graph, and what each of its terms is measured to be worth |
@@ -93,6 +94,7 @@ commands are executed and byte-compared against `_fixtures/` by
 [structural function identity](reference/function-identity-structural.md),
 [WARP function GUIDs](reference/function-identity-warp.md),
 [FLIRT-style signature libraries](reference/function-signature-libraries.md),
+[signature sources](reference/signature-sources.md),
 [the Canonical Function Representation](reference/function-identity-cfr.md),
 [value fingerprints](reference/function-identity-values.md),
 [context re-ranking](reference/function-identity-rerank.md),
