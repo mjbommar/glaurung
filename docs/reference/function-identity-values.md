@@ -300,8 +300,8 @@ produced; a compiler swap at fixed `-O` does not. Both forms ship
 **The corpus weighting does not earn its place yet.** vSim's
 `W(v) = 1 / ln(Occ(v) + 1)` is implemented (`OccurrenceWeights`) and measures
 *worse* on four of the five powered lanes and ties on the fifth — AUC 0.9059
-to 0.8869 on XO-gcc, Recall@1 0.5219 to 0.5193, mean -0.0066. A document-frequency table is only as good as the corpus it came from,
-and 1,787 functions from 206 sources is a corpus in which a genuinely rare
+to 0.8869 on XO-gcc, Recall@1 0.5219 to 0.5193, mean -0.0066. A
+document-frequency table is only as good as the corpus it came from, and 1,787 functions from 206 sources is a corpus in which a genuinely rare
 value and a value seen once by accident are indistinguishable. It is reported
 rather than adopted, and it is the first thing to re-measure when a larger
 corpus exists.
@@ -323,8 +323,8 @@ Stated here rather than discovered later.
    inlining (the field's unsolved failure mode: roughly 82 to 84 per cent of
    failures in the best tools involve it). It needs a call graph and a bounded
    fixpoint over it, neither of which this slice has.
-2. **AArch64 and the other architectures.** `glaurung::exec::Machine::new_with_arch`
-   already takes `RegArch::AArch64`, so the interpreter is not the blocker;
+2. **AArch64 and the other architectures.**
+   `glaurung::exec::Machine::new_with_arch` already takes `RegArch::AArch64`, so the interpreter is not the blocker;
    what is missing is the seeded-register list in `seeds.rs`, a return-register
    choice per ABI, and the decision about whether one fingerprint should be
    comparable across architectures at all (the width-free normal form says it
