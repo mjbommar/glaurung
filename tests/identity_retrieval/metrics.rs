@@ -322,9 +322,17 @@ pub fn evaluate<S: Scheme>(scheme: &S, corpus: &Corpus, tasks: &[Task]) -> Schem
         corpus_root: corpus.root.clone(),
         corpus_load_seconds: corpus.load_seconds,
         corpus_filters: corpus.filters,
+        // The JSON field this becomes is named `compiler`, so it holds the
+        // compiler and not `Slice::label()` ("gcc/O0"), which is what it used
+        // to hold. `test_python_and_rust_harnesses_agree_on_the_corpus` joins
+        // the two harnesses' populations on `(compiler, opt)` and could never
+        // match a key; the check that exists to notice the two lanes filtering
+        // different populations could not itself run. `cisco.rs` builds its
+        // own `slice_sizes` and is unaffected -- there a slice really is
+        // identified by its five-dimensional label.
         slice_sizes: corpus
             .slices()
-            .map(|s| (s.label(), s.opt.to_string(), s.samples.len()))
+            .map(|s| (s.compiler.to_string(), s.opt.to_string(), s.samples.len()))
             .collect(),
         corpus_name: "glaurung fixture matrix (tests/decompiler_fixtures/build)".to_string(),
         unsupported_tasks: UNSUPPORTED_TASKS
@@ -522,7 +530,7 @@ pub fn evaluate_slices<S: Scheme>(
 /// When the pool is smaller than the requested count, every usable candidate
 /// is returned and the caller's `sampled_pool_size` overstates the pool. That
 /// case is asserted against in `main.rs` rather than silently tolerated.
-fn sample_negatives(
+pub(crate) fn sample_negatives(
     task_name: &str,
     query_index: usize,
     query: &FunctionSample,
@@ -554,7 +562,7 @@ fn sample_negatives(
 }
 
 /// Recall@k: the fraction of queries whose twin ranked at `k` or better.
-fn recall(ranks: &[usize], k: usize) -> f64 {
+pub(crate) fn recall(ranks: &[usize], k: usize) -> f64 {
     if ranks.is_empty() {
         return 0.0;
     }
@@ -562,7 +570,7 @@ fn recall(ranks: &[usize], k: usize) -> f64 {
 }
 
 /// Mean reciprocal rank, truncated at `cutoff` (MRR10 for `cutoff = 10`).
-fn mrr(ranks: &[usize], cutoff: usize) -> f64 {
+pub(crate) fn mrr(ranks: &[usize], cutoff: usize) -> f64 {
     if ranks.is_empty() {
         return 0.0;
     }

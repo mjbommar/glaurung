@@ -112,6 +112,23 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "-O2 counterpart to the spill-shaped producers already in tagging.rs "
         "and valued.rs, so it sits beside them rather than in the driver."
     ),
+    "python_bindings/identity.rs": (
+        "accepted (2026-09-03): the PyO3 surface for the identity ladder, six "
+        "lanes in one file BY DESIGN and not by accretion. The module's own "
+        "header states the convention: each lane (`structural`, `warp`, `cfr`, "
+        "`gate`, `values`, `rerank`) keeps its items inside a delimited "
+        "section and gets its own `register_*` block, so two lanes landing at "
+        "once is a trivial merge instead of a conflict inside a function body. "
+        "That held: four lanes were merged onto one line and the only "
+        "conflicts in this file were the header's lane roster and the "
+        "registration list -- three lines. Splitting by lane would replace one "
+        "reviewed convention with six files whose only shared contract is a "
+        "`register_identity_bindings` that has to import all of them anyway, "
+        "and it would break the property that makes concurrent lanes cheap. It "
+        "crossed 1,000 LOC by merging, not by growth: no single lane's section "
+        "exceeds ~300 lines. Reviewed as the union of six section deltas, each "
+        "already reviewed on its own lane."
+    ),
     "python_bindings/ir.rs": (
         "scheduled split, three cuts taken 2026-08-18 (2,738 -> 1,422): "
         "ir/lift.rs (396) took the LLIR dict encoder and the two lift "

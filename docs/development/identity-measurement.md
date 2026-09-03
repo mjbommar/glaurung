@@ -29,7 +29,7 @@ So this harness scores every scheme the same way over the same filtered
 population, and no result can be printed or serialised without its pool size
 and its free-variable set attached.
 
-Three schemes are scored below, and the three results say different things.
+Four schemes are scored below, and the four results say different things.
 **CTPH** (`glaurung::similarity`, the byte digest) is at chance on every task.
 **The Python structural fingerprint**
 (`python/glaurung/llm/kb/structural_fingerprint.py`) reaches AUC 0.73 and MRR10
@@ -40,7 +40,13 @@ the L1 rung, plan item 2) reaches AUC 0.94 cross-compiler, does **not**
 collapse when both the compiler and the optimisation level are free (AUC
 0.70), and reaches AUC 0.95 across an architecture change on Dataset-1 —
 clearing every other scheme's cross-architecture floor by a wide margin. All
-three results are below.
+three results are below. **`values`**
+(`glaurung::identity::values`, the L3 rung, plan item 12) runs the function
+under bounded execution and keys on the numbers it computes: it reaches AUC
+0.91 / Recall@1 0.52 on the cross-optimisation lane where the best graph
+scheme manages 0.76 / 0.18, and 0.85 / 0.41 on XM where that scheme reads
+0.73 / 0.13 -- and it *loses* to the CFR on cross-compiler Recall@1. All four
+results are below.
 
 ## The protocol
 
@@ -192,6 +198,20 @@ GLAURUNG_CISCO_CORPUS="$HOME/.cache/glaurung/corpora/cisco-talos-dataset1" \
 # Every task's every number, no ratchet in the way, markdown rows for the
 # table below. Use this when a scheme lands or a ratchet fires.
 cargo test --features python-ext --test identity_retrieval -- --ignored --nocapture
+
+# The CFR lanes specifically, with the weighted-vs-unweighted delta table.
+# Note the profile: `cfr` extraction is 1,810 us/function in release and
+# 12,004 in debug, so a full sweep is minutes either way -- but the retrieval
+# numbers are bit-identical, so measure in release and gate in debug.
+cargo test --release --features python-ext --test identity_retrieval -- \
+  --ignored --nocapture cfr_full_sweep
+GLAURUNG_CISCO_CORPUS=... cargo test --release --features python-ext \
+  --test identity_retrieval -- --ignored --nocapture cisco_cfr_full_sweep
+
+# The re-rank ablation grid: five presets x two candidate lanes x two schemes,
+# both corpora. Under a minute once the corpora are loaded.
+cargo test --release --features python-ext --test identity_retrieval -- \
+  --ignored --nocapture rerank_full_sweep
 
 # --- Python: the production structural fingerprint. ~70s, `slow`-marked.
 uv run pytest python/tests/test_identity_retrieval_protocol.py -q
@@ -378,26 +398,314 @@ cushion against legitimate future scheme changes rather than against
 measurement noise), but the exemption described in "A note on reproducibility,
 sharpened" below no longer applies -- see there for the Dataset-1 numbers.
 
+### cfr — `glaurung::identity::cfr`, the L2 Canonical Function Representation
+
+Rust lane, 2026-09-02, **release** profile, extraction **1,810 us/function**
+over 1,787 samples (12,004 us/function in a debug build; the retrieval numbers
+are bit-identical between the two, and were read off the release run and
+reproduced by the debug ratchet run in the same commit). Sampled pool 101
+throughout, so chance Recall@1 is 0.0099. Uniform weights — the weighted rows
+are the section after this one.
+
+| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@5 | R@10 | R@50 | Global R@1 (chance) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| XO-gcc | optimisation | 389 | 410 | 0.7569 | 0.2543 | 0.1799 | 0.3393 | 0.4550 | 0.7815 | 0.1131 (0.0024) |
+| XO-clang | optimisation | 366 | 377 | 0.7135 | 0.1808 | 0.1120 | 0.2760 | 0.3634 | 0.7432 | 0.0683 (0.0027) |
+| **XC-O0** | compiler | 487 | 494 | **0.9663** | **0.9162** | **0.8706** | 0.9713 | 0.9836 | 0.9938 | 0.7680 (0.0020) |
+| **XC-O2** | compiler | 357 | 377 | **0.8921** | **0.5688** | 0.5014 | 0.6499 | 0.7227 | 0.9216 | 0.4034 (0.0027) |
+| XM | compiler + optimisation | 365 | 377 | **0.7296** | 0.1990 | 0.1342 | 0.2877 | 0.3836 | 0.7945 | 0.0795 (0.0027) |
+| XM-S | + queries <20 blocks | 308 | 377 | 0.7030 | 0.1637 | 0.1039 | 0.2240 | 0.3506 | 0.7565 | 0.0617 (0.0027) |
+| XM-M | + queries 20-100 blocks | 54 | 377 | 0.8708 | 0.3125 | 0.2037 | 0.4815 | 0.6296 | 0.9444 | 0.1296 (0.0027) |
+| XM-L *(underpowered, n=3)* | + queries >100 blocks | 3 | 377 | 0.9967 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 (0.0027) |
+
+**Reading it, in the same three-point form as the sections above.**
+
+1. **It does not reverse the intuition, and it does not collapse.** XO-gcc
+   0.7569 and XC-O0 0.9663: strong on both axes, like `structural` and unlike
+   the Python fingerprint. XM is 0.7296, above `structural`'s 0.7026 — which is
+   the bar the previous version of this page set for a new scheme ("the bar for
+   the CFR is not 'does not collapse' but 'beats 0.70'"). It clears it, though
+   only just, unweighted.
+
+2. **The margin is in the ranking, not the AUC.** XC-O2 AUC 0.8921 against
+   `structural`'s 0.7238 is a large gap; XC-O2 **MRR10 0.5688 against 0.2381**
+   is a much larger one, and MRR10 is the metric Marcelli warns diverges from
+   AUC. FunctionSimSearch's published ceiling for token-shaped representations
+   is MRR10 0.26; `structural` sits just above it at 0.238–0.582 depending on
+   the task; the CFR's XC-O0 MRR10 is 0.9162.
+
+3. **It is expensive, and structurally so.** 1,810 us/function against CTPH's
+   41 and `structural`'s 267, all release-or-debug-labelled above. This is the
+   only scheme in the harness that lifts to LLIR and runs SSA rather than
+   reading bytes or a discovered CFG, and it is an order of magnitude past
+   TikNib's published 20–1030 us band. For a 6,000-function kernel diff that is
+   eleven seconds of extraction, which is fine; for a corpus-scale index it is
+   the number to improve.
+
+### cfr-weighted — the same features under a corpus TF-IDF table
+
+Plan item 5. The weight table is
+`src/identity/cfr/weights.rs` — `idf(f) = ln((N + 1) / (df(f) + 1))`, quantised
+into 512 buckets over `[0, 16]` nats — and the design is documented in
+[`docs/reference/function-identity-cfr.md`](../reference/function-identity-cfr.md).
+
+**The population is half the corpus, and the comparison is against a control on
+the same half.** A weight table that has counted the exact function being
+retrieved has seen the answer, weakly but unboundably, so the harness splits:
+SplitMix64 over the ground-truth label (`scheme::cfr_in_training_half`) puts
+each function in training or held out **in every slice at once**, so a
+function's `-O0` build never trains the table that scores its `-O2` build. The
+weighted row and the unweighted control (`cfr-heldout`) score the identical
+population — `cfr_weighting_ratchets` asserts the two `scored` counts are equal,
+because two rows over two populations are not a delta.
+
+This is *stricter* than production. BSim counts its IDF over the corpus it later
+searches, as does every TF-IDF retrieval system, because a document frequency is
+a property of the collection rather than a fitted parameter. So these numbers
+understate what the weighting is worth in a deployment that indexes what it
+searches.
+
+In-house corpus, release, 2026-09-02. Weight table
+`cfr-1.0-s0-idf512-48359a7a35563d79`: 910 training-half functions, 39,969
+weighted features. Sampled pool 101 throughout.
+
+| Task | Scored | Global pool | AUC unw. → wtd. | MRR10 unw. → wtd. | R@1 unw. → wtd. |
+|---|---|---|---|---|---|
+| **XO-gcc** | 187 | 200 | 0.7800 → **0.8592** (+0.0791) | 0.2549 → **0.5080** (+0.2531) | 0.1872 → **0.4064** (+0.2193) |
+| **XO-clang** | 178 | 184 | 0.7419 → **0.8152** (+0.0733) | 0.1829 → **0.3729** (+0.1901) | 0.1124 → **0.2809** (+0.1685) |
+| XC-O0 | 241 | 243 | 0.9679 → 0.9938 (+0.0259) | 0.9501 → 0.9557 (+0.0056) | 0.9253 → 0.9253 (+0.0000) |
+| XC-O2 | 172 | 184 | 0.8935 → 0.9461 (+0.0526) | 0.5681 → 0.6549 (+0.0868) | 0.5116 → 0.5698 (+0.0581) |
+| XM | 177 | 184 | 0.7625 → 0.8131 (+0.0506) | 0.1984 → 0.4232 (+0.2247) | 0.1243 → 0.3333 (+0.2090) |
+| XM-S | 141 | 184 | 0.7474 → 0.7963 (+0.0490) | 0.1699 → 0.4128 (+0.2429) | 0.0922 → 0.3191 (+0.2270) |
+| XM-M | 34 | 184 | 0.8355 → 0.8797 (+0.0442) | 0.2394 → 0.4303 (+0.1909) | 0.1176 → 0.3235 (+0.2059) |
+| XM-L *(underpowered, n=2)* | 2 | 184 | 0.9975 → 0.9825 (−0.0150) | 1.0000 → 0.6000 (−0.4000) | 1.0000 → 0.5000 (−0.5000) |
+
+**Reading it.**
+
+1. **The plan's hypothesis holds, on every metric.** The research synthesis
+   predicted the weighting would lift **XO** most, and it does: the largest AUC
+   gain (+0.0791) and the largest ranking gains in the table (+0.2531 MRR10,
+   +0.2193 Recall@1). The mechanism is visible in the row that gains least —
+   XC-O0 was already at AUC 0.9679 with Recall@1 0.9253 and had nothing left to
+   gain, while XO sat at 0.7800, and what separates a function from its `-O2`
+   twin's *size-matched* neighbours is exactly the rare structure a uniform
+   weighting drowns in `mov`-shaped noise.
+
+2. **Ranking gains far outrun AUC gains.** XM moves +0.05 AUC and +0.22 MRR10.
+   AUC asks whether a positive pair outscores a random negative pair, which the
+   unweighted CFR already mostly gets right; MRR10 asks whether the twin
+   outranks a hundred size-matched negatives, and that is the question rarity
+   answers. **A lane evaluated on AUC alone would have reported this work as a
+   modest improvement.** That is the most transferable finding here and it is
+   exactly the divergence Marcelli documents.
+
+3. **XM-L is two queries.** Its Recall@1 can only be 0, 0.5 or 1. It is flagged,
+   it is not ratcheted, and it must not be quoted — the same rule as everywhere
+   else on this page.
+
+### cfr and cfr-weighted on Dataset-1
+
+Release, 2026-09-02, extraction **25,331 us/function** over 2,441 samples across
+six architectures. Uniform weights over the whole corpus, which is the row
+comparable with CTPH and `structural` above.
+
+| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@10 |
+|---|---|---|---|---|---|---|---|
+| **XO** | optimisation | 50 | 229 | **0.9127** | 0.7570 | 0.6800 | 0.9000 |
+| **XC** | compiler | 65 | 348 | **0.9638** | 0.9667 | 0.9385 | 1.0000 |
+| **XM** | compiler + optimisation | 36 | 262 | **0.8806** | 0.7301 | 0.6667 | 0.8611 |
+| **XB** | bitness | 72 | 260 | **0.9353** | 0.6695 | 0.5694 | 0.8889 |
+| **XA-arm64** | architecture | 47 | 228 | **0.9131** | 0.8045 | 0.7447 | 0.9149 |
+| XA-mips64 | architecture | **0** | — | — | — | — | — |
+| XA+XB-arm32 *(underpowered, n=25)* | architecture + bitness | 25 | 241 | 0.8280 | 0.5124 | 0.4400 | 0.6800 |
+| XA+XB-mips32 | architecture + bitness | **0** | — | — | — | — | — |
+| XA+XO *(underpowered, n=23)* | architecture + optimisation | 23 | 228 | 0.8203 | 0.4167 | 0.3043 | 0.6957 |
+
+Against `structural`'s table above, on the identical tasks:
+
+| Task | CTPH | `structural` | `cfr` |
+|---|---|---|---|
+| XO | 0.4990 | 0.8283 | **0.9127** |
+| XC | 0.5402 | 0.8851 | **0.9638** |
+| XM | 0.5121 | 0.8045 | **0.8806** |
+| XB | 0.4997 | 0.8985 | **0.9353** |
+| XA-arm64 | 0.5000 | **0.9486** | 0.9131 |
+| XA-mips64 | 0.4998 | 0.5742 | *no lifter* |
+| XA+XB-mips32 | 0.5000 | 0.5524 | *no lifter* |
+
+**Two things, and the second is the more important one.**
+
+**Four of five improve, and the exception is where a CFG-shape scheme was
+already strongest.** `structural` keeps XA-arm64 (0.9486 against 0.9131). The
+question the previous version of this page posed for the CFR was whether it
+would "beat `structural`'s own XA-mips64 (0.5742) and XA+XB-mips32 (0.5524) —
+the two rows where a CFG-shape-only representation is weakest, which is exactly
+where dataflow information the CFR adds might help most." **The answer is that
+it cannot run there at all**, and that is the second thing.
+
+**The two MIPS rows score zero queries, deliberately.** `src/ir/lift/` covers
+x86, x86-64, ARM and AArch64 and reaches MIPS not at all, so `CfrScheme::extract`
+consults `SampleArch::is_liftable` and **refuses** — visibly, counted, and
+printed beside the result — rather than returning an empty vector that would
+score 0.0 against everything and read as a measured failure. CTPH scored those
+rows at exactly chance and `structural` at 0.574 and 0.552; the CFR scores them
+not at all. `CISCO_CFR_UNLIFTABLE_TASKS` asserts the zero, so if a MIPS lifter
+ever lands the test fires and says to promote them. The difference between
+"wrong" and "cannot answer" is the whole reason `SchemeError` exists.
+
+The weighted Dataset-1 rows are on the held-out half, which leaves 9–30 queries
+per task and puts most of them under the quotable threshold. They are reported
+for completeness and only the first five should be read at all:
+
+| Task | Scored | Pool | AUC unw. → wtd. | MRR10 unw. → wtd. | R@1 unw. → wtd. |
+|---|---|---|---|---|---|
+| **XO** | 18 | 106 | 0.8880 → **0.9902** (+0.1023) | 0.5718 → 0.8426 (+0.2708) | 0.5000 → 0.7222 (+0.2222) |
+| XC | 29 | 171 | 0.9586 → 0.9972 (+0.0386) | 0.9483 → 0.9425 (−0.0057) | 0.8966 → 0.8966 (+0.0000) |
+| XM | 18 | 125 | 0.8681 → 0.9291 (+0.0610) | 0.5802 → 0.6543 (+0.0741) | 0.5000 → 0.6111 (+0.1111) |
+| XB | 30 | 127 | 0.9642 → 0.9844 (+0.0202) | 0.7001 → 0.8722 (+0.1721) | 0.5667 → 0.8000 (+0.2333) |
+| XA-arm64 | 19 | 115 | 0.9185 → 0.9855 (+0.0670) | 0.8132 → 0.8921 (+0.0789) | 0.7895 → 0.8421 (+0.0526) |
+| XA+XB-arm32 *(n=9)* | 9 | 128 | 0.9667 → 0.8878 (−0.0789) | 0.7778 → 0.8148 (+0.0370) | 0.7778 → 0.7778 (+0.0000) |
+| XA+XO *(n=9)* | 9 | 115 | 0.8635 → 0.8983 (+0.0348) | 0.4251 → 0.3529 (−0.0722) | 0.2222 → 0.1111 (−0.1111) |
+
+**XO gains most here too** (+0.1023 AUC), which is the in-house finding
+reproduced on a corpus with different compilers, different sources and a
+different ground truth. **The two rows that go backwards are the two with nine
+queries**, where one query is 11 percentage points of Recall@1; they are flagged
+and unratcheted for exactly that reason.
+
+### values — `glaurung::identity::values`, L3 value fingerprints
+
+Rust lane, 2026-09-03, **release** profile, extraction **732 to 766
+us/function** cold over whole images. Sampled pool 101 (chance R@1 0.0099)
+throughout. The full rule table, every simplification from vSim, the cost and
+coverage figures and the nine-configuration ablation are in
+[`reference/function-identity-values.md`](../reference/function-identity-values.md);
+this page carries the retrieval rows so they sit beside the other three
+schemes' on the same denominators.
+
+| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@5 | R@10 | R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| **XO-gcc** | optimisation | 389 | 410 | **0.9059** | **0.6274** | 0.5219 | 0.7635 | 0.8638 | 0.9640 |
+| XO-clang | optimisation | 366 | 377 | 0.8565 | 0.4574 | 0.3634 | 0.5765 | 0.6995 | 0.9344 |
+| XC-O0 | compiler | 487 | 494 | 0.9688 | 0.7724 | 0.6797 | 0.9014 | 0.9630 | 0.9979 |
+| XC-O2 | compiler | 357 | 377 | 0.9056 | 0.5654 | 0.4706 | 0.6723 | 0.7843 | 0.9692 |
+| **XM** | compiler + optimisation | 365 | 377 | **0.8518** | **0.4937** | 0.4055 | 0.5918 | 0.7096 | 0.9397 |
+| XM-S | + queries <20 blocks | 308 | 377 | 0.8458 | 0.4830 | 0.4026 | 0.5779 | 0.6916 | 0.9351 |
+| XM-M | + queries 20-100 blocks | 54 | 377 | 0.9169 | 0.4909 | 0.3889 | 0.6852 | 0.7407 | 0.9815 |
+| XM-L *(underpowered, n=3)* | + queries >100 blocks | 3 | 377 | 0.7233 | 0.6667 | 0.6667 | 0.6667 | 0.6667 | 0.6667 |
+
+**Reading it.** Two things, in the same order as the sections above.
+
+1. **It does not merely fail to collapse on XM — XM is where it wins most.**
+   AUC 0.8518 against `structural`'s 0.7026 and the CFR's 0.7296, and Recall@1
+   0.4055 against 0.0685 and 0.1342. The optimisation axis is what every
+   representation on this page loses signal to, and values are the thing an
+   optimiser is least free to change: it may unroll a loop, reassociate an
+   expression or hoist a constant, but it must still compute the same numbers.
+2. **It loses cross-compiler, and that is not a rounding error.** XC-O0
+   Recall@1 0.6797 against the CFR's 0.8706. Two compilers at `-O0` build so
+   nearly the same graph that a canonical form over it is close to exact.
+   These are complementary rungs; the honest summary is that the values lane
+   owns the optimisation axis and the CFR owns cross-compiler-at-fixed-`-O`.
+
+The **cost** is the surprise. 732 to 766 us/function cold in release, against
+the CFR's **4,088 us** measured in the same process on the same rows: bounded
+execution is five and a half times *cheaper* than building an SSA graph and
+running three Weisfeiler-Lehman iterations over it, and it sits inside
+TikNib's published 20 to 1,030 us band. The plan document assumed L3 would be
+the expensive rung; on this corpus it is not. 1.44% of runs hit the
+20,000-instruction budget and **no** function (0 of 1,787) hit it before
+producing a value.
+
+On **Dataset-1** this scheme runs the three x86-64 lanes only — XO AUC 0.9569
+/ R@1 0.8000 over 50 scored, XC 0.9368 / 0.7846 over 65, XM 0.9516 / 0.7500
+over 36 — and refuses the six cross-architecture and cross-bitness lanes
+outright. `glaurung::exec::Machine::new` builds an **x86-64 register file**;
+running ARM or MIPS through it would read every register as zero and return a
+fingerprint that looked like a measurement, so `fingerprints_for_path` raises
+instead, and `cisco_values_x86_64_lanes` asserts those lanes score **nothing**
+rather than quietly omitting them. Read the `Scored` column before the
+accuracies: 36 to 65 queries is above the 30-query floor for quoting a row and
+a long way below the point at which a few points mean anything.
+
 ### Head to head
 
-| | CTPH | Python structural fingerprint | `structural` (L1) |
-|---|---|---|---|
-| XO-gcc AUC | 0.5015 | 0.5825 | **0.7536** |
-| XC-O0 AUC | -- | -- | **0.9387** |
-| XC-O2 AUC | 0.5030 | 0.7287 | **0.7238** |
-| XM AUC | 0.5025 | 0.5150 | **0.7026** |
-| XC-O2 MRR10 | 0.0084 | **0.2241** | 0.2381 |
-| XM MRR10 | 0.0058 | 0.0357 | **0.1117** |
-| Extraction | **41 us** (debug) | 25,500 us | 223-655 us (debug) |
+| | CTPH | Python structural fingerprint | `structural` (L1) | `cfr` (L2) | `cfr` weighted | `cfr` norm + weighted | `values` (L3) |
+|---|---|---|---|---|---|---|---|
+| XO-gcc AUC | 0.5015 | 0.5825 | 0.7536 | 0.7569 | 0.8592\* | 0.8717\* | **0.9059** |
+| XC-O0 AUC | -- | -- | 0.9387 | 0.9663 | 0.9938\* | 0.9942\* | **0.9688** |
+| XC-O2 AUC | 0.5030 | 0.7287 | 0.7238 | 0.8921 | 0.9461\* | 0.9487\* | **0.9056** |
+| XM AUC | 0.5025 | 0.5150 | 0.7026 | 0.7296 | 0.8131\* | 0.8390\* | **0.8518** |
+| XC-O0 R@1 | 0.0062 | -- | 0.4723 | **0.8706** | 0.9253\* | 0.9336\* | 0.6797 |
+| XC-O2 MRR10 | 0.0084 | 0.2241 | 0.2381 | **0.5688** | 0.6549\* | 0.6723\* | 0.5654 |
+| XM MRR10 | 0.0058 | 0.0357 | 0.1117 | 0.1990 | 0.4232\* | 0.4405\* | **0.4937** |
+| XM R@1 | 0.0055 | 0.0165 | 0.0685 | 0.1342 | 0.3333\* | 0.3503\* | **0.4055** |
+| Extraction (debug) | **41 us** | 25,500 us | 223-655 us | -- | -- | -- | -- |
+| Extraction (release, one process) | 65 us | -- | 220 us | 4,088 us | -- | -- | **738 us** |
+| Extraction (release, retrieval harness) | -- | -- | -- | 1,805 us | 1,514 us | 2,113 us | -- |
 
-All three columns are over the same tasks, the same tie rule and the same
-sampling. They are **not** over the same rows: the three harnesses filter
-1,787, 1,786 and 1,787 functions from populations discovered differently (see
-"Two known differences" below), so treat the comparison as between
-representations, not as a per-function A/B. `structural` is the first scheme
-in this table that does not collapse on XM, and it reaches this without a
-model, a corpus, or a training step -- exactly what the research synthesis
-predicted for the identity ladder's L1 rung.
+\*The three `cfr` lever columns are scored on the **held-out half** of the
+corpus (187-241 queries against the others' 357-487), so they are not on the
+same denominators as the columns either side of them and nothing in their rows
+is bolded as a winner. The comparison they belong in is with `cfr-heldout`, in
+the weighted section above. They are here so the shape of the ladder is visible
+in one place. The last of them turns both CFR levers on at once -- the peephole
+normaliser and a TF-IDF table counted over normalised vectors -- and the 2x2
+that separates them, including the one cell where they do not compose, is in
+[`reference/function-identity-cfr.md`](../reference/function-identity-cfr.md#the-two-levers-together).
+
+The two release extraction rows are **different measurements**, not a
+disagreement: "one process" times a single whole-image run, while the retrieval
+harness figure is what `metrics::evaluate` reports across a scored slice with
+its image cache warm. Neither is comparable with the debug row; see CLAUDE.md
+on how far the two profiles diverge.
+
+The unstarred columns are over the same tasks, the same tie rule and the same
+sampling. They are **not** over the same rows: the harnesses filter 1,787,
+1,786 and 1,787 functions from populations discovered differently (see "Two
+known differences" below), so treat the comparison as between representations,
+not as a per-function A/B.
+
+`structural` is the first scheme in this table that does not collapse on XM,
+and it reaches that without a model, a corpus, or a training step. `cfr`
+improves on it everywhere, most sharply on the ranking metrics. `values` is the
+first that is *strong* on XM, and no single column wins outright: the CFR holds
+cross-compiler Recall@1 by a wide margin -- by a wider one still once its
+levers are on -- and `values` holds everything with the optimisation level
+free. That is the shape the identity ladder was designed for, different rungs
+answering different questions, rather than a replacement.
+
+### The re-rank post-pass — `glaurung::identity::rerank`
+
+Not a scheme and not in the table above: a **post-pass** that re-orders the
+candidate lists a scheme already produced, using the query and reference call
+graphs and the reference corpus's library partition. RevDecode (USENIX Security
+2025), plan item 10. It is scored by `tests/identity_retrieval/rerank.rs`
+against the same twin join, the same seeded negative draw and the same
+pessimistic tie rule as everything above, and
+`the_rerank_is_a_no_op_without_context` asserts that its baseline column is
+rank-for-rank the one `metrics::evaluate_slices` computes.
+
+The full grid — five settings presets, two candidate lanes, two schemes, both
+corpora — lives on the reference page,
+[Context re-ranking](../reference/function-identity-rerank.md#measured). The two
+results that matter here:
+
+| | Effect |
+|---|---|
+| Call-agreement term (ours) | **0 queries worsened in any of the 40 cells**; 16 cells up, 24 unchanged; up to +0.0177 MRR10 / +0.0213 R@1 (Dataset-1 XA-arm64) and +0.0128 / +0.0185 (in-house XC-O0, `structural`) |
+| RevDecode's adjacency + library terms | 8 cells up, **31 down**; the gains are all `structural` (best XC-O0 +0.094 MRR10), the losses reach −0.225 on Dataset-1 XA-arm64 |
+
+Read 2026-09-03, release build. Two additions to the protocol were needed and
+both are stated on the reference page: a **global candidate lane** (every layer
+ranked against the whole pool slice, which is RevDecode's own setting, beside
+Marcelli's per-query 101-candidate draw), and `FunctionSample::callees` —
+discovery's resolved call targets, the one input a per-function scheme has no
+use for.
+
+The measured recommendation is what `RerankSettings::default()` now does; the
+paper's own configuration is `RerankSettings::revdecode_paper()`, named rather
+than automatic for the reason in the table above.
 
 ## Cisco Dataset-1
 
@@ -836,8 +1144,25 @@ two remaining slots are documented at the bottom of `scheme.rs`:
 * **`warp`** (`src/identity/warp.rs`, L0) — a `uuid::Uuid` and exact equality,
   so its Recall@1 *is* its coverage. Read the pool size before believing
   either end of that.
-* **`cfr`** (`src/identity/cfr/`, L2) — the sorted `(u32 feature_hash, u16
-  count)` multiset, compared with BSim's merge-join cosine.
+* **`cfr`** (`src/identity/cfr/`, L2) -- **landed.** `CfrScheme` in
+  `scheme.rs`, in three configurations: `unweighted` (whole corpus),
+  `unweighted_held_out` and `weighted`, the last two over the identical
+  population so their difference is the weight table and nothing else. `Sig` is
+  an `Arc<CfrSignature>` -- the sorted `(u32 feature_hash, u16 count)` multiset
+  -- and `similarity` is BSim's merge-join cosine.
+
+  It is the only scheme here that needs `image_path` and `va` and reads neither
+  `bytes` nor `blocks`: the representation is over LLIR after SSA, and a
+  `FunctionSample` carries no IR. So it re-opens the image and lifts, and signs
+  the **whole image** on the first sample that names it, keeping the last four
+  images' signatures (`CFR_IMAGE_CACHE`). Four is enough because the driver
+  walks samples in ground-truth-label order and a label starts with the fixture
+  or the library, so consecutive samples come from the same image.
+
+  It is also the only scheme that must **fail for a whole architecture**.
+  `src/ir/lift/` has no MIPS lifter, so on a MIPS slice it consults
+  `SampleArch::is_liftable` and returns a `SchemeError` -- which is why its two
+  Dataset-1 MIPS rows score zero queries where CTPH's score exactly chance.
 
 The contract the harness enforces on every scheme: `extract` is deterministic,
 `similarity` is symmetric and in `[0, 1]`, and `similarity(a, a) == 1.0`. Those
@@ -878,25 +1203,33 @@ Both change the denominator, so both are stated rather than smoothed over.
 
 ## Where the numbers go next
 
-Plan item 2 (structural) has landed; the protocol document's plan items 3, 4
-and 6 (CFR prerequisites, the CFR itself, WARP) still produce schemes that
-land in this harness. When one does:
+Plan items 2 (structural), 3+4 (the CFR), 5 (its TF-IDF weighting and the
+inverted index), 8 (the peephole normaliser) and the first slice of 12 (value
+fingerprints) have landed in this harness. Item 6 (WARP GUIDs) and item 7 (the
+BinaryFuse8 gate) have landed in the tree but are not scored here. Item 10
+(call-graph re-rank) still produces a re-ranker that lands in this harness, as
+does the rest of item 12 (callee-to-caller propagation, which vSim's ablation
+puts at 0.08 Recall@1 and which is the largest single thing the values lane
+left out). When one does:
 
-* On the **in-house corpus**, the row to beat is now `structural`'s own
-  **XC-O0 AUC 0.9387 / MRR10 0.5824**, and the row that says whether a new
-  representation is actually better is **XM AUC 0.7026** — `structural`
-  already does not collapse here (unlike the Python fingerprint's XM AUC
-  0.5150), so the bar for the CFR is not "does not collapse" but "beats
-  0.70".
+* On the **in-house corpus**, the row to beat is now `cfr-weighted`'s
+  **XC-O0 AUC 0.9938 / MRR10 0.9557**, and the row that says whether a new
+  representation is actually better is **XM MRR10 0.4232** rather than XM AUC:
+  the weighting lane above moved AUC by 0.05 and MRR10 by 0.22 on that task,
+  which is the clearest demonstration on this page that AUC saturates long
+  before ranking does. The next scheme should be judged on the ranking column.
 * On **Dataset-1**, the floor is now `structural`'s own **XA-arm64 AUC
   0.9486 / XB AUC 0.8985**, not CTPH's chance-level 0.5000 / 0.4997 — a
   CFG-shaped L1 scheme already clears FunctionSimSearch's graphlets (XA AUC
   0.69) and sits close to Zeek's strands (0.84) on XC and XM. The CFR adds a
   typed SSA dataflow graph on top of the CFG shape `structural` already
-  reads, so the honest target for it is not "beat chance" but "beat
+  reads, so the honest target for it was not "beat chance" but "beat
   `structural`'s own XA-mips64 (0.5742) and XA+XB-mips32 (0.5524)" — the two
-  rows where a CFG-shape-only representation is weakest, which is exactly
-  where dataflow information the CFR adds might help most.
+  rows where a CFG-shape-only representation is weakest. **It cannot run there
+  at all**: those two slices are MIPS and `src/ir/lift/` has no MIPS lifter, so
+  the CFR refuses rather than answering. Those two rows are now the strongest
+  argument in this document for a MIPS lifter, and until there is one they
+  belong to `structural`.
 
 Two things a new scheme must do that CTPH did not have to, and that
 `structural` already does. It must consult `SampleArch::is_liftable` (or, for
@@ -929,6 +1262,9 @@ under `harness_budgets()` is expected to reproduce bit for bit.
   — the design, the identity ladder, and the four literature surveys behind it.
 * [`docs/development/corpora.md`](corpora.md) — provenance for every
   downloaded corpus: URLs, sizes, SHA-256s, licences, and how to fetch again.
+* [`docs/reference/function-identity-rerank.md`](../reference/function-identity-rerank.md)
+  — the RevDecode-style re-rank measured by this harness's `rerank.rs` lane,
+  its departures from the paper, and the full ablation grid.
 * [`docs/development/decompiler-testing.md`](decompiler-testing.md) — how the
   fixture corpus this harness reads is built.
 * `tests/similarity_retrieval.rs` — the earlier, narrower CTPH measurement.

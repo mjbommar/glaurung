@@ -1,10 +1,10 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 307,
-  "lfs": 107,
-  "toolchain": 34,
-  "fixtures": 32,
+  "core": 310,
+  "lfs": 109,
+  "fixtures": 33,
+  "toolchain": 28,
   "docker": 18,
   "llm": 5,
   "decbench": 2
@@ -107,6 +107,10 @@
    "core"
   ],
   "test_cfr_identity.py": [
+   "lfs"
+  ],
+  "test_cfr_index.py": [
+   "fixtures",
    "lfs"
   ],
   "test_ci_wiring.py": [
@@ -273,7 +277,7 @@
    "core"
   ],
   "test_decompiler_emission_invariants.py": [
-   "toolchain"
+   "core"
   ],
   "test_decompiler_fixture_build_cache.py": [
    "fixtures",
@@ -297,7 +301,6 @@
   ],
   "test_decompiler_fixture_toolchain.py": [
    "fixtures",
-   "toolchain",
    "docker"
   ],
   "test_decompiler_frame_semantics.py": [
@@ -343,7 +346,7 @@
    "fixtures"
   ],
   "test_decompiler_return_definedness.py": [
-   "toolchain"
+   "core"
   ],
   "test_decompiler_return_reaching_definitions.py": [
    "toolchain"
@@ -697,6 +700,9 @@
   "test_kb_provenance_rank.py": [
    "core"
   ],
+  "test_kb_siglib.py": [
+   "lfs"
+  ],
   "test_kb_stack_var_preserves.py": [
    "core"
   ],
@@ -719,12 +725,6 @@
    "core"
   ],
   "test_libc_pointer_roundtrip.py": [
-   "toolchain"
-  ],
-  "test_linux_arm_hello_canonical.py": [
-   "toolchain"
-  ],
-  "test_linux_x86_64_hello_canonical.py": [
    "toolchain"
   ],
   "test_llm.py": [
@@ -772,9 +772,6 @@
   ],
   "test_minecraft_fetch_mappings_tool.py": [
    "core"
-  ],
-  "test_mingw_hello_canonical.py": [
-   "toolchain"
   ],
   "test_model_hyperparameters.py": [
    "core"
@@ -902,6 +899,9 @@
   ],
   "test_rename_rerender.py": [
    "lfs"
+  ],
+  "test_rerank_candidates.py": [
+   "core"
   ],
   "test_roundtrip_review.py": [
    "core"

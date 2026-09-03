@@ -1,10 +1,15 @@
 //! Python bindings for `crate::flirt` -- signature extraction and matching.
 //!
-//! The one function here exists so `tools/build_flirt_library.py` can derive
-//! variant-byte masks from a `.a` archive's relocation tables without
-//! reimplementing ELF, Mach-O and COFF relocation parsing in Python. The
-//! derivation itself lives in `src/flirt/archive.rs`; this is a thin
-//! marshalling layer over it.
+//! [`flirt_signatures_from_archive_path_py`] exists so
+//! `tools/build_flirt_library.py` can derive variant-byte masks from a `.a`
+//! archive's relocation tables without reimplementing ELF, Mach-O and COFF
+//! relocation parsing in Python. The derivation itself lives in
+//! `src/flirt/archive.rs`; this is a thin marshalling layer over it.
+//!
+//! [`flirt_match_functions_with_evidence_path_py`] is the KB-facing match
+//! path: `python/glaurung/llm/kb/siglib.py` drives it to populate
+//! `function_match` rows with the escalation level named, per
+//! `docs/history/program-measures-2026-09-02/03-schema.sql` section 8.
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -79,6 +84,64 @@ fn flirt_signatures_from_archive_path_py(
     Ok(rows.unbind())
 }
 
+/// Match every function discovered in `path` against a FLIRT library,
+/// evidence-carrying.
+///
+/// Unlike the rename pass wired into discovery (`apply_flirt_overrides`),
+/// this does not mutate anything and does not skip functions that already
+/// carry a real name -- it is the read side an auditable `function_match` row
+/// needs, over the full domain of discovered functions rather than only the
+/// `sub_*` placeholders a rename would touch. See
+/// `crate::flirt::match_functions_with_evidence` and
+/// [`crate::flirt::FlirtLibrary::match_at_with_evidence`] for what each
+/// evidence string means.
+///
+/// Args:
+///     path: Path to an executable or object file.
+///     library_path: Path to a FLIRT-style JSON signature library (schema
+///         version ``"1"`` or ``"2"``).
+///
+/// Returns:
+///     A list of dicts, one per matched function, sorted by entry VA, with
+///     the keys ``entry_va``, ``names`` (a list; one entry unless
+///     ``ambiguous``), ``ambiguous`` and ``evidence`` (``None`` when
+///     ``ambiguous`` is true). Functions with no surviving candidate are
+///     simply absent.
+///
+/// Raises:
+///     OSError: either file cannot be read.
+///     ValueError: `library_path` does not parse as a FLIRT library.
+#[pyfunction]
+#[pyo3(name = "flirt_match_functions_with_evidence_path", signature = (path, library_path))]
+fn flirt_match_functions_with_evidence_path_py<'py>(
+    py: Python<'py>,
+    path: &str,
+    library_path: &str,
+) -> PyResult<Bound<'py, PyList>> {
+    let data = std::fs::read(path)?;
+    let library_text = std::fs::read_to_string(library_path)?;
+    let lib = crate::flirt::FlirtLibrary::from_json(&library_text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    let mut matches = py.detach(|| {
+        let budgets = crate::analysis::cfg::Budgets::default();
+        let (functions, _cg) = crate::analysis::cfg::analyze_functions_bytes(&data, &budgets);
+        crate::flirt::match_functions_with_evidence(&data, &functions, &lib)
+    });
+    matches.sort_by_key(|m| m.entry_va);
+
+    let rows = PyList::empty(py);
+    for m in matches {
+        let d = PyDict::new(py);
+        d.set_item("entry_va", m.entry_va)?;
+        d.set_item("names", m.names)?;
+        d.set_item("ambiguous", m.ambiguous)?;
+        d.set_item("evidence", m.evidence)?;
+        rows.append(d)?;
+    }
+    Ok(rows)
+}
+
 /// Register the FLIRT bindings onto the existing `analysis` submodule.
 ///
 /// Must run **after** `analysis::register_analysis_bindings`.
@@ -89,5 +152,10 @@ pub fn register_flirt_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
         flirt_signatures_from_archive_path_py,
         analysis_mod
     )?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        flirt_match_functions_with_evidence_path_py,
+        analysis_mod
+    )?)?;
+    analysis_mod.add("FLIRT_MASKED_PATTERN_SCHEME", crate::flirt::MASKED_PATTERN_SCHEME)?;
     Ok(())
 }

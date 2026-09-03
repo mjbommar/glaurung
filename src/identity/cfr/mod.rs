@@ -69,6 +69,7 @@ mod prune;
 pub mod signature;
 pub mod similarity;
 pub mod stack;
+pub mod weights;
 pub mod widths;
 pub mod wl;
 
@@ -78,8 +79,12 @@ pub use extract::{
 pub use graph::{CfrGraph, GraphContext};
 pub use labels::{ConstBucket, NodeLabel, OpKind, ValueClass, WidthClass};
 pub use signature::{CfrSettings, CfrSignature, CfrVersion, CFR_MAJOR, CFR_MINOR, CFR_SCHEME};
-pub use similarity::{cosine, distance, kernel, UniformWeights, Weights};
+pub use similarity::{
+    confidence, cosine, distance, false_positive_one_in, kernel, self_significance, significance,
+    MatchConfidence, UniformWeights, Weights, BSIM_CALIBRATION, CONFIDENT_SIGNIFICANCE,
+};
 pub use stack::stack_registers_for;
+pub use weights::{CorpusWeights, FeatureWeight, WeightsBuilder, IDF_BUCKETS, IDF_MAX};
 pub use widths::{WidthCensus, WidthInference};
 
 #[cfg(test)]

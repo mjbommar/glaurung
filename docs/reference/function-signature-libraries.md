@@ -180,17 +180,141 @@ drivers):
 
 Rows two and three are the point: same pipeline, same bytes, masks removed.
 
-## Not done here
+## Provenance and the membership gate
+
+Item 7 of the research plan
+([`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md)):
+a BinaryFuse8 membership gate over known identities, and the four KB tables
+that let a match say which library it came from and which level resolved it
+(`03-schema.sql` sections 1, 2, 7, 8: `siglib`, `siglib_function`,
+`identity_filter`, `function_match`).
+
+### The gate
+
+`src/identity/gate.rs` builds a `xorf::BinaryFuse8` over the identity strings
+of one `(scheme, architecture)`. `xorf` 0.13.0 (MIT) with
+`default-features = false, features = ["binary-fuse", "serde"]`: the crate's
+defaults include `uniform-random`, which fills unused fingerprint slots from
+`rand::thread_rng()` and makes two builds over identical keys produce
+different bytes -- measured in the survey, and re-verified here
+(`two_builds_over_the_same_keys_are_byte_identical`). With defaults off, the
+fill is deterministic zero and the whole filter is a pure function of its key
+set. Identity strings hash to the filter's `u64` keys via BLAKE3 (first 8
+bytes), not `std::hash`'s `SipHash`, because the standard hasher is
+process-seeded by default -- the same determinism trap one level up.
+
+Serialization is xorf's `DmaSerializable`/`FilterRef` split: an 8-byte key
+count plus a 20-byte descriptor are copied, and the fingerprint bytes -- the
+part that scales with key count -- are read back with `BinaryFuse8Ref`
+straight out of the `identity_filter.filter` BLOB, no copy. Python:
+`glaurung.analysis.identity_gate_build(identities) -> bytes`,
+`identity_gate_contains(blob, identity) -> bool`,
+`identity_gate_n_keys(blob) -> int`.
+
+**Measured.** `src/identity/gate.rs`'s own tests, over 150,000 synthetic keys,
+release-equivalent debug build: **9.393 bits/key, 0.385% false-positive rate**
+(xorf's own published figures at that scale are ~9.04 bits/key and ~0.39%).
+`tests/identity_gate.rs` runs the gate over every WARP function GUID this
+repository's native sample corpus produces (83 binaries under
+`samples/binaries/platforms/linux/amd64/export/native/`): **3,255 identities,
+249 distinct, 12.337 bits/key, zero false negatives** -- the higher bits/key
+than the synthetic run is the same fixed-overhead effect small key sets show
+in the KB measurements below, not a defect. The same file's second test is
+the deliverable's stated negative control: a gate built from `mathlib`'s WARP
+identities (read from one `tests/fixtures/flirt/` relink layout) accepts every
+`mathlib_*` function read from the *other* relink layout and rejects every
+non-library function in both that fixture and an entirely unrelated sample
+binary (`hello-clang-debug`). Probe cost is not independently rebenchmarked
+in this lane; xorf's own published figure is ~3 ns.
+
+At the tiny scale this repository's own libraries reach today, the fixed
+per-filter overhead dominates: the shipped FLIRT library's 16 masked-pattern
+identities measure **38.0 bits/key**, and `mathlib`'s 22 WARP identities (21
+distinct -- see below) measure **28.95 bits/key**
+(`python/tests/test_kb_siglib.py`). Neither is a useful storage figure by
+itself; they are recorded because a bits/key number is not a measurement
+without the corpus size next to it, and this repository's own libraries are
+this small today.
+
+### The four tables
+
+`python/glaurung/llm/kb/siglib.py` implements `03-schema.sql` sections 1, 2,
+7 and 8 verbatim, following `function_structural.py`'s pattern (its own
+`_SCHEMA`/`_ensure`, not joined into `xref_db`'s schema script). `siglib` is
+keyed `(name, version, variant, architecture, platform)`; `siglib_function`
+is deduplicated on `(siglib_id, scheme, identity, name)` with `occurrences`
+bumped on re-ingest (BSim's `vectable.count`, Lumina's popularity);
+`identity_filter` holds one gate BLOB per `(scheme, architecture)`;
+`function_match` records `score`, `confidence`, `rank`, `ambiguous` and
+`evidence`. `base_name` is `siglib.base_name_of`: the demangled name
+(`glaurung.strings.demangle_text`) with its `::`-namespace and a parameter
+list dropped and leading underscores stripped -- FunctionID's grouping key.
+
+`siglib.ingest_flirt_library` records the rebuilt library's provenance:
+`data/sigs/glaurung-base.x86_64.flirt.json` inserts a `siglib` row keyed
+**`(mathlib, 1.0.0, gcc-15.2.0-O2, x86_64)`** and one `siglib_function` row
+per signature, under a new scheme, **`flirt-masked-pattern-v1`**
+(`src/flirt::MASKED_PATTERN_SCHEME`) -- the masked pattern hex, *not* a
+`function_identity` scheme, because a masked pattern is gate/provenance input
+rather than an equality key (see [Matching](#matching) above). The identity
+is computed by `FlirtLibrary::masked_pattern_identities` /
+`FlirtSignature::masked_pattern_hex` on the Rust side and by
+`siglib._masked_pattern_hex` on the Python side -- the same equivalence
+`build_flirt_library.py::_masked_pattern` already uses to decide which
+signatures collide, implemented three times because none of the three call
+sites has a compiled library object the other two could borrow.
+
+### Evidence: which level resolved a match
+
+`FlirtLibrary::match_at_with_evidence` and the free function
+`match_functions_with_evidence` are the evidence-carrying counterparts of
+`match_at` and `apply_flirt_overrides`: same escalation, but the return value
+names which level resolved a `Unique` verdict.
+
+| Evidence | What ran |
+|---|---|
+| `flirt-L1` | Masked pattern compare only; no surviving candidate records a CRC. |
+| `flirt-L2` | At least one surviving candidate's CRC was checked. |
+| `flirt-L3` | *Not implemented.* Schema-reserved (`siglib_flirt.tail_offset`/`tail_byte`); this matcher has no tail-byte discriminator. |
+| `flirt-L4` | Pattern and CRC left more than one name; a referenced name broke the tie. |
+| `warp-guid` | Exact WARP GUID equality against a `siglib_function` row. |
+| `warp-constraint` | *Not implemented this lane.* WARP GUID collisions are reported ambiguous (below), not resolved by constraint proof. |
+
+`ambiguous = 1` rows carry `evidence = NULL` and no name is applied -- "no
+name beats a wrong name" reaches this table too. It is not a hypothetical:
+`mathlib_get_global_seed` and `mathlib_set_global_seed` produce the **same**
+WARP GUID in both relink layouts (two trivial one-block accessors whose
+masked bytes happen to coincide), so ingesting `mathlib`'s 22 named WARP
+functions yields 21 *distinct* identities, and `siglib.match_warp_library`
+correctly reports both as ambiguous, one `function_match` row per candidate,
+rather than guessing (`python/tests/test_kb_siglib.py::test_ingest_and_match_warp_library_across_a_relink`).
+
+`siglib.match_flirt_library` and `siglib.match_warp_library` are the two
+match paths. WARP's is the gate's real pre-lookup role: a candidate's GUID is
+directly comparable to a library identity with no masking step in between, so
+a gate negative skips the `siglib_function` lookup entirely and is counted in
+`MatchSummary.gate_stats` (mirroring `crate::identity::gate::GateStats`).
+FLIRT's masking has to run first to know which bytes even count, so its gate
+check is necessarily post-hoc -- a positive-control verification that the
+matched candidate's own masked-pattern identity is, as it must be by
+construction, a member.
+
+### Not done here
 
 - **Consuming third-party `.sig`/`.pat`.** See the `lancelot-flirt` decision
   above. This is the path to libc and MSVC coverage.
-- **A `siglib` provenance table and `function_match` evidence rows.** The
-  library file carries its key, but a match does not yet record *which* library
-  and *which* level resolved it. That is item 7 in the research plan.
 - **Referenced-name resolution wired into the analysis pass.**
   `match_at_with_refs` exists and is tested, but `apply_flirt_overrides` calls
   `match_at`: the pass has no resolver to hand it yet, because that needs the
   PLT and symbol maps threaded through. Until then a tie stays a tie and
   nothing is named, which is the safe direction.
-- **A BinaryFuse8 membership gate.** Item 3 in the research plan; the shipped
-  library is 16 signatures, so there is nothing to gate yet.
+- **FLIRT's L3 tail-byte discriminator and WARP constraint-based
+  disambiguation.** Both are schema-reserved (`siglib_flirt.tail_offset`/
+  `tail_byte`, `siglib_reference`) but not implemented by either matcher; a
+  collision at either level is reported ambiguous rather than resolved.
+- **`siglib_flirt` and `siglib_reference` (schema sections 3)** are not
+  populated: the shipped matcher works directly off the JSON library file,
+  not off a SQL-indexed masked-prefix table. Building that index is future
+  work once a library is large enough that a linear in-memory scan stops
+  being the cheaper option (see the schema survey's "flat scan until 1e5"
+  guidance).

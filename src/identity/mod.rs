@@ -14,6 +14,21 @@
 //!   feature multiset over the SSA dataflow graph and the degree-labelled CFG.
 //!   "Which library function is this, across compilers and optimisation
 //!   levels?"
+//! * `values` -- vSim-style value fingerprints: the multiset of numbers the
+//!   function computes under bounded execution. Same question as [`cfr`],
+//!   answered from what the code *does* rather than what it looks like.
+//!   Behind the `exec` feature, because it drives the interpreter; everything
+//!   above compiles without it.
+//!
+//! [`gate`] is not a scheme: it is a BinaryFuse8 membership filter over the
+//! identity strings any one scheme produces for a `(scheme, architecture)`
+//! pair, so "is this in any known library" can be answered before an exact or
+//! masked lookup runs at all.
+//!
+//! [`rerank`] is not a rung. It is a post-pass over any of them: given the
+//! candidate lists a scheme produced for every function in one binary, it picks
+//! the globally most consistent assignment using call-graph and library
+//! context. "Which of these candidate lists agree with each other?"
 //!
 //! The design, the mask/keep list, the metric argument and the measurement
 //! protocol are in `docs/history/program-measures-2026-09-02.md`. Byte-level
@@ -21,5 +36,9 @@
 //! they are not extended to functions.
 
 pub mod cfr;
+pub mod gate;
+pub mod rerank;
 pub mod structural;
+#[cfg(feature = "exec")]
+pub mod values;
 pub mod warp;
