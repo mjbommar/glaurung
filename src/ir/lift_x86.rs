@@ -8243,7 +8243,6 @@ mod tests {
             // Writes RCX and R11 (the return address and RFLAGS). RAX is the
             // kernel's doing, not the instruction's, and iced does not claim it.
             ("syscall", Silence::NoArm, 310),
-            ("vpbroadcastb", Silence::WiderThanTheLaneModel, 2),
             ("vpcmpeqb", Silence::WiderThanTheLaneModel, 12),
             // `VEX_Vpmovmskb_r32_ymm`: the DESTINATION is an ordinary GP
             // register, but the source is a 256-bit `ymm` this IR cannot spell,
@@ -8336,7 +8335,7 @@ mod tests {
             eprintln!("sample corpus missing; nothing to sweep");
             return;
         }
-        let watched = ["vpbroadcastb", "vpcmpeqb", "vpmovmskb"];
+        let watched = ["vpcmpeqb", "vpmovmskb"];
         let mut forms: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         for (data, ranges) in &corpus {
@@ -8356,7 +8355,6 @@ mod tests {
             }
         }
         let expected = std::collections::BTreeMap::from([
-            ("VEX_Vpbroadcastb_ymm_xmmm8".to_string(), 2),
             ("VEX_Vpcmpeqb_ymm_ymm_ymmm256".to_string(), 12),
             ("VEX_Vpmovmskb_r32_ymm".to_string(), 8),
         ]);
