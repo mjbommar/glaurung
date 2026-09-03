@@ -49,14 +49,22 @@ pub(super) fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
     let reachable = reachable_blocks(llir, &va_to_block);
 
     let mut registers = BTreeSet::new();
-    for block in &llir.blocks {
-        for instruction in &block.instrs {
-            let (definitions, uses) = defs_uses(&instruction.op);
+    for (block_index, block) in llir.blocks.iter().enumerate() {
+        for (instruction_index, instruction) in block.instrs.iter().enumerate() {
+            let address = InstrAddr {
+                block_idx: block_index,
+                instr_idx: instruction_index,
+            };
             registers.extend(
-                definitions
+                ssa.def_values(llir, address)
                     .into_iter()
-                    .chain(uses)
-                    .map(|register| canon_gpr_for_target(target, &register)),
+                    .map(|value| value.base),
+            );
+            let use_count = defs_uses(&instruction.op).1.len();
+            registers.extend(
+                (0..use_count)
+                    .filter_map(|use_index| ssa.use_value(llir, address, use_index))
+                    .map(|value| value.base),
             );
         }
     }
@@ -235,10 +243,16 @@ pub(super) fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
         if reachable.contains(&block_id) {
             continue;
         }
-        for instruction in &block.instrs {
-            for register in defs_uses(&instruction.op).1 {
-                let register = canon_gpr_for_target(target, &register);
-                let storage = storage_by_register[&register];
+        for (instruction_index, instruction) in block.instrs.iter().enumerate() {
+            let address = InstrAddr {
+                block_idx: block_index,
+                instr_idx: instruction_index,
+            };
+            for use_index in 0..defs_uses(&instruction.op).1.len() {
+                let Some(value) = ssa.use_value(llir, address, use_index) else {
+                    continue;
+                };
+                let storage = storage_by_register[&value.base];
                 unreachable_values
                     .entry((block_id, storage))
                     .or_insert_with(|| {

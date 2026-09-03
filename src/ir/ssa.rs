@@ -338,6 +338,13 @@ pub fn canon_gpr_for_target(target: TargetSpec, value: &VReg) -> VReg {
     let VReg::Phys(name) = value else {
         return value.clone();
     };
+    // IA-32 still shares downstream ABI/naming consumers with the historical
+    // architecture-blind model, which spells its `e*` values as `r*`. Changing
+    // that identity independently regresses most of the i386 fixture corpus.
+    // Preserve it until the x86-32 lifter and consumers migrate together.
+    if target.id() == TargetId::X86_32 {
+        return canon_gpr(value);
+    }
     let parent = match target.id() {
         TargetId::X86_64 => regview::ssa_parent(regview::Arch::X86_64, name),
         TargetId::AArch64 => regview::ssa_parent(regview::Arch::AArch64, name),
@@ -360,7 +367,38 @@ pub fn canon_gpr_for_target(target: TargetSpec, value: &VReg) -> VReg {
             "r15" | "pc" => Some("pc"),
             _ => None,
         },
-        TargetId::X86_32 | TargetId::Unsupported(_) => None,
+        TargetId::X86_32 => unreachable!("handled by compatibility branch above"),
+        TargetId::Unsupported(_) => None,
+    };
+    VReg::Phys(parent.unwrap_or(name).to_string())
+}
+
+/// Canonicalize a register READ under the function's actual target.
+///
+/// Definitions use [`regview::ssa_parent`]: only a whole-parent or
+/// zero-extending write defines the complete parent value. Reads have the
+/// opposite rule. Reading `ax`, `al`, or `ah` observes a window of the current
+/// `rax` value, so it must use that parent's reaching SSA version. Partial x86
+/// writes are already lifted as explicit parent read-modify-writes; this does
+/// not invent a parent definition.
+fn canon_read_for_target(target: TargetSpec, value: &VReg) -> VReg {
+    let VReg::Phys(name) = value else {
+        return value.clone();
+    };
+    if target.id() == TargetId::X86_32 {
+        return canon_gpr(value);
+    }
+    let parent = match target.id() {
+        TargetId::X86_64 => regview::view(regview::Arch::X86_64, name)
+            .filter(|view| view.bank == regview::RegBank::Gp)
+            .map(|view| view.parent),
+        TargetId::AArch64 => regview::view(regview::Arch::AArch64, name)
+            .filter(|view| view.bank == regview::RegBank::Gp)
+            .map(|view| view.parent),
+        TargetId::X86_32 => unreachable!("handled by compatibility branch above"),
+        TargetId::Arm32 | TargetId::Unsupported(_) => {
+            return canon_gpr_for_target(target, value);
+        }
     };
     VReg::Phys(parent.unwrap_or(name).to_string())
 }
@@ -629,7 +667,8 @@ fn rename(
     lf: &LlirFunction,
     idom: &[Option<usize>],
     phi_blocks: &[Vec<(VReg, Vec<usize>)>],
-    canonicalize: &impl Fn(&VReg) -> VReg,
+    canonicalize_def: &impl Fn(&VReg) -> VReg,
+    canonicalize_use: &impl Fn(&VReg) -> VReg,
 ) -> (SsaInfo, Vec<Vec<Phi>>) {
     let n = lf.blocks.len();
     let children = dom_children(idom);
@@ -729,7 +768,7 @@ fn rename(
                     block_idx: block,
                     instr_idx: ii,
                 };
-                uses_of_op_canonical_into(&ins.op, canonicalize, &mut use_scratch);
+                uses_of_op_canonical_into(&ins.op, canonicalize_use, &mut use_scratch);
                 // Drained, so the canonicalized register moves into the SSA
                 // value instead of being cloned into it — one `String`
                 // allocation per use rather than two.
@@ -740,7 +779,7 @@ fn rename(
                         use_values_all.set(addr, ui, SsaValue { base: u, version });
                     }
                 }
-                write_regs_into(&ins.op, canonicalize, &mut def_scratch);
+                write_regs_into(&ins.op, canonicalize_def, &mut def_scratch);
                 for (output_index, d) in def_scratch.drain(..).enumerate() {
                     let ver = new_version(&mut counter, &mut stack, &d);
                     if output_index == 0 {
@@ -836,21 +875,27 @@ fn rename(
 
 /// Compute SSA information for `lf`.
 pub fn compute_ssa(lf: &LlirFunction) -> SsaInfo {
-    compute_ssa_canonicalized(lf, &canon_gpr)
+    compute_ssa_canonicalized(lf, &canon_gpr, &canon_gpr)
 }
 
 /// Compute SSA using the canonical register identity of `target`.
 pub fn compute_ssa_for_target(lf: &LlirFunction, target: TargetSpec) -> SsaInfo {
-    compute_ssa_canonicalized(lf, &|value| canon_gpr_for_target(target, value))
+    compute_ssa_canonicalized(lf, &|value| canon_gpr_for_target(target, value), &|value| {
+        canon_read_for_target(target, value)
+    })
 }
 
-fn compute_ssa_canonicalized(lf: &LlirFunction, canonicalize: &impl Fn(&VReg) -> VReg) -> SsaInfo {
+fn compute_ssa_canonicalized(
+    lf: &LlirFunction,
+    canonicalize_def: &impl Fn(&VReg) -> VReg,
+    canonicalize_use: &impl Fn(&VReg) -> VReg,
+) -> SsaInfo {
     let preds = build_preds(lf);
     let (idom, _rpo) = compute_dominators(lf, &preds);
     let frontier = compute_frontiers(&idom, &preds);
-    let def_blocks = def_blocks(lf, canonicalize);
+    let def_blocks = def_blocks(lf, canonicalize_def);
     let phi_blocks = place_phis(&def_blocks, &frontier, &preds);
-    let (mut info, _per_block) = rename(lf, &idom, &phi_blocks, canonicalize);
+    let (mut info, _per_block) = rename(lf, &idom, &phi_blocks, canonicalize_def, canonicalize_use);
     info.frontier = frontier;
     info
 }
@@ -1210,6 +1255,74 @@ mod tests {
         // `sp` is the one name both tables spell. x86-64 declines it (16-bit,
         // bit-preserving); the AArch64 fallback maps it to itself.
         assert_eq!(parent64("sp"), Some("sp"));
+    }
+
+    #[test]
+    fn x86_partial_view_reads_use_the_current_parent_definition() {
+        use crate::core::binary::{Arch, Endianness, Format};
+
+        // The x86 lifter expands partial WRITES into an explicit parent
+        // read-modify-write, but an instruction may still READ `ax` directly
+        // (for example `movsx eax, ax`). That read observes the low 16 bits of
+        // the current rax value; treating it as an unrelated `ax#0` live-in is
+        // how a loop accumulator became `ret = (short)ret` in
+        // cpp_template_int16.
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                assign("rax", 7),
+                Op::Assign {
+                    dst: VReg::phys("rbx"),
+                    src: Value::Reg(VReg::phys("ax")),
+                },
+            ],
+            vec![],
+        )]);
+        let target =
+            TargetSpec::from_image_metadata(Arch::X86_64, Endianness::Little, Format::ELF, false);
+        let info = compute_ssa_for_target(&lf, target);
+        let definition = info
+            .def_value(
+                &lf,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 0,
+                },
+            )
+            .expect("rax definition");
+        let read = info
+            .use_value(
+                &lf,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                },
+                0,
+            )
+            .expect("ax read");
+
+        assert_eq!(read.base, VReg::phys("rax"));
+        assert_eq!(read.version, definition.version);
+    }
+
+    #[test]
+    fn x86_32_keeps_legacy_identity_until_its_machine_model_migrates_as_one_unit() {
+        use crate::core::binary::{Arch, Endianness, Format};
+
+        let target =
+            TargetSpec::from_image_metadata(Arch::X86, Endianness::Little, Format::PE, false);
+        assert_eq!(
+            canon_gpr_for_target(target, &VReg::phys("eax")),
+            VReg::phys("rax")
+        );
+        assert_eq!(
+            canon_read_for_target(target, &VReg::phys("eax")),
+            VReg::phys("rax")
+        );
+        assert_eq!(
+            canon_read_for_target(target, &VReg::phys("ax")),
+            VReg::phys("ax")
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! reason any of it changes is a change to that naming scheme or to the
 //! `Op` set the traversal must cover.
 
+use crate::ir::ssa::SsaValue;
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::def_ref;
 
@@ -149,28 +150,39 @@ pub(crate) fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
     }
 }
 
-/// Rewrite a `Value`'s register (if any) to the version at `use_vers[*ui]`,
+/// Apply the exact SSA identity of one use.
+///
+/// The base matters as much as the version: an x86 `ax` read may resolve to
+/// `rax#10`. Keeping the raw view spelling would manufacture a distinct
+/// `ax#10` variable that no instruction defines.
+fn tag_use_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx) {
+    if let Some(value) = value {
+        *v = value.base.clone();
+        tag_phys(v, value.version, ctx);
+    }
+}
+
+/// Rewrite a `Value`'s register (if any) to the identity at `use_values[*ui]`,
 /// advancing the use cursor exactly as `def_uses` enumerated it.
-fn tag_value(v: &mut Value, use_vers: &[u32], ui: &mut usize, ctx: &VnCtx) {
+fn tag_value(v: &mut Value, use_values: &[Option<SsaValue>], ui: &mut usize, ctx: &VnCtx) {
     if let Value::Reg(r) = v {
-        if let Some(&ver) = use_vers.get(*ui) {
-            tag_phys(r, ver, ctx);
-        }
+        tag_use_phys(r, use_values.get(*ui).and_then(Option::as_ref), ctx);
         *ui += 1;
     }
 }
 
-fn tag_memop_uses(m: &mut crate::ir::types::MemOp, use_vers: &[u32], ui: &mut usize, ctx: &VnCtx) {
+fn tag_memop_uses(
+    m: &mut crate::ir::types::MemOp,
+    use_values: &[Option<SsaValue>],
+    ui: &mut usize,
+    ctx: &VnCtx,
+) {
     if let Some(b) = &mut m.base {
-        if let Some(&ver) = use_vers.get(*ui) {
-            tag_phys(b, ver, ctx);
-        }
+        tag_use_phys(b, use_values.get(*ui).and_then(Option::as_ref), ctx);
         *ui += 1;
     }
     if let Some(idx) = &mut m.index {
-        if let Some(&ver) = use_vers.get(*ui) {
-            tag_phys(idx, ver, ctx);
-        }
+        tag_use_phys(idx, use_values.get(*ui).and_then(Option::as_ref), ctx);
         *ui += 1;
     }
 }
@@ -178,38 +190,38 @@ fn tag_memop_uses(m: &mut crate::ir::types::MemOp, use_vers: &[u32], ui: &mut us
 /// Apply the def version and the ordered use versions to one op's registers.
 /// The use order mirrors `use_def::def_uses` exactly (memory base before index,
 /// operands left-to-right), so the SSA `use_versions` line up by index.
-pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
+pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>], ctx: &VnCtx) {
     let mut ui = 0usize;
     match op {
         Op::Assign { dst, src } => {
-            tag_value(src, use_vers, &mut ui, ctx);
+            tag_value(src, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::Undef { dst, .. } => tag_phys(dst, def_ver, ctx),
         Op::Bin { dst, lhs, rhs, .. } => {
-            tag_value(lhs, use_vers, &mut ui, ctx);
-            tag_value(rhs, use_vers, &mut ui, ctx);
+            tag_value(lhs, use_values, &mut ui, ctx);
+            tag_value(rhs, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         // Computed target plus an optional normalized switch index, no def —
         // mirrors `use_def::def_uses`.
         Op::IndirectJump { target, index } => {
-            tag_value(target, use_vers, &mut ui, ctx);
+            tag_value(target, use_values, &mut ui, ctx);
             if let Some(index) = index {
-                tag_value(index, use_vers, &mut ui, ctx);
+                tag_value(index, use_values, &mut ui, ctx);
             }
         }
         Op::Un { dst, src, .. } => {
-            tag_value(src, use_vers, &mut ui, ctx);
+            tag_value(src, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::Cmp { dst, lhs, rhs, .. } => {
-            tag_value(lhs, use_vers, &mut ui, ctx);
-            tag_value(rhs, use_vers, &mut ui, ctx);
+            tag_value(lhs, use_values, &mut ui, ctx);
+            tag_value(rhs, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::Load { dst, addr } => {
-            tag_memop_uses(addr, use_vers, &mut ui, ctx);
+            tag_memop_uses(addr, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::CondLoad {
@@ -219,39 +231,31 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             fallback,
             ..
         } => {
-            if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, ctx);
-            }
+            tag_use_phys(cond, use_values.first().and_then(Option::as_ref), ctx);
             ui = 1;
-            tag_memop_uses(addr, use_vers, &mut ui, ctx);
-            tag_value(fallback, use_vers, &mut ui, ctx);
+            tag_memop_uses(addr, use_values, &mut ui, ctx);
+            tag_value(fallback, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::Store { addr, src } => {
-            tag_memop_uses(addr, use_vers, &mut ui, ctx);
-            tag_value(src, use_vers, &mut ui, ctx);
+            tag_memop_uses(addr, use_values, &mut ui, ctx);
+            tag_value(src, use_values, &mut ui, ctx);
         }
         Op::CondStore {
             cond, addr, src, ..
         } => {
-            if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, ctx);
-            }
+            tag_use_phys(cond, use_values.first().and_then(Option::as_ref), ctx);
             ui = 1;
-            tag_memop_uses(addr, use_vers, &mut ui, ctx);
-            tag_value(src, use_vers, &mut ui, ctx);
+            tag_memop_uses(addr, use_values, &mut ui, ctx);
+            tag_value(src, use_values, &mut ui, ctx);
         }
         Op::CondJump { cond, .. } | Op::CondReturn { cond, .. } => {
-            if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, ctx);
-            }
+            tag_use_phys(cond, use_values.first().and_then(Option::as_ref), ctx);
         }
         Op::CondReturnValue { cond, value, .. } => {
-            if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, ctx);
-            }
+            tag_use_phys(cond, use_values.first().and_then(Option::as_ref), ctx);
             ui = 1;
-            tag_value(value, use_vers, &mut ui, ctx);
+            tag_value(value, use_values, &mut ui, ctx);
         }
         // A call's effects must be renamed like any other operand. They are the only
         // place the op records its result and its argument reads, so leaving them at
@@ -260,13 +264,11 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
         // `rax`, and the AST then has a value nobody defines.
         Op::Call { target, effects } => {
             if let crate::ir::types::CallTarget::Indirect(v) = target {
-                tag_value(v, use_vers, &mut ui, ctx);
+                tag_value(v, use_values, &mut ui, ctx);
             }
             if let Some(e) = effects {
                 for a in e.args.iter_mut() {
-                    if let Some(&ver) = use_vers.get(ui) {
-                        tag_phys(a, ver, ctx);
-                    }
+                    tag_use_phys(a, use_values.get(ui).and_then(Option::as_ref), ctx);
                     ui += 1;
                 }
                 if let Some(r) = e.result.as_mut() {
@@ -274,29 +276,27 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
                 }
             }
         }
-        Op::ReturnValue { value } => tag_value(value, use_vers, &mut ui, ctx),
+        Op::ReturnValue { value } => tag_value(value, use_values, &mut ui, ctx),
         Op::ZExt { dst, src, .. }
         | Op::SExt { dst, src, .. }
         | Op::Trunc { dst, src, .. }
         | Op::Extract { dst, src, .. } => {
-            tag_value(src, use_vers, &mut ui, ctx);
+            tag_value(src, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::Concat { dst, hi, lo } => {
-            tag_value(hi, use_vers, &mut ui, ctx);
-            tag_value(lo, use_vers, &mut ui, ctx);
+            tag_value(hi, use_values, &mut ui, ctx);
+            tag_value(lo, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         Op::Ite {
             dst, cond, t, e, ..
         } => {
             // def_uses order: cond, then t, then e.
-            if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, ctx); // a flag in practice — no-op
-            }
+            tag_use_phys(cond, use_values.first().and_then(Option::as_ref), ctx);
             ui = 1;
-            tag_value(t, use_vers, &mut ui, ctx);
-            tag_value(e, use_vers, &mut ui, ctx);
+            tag_value(t, use_values, &mut ui, ctx);
+            tag_value(e, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
         // Effect-only and single-output intrinsics fit the ordinary SSA model
@@ -305,7 +305,7 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
         // what connects each use to its reaching definition.
         Op::Intrinsic { ins, outs, .. } if outs.len() <= 1 => {
             for input in ins {
-                tag_value(input, use_vers, &mut ui, ctx);
+                tag_value(input, use_values, &mut ui, ctx);
             }
             if let Some((output, _)) = outs.first_mut() {
                 tag_phys(output, def_ver, ctx);

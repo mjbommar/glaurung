@@ -167,7 +167,7 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     let mut definition_widths_by_value = DefinitionWidthsByValue::new();
     // One buffer for every instruction's use versions. The per-instruction
     // `Vec` was a heap allocation for a list that is normally one or two long.
-    let mut use_vers: Vec<u32> = Vec::new();
+    let mut use_values: Vec<Option<SsaValue>> = Vec::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
             let addr = InstrAddr {
@@ -180,9 +180,9 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
             let def_ver = ssa.def_version(lf, addr);
             // Only the use ARITY is wanted here; `def_uses` would allocate a
             // vector of cloned register spellings to report it.
-            use_vers.clear();
-            use_vers.extend((0..use_count(&ins.op)).map(|k| ssa.use_version(lf, addr, k)));
-            tag_op(&mut ins.op, def_ver, &use_vers, &ctx);
+            use_values.clear();
+            use_values.extend((0..use_count(&ins.op)).map(|k| ssa.use_value(lf, addr, k)));
+            tag_op(&mut ins.op, def_ver, &use_values, &ctx);
             if let (Some(dst), Some(width)) = (
                 def_ref(&ins.op),
                 operation_definition_width(&lf.blocks[bi].instrs[ii].op),
@@ -434,8 +434,44 @@ fn insert_phi_copies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ssa::compute_ssa;
+    use crate::ir::ssa::{compute_ssa, compute_ssa_for_target};
     use crate::ir::use_def::def_uses;
+
+    #[test]
+    fn target_aware_numbering_preserves_the_parent_identity_of_partial_reads() {
+        use crate::core::binary::{Arch, Endianness, Format};
+        use crate::ir::types::Width;
+        use crate::target::TargetSpec;
+
+        // `cx` is a view of the current `rcx`, not an independent live-in.
+        // The operation's W16 source width carries the extraction semantics;
+        // its SSA name must still identify the reaching whole-register value.
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rcx"),
+                src: Value::Const(7),
+            },
+            Op::SExt {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("cx")),
+                from: Width::W16,
+                to: Width::W64,
+            },
+        ]);
+        let target =
+            TargetSpec::from_image_metadata(Arch::X86_64, Endianness::Little, Format::ELF, false);
+        let ssa = compute_ssa_for_target(&lf, target);
+
+        let numbered = value_number(&lf, &ssa, CallConv::SysVAmd64);
+
+        match &numbered.blocks[0].instrs[1].op {
+            Op::SExt { src, from, to, .. } => {
+                assert_eq!(*src, Value::Reg(VReg::phys("rcx#1")));
+                assert_eq!((*from, *to), (Width::W16, Width::W64));
+            }
+            other => panic!("expected sign extension, got {other:?}"),
+        }
+    }
 
     #[test]
     fn exact_definition_widths_survive_parent_register_canonicalisation() {

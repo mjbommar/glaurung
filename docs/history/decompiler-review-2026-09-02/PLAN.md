@@ -237,8 +237,9 @@ If rejected:
   `src/ir/memory_ssa.rs`, and the MIR adapters in `src/ir/memory_objects/`.
 - [~] Delete only after porting any independent LLIR invariant checks and
   demonstrating the `release` profile remains green.
-- [ ] Implement goto-aware definedness later over authoritative SSA or the AST
-  label CFG, choosing the cheaper complete representation.
+- [x] Implement goto-aware definedness over the final AST label CFG; malformed
+  label graphs decline the stronger flow-sensitive claim while preserving the
+  always-safe whole-function finding.
 
 If accepted:
 
@@ -642,7 +643,7 @@ one authoritative set of case edges.
   ownership. The former strict xfail is green with no goto or indirect-jump
   placeholder.
   Other compiler/optimization and named fixture lanes remain.
-- [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
+- [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
   shadow-output path now runs the exact typed C returned by
@@ -657,6 +658,44 @@ one authoritative set of case edges.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
   parseable C rendering. Corpus-wide census coverage remains.
+
+### Implementation evidence — 2026-09-03 malformed-table safety
+
+The bounded relative decoder and whole-section scanner previously computed
+`table_va + signed_offset` through wrapping integer arithmetic. At either edge
+of the address space, malformed table bytes could therefore wrap into an
+address accepted by the executable-region predicate and manufacture a switch
+target. Two RED tests reproduced both directions: `u64::MAX - 7 + 16` was
+accepted as target `8`, and `4 + (-16)` was accepted near `u64::MAX`.
+
+`src/analysis/jump_table.rs` now uses checked signed address arithmetic. The
+bounded decoder reports the existing typed
+`TableDecline::TargetArithmeticOverflow { index }`; the heuristic scanner
+terminates the candidate run. Explicit unit coverage now includes malformed
+object bytes, a table extent truncated at both the section end and a non-zero
+offset, a target overlapping the absolute table itself, a non-executable
+relative target, adjacent tables, and both arithmetic boundaries.
+
+Validation against the working tree and a fresh release extension:
+
+- `cargo test --features python-ext analysis::jump_table::tests -- --nocapture`:
+  18 passed, 0 failed;
+- `cargo test --features python-ext`: all 3,089 library tests and every ordinary
+  integration target passed; its final CFR doctest hit a transient duplicate
+  `pyo3` artifact error, then
+  `cargo test --features python-ext --doc identity::cfr` passed 1/1 in
+  isolation;
+- the six named WP5 fixture families selected 24 baseline lanes with no scoped
+  regressions; one `206_aarch64_wide_dispatch:gcc:O2:dispatch_in_loop`
+  improvement was visible but is not attributed to this address-boundary fix
+  in the concurrent worktree; and
+- `08_indirect_dispatch` across i386, ARMv7, AArch64, and x86-64 GCC 15 selected
+  eight architecture lanes with no scoped regressions.
+
+The def-use census passed its five safety checks and stopped at the improvement
+ratchet because concurrent work removed many baseline violations; it requires
+a separately reviewed baseline refresh. The corpus-wide structural command was
+still running when this evidence was written and is not claimed green here.
 
 ### Exit criteria
 
@@ -961,6 +1000,36 @@ into a standing test.
 - [ ] Ratchet `SILENT_REGISTER_WRITERS` toward zero.
 - [ ] Ensure `Op::Unknown` and generic intrinsic totals cannot silently grow.
 
+### Implementation evidence - 2026-09-03 target-aware register reads
+
+The production SSA path now distinguishes definition identity from read
+identity. This fixes x86-64 partial reads such as `ax` observing the current
+`rax` value, carries the exact SSA base through value numbering and MIR storage
+inventory, and improves `cpp_template_int16:gcc:O2` from fail to pass without a
+scoped x86-64 regression.
+
+The required i386 sweep rejected an attempted standalone IA-32 register-view
+model with 241 regressions across 410 lanes. That experiment was removed and an
+explicit compatibility boundary retains historical i386 identity until the
+lifter and all downstream consumers migrate together. The attempt, focused and
+full-gate results, artifact hash, concurrent-worktree limitations, and remaining
+three unaccepted i386 baseline regressions are recorded in
+`results/wp9-target-aware-register-reads.md`.
+
+This is one bounded WP9 increment. It does not close the shared `MachineModel`,
+ARM32/VFP, capability-census, or whole-architecture exit criteria below.
+
+### Implementation evidence - 2026-09-03 store-width demand
+
+The bit-demand oracle now treats a register-valued memory-store source as the
+width actually written, while retaining whole-value demand for address and
+predicate operands. This removes the false entry-`rax`/undefined-`ret` input
+from both Clang `atomic_flag_round_trip` lanes without inventing an initializer
+or adding an architecture special case. The definedness module's six tests
+pass, a narrow definition-health census reports no O0 or O2 violation, and all
+four host atomic lanes remain baseline-stable. Exact RED/GREEN and fixture
+evidence is in `results/wp9-store-width-demand.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
@@ -978,7 +1047,7 @@ closed, and remove superseded code only after equivalence is demonstrated.
 - [x] Restore the independent LLIR invariants currently stranded in
   `src/ir/verify.rs` by compiling the module or porting each invariant to its
   correct owner.
-- [ ] Complete goto-aware used-before-definition using the WP1 winner.
+- [x] Complete goto-aware used-before-definition using the WP1 winner.
 - [ ] Promote `BlockDropped`, `EdgeUnaccounted`, `UsedBeforeDefinition`, and
   constant-false live latches to fixture/release failures.
 - [ ] Preserve best-effort output with structured health/completeness metadata.
@@ -1006,6 +1075,26 @@ Validation:
 This closes only the stranded-module item. The verifier is a query API, not yet
 a release gate, and the remaining health promotion and lane-keyed expectations
 below stay open.
+
+### Implementation evidence - 2026-09-03 goto-aware definedness
+
+`src/ir/verify_defs.rs` now builds a fixed-point CFG from the exact final AST
+for functions containing labels and gotos. The graph includes nested
+conditionals, loops, switches, breaks, exception arms, explicit labels, and
+direct gotos. Missing or duplicate labels fail closed for the stronger
+flow-sensitive claim; `NeverDefined` remains active, including for throw,
+indirect-goto, and try/catch reads.
+
+The focused suite passed 38 tests and the full
+`cargo test --features python-ext` gate passed. A release-built, goto-heavy
+fixture slice selected 20 of 838 lanes with no scoped behavior regressions.
+The full def-use census correctly remained red: it surfaced newly visible real
+undefined reads while concurrent work resolved many baseline findings, so this
+increment did not rewrite the shared baseline. The structural test file also
+remained red with the expected new exception-body finding plus unrelated
+concurrent output/baseline drift. Commands, build fingerprint, scope, and the
+detected repair targets are recorded in
+`results/wp10-goto-aware-definedness.md`.
 
 ### Selective deletion checklist
 

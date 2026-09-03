@@ -65,8 +65,15 @@ impl BitDemandOracle {
                     // Only the arity is wanted. `def_uses` would allocate a
                     // `Vec<VReg>` and clone the register spelling of every
                     // operand to produce values this loop never reads.
-                    for use_index in 0..use_count(&instruction.op) {
-                        oracle.demand_use(function, ssa, addr, use_index, FULL);
+                    let uses = use_count(&instruction.op);
+                    for use_index in 0..uses {
+                        oracle.demand_use(
+                            function,
+                            ssa,
+                            addr,
+                            use_index,
+                            observable_use_mask(&instruction.op, use_index, uses),
+                        );
                     }
                 }
 
@@ -317,6 +324,35 @@ fn has_observable_uses(op: &Op) -> bool {
     )
 }
 
+/// Bits read by an operand whose operation is itself an observable sink.
+///
+/// Address and control operands remain whole-value demands. A memory store,
+/// however, observes exactly the number of bytes encoded by its [`MemOp`]. On
+/// targets with canonical register storage, a one-byte source such as x86
+/// `al` may resolve to the current `rax` SSA value; demanding all 64 bits here
+/// would falsely keep the upper, architecturally preserved lanes alive.
+fn observable_use_mask(op: &Op, use_index: usize, use_count: usize) -> u64 {
+    let stored_bytes = match op {
+        Op::Store {
+            src: Value::Reg(_),
+            addr,
+        }
+        | Op::CondStore {
+            src: Value::Reg(_),
+            addr,
+            ..
+        } if use_index + 1 == use_count => Some(addr.size),
+        _ => None,
+    };
+    stored_bytes.map_or(FULL, |bytes| match u32::from(bytes).checked_mul(8) {
+        // A zero-width memory operation is malformed/unknown, not proof that
+        // its source is unobservable. Fail closed to a whole-value demand.
+        Some(0) => FULL,
+        Some(bits) if bits < u64::BITS => (1_u64 << bits) - 1,
+        _ => FULL,
+    })
+}
+
 /// Per-operand demand of `op`, written into `masks` (cleared first).
 ///
 /// Takes the buffer rather than returning one: the fixed point calls this once
@@ -469,11 +505,86 @@ fn width_mask(width: Width) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ssa::compute_ssa;
-    use crate::ir::types::{Flag, LlirBlock, LlirInstr};
+    use crate::core::binary::{Arch, Endianness, Format};
+    use crate::ir::ssa::{compute_ssa, compute_ssa_for_target};
+    use crate::ir::types::{Endian, Flag, LlirBlock, LlirInstr};
+    use crate::target::TargetSpec;
 
     fn instruction(va: u64, op: Op) -> LlirInstr {
         LlirInstr { va, op }
+    }
+
+    #[test]
+    fn byte_store_does_not_demand_preserved_upper_parent_lanes() {
+        // x86 byte writes are represented as a parent-register RMW so the
+        // untouched upper lanes remain architecturally correct.  When the only
+        // observation is a one-byte store from AL, those upper lanes cannot
+        // affect memory and must not turn the entry RAX value into a live-in.
+        let mut function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    instruction(
+                        0x1000,
+                        Op::Bin {
+                            dst: VReg::phys("rax"),
+                            op: BinOp::And,
+                            lhs: Value::Reg(VReg::phys("rax")),
+                            rhs: Value::Const(-256),
+                        },
+                    ),
+                    instruction(
+                        0x1004,
+                        Op::Bin {
+                            dst: VReg::phys("rax"),
+                            op: BinOp::Or,
+                            lhs: Value::Reg(VReg::phys("rax")),
+                            rhs: Value::Const(1),
+                        },
+                    ),
+                    instruction(
+                        0x1008,
+                        Op::Store {
+                            addr: crate::ir::types::MemOp {
+                                base: Some(VReg::phys("rbp")),
+                                index: None,
+                                scale: 1,
+                                disp: -8,
+                                size: 1,
+                                segment: None,
+                                endian: Endian::Little,
+                            },
+                            src: Value::Reg(VReg::phys("al")),
+                        },
+                    ),
+                    instruction(0x100c, Op::Nop),
+                ],
+                succs: vec![],
+            }],
+        };
+        let target =
+            TargetSpec::from_image_metadata(Arch::X86_64, Endianness::Little, Format::ELF, false);
+        let ssa = compute_ssa_for_target(&function, target);
+        let oracle = BitDemandOracle::analyze(&function, &ssa, CallConv::SysVAmd64);
+        let masked = InstrAddr {
+            block_idx: 0,
+            instr_idx: 0,
+        };
+
+        assert_eq!(oracle.use_demand(masked, 0), 0);
+        assert_eq!(
+            erase_unobserved_masked_inputs(&mut function, &ssa, &oracle),
+            1
+        );
+        assert!(matches!(
+            function.blocks[0].instrs[0].op,
+            Op::Bin {
+                lhs: Value::Const(0),
+                ..
+            }
+        ));
     }
 
     #[test]
