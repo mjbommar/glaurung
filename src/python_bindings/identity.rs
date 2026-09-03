@@ -458,6 +458,58 @@ pub struct CfrSignature {
 
 #[pymethods]
 impl CfrSignature {
+    /// Rebuild a signature from a stored `(feature_hash, count)` list.
+    ///
+    /// This is the index side of the boundary: `feature_vector.features` in a
+    /// `.glaurung` project holds exactly this list, and a stored vector has to
+    /// come back as a real signature to be scored by the same code that scores
+    /// a freshly computed one. The positional facts a computed signature
+    /// carries -- `entry_va`, `name`, `block_count`, `instruction_count`, the
+    /// width census -- are not in the vector and are **not** invented here;
+    /// they read back as zero and `None`. The vector, the digest and the
+    /// version triple are complete, which is everything the metric consumes.
+    ///
+    /// Args:
+    ///     features: `(feature_hash, count)` pairs. Order and duplicates do
+    ///         not matter: they are re-sorted and re-counted, which is also
+    ///         what makes the digest independent of how the caller stored them.
+    ///     nosize: The CFR setting the features were computed under. Part of
+    ///         the version triple, so getting it wrong produces a signature
+    ///         that compares 0.0 against everything rather than one that
+    ///         silently compares wrongly.
+    ///     normalize: Whether the peephole normaliser was on when the features
+    ///         were computed. The other bit of the version triple, and it
+    ///         fails the same way: a normalised vector reconstructed as a
+    ///         plain one compares 0.0 against every plain signature in the
+    ///         corpus and against every normalised one too.
+    #[staticmethod]
+    #[pyo3(signature = (features, nosize=false, normalize=false))]
+    fn from_features(features: Vec<(u32, u16)>, nosize: bool, normalize: bool) -> Self {
+        let version = crate::identity::cfr::CfrVersion::current(
+            crate::identity::cfr::CfrSettings { nosize, normalize },
+        );
+        let mut raw: Vec<u32> = Vec::new();
+        for (feature, count) in features {
+            for _ in 0..count.max(1) {
+                raw.push(feature);
+            }
+        }
+        let inner = crate::identity::cfr::CfrSignature::from_features(version, &raw);
+        CfrSignature {
+            entry_va: 0,
+            name: None,
+            block_count: 0,
+            instruction_count: 0,
+            width_total: 0,
+            width_unknown: 0,
+            version: (version.major, version.minor, version.settings),
+            features: inner.features.clone(),
+            digest: inner.identity(),
+            scheme: crate::identity::cfr::CFR_SCHEME.to_string(),
+            inner,
+        }
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "CfrSignature(entry_va={:#x}, name='{}', blocks={}, features={}, \
@@ -477,13 +529,36 @@ impl CfrSignature {
     }
 
     /// Weighted cosine against another signature, in `[0, 1]`.
-    fn cosine(&self, other: &CfrSignature) -> f64 {
-        crate::identity::cfr::cosine(&self.inner, &other.inner, None)
+    ///
+    /// `weights` is a :class:`CfrWeights` corpus table, or `None` for the
+    /// uniform weighting every published unweighted CFR number was measured
+    /// under.
+    #[pyo3(signature = (other, weights=None))]
+    fn cosine(&self, other: &CfrSignature, weights: Option<&CfrWeights>) -> f64 {
+        crate::identity::cfr::cosine(&self.inner, &other.inner, weights_arg(weights))
     }
 
     /// The induced distance `sqrt(k(a,a) + k(b,b) - 2 k(a,b))`.
-    fn distance(&self, other: &CfrSignature) -> f64 {
-        crate::identity::cfr::distance(&self.inner, &other.inner, None)
+    #[pyo3(signature = (other, weights=None))]
+    fn distance(&self, other: &CfrSignature, weights: Option<&CfrWeights>) -> f64 {
+        crate::identity::cfr::distance(&self.inner, &other.inner, weights_arg(weights))
+    }
+
+    /// BSim's significance ("Confidence" in Ghidra's UI) against another
+    /// signature.
+    ///
+    /// Open-ended and negative for a poor match. Bounded above by
+    /// :meth:`self_significance`, which is roughly proportional to size, so a
+    /// small function cannot reach a confident score however well it matches.
+    #[pyo3(signature = (other, weights=None))]
+    fn significance(&self, other: &CfrSignature, weights: Option<&CfrWeights>) -> f64 {
+        crate::identity::cfr::significance(&self.inner, &other.inner, weights_arg(weights))
+    }
+
+    /// The largest significance any match to this signature could reach.
+    #[pyo3(signature = (weights=None))]
+    fn self_significance(&self, weights: Option<&CfrWeights>) -> f64 {
+        crate::identity::cfr::self_significance(&self.inner, weights_arg(weights))
     }
 }
 
@@ -503,6 +578,177 @@ impl From<crate::identity::cfr::FunctionCfr> for CfrSignature {
             scheme: crate::identity::cfr::CFR_SCHEME.to_string(),
             inner: entry.signature,
         }
+    }
+}
+
+/// A frozen corpus TF-IDF table over CFR features.
+///
+/// Built from the signatures of a corpus with
+/// :func:`cfr_build_weights`, or rebuilt from stored rows with
+/// :meth:`CfrWeights.from_entries`. Immutable once built: a weight that changed
+/// under a caller would change every score computed against it, and the
+/// `weights_id` would then name a table that no longer exists.
+///
+/// Pass one to `cfr_similarity`, `cfr_distance` or `cfr_confidence` to weight
+/// the comparison; pass `None` for the uniform weighting every published
+/// unweighted CFR number was measured under.
+#[pyclass(module = "glaurung.analysis", name = "CfrWeights", frozen)]
+#[derive(Clone)]
+pub struct CfrWeights {
+    inner: crate::identity::cfr::CorpusWeights,
+}
+
+#[pymethods]
+impl CfrWeights {
+    /// Rebuild a weight table from its stored `feature_weight` entries.
+    ///
+    /// `entries` is `[(feature_hash, doc_count), ...]`; the weights are
+    /// recomputed from `documents` rather than trusted from the caller, so a
+    /// table read back out of a database cannot disagree with one built from
+    /// the corpus it was counted over.
+    ///
+    /// Args:
+    ///     documents: Functions counted into the table -- the ``N`` in
+    ///         ``ln((N + 1) / (df + 1))``.
+    ///     entries: ``(feature_hash, doc_count)`` pairs.
+    ///     nosize: The CFR setting the counted signatures were computed under.
+    ///         Part of the table's identity: a table counted over ``nosize``
+    ///         signatures must not weight plain ones.
+    ///     normalize: Whether the counted signatures were computed with the
+    ///         peephole normaliser on. Also part of the table's identity, and
+    ///         for a sharper reason than ``nosize``: normalisation changes the
+    ///         feature vocabulary, so a table counted over plain vectors
+    ///         weights features the normalised representation does not
+    ///         produce.
+    #[staticmethod]
+    #[pyo3(signature = (documents, entries, nosize=false, normalize=false))]
+    fn from_entries(
+        documents: u64,
+        entries: Vec<(u32, u64)>,
+        nosize: bool,
+        normalize: bool,
+    ) -> Self {
+        let version = crate::identity::cfr::CfrVersion::current(
+            crate::identity::cfr::CfrSettings { nosize, normalize },
+        );
+        let rows = entries
+            .into_iter()
+            .map(|(feature, doc_count)| {
+                (
+                    feature,
+                    crate::identity::cfr::FeatureWeight {
+                        doc_count,
+                        bucket: crate::identity::cfr::weights::quantise(
+                            crate::identity::cfr::weights::raw_idf(documents, doc_count),
+                        ),
+                    },
+                )
+            })
+            .collect();
+        CfrWeights {
+            inner: crate::identity::cfr::CorpusWeights::from_parts(version, documents, rows),
+        }
+    }
+
+    /// The stable name of this table.
+    ///
+    /// Changes whenever the CFR version, the quantisation parameters, the
+    /// corpus size or any single weight changes, which is what makes it safe to
+    /// key stored scores on.
+    #[getter]
+    fn weights_id(&self) -> &str {
+        self.inner.weights_id()
+    }
+
+    /// Functions counted into the table.
+    #[getter]
+    fn documents(&self) -> u64 {
+        self.inner.documents()
+    }
+
+    /// The CFR `(major, minor, settings)` triple the table was counted under.
+    #[getter]
+    fn version(&self) -> (u16, u16, u32) {
+        let version = self.inner.version();
+        (version.major, version.minor, version.settings)
+    }
+
+    /// The weight an unlisted feature gets: the largest the corpus can express.
+    #[getter]
+    fn max_idf(&self) -> f64 {
+        self.inner.unlisted_weight()
+    }
+
+    /// Distinct features the table carries a weight for.
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// The weight of one feature, in nats.
+    fn idf(&self, feature: u32) -> f64 {
+        use crate::identity::cfr::Weights as _;
+        self.inner.idf(feature)
+    }
+
+    /// Every row, ascending by feature hash, as
+    /// `(feature_hash, doc_count, weight)`.
+    ///
+    /// This is the order the `feature_weight` KB table wants and the order the
+    /// `weights_id` is hashed in.
+    fn entries(&self) -> Vec<(u32, u64, f64)> {
+        self.inner
+            .iter()
+            .map(|(hash, row)| (hash, row.doc_count, row.weight()))
+            .collect()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CfrWeights(weights_id='{}', documents={}, features={})",
+            self.inner.weights_id(),
+            self.inner.documents(),
+            self.inner.len()
+        )
+    }
+}
+
+/// Count a corpus of signatures into a TF-IDF weight table.
+///
+/// Args:
+///     signatures: The corpus. Signatures whose version is not comparable with
+///         the first one's are refused rather than counted, so a list that
+///         mixes ``nosize`` and plain signatures does not silently produce a
+///         table that is wrong for both.
+///     min_doc_count: Features seen in fewer functions than this are left
+///         *out* of the table rather than given a weight. Leaving one out is
+///         not the same as zeroing it: an absent feature falls through to the
+///         corpus maximum, which is the right answer for something the corpus
+///         saw once.
+///     nosize: The CFR setting the corpus was computed under.
+///     normalize: Whether the corpus was computed with the peephole normaliser
+///         on. A table counted over one representation must not weight the
+///         other; this is the bit that says which.
+///
+/// Returns:
+///     The frozen table.
+#[pyfunction]
+#[pyo3(name = "cfr_build_weights")]
+#[pyo3(signature = (signatures, min_doc_count=1u64, nosize=false, normalize=false))]
+fn cfr_build_weights(
+    signatures: Vec<PyRef<'_, CfrSignature>>,
+    min_doc_count: u64,
+    nosize: bool,
+    normalize: bool,
+) -> CfrWeights {
+    let version = crate::identity::cfr::CfrVersion::current(
+        crate::identity::cfr::CfrSettings { nosize, normalize },
+    );
+    let mut builder = crate::identity::cfr::WeightsBuilder::new(version);
+    for signature in &signatures {
+        builder.observe(&signature.inner);
+    }
+    CfrWeights {
+        inner: builder.build(min_doc_count),
     }
 }
 
@@ -566,8 +812,9 @@ fn cfr_signatures_path(
 /// and neither should read as "distant but related".
 #[pyfunction]
 #[pyo3(name = "cfr_similarity")]
-fn cfr_similarity(a: &CfrSignature, b: &CfrSignature) -> f64 {
-    crate::identity::cfr::cosine(&a.inner, &b.inner, None)
+#[pyo3(signature = (a, b, weights=None))]
+fn cfr_similarity(a: &CfrSignature, b: &CfrSignature, weights: Option<&CfrWeights>) -> f64 {
+    crate::identity::cfr::cosine(&a.inner, &b.inner, weights_arg(weights))
 }
 
 /// The metric distance between two CFR signatures.
@@ -578,17 +825,59 @@ fn cfr_similarity(a: &CfrSignature, b: &CfrSignature) -> f64 {
 /// size of the functions involved.
 #[pyfunction]
 #[pyo3(name = "cfr_distance")]
-fn cfr_distance(a: &CfrSignature, b: &CfrSignature) -> f64 {
-    crate::identity::cfr::distance(&a.inner, &b.inner, None)
+#[pyo3(signature = (a, b, weights=None))]
+fn cfr_distance(a: &CfrSignature, b: &CfrSignature, weights: Option<&CfrWeights>) -> f64 {
+    crate::identity::cfr::distance(&a.inner, &b.inner, weights_arg(weights))
+}
+
+/// The cosine and BSim's significance together, which is how a match should be
+/// reported: neither number answers the question on its own.
+///
+/// Returns a dict with `cosine`, `significance`, `self_significance`,
+/// `saturation` (the fraction of the available significance this match used)
+/// and `false_positive_one_in` -- the last of which is `None` below BSim's
+/// lowest published anchor, where Ghidra's own help page says the
+/// correspondence between a confidence score and a false-positive rate does not
+/// hold.
+#[pyfunction]
+#[pyo3(name = "cfr_confidence")]
+#[pyo3(signature = (a, b, weights=None))]
+fn cfr_confidence<'py>(
+    py: Python<'py>,
+    a: &CfrSignature,
+    b: &CfrSignature,
+    weights: Option<&CfrWeights>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let confidence = crate::identity::cfr::confidence(&a.inner, &b.inner, weights_arg(weights));
+    let out = PyDict::new(py);
+    out.set_item("cosine", confidence.cosine)?;
+    out.set_item("significance", confidence.significance)?;
+    out.set_item("self_significance", confidence.self_significance)?;
+    out.set_item("saturation", confidence.saturation())?;
+    out.set_item("is_confident", confidence.is_confident())?;
+    out.set_item("false_positive_one_in", confidence.false_positive_one_in())?;
+    Ok(out)
+}
+
+/// Borrow a Python weight table as the Rust trait object the metric takes.
+fn weights_arg(weights: Option<&CfrWeights>) -> Option<&dyn crate::identity::cfr::Weights> {
+    weights.map(|w| &w.inner as &dyn crate::identity::cfr::Weights)
 }
 
 /// Register the CFR (L2) additions on `analysis_mod`.
 fn register_cfr(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
     analysis_mod.add_class::<CfrSignature>()?;
+    analysis_mod.add_class::<CfrWeights>()?;
     analysis_mod.add_function(wrap_pyfunction!(cfr_signatures_path, analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(cfr_similarity, analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(cfr_distance, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(cfr_confidence, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(cfr_build_weights, analysis_mod)?)?;
     analysis_mod.add("CFR_SCHEME", crate::identity::cfr::CFR_SCHEME)?;
+    analysis_mod.add(
+        "CFR_CONFIDENT_SIGNIFICANCE",
+        crate::identity::cfr::CONFIDENT_SIGNIFICANCE,
+    )?;
     Ok(())
 }
 
