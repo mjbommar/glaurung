@@ -72,6 +72,16 @@ use reads::count_reads_body;
 use scratch_liveness::prune_unobservable_scratch_dataflow;
 use subst::{subst, subst_store_addr};
 
+/// Exact whole-function read count for one structured value identity.
+///
+/// Exposed to effect-moving passes so they can prove a call result has one
+/// consumer without duplicating this module's complete statement/expr walk.
+pub(crate) fn register_read_count(function: &Function, target: &crate::ir::types::VReg) -> usize {
+    let mut reads: RegMap<usize> = RegMap::default();
+    count_reads_body(&function.body, &mut reads);
+    reads.get(target).copied().unwrap_or(0)
+}
+
 /// Run copy propagation then dead-copy elimination over `f`'s body.
 ///
 /// Returns whether the body was changed.

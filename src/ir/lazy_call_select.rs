@@ -15,6 +15,139 @@ pub fn collapse_lazy_call_diamonds_with_pointer_width(function: &mut Function, p
     collapse_body(&mut function.body, pointer_width);
 }
 
+/// Move an adjacent, uniquely consumed call result into its assignment.
+///
+/// This is the straight-line counterpart of the lazy-diamond recovery below.
+/// It moves—never copies—the effectful call, and only after the complete
+/// structured function proves that result identity has exactly one read.
+pub fn fold_adjacent_single_use_call_results(function: &mut Function, pointer_width: u8) {
+    let mut results = Vec::new();
+    collect_call_results(&function.body, &mut results);
+    let eligible = results
+        .into_iter()
+        .filter(|result| crate::ir::copy_prop::register_read_count(function, result) == 1)
+        .collect::<std::collections::HashSet<_>>();
+    fold_adjacent_call_results_in_body(&mut function.body, pointer_width, &eligible);
+}
+
+fn collect_call_results(body: &[Stmt], results: &mut Vec<VReg>) {
+    for statement in body {
+        if let Stmt::Call {
+            dst: Some(result), ..
+        } = statement
+        {
+            results.push(result.clone());
+        }
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_call_results(then_body, results);
+                if let Some(else_body) = else_body {
+                    collect_call_results(else_body, results);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collect_call_results(body, results)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_call_results(body, results);
+                }
+                if let Some(default) = default {
+                    collect_call_results(default, results);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collect_call_results(try_body, results);
+                for catch in catches {
+                    collect_call_results(&catch.body, results);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn fold_adjacent_call_results_in_body(
+    body: &mut Vec<Stmt>,
+    pointer_width: u8,
+    eligible: &std::collections::HashSet<VReg>,
+) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_adjacent_call_results_in_body(then_body, pointer_width, eligible);
+                if let Some(else_body) = else_body {
+                    fold_adjacent_call_results_in_body(else_body, pointer_width, eligible);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                fold_adjacent_call_results_in_body(body, pointer_width, eligible)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    fold_adjacent_call_results_in_body(body, pointer_width, eligible);
+                }
+                if let Some(default) = default {
+                    fold_adjacent_call_results_in_body(default, pointer_width, eligible);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                fold_adjacent_call_results_in_body(try_body, pointer_width, eligible);
+                for catch in catches {
+                    fold_adjacent_call_results_in_body(&mut catch.body, pointer_width, eligible);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index + 1 < body.len() {
+        let eligible_result = matches!(
+            &body[index],
+            Stmt::Call { dst: Some(result), .. } if eligible.contains(result)
+        );
+        if !eligible_result {
+            index += 1;
+            continue;
+        }
+        let consumer_index =
+            (index + 1..body.len()).find(|candidate| !matches!(body[*candidate], Stmt::Nop));
+        let Some(consumer_index) = consumer_index else {
+            break;
+        };
+        let pair = [body[index].clone(), body[consumer_index].clone()];
+        if let Some((destination, value)) = call_arm(&pair, pointer_width) {
+            body[consumer_index] = assignment_with_value(destination, value);
+            body.drain(index..consumer_index);
+        } else if let Some(value) = call_return(&pair, pointer_width) {
+            body[consumer_index] = Stmt::Return { value: Some(value) };
+            body.drain(index..consumer_index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn assignment_with_value(destination: AssignmentTarget, value: Expr) -> Stmt {
+    match destination {
+        AssignmentTarget::Register(dst) => Stmt::Assign { dst, src: value },
+        AssignmentTarget::PromotedLocal { register, size } => Stmt::Store {
+            addr: Expr::Reg(register),
+            src: value,
+            size,
+        },
+    }
+}
+
 fn collapse_body(body: &mut Vec<Stmt>, pointer_width: u8) {
     for statement in body.iter_mut() {
         visit_children(statement, pointer_width);
@@ -349,12 +482,29 @@ fn constant_expression(expression: &Expr) -> bool {
 }
 
 fn call_arm(body: &[Stmt], pointer_width: u8) -> Option<(AssignmentTarget, Expr)> {
-    let [Stmt::Call {
+    let [call, assignment_statement] = body else {
+        return None;
+    };
+    let (call_result, call) = call_expression(call, pointer_width)?;
+    let (destination, src) = assignment(assignment_statement)?;
+    derive_from_call(src, &call_result, &call).map(|value| (destination, value))
+}
+
+fn call_return(body: &[Stmt], pointer_width: u8) -> Option<Expr> {
+    let [call, Stmt::Return { value: Some(value) }] = body else {
+        return None;
+    };
+    let (call_result, call) = call_expression(call, pointer_width)?;
+    derive_from_call(value, &call_result, &call)
+}
+
+fn call_expression(statement: &Stmt, pointer_width: u8) -> Option<(VReg, Expr)> {
+    let Stmt::Call {
         target,
         args,
         dst: Some(call_result),
         call_spec,
-    }, assignment_statement] = body
+    } = statement
     else {
         return None;
     };
@@ -368,7 +518,6 @@ fn call_arm(body: &[Stmt], pointer_width: u8) -> Option<(AssignmentTarget, Expr)
     {
         return None;
     }
-    let (destination, src) = assignment(assignment_statement)?;
     let call_spec = call_spec.clone().unwrap_or_else(|| {
         crate::ir::call_contracts::recover_call_site_spec(target, args, Some(call_result))
     });
@@ -379,7 +528,7 @@ fn call_arm(body: &[Stmt], pointer_width: u8) -> Option<(AssignmentTarget, Expr)
         call_spec: Some(call_spec),
         result_width,
     };
-    derive_from_call(src, call_result, &call).map(|value| (destination, value))
+    Some((call_result.clone(), call))
 }
 
 fn call_result_width(

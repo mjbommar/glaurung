@@ -451,3 +451,141 @@ fn machine_sized_call_result_uses_the_active_pointer_width() {
             }) && matches!(rhs.as_ref(), Expr::Const(2)))
     ));
 }
+
+#[test]
+fn adjacent_unique_call_result_moves_into_its_consumer() {
+    let mut function = Function {
+        name: "sum_lengths".into(),
+        entry_va: 0x1000,
+        body: vec![
+            call("call_result#call_lifetime_0"),
+            assign(
+                "sum",
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("sum"))),
+                    rhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(reg("call_result#call_lifetime_0"))),
+                    }),
+                },
+            ),
+        ],
+    };
+
+    fold_adjacent_single_use_call_results(&mut function, 8);
+
+    assert_eq!(function.body.len(), 1, "{function:#?}");
+    assert!(matches!(
+        &function.body[0],
+        Stmt::Assign {
+            src: Expr::Bin { rhs, .. },
+            ..
+        } if matches!(rhs.as_ref(), Expr::Cast { expr, .. }
+            if matches!(expr.as_ref(), Expr::Call { .. }))
+    ));
+}
+
+#[test]
+fn adjacent_unique_call_result_moves_into_promoted_commuted_update() {
+    let result = "call_result#call_lifetime_0";
+    let mut function = Function {
+        name: "sum_lengths".into(),
+        entry_va: 0x1000,
+        body: vec![
+            call(result),
+            Stmt::Store {
+                addr: Expr::Reg(reg("local_20")),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg(result))),
+                    rhs: Box::new(Expr::Reg(reg("local_20"))),
+                },
+                size: 4,
+            },
+        ],
+    };
+
+    fold_adjacent_single_use_call_results(&mut function, 4);
+
+    assert_eq!(function.body.len(), 1, "{function:#?}");
+    assert!(matches!(
+        &function.body[0],
+        Stmt::Store {
+            src: Expr::Bin { lhs, .. },
+            ..
+        } if matches!(lhs.as_ref(), Expr::Call { .. })
+    ));
+}
+
+#[test]
+fn shared_call_result_is_not_moved() {
+    let result = "call_result#call_lifetime_0";
+    let mut function = Function {
+        name: "shared_result".into(),
+        entry_va: 0x1000,
+        body: vec![
+            call(result),
+            assign("first", Expr::Reg(reg(result))),
+            Stmt::Return {
+                value: Some(Expr::Reg(reg(result))),
+            },
+        ],
+    };
+
+    fold_adjacent_single_use_call_results(&mut function, 8);
+
+    assert_eq!(function.body.len(), 3, "{function:#?}");
+    assert!(matches!(function.body[0], Stmt::Call { .. }));
+}
+
+#[test]
+fn adjacent_unique_call_result_moves_into_return() {
+    let result = "call_result#call_lifetime_0";
+    let mut function = Function {
+        name: "forward_result".into(),
+        entry_va: 0x1000,
+        body: vec![
+            call(result),
+            Stmt::Return {
+                value: Some(Expr::Reg(reg(result))),
+            },
+        ],
+    };
+
+    fold_adjacent_single_use_call_results(&mut function, 8);
+
+    assert!(matches!(
+        function.body.as_slice(),
+        [Stmt::Return {
+            value: Some(Expr::Call { .. })
+        }]
+    ));
+}
+
+#[test]
+fn inert_nops_do_not_block_call_result_return_folding() {
+    let result = "call_result#call_lifetime_0";
+    let mut function = Function {
+        name: "forward_result_after_nops".into(),
+        entry_va: 0x1000,
+        body: vec![
+            call(result),
+            Stmt::Nop,
+            Stmt::Nop,
+            Stmt::Return {
+                value: Some(Expr::Reg(reg(result))),
+            },
+        ],
+    };
+
+    fold_adjacent_single_use_call_results(&mut function, 8);
+
+    assert!(matches!(
+        function.body.as_slice(),
+        [Stmt::Return {
+            value: Some(Expr::Call { .. })
+        }]
+    ));
+}

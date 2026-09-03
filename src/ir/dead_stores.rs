@@ -34,6 +34,114 @@ pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     eliminate_body(&mut f.body, &ret_regs);
 }
 
+/// Discard the destination identity of an effectful call when the function
+/// never reads that value.
+///
+/// The call itself is retained: this is not dead-code elimination of an
+/// effect, only removal of an invented source temporary for an ignored ABI
+/// result.  The proof is deliberately whole-function and conservative. If any
+/// statement reads the same identity, every call defining it remains intact;
+/// distinguishing those definitions requires reaching-definition evidence.
+pub fn drop_globally_unused_call_results(f: &mut Function) {
+    fn collect(body: &[Stmt], out: &mut HashSet<VReg>) {
+        for statement in body {
+            match statement {
+                Stmt::Call { dst: Some(dst), .. } => {
+                    out.insert(dst.clone());
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    collect(then_body, out);
+                    if let Some(else_body) = else_body {
+                        collect(else_body, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collect(body, out),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    collect(std::slice::from_ref(init.as_ref()), out);
+                    collect(body, out);
+                    collect(std::slice::from_ref(step.as_ref()), out);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        collect(body, out);
+                    }
+                    if let Some(default) = default {
+                        collect(default, out);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    collect(try_body, out);
+                    for catch in catches {
+                        collect(&catch.body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn clear(body: &mut [Stmt], unused: &HashSet<VReg>) {
+        for statement in body {
+            match statement {
+                Stmt::Call { dst, .. } if dst.as_ref().is_some_and(|dst| unused.contains(dst)) => {
+                    *dst = None;
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    clear(then_body, unused);
+                    if let Some(else_body) = else_body {
+                        clear(else_body, unused);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => clear(body, unused),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    clear(std::slice::from_mut(init.as_mut()), unused);
+                    clear(body, unused);
+                    clear(std::slice::from_mut(step.as_mut()), unused);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        clear(body, unused);
+                    }
+                    if let Some(default) = default {
+                        clear(default, unused);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    clear(try_body, unused);
+                    for catch in catches {
+                        clear(&mut catch.body, unused);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut candidates = HashSet::new();
+    collect(&f.body, &mut candidates);
+    let unused = candidates
+        .into_iter()
+        .filter(|candidate| {
+            !f.body
+                .iter()
+                .any(|statement| stmt_reads(statement, candidate))
+        })
+        .collect::<HashSet<_>>();
+    clear(&mut f.body, &unused);
+}
+
 fn return_reg_aliases(cc: CallConv) -> Vec<&'static str> {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => vec!["rax", "eax", "ax", "al", "ret"],
@@ -776,14 +884,22 @@ pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
                     .is_some_and(|b| b.iter().any(|s| stmt_reads(s, dst)))
         }
         Stmt::IndirectGoto { target } => expr_reads(target, dst),
+        Stmt::Throw { value } => expr_reads(value, dst),
+        Stmt::TryCatch { try_body, catches } => {
+            try_body.iter().any(|statement| stmt_reads(statement, dst))
+                || catches.iter().any(|catch| {
+                    catch
+                        .body
+                        .iter()
+                        .any(|statement| stmt_reads(statement, dst))
+                })
+        }
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_)
-        | Stmt::Throw { .. }
-        | Stmt::TryCatch { .. } => false,
+        | Stmt::Comment(_) => false,
     }
 }
 
@@ -1016,6 +1132,101 @@ mod tests {
         eliminate_dead_stores(&mut f, CallConv::SysVAmd64);
         assert_eq!(f.body.len(), 1, "dead ret store should be removed");
         assert!(matches!(&f.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn globally_unused_call_result_becomes_an_effect_only_call() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "puts".into(),
+                    },
+                    args: vec![Expr::StringLit {
+                        value: "Hello, World!".into(),
+                    }],
+                    dst: Some(reg("var0")),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        drop_globally_unused_call_results(&mut f);
+
+        assert!(matches!(f.body.first(), Some(Stmt::Call { dst: None, .. })));
+        assert!(matches!(f.body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn read_call_result_keeps_its_destination() {
+        let result = reg("var0");
+        let mut f = Function {
+            name: "wrapper".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "puts".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(result.clone()),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        };
+
+        drop_globally_unused_call_results(&mut f);
+
+        assert!(matches!(
+            f.body.first(),
+            Some(Stmt::Call { dst: Some(_), .. })
+        ));
+    }
+
+    #[test]
+    fn call_result_read_inside_try_body_keeps_its_destination() {
+        let result = reg("call_result");
+        let mut function = Function {
+            name: "exceptional_wrapper".into(),
+            entry_va: 0,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![
+                    Stmt::Call {
+                        target: Expr::Named {
+                            va: 0,
+                            name: "may_throw".into(),
+                        },
+                        args: Vec::new(),
+                        dst: Some(result.clone()),
+                        call_spec: None,
+                    },
+                    Stmt::Return {
+                        value: Some(Expr::Reg(result)),
+                    },
+                ],
+                catches: Vec::new(),
+            }],
+        };
+
+        drop_globally_unused_call_results(&mut function);
+
+        let Stmt::TryCatch { try_body, .. } = &function.body[0] else {
+            panic!("expected the try body")
+        };
+        assert!(matches!(
+            try_body.first(),
+            Some(Stmt::Call { dst: Some(_), .. })
+        ));
     }
 
     #[test]
