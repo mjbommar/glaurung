@@ -1,10 +1,10 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 310,
+  "core": 308,
   "lfs": 109,
+  "toolchain": 34,
   "fixtures": 33,
-  "toolchain": 28,
   "docker": 18,
   "llm": 5,
   "decbench": 2
@@ -277,7 +277,7 @@
    "core"
   ],
   "test_decompiler_emission_invariants.py": [
-   "core"
+   "toolchain"
   ],
   "test_decompiler_fixture_build_cache.py": [
    "fixtures",
@@ -301,6 +301,7 @@
   ],
   "test_decompiler_fixture_toolchain.py": [
    "fixtures",
+   "toolchain",
    "docker"
   ],
   "test_decompiler_frame_semantics.py": [
@@ -346,7 +347,7 @@
    "fixtures"
   ],
   "test_decompiler_return_definedness.py": [
-   "core"
+   "toolchain"
   ],
   "test_decompiler_return_reaching_definitions.py": [
    "toolchain"
@@ -727,6 +728,12 @@
   "test_libc_pointer_roundtrip.py": [
    "toolchain"
   ],
+  "test_linux_arm_hello_canonical.py": [
+   "toolchain"
+  ],
+  "test_linux_x86_64_hello_canonical.py": [
+   "toolchain"
+  ],
   "test_llm.py": [
    "core"
   ],
@@ -772,6 +779,9 @@
   ],
   "test_minecraft_fetch_mappings_tool.py": [
    "core"
+  ],
+  "test_mingw_hello_canonical.py": [
+   "toolchain"
   ],
   "test_model_hyperparameters.py": [
    "core"
