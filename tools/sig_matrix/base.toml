@@ -1,0 +1,148 @@
+# The `base` signature matrix.
+#
+# One row per (distro, release, arch). `python -m glaurung.tools.harvest_sources`
+# reads this file, resolves each package to an exact version and a content hash,
+# fetches it from the distribution's own infrastructure, extracts the static
+# archives and writes a manifest with provenance sufficient to re-fetch and
+# re-derive every signature.
+#
+# The archives themselves are NEVER redistributed by this repository. What is
+# redistributable is the derived signature file: a masked pattern, a CRC16 and
+# a name. See `docs/reference/signature-sources.md`.
+#
+# Package names beginning with `@` are *resolved*, not literal:
+#
+#   @libstdcxx-dev  the C++ standard library development package the release's
+#                   default `g++` actually depends on. Debian and Ubuntu spell
+#                   it `libstdc++-<N>-dev` with a per-release N, and Alpine
+#                   spells it `libstdc++-dev`; in every case the harvester
+#                   follows the `g++` package's own dependency edge rather than
+#                   guessing N, and records the edge it followed.
+#
+# `licence` is what the distribution's own metadata is expected to say. The
+# harvester records the *observed* licence separately -- from the extracted
+# `usr/share/doc/<pkg>/copyright` on Debian and Ubuntu, from the APKINDEX `L:`
+# field on Alpine -- and never silently substitutes one for the other.
+
+schema_version = "1"
+name = "base"
+
+# Fedora is deliberately out of scope for this lane. Its static libraries live
+# in separate `-static` subpackages fetched from koji, extraction needs
+# `rpm2cpio` (absent on this machine), and the packaging-guidelines page that
+# would document the policy is behind an anti-bot gate and returned 403 to
+# every fetch. Recorded here so the omission is a decision and not an oversight.
+out_of_scope = ["fedora", "rhel"]
+
+# ---------------------------------------------------------------------------
+# Debian. Suite -> exact version comes from the release's own `Packages` index;
+# version -> bytes goes through snapshot.debian.org, whose `/mr/` and `/file/`
+# endpoints are the only ones its robots.txt permits a machine to walk.
+# ---------------------------------------------------------------------------
+
+[[target]]
+backend = "debian"
+distro = "debian"
+release = "bookworm"
+version_id = "12"
+suite = "bookworm/main"
+arches = ["amd64", "arm64"]
+packages = ["libc6-dev", "@libstdcxx-dev", "zlib1g-dev"]
+# `dpkg-buildflags` default for the release, recorded for the variant's sake.
+default_compiler = "gcc-12"
+build_flags = "-g -O2 -fstack-protector-strong -Wformat -D_FORTIFY_SOURCE=2"
+
+[[target]]
+backend = "debian"
+distro = "debian"
+release = "trixie"
+version_id = "13"
+suite = "trixie/main"
+arches = ["amd64", "arm64"]
+packages = ["libc6-dev", "@libstdcxx-dev", "zlib1g-dev"]
+default_compiler = "gcc-14"
+build_flags = "-g -O2 -fstack-protector-strong -Wformat -D_FORTIFY_SOURCE=2"
+
+# ---------------------------------------------------------------------------
+# Ubuntu. Launchpad's `getPublishedBinaries` gives the exact published version
+# per (series, arch) and `binaryFileUrls` gives the download; the release's
+# `Packages` index supplies the SHA-256 to verify against and the `g++`
+# dependency edge. amd64 lives on archive.ubuntu.com, arm64 on
+# ports.ubuntu.com, and an EOL series on old-releases.ubuntu.com.
+# ---------------------------------------------------------------------------
+
+[[target]]
+backend = "ubuntu"
+distro = "ubuntu"
+release = "jammy"
+version_id = "22.04"
+suite = "jammy/main"
+arches = ["amd64", "arm64"]
+packages = ["libc6-dev", "@libstdcxx-dev", "zlib1g-dev"]
+default_compiler = "gcc-11"
+build_flags = "-O2 -fno-omit-frame-pointer -fstack-protector-strong -fstack-clash-protection -fcf-protection -D_FORTIFY_SOURCE=2"
+
+[[target]]
+backend = "ubuntu"
+distro = "ubuntu"
+release = "noble"
+version_id = "24.04"
+suite = "noble/main"
+arches = ["amd64", "arm64"]
+packages = ["libc6-dev", "@libstdcxx-dev", "zlib1g-dev"]
+default_compiler = "gcc-13"
+build_flags = "-O2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fstack-protector-strong -fstack-clash-protection -fcf-protection -D_FORTIFY_SOURCE=3"
+
+# The current LTS at the time this file was written (2026-09-03): Launchpad
+# reports resolute 26.04 as "Current Stable Release" and noble 24.04 as the
+# LTS before it, which makes this row the LTS and the one above it LTS-1.
+[[target]]
+backend = "ubuntu"
+distro = "ubuntu"
+release = "resolute"
+version_id = "26.04"
+suite = "resolute/main"
+arches = ["amd64", "arm64"]
+packages = ["libc6-dev", "@libstdcxx-dev", "zlib1g-dev"]
+default_compiler = "gcc-15"
+build_flags = "-O2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -flto=auto -ffat-lto-objects -fstack-protector-strong -fstack-clash-protection -fcf-protection -D_FORTIFY_SOURCE=3"
+
+# ---------------------------------------------------------------------------
+# Alpine. The only `-Os` corpus in the matrix, and the only musl one, which is
+# why it is in `base` at all: no amount of Debian and Ubuntu coverage reaches
+# the code shapes `abuild`'s defaults produce. Raw CDN, no `apk`, no root.
+# ---------------------------------------------------------------------------
+
+[[target]]
+backend = "alpine"
+distro = "alpine"
+release = "v3.20"
+version_id = "3.20"
+suite = "v3.20/main"
+arches = ["x86_64", "aarch64"]
+packages = ["musl-dev", "@libstdcxx-dev", "zlib-static"]
+default_compiler = "gcc-13"
+build_flags = "-Os -fstack-clash-protection -Wformat -Werror=format-security"
+
+[[target]]
+backend = "alpine"
+distro = "alpine"
+release = "v3.21"
+version_id = "3.21"
+suite = "v3.21/main"
+arches = ["x86_64", "aarch64"]
+packages = ["musl-dev", "@libstdcxx-dev", "zlib-static"]
+default_compiler = "gcc-14"
+build_flags = "-Os -fstack-clash-protection -Wformat -Werror=format-security"
+
+# ---------------------------------------------------------------------------
+# Expected licences, by package. Checked against what the harvest observes.
+# ---------------------------------------------------------------------------
+
+[licences]
+"libc6-dev" = "LGPL-2.1-or-later"
+"zlib1g-dev" = "Zlib"
+"musl-dev" = "MIT"
+"zlib-static" = "Zlib"
+"libstdc++-dev" = "GPL-3.0-or-later WITH GCC-exception-3.1"
+"@libstdcxx-dev" = "GPL-3.0-or-later WITH GCC-exception-3.1"

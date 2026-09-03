@@ -36,6 +36,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Sequence
 
 #: The trailing dotted version in a `gcc --version` first line.
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)+)\s*$")
@@ -60,7 +61,23 @@ def compiler_tag(compiler: str, driver: str) -> str:
 
 
 def variant_for(manifest: dict) -> str:
-    """Return the `<distro>-<compiler>` variant tag for one triplet manifest."""
+    """Return the `<distro>-<compiler>` variant tag for one triplet manifest.
+
+    A manifest that states its own `variant` is believed. The network harvester
+    (`glaurung.tools.harvest_sources`) does, because it knows things this
+    function cannot reconstruct: the release *codename* rather than the numeric
+    `VERSION_ID`, and which rung of the compiler-evidence ladder produced the
+    version -- its `compiler.version` reads `gcc-12.2.0 (libstdcxx-package-
+    version)`, from which the regex below would extract nothing and silently key
+    the library `debian-12-gcc`. The variant is part of the identity, so a
+    silently degraded one is a wrong key, not a cosmetic loss.
+
+    Only the Docker harvester's manifests, which have no `variant` field, fall
+    through to reconstruction from the image and the driver.
+    """
+    stated = manifest.get("variant")
+    if isinstance(stated, str) and stated:
+        return stated
     image = manifest.get("image", {})
     distro = f"{image.get('os_id', 'unknown')}-{image.get('os_version_id', 'unknown')}"
     compiler = manifest.get("compiler", {})
@@ -134,13 +151,42 @@ def build_one(
     return row
 
 
-def build_set(harvest_root: Path, output_dir: Path) -> dict:
-    """Build a library for every archive named in the harvest index."""
+def build_set(
+    harvest_root: Path,
+    output_dir: Path,
+    *,
+    images: Sequence[str] = (),
+    merge: bool = False,
+) -> dict:
+    """Build a library for every archive named in the harvest index.
+
+    Args:
+        harvest_root: Directory holding per-image harvests and their
+            `index.json`.
+        output_dir: Where the `.flirt.json` files and their index go.
+        images: Substrings selecting which harvest images to build. Empty means
+            all of them.
+        merge: Keep the existing index's rows for keys this run did not build.
+            Without it, a scoped run writes an index describing only what it
+            built and the rest of the catalogue vanishes from the record while
+            its files sit on disk -- which is worse than either building
+            everything or building nothing, because nothing says it happened.
+
+    Returns:
+        The summary written to `<output_dir>/index.json`.
+    """
     index = json.loads((harvest_root / "index.json").read_text())
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    carried: list[dict] = []
+    if merge and (output_dir / "index.json").is_file():
+        previous = json.loads((output_dir / "index.json").read_text())
+        carried = list(previous.get("libraries", []))
+
     libraries: list[dict] = []
     for image in index.get("images", []):
+        if images and not any(token in image["image"] for token in images):
+            continue
         image_dir = harvest_root / image["image"]
         for triplet in image.get("triplets", []):
             manifest = json.loads(
@@ -184,11 +230,16 @@ def build_set(harvest_root: Path, output_dir: Path) -> dict:
                     flush=True,
                 )
 
+    built_keys = {str(r["key"]) for r in libraries}
+    kept = [r for r in carried if str(r.get("key")) not in built_keys]
+    libraries.extend(kept)
     libraries.sort(key=lambda r: str(r["key"]))
     summary = {
         "schema_version": "1",
         "libraries": libraries,
         "totals": {
+            "built_this_run": len(built_keys),
+            "carried_from_previous_index": len(kept),
             "libraries": len(libraries),
             "with_signatures": sum(1 for r in libraries if r["unique_signatures"]),
             "raw_signatures": sum(int(r["raw_signatures"]) for r in libraries),
@@ -224,6 +275,25 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Directory for the .flirt.json files and their index.json.",
     )
+    p.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        dest="images",
+        help=(
+            "Build only harvest images whose name contains this substring; "
+            "repeatable. Pair with --merge, or the index will describe only "
+            "what this run built."
+        ),
+    )
+    p.add_argument(
+        "--merge",
+        action="store_true",
+        help=(
+            "Carry forward the existing index's rows for keys this run did not "
+            "build, instead of replacing the whole index."
+        ),
+    )
     args = p.parse_args(argv)
 
     root = args.harvest_root.expanduser()
@@ -231,10 +301,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {root / 'index.json'} not found", file=sys.stderr)
         return 2
 
-    summary = build_set(root, args.output.expanduser())
+    summary = build_set(
+        root,
+        args.output.expanduser(),
+        images=tuple(args.images),
+        merge=args.merge,
+    )
     t = summary["totals"]
     print(
-        f"\n{t['libraries']} libraries, {t['with_signatures']} with signatures, "
+        f"\n{t['libraries']} libraries ({t['built_this_run']} built here, "
+        f"{t['carried_from_previous_index']} carried), "
+        f"{t['with_signatures']} with signatures, "
         f"{t['unique_signatures']} unique signatures, {t['failures']} failures, "
         f"{t['build_seconds']}s, {t['output_bytes']} bytes"
     )

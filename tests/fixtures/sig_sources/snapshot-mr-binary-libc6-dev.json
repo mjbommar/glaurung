@@ -1,0 +1,127 @@
+{
+ "_comment": "foo",
+ "_glaurung_note": "result truncated to the newest 20 of 813 entries",
+ "binary": "libc6-dev",
+ "result": [
+  {
+   "binary_version": "2.44-1",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.44-1"
+  },
+  {
+   "binary_version": "2.43-4+m68k",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.43-4+m68k"
+  },
+  {
+   "binary_version": "2.43-4",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.43-4"
+  },
+  {
+   "binary_version": "2.43-3+m68k",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.43-3+m68k"
+  },
+  {
+   "binary_version": "2.43-3",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.43-3"
+  },
+  {
+   "binary_version": "2.43-2",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.43-2"
+  },
+  {
+   "binary_version": "2.43-1",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.43-1"
+  },
+  {
+   "binary_version": "2.42-17",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-17"
+  },
+  {
+   "binary_version": "2.42-16",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-16"
+  },
+  {
+   "binary_version": "2.42-15",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-15"
+  },
+  {
+   "binary_version": "2.42-14",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-14"
+  },
+  {
+   "binary_version": "2.42-13",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-13"
+  },
+  {
+   "binary_version": "2.42-12",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-12"
+  },
+  {
+   "binary_version": "2.42-11+b1",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-11"
+  },
+  {
+   "binary_version": "2.42-11",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-11"
+  },
+  {
+   "binary_version": "2.42-10+b1",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-10"
+  },
+  {
+   "binary_version": "2.42-10",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-10"
+  },
+  {
+   "binary_version": "2.42-9",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-9"
+  },
+  {
+   "binary_version": "2.42-8",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-8"
+  },
+  {
+   "binary_version": "2.42-7",
+   "name": "libc6-dev",
+   "source": "glibc",
+   "version": "2.42-7"
+  }
+ ]
+}
