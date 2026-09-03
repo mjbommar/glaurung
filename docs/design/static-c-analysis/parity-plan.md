@@ -141,6 +141,30 @@ the 88,963-cell inventory are correct.)*
 source CFGs plus the stored C, there is no offline oracle and this plan is
 replaced by one that budgets for real Joern runs.
 
+**Status: the distance half is done and verified.** `src/syntax/ged.rs`
+implements G-1, G-2 and G-4, and `tools/ged_cross_check.py` diffs it against
+the live reference over real published CFGs rather than against vectors we
+chose:
+
+```
+pairs in dump   12792        # at static-c-analysis-substrate, DEBUG build
+  compared      11979
+  agreed        11979  (100.0000%)
+  disagreed     0
+  skipped       813 above the node cap, 0 unmatched keys
+```
+
+```bash
+DECBENCH_DIR=/nas4/data/workspace-infosec/decbench \
+PYTHONPATH=$DECBENCH_DIR $DECBENCH_DIR/.venv/bin/python \
+  tools/ged_cross_check.py ~/.cache/glaurung/decbench-full/tree --run
+```
+
+The 813 skipped pairs are above `GED_MAX_NODES`, where our value is
+`|Δnodes| + |Δedges|` by design rather than an assignment result; comparing
+them would be comparing two different formulas. What remains for this stage is
+the front end that produces the decompiled-side CFG, not the distance.
+
 ### Phase 1 — the parser
 
 **Deliverable.** `src/csource/` with a tolerant C front end meeting REQ-IN-1..4

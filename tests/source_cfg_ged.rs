@@ -158,7 +158,8 @@ fn every_published_cfg_scores_zero_against_itself() {
         if result.is_exact() {
             exact += 1;
             assert_eq!(
-                result.value, 0.0,
+                result.value,
+                0.0,
                 "{binary}:{name} ({} nodes) scored {} against itself",
                 graph.node_count(),
                 result.value
@@ -166,7 +167,10 @@ fn every_published_cfg_scores_zero_against_itself() {
         } else {
             // Above the node cap the metric returns |dnodes| + |dedges|, which
             // is 0 for a graph against itself but is not an exact distance.
-            assert_eq!(result.value, 0.0, "{binary}:{name} approximated self-distance");
+            assert_eq!(
+                result.value, 0.0,
+                "{binary}:{name} approximated self-distance"
+            );
         }
     }
     eprintln!(
@@ -244,4 +248,43 @@ fn no_real_cfg_shape_makes_the_distance_panic() {
         "degenerate pairings: {} functions survived, widest {widest} nodes",
         graphs.len()
     );
+}
+
+/// Dump our distance for real published pairs, for the cross-implementation
+/// differential in `tools/ged_cross_check.py`.
+///
+/// The unit tests check `syntax::ged` against 124 vectors recorded from the
+/// reference and against exhaustive search; this exists so the same code can be
+/// diffed against the *live* reference over thousands of real degree sequences,
+/// which is a stronger claim than either. Writing a file rather than asserting
+/// here keeps the Rust side free of any Python dependency.
+///
+/// Enabled only when `GLAURUNG_GED_DUMP` names an output path.
+#[test]
+fn dump_real_pair_distances_for_the_cross_check() {
+    let Some(out) = std::env::var("GLAURUNG_GED_DUMP").ok() else {
+        return;
+    };
+    let Some(graphs) = corpus(80) else {
+        eprintln!("skipped: set GLAURUNG_DECBENCH_TREE too");
+        return;
+    };
+    // Pair each graph with the next one. Adjacent entries share a binary, so
+    // the shapes are related rather than arbitrary -- the comparison the metric
+    // is actually asked to make.
+    let mut rows = Vec::new();
+    for pair in graphs.windows(2) {
+        let [(bin_a, name_a, a), (bin_b, name_b, b)] = pair else {
+            continue;
+        };
+        let result = ged(a, b);
+        rows.push(format!(
+            "{{\"a\":\"{bin_a}:{name_a}\",\"b\":\"{bin_b}:{name_b}\",\
+\"value\":{},\"approximated\":{}}}",
+            result.value, result.approximated
+        ));
+    }
+    let body = format!("[{}]", rows.join(","));
+    std::fs::write(&out, body).expect("dump path must be writable");
+    eprintln!("wrote {} pair distances to {out}", rows.len());
 }
