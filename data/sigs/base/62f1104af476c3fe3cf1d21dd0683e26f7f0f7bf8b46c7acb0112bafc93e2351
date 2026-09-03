@@ -1,0 +1,2864 @@
+{
+  "arch": "x86_64",
+  "entries": [
+    {
+      "crc16": 34194,
+      "crc_len": 255,
+      "function_len": 322,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_align",
+      "prologue_hex": "f30f1efa8b8f341700004889f8bf0200000089fad3e28d7103660b9030170000",
+      "refs": [],
+      "source_binary": "trees.o!_tr_align"
+    },
+    {
+      "crc16": 63905,
+      "crc_len": 104,
+      "function_len": 136,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_flush_bits",
+      "prologue_hex": "f30f1efa8b873417000083f810743183f8077e29488b47280fb78f3017000048",
+      "refs": [],
+      "source_binary": "trees.o!_tr_flush_bits"
+    },
+    {
+      "crc16": 18155,
+      "crc_len": 255,
+      "function_len": 2184,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_flush_block",
+      "prologue_hex": "f30f1efa41574c8d42044989f741564989d641554189cd41544989fc55534883",
+      "refs": [
+        {
+          "name": "_tr_stored_block",
+          "offset": 1715
+        }
+      ],
+      "source_binary": "trees.o!_tr_flush_block"
+    },
+    {
+      "crc16": 304,
+      "crc_len": 9,
+      "function_len": 243,
+      "mask_hex": "ffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_init",
+      "prologue_hex": "f30f1efa488d3500000000488d87d40000004531d2c787341700000000000048",
+      "refs": [],
+      "source_binary": "trees.o!_tr_init"
+    },
+    {
+      "crc16": 17029,
+      "crc_len": 114,
+      "function_len": 146,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_send_bits",
+      "prologue_hex": "f30f1efa4189f08b8f341700004889f889d6410fb7f841b8100000004589c289",
+      "refs": [],
+      "source_binary": "trees.o!_tr_send_bits"
+    },
+    {
+      "crc16": 16281,
+      "crc_len": 255,
+      "function_len": 363,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_stored_block",
+      "prologue_hex": "f30f1efa41544189c94989d44989f053410fb7d14889fb89d04883ec088b8f34",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 319
+        }
+      ],
+      "source_binary": "trees.o!_tr_stored_block"
+    },
+    {
+      "crc16": 36894,
+      "crc_len": 101,
+      "function_len": 203,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "_tr_tally",
+      "prologue_hex": "f30f1efa4889f85389f1488bbf001700008bb00c170000448d46014489800c17",
+      "refs": [
+        {
+          "name": "_length_code",
+          "offset": 133
+        },
+        {
+          "name": "_dist_code",
+          "offset": 171
+        }
+      ],
+      "source_binary": "trees.o!_tr_tally"
+    },
+    {
+      "crc16": 35650,
+      "crc_len": 255,
+      "function_len": 1742,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "adler32_z",
+      "prologue_hex": "f30f1efa41574889f84889f1440fb7ff415648c1e81041550fb7c04154555348",
+      "refs": [],
+      "source_binary": "adler32.o!adler32_z"
+    },
+    {
+      "crc16": 64234,
+      "crc_len": 9,
+      "function_len": 41,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "bi_reverse",
+      "prologue_hex": "f30f1efa31d2662e0f1f84000000000089f883ee01d1ef83e00109d08d140085",
+      "refs": [],
+      "source_binary": "trees.o!bi_reverse"
+    },
+    {
+      "crc16": 9455,
+      "crc_len": 77,
+      "function_len": 109,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "bi_windup",
+      "prologue_hex": "f30f1efa8b873417000083f8087e51488b47280fb78f30170000488b5710488d",
+      "refs": [],
+      "source_binary": "trees.o!bi_windup"
+    },
+    {
+      "crc16": 58234,
+      "crc_len": 38,
+      "function_len": 2801,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "build_tree",
+      "prologue_hex": "415741564155415455534889fb4883ec78488b2e488974242864488b04252800",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 70
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 2797
+        }
+      ],
+      "source_binary": "trees.o!build_tree"
+    },
+    {
+      "crc16": 40264,
+      "crc_len": 125,
+      "function_len": 161,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "build_tree.cold",
+      "prologue_hex": "488b7c2418448974242489b483c00b0000418d4424016641c7020100489842c6",
+      "refs": [],
+      "source_binary": "trees.o!build_tree.cold"
+    },
+    {
+      "crc16": 44649,
+      "crc_len": 6,
+      "function_len": 317,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "compress2",
+      "prologue_hex": "f30f1efa4157660fefc041564989ceb97000000041554989f54489c641545553",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 38
+        },
+        {
+          "name": "deflateInit_",
+          "offset": 108
+        },
+        {
+          "name": "deflate",
+          "offset": 194
+        },
+        {
+          "name": "deflateEnd",
+          "offset": 261
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 313
+        }
+      ],
+      "source_binary": "compress.o!compress2"
+    },
+    {
+      "crc16": 6217,
+      "crc_len": 2,
+      "function_len": 34,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "compressBound",
+      "prologue_hex": "f30f1efa4889f84889fa48c1e80c48c1ea0e488d44070d48c1ef194801d04801",
+      "refs": [],
+      "source_binary": "compress.o!compressBound"
+    },
+    {
+      "crc16": 12718,
+      "crc_len": 20,
+      "function_len": 1053,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "compress_block",
+      "prologue_hex": "4889f841574989f38b880c1700000fb7b03017000041564155415455538bbf34",
+      "refs": [
+        {
+          "name": "_length_code",
+          "offset": 52
+        },
+        {
+          "name": "_dist_code",
+          "offset": 538
+        },
+        {
+          "name": "_dist_code",
+          "offset": 981
+        }
+      ],
+      "source_binary": "trees.o!compress_block"
+    },
+    {
+      "crc16": 15875,
+      "crc_len": 2,
+      "function_len": 40,
+      "mask_hex": "ffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffff",
+      "name": "crc32",
+      "prologue_hex": "f30f1efa488b050000000089d24885c07406ffe00f1f4000488d0511f9ffff48",
+      "refs": [],
+      "source_binary": "crc32.o!crc32"
+    },
+    {
+      "crc16": 63510,
+      "crc_len": 255,
+      "function_len": 506,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "crc32_combine_",
+      "prologue_hex": "534881ec1002000064488b042528000000488984240802000031c04889f84885",
+      "refs": [
+        {
+          "name": "__stack_chk_fail",
+          "offset": 502
+        }
+      ],
+      "source_binary": "crc32.o!crc32_combine_"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 1158,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000",
+      "name": "crc32_little",
+      "prologue_hex": "f30f1efa4989d04885f6744489f8f7d74885d2743d40f6c603743d488d050000",
+      "refs": [],
+      "source_binary": "crc32.o!crc32_little"
+    },
+    {
+      "crc16": 15875,
+      "crc_len": 2,
+      "function_len": 40,
+      "mask_hex": "ffffffffffffff00000000ffffffffffffffffffffffffffffffffffffffffff",
+      "name": "crc32_z",
+      "prologue_hex": "f30f1efa488b05000000004885c07408ffe0660f1f440000488d0541f9ffff48",
+      "refs": [],
+      "source_binary": "crc32.o!crc32_z"
+    },
+    {
+      "crc16": 9079,
+      "crc_len": 89,
+      "function_len": 121,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflate",
+      "prologue_hex": "f30f1efa4885ff741c48837f4000741548837f4800740e488b47384885c07405",
+      "refs": [],
+      "source_binary": "deflate.o!deflate"
+    },
+    {
+      "crc16": 12072,
+      "crc_len": 255,
+      "function_len": 6029,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflate.part.0",
+      "prologue_hex": "4157415641554154554889fd534883ec28488b473848837f1800488904240f84",
+      "refs": [
+        {
+          "name": "adler32",
+          "offset": 368
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 395
+        },
+        {
+          "name": "z_errmsg",
+          "offset": 517
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 872
+        },
+        {
+          "name": "memcpy",
+          "offset": 910
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1031
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1060
+        },
+        {
+          "name": "memcpy",
+          "offset": 1101
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1212
+        },
+        {
+          "name": "memcpy",
+          "offset": 1271
+        },
+        {
+          "name": "memcpy",
+          "offset": 1327
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1409
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1437
+        },
+        {
+          "name": "memcpy",
+          "offset": 1477
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1839
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1867
+        },
+        {
+          "name": "memcpy",
+          "offset": 1907
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 2013
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 2248
+        },
+        {
+          "name": "memcpy",
+          "offset": 2286
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 2520
+        },
+        {
+          "name": "memcpy",
+          "offset": 2558
+        },
+        {
+          "name": "crc32",
+          "offset": 2631
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 3168
+        },
+        {
+          "name": "memcpy",
+          "offset": 3210
+        },
+        {
+          "name": "memcpy",
+          "offset": 3341
+        },
+        {
+          "name": "crc32",
+          "offset": 3402
+        },
+        {
+          "name": "memcpy",
+          "offset": 3445
+        },
+        {
+          "name": "crc32",
+          "offset": 3563
+        },
+        {
+          "name": "crc32",
+          "offset": 3595
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 3689
+        },
+        {
+          "name": "crc32",
+          "offset": 3787
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 3814
+        },
+        {
+          "name": "memcpy",
+          "offset": 3852
+        },
+        {
+          "name": "crc32",
+          "offset": 3917
+        },
+        {
+          "name": "memcpy",
+          "offset": 4175
+        },
+        {
+          "name": "_length_code",
+          "offset": 4227
+        },
+        {
+          "name": "_tr_stored_block",
+          "offset": 4571
+        },
+        {
+          "name": "memset",
+          "offset": 4615
+        },
+        {
+          "name": "memcpy",
+          "offset": 4727
+        },
+        {
+          "name": "crc32",
+          "offset": 4781
+        },
+        {
+          "name": "crc32",
+          "offset": 4820
+        },
+        {
+          "name": "z_errmsg",
+          "offset": 4840
+        },
+        {
+          "name": "_dist_code",
+          "offset": 5138
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 5242
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 5270
+        },
+        {
+          "name": "memcpy",
+          "offset": 5313
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 5603
+        },
+        {
+          "name": "memcpy",
+          "offset": 5641
+        },
+        {
+          "name": "crc32",
+          "offset": 5720
+        },
+        {
+          "name": "_tr_align",
+          "offset": 5806
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 5869
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 5897
+        },
+        {
+          "name": "memcpy",
+          "offset": 5940
+        }
+      ],
+      "source_binary": "deflate.o!deflate.part.0"
+    },
+    {
+      "crc16": 13646,
+      "crc_len": 255,
+      "function_len": 343,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateBound",
+      "prologue_hex": "f30f1efa4c8d4607488d463f4889f14c89c248c1e80648c1ea034801d04801f0",
+      "refs": [],
+      "source_binary": "deflate.o!deflateBound"
+    },
+    {
+      "crc16": 3378,
+      "crc_len": 255,
+      "function_len": 620,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateCopy",
+      "prologue_hex": "f30f1efa4885f60f843b020000488b4e404885c90f842e02000048837e48000f",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 430
+        },
+        {
+          "name": "memcpy",
+          "offset": 450
+        },
+        {
+          "name": "memcpy",
+          "offset": 473
+        },
+        {
+          "name": "memcpy",
+          "offset": 490
+        },
+        {
+          "name": "deflateEnd",
+          "offset": 596
+        }
+      ],
+      "source_binary": "deflate.o!deflateCopy"
+    },
+    {
+      "crc16": 33134,
+      "crc_len": 238,
+      "function_len": 270,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateEnd",
+      "prologue_hex": "f30f1efa4885ff0f84fb00000055534889fb4883ec0848837f40007446488b57",
+      "refs": [],
+      "source_binary": "deflate.o!deflateEnd"
+    },
+    {
+      "crc16": 51187,
+      "crc_len": 178,
+      "function_len": 234,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateGetDictionary",
+      "prologue_hex": "f30f1efa4885ff0f84a300000048837f40000f849800000048837f48000f848d",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 210
+        }
+      ],
+      "source_binary": "deflate.o!deflateGetDictionary"
+    },
+    {
+      "crc16": 8759,
+      "crc_len": 255,
+      "function_len": 992,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateInit2_",
+      "prologue_hex": "f30f1efa4157415641554154554889fd89d7534883ec08488b5424404885d20f",
+      "refs": [
+        {
+          "name": "deflateResetKeep",
+          "offset": 592
+        },
+        {
+          "name": "memset",
+          "offset": 712
+        },
+        {
+          "name": ".LC0",
+          "offset": 827
+        },
+        {
+          "name": "zcalloc",
+          "offset": 867
+        },
+        {
+          "name": "zcfree",
+          "offset": 897
+        },
+        {
+          "name": "z_errmsg",
+          "offset": 947
+        },
+        {
+          "name": "deflateEnd",
+          "offset": 972
+        }
+      ],
+      "source_binary": "deflate.o!deflateInit2_"
+    },
+    {
+      "crc16": 31266,
+      "crc_len": 123,
+      "function_len": 768,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateInit_",
+      "prologue_hex": "f30f1efa415455534885d20f849f020000803a310f859602000083f9700f858d",
+      "refs": [
+        {
+          "name": ".LC2",
+          "offset": 155
+        },
+        {
+          "name": ".LC1",
+          "offset": 184
+        },
+        {
+          "name": "deflateResetKeep",
+          "offset": 401
+        },
+        {
+          "name": "memset",
+          "offset": 480
+        },
+        {
+          "name": ".LC0",
+          "offset": 595
+        },
+        {
+          "name": "zcalloc",
+          "offset": 635
+        },
+        {
+          "name": "zcfree",
+          "offset": 665
+        },
+        {
+          "name": "z_errmsg",
+          "offset": 723
+        },
+        {
+          "name": "deflateEnd",
+          "offset": 748
+        }
+      ],
+      "source_binary": "deflate.o!deflateInit_"
+    },
+    {
+      "crc16": 55441,
+      "crc_len": 115,
+      "function_len": 825,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateParams",
+      "prologue_hex": "f30f1efa4885ff0f8463020000415641554154554889fd5348837f40000f8445",
+      "refs": [
+        {
+          "name": "memset",
+          "offset": 254
+        }
+      ],
+      "source_binary": "deflate.o!deflateParams"
+    },
+    {
+      "crc16": 21991,
+      "crc_len": 107,
+      "function_len": 139,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflatePending",
+      "prologue_hex": "f30f1efa4885ff744b48837f4000744448837f4800743d488b4f38b8feffffff",
+      "refs": [],
+      "source_binary": "deflate.o!deflatePending"
+    },
+    {
+      "crc16": 36185,
+      "crc_len": 178,
+      "function_len": 247,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflatePrime",
+      "prologue_hex": "f30f1efa41564155415455534885ff744f48837f4000744848837f480074414c",
+      "refs": [
+        {
+          "name": "_tr_flush_bits",
+          "offset": 210
+        }
+      ],
+      "source_binary": "deflate.o!deflatePrime"
+    },
+    {
+      "crc16": 30904,
+      "crc_len": 178,
+      "function_len": 486,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateReset",
+      "prologue_hex": "f30f1efa4885ff0f84d301000055534889fb4883ec0848837f4000744548837f",
+      "refs": [
+        {
+          "name": "adler32",
+          "offset": 210
+        },
+        {
+          "name": "_tr_init",
+          "offset": 229
+        },
+        {
+          "name": "memset",
+          "offset": 273
+        },
+        {
+          "name": ".LC0",
+          "offset": 388
+        },
+        {
+          "name": "crc32",
+          "offset": 462
+        }
+      ],
+      "source_binary": "deflate.o!deflateReset"
+    },
+    {
+      "crc16": 7624,
+      "crc_len": 166,
+      "function_len": 294,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateResetKeep",
+      "prologue_hex": "f30f1efa4885ff0f841301000055534889fb4883ec0848837f4000744548837f",
+      "refs": [
+        {
+          "name": "adler32",
+          "offset": 198
+        },
+        {
+          "name": "_tr_init",
+          "offset": 217
+        },
+        {
+          "name": "crc32",
+          "offset": 278
+        }
+      ],
+      "source_binary": "deflate.o!deflateResetKeep"
+    },
+    {
+      "crc16": 33753,
+      "crc_len": 255,
+      "function_len": 653,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateSetDictionary",
+      "prologue_hex": "f30f1efa4885ff0f847a020000415741564155415455534889fb4883ec184883",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 433
+        },
+        {
+          "name": "adler32",
+          "offset": 537
+        },
+        {
+          "name": "memset",
+          "offset": 601
+        }
+      ],
+      "source_binary": "deflate.o!deflateSetDictionary"
+    },
+    {
+      "crc16": 19499,
+      "crc_len": 106,
+      "function_len": 138,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateSetHeader",
+      "prologue_hex": "f30f1efa4885ff747748837f4000747048837f48007469488b473841b8feffff",
+      "refs": [],
+      "source_binary": "deflate.o!deflateSetHeader"
+    },
+    {
+      "crc16": 13628,
+      "crc_len": 130,
+      "function_len": 162,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflateTune",
+      "prologue_hex": "f30f1efa66410f6ec0660f6eca660f62c14885ff0f847e00000048837f400074",
+      "refs": [],
+      "source_binary": "deflate.o!deflateTune"
+    },
+    {
+      "crc16": 16214,
+      "crc_len": 217,
+      "function_len": 1433,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflate_fast",
+      "prologue_hex": "f30f1efa415741564155415455534889fb4883ec18893424448babb400000090",
+      "refs": [
+        {
+          "name": "_length_code",
+          "offset": 249
+        },
+        {
+          "name": "_dist_code",
+          "offset": 289
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 483
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 511
+        },
+        {
+          "name": "memcpy",
+          "offset": 549
+        },
+        {
+          "name": "_dist_code",
+          "offset": 815
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1119
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1147
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1226
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1254
+        },
+        {
+          "name": "memcpy",
+          "offset": 1330
+        },
+        {
+          "name": "memcpy",
+          "offset": 1386
+        }
+      ],
+      "source_binary": "deflate.o!deflate_fast"
+    },
+    {
+      "crc16": 59411,
+      "crc_len": 255,
+      "function_len": 1908,
+      "mask_hex": "ffffffffffffffffffffff00000000ffffffffffffffffffffffffffffffffff",
+      "name": "deflate_slow",
+      "prologue_hex": "f30f1efa415741564c8d3500000000415541544189f455534889fb4883ec188b",
+      "refs": [
+        {
+          "name": "_length_code",
+          "offset": 11
+        },
+        {
+          "name": "_dist_code",
+          "offset": 672
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 935
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 963
+        },
+        {
+          "name": "memcpy",
+          "offset": 1002
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1107
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1135
+        },
+        {
+          "name": "memcpy",
+          "offset": 1178
+        },
+        {
+          "name": "_dist_code",
+          "offset": 1296
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1484
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1513
+        },
+        {
+          "name": "memcpy",
+          "offset": 1553
+        },
+        {
+          "name": "_tr_flush_block",
+          "offset": 1772
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1801
+        },
+        {
+          "name": "memcpy",
+          "offset": 1841
+        }
+      ],
+      "source_binary": "deflate.o!deflate_slow"
+    },
+    {
+      "crc16": 58172,
+      "crc_len": 197,
+      "function_len": 1800,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "deflate_stored",
+      "prologue_hex": "f30f1efa415741564155415455534889fb4883ec38488b4718488b0f8974240c",
+      "refs": [
+        {
+          "name": "_tr_stored_block",
+          "offset": 229
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 304
+        },
+        {
+          "name": "memcpy",
+          "offset": 347
+        },
+        {
+          "name": "memcpy",
+          "offset": 471
+        },
+        {
+          "name": "memcpy",
+          "offset": 639
+        },
+        {
+          "name": "memcpy",
+          "offset": 743
+        },
+        {
+          "name": "_tr_stored_block",
+          "offset": 1039
+        },
+        {
+          "name": "_tr_flush_bits",
+          "offset": 1061
+        },
+        {
+          "name": "adler32",
+          "offset": 1285
+        },
+        {
+          "name": "crc32",
+          "offset": 1333
+        },
+        {
+          "name": "memcpy",
+          "offset": 1395
+        },
+        {
+          "name": "memcpy",
+          "offset": 1444
+        },
+        {
+          "name": "memcpy",
+          "offset": 1537
+        },
+        {
+          "name": "memcpy",
+          "offset": 1624
+        },
+        {
+          "name": "memcpy",
+          "offset": 1683
+        },
+        {
+          "name": "adler32",
+          "offset": 1748
+        },
+        {
+          "name": "crc32",
+          "offset": 1782
+        }
+      ],
+      "source_binary": "deflate.o!deflate_stored"
+    },
+    {
+      "crc16": 17071,
+      "crc_len": 79,
+      "function_len": 995,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "fill_window",
+      "prologue_hex": "415741564155415455534889fb4883ec188b4f508bb7b400000048894c240848",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 111
+        },
+        {
+          "name": "memcpy",
+          "offset": 268
+        },
+        {
+          "name": "adler32",
+          "offset": 747
+        },
+        {
+          "name": "crc32",
+          "offset": 779
+        },
+        {
+          "name": "memset",
+          "offset": 906
+        }
+      ],
+      "source_binary": "deflate.o!fill_window"
+    },
+    {
+      "crc16": 6112,
+      "crc_len": 50,
+      "function_len": 130,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffff00000000ffffff",
+      "name": "flush_pending",
+      "prologue_hex": "f30f1efa4155415455534889fb4883ec084c8b67384c89e7e8000000008b4320",
+      "refs": [
+        {
+          "name": "_tr_flush_bits",
+          "offset": 25
+        },
+        {
+          "name": "memcpy",
+          "offset": 82
+        }
+      ],
+      "source_binary": "deflate.o!flush_pending"
+    },
+    {
+      "crc16": 23386,
+      "crc_len": 53,
+      "function_len": 501,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_comp",
+      "prologue_hex": "415641554989fd415455538b472889f385c00f8478010000458b65404585e475",
+      "refs": [
+        {
+          "name": "deflate",
+          "offset": 85
+        },
+        {
+          "name": "write",
+          "offset": 215
+        },
+        {
+          "name": "__errno_location",
+          "offset": 224
+        },
+        {
+          "name": "strerror",
+          "offset": 237
+        },
+        {
+          "name": "gz_error",
+          "offset": 253
+        },
+        {
+          "name": "write",
+          "offset": 341
+        },
+        {
+          "name": ".LC2",
+          "offset": 460
+        },
+        {
+          "name": "gz_error",
+          "offset": 479
+        },
+        {
+          "name": "deflateReset",
+          "offset": 492
+        }
+      ],
+      "source_binary": "gzwrite.o!gz_comp"
+    },
+    {
+      "crc16": 34627,
+      "crc_len": 60,
+      "function_len": 406,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_comp.constprop.0",
+      "prologue_hex": "4154554889fd538b572885d20f844e0100008b454085c074778b958000000085",
+      "refs": [
+        {
+          "name": "write",
+          "offset": 92
+        },
+        {
+          "name": "__errno_location",
+          "offset": 101
+        },
+        {
+          "name": "strerror",
+          "offset": 108
+        },
+        {
+          "name": "gz_error",
+          "offset": 124
+        },
+        {
+          "name": "deflate",
+          "offset": 167
+        },
+        {
+          "name": "write",
+          "offset": 276
+        },
+        {
+          "name": ".LC2",
+          "offset": 379
+        },
+        {
+          "name": "gz_error",
+          "offset": 392
+        }
+      ],
+      "source_binary": "gzwrite.o!gz_comp.constprop.0"
+    },
+    {
+      "crc16": 50050,
+      "crc_len": 22,
+      "function_len": 498,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_decomp",
+      "prologue_hex": "415541544c8d6778554889fd534883ec188b9f9800000064488b042528000000",
+      "refs": [
+        {
+          "name": "inflate",
+          "offset": 54
+        },
+        {
+          "name": ".LC5",
+          "offset": 203
+        },
+        {
+          "name": "gz_error",
+          "offset": 216
+        },
+        {
+          "name": ".LC6",
+          "offset": 291
+        },
+        {
+          "name": "gz_error",
+          "offset": 304
+        },
+        {
+          "name": ".LC0",
+          "offset": 323
+        },
+        {
+          "name": "gz_error",
+          "offset": 336
+        },
+        {
+          "name": ".LC4",
+          "offset": 362
+        },
+        {
+          "name": "gz_error",
+          "offset": 382
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 494
+        }
+      ],
+      "source_binary": "gzread.o!gz_decomp"
+    },
+    {
+      "crc16": 50416,
+      "crc_len": 53,
+      "function_len": 227,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_error",
+      "prologue_hex": "f30f1efa415541544989d45589f5534889fb4883ec08488b7f704885ff741283",
+      "refs": [
+        {
+          "name": "strlen",
+          "offset": 85
+        },
+        {
+          "name": "strlen",
+          "offset": 96
+        },
+        {
+          "name": "malloc",
+          "offset": 106
+        },
+        {
+          "name": "strlen",
+          "offset": 126
+        },
+        {
+          "name": "strlen",
+          "offset": 137
+        },
+        {
+          "name": ".LC7",
+          "offset": 159
+        },
+        {
+          "name": ".LC6",
+          "offset": 177
+        },
+        {
+          "name": "__snprintf_chk",
+          "offset": 184
+        },
+        {
+          "name": "free",
+          "offset": 209
+        }
+      ],
+      "source_binary": "gzlib.o!gz_error"
+    },
+    {
+      "crc16": 30596,
+      "crc_len": 134,
+      "function_len": 166,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_fetch",
+      "prologue_hex": "534889fb8b434483f801747483f802743f85c0741b8b0b85c975118b535085d2",
+      "refs": [],
+      "source_binary": "gzread.o!gz_fetch"
+    },
+    {
+      "crc16": 5717,
+      "crc_len": 22,
+      "function_len": 241,
+      "mask_hex": "ffffffffffffffffffffffffffff00000000ffffffffffffffffffffffffffff",
+      "name": "gz_init",
+      "prologue_hex": "4154554889fd538b5f2c8d3c1be800000000488945304885c00f84af0000008b",
+      "refs": [
+        {
+          "name": "malloc",
+          "offset": 14
+        },
+        {
+          "name": "malloc",
+          "offset": 54
+        },
+        {
+          "name": ".LC1",
+          "offset": 74
+        },
+        {
+          "name": "deflateInit2_",
+          "offset": 131
+        },
+        {
+          "name": "free",
+          "offset": 193
+        },
+        {
+          "name": "free",
+          "offset": 202
+        },
+        {
+          "name": ".LC0",
+          "offset": 209
+        },
+        {
+          "name": "gz_error",
+          "offset": 222
+        }
+      ],
+      "source_binary": "gzwrite.o!gz_init"
+    },
+    {
+      "crc16": 31776,
+      "crc_len": 38,
+      "function_len": 165,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_load",
+      "prologue_hex": "415531c04989cd41544989fc554889f55389d34883ec08c70100000000eb0d90",
+      "refs": [
+        {
+          "name": "read",
+          "offset": 70
+        },
+        {
+          "name": "__errno_location",
+          "offset": 130
+        },
+        {
+          "name": "strerror",
+          "offset": 137
+        },
+        {
+          "name": "gz_error",
+          "offset": 153
+        }
+      ],
+      "source_binary": "gzread.o!gz_load"
+    },
+    {
+      "crc16": 4272,
+      "crc_len": 119,
+      "function_len": 604,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_look",
+      "prologue_hex": "415541544c8d6778554889fd534883ec188b7f2864488b042528000000488944",
+      "refs": [
+        {
+          "name": "malloc",
+          "offset": 151
+        },
+        {
+          "name": "malloc",
+          "offset": 166
+        },
+        {
+          "name": ".LC1",
+          "offset": 221
+        },
+        {
+          "name": "inflateInit2_",
+          "offset": 256
+        },
+        {
+          "name": "free",
+          "offset": 273
+        },
+        {
+          "name": "free",
+          "offset": 282
+        },
+        {
+          "name": ".LC0",
+          "offset": 296
+        },
+        {
+          "name": "gz_error",
+          "offset": 309
+        },
+        {
+          "name": "memcpy",
+          "offset": 457
+        },
+        {
+          "name": ".LC3",
+          "offset": 483
+        },
+        {
+          "name": "inflateReset",
+          "offset": 518
+        },
+        {
+          "name": ".LC2",
+          "offset": 525
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 579
+        },
+        {
+          "name": "free",
+          "offset": 587
+        },
+        {
+          "name": "free",
+          "offset": 595
+        }
+      ],
+      "source_binary": "gzread.o!gz_look"
+    },
+    {
+      "crc16": 54896,
+      "crc_len": 5,
+      "function_len": 770,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_open",
+      "prologue_hex": "415741564155415455534883ec084885ff0f84b10000004989febfe800000089",
+      "refs": [
+        {
+          "name": "malloc",
+          "offset": 37
+        },
+        {
+          "name": ".LC0",
+          "offset": 56
+        },
+        {
+          "name": ".LC1",
+          "offset": 95
+        },
+        {
+          "name": "free",
+          "offset": 181
+        },
+        {
+          "name": "free",
+          "offset": 196
+        },
+        {
+          "name": "strlen",
+          "offset": 275
+        },
+        {
+          "name": "malloc",
+          "offset": 287
+        },
+        {
+          "name": ".LC2",
+          "offset": 306
+        },
+        {
+          "name": "snprintf",
+          "offset": 319
+        },
+        {
+          "name": "free",
+          "offset": 601
+        },
+        {
+          "name": "open",
+          "offset": 631
+        },
+        {
+          "name": "lseek64",
+          "offset": 669
+        },
+        {
+          "name": "lseek64",
+          "offset": 745
+        }
+      ],
+      "source_binary": "gzlib.o!gz_open"
+    },
+    {
+      "crc16": 22952,
+      "crc_len": 62,
+      "function_len": 352,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_read.part.0",
+      "prologue_hex": "41574989f741564531f641554154554889d5534889fb4883ec1864488b042528",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 94
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 348
+        }
+      ],
+      "source_binary": "gzread.o!gz_read.part.0"
+    },
+    {
+      "crc16": 27256,
+      "crc_len": 252,
+      "function_len": 284,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_skip",
+      "prologue_hex": "4885f60f8410010000554889f5534889fb4883ec088b07660f1f840000000000",
+      "refs": [],
+      "source_binary": "gzread.o!gz_skip"
+    },
+    {
+      "crc16": 53903,
+      "crc_len": 109,
+      "function_len": 550,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gz_write",
+      "prologue_hex": "415741564155415455534883ec1848895424084885d20f84f40000008b4f2848",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 141
+        },
+        {
+          "name": "memset",
+          "offset": 378
+        }
+      ],
+      "source_binary": "gzwrite.o!gz_write"
+    },
+    {
+      "crc16": 12756,
+      "crc_len": 38,
+      "function_len": 70,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzbuffer",
+      "prologue_hex": "f30f1efa4885ff74378b47183d4f1c000074073db179000075268b472885c075",
+      "refs": [],
+      "source_binary": "gzlib.o!gzbuffer"
+    },
+    {
+      "crc16": 40479,
+      "crc_len": 49,
+      "function_len": 113,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzclearerr",
+      "prologue_hex": "f30f1efa4885ff7467538b47184889fb3d4f1c000074493db179000074025bc3",
+      "refs": [
+        {
+          "name": "free",
+          "offset": 81
+        }
+      ],
+      "source_binary": "gzlib.o!gzclearerr"
+    },
+    {
+      "crc16": 46986,
+      "crc_len": 1,
+      "function_len": 43,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffff00000000ffffffffffffffffff",
+      "name": "gzclose",
+      "prologue_hex": "f30f1efa4885ff741c817f184f1c0000740ee900000000660f1f840000000000",
+      "refs": [
+        {
+          "name": "gzclose_w",
+          "offset": 19
+        },
+        {
+          "name": "gzclose_r",
+          "offset": 33
+        }
+      ],
+      "source_binary": "gzclose.o!gzclose"
+    },
+    {
+      "crc16": 21787,
+      "crc_len": 26,
+      "function_len": 152,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzclose_r",
+      "prologue_hex": "f30f1efa415455534885ff0f847f000000817f184f1c00004889fd75738b4728",
+      "refs": [
+        {
+          "name": "gz_error",
+          "offset": 58
+        },
+        {
+          "name": "free",
+          "offset": 67
+        },
+        {
+          "name": "close",
+          "offset": 75
+        },
+        {
+          "name": "free",
+          "offset": 85
+        },
+        {
+          "name": "inflateEnd",
+          "offset": 117
+        },
+        {
+          "name": "free",
+          "offset": 126
+        },
+        {
+          "name": "free",
+          "offset": 135
+        }
+      ],
+      "source_binary": "gzread.o!gzclose_r"
+    },
+    {
+      "crc16": 44860,
+      "crc_len": 62,
+      "function_len": 356,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzclose_w",
+      "prologue_hex": "f30f1efa4155415455534883ec084885ff0f8442010000817f18b17900004889",
+      "refs": [
+        {
+          "name": "free",
+          "offset": 94
+        },
+        {
+          "name": "gz_error",
+          "offset": 106
+        },
+        {
+          "name": "free",
+          "offset": 115
+        },
+        {
+          "name": "close",
+          "offset": 123
+        },
+        {
+          "name": "free",
+          "offset": 143
+        },
+        {
+          "name": "memset",
+          "offset": 282
+        },
+        {
+          "name": "deflateEnd",
+          "offset": 293
+        },
+        {
+          "name": "free",
+          "offset": 302
+        }
+      ],
+      "source_binary": "gzwrite.o!gzclose_w"
+    },
+    {
+      "crc16": 17605,
+      "crc_len": 51,
+      "function_len": 83,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzdirect",
+      "prologue_hex": "f30f1efa4885ff7447817f184f1c0000740e8b4740c3662e0f1f840000000000",
+      "refs": [],
+      "source_binary": "gzread.o!gzdirect"
+    },
+    {
+      "crc16": 8447,
+      "crc_len": 25,
+      "function_len": 124,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffff00000000ffff",
+      "name": "gzdopen",
+      "prologue_hex": "f30f1efa415541545583ffff74624189fcbf130000004989f5e8000000004889",
+      "refs": [
+        {
+          "name": "malloc",
+          "offset": 26
+        },
+        {
+          "name": ".LC3",
+          "offset": 57
+        },
+        {
+          "name": "__snprintf_chk",
+          "offset": 69
+        },
+        {
+          "name": "free",
+          "offset": 94
+        }
+      ],
+      "source_binary": "gzlib.o!gzdopen"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 28,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000",
+      "name": "gzeof",
+      "prologue_hex": "f30f1efa31c04885ff7409817f184f1c00007404c30f1f008b4754c30f1f4000",
+      "refs": [],
+      "source_binary": "gzlib.o!gzeof"
+    },
+    {
+      "crc16": 64725,
+      "crc_len": 15,
+      "function_len": 83,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzerror",
+      "prologue_hex": "f30f1efa4885ff74478b571881fa4f1c0000740a31c081fab179000075344885",
+      "refs": [
+        {
+          "name": ".LC4",
+          "offset": 47
+        },
+        {
+          "name": ".LC5",
+          "offset": 60
+        }
+      ],
+      "source_binary": "gzlib.o!gzerror"
+    },
+    {
+      "crc16": 52383,
+      "crc_len": 142,
+      "function_len": 237,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzflush",
+      "prologue_hex": "f30f1efa4885ff0f84da0000004156415541545553817f18b17900004889fb0f",
+      "refs": [
+        {
+          "name": "memset",
+          "offset": 174
+        }
+      ],
+      "source_binary": "gzwrite.o!gzflush"
+    },
+    {
+      "crc16": 17092,
+      "crc_len": 227,
+      "function_len": 283,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzfread",
+      "prologue_hex": "f30f1efa4885c97477415631c041554154554889cd538179184f1c000075128b",
+      "refs": [
+        {
+          "name": ".LC8",
+          "offset": 259
+        },
+        {
+          "name": "gz_error",
+          "offset": 272
+        }
+      ],
+      "source_binary": "gzread.o!gzfread"
+    },
+    {
+      "crc16": 2676,
+      "crc_len": 67,
+      "function_len": 120,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzfwrite",
+      "prologue_hex": "f30f1efa31c04885c9744d817918b1790000753c448b416c4585c07533534889",
+      "refs": [
+        {
+          "name": ".LC4",
+          "offset": 99
+        },
+        {
+          "name": "gz_error",
+          "offset": 112
+        }
+      ],
+      "source_binary": "gzwrite.o!gzfwrite"
+    },
+    {
+      "crc16": 18846,
+      "crc_len": 159,
+      "function_len": 195,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzgetc",
+      "prologue_hex": "f30f1efa4883ec2864488b042528000000488944241831c04885ff0f84960000",
+      "refs": [
+        {
+          "name": "__stack_chk_fail",
+          "offset": 191
+        }
+      ],
+      "source_binary": "gzread.o!gzgetc"
+    },
+    {
+      "crc16": 5271,
+      "crc_len": 159,
+      "function_len": 195,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzgetc_",
+      "prologue_hex": "f30f1efa4883ec2864488b042528000000488944241831c04885ff0f84960000",
+      "refs": [
+        {
+          "name": "__stack_chk_fail",
+          "offset": 191
+        }
+      ],
+      "source_binary": "gzread.o!gzgetc_"
+    },
+    {
+      "crc16": 11021,
+      "crc_len": 120,
+      "function_len": 360,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzgets",
+      "prologue_hex": "f30f1efa41574156415541545589d5534883ec184885f60f94c085d248897424",
+      "refs": [
+        {
+          "name": "memchr",
+          "offset": 152
+        },
+        {
+          "name": "memcpy",
+          "offset": 181
+        },
+        {
+          "name": "memcpy",
+          "offset": 293
+        }
+      ],
+      "source_binary": "gzread.o!gzgets"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 17,
+      "mask_hex": "ffffffffffffffffffffffffffffffffff000000000000000000000000000000",
+      "name": "gzopen",
+      "prologue_hex": "f30f1efa4889f2beffffffffe9dffcffff66662e0f1f8400000000000f1f4000",
+      "refs": [],
+      "source_binary": "gzlib.o!gzopen"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 17,
+      "mask_hex": "ffffffffffffffffffffffffffffffffff000000000000000000000000000000",
+      "name": "gzopen64",
+      "prologue_hex": "f30f1efa4889f2beffffffffe9bffcffff66662e0f1f8400000000000f1f4000",
+      "refs": [],
+      "source_binary": "gzlib.o!gzopen64"
+    },
+    {
+      "crc16": 20285,
+      "crc_len": 240,
+      "function_len": 672,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzprintf",
+      "prologue_hex": "f30f1efa41564989f64155415455534889fb4881ecd000000048895424304889",
+      "refs": [
+        {
+          "name": "__vsnprintf_chk",
+          "offset": 272
+        },
+        {
+          "name": "memset",
+          "offset": 542
+        },
+        {
+          "name": "memcpy",
+          "offset": 632
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 668
+        }
+      ],
+      "source_binary": "gzwrite.o!gzprintf"
+    },
+    {
+      "crc16": 10211,
+      "crc_len": 255,
+      "function_len": 383,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzputc",
+      "prologue_hex": "f30f1efa41564155415455534883ec1064488b042528000000488944240831c0",
+      "refs": [
+        {
+          "name": "memset",
+          "offset": 338
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 379
+        }
+      ],
+      "source_binary": "gzwrite.o!gzputc"
+    },
+    {
+      "crc16": 14613,
+      "crc_len": 7,
+      "function_len": 92,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzputs",
+      "prologue_hex": "f30f1efa4885ff744f4154554889fd53817f18b179000075378b476c85c07530",
+      "refs": [
+        {
+          "name": "strlen",
+          "offset": 39
+        }
+      ],
+      "source_binary": "gzwrite.o!gzputs"
+    },
+    {
+      "crc16": 63411,
+      "crc_len": 122,
+      "function_len": 177,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzread",
+      "prologue_hex": "f30f1efa4885ff0f84a00000004154554889fd53817f184f1c000075738b476c",
+      "refs": [
+        {
+          "name": ".LC7",
+          "offset": 154
+        },
+        {
+          "name": "gz_error",
+          "offset": 167
+        }
+      ],
+      "source_binary": "gzread.o!gzread"
+    },
+    {
+      "crc16": 53430,
+      "crc_len": 24,
+      "function_len": 187,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzrewind",
+      "prologue_hex": "f30f1efa4885ff0f84aa00000053817f184f1c00004889fb0f85920000008b47",
+      "refs": [
+        {
+          "name": "lseek64",
+          "offset": 56
+        },
+        {
+          "name": "free",
+          "offset": 161
+        }
+      ],
+      "source_binary": "gzlib.o!gzrewind"
+    },
+    {
+      "crc16": 27193,
+      "crc_len": 109,
+      "function_len": 363,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzsetparams",
+      "prologue_hex": "f30f1efa4157660f6ec6660f6eca4156660f62c14155415455534883ec18660f",
+      "refs": [
+        {
+          "name": "deflateParams",
+          "offset": 141
+        },
+        {
+          "name": "memset",
+          "offset": 300
+        }
+      ],
+      "source_binary": "gzwrite.o!gzsetparams"
+    },
+    {
+      "crc16": 56658,
+      "crc_len": 255,
+      "function_len": 318,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzungetc",
+      "prologue_hex": "f30f1efa4885f60f842d010000554889f5534883ec08817e184f1c00000f85c5",
+      "refs": [
+        {
+          "name": ".LC9",
+          "offset": 295
+        },
+        {
+          "name": "gz_error",
+          "offset": 308
+        }
+      ],
+      "source_binary": "gzread.o!gzungetc"
+    },
+    {
+      "crc16": 274,
+      "crc_len": 109,
+      "function_len": 507,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzvprintf",
+      "prologue_hex": "f30f1efa415741564155415455534883ec084885ff0f84d5010000817f18b179",
+      "refs": [
+        {
+          "name": "__vsnprintf_chk",
+          "offset": 141
+        },
+        {
+          "name": "memset",
+          "offset": 382
+        },
+        {
+          "name": "memcpy",
+          "offset": 472
+        }
+      ],
+      "source_binary": "gzwrite.o!gzvprintf"
+    },
+    {
+      "crc16": 36182,
+      "crc_len": 27,
+      "function_len": 99,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "gzwrite",
+      "prologue_hex": "f30f1efa31c04885ff744d817f18b1790000751c8b476c85c075454883ec1885",
+      "refs": [
+        {
+          "name": ".LC3",
+          "offset": 59
+        },
+        {
+          "name": "gz_error",
+          "offset": 73
+        }
+      ],
+      "source_binary": "gzwrite.o!gzwrite"
+    },
+    {
+      "crc16": 27769,
+      "crc_len": 21,
+      "function_len": 9418,
+      "mask_hex": "ffffffffffffffffff00000000ffffffffffffffffffffffffffffffffffffff",
+      "name": "inflate",
+      "prologue_hex": "f30f1efa4157488d1500000000415666480f6ed24155415455534883ec788974",
+      "refs": [
+        {
+          "name": "adler32",
+          "offset": 592
+        },
+        {
+          "name": ".LC6",
+          "offset": 913
+        },
+        {
+          "name": "inflate_fast",
+          "offset": 1035
+        },
+        {
+          "name": ".LC16",
+          "offset": 1195
+        },
+        {
+          "name": ".LC15",
+          "offset": 1466
+        },
+        {
+          "name": "memcpy",
+          "offset": 1691
+        },
+        {
+          "name": "crc32",
+          "offset": 1905
+        },
+        {
+          "name": "memcpy",
+          "offset": 1968
+        },
+        {
+          "name": "adler32",
+          "offset": 2105
+        },
+        {
+          "name": "memcpy",
+          "offset": 2567
+        },
+        {
+          "name": "crc32",
+          "offset": 2787
+        },
+        {
+          "name": ".LC11",
+          "offset": 3230
+        },
+        {
+          "name": ".LC18",
+          "offset": 3467
+        },
+        {
+          "name": "memcpy",
+          "offset": 3564
+        },
+        {
+          "name": ".LC2",
+          "offset": 3955
+        },
+        {
+          "name": ".LC9",
+          "offset": 4175
+        },
+        {
+          "name": ".LC8",
+          "offset": 4514
+        },
+        {
+          "name": ".LC5",
+          "offset": 5496
+        },
+        {
+          "name": "memcpy",
+          "offset": 5904
+        },
+        {
+          "name": ".LC3",
+          "offset": 6802
+        },
+        {
+          "name": "crc32",
+          "offset": 7076
+        },
+        {
+          "name": ".LC4",
+          "offset": 7170
+        },
+        {
+          "name": "crc32",
+          "offset": 7239
+        },
+        {
+          "name": ".LC17",
+          "offset": 7357
+        },
+        {
+          "name": "crc32",
+          "offset": 7411
+        },
+        {
+          "name": "crc32",
+          "offset": 7476
+        },
+        {
+          "name": ".LC7",
+          "offset": 7516
+        },
+        {
+          "name": "inflate_table",
+          "offset": 7804
+        },
+        {
+          "name": ".LC10",
+          "offset": 7825
+        },
+        {
+          "name": "crc32",
+          "offset": 7897
+        },
+        {
+          "name": ".LC14",
+          "offset": 7955
+        },
+        {
+          "name": "crc32",
+          "offset": 8009
+        },
+        {
+          "name": ".LC1",
+          "offset": 8032
+        },
+        {
+          "name": "crc32",
+          "offset": 8576
+        },
+        {
+          "name": "adler32",
+          "offset": 8653
+        },
+        {
+          "name": "crc32",
+          "offset": 8785
+        },
+        {
+          "name": "crc32",
+          "offset": 8815
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 8867
+        },
+        {
+          "name": "inflate_table",
+          "offset": 8959
+        },
+        {
+          "name": ".LC12",
+          "offset": 8995
+        },
+        {
+          "name": "crc32",
+          "offset": 9066
+        },
+        {
+          "name": "adler32",
+          "offset": 9137
+        },
+        {
+          "name": ".LC19",
+          "offset": 9196
+        },
+        {
+          "name": "inflate_table",
+          "offset": 9345
+        },
+        {
+          "name": ".LC13",
+          "offset": 9368
+        }
+      ],
+      "source_binary": "inflate.o!inflate"
+    },
+    {
+      "crc16": 52302,
+      "crc_len": 35,
+      "function_len": 4838,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffff00000000ffffffffffffffffffff",
+      "name": "inflateBack",
+      "prologue_hex": "f30f1efa41574156415541544989d4488d15000000005566480f6eca534881ec",
+      "refs": [
+        {
+          "name": ".LC3",
+          "offset": 839
+        },
+        {
+          "name": ".LC2",
+          "offset": 1038
+        },
+        {
+          "name": "memcpy",
+          "offset": 1237
+        },
+        {
+          "name": ".LC0",
+          "offset": 1357
+        },
+        {
+          "name": "inflate_fast",
+          "offset": 1500
+        },
+        {
+          "name": ".LC1",
+          "offset": 1915
+        },
+        {
+          "name": ".LC8",
+          "offset": 1954
+        },
+        {
+          "name": ".LC9",
+          "offset": 2624
+        },
+        {
+          "name": "inflate_table",
+          "offset": 2810
+        },
+        {
+          "name": ".LC4",
+          "offset": 2830
+        },
+        {
+          "name": ".LC10",
+          "offset": 2918
+        },
+        {
+          "name": ".LC5",
+          "offset": 3491
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 3879
+        },
+        {
+          "name": ".LC11",
+          "offset": 4455
+        },
+        {
+          "name": "inflate_table",
+          "offset": 4687
+        },
+        {
+          "name": ".LC6",
+          "offset": 4703
+        },
+        {
+          "name": "inflate_table",
+          "offset": 4788
+        },
+        {
+          "name": ".LC7",
+          "offset": 4804
+        }
+      ],
+      "source_binary": "infback.o!inflateBack"
+    },
+    {
+      "crc16": 3898,
+      "crc_len": 30,
+      "function_len": 62,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateBackEnd",
+      "prologue_hex": "f30f1efa4885ff742f53488b77384889fb4885f6741b488b47484885c0741248",
+      "refs": [],
+      "source_binary": "infback.o!inflateBackEnd"
+    },
+    {
+      "crc16": 21438,
+      "crc_len": 155,
+      "function_len": 254,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateBackInit_",
+      "prologue_hex": "f30f1efa4885c90f84db0000008039310f85d20000004183f8700f85c8000000",
+      "refs": [
+        {
+          "name": "zcalloc",
+          "offset": 187
+        },
+        {
+          "name": "zcfree",
+          "offset": 215
+        }
+      ],
+      "source_binary": "infback.o!inflateBackInit_"
+    },
+    {
+      "crc16": 17662,
+      "crc_len": 72,
+      "function_len": 104,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateCodesUsed",
+      "prologue_hex": "f30f1efa4885ff745748837f4000745048837f48007449488b573848c7c0ffff",
+      "refs": [],
+      "source_binary": "inflate.o!inflateCodesUsed"
+    },
+    {
+      "crc16": 7359,
+      "crc_len": 255,
+      "function_len": 733,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateCopy",
+      "prologue_hex": "f30f1efa4885f60f848b0200004155415455534889f34883ec08488b4e404885",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 371
+        }
+      ],
+      "source_binary": "inflate.o!inflateCopy"
+    },
+    {
+      "crc16": 7229,
+      "crc_len": 118,
+      "function_len": 150,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateEnd",
+      "prologue_hex": "f30f1efa4885ff0f84830000005348837f40004889fb7468488b47484885c074",
+      "refs": [],
+      "source_binary": "inflate.o!inflateEnd"
+    },
+    {
+      "crc16": 60668,
+      "crc_len": 109,
+      "function_len": 172,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateGetDictionary",
+      "prologue_hex": "f30f1efa4885ff746748837f4000746048837f4800745955b8feffffff534883",
+      "refs": [
+        {
+          "name": "memcpy",
+          "offset": 141
+        },
+        {
+          "name": "memcpy",
+          "offset": 166
+        }
+      ],
+      "source_binary": "inflate.o!inflateGetDictionary"
+    },
+    {
+      "crc16": 18387,
+      "crc_len": 74,
+      "function_len": 106,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateGetHeader",
+      "prologue_hex": "f30f1efa4885ff745748837f4000745048837f48007449488b473841b8feffff",
+      "refs": [],
+      "source_binary": "inflate.o!inflateGetHeader"
+    },
+    {
+      "crc16": 5216,
+      "crc_len": 160,
+      "function_len": 353,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateInit2_",
+      "prologue_hex": "f30f1efa415455534885d20f842f010000803a310f852601000083f9700f851d",
+      "refs": [
+        {
+          "name": "inflateReset",
+          "offset": 192
+        },
+        {
+          "name": "zcfree",
+          "offset": 259
+        },
+        {
+          "name": "zcalloc",
+          "offset": 275
+        }
+      ],
+      "source_binary": "inflate.o!inflateInit2_"
+    },
+    {
+      "crc16": 29425,
+      "crc_len": 130,
+      "function_len": 318,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateInit_",
+      "prologue_hex": "f30f1efa4154534883ec084885f60f840c010000803e310f850301000083fa70",
+      "refs": [
+        {
+          "name": "inflateReset",
+          "offset": 162
+        },
+        {
+          "name": "zcalloc",
+          "offset": 195
+        },
+        {
+          "name": "zcfree",
+          "offset": 227
+        }
+      ],
+      "source_binary": "inflate.o!inflateInit_"
+    },
+    {
+      "crc16": 31241,
+      "crc_len": 103,
+      "function_len": 135,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateMark",
+      "prologue_hex": "f30f1efa4885ff746748837f4000746048837f48007459488b573848c7c00000",
+      "refs": [],
+      "source_binary": "inflate.o!inflateMark"
+    },
+    {
+      "crc16": 29120,
+      "crc_len": 114,
+      "function_len": 146,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflatePrime",
+      "prologue_hex": "f30f1efa89f14885ff746d48837f4000746648837f4800745f488b7738b8feff",
+      "refs": [],
+      "source_binary": "inflate.o!inflatePrime"
+    },
+    {
+      "crc16": 5926,
+      "crc_len": 142,
+      "function_len": 250,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateReset",
+      "prologue_hex": "f30f1efa4885ff0f84e300000048837f40000f84d800000048837f48000f84cd",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 174
+        }
+      ],
+      "source_binary": "inflate.o!inflateReset"
+    },
+    {
+      "crc16": 50447,
+      "crc_len": 255,
+      "function_len": 458,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateReset2",
+      "prologue_hex": "f30f1efa4885ff0f84a30100004155415455534889fb4883ec0848837f400074",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 341
+        }
+      ],
+      "source_binary": "inflate.o!inflateReset2"
+    },
+    {
+      "crc16": 52206,
+      "crc_len": 127,
+      "function_len": 234,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateResetKeep",
+      "prologue_hex": "f30f1efa4885ff0f84d300000048837f40000f84c800000048837f48000f84bd",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 159
+        }
+      ],
+      "source_binary": "inflate.o!inflateResetKeep"
+    },
+    {
+      "crc16": 36270,
+      "crc_len": 111,
+      "function_len": 532,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateSetDictionary",
+      "prologue_hex": "f30f1efa4885ff0f84cb010000415741564155415455534889fb4883ec084883",
+      "refs": [
+        {
+          "name": "adler32",
+          "offset": 143
+        },
+        {
+          "name": "adler32",
+          "offset": 156
+        },
+        {
+          "name": "memcpy",
+          "offset": 345
+        },
+        {
+          "name": "memcpy",
+          "offset": 447
+        },
+        {
+          "name": "memcpy",
+          "offset": 493
+        }
+      ],
+      "source_binary": "inflate.o!inflateSetDictionary"
+    },
+    {
+      "crc16": 17784,
+      "crc_len": 255,
+      "function_len": 764,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateSync",
+      "prologue_hex": "f30f1efa534883ec1064488b042528000000488944240831c04885ff0f846e01",
+      "refs": [
+        {
+          "name": "inflateReset",
+          "offset": 640
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 750
+        }
+      ],
+      "source_binary": "inflate.o!inflateSync"
+    },
+    {
+      "crc16": 49793,
+      "crc_len": 62,
+      "function_len": 94,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateSyncPoint",
+      "prologue_hex": "f30f1efa4885ff744f48837f4000744848837f48007441488b5738b8feffffff",
+      "refs": [],
+      "source_binary": "inflate.o!inflateSyncPoint"
+    },
+    {
+      "crc16": 8550,
+      "crc_len": 54,
+      "function_len": 86,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateUndermine",
+      "prologue_hex": "f30f1efa4885ff744748837f4000744048837f48007439488b5738b8feffffff",
+      "refs": [],
+      "source_binary": "inflate.o!inflateUndermine"
+    },
+    {
+      "crc16": 44276,
+      "crc_len": 85,
+      "function_len": 117,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflateValidate",
+      "prologue_hex": "f30f1efa4885ff744f48837f4000744848837f48007441488b473841b8feffff",
+      "refs": [],
+      "source_binary": "inflate.o!inflateValidate"
+    },
+    {
+      "crc16": 21801,
+      "crc_len": 57,
+      "function_len": 89,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflate_ensure_window",
+      "prologue_hex": "f30f1efa5348837f48004889fb74218b433c85c075158b4b38b80100000048c7",
+      "refs": [],
+      "source_binary": "inflate.o!inflate_ensure_window"
+    },
+    {
+      "crc16": 39899,
+      "crc_len": 255,
+      "function_len": 3127,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflate_fast",
+      "prologue_hex": "f30f1efa4157ba0100000041564989fe4189d34155415455534883ec208b4708",
+      "refs": [
+        {
+          "name": ".LC2",
+          "offset": 1459
+        },
+        {
+          "name": ".LC1",
+          "offset": 1491
+        },
+        {
+          "name": ".LC0",
+          "offset": 2518
+        }
+      ],
+      "source_binary": "inffast.o!inflate_fast"
+    },
+    {
+      "crc16": 39059,
+      "crc_len": 255,
+      "function_len": 3924,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "inflate_table",
+      "prologue_hex": "f30f1efa4157660fefc041564155415455534881eca8000000488974241089d6",
+      "refs": [
+        {
+          "name": "__stack_chk_fail",
+          "offset": 3613
+        }
+      ],
+      "source_binary": "inftrees.o!inflate_table"
+    },
+    {
+      "crc16": 56972,
+      "crc_len": 255,
+      "function_len": 414,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "longest_match",
+      "prologue_hex": "415731d24156415541544989fc418b8c24ac000000458b442450554d8b542460",
+      "refs": [],
+      "source_binary": "deflate.o!longest_match"
+    },
+    {
+      "crc16": 2408,
+      "crc_len": 209,
+      "function_len": 241,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "pqdownheap.constprop.0",
+      "prologue_hex": "41574989f84156415541545553448b97b4140000448ba7c40b00004183fa010f",
+      "refs": [],
+      "source_binary": "trees.o!pqdownheap.constprop.0"
+    },
+    {
+      "crc16": 21106,
+      "crc_len": 246,
+      "function_len": 278,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "scan_tree",
+      "prologue_hex": "0fb74e024989f84863c241baffffffff66448954860683f9014519c94183c104",
+      "refs": [],
+      "source_binary": "trees.o!scan_tree"
+    },
+    {
+      "crc16": 49469,
+      "crc_len": 255,
+      "function_len": 1724,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "send_tree",
+      "prologue_hex": "4889f80fb77e0283ff014519d24183c20483ff0119c981e18300000083c10785",
+      "refs": [],
+      "source_binary": "trees.o!send_tree"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 28,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffff00000000ffffffffff00000000",
+      "name": "uncompress",
+      "prologue_hex": "f30f1efa4883ec1848894c2408488d4c2408e8000000004883c418c300000000",
+      "refs": [
+        {
+          "name": "uncompress2",
+          "offset": 19
+        }
+      ],
+      "source_binary": "uncompr.o!uncompress"
+    },
+    {
+      "crc16": 6300,
+      "crc_len": 63,
+      "function_len": 432,
+      "mask_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "uncompress2",
+      "prologue_hex": "f30f1efa415741564989f641554989cd415455534881ec98000000488b1e488b",
+      "refs": [
+        {
+          "name": ".LC0",
+          "offset": 95
+        },
+        {
+          "name": "inflateInit_",
+          "offset": 125
+        },
+        {
+          "name": "inflate",
+          "offset": 228
+        },
+        {
+          "name": "inflateEnd",
+          "offset": 287
+        },
+        {
+          "name": "inflateEnd",
+          "offset": 398
+        },
+        {
+          "name": "__stack_chk_fail",
+          "offset": 428
+        }
+      ],
+      "source_binary": "uncompr.o!uncompress2"
+    },
+    {
+      "crc16": null,
+      "crc_len": 0,
+      "function_len": 25,
+      "mask_hex": "ffffffffffffffffffffffff00000000ffffffffffffffffff00000000000000",
+      "name": "zError",
+      "prologue_hex": "f30f1efab802000000488d150000000029f84898488b04c2c30f1f8000000000",
+      "refs": [
+        {
+          "name": "z_errmsg",
+          "offset": 12
+        }
+      ],
+      "source_binary": "zutil.o!zError"
+    }
+  ],
+  "index": {
+    "0fb74e02": [
+      104
+    ],
+    "41545548": [
+      41,
+      45
+    ],
+    "415531c0": [
+      46
+    ],
+    "41554154": [
+      42,
+      47
+    ],
+    "41564155": [
+      40
+    ],
+    "415731d2": [
+      102
+    ],
+    "41574156": [
+      10,
+      20,
+      38,
+      48,
+      51
+    ],
+    "41574989": [
+      49,
+      103
+    ],
+    "4885f60f": [
+      50
+    ],
+    "4889f80f": [
+      105
+    ],
+    "4889f841": [
+      14
+    ],
+    "488b7c24": [
+      11
+    ],
+    "534881ec": [
+      16
+    ],
+    "534889fb": [
+      44
+    ],
+    "f30f1efa": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      12,
+      13,
+      15,
+      17,
+      18,
+      19,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      39,
+      43,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      106,
+      107,
+      108
+    ]
+  },
+  "library": {
+    "arch": "x86_64",
+    "name": "zlib1g-dev",
+    "variant": "ubuntu-22.04-gcc-11.4.0",
+    "version": "1:1.2.11.dfsg-2ubuntu9.2"
+  },
+  "prologue_len": 32,
+  "schema_version": "2",
+  "stats": {
+    "aliases_coalesced": 0,
+    "archive": "/home/mjbommar/.cache/glaurung/system-libs/linux-amd64/x86_64-linux-gnu/lib/libz.a",
+    "dropped_ambiguous": 4,
+    "raw_signatures": 117,
+    "signatures_with_crc": 103,
+    "signatures_with_masked_bytes": 16,
+    "signatures_with_refs": 70,
+    "unique_signatures": 109
+  }
+}

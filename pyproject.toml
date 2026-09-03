@@ -55,6 +55,19 @@ include = [
     # tools/gen_native_stub.py. Without this line the wheel ships a `.so`
     # that no type checker can read.
     "python/glaurung/_native/*.pyi",
+    # Bundled signature-set fallback: the JSON Schema for the distribution
+    # manifest, the trusted minisign public keys, the signed bundled manifest,
+    # and the tiny content-addressed `base` blobs it names. Without these a
+    # fresh `pip install glaurung` on a machine with no network has no
+    # signature library at all -- the pre-2026-09 default path was
+    # cwd-relative, so it resolved only when you happened to run from a source
+    # checkout. See docs/reference/signature-distribution.md.
+    "data/sigs/manifest.schema.json",
+    "data/sigs/bundled-manifest.json",
+    "data/sigs/bundled-manifest.json.minisig",
+    "data/sigs/NOTICE",
+    "data/sigs/base/*",
+    "data/sigs/trusted-keys/*",
 ]
 module-name = "glaurung._native"
 

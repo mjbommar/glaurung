@@ -1,0 +1,64 @@
+{
+  "blobs": [
+    {
+      "compression": "none",
+      "format": "flirt-json/2",
+      "key": "libz/1:1.2.11.dfsg-2ubuntu9.2/ubuntu-22.04-gcc-11.4.0/x86_64",
+      "kind": "flirt-masked-pattern-v1",
+      "licence": "signatures and names only, derived; inputs under their own licence (see provenance) -- no library bytes are redistributed",
+      "provenance": {
+        "arch": "x86_64",
+        "archive": "libz.a",
+        "image": "linux-amd64",
+        "input_sha256": "478ed7d354847b3df2004a638966e6288adf25dae2a38504f5a16ac82dc2a35c",
+        "package": "zlib1g-dev",
+        "source": "docker-harvest",
+        "triplet": "x86_64-linux-gnu",
+        "variant": "ubuntu-22.04-gcc-11.4.0",
+        "version": "1:1.2.11.dfsg-2ubuntu9.2"
+      },
+      "sha256": "62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351",
+      "signatures": 109,
+      "size_bytes": 69783,
+      "uncompressed_bytes": 69783,
+      "urls": [
+        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351",
+        "https://sigs.glaurung.dev/blob/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351",
+        "hf://datasets/glaurung/sigs/blobs/62f1104af476c3fe3cf1d21dd0683e26f7f0f7bf8b46c7acb0112bafc93e2351"
+      ]
+    },
+    {
+      "compression": "none",
+      "format": "flirt-json/2",
+      "key": "mathlib/1.0.0/gcc-15.2.0-O2/x86_64",
+      "kind": "flirt-masked-pattern-v1",
+      "licence": "signatures and names only, derived; inputs under their own licence (see provenance) -- no library bytes are redistributed",
+      "provenance": {
+        "arch": "x86_64",
+        "archive": "samples/binaries/platforms/linux/amd64/libraries/static/libmathlib.a",
+        "image": "first-party",
+        "package": "glaurung-samples",
+        "source": "first-party",
+        "triplet": "x86_64-linux-gnu",
+        "variant": "gcc-15.2.0-O2",
+        "version": "1.0.0"
+      },
+      "sha256": "8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474",
+      "signatures": 16,
+      "size_bytes": 6631,
+      "uncompressed_bytes": 6631,
+      "urls": [
+        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474",
+        "https://sigs.glaurung.dev/blob/8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474",
+        "hf://datasets/glaurung/sigs/blobs/8361abfabe1560402d1a3c4501b012362c684b5e8578f5d03e472985306a0474"
+      ]
+    }
+  ],
+  "built_utc": "2026-09-03T13:02:48Z",
+  "min_glaurung_version": "0.1.0",
+  "schema_version": 1,
+  "serial": 1,
+  "set": "base",
+  "set_version": "2026.09.1-bundled",
+  "valid_until": "2027-03-02T13:02:48Z"
+}

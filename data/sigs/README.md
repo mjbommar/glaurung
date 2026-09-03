@@ -79,3 +79,62 @@ do not read them as library content.
 - `src/flirt/crc16.rs` -- IDA's exact CRC16 variant.
 - `python/glaurung/tools/build_flirt_library.py` -- the builder CLI.
 - `tests/flirt_signature_matching.rs` -- the measurements quoted above.
+
+## The distribution channel's files
+
+Since 2026-09-03 this directory is also the **bundled fallback** for the signed
+signature-set channel described in
+[`docs/reference/signature-distribution.md`](../../docs/reference/signature-distribution.md).
+Everything here ships inside the wheel (`[tool.maturin].include` in
+`pyproject.toml`).
+
+| Path | What it is |
+|---|---|
+| `manifest.schema.json` | JSON Schema for a distribution manifest. Executed by `glaurung.sigs.manifest.validate_against_schema`, not decorative. |
+| `bundled-manifest.json` | The signed manifest for the bundled `base` subset. |
+| `bundled-manifest.json.minisig` | Its detached minisign signature. |
+| `base/<sha256>` | The bundled blobs, named by digest exactly as in the cache. |
+| `trusted-keys/*.pub` | Which minisign keys this installation trusts. See that directory's README. |
+| `NOTICE` | The licence position and per-blob provenance for the bundled set. |
+
+The bundled set is a **fallback**, not the corpus: two blobs, 125 signatures,
+76,414 bytes. It exists so `pip install glaurung` on a machine with no network
+can still name library functions. The real set is 171 blobs and 125 MB and
+goes through the release channel.
+`python/tests/test_sigs_packaging.py::test_the_bundled_set_stays_small` caps
+the whole directory at 256 KiB.
+
+`glaurung-base.x86_64.flirt.json` is *both* the named file the Rust loader
+resolves and, byte for byte, one of the content-addressed blobs under `base/`.
+`test_the_demo_library_and_its_bundled_copy_are_the_same_bytes` pins them
+together.
+
+### Rebuilding the bundled set
+
+Needs the signing secret key, which is not in this repository.
+
+```bash
+# 1. Stage the two source libraries and a provenance index.
+mkdir -p "$TMPDIR/bundled-staging"
+cp data/sigs/glaurung-base.x86_64.flirt.json "$TMPDIR/bundled-staging/mathlib.flirt.json"
+cp <harvest>/linux-amd64.x86_64-linux-gnu.libz.flirt.json "$TMPDIR/bundled-staging/libz.flirt.json"
+# ...plus an index.json holding one record per file (see the harvester's own
+# index.json for the field names).
+
+# 2. Publish it as a set whose blob URLs point at the real release tag.
+uv run python tools/publish_signature_set.py \
+    --blobs "$TMPDIR/bundled-staging" --set base \
+    --set-version 2026.09.1-bundled --release-tag 2026.09.1 --serial 1 \
+    --secret-key <path to the production key> \
+    --out "$TMPDIR/bundled-out"
+
+# 3. Install the result.
+cp "$TMPDIR/bundled-out/manifest.json"          data/sigs/bundled-manifest.json
+cp "$TMPDIR/bundled-out/manifest.json.minisig"  data/sigs/bundled-manifest.json.minisig
+cp "$TMPDIR/bundled-out/NOTICE"                 data/sigs/NOTICE
+rm -f data/sigs/base/* && cp "$TMPDIR/bundled-out/blobs/"* data/sigs/base/
+```
+
+Then `uv run pytest python/tests/test_sigs_packaging.py -q`, which checks the
+signature verifies, every named blob is present and hashes correctly, and no
+orphan file sits in `base/`.
