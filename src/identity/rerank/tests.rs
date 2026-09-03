@@ -44,6 +44,15 @@ fn references(ranking: &LayerRanking) -> Vec<Option<ReferenceId>> {
     ranking.ranked.iter().map(|c| c.reference).collect()
 }
 
+/// One node as `the_dp_agrees_with_brute_force_enumeration` sees it:
+/// `(reference, similarity)`, with `None` for the "no match" node. No
+/// confidence field, because no [`Candidate`] built in this file carries one.
+type BruteNode = (Option<ReferenceId>, f64);
+
+/// One layer for the same enumerator: its query, and its nodes in the decode's
+/// own admission order.
+type BruteLayer = (QueryId, Vec<BruteNode>);
+
 /// With every context term off, the decode must return exactly the matcher's
 /// own ordering.
 ///
@@ -363,29 +372,27 @@ fn the_dp_agrees_with_brute_force_enumeration() {
     let decoded = rerank(&queries, &context, &settings);
 
     // Re-derive every path weight from the layer contents alone.
-    let layers: Vec<(QueryId, Vec<(Option<ReferenceId>, f64, Option<f64>)>)> = decoded
+    let layers: Vec<BruteLayer> = decoded
         .layers
         .iter()
         .map(|layer| {
-            let mut nodes: Vec<(Option<ReferenceId>, f64, Option<f64>)> = layer
+            let mut nodes: Vec<BruteNode> = layer
                 .ranked
                 .iter()
-                .map(|c| (c.reference, c.similarity, None))
+                .map(|c| (c.reference, c.similarity))
                 .collect();
             nodes.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
             (layer.query, nodes)
         })
         .collect();
 
-    let weight_of = |from: Option<(QueryId, (Option<ReferenceId>, f64, Option<f64>))>,
-                     to: (QueryId, (Option<ReferenceId>, f64, Option<f64>))|
-     -> f64 {
-        let (to_query, (to_ref, to_sim, _)) = to;
+    let weight_of = |from: Option<(QueryId, BruteNode)>, to: (QueryId, BruteNode)| -> f64 {
+        let (to_query, (to_ref, to_sim)) = to;
         let mut w = settings.normalization.apply(to_sim);
         if let Some(r) = to_ref {
             w += context.library_score(r);
         }
-        if let (Some((from_query, (Some(from_ref), _, _))), Some(to_ref)) = (from, to_ref) {
+        if let (Some((from_query, (Some(from_ref), _))), Some(to_ref)) = (from, to_ref) {
             w += context.adjacency_score(from_ref, to_ref, settings.adjacency_same_group);
             w += context.call_agreement(from_query, to_query, from_ref, to_ref);
         }
