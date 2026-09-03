@@ -1614,7 +1614,7 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
         "mrs" => {
             // MRS Xt,SP_EL0 has fixed sysreg bits 0xd5384100; Rt is bits 4:0.
             if instruction_word(ins).is_some_and(|word| word & 0xffff_ffe0 == 0xd538_4100)
-                && ins.operands.len() == 1
+                && !ins.operands.is_empty()
             {
                 let Some(dst) = operand_reg(&ins.operands[0]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
