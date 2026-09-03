@@ -120,6 +120,72 @@ fn wide_integer_return_c_type(cc: crate::ir::call_args::CallConv) -> &'static st
     }
 }
 
+/// Merge source declaration facts that are also exact call-boundary facts.
+///
+/// Scalar and void return spellings describe their ABI storage directly, so
+/// they outrank a body-only guess such as `void`. Aggregate spellings do not:
+/// their fields may occupy multiple banks or a hidden buffer, and the recovered
+/// prototype deliberately carries the representation type selected from that
+/// class instead. Parameter types are safe only when source and storage arity
+/// already agree.
+fn refine_call_boundary_from_declared(
+    call: &mut crate::ir::call_contracts::CallPrototype,
+    declared: &crate::ir::call_contracts::CallPrototype,
+    storage_arity: usize,
+    source_uses_platform_c_abi: bool,
+) {
+    let mut selected_return_authority = false;
+    // A source spelling crosses this machine boundary only when it denotes a
+    // scalar/pointer storage class the call model understands. Rust aliases
+    // such as `u32` are not C tokens, and a source aggregate such as
+    // `NonZeroU32` may use a language ABI whose one-register carrier is not a
+    // C by-value struct parameter. In both cases the recovered carrier is the
+    // honest executable contract; the source declaration remains in metadata.
+    let declared_machine_parameter_types = declared
+        .parameter_types
+        .iter()
+        .map(|c_type| crate::ir::call_contracts::standalone_c_type(c_type))
+        .collect::<Option<Vec<_>>>();
+    if declared.parameter_types.len() == storage_arity {
+        if let Some(parameter_types) = declared_machine_parameter_types {
+            call.parameter_types = parameter_types;
+            call.variadic = declared.variadic;
+        } else if source_uses_platform_c_abi {
+            // C and C++ declarations describe this platform's actual ABI, so
+            // a representable by-value aggregate remains authoritative. The
+            // Rust/Go path never enters this branch: its source aggregate can
+            // have a different carrier despite equal source/storage arity.
+            call.parameter_types = declared.parameter_types.clone();
+            call.variadic = declared.variadic;
+        }
+    }
+    if declared.return_type.trim().eq_ignore_ascii_case("void")
+        || crate::ir::call_contracts::call_return_hint(&declared.return_type).is_some()
+    {
+        if let Some(return_type) =
+            crate::ir::call_contracts::standalone_c_type(&declared.return_type)
+        {
+            call.return_type = return_type;
+            selected_return_authority = true;
+        }
+    }
+    // `CallPrototypeAuthority` currently describes the returned value in every
+    // consumer that guards type/representation refinement. Copying only
+    // parameter spellings must not lock an unrelated body-recovered result.
+    if selected_return_authority {
+        call.authority = declared.authority;
+    }
+}
+
+fn source_uses_platform_c_abi(image: &crate::program::image::ProgramImage, body_va: u64) -> bool {
+    image
+        .dwarf_functions()
+        .iter()
+        .find(|function| function.entry_va == body_va)
+        .and_then(|function| function.language.as_deref())
+        .map_or(true, |language| matches!(language, "C" | "C++"))
+}
+
 pub(super) fn recovered_call_prototype(
     prototype: &crate::ir::types_recover::RecoveredPrototype,
     cc: crate::ir::call_args::CallConv,
@@ -693,6 +759,19 @@ fn recover_direct_callee_definition(
         call_prototype.variadic = true;
     }
     let declared = dwarf_outputs.and_then(|outputs| outputs.get(&body_va));
+    if let Some(authoritative) = declared.and_then(super::dwarf_render_prototype) {
+        // One source aggregate occupying one ABI slot is representable at the
+        // existing call-site boundary: the renderer can bitcast that slot to
+        // the complete source object. Multi-slot aggregates still need an
+        // explicit grouping model, so retain the recovered machine prototype
+        // unless source and storage arity agree exactly.
+        refine_call_boundary_from_declared(
+            &mut call_prototype,
+            &authoritative,
+            layout.len(),
+            source_uses_platform_c_abi(image, body_va),
+        );
+    }
     let callee_defines_pair =
         crate::ir::interprocedural_return::callee_defines_integer_pair_on_every_return(&lifted, cc);
     (!layout.is_empty() || retain_empty_direct_callee_layout(declared)).then(|| {
@@ -803,6 +882,7 @@ pub(super) fn recover_direct_callee_layouts(
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {}
             }
+            let layout_len = layout.len();
             facts.layouts.insert(callee_va, layout);
             let mut call_prototype = prototype.clone();
             if let Some(display) = address_names.get(&callee_va) {
@@ -820,14 +900,26 @@ pub(super) fn recover_direct_callee_layouts(
                         facts.env.insert(key.clone(), record);
                     }
                 }
-                // Records that require no separate tag declaration are also
-                // safe to use as call-boundary type evidence.
-                if let Some(record) = facts
-                    .env
-                    .get(&key)
-                    .filter(|record| record.required_structs.is_empty())
+                // The call-site renderer receives the same DWARF type
+                // environment and can therefore emit complete aggregate
+                // definitions plus an explicit representation bridge. Keep
+                // the authoritative prototype even when it names such a tag.
+                if let Some(declared) = dwarf_outputs
+                    .and_then(|outputs| outputs.get(&body_va))
+                    .and_then(super::dwarf_render_prototype)
                 {
-                    call_prototype = record.prototype.clone();
+                    refine_call_boundary_from_declared(
+                        &mut call_prototype,
+                        &declared,
+                        layout_len,
+                        source_uses_platform_c_abi(image, body_va),
+                    );
+                } else if let Some(record) = facts.env.get(&key) {
+                    if record.prototype.parameter_types.len() == layout_len {
+                        call_prototype.parameter_types = record.prototype.parameter_types.clone();
+                        call_prototype.variadic = record.prototype.variadic;
+                        call_prototype.authority = record.prototype.authority;
+                    }
                 }
             }
             facts.prototypes.insert(callee_va, call_prototype);
@@ -927,5 +1019,135 @@ fn recover_table_entry_layouts(
         } else if dump {
             eprintln!("table entry 0x{entry_va:x}: no recovered layout");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
+
+    #[test]
+    fn declared_scalar_return_repairs_a_body_only_void_guess() {
+        let mut boundary = CallPrototype {
+            return_type: "void".into(),
+            parameter_types: vec!["long".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let declared = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        super::refine_call_boundary_from_declared(&mut boundary, &declared, 1, true);
+
+        assert_eq!(boundary.return_type, "int");
+        assert_eq!(boundary.parameter_types, ["int"]);
+        assert_eq!(boundary.authority, CallPrototypeAuthority::Authoritative);
+    }
+
+    #[test]
+    fn declared_aggregate_return_keeps_its_machine_carrier() {
+        let mut boundary = CallPrototype {
+            return_type: "unsigned __int128".into(),
+            parameter_types: vec!["long".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let declared = CallPrototype {
+            return_type: "struct quad".into(),
+            parameter_types: vec!["int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        super::refine_call_boundary_from_declared(&mut boundary, &declared, 1, true);
+
+        assert_eq!(boundary.return_type, "unsigned __int128");
+        assert_eq!(boundary.parameter_types, ["int"]);
+        assert_eq!(boundary.authority, CallPrototypeAuthority::Recovered);
+    }
+
+    #[test]
+    fn non_c_scalar_alias_does_not_escape_into_generated_c() {
+        let mut boundary = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec!["unsigned int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let declared = CallPrototype {
+            return_type: "u32".into(),
+            parameter_types: vec!["u32".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        super::refine_call_boundary_from_declared(&mut boundary, &declared, 1, false);
+
+        assert_eq!(boundary.parameter_types, ["unsigned int"]);
+    }
+
+    #[test]
+    fn language_aggregate_parameter_keeps_its_machine_carrier() {
+        let mut boundary = CallPrototype {
+            return_type: "unsigned int".into(),
+            parameter_types: vec!["unsigned int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let declared = CallPrototype {
+            return_type: "u32".into(),
+            parameter_types: vec!["struct NonZeroU32".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        super::refine_call_boundary_from_declared(&mut boundary, &declared, 1, false);
+
+        assert_eq!(boundary.parameter_types, ["unsigned int"]);
+    }
+
+    #[test]
+    fn c_aggregate_parameter_keeps_its_source_abi_spelling() {
+        let mut boundary = CallPrototype {
+            return_type: "unsigned int".into(),
+            parameter_types: vec!["unsigned int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let declared = CallPrototype {
+            return_type: "unsigned int".into(),
+            parameter_types: vec!["struct Pair".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        super::refine_call_boundary_from_declared(&mut boundary, &declared, 1, true);
+
+        assert_eq!(boundary.parameter_types, ["struct Pair"]);
+    }
+
+    #[test]
+    fn non_c_pointer_alias_is_normalized_to_standalone_c() {
+        let mut boundary = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec!["long".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let declared = CallPrototype {
+            return_type: "i32 *".into(),
+            parameter_types: vec!["i32 *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        super::refine_call_boundary_from_declared(&mut boundary, &declared, 1, false);
+
+        assert_eq!(boundary.return_type, "void *");
+        assert_eq!(boundary.parameter_types, ["void *"]);
     }
 }
