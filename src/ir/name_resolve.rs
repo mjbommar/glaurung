@@ -288,6 +288,21 @@ pub fn collect_address_map_and_data_symbols(
     for (va, name) in crate::analysis::pe_iat::pe_import_thunk_map(data) {
         out.insert(va, name);
     }
+    // MinGW CRT relationships are binary-backed names too, and must not
+    // depend on whether a bounded discovery happened to retain the helper.
+    for (va, name) in crate::analysis::cfg::pe_runtime_function_names(data) {
+        match out.entry(va) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(name);
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot)
+                if slot.get().starts_with("sub_") || (slot.get() == "_main" && name == "main") =>
+            {
+                slot.insert(name);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
+        }
+    }
     // Mach-O stubs / lazy / non-lazy pointers.
     for (va, name) in crate::analysis::macho_stubs::macho_stubs_map(data) {
         out.insert(va, name);
@@ -343,9 +358,18 @@ pub fn add_discovered_function_names(
         if va == 0 || func.name.is_empty() {
             continue;
         }
-        if let std::collections::hash_map::Entry::Vacant(slot) = out.entry(va) {
-            slot.insert(func.name.clone());
-            added += 1;
+        match out.entry(va) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(func.name.clone());
+                added += 1;
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot)
+                if slot.get().starts_with("sub_") && !func.name.starts_with("sub_") =>
+            {
+                slot.insert(func.name.clone());
+                added += 1;
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
         }
     }
     added
@@ -458,6 +482,57 @@ pub fn add_referenced_function_names(
     added
 }
 
+/// Give exact referenced targets a library name before the anonymous fallback.
+pub fn add_flirt_referenced_function_names(
+    image: &crate::program::image::ProgramImage,
+    out: &mut HashMap<u64, String>,
+    funcs: &[crate::core::function::Function],
+) -> usize {
+    let Some(library) = crate::flirt::load_default_library() else {
+        return 0;
+    };
+    // A Function's CFG span is not an exact symbol length: unreachable literal
+    // pools and split cold regions can belong to the archive symbol without
+    // being reachable from its entry. Only an authoritative unwind interval is
+    // strong enough to eliminate an otherwise byte-matching signature by
+    // length. Absence leaves ordinary pattern/CRC matching in force.
+    let lengths = image
+        .eh_frame_functions()
+        .iter()
+        .filter_map(|range| Some((range.start, range.end.checked_sub(range.start)?)))
+        .collect::<HashMap<_, _>>();
+    let referenced = funcs
+        .iter()
+        .flat_map(|function| function.callees.iter().map(|callee| callee.value))
+        .filter(|va| *va != 0)
+        .collect::<std::collections::HashSet<_>>();
+
+    let targets = referenced
+        .into_iter()
+        .map(|va| (va, lengths.get(&va).copied()));
+    let mut added = 0;
+    for (va, name) in crate::flirt::names_at_vas_with_lengths(image.bytes(), targets, &library) {
+        if insert_flirt_name(out, va, name) {
+            added += 1;
+        }
+    }
+    added
+}
+
+fn insert_flirt_name(out: &mut HashMap<u64, String>, va: u64, name: String) -> bool {
+    match out.entry(va) {
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert(name);
+            true
+        }
+        std::collections::hash_map::Entry::Occupied(mut slot) if slot.get().starts_with("sub_") => {
+            slot.insert(name);
+            true
+        }
+        std::collections::hash_map::Entry::Occupied(_) => false,
+    }
+}
+
 fn collect_pe_exports(data: &[u8], out: &mut HashMap<u64, String>) {
     let Ok(parser) = crate::formats::pe::PeParser::new(data) else {
         return;
@@ -517,6 +592,18 @@ pub fn collect_pdb_public_symbol_map(path: &str, cache_dir: &Path) -> HashMap<u6
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_flirt_name_replaces_only_an_automatic_placeholder() {
+        let mut map = HashMap::from([
+            (0x1000, "sub_1000".to_string()),
+            (0x2000, "symbol_name".to_string()),
+        ]);
+        assert!(insert_flirt_name(&mut map, 0x1000, "puts".to_string()));
+        assert!(!insert_flirt_name(&mut map, 0x2000, "wrong".to_string()));
+        assert_eq!(map.get(&0x1000).map(String::as_str), Some("puts"));
+        assert_eq!(map.get(&0x2000).map(String::as_str), Some("symbol_name"));
+    }
+
     /// The analyst's rename must beat every automatic source, because it is a
     /// decision about them rather than another one of them.
     #[test]
@@ -809,13 +896,31 @@ mod tests {
             crate::core::function::FunctionKind::Normal,
         )
         .unwrap();
-        let mut map = HashMap::from([(0x402000, "ReadFile".to_string())]);
+        let recovered_entry = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x403000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let recovered_func = crate::core::function::Function::new(
+            "__main".to_string(),
+            recovered_entry,
+            crate::core::function::FunctionKind::Normal,
+        )
+        .unwrap();
+        let mut map = HashMap::from([
+            (0x402000, "ReadFile".to_string()),
+            (0x403000, "sub_403000".to_string()),
+        ]);
 
-        let added = add_discovered_function_names(&mut map, &[func, imported_func]);
+        let added = add_discovered_function_names(&mut map, &[func, imported_func, recovered_func]);
 
-        assert_eq!(added, 1);
+        assert_eq!(added, 2);
         assert_eq!(map.get(&0x401000).map(String::as_str), Some("sub_401000"));
         assert_eq!(map.get(&0x402000).map(String::as_str), Some("ReadFile"));
+        assert_eq!(map.get(&0x403000).map(String::as_str), Some("__main"));
     }
 
     #[test]
