@@ -86,15 +86,18 @@ file inventory with hashes only, no PE metadata. The earlier survey of the
    resolution order `GLAURUNG_SIG_DIR`, then `~/.cache/glaurung/sigs/`, then a
    tiny bundled `base` set inside the wheel. `GLAURUNG_SIGS_OFFLINE=1` forbids
    network.
-4. **Distribution**: GitHub Releases on a dedicated `glaurung-sigs` repository
-   as primary (2 GiB per asset, no bandwidth cap, immutable releases with
-   Sigstore attestations), Cloudflare R2 as mirror, Hugging Face as an optional
-   second mirror, PyPI carrying only the resolver and the `base` set. A
-   Nix-shaped content-addressed `manifest.json` (schema, set version, monotonic
-   serial, validity window, minimum Glaurung version, one entry per blob with
-   sha256, sizes, licence, provenance, URLs) signed with minisign, verified
-   in-process by `minisign-verify` with the public key embedded. Sigstore is an
-   optional layer on top, never a client dependency.
+4. **Distribution**: `assets.glaurung.dev` (an S3 bucket behind CloudFront with
+   origin access control, in the maintainer's personal AWS account) as
+   primary, GitHub Releases on a dedicated `glaurung-sigs` repository as
+   secondary (2 GiB per asset, no bandwidth cap, immutable releases with
+   Sigstore attestations), PyPI carrying only the resolver and the `base` set.
+   **Amended 2026-09-03: AWS is primary because the maintainer has AWS only**
+   — Cloudflare R2 and Hugging Face, both considered as mirrors, are dropped.
+   A Nix-shaped content-addressed `manifest.json` (schema, set version,
+   monotonic serial, validity window, minimum Glaurung version, one entry per
+   blob with sha256, sizes, licence, provenance, URLs) signed with minisign,
+   verified in-process by `minisign-verify` with the public key embedded.
+   Sigstore is an optional layer on top, never a client dependency.
 5. **Sourcing, in order**: snapshot.debian.org via `/mr/` and `/file/`
    (content-addressed, robots-permitted; `/archive/*` is not); Launchpad
    `binaryFileUrls` for Ubuntu; Alpine APKINDEX plus CDN for musl and the only
@@ -140,9 +143,9 @@ records per-archive outcomes and never treats an empty result as success.
 | 5 | Matcher correctness: ambiguity key, resolver wiring, load-once | merged (integration line) | `04e9afd0` | matcher-indistinguishable keys 276 to 0, dropped-ambiguous 1,179 to 0; over 4 static binaries and 4,357 truth functions, correct 2,931 to 2,979 with wrong unchanged at 12; cached load 0.002 s vs 0.022 s; PLT/import names not yet fed to the resolver |
 | 6 | `gsig/1` format and loader | merged (integration line) | `cbc23304` | JSON 1,326 B/sig; gsig store (uncompressed) 229 B/sig; gsig zstd 101 B/sig, 13.1x smaller than JSON; load to first match, merged x86_64 (116,593 sigs), release: 153.6 ms JSON vs 81.1 ms gsig; RSS delta, same corpus: 296.3 vs 134.3 MiB; 0 round-trip failures over 561 harvested libraries |
 | 7 | Harvester v1: Debian, Ubuntu, Alpine | merged (integration line) | `b480e04c` | 14 network cells, 561 archives indexed, 140 MB fetched |
-| 8 | Distribution: manifest, minisign, client cache, CLI | merged (integration line) | `e0597778` | signed content-addressed manifest, minisign dev key `FA6FDB763B3E76EF` (to be replaced before a real release), `glaurung sigs list\|fetch\|verify\|status\|path`, publish dry run at `~/.cache/glaurung/release/2026.09.1`: 292 blobs, 211 MB, commands printed and unrun; `data/sigs` now packaged in the wheel |
+| 8 | Distribution: manifest, minisign, client cache, CLI | merged (integration line) | `e0597778` | signed content-addressed manifest, minisign dev key `FA6FDB763B3E76EF` (to be replaced before a real release), `glaurung sigs list\|fetch\|verify\|status\|path`, publish dry run at `~/.cache/glaurung/release/2026.09.1`: 292 blobs, 211 MB, commands printed and unrun; `data/sigs` now packaged in the wheel. **Updated 2026-09-03:** production key `25655013D3F68BC1` generated and installed at `data/sigs/trusted-keys/glaurung-sigs.pub`; `tools/publish_signature_set.py --signature` added so a real release is signed externally (the dev key stays local-testing only); the bundled fallback manifest is still dev-signed and the dev key remains trusted only until it is re-signed |
 | 9 | Consume mandiant/siglib via lancelot-flirt | dropped | | user decision 2026-09-03: no third-party signature sources; the lane was stopped and its outputs removed |
 | 10 | MSVC via xwin/vcpkg | queued | | NOTICE review first |
 | 11 | Rust sysroot harvester; gopclntab path for Go | Rust half merged (lane) | `siglib/rust-sysroot`, `96187c92` | 13 crates x 2 toolchains (1.88.0, 1.97.1), 26 libraries, 3,375 unique signatures, 0.06 s build; same-toolchain recall 47-48% of defined text symbols on two stripped Rust binaries, cross-toolchain **0 correct** in every cell (mangling scheme plus codegen); `unwind` yields 0 sigs on both (object has zero defined symbols, confirmed); no `src/flirt/` change needed. Go: gopclntab path still queued, unchanged from Decision 5 |
-| 12 | R2 mirror, dictionary training, delta channel | queued | | after the corpus is large |
+| 12 | Mirror (GitHub Releases), dictionary training, delta channel | GitHub Releases mirror wiring merged (`assets.glaurung.dev` primary) | | dictionary training and the delta channel still queued, after the corpus is large |
 | 13 | Cortex-M libraries from the ARM toolchain, validated on `rt-libopencm3` and the holdout firmware | merged (integration line) | `440a67fd` | 48 libraries, 32,812 unique signatures; 209 of 210 names correct over 7,622 truth functions across rt-libopencm3 and three holdout projects; alias tie-break defect fixed, 21 wrong to 1 |

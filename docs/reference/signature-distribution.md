@@ -9,9 +9,12 @@ archive, see
 [FLIRT-style signature libraries](function-signature-libraries.md).
 
 **Nothing has been published yet.** The channel is implemented and exercised
-end to end against a locally published release; creating the real GitHub
-release is a maintainer action, and `tools/publish_signature_set.py` stops at
-printing the commands.
+end to end against a locally published release, and the `assets.glaurung.dev`
+infrastructure described below now exists. Uploading the first real manifest,
+and creating the first real GitHub release, both remain a maintainer action:
+`tools/publish_signature_set.py` prints the S3 and GitHub commands by default
+and only executes the S3 half when run with `--upload`; it never runs `gh`
+itself.
 
 ## Why a channel at all
 
@@ -31,10 +34,15 @@ resolver and a fallback; the corpus goes through a release channel.**
 
 | Tier | Where | Why |
 |---|---|---|
-| Primary | GitHub Releases on a dedicated `glaurung-sigs` repository | 2 GiB per asset, 1000 assets per release, no bandwidth cap in the release docs. Immutable Releases carry Sigstore attestations automatically. |
-| Mirror | Cloudflare R2 | Contractual `$0` egress. Must exist *before* GitHub's acceptable-use throttling makes it necessary, not after. |
-| Optional mirror | Hugging Face datasets | Chunk-level dedup suits the measured 26-43 percent cross-release overlap, but the anonymous resolver limit is 3,000 requests per 5-minute window per IP, which a many-file sync hits. Good mirror, wrong primary. |
+| Primary | `assets.glaurung.dev` — an S3 bucket behind CloudFront, origin access control, in the maintainer's personal AWS account | No third-party release-asset limits, and the maintainer controls both the storage and the CDN outright. Chosen as primary because the maintainer has AWS and no other cloud account. |
+| Secondary | GitHub Releases on a dedicated `glaurung-sigs` repository | 2 GiB per asset, 1000 assets per release, no bandwidth cap in the release docs. Immutable Releases carry Sigstore attestations automatically. Kept for redundancy if the CDN or the bucket has an incident. |
 | Never | the git repository itself | 100 MiB per file hard block, 5 GB soft repository ceiling. |
+
+Cloudflare R2 and Hugging Face datasets were both considered as mirrors and
+dropped on 2026-09-03: the maintainer has AWS only, and running a second
+provider's account for a mirror nobody has asked for yet is not worth the
+operational surface. `docs/design/signature-library-program-2026-09-03.md`
+Decision 4 records the amendment.
 
 Blobs are **named by their sha256**, on disk and in every URL. Three
 consequences, and they are the whole design:
@@ -43,6 +51,43 @@ consequences, and they are the whole design:
   whichever answers with bytes that hash correctly;
 * a stale mirror cannot serve a mismatched file under a live name;
 * the cross-release overlap deduplicates for free at the blob level.
+
+### `assets.glaurung.dev`, in detail
+
+| Resource | Value |
+|---|---|
+| S3 bucket | `assets.glaurung.dev`, `us-east-1`, private, versioned, SSE-S3 |
+| Bucket policy | grants `GetObject` only to CloudFront distribution `E3A8M3Y3GUZ4ZD` via origin access control `E7HX29S4M25DX` — the bucket has no public access of its own |
+| CloudFront distribution | `E3A8M3Y3GUZ4ZD` (`d14q5hxxut187.cloudfront.net`) |
+| ACM certificate | `e464d88b-db18-4fa3-937b-03a72520b71c`, validated in Route 53 zone `Z01833141XUJONTNN0T91` |
+| DNS | A/AAAA alias records for `assets.glaurung.dev` in that zone, pointed at the CloudFront distribution |
+| `aws` CLI profile | `personal-sso` |
+
+Object layout:
+
+| Path | Contents | Cache-Control |
+|---|---|---|
+| `sigs/v1/manifest.json` | the signed manifest | `public, max-age=300` (short — this is the pointer clients re-check) |
+| `sigs/v1/manifest.json.minisig` | its detached minisign signature | `public, max-age=300` |
+| `sigs/blob/<sha256>.gsig.zst` | one blob, named by its digest | `public, max-age=31536000, immutable` (one year) |
+
+**Invariants**, enforced by the publish tool and by convention:
+
+* the bucket is **never** made public — every read goes through CloudFront,
+  which is the only principal the bucket policy grants `GetObject` to;
+* CloudFront is **never** bypassed for a real client (the bucket has no
+  website endpoint and no public policy to bypass it *to*);
+* a blob key is **never** overwritten or deleted once uploaded — content
+  addressing means an existing key already holds the right bytes, and
+  `tools/publish_signature_set.py --upload` checks with `aws s3api
+  head-object` before every blob upload and skips it if the key exists;
+* the manifest is uploaded **last**, after every blob it names — see
+  "Publishing a release" below;
+* a real manifest for this bucket is signed with the production key
+  (`25655013D3F68BC1`, `data/sigs/trusted-keys/glaurung-sigs.pub`), never the
+  development key (`FA6FDB763B3E76EF`) that today's `bundled-manifest.json`
+  still carries. See
+  [`data/sigs/trusted-keys/README.md`](../../data/sigs/trusted-keys/README.md).
 
 ## The manifest
 
@@ -87,9 +132,8 @@ of truth that silently drifts.
         "triplet": "x86_64-linux-gnu"
       },
       "urls": [
-        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/62f1104af476c3fe…",
-        "https://sigs.glaurung.dev/blob/62f1104af476c3fe…",
-        "hf://datasets/glaurung/sigs/blobs/62f1104af476c3fe…"
+        "https://assets.glaurung.dev/sigs/blob/62f1104af476c3fe….gsig.zst",
+        "https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/62f1104af476c3fe…"
       ]
     }
   ]
@@ -161,9 +205,12 @@ for a release or two, both verify, then the old one is deleted. A single key
 compiled into the binary makes rotation a flag day where every unupgraded
 client breaks the moment the key changes.
 
-The key that ships today is a **development** key. See
+Two keys ship today, deliberately: the production key
+(`25655013D3F68BC1`), password-protected on the maintainer's own machine, and
+a development key (`FA6FDB763B3E76EF`) kept trusted only because the bundled
+fallback manifest is still signed with it. See
 [`data/sigs/trusted-keys/README.md`](../../data/sigs/trusted-keys/README.md)
-for what the maintainer must do before the first real release.
+for the interactive signing command and what retires the development key.
 
 ### Sigstore
 
@@ -288,26 +335,60 @@ bit-rot and hand edits that a size check cannot see.
 
 ## Publishing a release, step by step
 
-The maintainer does this. `tools/publish_signature_set.py` imports no network
-client at all — `python/tests/test_sigs_publish.py` asserts that structurally —
-so it cannot publish, only prepare.
+The maintainer does this. `tools/publish_signature_set.py` builds the release
+directory, always prints the GitHub Releases (secondary) commands without
+running them, and drives the S3 (primary) upload itself — but only when told
+to: by default it prints the exact `aws` commands instead of running them, and
+`--upload` is what makes it real.
+
+**Signing is external, and that is the normal flow, not a fallback.** The
+production key (`data/sigs/trusted-keys/glaurung-sigs.pub`, key id
+`25655013D3F68BC1`) is password-protected, on the maintainer's own machine,
+and `glaurung.sigs.minisign.SecretKey` only reads minisign's password-less
+form — correctly, since decrypting a scrypt-protected key needs a passphrase
+no automated tool should ever see. So the tool never signs a real release
+itself: it writes `manifest.json`, prints the exact `minisign -Sm ...`
+command, and only *verifies* whatever `.minisig` comes back via `--signature`
+before it will proceed. `--secret-key`/`--generate-key` (a throwaway
+password-less key the tool signs with itself) are the **local-testing flow
+only** — every worked example and fixture below that uses them is testing the
+channel, not publishing to it.
 
 ```bash
 export TMPDIR="$HOME/.cache/glaurung/tmp"; mkdir -p "$TMPDIR"
+OUT="$HOME/.cache/glaurung/release/2026.09.1"
 
-# 1. Build the release directory from a harvest.
+# 1. Build the release directory from a harvest, naming the signature that
+#    does not exist yet. This refuses (non-zero exit) and prints the exact
+#    command to run by hand -- that refusal is the point of this first run.
 uv run python tools/publish_signature_set.py \
     --blobs "$HOME/.cache/glaurung/system-libs/sigs" \
     --set base --set-version 2026.09.1 --serial 1 \
     --secret-key "$HOME/.cache/glaurung/keys/glaurung-sigs.key" \
-    --out "$HOME/.cache/glaurung/release/2026.09.1"
+    --out "$OUT" --signature "$OUT/manifest.json.minisig"
+
+# 2. Run the printed command by hand. minisign prompts for the passphrase on
+#    its controlling terminal; nothing here ever sees it.
+minisign -Sm "$OUT/manifest.json" -s "$HOME/.cache/glaurung/keys/glaurung-sigs.key" \
+    -t "2026.09.1 serial=1"
+
+# 3. Re-run step 1's exact command. manifest.json is unchanged (same bytes
+#    the signature above covers) and --signature now exists and verifies
+#    against data/sigs/trusted-keys/*.pub, so the tool proceeds.
+uv run python tools/publish_signature_set.py \
+    --blobs "$HOME/.cache/glaurung/system-libs/sigs" \
+    --set base --set-version 2026.09.1 --serial 1 \
+    --secret-key "$HOME/.cache/glaurung/keys/glaurung-sigs.key" \
+    --out "$OUT" --signature "$OUT/manifest.json.minisig"
 ```
 
 It writes `blobs/<sha256>` (one file per blob, deduplicated by digest),
-`manifest.json`, `manifest.json.minisig`, `SHA256SUMS` and `NOTICE`; validates
-the manifest against the shipped schema; verifies its own signature with the
-public half before saying anything succeeded; and prints the `gh release` and
-mirror commands **without running them**.
+`manifest.json`, `SHA256SUMS` and `NOTICE`; validates the manifest against the
+shipped schema; and, once `--signature` verifies, prints the S3 dry-run
+commands and the GitHub commands, **neither run yet**. A rebuild whose blobs,
+set name, version or serial differ from what `--signature` was made against
+is refused outright (only `built_utc`/`valid_until` may legitimately differ
+between the two runs above).
 
 Two refusals worth knowing:
 
@@ -325,9 +406,45 @@ Two refusals worth knowing:
 cd "$HOME/.cache/glaurung/release/2026.09.1"
 minisign -Vm manifest.json -p <the production public key>
 sha256sum -c SHA256SUMS
+```
 
-# 3. Create the release. Immutable Releases need draft, upload, publish:
-#    an asset uploaded after publication returns 422.
+**3. Upload to S3 (`assets.glaurung.dev`, primary).** Blobs first, then the
+signature, then the manifest last — a client must never see a manifest naming
+a blob that is not there yet. Every blob key is checked with `head-object`
+first and is skipped, never overwritten, if it already exists (a blob is
+content-addressed and immutable, so an existing key already holds the right
+bytes):
+
+```bash
+# One `head-object`/`cp` pair per blob (elided here; see the tool's own
+# --upload dry-run output for the exact per-blob commands):
+aws s3api head-object --bucket assets.glaurung.dev \
+    --key sigs/blob/<sha256>.gsig.zst --profile personal-sso \
+    || aws s3 cp blobs/<sha256> s3://assets.glaurung.dev/sigs/blob/<sha256>.gsig.zst \
+        --profile personal-sso \
+        --cache-control "public, max-age=31536000, immutable" \
+        --content-type application/octet-stream
+
+# Then the signature, then the manifest -- in that order.
+aws s3 cp manifest.json.minisig s3://assets.glaurung.dev/sigs/v1/manifest.json.minisig \
+    --profile personal-sso --cache-control "public, max-age=300" --metadata-directive REPLACE
+aws s3 cp manifest.json s3://assets.glaurung.dev/sigs/v1/manifest.json \
+    --profile personal-sso --cache-control "public, max-age=300" --metadata-directive REPLACE
+```
+
+`tools/publish_signature_set.py --upload --s3-bucket assets.glaurung.dev
+--aws-profile personal-sso` runs exactly this (the `head-object` precheck
+included) instead of requiring it by hand; drop `--upload` to see the same
+commands printed rather than executed. `--metadata-directive REPLACE` is
+S3-copy vocabulary — it does not change what a local-file upload does, since
+that is always a fresh `PutObject`, but it is passed on the manifest and
+signature commands so the intent ("these headers always win here") is
+explicit at the call site rather than only in prose. GitHub Releases stays
+print-only regardless of `--upload`:
+
+```bash
+# 4. Create the (secondary) GitHub release. Immutable Releases need
+#    draft, upload, publish: an asset uploaded after publication returns 422.
 gh release create 2026.09.1 --repo glaurung-re/glaurung-sigs --draft \
     --title 'glaurung signature set base 2026.09.1' --notes-file NOTICE
 gh release upload 2026.09.1 --repo glaurung-re/glaurung-sigs \
@@ -335,20 +452,22 @@ gh release upload 2026.09.1 --repo glaurung-re/glaurung-sigs \
 gh release upload 2026.09.1 --repo glaurung-re/glaurung-sigs blobs/*
 gh release edit 2026.09.1 --repo glaurung-re/glaurung-sigs --draft=false
 
-# 4. Mirror to R2, then optionally Hugging Face.
-rclone copy blobs r2:glaurung-sigs/blob --checksum --transfers 8
-rclone copy manifest.json         r2:glaurung-sigs/v1/
-rclone copy manifest.json.minisig r2:glaurung-sigs/v1/
-
 # 5. Verify from the outside, as a user.
 GLAURUNG_SIG_DIR="$TMPDIR/verify-cache" uv run glaurung sigs fetch \
-    --manifest-url https://github.com/glaurung-re/glaurung-sigs/releases/download/2026.09.1/manifest.json
+    --manifest-url https://assets.glaurung.dev/sigs/v1/manifest.json
 GLAURUNG_SIG_DIR="$TMPDIR/verify-cache" uv run glaurung sigs verify
 ```
 
 The serial must **exceed** every previously published serial for the set. That
 is what makes the downgrade defence work; a re-issue at the same serial with
 different content defeats it.
+
+The production key (`25655013D3F68BC1`) exists and is trusted (installed at
+`data/sigs/trusted-keys/glaurung-sigs.pub`); the bundled fallback manifest
+shipped in the wheel today is still signed with the development key
+(`FA6FDB763B3E76EF`, also still trusted, for that reason alone) and must be
+re-signed with the production key before the development key can be retired
+— see [`data/sigs/trusted-keys/README.md`](../../data/sigs/trusted-keys/README.md).
 
 ## Legal position
 
@@ -449,7 +568,8 @@ harvest is the harvester lane's call, not this one's.
 * **No delta channel.** ClamAV's `cdiff` model — ship only what changed — is
   worth having once full re-downloads become the complaint. Content-addressing
   already means an unchanged blob is never re-fetched, which covers most of it.
-* **No R2 bucket exists.** The manifest lists the URL and the client will try
-  it; it must be created before GitHub throttling makes it necessary.
+* **No manifest has actually been uploaded to `assets.glaurung.dev` yet.** The
+  bucket, CloudFront distribution and DNS exist; the first real `--upload` run,
+  with a production signing key, is a maintainer action still to happen.
 * **Sigstore attestations are not attached.** They come free with GitHub
   Immutable Releases once the repository exists.
