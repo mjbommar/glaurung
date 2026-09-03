@@ -154,6 +154,140 @@ same problem is to match such functions only as *referenced* names from a
 caller, never standalone; that is available here through
 `match_at_with_refs` once a resolver is wired in.
 
+## COFF archives (MinGW-w64 `.a`, MSVC `.lib`)
+
+Added 2026-09-03. Before that, `glaurung.analysis.flirt_signatures_from_archive_path`
+returned **`raw=0`** for every COFF archive on the box --
+`/usr/x86_64-w64-mingw32/lib/libmingwex.a`, `libmingw32.a` and
+`/usr/lib/gcc/x86_64-w64-mingw32/13-win32/libgcc.a` -- while
+`/usr/lib/x86_64-linux-gnu/libc.a` returned 4,375. It was not a parse failure:
+`object` reads COFF, the archive walked, the members parsed.
+
+### The diagnosis
+
+Four things were checked against a real member
+(`lib64_libmingwex_a-cacos.o`), and only the first was broken.
+
+1. **A COFF symbol record has no size.** ELF's `STT_FUNC` carries `st_size`;
+   COFF has nothing equivalent. The MS aux *function definition* record has a
+   `TotalSize` field, but GCC writes it as zero, so `object` reports
+   `size() == 0` for **every** function symbol in the archive -- asserted in
+   `archive::tests::every_coff_function_symbol_reports_no_size`. The builder's
+   `sym.size() < min_function_len` guard therefore rejected all of them. That
+   one line was the whole of the failure.
+2. **Symbol kinds were already right.** `object` maps
+   `IMAGE_SYM_DTYPE_FUNCTION` to `SymbolKind::Text` for both
+   `IMAGE_SYM_CLASS_EXTERNAL` and `IMAGE_SYM_CLASS_STATIC`, so published and
+   file-local functions both arrive, and section definition symbols (`.text`,
+   `.rdata`) arrive as `SymbolKind::Section` and are excluded.
+3. **Section identity was never assumed.** The builder keys on the symbol's own
+   section index, so MSVC's `/Gy` COMDAT `.text$mn` sections -- one function per
+   section -- and GCC's `-ffunction-sections` need nothing special. `.drectve`
+   and `.debug*` are skipped by requiring `SectionKind::Text`.
+4. **Relocation widths were already right.** `object` reports COFF relocations
+   in bits: 32 for `IMAGE_REL_AMD64_REL32`, `ADDR32`, `ADDR32NB` and `SECREL`,
+   64 for `ADDR64`; i386's `REL32` and `DIR32` are both 32. So the generic
+   `[offset, offset + size/8)` span is correct as written. **No COFF relocation
+   is linker-relaxable** -- there is no COFF analogue of ELF's `R_386_GOT32X`,
+   whose contract lets the linker rewrite the two opcode bytes before the field
+   -- so no span is widened. An unrecognised relocation type reports size 0 and
+   falls back to the architecture's pointer width, which over-masks by four
+   bytes rather than missing the field.
+
+### The rules
+
+| Rule | Why |
+|---|---|
+| **Extent = next symbol in the section, or the section end.** | The only rule available with no size field. FLIRT's own `pcf` does the same. Strictly-greater, so two aliases at one address do not each derive an extent of zero. Applied to *any* format that reports `size() == 0`, so ELF assembly functions with no `.size` directive are picked up too; ELF output is otherwise byte-identical, verified by rebuilding the shipped library to a zero-line diff. |
+| **Trailing alignment padding (`0x00`, `0x90`, `0xcc`) is trimmed off a derived extent, unless a relocation covers it.** | See below -- this is the rule that keeps the false-positive count at zero. The relocation guard is for an unlinked `jmp rel32` tail call, which really does end in four zero bytes. |
+| **Section symbols are not references.** | A COFF relocation against a constant pool targets the `.rdata` *section* symbol. Recording `.rdata` as a referenced name would make the L4 disambiguator fire on a name that every COFF object contains and no resolver over a linked image can confirm -- so a resolver reporting the real symbol would *eliminate* the correct candidate. MinGW's `.refptr.<name>` COMDAT stubs are ordinary symbols, not section symbols, and are kept. |
+| **i386 COFF loses exactly one leading underscore.** | `_cacos` is the cdecl decoration of `cacos`; `___mingw_vfprintf` is `__mingw_vfprintf`. Inside an `__imp_` prefix the underscore comes off the tail, so `__imp__GetLastError` becomes `__imp_GetLastError` -- the import indirection is real and stays named as such rather than being rewritten to the target. x86-64, ARM and AArch64 COFF are undecorated and untouched. |
+| **Non-object members are skipped, not errors.** | An MSVC `.lib` has a *first* and a *second* linker member (both named `/`) then `//` for long names, where a GNU `.a` has one `/`; `object`'s archive reader walks past all of them. A short-import member (`IMPORT_OBJECT_HDR_SIG2`, magic `00 00 ff ff`) is `FileKind::CoffImport`, which `object::File::parse` declines -- so an import-only library yields an empty list rather than an error. |
+
+### Alignment padding was the whole false-positive story
+
+`libmingwex.a`'s `alarm` is `xor eax,eax; ret` -- three bytes, alone in a
+16-byte-aligned section. With the extent running to the section end, it signs as
+**sixteen fixed bytes, thirteen of them `0x90`**. It clears the
+`min_fixed_bytes` floor of 16 on padding alone, and padding is identical in
+every object ever compiled. Measured on a MinGW `hello.exe` before the trim was
+added: `alarm` was applied to `_setargv` and `__tlregdtor`, and `libgcc.a`'s
+one-byte `__clear_cache` to `__gcc_deregister_frame` -- five wrong names at
+`set_by=flirt` rank across two link layouts. With the trim, `alarm` is three
+bytes, falls below `min_function_len`, and is correctly never signed; the wrong
+names go to **zero**.
+
+This is the same lesson `min_fixed_bytes` records one section up, arriving by a
+different road: what bounds the false-positive rate is how many bytes are
+*compared and specific to the function*, and a derived extent can inflate that
+count without inflating the information.
+
+### Measured
+
+Release build, this box, best of three runs. "raw" is what the extractor
+returns, "unique" what survives the builder's ambiguity rule.
+
+| archive | MB | raw | unique | ambiguous | masked | with CRC | with refs | build |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `libmingwex.a` | 2.0 | 474 | 391 | 23 | 129 | 352 | 235 | 4 ms |
+| `libmingw32.a` | 0.2 | 31 | 31 | 0 | 24 | 24 | 26 | <1 ms |
+| `libgcc.a` (mingw) | 2.9 | 446 | 390 | 16 | 127 | 343 | 298 | 4 ms |
+| `libmsvcrt.a` (mingw) | 2.2 | 278 | 162 | 26 | 159 | 136 | 100 | 3 ms |
+| `libkernel32.a` (mingw) | 1.6 | 31 | 23 | 1 | 31 | 0 | 0 | 2 ms |
+| `mingw_crt_subset.a` (fixture) | 0.1 | 62 | 62 | 0 | 25 | 57 | 44 | <1 ms |
+| `import_only.msvc.lib` (fixture) | 0.0 | 0 | 0 | 0 | 0 | 0 | 0 | <1 ms |
+| `libc.a` (ELF control) | 6.2 | 4375 | 2690 | 137 | 1953 | 2233 | 2189 | 39 ms |
+| `libmathlib.a` (ELF, shipped) | 0.0 | 16 | 16 | 0 | 16 | 14 | 1 | <1 ms |
+
+The two ELF rows are the control, and it was run as an A/B rather than asserted:
+the change was reverted with `git apply -R`, the extension **rebuilt**, and
+`libc.a` measured again. All 2,690 entries are identical in name, pattern, mask,
+CRC and length across the two builds -- 0 added, 0 removed. Rebuilding
+`data/sigs/glaurung-base.x86_64.flirt.json` likewise produces a zero-line diff.
+Nothing about the ELF path moved. The same A/B on the reverted build gives
+**0** signatures for `libmingwex.a`, `libmingw32.a`, `libgcc.a` and the fixture,
+which is the "before" column of the table above.
+
+### The relink measurement
+
+`samples/source/c/hello.c` built twice with `x86_64-w64-mingw32-gcc -O2`: link A
+plain, link B with three filler functions ahead of it and
+`-Wl,--image-base,0x180000000`. Both stripped. The library is
+`tests/fixtures/flirt/coff/mingw_crt_subset.a` -- the 27 CRT objects the link
+map says `hello.exe` actually pulls. Ground truth is `x86_64-w64-mingw32-nm` on
+the unstripped images (`tests/flirt_signature_matching.rs`,
+`one_mingw_archive_linked_two_ways_is_named_in_both`).
+
+| Measurement | Result |
+|---|---|
+| Signatures from the archive (before this change) | **0** |
+| Signatures from the archive (after) | **62** |
+| Named in link A / link B | **62 / 62** |
+| Correct against the `nm` truth | **124 of 124** |
+| Wrong | **0** |
+| Ambiguous | **0** |
+| Named in **both** links | **62** |
+| ...of those, at a **different** address in the two links | **62 of 62** |
+| Named in both with `mask_hex` and the CRC stripped | **37** -- the exact matcher's ceiling |
+
+The last row is the control the ELF fixture has too: same archive, same
+discovery, same matcher, masks removed. Here it does not fall to zero the way
+`mathlib`'s does, because 37 of these 62 CRT functions have no relocation
+anywhere in their 32-byte window; the 25 that do are exactly the 25 an
+exact-byte library loses on every relink.
+
+### Not covered
+
+**No MSVC-built `.lib` was available to test.** There is no Microsoft toolchain
+on this machine and no `.lib` under the Windows corpora on `/nas4`
+(`windows-corpus`, `windows-packages`, `windows-seeds` -- searched, zero hits),
+so the MSVC-specific claims above are supported by the archive *layout*
+(`llvm-lib`, byte-for-byte the same first/second-linker-member structure MSVC's
+`lib.exe` writes) and by the short-import member format, but not by MSVC's own
+code generation. `.text$mn` COMDAT handling in particular is argued from the
+code path -- the builder never looks at a section's name -- rather than
+measured. That is the first thing to check the day a real `.lib` is to hand.
+
 ## Keying
 
 A library is `(name, version, variant, arch)`. **No exact or masked scheme

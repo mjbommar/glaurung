@@ -30,13 +30,24 @@
 //! natural pointer width for the architecture rather than skipped, because a
 //! relocation we mask too generously costs recall while one we miss costs
 //! correctness.
+//!
+//! # How long a function is
+//!
+//! ELF answers this directly: `STT_FUNC` carries `st_size`. **COFF has no
+//! symbol size at all**, and that single gap was the whole of the COFF
+//! failure -- see [`coff`]. Extent is therefore derived when the format does
+//! not state it: the next defined symbol address in the same section, or the
+//! section end. That is what FLIRT's own `pcf` does, and it is why a MinGW
+//! `.a` now yields signatures where it used to yield none.
 
-use std::collections::BTreeMap;
+mod coff;
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use object::read::archive::ArchiveFile;
 use object::{
     Architecture, Object, ObjectSection, ObjectSymbol, RelocationFlags, RelocationTarget,
-    SectionIndex, SymbolKind,
+    SectionIndex, SectionKind, SymbolKind,
 };
 
 use super::{crc16, FlirtLibraryKey, FlirtReference, FlirtSignatureEntry};
@@ -129,6 +140,72 @@ fn default_reloc_width(arch: Architecture) -> u64 {
     }
 }
 
+/// Bytes an assembler emits to align the next function, never as content.
+///
+/// `0x90` is x86 `nop`, `0xcc` is `int3` (MSVC's filler), `0x00` is the
+/// default fill everywhere else.
+const ALIGNMENT_FILLER: [u8; 3] = [0x00, 0x90, 0xcc];
+
+/// The first address after `address` that another symbol claims, or the
+/// section end.
+///
+/// Strictly-greater is load-bearing. Aliases -- two names for one entry --
+/// share an address, and a `>=` scan would give each of them an extent of
+/// zero and drop the pair.
+fn next_boundary(address: u64, boundaries: Option<&BTreeSet<u64>>, section_end: u64) -> u64 {
+    boundaries
+        .and_then(|b| b.range(address + 1..).next().copied())
+        .unwrap_or(section_end)
+        .min(section_end)
+}
+
+/// How far a symbol reaches when the format does not say.
+///
+/// The next distinct symbol address in the same section, or the section end,
+/// **minus the alignment padding at the end of that span**. FLIRT's `pcf`
+/// uses the same next-symbol rule for COFF, and it is the only rule
+/// available: a COFF symbol record has no size field, and GCC writes the aux
+/// function record's `TotalSize` as zero.
+///
+/// **Trimming the padding is what keeps the false-positive rate at zero, and
+/// it was measured.** Without it, `libmingwex.a`'s `alarm` -- `xor eax,eax;
+/// ret`, three bytes, alone in a 16-byte-aligned section -- signs as sixteen
+/// *fixed* bytes, thirteen of which are `0x90`. It clears the
+/// `min_fixed_bytes` floor on padding alone and then names every other
+/// three-byte stub in the image: measured on a MinGW `hello.exe`, `alarm` was
+/// applied to `_setargv` and `__tlregdtor`, and `libgcc.a`'s one-byte
+/// `__clear_cache` to `__gcc_deregister_frame`. Padding is identical in every
+/// object in the world, so counting it as pattern is counting the alignment
+/// rule, not the function.
+///
+/// A byte covered by a relocation is never filler, whatever its value: an
+/// unlinked `jmp rel32` tail call ends in four zero displacement bytes that
+/// the linker is about to overwrite, and trimming those would shorten a real
+/// function.
+fn symbol_extent(
+    address: u64,
+    boundaries: Option<&BTreeSet<u64>>,
+    section_end: u64,
+    section: &object::Section<'_, '_>,
+    spans: &[(u64, u64, u64, Option<String>)],
+) -> u64 {
+    let mut end = next_boundary(address, boundaries, section_end);
+    while end > address {
+        let byte = end - 1;
+        if spans
+            .iter()
+            .any(|(offset, len, _, _)| byte >= *offset && byte < offset + len)
+        {
+            break;
+        }
+        match section.data_range(byte, 1) {
+            Ok(Some([value])) if ALIGNMENT_FILLER.contains(value) => end = byte,
+            _ => break,
+        }
+    }
+    end.saturating_sub(address)
+}
+
 fn relocation_variant_span(
     arch: Architecture,
     offset: u64,
@@ -182,7 +259,9 @@ pub fn signatures_from_object(
     member: &str,
     options: &ArchiveOptions,
 ) -> Vec<ArchiveSignature> {
-    let width = default_reloc_width(obj.architecture());
+    let arch = obj.architecture();
+    let format = obj.format();
+    let width = default_reloc_width(arch);
 
     // Relocations per section, as `(offset, byte length)`, plus the symbol
     // name each one targets so the reference list can be built.
@@ -199,22 +278,54 @@ pub fn signatures_from_object(
                 RelocationTarget::Symbol(index) => obj
                     .symbol_by_index(index)
                     .ok()
-                    .and_then(|s| s.name().ok().map(|n| n.to_string()))
+                    // A COFF relocation against a constant pool targets the
+                    // *section* symbol, so its name is `.rdata` -- a name
+                    // every COFF object in the world contains, that no
+                    // resolver over a linked image can ever confirm, and that
+                    // a resolver reporting the real symbol there would
+                    // actively contradict. Recording it would turn the
+                    // second-level disambiguator into a source of false
+                    // eliminations. (ELF section symbols are unnamed, so this
+                    // filter is a no-op there.)
+                    .filter(|s| s.kind() != SymbolKind::Section)
+                    .and_then(|s| {
+                        s.name()
+                            .ok()
+                            .map(|n| coff::undecorate(format, arch, n).into_owned())
+                    })
                     .filter(|n| !n.is_empty()),
                 _ => None,
             };
             let (variant_offset, variant_len) =
-                relocation_variant_span(obj.architecture(), offset, len.max(1), reloc.flags());
+                relocation_variant_span(arch, offset, len.max(1), reloc.flags());
             spans.push((variant_offset, variant_len, offset, target));
         }
         spans.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         relocs.insert(section.index().0, spans);
     }
 
-    // Sized text symbols, sorted for determinism.
+    // Every defined symbol address in a section bounds the symbol before it.
+    // Collected for all symbols, not only functions, because a jump table or
+    // a literal pool emitted into `.text` ends the function it follows just
+    // as surely as the next function does.
+    let mut boundaries: BTreeMap<usize, BTreeSet<u64>> = BTreeMap::new();
+    for sym in obj.symbols() {
+        if matches!(sym.kind(), SymbolKind::Section | SymbolKind::File) {
+            continue;
+        }
+        let Some(index) = sym.section_index() else {
+            continue;
+        };
+        boundaries
+            .entry(index.0)
+            .or_default()
+            .insert(code_symbol_address(arch, sym.address()));
+    }
+
+    // Text symbols in code sections, sorted for determinism.
     let mut symbols: Vec<(u64, String, SectionIndex, u64)> = Vec::new();
     for sym in obj.symbols() {
-        if sym.kind() != SymbolKind::Text || sym.size() < options.min_function_len {
+        if sym.kind() != SymbolKind::Text {
             continue;
         }
         let Ok(name) = sym.name() else { continue };
@@ -224,12 +335,40 @@ pub fn signatures_from_object(
         let Some(index) = sym.section_index() else {
             continue;
         };
+        let Ok(section) = obj.section_by_index(index) else {
+            continue;
+        };
+        // A `DTYPE_FUNCTION` COFF symbol that does not live in a code section
+        // is not a function we can pattern-match; neither is anything in
+        // `.drectve`, `.debug*` or a COMDAT data section.
+        if section.kind() != SectionKind::Text {
+            continue;
+        }
         // ELF encodes Thumb state in bit zero of STT_FUNC values. It is not a
         // byte offset: section data and relocations are addressed at the
         // underlying even location. Keeping the bit shifted every ARM FLIRT
         // pattern by one byte, so no linked Thumb function could ever match.
-        let address = code_symbol_address(obj.architecture(), sym.address());
-        symbols.push((address, name.to_string(), index, sym.size()));
+        let address = code_symbol_address(arch, sym.address());
+        // COFF states no size. Derive one rather than dropping the symbol.
+        let size = match sym.size() {
+            0 => symbol_extent(
+                address,
+                boundaries.get(&index.0),
+                section.address() + section.size(),
+                &section,
+                relocs.get(&index.0).map(Vec::as_slice).unwrap_or(&[]),
+            ),
+            n => n,
+        };
+        if size < options.min_function_len {
+            continue;
+        }
+        symbols.push((
+            address,
+            coff::undecorate(format, arch, name).into_owned(),
+            index,
+            size,
+        ));
     }
     symbols.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
@@ -539,6 +678,260 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------
+    // COFF: MinGW-w64 `.a` and MSVC-layout `.lib`.
+    //
+    // Fixtures and their provenance: `tests/fixtures/flirt/coff/README.md`.
+    // -----------------------------------------------------------------
+
+    fn coff_fixture(name: &str) -> Vec<u8> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/flirt/coff")
+            .join(name);
+        std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("committed fixture {} must read: {e}", path.display()))
+    }
+
+    /// The diagnosis, asserted rather than described.
+    ///
+    /// Every function symbol in a real MinGW COFF member reports
+    /// `size() == 0`, so the builder's original `sym.size() < min_function_len`
+    /// guard rejected all of them and three MinGW archives returned nothing.
+    /// If a future `object` release starts synthesising sizes this test goes
+    /// red, which is the correct outcome: the derived-extent path would then
+    /// be dead code that nothing exercises.
+    #[test]
+    fn every_coff_function_symbol_reports_no_size() {
+        let data = coff_fixture("mingw_crt_subset.a");
+        let archive = ArchiveFile::parse(&*data).expect("fixture must parse as an archive");
+        let mut text_symbols = 0usize;
+        for member in archive.members() {
+            let member = member.expect("fixture members must read");
+            let obj = object::File::parse(member.data(&*data).expect("member data"))
+                .expect("every fixture member is a COFF object");
+            assert_eq!(obj.format(), object::BinaryFormat::Coff);
+            for sym in obj.symbols() {
+                if sym.kind() != SymbolKind::Text || sym.section_index().is_none() {
+                    continue;
+                }
+                text_symbols += 1;
+                assert_eq!(
+                    sym.size(),
+                    0,
+                    "{} reported a size; the derived-extent path is now unreachable \
+                     for this input and the COFF tests below prove less than they say",
+                    sym.name().unwrap_or("<unnamed>")
+                );
+            }
+        }
+        assert!(
+            text_symbols >= 60,
+            "only {text_symbols} COFF text symbols in the fixture; a vacuous pass"
+        );
+    }
+
+    /// The bug this lane fixes: a MinGW archive yields signatures at all.
+    #[test]
+    fn a_mingw_coff_archive_yields_masked_signatures() {
+        let data = coff_fixture("mingw_crt_subset.a");
+        let sigs = signatures_from_archive(&data, &ArchiveOptions::default())
+            .expect("mingw_crt_subset.a must parse");
+        assert!(
+            sigs.len() >= 50,
+            "expected ~62 signatures from the MinGW CRT subset, got {}",
+            sigs.len()
+        );
+        let masked = sigs.iter().filter(|s| s.masked_bytes > 0).count();
+        assert!(
+            masked >= 10,
+            "only {masked} of {} signatures had a relocation in the 32-byte \
+             window; COFF relocation widths are not reaching the mask",
+            sigs.len()
+        );
+        let with_refs = sigs.iter().filter(|s| !s.entry.refs.is_empty()).count();
+        assert!(
+            with_refs >= 10,
+            "only {with_refs} signatures recorded a referenced name"
+        );
+        // A COFF relocation against a constant pool targets the `.rdata`
+        // *section definition* symbol. Recording that as a reference would
+        // make the second-level disambiguator fire on a name no resolver can
+        // confirm, and that every COFF object in the world contains.
+        //
+        // MinGW's `.refptr.<name>` COMDAT stubs are NOT that. They are ordinary
+        // static symbols whose name happens to start with a dot, they identify
+        // exactly one target, and they are kept.
+        const SECTION_NAMES: [&str; 8] = [
+            ".text", ".data", ".bss", ".rdata", ".xdata", ".pdata", ".tls", ".idata",
+        ];
+        for s in &sigs {
+            for r in &s.entry.refs {
+                assert!(
+                    !SECTION_NAMES.contains(&r.name.as_str()),
+                    "{} records the section name {} as a reference",
+                    s.entry.name,
+                    r.name
+                );
+            }
+        }
+        assert!(
+            sigs.iter()
+                .any(|s| s.entry.refs.iter().any(|r| r.name.starts_with(".refptr."))),
+            "no `.refptr.` stub was recorded as a reference; the section-symbol \
+             filter has swallowed MinGW's COMDAT indirection stubs too"
+        );
+        eprintln!(
+            "mingw_crt_subset.a: {} signatures, {masked} masked, {with_refs} with refs",
+            sigs.len()
+        );
+    }
+
+    /// Alignment padding must not be signed as if it were the function.
+    ///
+    /// A COFF function's extent is derived, so without trimming it runs to the
+    /// next symbol -- through however many `nop`s the assembler inserted. Those
+    /// bytes are identical in every object ever compiled, so a three-byte stub
+    /// would clear the `min_fixed_bytes` floor on padding alone and then name
+    /// every other three-byte stub in the image. Measured before the trim was
+    /// added: `alarm` named `_setargv` and `__tlregdtor` in a MinGW
+    /// `hello.exe`, and `__clear_cache` named `__gcc_deregister_frame`.
+    #[test]
+    fn derived_extents_do_not_include_alignment_padding() {
+        let data = coff_fixture("mingw_crt_subset.a");
+        for s in signatures_from_archive(&data, &ArchiveOptions::default()).unwrap() {
+            let len = s
+                .entry
+                .function_len
+                .expect("COFF extents are always derived") as usize;
+            let bytes = hex_bytes(&s.entry.prologue_hex);
+            if len == 0 || len > bytes.len() {
+                continue;
+            }
+            assert!(
+                !ALIGNMENT_FILLER.contains(&bytes[len - 1]),
+                "{} ends at offset {} on filler byte {:#04x}: its extent ran \
+                 into the alignment padding",
+                s.entry.name,
+                len - 1,
+                bytes[len - 1]
+            );
+        }
+    }
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// The MSVC archive layout is a header difference, not an object one.
+    ///
+    /// A `.lib` written by `llvm-lib` (and by MSVC's `lib.exe`) carries a
+    /// *first* and a *second* linker member, both named `/`, then the `//`
+    /// longnames member; a GNU `.a` has one `/` and one `//`. None of those is
+    /// an object, and mistaking one for an object is the failure mode this
+    /// test exists for. The three objects inside are the same three objects,
+    /// so the signatures must be identical.
+    #[test]
+    fn the_msvc_lib_layout_reads_the_same_objects_as_a_gnu_archive() {
+        let gnu = coff_fixture("mingw_crt_subset.a");
+        let msvc = coff_fixture("mingw_crt_three.msvc.lib");
+        assert_eq!(
+            ArchiveFile::parse(&*msvc).expect("fixture parses").kind(),
+            object::read::archive::ArchiveKind::Coff,
+            "the fixture is supposed to be in the MSVC layout; if it is read as \
+             a GNU archive this test proves nothing"
+        );
+
+        let options = ArchiveOptions::default();
+        let from_gnu = signatures_from_archive(&gnu, &options).unwrap();
+        let from_msvc = signatures_from_archive(&msvc, &options).unwrap();
+        assert!(
+            from_msvc.len() >= 5,
+            "only {} signatures from the MSVC-layout fixture",
+            from_msvc.len()
+        );
+        for m in &from_msvc {
+            let peer = from_gnu
+                .iter()
+                .find(|g| g.entry.name == m.entry.name)
+                .unwrap_or_else(|| panic!("{} is in the .lib but not in the .a", m.entry.name));
+            assert_eq!(peer.entry.prologue_hex, m.entry.prologue_hex);
+            assert_eq!(peer.entry.mask_hex, m.entry.mask_hex);
+            assert_eq!(peer.entry.crc16, m.entry.crc16);
+            assert_eq!(peer.entry.crc_len, m.entry.crc_len);
+            assert_eq!(peer.entry.function_len, m.entry.function_len);
+        }
+        eprintln!(
+            "MSVC layout: {} signatures, all identical to the GNU archive's",
+            from_msvc.len()
+        );
+    }
+
+    /// An import-only `.lib` is not an error, and is not signatures either.
+    ///
+    /// Every member of a Windows SDK import library is a short-import record
+    /// (`IMPORT_OBJECT_HDR_SIG2`), which is not a COFF object and has no code
+    /// in it. The builder must walk past all of them and return an empty list.
+    #[test]
+    fn an_import_only_library_yields_nothing_rather_than_failing() {
+        let data = coff_fixture("import_only.msvc.lib");
+        // Three `\0\0\xff\xff` short-import headers, one per export.
+        assert_eq!(
+            data.windows(4).filter(|w| w == b"\x00\x00\xff\xff").count(),
+            3,
+            "the fixture is supposed to hold three short-import members"
+        );
+        let sigs = signatures_from_archive(&data, &ArchiveOptions::default())
+            .expect("an import library is still an archive");
+        assert!(
+            sigs.is_empty(),
+            "an import library has no function bodies, but {} signatures came \
+             out of one",
+            sigs.len()
+        );
+    }
+
+    /// Extraction from COFF is a pure function of the bytes, as it is for ELF.
+    #[test]
+    fn coff_extraction_is_deterministic() {
+        let data = coff_fixture("mingw_crt_subset.a");
+        let a = signatures_from_archive(&data, &ArchiveOptions::default()).unwrap();
+        let b = signatures_from_archive(&data, &ArchiveOptions::default()).unwrap();
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.entry.name, y.entry.name);
+            assert_eq!(x.entry.prologue_hex, y.entry.prologue_hex);
+            assert_eq!(x.entry.mask_hex, y.entry.mask_hex);
+            assert_eq!(x.entry.crc16, y.entry.crc16);
+            assert_eq!(x.entry.function_len, y.entry.function_len);
+        }
+    }
+
+    /// Masks stay the length of their patterns on COFF too.
+    #[test]
+    fn coff_masks_are_the_same_length_as_patterns() {
+        let data = coff_fixture("mingw_crt_subset.a");
+        for s in signatures_from_archive(&data, &ArchiveOptions::default()).unwrap() {
+            let mask = s.entry.mask_hex.as_ref().expect("masks are always emitted");
+            assert_eq!(mask.len(), s.entry.prologue_hex.len(), "{}", s.entry.name);
+        }
+    }
+
+    #[test]
+    fn an_extent_stops_at_the_next_symbol_not_at_an_alias() {
+        let mut boundaries = BTreeSet::new();
+        boundaries.insert(0x00);
+        boundaries.insert(0x40);
+        // Two names at 0x00 collapse to one entry, so the extent is still the
+        // distance to 0x40 rather than zero.
+        assert_eq!(next_boundary(0x00, Some(&boundaries), 0x80), 0x40);
+        assert_eq!(next_boundary(0x40, Some(&boundaries), 0x80), 0x80);
+        // A section end below the next recorded symbol wins.
+        assert_eq!(next_boundary(0x00, Some(&boundaries), 0x20), 0x20);
+        assert_eq!(next_boundary(0x00, None, 0x80), 0x80);
     }
 
     #[test]

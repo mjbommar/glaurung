@@ -1350,3 +1350,245 @@ fn the_shipped_library_names_nothing_in_unrelated_samples() {
          samples: 0 names assigned"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 7. COFF: MinGW-w64 `.a` and MSVC-layout `.lib`.
+//
+// The archive builder was ELF-shaped and returned *nothing* from a COFF
+// archive, because a COFF symbol record has no size field and the builder
+// dropped every symbol whose `size()` was below `min_function_len`. See
+// `src/flirt/archive/coff.rs` and the "COFF archives" section of
+// `docs/reference/function-signature-libraries.md`.
+//
+// Fixtures and their provenance: `tests/fixtures/flirt/coff/README.md`.
+// ---------------------------------------------------------------------------
+
+fn coff_fixture(name: &str) -> PathBuf {
+    repo_root().join("tests/fixtures/flirt/coff").join(name)
+}
+
+/// Every signature the MinGW CRT subset archive yields.
+///
+/// The subset has no ambiguous signatures -- asserted, not assumed -- so the
+/// builder's "drop both" rule removes nothing here, which is what lets the
+/// counts below be read as recall rather than as luck.
+fn mingw_crt_entries() -> Vec<FlirtSignatureEntry> {
+    let data = std::fs::read(coff_fixture("mingw_crt_subset.a"))
+        .expect("committed COFF fixture must read");
+    let sigs = glaurung::flirt::archive::signatures_from_archive(
+        &data,
+        &glaurung::flirt::archive::ArchiveOptions::default(),
+    )
+    .expect("mingw_crt_subset.a must parse as an archive");
+    assert!(
+        sigs.len() >= 50,
+        "only {} signatures from the MinGW CRT subset",
+        sigs.len()
+    );
+
+    // The builder's ambiguity policy: two functions the matcher cannot tell
+    // apart are both dropped.
+    let mut by_key: BTreeMap<(String, Option<String>, Option<u16>, u16), BTreeSet<String>> =
+        BTreeMap::new();
+    for s in &sigs {
+        let masked: String = match &s.entry.mask_hex {
+            Some(mask) => s
+                .entry
+                .prologue_hex
+                .as_bytes()
+                .chunks(2)
+                .zip(mask.as_bytes().chunks(2))
+                .map(|(p, m)| if m == b"ff" { p[0] as char } else { '0' })
+                .collect(),
+            None => s.entry.prologue_hex.clone(),
+        };
+        by_key
+            .entry((
+                masked,
+                s.entry.mask_hex.clone(),
+                s.entry.crc16,
+                s.entry.crc_len,
+            ))
+            .or_default()
+            .insert(s.entry.name.clone());
+    }
+    let collisions: Vec<&BTreeSet<String>> =
+        by_key.values().filter(|names| names.len() > 1).collect();
+    assert!(
+        collisions.is_empty(),
+        "the COFF fixture has indistinguishable signatures: {collisions:?}"
+    );
+    sigs.into_iter().map(|s| s.entry).collect()
+}
+
+/// A signature library over those entries.
+///
+/// Built through the same JSON round trip as every other library in this file,
+/// so a serialization regression cannot hide here either.
+fn coff_library(entries: Vec<FlirtSignatureEntry>) -> FlirtLibrary {
+    let file = FlirtLibraryFile {
+        schema_version: "2".to_string(),
+        arch: "x86_64".to_string(),
+        prologue_len: SHIPPED_PROLOGUE_LEN,
+        entries,
+        index: Default::default(),
+        library: None,
+        stats: serde_json::Value::Null,
+    };
+    let json = serde_json::to_string(&file).expect("COFF library must serialize");
+    FlirtLibrary::from_json(&json).expect("COFF library must deserialize")
+}
+
+/// VA to every name the unstripped image gave that address.
+///
+/// Read from the committed `nm -n` transcript rather than from the image,
+/// because only the *stripped* images are committed -- naming functions in a
+/// binary with no symbol table is the whole job, and carrying half a megabyte
+/// of duplicate CRT bytes to hold a symbol table would be paying twice for it.
+/// Bare section symbols (`.text`) are dropped: they are not function names,
+/// and treating one as ground truth reports a correct hit as wrong.
+fn pe_truth(name: &str) -> BTreeMap<u64, BTreeSet<String>> {
+    let text =
+        std::fs::read_to_string(coff_fixture(name)).expect("committed symbol table must read");
+    let mut out: BTreeMap<u64, BTreeSet<String>> = BTreeMap::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(va), Some(symbol)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if symbol.starts_with('.') && !symbol.starts_with(".refptr.") {
+            continue;
+        }
+        let Ok(va) = u64::from_str_radix(va, 16) else {
+            continue;
+        };
+        out.entry(va).or_default().insert(symbol.to_string());
+    }
+    out
+}
+
+/// Every name a library assigns in one stripped PE, with discovery doing the
+/// finding -- the path `flirt_match_functions_with_evidence_path` drives.
+fn names_in_pe(image: &str, lib: &FlirtLibrary) -> BTreeMap<String, u64> {
+    let data = std::fs::read(coff_fixture(image)).expect("committed PE fixture must read");
+    assert!(data.starts_with(b"MZ"), "{image} is not a PE image");
+    let budgets = glaurung::analysis::cfg::Budgets::default();
+    let (functions, _cg) = glaurung::analysis::cfg::analyze_functions_bytes(&data, &budgets);
+    assert!(
+        functions.len() >= 50,
+        "PE discovery found only {} functions in {image}; the match measurement \
+         would be bounded by discovery rather than by the library",
+        functions.len()
+    );
+    let mut out = BTreeMap::new();
+    for m in glaurung::flirt::match_functions_with_evidence(&data, &functions, lib) {
+        if m.ambiguous {
+            continue;
+        }
+        out.insert(m.names[0].clone(), m.entry_va);
+    }
+    out
+}
+
+/// **The load-bearing COFF test.** One MinGW archive, two link layouts.
+///
+/// `hello.c` is compiled twice: once plainly, once with three filler functions
+/// ahead of it and a different image base. Every CRT function the linker
+/// copied out of the archive therefore lands at a different address with
+/// different resolved displacements. A signature built from the archive must
+/// name the same function in both images, and must not name anything else.
+#[test]
+fn one_mingw_archive_linked_two_ways_is_named_in_both() {
+    let lib = coff_library(mingw_crt_entries());
+    let a = names_in_pe("hello_link_a.stripped.x86_64.pe", &lib);
+    let b = names_in_pe("hello_link_b.stripped.x86_64.pe", &lib);
+    let truth_a = pe_truth("hello_link_a.symbols.txt");
+    let truth_b = pe_truth("hello_link_b.symbols.txt");
+
+    let mut wrong: Vec<String> = Vec::new();
+    let mut correct = 0usize;
+    for (label, names, truth) in [("a", &a, &truth_a), ("b", &b, &truth_b)] {
+        for (name, va) in names {
+            match truth.get(va) {
+                Some(real) if real.contains(name) => correct += 1,
+                Some(real) => wrong.push(format!(
+                    "  link_{label}: {va:#x} named {name}, symbol table says {real:?}"
+                )),
+                None => wrong.push(format!(
+                    "  link_{label}: {va:#x} named {name}, no function symbol there"
+                )),
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} wrong name(s) written at set_by=flirt rank:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+
+    let names_a: BTreeSet<&String> = a.keys().collect();
+    let names_b: BTreeSet<&String> = b.keys().collect();
+    let both: Vec<&String> = names_a.intersection(&names_b).copied().collect();
+    let moved = both.iter().filter(|n| a[**n] != b[**n]).count();
+    assert!(
+        both.len() >= 50,
+        "only {} CRT functions were named in both links",
+        both.len()
+    );
+    assert_eq!(
+        moved,
+        both.len(),
+        "{} of {} functions sit at the SAME address in both images; those are \
+         not evidence of surviving a relink",
+        both.len() - moved,
+        both.len()
+    );
+    eprintln!(
+        "mingw relink: {} named in link A, {} in link B, {} in both, all {} at \
+         a different address in the two, {correct} correct against the symbol \
+         table, 0 wrong",
+        a.len(),
+        b.len(),
+        both.len(),
+        moved
+    );
+}
+
+/// The control: strip the masks and the same pipeline names far less.
+///
+/// Without this, "62 of 62 named in both links" could be an artifact of the
+/// two images being more alike than claimed. It is the same fixture, the same
+/// discovery and the same matcher, with only `mask_hex` and the CRC removed.
+#[test]
+fn the_same_mingw_library_without_masks_does_not_survive_the_relink() {
+    let entries = mingw_crt_entries();
+    let masked = coff_library(entries.clone());
+    let mut stripped = entries;
+    for e in &mut stripped {
+        e.mask_hex = None;
+        e.crc16 = None;
+        e.crc_len = 0;
+    }
+    let unmasked = coff_library(stripped);
+
+    let a = names_in_pe("hello_link_a.stripped.x86_64.pe", &unmasked);
+    let b = names_in_pe("hello_link_b.stripped.x86_64.pe", &unmasked);
+    let both = a.keys().filter(|n| b.contains_key(*n)).count();
+
+    let ma = names_in_pe("hello_link_a.stripped.x86_64.pe", &masked);
+    let mb = names_in_pe("hello_link_b.stripped.x86_64.pe", &masked);
+    let masked_both = ma.keys().filter(|n| mb.contains_key(*n)).count();
+
+    assert!(
+        both < masked_both,
+        "the UNMASKED library named {both} functions in both links, as many as \
+         the masked one ({masked_both}). Either the two PE fixtures are not \
+         actually different layouts, or no COFF relocation reached the mask -- \
+         either way the test above is proving nothing."
+    );
+    eprintln!(
+        "mingw relink without masks: {both} named in both layouts (masked \
+         reaches {masked_both})"
+    );
+}

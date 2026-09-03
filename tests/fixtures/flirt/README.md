@@ -15,6 +15,7 @@ linker has moved it.
 | `mathlib_link_a.x86_64.elf` | Committed output of `driver_a.c` + `libmathlib.a`, PIE. |
 | `mathlib_link_b.x86_64.elf` | Committed output of `driver_b.c` + `libmathlib.a`, non-PIE. |
 | `mathlib_link_a.stripped.x86_64.elf` | `strip --strip-all` of link A. The library's real job is naming functions in a binary with no symbol table, and that cannot be tested on one that has it. |
+| [`coff/`](coff/README.md) | The same argument for Windows objects: a MinGW-w64 `.a`, an MSVC-layout `.lib`, an import-only `.lib`, and two stripped PE images of one source linked two ways. |
 
 The archive is
 `samples/binaries/platforms/linux/amd64/libraries/static/libmathlib.a`, which

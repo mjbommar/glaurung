@@ -13,6 +13,14 @@ pattern, variant-byte mask, a FLIRT CRC16 over the bytes after the pattern
 up to the first variant byte, the function length, and the referenced
 names that act as a second-level disambiguator.
 
+Both ELF and COFF archives work: a MinGW-w64 ``.a``, an MSVC-layout
+``.lib`` and an import-only library are all accepted, the last yielding
+nothing rather than failing. COFF symbols carry no size, so a function's
+extent is derived from the next symbol in its section; see the "COFF
+archives" section of ``docs/reference/function-signature-libraries.md``.
+Pass the right ``--arch`` for the archive: it is part of the library key
+and is not inferred from the members.
+
 **Linked binaries (positional roots, legacy).** Kept because it is how the
 original 30-signature library was made and because it is occasionally the
 only input available. It cannot mask anything: a linked image has no
