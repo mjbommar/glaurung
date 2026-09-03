@@ -89,7 +89,10 @@ exactly.
     "crc16": 46863, "crc_len": 28,       // over bytes [32, 32+28)
     "function_len": 60,
     "refs": [{"offset": 14, "name": ".LC0"}],
-    "source_binary": "mathlib.o!mathlib_add"
+    "source_binary": "mathlib.o!mathlib_add",
+    // Present only on a leaf the pattern and the CRC cannot resolve.
+    "alternatives": [{"name": "mathlib_add_alias", "function_len": 64,
+                      "refs": [], "source_binary": "other.o!..."}]
   }]
 }
 ```
@@ -104,7 +107,8 @@ deliberately so a signature set is not a copy of the library it describes.
 |---|---|
 | `mask_hex` | The `.o`'s relocation table: `[offset, offset + size/8)` for each relocation, clamped to the pattern. **Plus** every byte at or beyond `function_len`, because a short symbol's 32-byte window runs into whatever the linker placed next and that is a different neighbour in every link. |
 | `crc16` / `crc_len` | IDA's exact CRC16 (`src/flirt/crc16.rs`), over the bytes following the pattern, stopping at the first variant byte, the end of the function, or 255 bytes -- whichever comes first. |
-| `refs` | Every relocation inside the function that names a symbol other than the function itself, at its offset from the entry. |
+| `refs` | Every relocation inside the function that names a symbol other than the function itself, at its offset from the entry. **The offset is the relocated field's, not the instruction's** -- for `call rel32` that is one byte past the opcode. |
+| `alternatives` | The other names that share this entry's matcher key. See [The ambiguity rule](#the-ambiguity-rule). |
 | `library` | Given on the command line. |
 
 ### Why the CRC is not a generic CRC-16
@@ -131,14 +135,72 @@ matches are in the README too, so bytes `[32, 64)` of that buffer must hash to
    answers "what is the name of the thing this function references `offset`
    bytes in?". `None` means unknown and never eliminates a candidate; a name
    that disagrees with a candidate's recorded reference does. Survivors are
-   ranked by how many references were positively confirmed.
+   ranked by how many references were positively confirmed, **and the winning
+   score must be non-zero** -- see [A contradiction alone does not
+   decide](#a-contradiction-alone-does-not-decide).
 
 `Ambiguous` is never collapsed to a name. A FLIRT hit is written at
 `set_by=flirt`, which `provenance.py` ranks at 50, above `auto` and
 `propagated` -- a false positive here does not degrade an answer, it *outranks*
-the correct one. The builder applies the same rule at build time: two functions
-whose **masked** patterns, masks and CRCs all agree but whose names differ are
-both dropped.
+the correct one.
+
+### The ambiguity rule
+
+**The builder's duplicate key is the matcher's key, exactly.** `match_at`
+compares the masked pattern, the mask, the CRC16 and the CRC length. Two
+entries agreeing on all four accept exactly the same bytes: nothing can ever
+reach one without reaching the other, so both become candidates together and
+the verdict is a permanent `Ambiguous`.
+
+Until 2026-09-03 `build_flirt_library.py` keyed on `function_len` as well,
+which the matcher does not read. Measured over a seven-library set built from
+this box's own `libc.a`, `libm-2.43.a`, `libstdc++.a`, `libcrypto.a`,
+`libssl.a`, `libz.a` and the Rust 1.97.1 sysroot `libstd`:
+
+| | before | after |
+|---|--:|--:|
+| entries | 15,538 | 16,329 |
+| names carried | 15,538 | 19,729 |
+| raw signatures dropped as ambiguous | 1,179 | **0** |
+| per-library entry pairs `match_at` cannot separate | 276 keys / 594 entries | **0 / 0** |
+| merged-set keys carrying more than one name | 268 / 576 names | 1,247 / 4,681 names |
+
+Reproduce with `FlirtLibraryFile::matcher_key_collisions()`; the assertion is
+`tests/flirt_signature_matching.rs::no_library_holds_entries_the_matcher_cannot_tell_apart`,
+which checks `data/sigs/` always and `GLAURUNG_SIG_DIR` when one is set.
+
+Names that genuinely cannot be separated are **not dropped**. They become one
+entry with `alternatives`, which is how FLIRT's own tree holds several modules
+on a leaf: `FlirtLibrary::from_file` compiles one `FlirtSignature` per name,
+`match_at` still reports `Ambiguous` and names none of them, and a level that
+*can* tell them apart -- an exact `function_len`, a referenced name -- still
+has something to choose between. Before this change those names were thrown
+away at build time and the choice could never be made.
+
+The invariant is **per file**. Two independently built libraries can still
+collide with each other; the matcher handles that correctly at match time
+(identical names collapse to one verdict, differing names report `Ambiguous`),
+and merging does not rewrite entries. On the seven-library set, 38 merged keys
+collide across files and 36 of those are the same function appearing in two
+archives (glibc's `libm` symbols are in `libc.a` too).
+
+### A contradiction alone does not decide
+
+Eliminating every candidate but one and naming that one looks like sound
+elimination. It is not, because **a library records one spelling of an aliased
+symbol** -- the builder keeps the public one, so `pthread_mutex_lock` is stored
+and `__pthread_mutex_lock` is not -- and a resolver reporting the other
+spelling contradicts a signature that is in fact correct.
+
+Measured: with elimination-only allowed, the four `gcc -O2 -static` binaries
+below gained 16 wrong names, all of them the same shape. `__dlsym` and
+`__dlvsym` share a pattern and a CRC and call the same four helpers at offsets
+four bytes apart; resolving `__pthread_mutex_lock` to its public alias
+contradicted the *correct* candidate at each address and left the other
+standing alone, so the pair was named as each other, and `dlsym`/`dlvsym` with
+them. Requiring at least one positively confirmed reference takes that to zero
+while keeping every name the confirmations earned. Every candidate being
+contradicted is still `None` -- there is nothing left to name either way.
 
 ### Signatures the builder declines to make
 
@@ -158,8 +220,71 @@ honest thing to do with it is decline. Raising the floor to 16 drops exactly
 those four plus one other (nothing in this archive sits between 11 and 17
 fixed bytes) and takes the false-positive count to zero. FLIRT's answer to the
 same problem is to match such functions only as *referenced* names from a
-caller, never standalone; that is available here through
-`match_at_with_refs` once a resolver is wired in.
+caller, never standalone; `match_at_with_refs` is the same idea from the other
+side, and it is now wired into the analysis pass -- see
+[Referenced names in the analysis pass](#referenced-names-in-the-analysis-pass).
+
+## Referenced names in the analysis pass
+
+**17.6% of the signatures a real archive yields record no CRC at all**
+(`crc_len == 0`, measured over the seven-library set: 2,732 of 15,538), plus a
+further 8% with a range of one to three bytes. Those match on pattern alone --
+exactly the leaves FLIRT expects the caller-name discriminator to finish. Until
+2026-09-03 `apply_flirt_overrides` called the bare `match_at` and every such
+tie stayed a tie.
+
+`apply_flirt_overrides_with_refs(data, functions, lib, sites, extra_names)` is
+the wired version. `src/analysis/cfg/worklist.rs` builds `sites` from the call
+xrefs the discovery pass already collected. `extra_names` -- PLT stub and
+import-thunk names, which a dynamically linked binary's references would
+depend on -- is passed empty for now: `analysis::elf_plt::elf_plt_map` is the
+only source of them and it parses the whole object again, and
+`program::session_tests::discovery_parse_count_does_not_scale_with_the_number_of_functions`
+asserts a ceiling on how many parses one discovery may cost. Nothing in the
+measured corpus below needed it either -- all four binaries are
+`-static`, so there is no PLT to name. It belongs here once `ProgramImage`
+caches a PLT-name index the way it already caches `relocated_symbol_slots`, so
+the parse is paid once per image rather than once per discovery.
+
+**The offset has to be reconstructed.** A signature records a reference at the
+*relocation's* offset from the entry -- the field the linker rewrites, not the
+instruction containing it. A linked image has no relocation table, so
+`FlirtReferenceSites::from_call_sites` reads the opcode at each call site and
+files the target under the one offset that opcode implies: `+1` for `call
+rel32` / `jmp rel32`, `+2` for `jcc rel32` and for `ff /2`, `ff /4` through a
+RIP-relative slot, and the instruction offset itself where no field can be
+placed -- which is the correct answer on the fixed-width architectures, where
+the instruction *is* the field. One offset, never two: a spare registration
+answers a different signature's reference and a wrong answer can eliminate the
+correct candidate.
+
+**Multi-pass**, as FLIRT is: naming a function makes it usable as evidence for
+its neighbours, so the loop repeats until a pass renames nothing (bounded at
+four).
+
+### Measured
+
+Four `gcc -O2 -static` binaries built from `samples/source/c/` (`hello`,
+`vulnparse`, `c2_demo`, `suspicious_linux`), stripped, matched against the
+merged seven-library set. Truth is `nm` on the unstripped twin keeping `T`,
+`t`, `W` and `i` symbols, with all aliases at one address accepted.
+**Denominator: 4,429 discovered functions, 4,357 truth symbols.**
+
+| | named | correct | wrong | ambiguous rows |
+|---|--:|--:|--:|--:|
+| before (no resolver, old library) | 2,951 | 2,931 | 12 | 64 |
+| resolver only (old library) | 2,967 | 2,947 | 12 | 64 |
+| resolver + `alternatives` | **2,999** | **2,979** | **12** | 315 |
+
+**+48 correct names, zero new wrong.** The 12 "wrong" are identical in all
+three rows and are one pre-existing pair: libgcc's `unwind-pe.h` is compiled
+into both `libc.a` and `libstdc++.a`, so `read_encoded_value_with_base` and
+`base_of_encoded_value` are named with libstdc++'s mangled C++ spelling of the
+same code. They are the same function; the comparison is string equality
+against `nm`, which does not know that.
+
+The `named` column is larger than `correct` by the eight functions FLIRT named
+at an address `nm` has no symbol for, plus the 12 above.
 
 ## COFF archives (MinGW-w64 `.a`, MSVC `.lib`)
 
@@ -424,6 +549,71 @@ chunk table without inflating anything, then inflates the sections it needs
 into one arena allocation and rebuilds `by_first_byte` (and, for a WARP-GUID
 library, a sorted `u128` array for binary search) from scratch every load.
 
+## Loading
+
+### Once per process
+
+`flirt::library_for(path) -> Result<Arc<FlirtLibrary>>` is the **only** way a
+path becomes a matcher. It parses at most once per `(path, mtime, size)` per
+process and hands every later caller the same `Arc`;
+`library_for_paths(&[..])` is the same over several files, merged.
+`load_default_library()` and the Python binding both go through it.
+
+Before 2026-09-03 `load_default_library()` re-read and re-parsed the JSON on
+**every** `analyze()`. Measured, release build, 16,329-entry / 13.2 MB library,
+`glaurung.analysis.flirt_match_functions_with_evidence_path` over a 16 kB
+binary so the analysis part is a small constant, best of five:
+
+| | per call |
+|---|--:|
+| same library path again (cached) | **0.002 s** |
+| a byte-identical copy at another path (re-parsed) | 0.022 s |
+
+So the cache removes ~20 ms of parse and index construction from every
+`analyze()` after the first, for a library of this size. The key includes mtime
+and length, so a tool that rebuilds a library and immediately re-analyses
+picks up the new one without a restart.
+
+`library_for`/`library_for_paths` are also the seam the second on-disk format
+plugs into: each resolved path is loaded through `FlirtLibrary::from_path`,
+which dispatches on the file's first four bytes, so a rung that resolves to a
+mix of `*.flirt.json` and `*.gsig` files loads and merges correctly -- the
+dispatch happens per file, not per rung.
+
+**Merging** is concatenation of the already-compiled signatures -- a signature
+carries its own pattern, mask and CRC, so two libraries have nothing to
+reconcile. A file whose `prologue_len` disagrees with the first is skipped: the
+matcher indexes one window length, and silently comparing 32 bytes of a
+64-byte signature would be a false-positive generator. A merged set records no
+`library` provenance key, because it has none.
+
+### Resolution order
+
+`flirt::default_library_paths()`. The **first rung that yields anything wins**;
+rungs are not merged with each other.
+
+| # | Rung | Notes |
+|---|---|---|
+| 1 | `GLAURUNG_FLIRT_LIB` | One explicit file, either format. An override is an override: naming a file must not silently pull in a directory's worth of others. |
+| 2 | `GLAURUNG_SIG_DIR` | Every `*.flirt.json` and `*.gsig` in that directory, sorted, merged. |
+| 3 | `~/.cache/glaurung/sigs/` | The client download cache (`python/glaurung/sigs/`), written as sha256-named blobs plus a `catalog.json` index. The loader does not yet consult the catalog to pick a subset -- it loads every file in the directory except `catalog.json`. A catalog-aware selection can replace this once the cache holds enough sets that loading all of them stops being free. |
+| 4 | The packaged `data/sigs/`, else `data/sigs/` relative to the cwd | See below. |
+
+Nothing reachable means no library, which is fine: the matcher pass becomes a
+no-op and analysis falls back to DWARF and the symbol table.
+
+**Finding the packaged directory is not something Rust can do on its own.** The
+running executable is `python`, so `current_exe()` is useless, and the
+cwd-relative `data/sigs` only resolves inside a checkout. The extension
+module's own `__file__` is the anchor: `src/python_bindings/flirt.rs` derives
+`<package>/data/sigs` (installed) or `<repo>/data/sigs` (after `maturin
+develop`) from it at registration time and calls
+`flirt::set_packaged_sig_dir` once. This mirrors
+`python/glaurung/llm/kb/type_db.py::_stdlib_bundle_dir`, which resolves
+`data/types/` from `__file__` for exactly the same reason. Getting `data/sigs`
+*into* the wheel is `pyproject.toml`'s `[tool.maturin] include`, and is the
+distribution lane's job.
+
 ## Keying
 
 A library is `(name, version, variant, arch)`. **No exact or masked scheme
@@ -638,11 +828,14 @@ construction, a member.
 
 - **Consuming third-party `.sig`/`.pat`.** See the `lancelot-flirt` decision
   above. This is the path to libc and MSVC coverage.
-- **Referenced-name resolution wired into the analysis pass.**
-  `match_at_with_refs` exists and is tested, but `apply_flirt_overrides` calls
-  `match_at`: the pass has no resolver to hand it yet, because that needs the
-  PLT and symbol maps threaded through. Until then a tie stays a tie and
-  nothing is named, which is the safe direction.
+- **PLT/import names in the referenced-name resolver.** Established names
+  (symbol table, DWARF, an earlier FLIRT hit) are wired into
+  `apply_flirt_overrides_with_refs`; PLT stub and import-thunk names are not
+  yet, because their only source (`elf_plt_map`) parses the whole object
+  again and the discovery pass has an asserted parse-count ceiling. Needed for
+  dynamically linked binaries, where a reference to an external symbol resolves
+  through the PLT rather than to a defined function -- the measured corpus is
+  `-static` and does not exercise this gap.
 - **FLIRT's L3 tail-byte discriminator and WARP constraint-based
   disambiguation.** Both are schema-reserved (`siglib_flirt.tail_offset`/
   `tail_byte`, `siglib_reference`) but not implemented by either matcher; a

@@ -43,15 +43,32 @@ impl Default for WriteOptions {
     }
 }
 
-/// One entry, decoded out of its hex and ready to lay out.
+/// One matchable leaf, decoded out of its hex and ready to lay out.
+///
+/// A [`FlirtSignatureEntry`] with a non-empty `alternatives` list is several
+/// leaves sharing one pattern/mask/CRC — the container has no concept of
+/// "alternatives" of its own, so each becomes its own flat record here. That
+/// is exactly what [`crate::flirt::FlirtLibrary::from_file`] already does at
+/// match-compile time, so a `gsig/1` file and the JSON it came from index the
+/// same candidate set; what does not survive the round trip is the grouping
+/// itself (see [`prepare`]).
 struct Prepared<'a> {
-    entry: &'a FlirtSignatureEntry,
+    /// The entry that owns this leaf's pattern, mask, CRC and CRC length —
+    /// the primary entry itself for a primary leaf, or the entry an
+    /// alternative sits under.
+    parent: &'a FlirtSignatureEntry,
     pattern: Vec<u8>,
     /// `None` when the entry had no `mask_hex` — i.e. every byte is fixed.
     fixed: Option<Vec<bool>>,
-    /// Where this entry sat in the caller's `entries`, so the JSON `index`
-    /// can be remapped if the sort moved it.
-    original: usize,
+    /// This leaf's position in the caller's `entries`, so the JSON `index`
+    /// can be remapped if the sort moved it. `None` for a leaf synthesized
+    /// from `alternatives`: the JSON `index` never names one of those, since
+    /// it addresses `entries` positions only.
+    original: Option<usize>,
+    name: &'a str,
+    function_len: Option<u32>,
+    refs: &'a [crate::flirt::FlirtReference],
+    source_binary: &'a str,
 }
 
 impl Prepared<'_> {
@@ -67,7 +84,7 @@ impl Prepared<'_> {
     /// the 419 harvested libraries. Determinism here means "a pure function of
     /// the input", and the input's order is part of the input.
     fn sort_key(&self) -> (&str, &[u8]) {
-        (&self.entry.name, &self.pattern)
+        (self.name, &self.pattern)
     }
 
     /// Is this entry filed in the derivable prefix index? See
@@ -86,7 +103,7 @@ fn hex_to_bytes(s: &str, what: &'static str) -> Result<Vec<u8>, GsigError> {
 }
 
 /// Decode every entry's hex, refusing anything the container cannot represent
-/// faithfully.
+/// faithfully, and flatten `alternatives` into their own leaves.
 ///
 /// The JSON matcher *drops* an entry whose mask length disagrees with its
 /// pattern. A converter must not: silently losing signatures during a format
@@ -115,11 +132,27 @@ fn prepare<'a>(file: &'a FlirtLibraryFile) -> Result<Vec<Prepared<'a>>, GsigErro
             return Err(GsigError::TooLarge("pattern bytes", pattern.len()));
         }
         out.push(Prepared {
-            entry,
-            pattern,
-            fixed,
-            original,
+            parent: entry,
+            pattern: pattern.clone(),
+            fixed: fixed.clone(),
+            original: Some(original),
+            name: &entry.name,
+            function_len: entry.function_len,
+            refs: &entry.refs,
+            source_binary: &entry.source_binary,
         });
+        for alt in &entry.alternatives {
+            out.push(Prepared {
+                parent: entry,
+                pattern: pattern.clone(),
+                fixed: fixed.clone(),
+                original: None,
+                name: &alt.name,
+                function_len: alt.function_len,
+                refs: &alt.refs,
+                source_binary: &alt.source_binary,
+            });
+        }
     }
     Ok(out)
 }
@@ -204,9 +237,14 @@ pub fn write(file: &FlirtLibraryFile, options: &WriteOptions) -> Result<Vec<u8>,
     let mut prepared = prepare(file)?;
     prepared.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
 
-    let mut old_to_new = vec![0usize; prepared.len()];
+    // Sized by `file.entries`, not `prepared`: alternatives have no slot of
+    // their own to remap, since `file.index` only ever names positions in
+    // `file.entries`.
+    let mut old_to_new = vec![0usize; file.entries.len()];
     for (new, p) in prepared.iter().enumerate() {
-        old_to_new[p.original] = new;
+        if let Some(orig) = p.original {
+            old_to_new[orig] = new;
+        }
     }
 
     // ---- strings -------------------------------------------------------
@@ -225,9 +263,9 @@ pub fn write(file: &FlirtLibraryFile, options: &WriteOptions) -> Result<Vec<u8>,
         }
     }
     for p in &prepared {
-        table.add(&p.entry.name);
-        table.add(&p.entry.source_binary);
-        for r in &p.entry.refs {
+        table.add(p.name);
+        table.add(p.source_binary);
+        for r in p.refs {
             table.add(&r.name);
         }
     }
@@ -269,29 +307,29 @@ pub fn write(file: &FlirtLibraryFile, options: &WriteOptions) -> Result<Vec<u8>,
             flags |= FLAG_HAS_MASK;
             sections.masks.extend_from_slice(&pack_bitmap(fixed));
         }
-        if p.entry.crc16.is_some() {
+        if p.parent.crc16.is_some() {
             flags |= FLAG_HAS_CRC16;
         }
-        if p.entry.function_len.is_some() {
+        if p.function_len.is_some() {
             flags |= FLAG_HAS_FUNCTION_LEN;
         }
         sections.patterns.extend_from_slice(&p.pattern);
-        for r in &p.entry.refs {
+        for r in p.refs {
             sections.refs.extend_from_slice(&r.offset.to_le_bytes());
             sections
                 .refs
                 .extend_from_slice(&id_of(&r.name).to_le_bytes());
         }
         let record = WireRecord {
-            name: id_of(&p.entry.name),
-            source: id_of(&p.entry.source_binary),
+            name: id_of(p.name),
+            source: id_of(p.source_binary),
             pattern_len: p.pattern.len() as u16,
             flags,
-            crc16: p.entry.crc16.unwrap_or(0),
-            crc_len: p.entry.crc_len,
-            function_len: p.entry.function_len.unwrap_or(0),
-            n_refs: u32::try_from(p.entry.refs.len())
-                .map_err(|_| GsigError::TooLarge("references", p.entry.refs.len()))?,
+            crc16: p.parent.crc16.unwrap_or(0),
+            crc_len: p.parent.crc_len,
+            function_len: p.function_len.unwrap_or(0),
+            n_refs: u32::try_from(p.refs.len())
+                .map_err(|_| GsigError::TooLarge("references", p.refs.len()))?,
         };
         sections.signatures = append(std::mem::take(&mut sections.signatures), &record)?;
     }

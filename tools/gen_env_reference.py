@@ -390,7 +390,12 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_ORDERED_TRACE_DIR": "Directory ordered symbolic traces are written to/read from.",
     "GLAURUNG_SYMBOLIC_CVE_OBJECT_ID": "Object identifier for the `linux_symbolic_cve` example run.",
     "GLAURUNG_FLIRT_LIB": "Path to a FLIRT signature library override.",
-    "GLAURUNG_SIG_DIR": "Signature-set cache root, overriding `~/.cache/glaurung/sigs/`. Read by both the Python fetch client and the Rust loader.",
+    "GLAURUNG_SIG_DIR": (
+        "Directory of signature libraries: every `*.flirt.json` and `*.gsig` "
+        "file in it is loaded and merged. Consulted after `GLAURUNG_FLIRT_LIB` "
+        "and before `~/.cache/glaurung/sigs/` and the packaged `data/sigs/`; "
+        "read by both the Python fetch client and the Rust loader."
+    ),
     "GLAURUNG_SIGS_OFFLINE": "`1`/`true`/`yes`/`on` forbids every network call in the signature-set fetch path; the cache and the bundled `base` set are used instead.",
     "GLAURUNG_SIGS_MANIFEST_URL": "Where the signed signature-set manifest is fetched from: a mirror, or a `file://` URL.",
     "GLAURUNG_SIGS_TRUSTED_KEYS": "Directory of trusted minisign `*.pub` keys, replacing the set bundled in `data/sigs/trusted-keys/`.",

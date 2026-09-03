@@ -47,6 +47,17 @@ pub fn library_file_from_gsig(library: &GsigLibrary) -> Result<FlirtLibraryFile,
             crc_len: record.crc_len,
             function_len: record.function_len,
             refs: library.refs(record)?,
+            // The container has no "alternatives" concept: the writer
+            // flattens a JSON entry's `alternatives` into their own records
+            // sharing this pattern/mask/CRC (see `writer::prepare`), so they
+            // come back here as independent entries rather than regrouped
+            // under one. That is not a matching regression -- both shapes
+            // compile to the same flat candidate set in
+            // `FlirtLibrary::from_file` / `from_gsig_library` -- but it does
+            // mean a JSON library with non-empty `alternatives` is not
+            // byte-identical after a JSON -> gsig -> JSON round trip, only
+            // match-equivalent. No committed fixture currently has any.
+            alternatives: Vec::new(),
         });
     }
     Ok(FlirtLibraryFile {
@@ -103,6 +114,7 @@ mod tests {
                 crc_len: 0,
                 function_len: None,
                 refs: Vec::new(),
+                alternatives: Vec::new(),
             }],
             index: [("554889e5".to_string(), vec![0usize])]
                 .into_iter()

@@ -135,6 +135,7 @@ pub(crate) fn sample_library_file() -> crate::flirt::FlirtLibraryFile {
                     offset: 5,
                     name: "memcpy".to_string(),
                 }],
+                alternatives: Vec::new(),
             },
             FlirtSignatureEntry {
                 name: "beta".to_string(),
@@ -145,6 +146,7 @@ pub(crate) fn sample_library_file() -> crate::flirt::FlirtLibraryFile {
                 crc_len: 0,
                 function_len: None,
                 refs: Vec::new(),
+                alternatives: Vec::new(),
             },
         ],
         index: [("554889e5".to_string(), vec![0usize, 1])]
