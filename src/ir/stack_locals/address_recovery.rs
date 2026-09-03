@@ -570,6 +570,7 @@ pub(super) fn stack_assignment_object_address(
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
     allow_end_pointer: bool,
+    read_slots: &std::collections::HashSet<SlotKey>,
 ) -> Option<Expr> {
     if let Some(existing) =
         stack_object_constant_address(expr, map, sp_delta, ctx, address_defs, allow_end_pointer)
@@ -597,7 +598,11 @@ pub(super) fn stack_assignment_object_address(
     let boundary = map
         .iter()
         .filter(|(candidate, slot)| {
-            candidate.base == base && candidate.disp > disp && slot.object_size.is_some()
+            candidate.base == base
+                && candidate.disp > disp
+                && (slot.object_size.is_some()
+                    || slot.observed_read
+                    || read_slots.contains(*candidate))
         })
         .map(|(candidate, _)| candidate.disp)
         .min();
@@ -608,6 +613,8 @@ pub(super) fn stack_assignment_object_address(
                 && candidate.disp >= disp
                 && candidate.disp < boundary.unwrap_or(i64::MAX)
                 && slot.object_size.is_none()
+                && !slot.observed_read
+                && !read_slots.contains(*candidate)
         })
         .map(|(candidate, slot)| (candidate.disp, slot.span_size))
         .collect::<Vec<_>>();

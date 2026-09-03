@@ -47,7 +47,7 @@ use address_recovery::{
     stack_assignment_object_address, stack_object_address, stack_object_constant_address,
 };
 use coordinate_flow::{collect_label_stack_deltas, collect_stack_address_defs};
-use indexed_objects::seed_indexed_stack_objects;
+use indexed_objects::{collect_read_stack_slots, seed_indexed_stack_objects};
 use rewrite::{reconcile_late_address_taken_objects, rewrite_body};
 
 const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
@@ -82,6 +82,9 @@ struct SlotVal {
     name: String,
     declared_size: u8,
     span_size: u8,
+    /// A read proves that this slot is independently live, so it bounds an
+    /// adjacent write-only initializer run whose base later escapes.
+    observed_read: bool,
     /// A bounded stack object recovered from indexed frame accesses.  Every
     /// constant and indexed access inside this interval must be rendered
     /// through the same byte-array identity; otherwise an earlier zeroing
@@ -530,6 +533,7 @@ pub fn promote_stack_locals_with_facts(
                 name,
                 declared_size: scalar_size.unwrap_or(1),
                 span_size: scalar_size.unwrap_or(1),
+                observed_read: false,
                 object_size: hint.aggregate.then_some(hint.size),
                 bounded_object: true,
                 source_type: hint.c_type.clone(),
@@ -570,6 +574,7 @@ pub fn promote_stack_locals_with_facts(
         &address_defs,
         &label_deltas,
     );
+    let read_slots = collect_read_stack_slots(&f.body, ctx, &address_defs, &label_deltas);
     let mut sp_delta = Some(0i64);
     rewrite_body(
         &mut f.body,
@@ -579,6 +584,7 @@ pub fn promote_stack_locals_with_facts(
         &mut sp_delta,
         &address_defs,
         &label_deltas,
+        &read_slots,
     );
     reconcile_late_address_taken_objects(&mut f.body, &map);
     // Several machine SlotKeys can intentionally collapse to one source-level
@@ -2424,6 +2430,139 @@ mod tests {
     }
 
     #[test]
+    fn direct_escape_joins_write_only_fields_but_stops_at_read_spills() {
+        // Clang -O0 homes both arguments, reads them to initialise an unnamed
+        // Pair, then passes &pair. The read homes at -8/-4 are independent
+        // values; only the write-only -16/-12 run is the escaped object.
+        let mut f = Function {
+            name: "compound_literal_argument".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -4),
+                    src: Expr::Reg(reg("edi")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -8),
+                    src: Expr::Reg(reg("esi")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rbp", -4, 4),
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -16),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rbp", -8, 4),
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -12),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "pair_span".into(),
+                    },
+                    args: vec![lea("rbp", -16)],
+                    dst: Some(reg("eax")),
+                    call_spec: None,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[6] else {
+            panic!("expected call: {f:#?}");
+        };
+        let [Expr::StackAddr { object, size: 8 }] = args.as_slice() else {
+            panic!("escaped Pair did not recover as exactly eight bytes: {f:#?}");
+        };
+        assert!(
+            matches!(
+                &f.body[5],
+                Stmt::Store { addr: Expr::Bin { lhs, rhs, .. }, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object: field_object, size: 8 }
+                        if field_object == object)
+                    && rhs.as_ref() == &Expr::Const(4)
+            ),
+            "second Pair field did not join the escaped object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn direct_escape_stops_at_a_slot_read_only_after_the_escape() {
+        // A stack protector is stored beside two output parameters, passed to
+        // the callee only through the preceding pair, and checked afterwards.
+        // The later load must already bound object recovery at call time.
+        let mut f = Function {
+            name: "outputs_beside_canary".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rsp", 0),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rsp", 4),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rsp", 8),
+                    src: Expr::Reg(reg("canary")),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "fill_pair".into(),
+                    },
+                    args: vec![Expr::Reg(reg("rsp"))],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("saved_canary"),
+                    src: deref_of("rsp", 8, 8),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                &f.body[3],
+                Stmt::Call {
+                    args,
+                    ..
+                } if matches!(args.as_slice(), [Expr::StackAddr { size: 8, .. }])
+            ),
+            "the future-read canary slot was absorbed into the pair: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[4],
+                Stmt::Assign {
+                    src: Expr::Reg(_),
+                    ..
+                }
+            ),
+            "the independent canary load was not preserved: {f:#?}"
+        );
+    }
+
+    #[test]
     fn store_to_stack_slot_becomes_named_local_on_lhs() {
         let mut f = Function {
             name: "f".into(),
@@ -4218,6 +4357,7 @@ mod tests {
                 name: "local_a8".into(),
                 declared_size: 1,
                 span_size: 1,
+                observed_read: false,
                 object_size: Some(64),
                 bounded_object: true,
                 source_type: None,

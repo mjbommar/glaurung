@@ -8,7 +8,7 @@
 //! coordinate an expression denotes (`address_recovery`) or what a slot is
 //! called (`alloc_name` in the parent); it decides what the statement becomes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::slot_views::{compose_little_endian_slots, extract_little_endian_subvalue};
 use super::{
@@ -31,6 +31,7 @@ pub(super) fn rewrite_body(
     sp_delta: &mut Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
     label_deltas: &HashMap<u64, Option<i64>>,
+    read_slots: &HashSet<SlotKey>,
 ) {
     for s in body.iter_mut() {
         match s {
@@ -60,6 +61,7 @@ pub(super) fn rewrite_body(
                         ctx,
                         address_defs,
                         !establishes_a_frame_base,
+                        read_slots,
                     ) {
                         *src = object_addr;
                     }
@@ -84,7 +86,15 @@ pub(super) fn rewrite_body(
                 // as strong as passing the address directly to a callee: the
                 // pointee must retain storage identity instead of rendering as
                 // arithmetic on an uninitialised frame register.
-                promote_address_taken_stack_object(src, map, names, ctx, *sp_delta, address_defs);
+                promote_address_taken_stack_object(
+                    src,
+                    map,
+                    names,
+                    ctx,
+                    *sp_delta,
+                    address_defs,
+                    read_slots,
+                );
                 if addressed_memory {
                     if let Some(parameter) = argument_slot_assignment(addr, *size, ctx) {
                         *s = Stmt::Assign {
@@ -98,7 +108,15 @@ pub(super) fn rewrite_body(
                 rewrite_expr(target, map, names, ctx, *sp_delta, address_defs);
                 for a in args {
                     rewrite_expr(a, map, names, ctx, *sp_delta, address_defs);
-                    promote_address_taken_stack_object(a, map, names, ctx, *sp_delta, address_defs);
+                    promote_address_taken_stack_object(
+                        a,
+                        map,
+                        names,
+                        ctx,
+                        *sp_delta,
+                        address_defs,
+                        read_slots,
+                    );
                 }
             }
             Stmt::Return { value } => {
@@ -123,6 +141,7 @@ pub(super) fn rewrite_body(
                     &mut then_delta,
                     address_defs,
                     label_deltas,
+                    read_slots,
                 );
                 let mut else_delta = incoming;
                 if let Some(eb) = else_body {
@@ -134,6 +153,7 @@ pub(super) fn rewrite_body(
                         &mut else_delta,
                         address_defs,
                         label_deltas,
+                        read_slots,
                     );
                 }
                 let then_falls_through = body_falls_through(then_body);
@@ -157,6 +177,7 @@ pub(super) fn rewrite_body(
                     &mut body_delta,
                     address_defs,
                     label_deltas,
+                    read_slots,
                 );
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
             }
@@ -174,6 +195,7 @@ pub(super) fn rewrite_body(
                     sp_delta,
                     address_defs,
                     label_deltas,
+                    read_slots,
                 );
                 rewrite_expr(cond, map, names, ctx, *sp_delta, address_defs);
                 let loop_entry = *sp_delta;
@@ -186,6 +208,7 @@ pub(super) fn rewrite_body(
                     &mut body_delta,
                     address_defs,
                     label_deltas,
+                    read_slots,
                 );
                 rewrite_body(
                     std::slice::from_mut(step.as_mut()),
@@ -195,6 +218,7 @@ pub(super) fn rewrite_body(
                     &mut body_delta,
                     address_defs,
                     label_deltas,
+                    read_slots,
                 );
                 *sp_delta = merge_stack_deltas(loop_entry, body_delta);
             }
@@ -209,6 +233,7 @@ pub(super) fn rewrite_body(
                     &mut body_delta,
                     address_defs,
                     label_deltas,
+                    read_slots,
                 );
                 rewrite_expr(cond, map, names, ctx, body_delta, address_defs);
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
@@ -235,6 +260,7 @@ pub(super) fn rewrite_body(
                         &mut case_delta,
                         address_defs,
                         label_deltas,
+                        read_slots,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, case_delta),
@@ -251,6 +277,7 @@ pub(super) fn rewrite_body(
                         &mut default_delta,
                         address_defs,
                         label_deltas,
+                        read_slots,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, default_delta),
@@ -367,6 +394,7 @@ fn rewrite_expr(
                     let Some(entry) = map.get_mut(&key) else {
                         return;
                     };
+                    entry.observed_read = true;
                     // A load reports the true access width — let it win for
                     // the declaration while preserving the widest owned span.
                     entry.declared_size = entry.declared_size.min(size_val);
@@ -404,6 +432,7 @@ fn rewrite_expr(
                         name: alias.clone(),
                         declared_size: size_val,
                         span_size: size_val,
+                        observed_read: true,
                         object_size: None,
                         bounded_object: false,
                         source_type: None,
@@ -696,7 +725,17 @@ fn promote_address_taken_stack_object(
     ctx: StackContext,
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
+    read_slots: &HashSet<SlotKey>,
 ) {
+    // Clang -O0 materialises a compound literal as adjacent scalar stores and
+    // passes the first slot's address directly. Join that write-only run before
+    // the scalar fallback fixes the extent at one field.
+    if let Some(object_addr) =
+        stack_assignment_object_address(expr, map, sp_delta, ctx, address_defs, false, read_slots)
+    {
+        *expr = object_addr;
+        return;
+    }
     // A debug scalar is seeded in CFA/entry-SP coordinates before the body is
     // walked. If its address escapes through the post-prologue SP spelling,
     // promote that exact seeded slot into an addressable object instead of
@@ -810,6 +849,7 @@ fn promote_address_taken_stack_object(
         name: alloc_name(&key_base, key_disp, names, ctx),
         declared_size: pointer_size,
         span_size: pointer_size,
+        observed_read: false,
         object_size: None,
         bounded_object: false,
         source_type: None,
@@ -907,6 +947,7 @@ fn try_promote_lea_to_local(
         name: alloc_name(&key_base, key_disp, names, ctx),
         declared_size: size,
         span_size: size,
+        observed_read: false,
         object_size: None,
         bounded_object: false,
         source_type: None,

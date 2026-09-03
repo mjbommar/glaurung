@@ -4,7 +4,7 @@
 //! for C pointer arithmetic to preserve the alias between a wide zeroing store
 //! and a later byte or int indexing of the same region.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     alloc_name, body_falls_through, is_arm_frame_pointer, is_stack_pointer_reg, merge_stack_deltas,
@@ -368,6 +368,7 @@ pub(super) fn seed_indexed_stack_objects(
             name,
             declared_size: 1,
             span_size: 1,
+            observed_read: false,
             object_size: Some(size),
             bounded_object: partitions.get(index + 1).is_some(),
             source_type: None,
@@ -375,4 +376,235 @@ pub(super) fn seed_indexed_stack_objects(
             debug_proven: false,
         });
     }
+}
+
+/// Collect every directly-read scalar stack slot before the mutating rewrite.
+///
+/// Object promotion happens when an address escapes, but a neighbouring slot
+/// can be read only *after* that escape (the stack protector is the canonical
+/// example).  A sequential rewrite cannot use that future read as an object
+/// boundary.  Census the immutable body first with the same stack-coordinate
+/// flow used by the other seed analysis, so statement order cannot change
+/// whether independently live storage is absorbed into an escaped object.
+pub(super) fn collect_read_stack_slots(
+    body: &[Stmt],
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+    label_deltas: &HashMap<u64, Option<i64>>,
+) -> HashSet<SlotKey> {
+    fn collect_expr(
+        expr: &Expr,
+        sp_delta: Option<i64>,
+        ctx: StackContext,
+        address_defs: &HashMap<VReg, (String, i64)>,
+        reads: &mut Vec<(String, i64, u8)>,
+    ) {
+        if let Expr::Deref { addr, size } = expr {
+            if let Some((base, disp)) =
+                super::resolved_memory_slot(addr, sp_delta, ctx, address_defs)
+            {
+                reads.push((base, disp, *size));
+            }
+        }
+        match expr {
+            Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, reads),
+            Expr::Call { target, args, .. } => {
+                collect_expr(target, sp_delta, ctx, address_defs, reads);
+                for argument in args {
+                    collect_expr(argument, sp_delta, ctx, address_defs, reads);
+                }
+            }
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect_expr(lhs, sp_delta, ctx, address_defs, reads);
+                collect_expr(rhs, sp_delta, ctx, address_defs, reads);
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect_expr(cond, sp_delta, ctx, address_defs, reads);
+                collect_expr(if_true, sp_delta, ctx, address_defs, reads);
+                collect_expr(if_false, sp_delta, ctx, address_defs, reads);
+            }
+            Expr::Un { src, .. } => collect_expr(src, sp_delta, ctx, address_defs, reads),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                collect_expr(expr, sp_delta, ctx, address_defs, reads)
+            }
+            Expr::FunctionTableEntry { index, .. } => {
+                collect_expr(index, sp_delta, ctx, address_defs, reads)
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    collect_expr(argument, sp_delta, ctx, address_defs, reads);
+                }
+            }
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn walk(
+        body: &[Stmt],
+        ctx: StackContext,
+        mut sp_delta: Option<i64>,
+        address_defs: &HashMap<VReg, (String, i64)>,
+        label_deltas: &HashMap<u64, Option<i64>>,
+        reads: &mut Vec<(String, i64, u8)>,
+    ) -> Option<i64> {
+        for stmt in body {
+            match stmt {
+                Stmt::Assign { dst, src } => {
+                    collect_expr(src, sp_delta, ctx, address_defs, reads);
+                    if is_stack_pointer_reg(dst, ctx) {
+                        sp_delta =
+                            stack_delta_after_assignment(dst, src, sp_delta, ctx, address_defs);
+                    }
+                }
+                Stmt::Store { addr, src, .. } => {
+                    collect_expr(addr, sp_delta, ctx, address_defs, reads);
+                    collect_expr(src, sp_delta, ctx, address_defs, reads);
+                }
+                Stmt::Call { target, args, .. } => {
+                    collect_expr(target, sp_delta, ctx, address_defs, reads);
+                    for argument in args {
+                        collect_expr(argument, sp_delta, ctx, address_defs, reads);
+                    }
+                }
+                Stmt::Return { value } => {
+                    if let Some(value) = value {
+                        collect_expr(value, sp_delta, ctx, address_defs, reads);
+                    }
+                    sp_delta = None;
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    collect_expr(cond, sp_delta, ctx, address_defs, reads);
+                    let then_delta =
+                        walk(then_body, ctx, sp_delta, address_defs, label_deltas, reads);
+                    let else_delta = else_body.as_deref().map_or(sp_delta, |branch| {
+                        walk(branch, ctx, sp_delta, address_defs, label_deltas, reads)
+                    });
+                    sp_delta = match (
+                        body_falls_through(then_body),
+                        else_body.as_deref().is_none_or(body_falls_through),
+                    ) {
+                        (true, true) => merge_stack_deltas(then_delta, else_delta),
+                        (true, false) => then_delta,
+                        (false, true) => else_delta,
+                        (false, false) => None,
+                    };
+                }
+                Stmt::While { cond, body } => {
+                    collect_expr(cond, sp_delta, ctx, address_defs, reads);
+                    let body_delta = walk(body, ctx, sp_delta, address_defs, label_deltas, reads);
+                    sp_delta = merge_stack_deltas(sp_delta, body_delta);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    sp_delta = walk(
+                        std::slice::from_ref(init.as_ref()),
+                        ctx,
+                        sp_delta,
+                        address_defs,
+                        label_deltas,
+                        reads,
+                    );
+                    collect_expr(cond, sp_delta, ctx, address_defs, reads);
+                    let loop_entry = sp_delta;
+                    let body_delta = walk(body, ctx, loop_entry, address_defs, label_deltas, reads);
+                    let stepped = walk(
+                        std::slice::from_ref(step.as_ref()),
+                        ctx,
+                        body_delta,
+                        address_defs,
+                        label_deltas,
+                        reads,
+                    );
+                    sp_delta = merge_stack_deltas(loop_entry, stepped);
+                }
+                Stmt::DoWhile { body, cond } => {
+                    let body_delta = walk(body, ctx, sp_delta, address_defs, label_deltas, reads);
+                    collect_expr(cond, body_delta, ctx, address_defs, reads);
+                    sp_delta = merge_stack_deltas(sp_delta, body_delta);
+                }
+                Stmt::Push { value } => {
+                    collect_expr(value, sp_delta, ctx, address_defs, reads);
+                    sp_delta = sp_delta.map(|delta| delta - stack_word_size(ctx));
+                }
+                Stmt::Pop { .. } => sp_delta = sp_delta.map(|delta| delta + stack_word_size(ctx)),
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    collect_expr(discriminant, sp_delta, ctx, address_defs, reads);
+                    let incoming = sp_delta;
+                    let mut exits = Vec::new();
+                    for (_, branch) in cases {
+                        exits.push(walk(
+                            branch,
+                            ctx,
+                            incoming,
+                            address_defs,
+                            label_deltas,
+                            reads,
+                        ));
+                    }
+                    if let Some(branch) = default {
+                        exits.push(walk(
+                            branch,
+                            ctx,
+                            incoming,
+                            address_defs,
+                            label_deltas,
+                            reads,
+                        ));
+                    } else {
+                        exits.push(incoming);
+                    }
+                    sp_delta = exits
+                        .into_iter()
+                        .reduce(merge_stack_deltas)
+                        .unwrap_or(incoming);
+                }
+                Stmt::IndirectGoto { target } => {
+                    collect_expr(target, sp_delta, ctx, address_defs, reads);
+                    sp_delta = None;
+                }
+                Stmt::Label(label) => sp_delta = label_deltas.get(label).copied().unwrap_or(None),
+                Stmt::Goto { .. } => sp_delta = None,
+                Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
+            }
+        }
+        sp_delta
+    }
+
+    let mut reads = Vec::new();
+    let _ = walk(body, ctx, Some(0), address_defs, label_deltas, &mut reads);
+    reads
+        .into_iter()
+        .map(|(base, disp, _)| SlotKey { base, disp })
+        .collect()
 }
