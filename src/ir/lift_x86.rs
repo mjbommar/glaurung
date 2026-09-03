@@ -62,7 +62,7 @@ use packed::{
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
     packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_qword_binary_ops,
     packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops,
-    vex_packed_dword_binary_ops, vex_ymm_dword_move_ops, xorps_ops,
+    vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops, vex_ymm_dword_move_ops, xorps_ops,
 };
 use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
@@ -1854,6 +1854,8 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
         Mnemonic::Vpxor => vex_packed_dword_binary_ops(instr, BinOp::Xor),
         Mnemonic::Vmovdqu => vex_ymm_dword_move_ops(instr),
+        Mnemonic::Vpand => vex_packed_dword_binary_ops(instr, BinOp::And),
+        Mnemonic::Vpbroadcastb => vex_ymm_byte_broadcast_ops(instr),
         Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
         Mnemonic::Pandn => packed_dword_and_not_ops(instr),
         Mnemonic::Por => packed_dword_binary_ops(instr, BinOp::Or),
@@ -8241,7 +8243,6 @@ mod tests {
             // Writes RCX and R11 (the return address and RFLAGS). RAX is the
             // kernel's doing, not the instruction's, and iced does not claim it.
             ("syscall", Silence::NoArm, 310),
-            ("vpand", Silence::WiderThanTheLaneModel, 2),
             ("vpbroadcastb", Silence::WiderThanTheLaneModel, 2),
             ("vpcmpeqb", Silence::WiderThanTheLaneModel, 12),
             // `VEX_Vpmovmskb_r32_ymm`: the DESTINATION is an ordinary GP
@@ -8335,7 +8336,7 @@ mod tests {
             eprintln!("sample corpus missing; nothing to sweep");
             return;
         }
-        let watched = ["vpand", "vpbroadcastb", "vpcmpeqb", "vpmovmskb"];
+        let watched = ["vpbroadcastb", "vpcmpeqb", "vpmovmskb"];
         let mut forms: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         for (data, ranges) in &corpus {
@@ -8355,7 +8356,6 @@ mod tests {
             }
         }
         let expected = std::collections::BTreeMap::from([
-            ("VEX_Vpand_ymm_ymm_ymmm256".to_string(), 2),
             ("VEX_Vpbroadcastb_ymm_xmmm8".to_string(), 2),
             ("VEX_Vpcmpeqb_ymm_ymm_ymmm256".to_string(), 12),
             ("VEX_Vpmovmskb_r32_ymm".to_string(), 8),
@@ -9172,6 +9172,63 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    fn vpbroadcastb_ymm_replicates_one_memory_byte_into_all_eight_lanes() {
+        // c4 e2 7d 78 00 -> vpbroadcastb ymm0,byte ptr [rax]
+        let ops = lift64_lanes(&[0xc4, 0xe2, 0x7d, 0x78, 0x00]);
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Load { .. }))
+                .count(),
+            1,
+            "the scalar source byte must be read exactly once: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Load { addr, .. } if addr.size == 1
+            )),
+            "the source access must stay byte-wide: {ops:#?}"
+        );
+        for lane in 0..8 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign {
+                        dst: VReg::Phys(dst),
+                        src: Value::Reg(VReg::Temp(_)),
+                    } if dst == &format!("ymm0_d{lane}")
+                )),
+                "lane {lane} did not receive the replicated dword: {ops:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vpbroadcastb_ymm_register_form_reads_only_the_low_source_byte() {
+        // c4 e2 7d 78 c1 -> vpbroadcastb ymm0,xmm1
+        let ops = lift64_lanes(&[0xc4, 0xe2, 0x7d, 0x78, 0xc1]);
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Trunc {
+                    src: Value::Reg(VReg::Phys(src)),
+                    from: Width::W32,
+                    to: Width::W8,
+                    ..
+                } if src == "xmm1_d0"
+            )),
+            "the register form must read only xmm1's low byte: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Assign { .. }))
+                .count(),
+            8,
+            "the byte must reach every YMM dword lane: {ops:#?}"
+        );
     }
 
     #[test]
