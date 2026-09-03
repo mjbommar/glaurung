@@ -135,13 +135,13 @@ records per-archive outcomes and never treats an empty result as success.
 | 1 | Baseline measurement | done | this page | glibc 731/1,090 named, 0 wrong |
 | 2 | COFF archives in the builder | landed, pushed | `5e882019` | MinGW 0 to 474 raw; hello relink 62/62 |
 | 3 | Docker harvest with dpkg provenance | landed (integration line) | `bab4dd8b`, `bea1e5ee` | 419 archives, 508 MB; 299 with signatures, 147,733 unique of 235,043 raw in 40 s after COFF |
-| 4 | WARP libraries from NAS PE+PDB | in flight | `siglib/warp-windows` | cross-build recall is the measurement |
+| 4 | WARP libraries from NAS PE+PDB | merged (integration line) | `68509346` | cross-servicing recall 0.83 to 0.94 with at most 3 wrong; cross-release 0.27 to 0.37; 0 false names on 48 MinGW PEs; 82 libraries, 226,346 GUIDs |
 | 5 | Matcher correctness: ambiguity key, resolver wiring, load-once | in flight | `siglib/matcher-correctness` | blocking before any publish |
 | 6 | `gsig/1` format and loader | in flight | `siglib/gsig-format` | JSON kept as import/export |
-| 7 | Harvester v1: Debian, Ubuntu, Alpine | in flight | `siglib/harvester-v1` | `base` matrix |
+| 7 | Harvester v1: Debian, Ubuntu, Alpine | merged (integration line) | `b480e04c` | 14 network cells, 561 archives indexed, 140 MB fetched |
 | 8 | Distribution: manifest, minisign, client cache, CLI | in flight | `siglib/distribution` | dry-run publish only; the human creates the release |
 | 9 | Consume mandiant/siglib via lancelot-flirt | queued | | optional feature |
 | 10 | MSVC via xwin/vcpkg | queued | | NOTICE review first |
 | 11 | Rust sysroot harvester; gopclntab path for Go | queued | | |
 | 12 | R2 mirror, dictionary training, delta channel | queued | | after the corpus is large |
-| 13 | Cortex-M libraries from the ARM toolchain, validated on `rt-libopencm3` and the holdout firmware | in flight | `siglib/cortex-m` | the only bare-metal source; 780 archives |
+| 13 | Cortex-M libraries from the ARM toolchain, validated on `rt-libopencm3` and the holdout firmware | merged (integration line) | `440a67fd` | 48 libraries, 32,812 unique signatures; 209 of 210 names correct over 7,622 truth functions across rt-libopencm3 and three holdout projects; alias tie-break defect fixed, 21 wrong to 1 |
