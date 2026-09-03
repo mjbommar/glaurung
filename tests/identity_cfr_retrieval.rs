@@ -867,7 +867,15 @@ fn the_normaliser_moves_a_measured_fraction_of_the_corpus() {
 /// only assertion is that the "none" row reproduces the unnormalised floor
 /// exactly, which is what proves the ablation is measuring the passes rather
 /// than the harness.
+///
+/// `#[ignore]`d because fourteen configurations means fourteen loads of two
+/// 206-binary slices -- half a minute in a release build and many minutes in
+/// the debug profile `cargo test` uses by default. It is a diagnostic that
+/// answers "what is each pass worth", not a ratchet; the ratchets are the three
+/// lanes above, and the numbers this printed are in
+/// `docs/reference/function-identity-cfr.md`.
 #[test]
+#[ignore = "14 corpus loads. cargo test --release --features python-ext --test identity_cfr_retrieval -- --ignored --nocapture ablation"]
 fn the_per_pass_ablation_on_the_cross_optimisation_lane() {
     use glaurung::identity::cfr::normalize::{with_passes, Passes};
 

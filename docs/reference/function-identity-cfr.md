@@ -505,7 +505,13 @@ say two to three points.
 
 XO, gcc `-O0` -> gcc `-O2`, 1 + 100 size-matched candidates, the lane the
 normaliser exists for. Each pass alone, then each pass removed from the full
-set. `tests/identity_cfr_retrieval.rs::the_per_pass_ablation_on_the_cross_optimisation_lane`.
+set. Fourteen configurations means fourteen loads of two 206-binary slices, so
+the lane is `#[ignore]`d:
+
+```
+cargo test --release --features python-ext --test identity_cfr_retrieval \
+  -- --ignored --nocapture ablation
+```
 
 | One pass alone | Recall@1 | The full set less one | Recall@1 |
 |---|---|---|---|
