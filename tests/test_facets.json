@@ -1092,6 +1092,9 @@
   "test_warp_function_guids.py": [
    "lfs"
   ],
+  "test_warp_windows_libraries.py": [
+   "lfs"
+  ],
   "test_winapi_prototypes.py": [
    "lfs"
   ],

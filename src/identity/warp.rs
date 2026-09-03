@@ -138,6 +138,13 @@ pub enum Disposition {
 pub struct WarpBasicBlock {
     /// Start VA of the block. Only used to order blocks; never hashed.
     pub start_va: u64,
+    /// How many bytes of the image this block covers, before masking.
+    ///
+    /// Never hashed either. It is recorded because a GUID's *evidence* is the
+    /// amount of code behind it, and a signature library that cannot say how
+    /// big a matched function was cannot tell a 400-byte parser from a
+    /// five-byte forwarding stub.
+    pub byte_len: u64,
     /// UUIDv5 of the masked instruction bytes.
     pub guid: Uuid,
 }
@@ -198,6 +205,17 @@ pub struct WarpFunction {
     pub blocks: Vec<WarpBasicBlock>,
     /// Callee, caller and adjacency constraints, in a deterministic order.
     pub constraints: Vec<WarpConstraint>,
+}
+
+impl WarpFunction {
+    /// Total image bytes covered by this function's blocks, before masking.
+    ///
+    /// The sum of the blocks that were actually readable, so a function whose
+    /// tail fell outside the mapped image reports what it could see rather
+    /// than what discovery claimed. Not part of the identity.
+    pub fn byte_len(&self) -> u64 {
+        self.blocks.iter().map(|b| b.byte_len).sum()
+    }
 }
 
 /// The mapped image, plus the decode width, as the masker needs to see it.
@@ -539,6 +557,7 @@ pub fn warp_functions_from_discovered(
             };
             blocks.push(WarpBasicBlock {
                 start_va: start,
+                byte_len: code.len() as u64,
                 guid: basic_block_guid(&mask_block_bytes(code, start, &ctx)),
             });
             for (site, target) in direct_call_targets(code, start, &ctx) {
@@ -796,6 +815,49 @@ mod tests {
         );
     }
 
+    /// `byte_len` is the *unmasked* size of the code the GUID was taken over,
+    /// and it must not leak into the identity.
+    ///
+    /// A signature library needs it: WARP masks a `call rel32` to five zero
+    /// bytes, so two functions of very different sizes can hash the same
+    /// number of bytes, and a match that cannot say how much code stood behind
+    /// the GUID cannot tell a real function from a forwarding stub. The two
+    /// assertions here are the two halves of that: it counts the bytes, and
+    /// changing it cannot change a GUID because nothing hashes it.
+    #[test]
+    fn byte_len_sums_the_blocks_and_is_not_part_of_the_identity() {
+        let blocks = vec![
+            WarpBasicBlock {
+                start_va: 0x2000,
+                byte_len: 40,
+                guid: basic_block_guid(b"a"),
+            },
+            WarpBasicBlock {
+                start_va: 0x1000,
+                byte_len: 2,
+                guid: basic_block_guid(b"b"),
+            },
+        ];
+        let guids: Vec<Uuid> = blocks.iter().map(|b| b.guid).collect();
+        let f = WarpFunction {
+            entry_va: 0x1000,
+            name: "f".to_string(),
+            guid: function_guid_from_blocks(&guids),
+            blocks: blocks.clone(),
+            constraints: Vec::new(),
+        };
+        assert_eq!(f.byte_len(), 42);
+
+        let mut resized = blocks;
+        resized[0].byte_len = 4096;
+        let resized_guids: Vec<Uuid> = resized.iter().map(|b| b.guid).collect();
+        assert_eq!(
+            function_guid_from_blocks(&resized_guids),
+            f.guid,
+            "byte_len is a label like entry_va; only the block GUIDs are hashed"
+        );
+    }
+
     /// Different code must not collide just because both ends are masked.
     #[test]
     fn different_code_does_not_share_a_block_guid() {
@@ -816,10 +878,12 @@ mod tests {
         let mut blocks = vec![
             WarpBasicBlock {
                 start_va: 0x1000,
+                byte_len: 1,
                 guid: basic_block_guid(b"a"),
             },
             WarpBasicBlock {
                 start_va: 0x2000,
+                byte_len: 1,
                 guid: basic_block_guid(b"b"),
             },
         ];

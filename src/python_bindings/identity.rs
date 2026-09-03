@@ -336,6 +336,11 @@ pub struct PyWarpFunction {
     /// Block GUIDs in the order they were hashed: highest start VA first.
     #[pyo3(get)]
     pub block_guids: Vec<String>,
+    /// Total image bytes the function's blocks cover, before masking. Not part
+    /// of the identity; it is the size a signature library records so a match
+    /// can say how much code stands behind the GUID.
+    #[pyo3(get)]
+    pub byte_len: u64,
     /// Callee, caller and adjacency constraints.
     #[pyo3(get)]
     pub constraints: Vec<PyWarpConstraint>,
@@ -378,6 +383,7 @@ fn warp_function_guids_path_py(py: Python<'_>, path: &str) -> PyResult<Py<PyList
         .map(|f| PyWarpFunction {
             guid: f.guid.to_string(),
             entry_va: f.entry_va,
+            byte_len: f.byte_len(),
             name: f.name,
             block_guids: f.blocks.iter().map(|b| b.guid.to_string()).collect(),
             constraints: f
@@ -485,9 +491,11 @@ impl CfrSignature {
     #[staticmethod]
     #[pyo3(signature = (features, nosize=false, normalize=false))]
     fn from_features(features: Vec<(u32, u16)>, nosize: bool, normalize: bool) -> Self {
-        let version = crate::identity::cfr::CfrVersion::current(
-            crate::identity::cfr::CfrSettings { nosize, normalize },
-        );
+        let version =
+            crate::identity::cfr::CfrVersion::current(crate::identity::cfr::CfrSettings {
+                nosize,
+                normalize,
+            });
         let mut raw: Vec<u32> = Vec::new();
         for (feature, count) in features {
             for _ in 0..count.max(1) {
@@ -628,9 +636,11 @@ impl CfrWeights {
         nosize: bool,
         normalize: bool,
     ) -> Self {
-        let version = crate::identity::cfr::CfrVersion::current(
-            crate::identity::cfr::CfrSettings { nosize, normalize },
-        );
+        let version =
+            crate::identity::cfr::CfrVersion::current(crate::identity::cfr::CfrSettings {
+                nosize,
+                normalize,
+            });
         let rows = entries
             .into_iter()
             .map(|(feature, doc_count)| {
@@ -740,9 +750,10 @@ fn cfr_build_weights(
     nosize: bool,
     normalize: bool,
 ) -> CfrWeights {
-    let version = crate::identity::cfr::CfrVersion::current(
-        crate::identity::cfr::CfrSettings { nosize, normalize },
-    );
+    let version = crate::identity::cfr::CfrVersion::current(crate::identity::cfr::CfrSettings {
+        nosize,
+        normalize,
+    });
     let mut builder = crate::identity::cfr::WeightsBuilder::new(version);
     for signature in &signatures {
         builder.observe(&signature.inner);
