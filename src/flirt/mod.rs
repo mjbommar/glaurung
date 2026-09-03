@@ -50,6 +50,17 @@
 //! `docs/history/program-measures-2026-09-02/03-schema.sql` section 8 and
 //! `docs/reference/function-signature-libraries.md`.
 //!
+//! # The builder's duplicate key is this file's business
+//!
+//! [`FlirtLibraryFile::matcher_key_collisions`] states the invariant a
+//! *builder* has to satisfy, from the matcher's side: no two entries may agree
+//! on everything [`FlirtSignature::matches`] compares. A builder keying on
+//! more than that (a function length, say) leaves entries no input can ever
+//! separate, and they collapse to a permanent [`FlirtMatch::Ambiguous`]. The
+//! representation for names that genuinely cannot be separated by pattern and
+//! CRC is [`FlirtSignatureEntry::alternatives`] -- one leaf, several names,
+//! the way FLIRT's own tree holds several modules on a leaf.
+//!
 //! [`FlirtLibrary::masked_pattern_identities`] is the identity string this
 //! module contributes to `crate::identity::gate`: the masked pattern, hex
 //! encoded with every variant byte forced to `0x00`, mirroring the ambiguity
@@ -150,6 +161,39 @@ pub struct FlirtSignatureEntry {
     /// Names referenced from the function body, for disambiguation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<FlirtReference>,
+    /// Further names sharing this entry's [matcher key](FlirtLibraryFile::matcher_key_collisions).
+    ///
+    /// FLIRT's tree keeps *several* modules on one leaf and separates them
+    /// below the pattern; so does this. An entry with a non-empty
+    /// `alternatives` is a leaf the pattern and the CRC cannot resolve, and
+    /// [`FlirtLibrary::from_file`] compiles it into one [`FlirtSignature`]
+    /// per name so a later level -- an exact function length, a referenced
+    /// name -- still has something to choose between. Empty is the ordinary
+    /// case and is exactly the v2 file this field was added to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<FlirtAlternative>,
+}
+
+/// One further name on a signature leaf, with the discriminators that are
+/// its own.
+///
+/// The pattern, mask, CRC and CRC length belong to the enclosing
+/// [`FlirtSignatureEntry`] -- by construction, since sharing them is what put
+/// this name here. Only the fields the matcher can still tell apart on live
+/// here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlirtAlternative {
+    /// The function name this alternative assigns.
+    pub name: String,
+    /// The function's total length in bytes, when the builder knew it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_len: Option<u32>,
+    /// Names referenced from this alternative's body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<FlirtReference>,
+    /// Where this alternative came from. Free text, for provenance only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_binary: String,
 }
 
 /// The on-disk library file.
@@ -174,6 +218,81 @@ pub struct FlirtLibraryFile {
     /// Builder statistics; opaque here.
     #[serde(default)]
     pub stats: serde_json::Value,
+}
+
+/// Everything [`FlirtSignature::matches`] actually compares, as a value.
+///
+/// The masked pattern (variant bytes forced to `0x00`), the mask itself, and
+/// the CRC with its length. Two entries agreeing on all four accept exactly
+/// the same bytes: no input can reach one and not the other, and no amount of
+/// pattern or CRC work will ever separate them. Anything else an entry
+/// records -- `function_len`, `refs`, `source_binary` -- is invisible at this
+/// level and must not be part of a builder's duplicate key. See
+/// [`FlirtLibraryFile::matcher_key_collisions`].
+pub type MatcherKey = (String, String, Option<u16>, u16);
+
+impl FlirtLibraryFile {
+    /// The [`MatcherKey`] of one entry, or `None` if its hex does not decode.
+    fn entry_matcher_key(&self, entry: &FlirtSignatureEntry) -> Option<MatcherKey> {
+        let pattern = hex_to_bytes(&entry.prologue_hex).ok()?;
+        let mask = match &entry.mask_hex {
+            None => vec![0xffu8; pattern.len()],
+            Some(hex) => {
+                let bytes = hex_to_bytes(hex).ok()?;
+                if bytes.len() != pattern.len() {
+                    return None;
+                }
+                bytes
+            }
+        };
+        let masked: Vec<u8> = pattern
+            .iter()
+            .zip(mask.iter())
+            .map(|(&byte, &m)| if m != 0 { byte } else { 0 })
+            .collect();
+        // Normalise the mask to one bit per byte so `ff`/`01` -- both "fixed"
+        // to `from_file` -- cannot read as two different keys.
+        let normalized: Vec<u8> = mask.iter().map(|m| u8::from(*m != 0)).collect();
+        Some((
+            hex::encode(masked),
+            hex::encode(normalized),
+            entry.crc16,
+            entry.crc_len,
+        ))
+    }
+
+    /// Groups of entry indices that [`FlirtLibrary::match_at`] cannot tell
+    /// apart, largest first within each group's own order.
+    ///
+    /// **This should always be empty.** A builder's duplicate key has to be
+    /// exactly what the matcher compares: key on *more* than the matcher and
+    /// several entries survive that no input can ever separate, so every one
+    /// of them becomes a candidate together and the verdict is a permanent
+    /// [`FlirtMatch::Ambiguous`] -- a name the library paid for and can never
+    /// deliver. Measured on a seven-library set built from this box's own
+    /// `libc.a`, `libm`, `libstdc++`, `libcrypto`, `libssl`, `libz` and the
+    /// Rust sysroot: 276 such groups covering 594 of 15,538 entries, because
+    /// `build_flirt_library.py` keyed on `function_len` as well. Those names
+    /// now share one entry as [`FlirtSignatureEntry::alternatives`], where a
+    /// later level can still choose between them.
+    ///
+    /// Entries whose hex does not decode are skipped; [`FlirtLibrary::from_file`]
+    /// drops them too.
+    pub fn matcher_key_collisions(&self) -> Vec<Vec<usize>> {
+        let mut by_key: HashMap<MatcherKey, Vec<usize>> = HashMap::new();
+        for (i, entry) in self.entries.iter().enumerate() {
+            let Some(key) = self.entry_matcher_key(entry) else {
+                continue;
+            };
+            by_key.entry(key).or_default().push(i);
+        }
+        let mut groups: Vec<Vec<usize>> = by_key
+            .into_values()
+            .filter(|indices| indices.len() > 1)
+            .collect();
+        groups.sort_unstable();
+        groups
+    }
 }
 
 /// One signature, compiled for matching.
@@ -294,6 +413,13 @@ impl FlirtLibrary {
     /// Entries whose pattern is not `prologue_len` bytes, or whose mask length
     /// disagrees with the pattern, are dropped: a signature we cannot compare
     /// correctly is worse than a missing one.
+    ///
+    /// An entry carrying [`FlirtSignatureEntry::alternatives`] compiles to one
+    /// [`FlirtSignature`] per name, all sharing the entry's pattern, mask and
+    /// CRC. That is the shape the rest of this module already handles: they
+    /// arrive together as candidates, `match_at` reports them
+    /// [`FlirtMatch::Ambiguous`], and a length or a referenced name can still
+    /// pick one.
     pub fn from_file(file: FlirtLibraryFile) -> Self {
         let mut signatures: Vec<FlirtSignature> = Vec::new();
         for e in &file.entries {
@@ -317,13 +443,24 @@ impl FlirtLibrary {
             };
             signatures.push(FlirtSignature {
                 name: e.name.clone(),
-                pattern,
-                fixed,
+                pattern: pattern.clone(),
+                fixed: fixed.clone(),
                 crc: e.crc16,
                 crc_len: usize::from(e.crc_len),
                 function_len: e.function_len,
                 refs: e.refs.clone(),
             });
+            for alt in &e.alternatives {
+                signatures.push(FlirtSignature {
+                    name: alt.name.clone(),
+                    pattern: pattern.clone(),
+                    fixed: fixed.clone(),
+                    crc: e.crc16,
+                    crc_len: usize::from(e.crc_len),
+                    function_len: alt.function_len,
+                    refs: alt.refs.clone(),
+                });
+            }
         }
 
         let mut by_first_byte: HashMap<u8, Vec<usize>> = HashMap::new();
@@ -1269,5 +1406,83 @@ mod tests {
         let lib = FlirtLibrary::from_json(json).unwrap();
         let ids = lib.masked_pattern_identities();
         assert_eq!(ids[0], ids[1]);
+    }
+
+    // -- the matcher's own duplicate key -------------------------------------
+
+    /// Two entries agreeing on everything `matches` compares, differing only
+    /// in a `function_len` it never reads. This is the shape the builder
+    /// produced 276 times over a seven-library set.
+    const COLLIDING_FILE: &str = r#"{
+      "schema_version": "2", "arch": "x86_64", "prologue_len": 4,
+      "entries": [
+        {"name": "_IO_seekoff", "prologue_hex": "f30f1efa",
+         "crc16": 7706, "crc_len": 1, "function_len": 646},
+        {"name": "_IO_seekpos", "prologue_hex": "f30f1efa",
+         "crc16": 7706, "crc_len": 1, "function_len": 492}
+      ], "index": {}
+    }"#;
+
+    #[test]
+    fn a_builder_key_wider_than_the_matcher_leaves_a_collision() {
+        let file: FlirtLibraryFile = serde_json::from_str(COLLIDING_FILE).unwrap();
+        let groups = file.matcher_key_collisions();
+        assert_eq!(groups, vec![vec![0, 1]]);
+    }
+
+    #[test]
+    fn an_absent_mask_and_an_all_ff_mask_are_one_key() {
+        // `from_file` treats both as "every byte fixed", so the collision
+        // check has to as well, or it under-reports.
+        let json = r#"{
+          "schema_version": "2", "arch": "x86_64", "prologue_len": 4,
+          "entries": [
+            {"name": "a", "prologue_hex": "f30f1efa"},
+            {"name": "b", "prologue_hex": "f30f1efa", "mask_hex": "ffffffff"}
+          ], "index": {}
+        }"#;
+        let file: FlirtLibraryFile = serde_json::from_str(json).unwrap();
+        assert_eq!(file.matcher_key_collisions(), vec![vec![0, 1]]);
+    }
+
+    #[test]
+    fn alternatives_are_one_entry_with_no_collision_and_two_candidates() {
+        let json = r#"{
+          "schema_version": "2", "arch": "x86_64", "prologue_len": 4,
+          "entries": [
+            {"name": "_IO_seekoff", "prologue_hex": "f30f1efa",
+             "crc16": null, "crc_len": 0, "function_len": 646,
+             "alternatives": [{"name": "_IO_seekpos", "function_len": 492}]}
+          ], "index": {}
+        }"#;
+        let file: FlirtLibraryFile = serde_json::from_str(json).unwrap();
+        assert!(file.matcher_key_collisions().is_empty());
+
+        let lib = FlirtLibrary::from_file(file);
+        assert_eq!(lib.signature_count(), 2);
+        // Indistinguishable to `match_at`, which is the honest answer.
+        assert_eq!(
+            lib.match_at(&[0xf3, 0x0f, 0x1e, 0xfa]),
+            FlirtMatch::Ambiguous(vec!["_IO_seekoff", "_IO_seekpos"])
+        );
+        // ...and still separable by the level that can tell them apart.
+        assert_eq!(
+            lib.match_at_with_length(&[0xf3, 0x0f, 0x1e, 0xfa], 492),
+            FlirtMatch::Unique("_IO_seekpos")
+        );
+    }
+
+    #[test]
+    fn the_shipped_library_has_no_matcher_key_collisions() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("data/sigs/glaurung-base.x86_64.flirt.json");
+        let file: FlirtLibraryFile =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let groups = file.matcher_key_collisions();
+        let named: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|g| g.iter().map(|i| file.entries[*i].name.as_str()).collect())
+            .collect();
+        assert!(named.is_empty(), "{path:?} holds indistinguishable entries: {named:?}");
     }
 }

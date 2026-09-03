@@ -29,6 +29,16 @@ window is an absolute the linker chose. It emits schema version ``1``
 (exact byte equality), and the matcher still reads that -- an absent mask
 means every byte is fixed.
 
+**The duplicate key is the matcher's, not the builder's.**
+``FlirtLibrary::match_at`` compares the masked pattern, the mask, the CRC16
+and the CRC length, so those four are the key here. Names that share one key
+cannot be separated by any input, and they are written as **one** entry
+carrying ``alternatives`` -- FLIRT's own tree keeps several modules on a leaf
+for the same reason. ``match_at`` still names none of them, but an exact
+function length or a referenced name can still choose, and only if the
+alternatives were written down. See
+``docs/reference/function-signature-libraries.md``.
+
 A library is keyed by ``(name, version, variant, arch)``. No exact or
 masked scheme crosses an optimisation level, so a corpus spanning gcc and
 clang across ``-O0`` to ``-O3`` is not one library; it is N libraries
@@ -258,17 +268,27 @@ def build_library_from_archive(
         str(archive), prologue_len, min_function_len, min_fixed_bytes
     )
 
-    # Two functions that are indistinguishable to the matcher -- same *masked*
-    # pattern, same mask, same CRC -- but carrying different names are dropped,
-    # both of them. A FLIRT hit writes a name at `set_by=flirt`, which outranks
-    # `auto`; a coin flip there is worse than no name at all.
+    # ---- the duplicate key is exactly what the matcher compares --------------
     #
-    # The key is the masked pattern, not the raw one. Variant bytes are never
+    # `FlirtLibrary::match_at` compares the masked pattern, the mask, the CRC16
+    # and the CRC length, and nothing else. So that is the key here. Keying on
+    # anything further -- this function keyed on `function_len` until
+    # 2026-09-03 -- leaves in the file entries that no input can ever separate:
+    # every one of them becomes a candidate together and the verdict is a
+    # permanent `Ambiguous`. Measured over a seven-library set built from this
+    # box's own libc, libm, libstdc++, libcrypto, libssl, libz and Rust
+    # sysroot: **276 such keys covering 594 of 15,538 entries.**
+    #
+    # The key is the *masked* pattern, not the raw one. Variant bytes are never
     # compared, so two signatures that differ only there are the same signature
-    # as far as matching is concerned -- and keying on the raw hex would let
-    # both into the library and let whichever came first win.
-    by_key: dict[tuple[str, str, object, int, object], dict] = {}
-    ambiguous: set[tuple[str, str, object, int, object]] = set()
+    # as far as matching is concerned.
+    #
+    # Names that survive one key are not dropped -- they become one entry with
+    # `alternatives`, which is how FLIRT's own tree holds several modules on
+    # one leaf. `match_at` still refuses to name any of them, but an exact
+    # function length or a referenced name can still choose, and that
+    # information is only available if it was written down.
+    by_key: dict[tuple[str, str, object, int], list[dict]] = {}
     aliases_coalesced = 0
 
     def public_alias_rank(row: dict) -> tuple[int, int, str]:
@@ -282,45 +302,74 @@ def build_library_from_archive(
             row["mask_hex"] or "",
             row["crc16"],
             int(row["crc_len"]),
-            row["function_len"],
         )
-        if key in ambiguous:
-            continue
-        prior = by_key.get(key)
-        if prior is not None:
-            if prior["name"] != row["name"]:
-                same_symbol = (
-                    prior["member"] == row["member"]
-                    and int(prior["address"]) == int(row["address"])
-                )
-                if same_symbol:
-                    aliases_coalesced += 1
-                    by_key[key] = min((prior, row), key=public_alias_rank)
-                else:
-                    ambiguous.add(key)
-                    del by_key[key]
-            continue
-        by_key[key] = row
+        by_key.setdefault(key, []).append(row)
+
+    def collapse(rows: list[dict]) -> list[dict]:
+        """One row per distinct name on a leaf, best spelling first.
+
+        Two rows at the same `(member, address)` are the *same code* under two
+        symbols -- `_IO_puts` and `puts` -- and only the public spelling is
+        kept. Two rows at different addresses are different functions that
+        happen to be indistinguishable, and both are kept as alternatives.
+        """
+        nonlocal aliases_coalesced
+        by_symbol: dict[tuple[str, int], dict] = {}
+        for row in rows:
+            symbol = (str(row["member"]), int(row["address"]))
+            prior = by_symbol.get(symbol)
+            if prior is None:
+                by_symbol[symbol] = row
+            elif prior["name"] != row["name"]:
+                aliases_coalesced += 1
+                by_symbol[symbol] = min((prior, row), key=public_alias_rank)
+        seen: set[str] = set()
+        out: list[dict] = []
+        for row in sorted(by_symbol.values(), key=public_alias_rank):
+            if row["name"] in seen:
+                continue
+            seen.add(row["name"])
+            out.append(row)
+        return out
+
+    collapsed = {key: collapse(rows) for key, rows in by_key.items()}
+    ambiguous_keys = sum(1 for rows in collapsed.values() if len(rows) > 1)
+    ambiguous_names = sum(len(rows) for rows in collapsed.values() if len(rows) > 1)
 
     entries: list[dict[str, Any]] = []
     index: dict[str, list[int]] = {}
-    for row in sorted(by_key.values(), key=lambda r: (r["name"], r["prologue_hex"])):
+    for rows in sorted(
+        collapsed.values(), key=lambda r: (r[0]["name"], r[0]["prologue_hex"])
+    ):
+        row = rows[0]
         pattern_hex = str(row["prologue_hex"])
         mask_hex = str(row["mask_hex"]) if row["mask_hex"] else None
-        entries.append(
-            {
-                "name": row["name"],
-                "prologue_hex": pattern_hex,
-                "source_binary": row["source_binary"],
-                "mask_hex": mask_hex,
-                "crc16": row["crc16"],
-                "crc_len": int(row["crc_len"]),
-                "function_len": row["function_len"],
-                "refs": [
-                    {"offset": int(r["offset"]), "name": r["name"]} for r in row["refs"]
-                ],
-            }
-        )
+        entry: dict[str, Any] = {
+            "name": row["name"],
+            "prologue_hex": pattern_hex,
+            "source_binary": row["source_binary"],
+            "mask_hex": mask_hex,
+            "crc16": row["crc16"],
+            "crc_len": int(row["crc_len"]),
+            "function_len": row["function_len"],
+            "refs": [
+                {"offset": int(r["offset"]), "name": r["name"]} for r in row["refs"]
+            ],
+        }
+        if len(rows) > 1:
+            entry["alternatives"] = [
+                {
+                    "name": alt["name"],
+                    "function_len": alt["function_len"],
+                    "refs": [
+                        {"offset": int(r["offset"]), "name": r["name"]}
+                        for r in alt["refs"]
+                    ],
+                    "source_binary": alt["source_binary"],
+                }
+                for alt in rows[1:]
+            ]
+        entries.append(entry)
         # The prefix index keys on the first four bytes, so it is only usable
         # when those four are fixed. An entry whose prologue starts variant is
         # left out of the index rather than filed under bytes that will change.
@@ -344,7 +393,12 @@ def build_library_from_archive(
             "archive": str(archive),
             "raw_signatures": len(raw),
             "unique_signatures": len(entries),
-            "dropped_ambiguous": len(ambiguous),
+            # Leaves the pattern and the CRC cannot resolve, and how many names
+            # sit on them. Nothing is *dropped* any more: an unresolvable leaf
+            # is one entry carrying every name, so a later level still has
+            # something to choose between.
+            "ambiguous_keys": ambiguous_keys,
+            "ambiguous_names": ambiguous_names,
             "aliases_coalesced": aliases_coalesced,
             "signatures_with_masked_bytes": masked,
             "signatures_with_crc": sum(1 for e in entries if int(e["crc_len"]) > 0),
@@ -478,7 +532,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"wrote {args.output}  "
                 f"(raw={s['raw_signatures']}, "
                 f"unique={s['unique_signatures']}, "
-                f"dropped_ambiguous={s['dropped_ambiguous']}, "
+                f"ambiguous_keys={s['ambiguous_keys']}, "
+                f"ambiguous_names={s['ambiguous_names']}, "
                 f"masked={s['signatures_with_masked_bytes']}, "
                 f"with_crc={s['signatures_with_crc']}, "
                 f"with_refs={s['signatures_with_refs']})",
