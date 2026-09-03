@@ -158,10 +158,67 @@ def test_archive_builder_keeps_public_name_for_same_address_aliases(
     )
 
     built = build_library_from_archive(
-        Path("libc.a"), library_name="glibc", version="test", variant="test", arch="armv7"
+        Path("libc.a"),
+        library_name="glibc",
+        version="test",
+        variant="test",
+        arch="armv7",
     )
 
     assert [entry["name"] for entry in built["entries"]] == ["puts"]
+    assert built["stats"]["aliases_coalesced"] == 1
+    assert built["stats"]["dropped_ambiguous"] == 0
+
+
+def test_archive_builder_prefers_the_aeabi_alias_over_the_shorter_libgcc_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ARM EABI libgcc double-precision helpers alias the *generic* GCC
+    libcall name (``__adddf3``) with the RTABI-mandated name
+    (``__aeabi_dadd``) at the same address in the same ``.o`` -- measured in
+    ``lib/gcc/arm-none-eabi/13.2.1/thumb/v7e-m+fp/hard/libgcc.a``'s
+    ``_arm_addsubdf3.o``. Both names have two leading underscores, so the
+    pre-existing tie-break (fewer leading underscores, then shorter name)
+    picks ``__adddf3`` -- the wrong one. Every real Cortex-M firmware that
+    calls these routines does so through the RTABI name, so ``__adddf3``
+    named nothing while ``__aeabi_dadd`` would have named it correctly in
+    every firmware measured against `rt-libopencm3`
+    (`docs/reference/function-signature-libraries.md`, "Cortex-M (bare
+    metal)"): 21 of 21 wrong names in that measurement were exactly this
+    alias-selection bug on ``__aeabi_d*``/``__aeabi_f*`` pairs.
+    """
+    base = {
+        "prologue_hex": "aa" * 32,
+        "mask_hex": "ff" * 32,
+        "crc16": 7,
+        "crc_len": 4,
+        "function_len": 630,
+        "refs": [],
+        "member": "_arm_addsubdf3.o",
+        "address": 12,
+        "masked_bytes": 0,
+    }
+    rows = [
+        {**base, "name": "__adddf3", "source_binary": "_arm_addsubdf3.o!__adddf3"},
+        {
+            **base,
+            "name": "__aeabi_dadd",
+            "source_binary": "_arm_addsubdf3.o!__aeabi_dadd",
+        },
+    ]
+    monkeypatch.setattr(
+        g.analysis, "flirt_signatures_from_archive_path", lambda *_args: rows
+    )
+
+    built = build_library_from_archive(
+        Path("libgcc.a"),
+        library_name="libgcc",
+        version="13.2.1",
+        variant="test",
+        arch="armv7",
+    )
+
+    assert [entry["name"] for entry in built["entries"]] == ["__aeabi_dadd"]
     assert built["stats"]["aliases_coalesced"] == 1
     assert built["stats"]["dropped_ambiguous"] == 0
 

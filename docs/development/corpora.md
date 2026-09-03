@@ -19,8 +19,13 @@ committed:
 * `samples/` — **checked in**, small, documented in
   [`samples/README.md`](../../samples/README.md).
 * Published research corpora — **downloaded**, tens of gigabytes, this page.
-* Windows system binaries and their PDBs — **NAS-resident**, hundreds of
-  gigabytes, not downloadable as one artifact, also this page.
+* NAS-mounted corpora — **read-only, never copied or downloaded**, this page.
+  Large, pre-built binary/toolchain trees that live on `/nas4` and are
+  referenced by path plus sha256 rather than fetched, because copying them
+  would just duplicate bytes an agent must not write to `/nas4` to produce in
+  the first place. Windows system binaries and their PDBs are one such tree,
+  hundreds of gigabytes and not downloadable as one artifact; the ARM GNU
+  Toolchain and Cortex-M validation firmware are another.
 
 A downloaded corpus is only useful as evidence if a later reader can tell that
 they have the same bytes. So each entry below records the exact source, the
@@ -261,6 +266,53 @@ uv run python -m glaurung.tools.build_warp_library \
   --skip-without-pdb --index \
   "$GLAURUNG_WINDOWS_CORPUS/binaries/windows-11-x64"
 ```
+
+---
+
+## ARM GNU Toolchain (`armtc`) and Cortex-M validation firmware — NAS, read-only
+
+Three trees under `/nas4/data/binary-analysis/`, used together to build and
+validate the Cortex-M FLIRT signature libraries in
+[`function-signature-libraries.md`](../reference/function-signature-libraries.md#cortex-m-bare-metal).
+None of them is downloaded or copied anywhere by this repository's tooling;
+`tools/harvest_armtc.py` records NAS path plus sha256 and nothing else.
+
+**`armtc/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/`** — the
+prebuilt ARM GNU Toolchain release (`arm-none-eabi-gcc 13.2.1 20231009`,
+newlib `4.3.0`), 780 static archives (`libc.a`, `libc_nano.a`, `libg.a`,
+`libm.a`, `libstdc++.a`, `libstdc++_nano.a`, `libsupc++.a`, `libnosys.a`,
+`librdimon*.a`, `libgcov.a`, `libcaf_single.a`) across 39 multilibs under
+`arm-none-eabi/lib/{arm,thumb}/**` plus `libgcc.a` under
+`lib/gcc/arm-none-eabi/13.2.1/**`. Licence: newlib/libgloss is BSD-style
+(the toolchain's own `license.txt`, lines 8721-10644); libgcc/libstdc++ are
+GPLv3 plus the GCC Runtime Library Exception. Read by
+`GLAURUNG_ARMTC` (Python-side only, e.g.
+`tools/harvest_armtc.py --toolchain-root "$GLAURUNG_ARMTC"`, and
+`python/tests/test_flirt_cortex_m_fixture.py`'s live-toolchain check).
+
+**`rt-libopencm3/`** — 20 real STM32F4 firmwares from the `libopencm3`
+example tree (`blink`, `usart-stdio`, `lcd-dma`, ...), each with a `stripped/`
+and an `asrun/` (unstripped, DWARF-carrying) copy at three optimisation
+levels (`O0`, `O2`, `O2-noinline`), plus `addr2name.json` (decimal VA -> name
+ground truth, some addresses carrying the Thumb bit) and `srcloc.json`. Built
+with the *same* toolchain release above (`arm-none-eabi-gcc 13.2.1
+20231009`, confirmed from each firmware's `.comment` section) and a gcc14
+variant not used by this measurement.
+
+**`decbench-holdout-source-rebuild-2026-08-06/{O0,O2,O2-noinline}/<project>/{compiled,stripped}/`**
+— DecBench holdout projects rebuilt from source, several of them bare-metal
+ARM EABI5 statically linked firmware: `libopencm3`, `chibios`, `freertos`,
+`nuttx`, `riot-os`, `betaflight`, `cleanflight`, `crazyflie`. **Recorded
+defect:** for every ARM project checked (`freertos`, `nuttx`, `betaflight`),
+`stripped/<binary>` is byte-**identical** to `compiled/<binary>` (sha256
+verified) — the corpus's strip step is a no-op for these targets, so there is
+no separately-stripped ARM binary to test blind recovery against in this
+holdout set. Ground truth for the ARM validation table is read directly off
+the binary's own symbol table (`arm-none-eabi-nm -S --defined-only`) rather
+than from a separate stripped/unstripped pair.
+
+None of these three trees count toward the "current total" above — they are
+never copied into `$HOME/.cache/glaurung/`, only read in place.
 
 ## Not ingested, and why
 
