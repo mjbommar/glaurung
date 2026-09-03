@@ -2429,6 +2429,120 @@ mod tests {
     }
 
     #[test]
+    fn live_in_arg_slots_follow_cfg_paths_instead_of_block_address_order() {
+        use crate::ir::types::BinOp;
+
+        // The lower-address arm initializes rcx, while a sibling arm reads the
+        // incoming rcx. A linear block scan sees the write first and loses the
+        // fourth parameter even though one executable path reads it before any
+        // definition (the shape used by Rust enum jump-table constructors).
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: Vec::new(),
+                    succs: vec![0x1010, 0x1020],
+                },
+                LlirBlock {
+                    start_va: 0x1010,
+                    end_va: 0x1014,
+                    instrs: vec![LlirInstr {
+                        va: 0x1010,
+                        op: Op::Assign {
+                            dst: VReg::phys("ecx"),
+                            src: Value::Const(0),
+                        },
+                    }],
+                    succs: Vec::new(),
+                },
+                LlirBlock {
+                    start_va: 0x1020,
+                    end_va: 0x1024,
+                    instrs: vec![LlirInstr {
+                        va: 0x1020,
+                        op: Op::Bin {
+                            op: BinOp::Add,
+                            dst: VReg::phys("rax"),
+                            lhs: Value::Reg(VReg::phys("rcx")),
+                            rhs: Value::Const(1),
+                        },
+                    }],
+                    succs: Vec::new(),
+                },
+            ],
+        };
+
+        let params = live_in_arg_slots_llir(&lf, CallConv::SysVAmd64);
+
+        assert!(
+            params.contains(&3),
+            "the sibling path reads incoming rcx before any definition: {params:?}"
+        );
+    }
+
+    #[test]
+    fn cfg_path_parameter_analysis_covers_every_register_argument_abi() {
+        use crate::ir::types::BinOp;
+
+        for (cc, register, slot) in [
+            (CallConv::SysVAmd64, "rcx", 3),
+            (CallConv::Win64, "r9", 3),
+            (CallConv::Aarch64, "x3", 3),
+            (CallConv::Arm, "r3", 3),
+            (CallConv::ArmHardFloat, "r3", 3),
+        ] {
+            let lf = LlirFunction {
+                entry_va: 0x1000,
+                blocks: vec![
+                    LlirBlock {
+                        start_va: 0x1000,
+                        end_va: 0x1004,
+                        instrs: Vec::new(),
+                        succs: vec![0x1010, 0x1020],
+                    },
+                    LlirBlock {
+                        start_va: 0x1010,
+                        end_va: 0x1014,
+                        instrs: vec![LlirInstr {
+                            va: 0x1010,
+                            op: Op::Assign {
+                                dst: VReg::phys(register),
+                                src: Value::Const(0),
+                            },
+                        }],
+                        succs: Vec::new(),
+                    },
+                    LlirBlock {
+                        start_va: 0x1020,
+                        end_va: 0x1024,
+                        instrs: vec![LlirInstr {
+                            va: 0x1020,
+                            op: Op::Bin {
+                                op: BinOp::Add,
+                                dst: VReg::phys("tmp"),
+                                lhs: Value::Reg(VReg::phys(register)),
+                                rhs: Value::Const(1),
+                            },
+                        }],
+                        succs: Vec::new(),
+                    },
+                ],
+            };
+
+            assert!(
+                live_in_arg_slots_llir(&lf, cc).contains(&slot),
+                "{cc:?} must retain the incoming {register} value on its reading arm"
+            );
+        }
+
+        // IA-32 cdecl passes ordinary arguments on the stack, so there is no
+        // register slot for this analysis to classify.
+        assert!(crate::ir::abi::argument_slots(CallConv::Cdecl32).is_empty());
+    }
+
+    #[test]
     fn real_arm_alignment_save_does_not_invent_four_parameters() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-gcc");
