@@ -57,7 +57,10 @@ use return_attribution::{attribute_call_results, return_value_is_read};
 use slot_marking::{
     mark_arg_reads_in_expr, mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, mark_slot_write,
 };
-pub use tail_calls::{recover_resolved_direct_tail_calls, recover_resolved_tail_calls};
+pub use tail_calls::{
+    recover_proven_vtable_tail_calls, recover_resolved_direct_tail_calls,
+    recover_resolved_tail_calls,
+};
 
 /// Compatibility export while ABI consumers migrate to `crate::target`.
 pub use crate::target::abi::CallConv;

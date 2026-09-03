@@ -18,7 +18,7 @@
 //! explicit unrecovered-control-flow warning downstream.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::VReg;
+use crate::ir::types::{BinOp, VReg};
 
 use super::{arg_slots, return_reg, slot_of, CallConv};
 
@@ -38,6 +38,16 @@ use super::{arg_slots, return_reg, slot_of, CallConv};
 /// guessing a source prototype or a callee arity.
 pub fn recover_resolved_tail_calls(f: &mut Function, arch: CallConv) {
     recover_tail_calls_in_body(&mut f.body, arch);
+}
+
+/// Recover a Rust trait-object terminal dispatch backed by a proven fat-pointer
+/// result from the preceding direct call.
+pub fn recover_proven_vtable_tail_calls(
+    f: &mut Function,
+    arch: CallConv,
+    prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+) {
+    recover_vtable_tail_calls_in_body(&mut f.body, arch, prototypes);
 }
 
 /// Recover a direct jump whose target is a named entry outside the current AST
@@ -243,6 +253,173 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
     }
 }
 
+fn recover_vtable_tail_calls_in_body(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_vtable_tail_calls_in_body(then_body, arch, prototypes);
+                if let Some(else_body) = else_body {
+                    recover_vtable_tail_calls_in_body(else_body, arch, prototypes);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                recover_vtable_tail_calls_in_body(body, arch, prototypes)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    recover_vtable_tail_calls_in_body(case, arch, prototypes);
+                }
+                if let Some(default) = default {
+                    recover_vtable_tail_calls_in_body(default, arch, prototypes);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(Stmt::IndirectGoto {
+        target: Expr::Reg(target_register),
+    }) = body.last()
+    else {
+        return;
+    };
+    let target_register = target_register.clone();
+    let Some((definition_index, target)) = body[..body.len() - 1]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, statement)| match statement {
+            Stmt::Assign { dst, src } if *dst == target_register => Some((index, src.clone())),
+            _ => None,
+        })
+    else {
+        return;
+    };
+    if !is_rust_vtable_slot_load(&target, arch) {
+        return;
+    }
+    let Some((call_index, callee_va)) =
+        body[..definition_index]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, statement)| match statement {
+                Stmt::Call {
+                    target: Expr::Named { va, .. },
+                    ..
+                } => Some((index, *va)),
+                _ => None,
+            })
+    else {
+        return;
+    };
+    let Some(prototype) = prototypes.get(&callee_va) else {
+        return;
+    };
+    let word = crate::ir::abi::machine_word_bytes(arch);
+    if crate::ir::call_contracts::integer_c_type_width(&prototype.return_type, word)
+        != Some(crate::ir::abi::wide_integer_return_width(arch))
+        || body[call_index + 1..definition_index]
+            .iter()
+            .any(|statement| statement_writes_high_result(statement, arch))
+    {
+        return;
+    }
+
+    let tail_index = body.len() - 1;
+    body[tail_index] = Stmt::Call {
+        target,
+        args: Vec::new(),
+        dst: None,
+        call_spec: None,
+    };
+    body.push(Stmt::Return {
+        value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
+    });
+}
+
+fn statement_writes_high_result(statement: &Stmt, arch: CallConv) -> bool {
+    match statement {
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+            matches!(dst, VReg::Phys(name) if crate::ir::abi::wide_integer_return_part(arch, name) == Some(1))
+        }
+        _ => false,
+    }
+}
+
+/// Recognise the machine shape of a Rust trait-object method slot.
+///
+/// A Rust fat pointer transports its vtable pointer in the high machine word.
+/// The first three vtable words are metadata (`drop`, size, alignment), so a
+/// method dispatch is a pointer-sized load at an aligned offset of at least
+/// three words from that extracted high half. Requiring this complete shape and
+/// a terminal statement keeps generic computed jumps explicitly unrecovered.
+fn is_rust_vtable_slot_load(target: &Expr, arch: CallConv) -> bool {
+    let word = crate::ir::abi::machine_word_bytes(arch);
+    let Expr::Deref { addr, size } = target else {
+        return false;
+    };
+    if *size != word {
+        return false;
+    }
+    let (base_is_high_result, offset) = match addr.as_ref() {
+        Expr::Lea {
+            base: Some(base),
+            index: None,
+            disp,
+            ..
+        } => (
+            matches!(base, VReg::Phys(name) if crate::ir::abi::wide_integer_return_part(arch, name) == Some(1)),
+            *disp,
+        ),
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => {
+            let (base, offset) = match (lhs.as_ref(), rhs.as_ref()) {
+                (base, Expr::Const(offset)) | (Expr::Const(offset), base) => (base, *offset),
+                _ => return false,
+            };
+            (
+                contains_high_word_extract(base, u32::from(word) * 8),
+                offset,
+            )
+        }
+        _ => return false,
+    };
+    let minimum_method_offset = i64::from(word) * 3;
+    base_is_high_result && offset >= minimum_method_offset && offset % i64::from(word) == 0
+}
+
+fn contains_high_word_extract(expr: &Expr, word_bits: u32) -> bool {
+    match expr {
+        Expr::Bin {
+            op: BinOp::Shr,
+            lhs: _,
+            rhs,
+        } if matches!(rhs.as_ref(), Expr::Const(bits) if *bits == i64::from(word_bits)) => true,
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            contains_high_word_extract(expr, word_bits)
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            contains_high_word_extract(lhs, word_bits) || contains_high_word_extract(rhs, word_bits)
+        }
+        Expr::Un { src, .. } | Expr::Deref { addr: src, .. } => {
+            contains_high_word_extract(src, word_bits)
+        }
+        _ => false,
+    }
+}
+
 fn statement_writes_argument_slot(stmt: &Stmt, arch: CallConv) -> bool {
     match stmt {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
@@ -295,6 +472,57 @@ mod tests {
                 }),
                 size: 8,
             },
+        }
+    }
+
+    fn vtable_load(slot: i64) -> Expr {
+        Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(reg("rdx#result")),
+                index: None,
+                scale: 1,
+                disp: slot,
+                segment: None,
+            }),
+            size: 8,
+        }
+    }
+
+    fn wide_prototypes() -> std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>
+    {
+        std::collections::HashMap::from([(
+            0x1000,
+            crate::ir::call_contracts::CallPrototype {
+                return_type: "unsigned __int128".into(),
+                parameter_types: vec!["unsigned int".into()],
+                variadic: false,
+                authority: crate::ir::call_contracts::CallPrototypeAuthority::Recovered,
+            },
+        )])
+    }
+
+    fn vtable_tail_function(slot: i64) -> Function {
+        Function {
+            name: "rust_dyn_apply".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "choose".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rcx#method"),
+                    src: vtable_load(slot),
+                },
+                Stmt::IndirectGoto {
+                    target: Expr::Reg(reg("rcx#method")),
+                },
+            ],
         }
     }
 
@@ -445,5 +673,59 @@ mod tests {
 
         recover_resolved_tail_calls(&mut f, CallConv::SysVAmd64);
         assert!(matches!(f.body.as_slice(), [Stmt::IndirectGoto { .. }]));
+    }
+
+    #[test]
+    fn terminal_aligned_vtable_slot_becomes_an_indirect_tail_call() {
+        let mut f = vtable_tail_function(24);
+
+        recover_proven_vtable_tail_calls(&mut f, CallConv::SysVAmd64, &wide_prototypes());
+
+        assert!(matches!(
+            &f.body[2..],
+            [
+                Stmt::Call {
+                    target: Expr::Deref { .. },
+                    ..
+                },
+                Stmt::Return { .. }
+            ]
+        ));
+    }
+
+    #[test]
+    fn unaligned_dynamic_dereference_stays_explicitly_unrecovered() {
+        let mut f = vtable_tail_function(3);
+
+        recover_proven_vtable_tail_calls(&mut f, CallConv::SysVAmd64, &wide_prototypes());
+
+        assert!(matches!(f.body.last(), Some(Stmt::IndirectGoto { .. })));
+    }
+
+    #[test]
+    fn vtable_shape_after_a_scalar_call_stays_explicitly_unrecovered() {
+        let mut f = vtable_tail_function(24);
+        let mut prototypes = wide_prototypes();
+        prototypes.get_mut(&0x1000).unwrap().return_type = "long".into();
+
+        recover_proven_vtable_tail_calls(&mut f, CallConv::SysVAmd64, &prototypes);
+
+        assert!(matches!(f.body.last(), Some(Stmt::IndirectGoto { .. })));
+    }
+
+    #[test]
+    fn overwritten_high_result_before_vtable_load_stays_unrecovered() {
+        let mut f = vtable_tail_function(24);
+        f.body.insert(
+            1,
+            Stmt::Assign {
+                dst: reg("rdx#result"),
+                src: Expr::Const(0),
+            },
+        );
+
+        recover_proven_vtable_tail_calls(&mut f, CallConv::SysVAmd64, &wide_prototypes());
+
+        assert!(matches!(f.body.last(), Some(Stmt::IndirectGoto { .. })));
     }
 }

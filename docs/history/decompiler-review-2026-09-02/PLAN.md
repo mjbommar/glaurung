@@ -1030,6 +1030,41 @@ pass, a narrow definition-health census reports no O0 or O2 violation, and all
 four host atomic lanes remain baseline-stable. Exact RED/GREEN and fixture
 evidence is in `results/wp9-store-width-demand.md`.
 
+### Implementation evidence - 2026-09-03 interprocedural INTEGER pair
+
+Direct-callee recovery now upgrades a call to the existing double-word INTEGER
+carrier only when the callee must-define analysis proves both ABI result halves
+on every reachable return and the exact caller consumes both before overwrite.
+This removes the undefined `rdx`/`var4` from Rust trait-object `rust_dyn_apply`
+at O2 and keeps O0 clean. Five positive/negative and cross-ABI proof tests and 18 adjacent
+call-result tests pass; both Rust fixture lanes remain baseline-stable. The
+broader host sweep measured 824/838 lanes but remains red from one infrastructure
+crash and three scalar C++ regressions in the concurrent snapshot, none of which
+crossed this new carrier path. Exact evidence and limits are in
+`results/wp9-interprocedural-integer-pair.md`.
+
+### Implementation evidence - 2026-09-03 Rust vtable tail calls
+
+Prototype-backed tail-call recovery now joins the proven two-word callee result
+with the exact terminal Rust vtable-slot load before converting an indirect
+jump. O2 `rust_dyn_apply` consequently emits the real virtual call and return
+instead of an unrecovered terminal jump, while four negative proof shapes stay
+fail-closed. The complete Rust trait-object O0/O2 slice remains baseline-stable;
+its remaining score failure is return-width/type cleanup, not missing control
+flow. Exact proof conditions and gate limits are in
+`results/wp9-rust-vtable-tail-call.md`.
+
+### Implementation evidence - 2026-09-03 Rust scalar source types
+
+The DWARF-to-C rendering boundary now translates Rust's fixed-width scalar
+spellings into representation-preserving standalone C types. The real O0 and
+O2 `rust_dyn_apply` fixture lanes consequently render their exported boundary
+as `int rust_dyn_apply(unsigned int sel, int x)` instead of widening the return
+to `long`; the clean O2 snapshot retains the previously recovered virtual call.
+The conversion is deliberately outside the generic C catalog normalizer, so it
+does not reinterpret Rust pointers or aggregates. Exact RED/GREEN and isolated
+snapshot evidence is in `results/wp9-rust-scalar-source-types.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
