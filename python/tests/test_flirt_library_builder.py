@@ -135,6 +135,85 @@ def test_ambiguity_is_keyed_on_the_masked_pattern() -> None:
     assert _masked_pattern("aabbccdd", None) == "aabbccdd"
 
 
+def test_archive_builder_keeps_public_name_for_same_address_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = {
+        "prologue_hex": "aa" * 32,
+        "mask_hex": "ff" * 32,
+        "crc16": 7,
+        "crc_len": 4,
+        "function_len": 64,
+        "refs": [],
+        "member": "ioputs.o",
+        "address": 0,
+        "masked_bytes": 0,
+    }
+    rows = [
+        {**base, "name": "_IO_puts", "source_binary": "ioputs.o!_IO_puts"},
+        {**base, "name": "puts", "source_binary": "ioputs.o!puts"},
+    ]
+    monkeypatch.setattr(
+        g.analysis, "flirt_signatures_from_archive_path", lambda *_args: rows
+    )
+
+    built = build_library_from_archive(
+        Path("libc.a"), library_name="glibc", version="test", variant="test", arch="armv7"
+    )
+
+    assert [entry["name"] for entry in built["entries"]] == ["puts"]
+    assert built["stats"]["aliases_coalesced"] == 1
+    assert built["stats"]["dropped_ambiguous"] == 0
+
+
+def test_archive_builder_preserves_same_pattern_at_distinct_lengths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The matcher can resolve this collision from an exact function boundary."""
+    base = {
+        "prologue_hex": "aa" * 32,
+        "mask_hex": "ff" * 32,
+        "crc16": None,
+        "crc_len": 0,
+        "refs": [],
+        "address": 0,
+        "masked_bytes": 0,
+    }
+    rows = [
+        {
+            **base,
+            "name": "puts",
+            "member": "ioputs.o",
+            "source_binary": "ioputs.o!puts",
+            "function_len": 628,
+        },
+        {
+            **base,
+            "name": "other",
+            "member": "other.o",
+            "source_binary": "other.o!other",
+            "function_len": 664,
+        },
+    ]
+    monkeypatch.setattr(
+        g.analysis, "flirt_signatures_from_archive_path", lambda *_args: rows
+    )
+
+    built = build_library_from_archive(
+        Path("libc.a"),
+        library_name="glibc",
+        version="test",
+        variant="test",
+        arch="aarch64",
+    )
+
+    assert [(entry["name"], entry["function_len"]) for entry in built["entries"]] == [
+        ("other", 664),
+        ("puts", 628),
+    ]
+    assert built["stats"]["dropped_ambiguous"] == 0
+
+
 def test_the_shipped_library_is_what_the_builder_produces(library: dict) -> None:
     """The committed file must be a rebuild of the committed archive.
 

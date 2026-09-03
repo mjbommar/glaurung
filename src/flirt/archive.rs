@@ -12,11 +12,10 @@
 //! samples.
 //!
 //! An `ar` archive holds unlinked `.o` members, and a relocatable object
-//! carries the relocation table that says, byte for byte, which parts of the
-//! text the linker is going to overwrite. SigKit puts it plainly: the linker
-//! "basically copy-pastes it byte-for-byte... The only bytes that change are
-//! the relocation bytes." Mask exactly those and the signature survives
-//! relinking, which is the one property the v1 design could not have.
+//! carries the relocation table that identifies which parts of the text the
+//! linker may change. Usually that is exactly the relocated field. Relaxable
+//! relocations are the important exception: their contract also permits the
+//! linker to rewrite surrounding instruction bytes, which must be masked too.
 //!
 //! FLIRT, Ghidra FunctionID, SigKit and WARP's own `WARP\Process` all take the
 //! same input class for the same reason.
@@ -24,7 +23,9 @@
 //! # What a relocation covers
 //!
 //! `object`'s `Relocation` gives an offset and a size in bits. The masked span
-//! is `[offset, offset + size/8)`, clamped to the pattern. A relocation with a
+//! is normally `[offset, offset + size/8)`, clamped to the pattern. Known
+//! linker-relaxable relocation kinds widen that span to cover the affected
+//! opcode bytes as well. A relocation with a
 //! reported size of zero -- some formats leave it implicit -- is widened to the
 //! natural pointer width for the architecture rather than skipped, because a
 //! relocation we mask too generously costs recall while one we miss costs
@@ -34,7 +35,8 @@ use std::collections::BTreeMap;
 
 use object::read::archive::ArchiveFile;
 use object::{
-    Architecture, Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex, SymbolKind,
+    Architecture, Object, ObjectSection, ObjectSymbol, RelocationFlags, RelocationTarget,
+    SectionIndex, SymbolKind,
 };
 
 use super::{crc16, FlirtLibraryKey, FlirtReference, FlirtSignatureEntry};
@@ -66,6 +68,10 @@ pub struct ArchiveSignature {
     pub entry: FlirtSignatureEntry,
     /// The archive member (`mathlib.o`) the function was defined in.
     pub member: String,
+    /// Section-relative symbol address. Equal addresses in one member prove
+    /// that differently named symbols are aliases, not coincidental byte
+    /// matches between distinct functions.
+    pub address: u64,
     /// How many pattern bytes the relocation table marked variant.
     pub masked_bytes: usize,
 }
@@ -123,6 +129,23 @@ fn default_reloc_width(arch: Architecture) -> u64 {
     }
 }
 
+fn relocation_variant_span(
+    arch: Architecture,
+    offset: u64,
+    len: u64,
+    flags: RelocationFlags,
+) -> (u64, u64) {
+    // GNU ld may relax `mov disp32(%ebx),reg` carrying R_386_GOT32X into a
+    // different opcode/modrm pair. Those two bytes precede the relocated
+    // disp32 field, but are just as link-variant as the field itself.
+    if arch == Architecture::I386
+        && matches!(flags, RelocationFlags::Elf { r_type } if r_type == object::elf::R_386_GOT32X)
+    {
+        return (offset.saturating_sub(2), len.saturating_add(2));
+    }
+    (offset, len)
+}
+
 /// Extract masked signatures from every object member of an `ar` archive.
 ///
 /// Deterministic: members are visited in archive order and symbols within a
@@ -163,9 +186,9 @@ pub fn signatures_from_object(
 
     // Relocations per section, as `(offset, byte length)`, plus the symbol
     // name each one targets so the reference list can be built.
-    let mut relocs: BTreeMap<usize, Vec<(u64, u64, Option<String>)>> = BTreeMap::new();
+    let mut relocs: BTreeMap<usize, Vec<(u64, u64, u64, Option<String>)>> = BTreeMap::new();
     for section in obj.sections() {
-        let mut spans: Vec<(u64, u64, Option<String>)> = Vec::new();
+        let mut spans: Vec<(u64, u64, u64, Option<String>)> = Vec::new();
         for (offset, reloc) in section.relocations() {
             let len = if reloc.size() == 0 {
                 width
@@ -180,7 +203,9 @@ pub fn signatures_from_object(
                     .filter(|n| !n.is_empty()),
                 _ => None,
             };
-            spans.push((offset, len.max(1), target));
+            let (variant_offset, variant_len) =
+                relocation_variant_span(obj.architecture(), offset, len.max(1), reloc.flags());
+            spans.push((variant_offset, variant_len, offset, target));
         }
         spans.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         relocs.insert(section.index().0, spans);
@@ -199,7 +224,12 @@ pub fn signatures_from_object(
         let Some(index) = sym.section_index() else {
             continue;
         };
-        symbols.push((sym.address(), name.to_string(), index, sym.size()));
+        // ELF encodes Thumb state in bit zero of STT_FUNC values. It is not a
+        // byte offset: section data and relocations are addressed at the
+        // underlying even location. Keeping the bit shifted every ARM FLIRT
+        // pattern by one byte, so no linked Thumb function could ever match.
+        let address = code_symbol_address(obj.architecture(), sym.address());
+        symbols.push((address, name.to_string(), index, sym.size()));
     }
     symbols.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
@@ -244,7 +274,7 @@ pub fn signatures_from_object(
             *f = false;
         }
 
-        for (offset, len, _) in spans {
+        for (offset, len, _, _) in spans {
             for byte in *offset..offset + len {
                 if byte < address {
                     continue;
@@ -266,7 +296,7 @@ pub fn signatures_from_object(
             .min(options.max_crc_len as u64);
         'crc: while crc_len < limit {
             let byte = crc_start + crc_len;
-            for (offset, len, _) in spans {
+            for (offset, len, _, _) in spans {
                 if byte >= *offset && byte < offset + len {
                     break 'crc;
                 }
@@ -282,8 +312,8 @@ pub fn signatures_from_object(
         // References: every relocation inside the function that names a symbol
         // other than the function itself, at its offset from the entry.
         let mut refs: Vec<FlirtReference> = Vec::new();
-        for (offset, _, target) in spans {
-            if *offset < address || *offset >= function_end {
+        for (_, _, reference_offset, target) in spans {
+            if *reference_offset < address || *reference_offset >= function_end {
                 continue;
             }
             let Some(target) = target else { continue };
@@ -291,7 +321,7 @@ pub fn signatures_from_object(
                 continue;
             }
             refs.push(FlirtReference {
-                offset: (offset - address) as u32,
+                offset: (reference_offset - address) as u32,
                 name: target.clone(),
             });
         }
@@ -319,10 +349,19 @@ pub fn signatures_from_object(
                 refs,
             },
             member: member.to_string(),
+            address,
             masked_bytes,
         });
     }
     out
+}
+
+fn code_symbol_address(arch: Architecture, address: u64) -> u64 {
+    if arch == Architecture::Arm {
+        address & !1
+    } else {
+        address
+    }
 }
 
 /// The `arch` tag a library file should carry for this object.
@@ -351,6 +390,21 @@ pub fn library_key(name: &str, version: &str, variant: &str, arch: &str) -> Flir
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn i386_got32x_masks_the_linker_relaxable_opcode_pair() {
+        assert_eq!(
+            relocation_variant_span(
+                Architecture::I386,
+                0x26,
+                4,
+                RelocationFlags::Elf {
+                    r_type: object::elf::R_386_GOT32X,
+                },
+            ),
+            (0x24, 6)
+        );
+    }
     use std::path::PathBuf;
 
     fn mathlib_archive() -> Option<Vec<u8>> {
@@ -499,5 +553,11 @@ mod tests {
         assert_eq!(arch_tag(Architecture::X86_64), "x86_64");
         assert_eq!(arch_tag(Architecture::I386), "i386");
         assert_eq!(arch_tag(Architecture::Aarch64), "aarch64");
+    }
+
+    #[test]
+    fn thumb_state_bit_is_not_used_as_a_section_byte_offset() {
+        assert_eq!(code_symbol_address(Architecture::Arm, 0x101), 0x100);
+        assert_eq!(code_symbol_address(Architecture::Aarch64, 0x101), 0x101);
     }
 }

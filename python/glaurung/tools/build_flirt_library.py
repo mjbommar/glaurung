@@ -259,22 +259,38 @@ def build_library_from_archive(
     # compared, so two signatures that differ only there are the same signature
     # as far as matching is concerned -- and keying on the raw hex would let
     # both into the library and let whichever came first win.
-    by_key: dict[tuple[str, str, object, int], dict] = {}
-    ambiguous: set[tuple[str, str, object, int]] = set()
+    by_key: dict[tuple[str, str, object, int, object], dict] = {}
+    ambiguous: set[tuple[str, str, object, int, object]] = set()
+    aliases_coalesced = 0
+
+    def public_alias_rank(row: dict) -> tuple[int, int, str]:
+        """Prefer the public C spelling among proven same-address aliases."""
+        name = str(row["name"])
+        return (len(name) - len(name.lstrip("_")), len(name), name)
+
     for row in raw:
         key = (
             _masked_pattern(row["prologue_hex"], row["mask_hex"]),
             row["mask_hex"] or "",
             row["crc16"],
             int(row["crc_len"]),
+            row["function_len"],
         )
         if key in ambiguous:
             continue
         prior = by_key.get(key)
         if prior is not None:
             if prior["name"] != row["name"]:
-                ambiguous.add(key)
-                del by_key[key]
+                same_symbol = (
+                    prior["member"] == row["member"]
+                    and int(prior["address"]) == int(row["address"])
+                )
+                if same_symbol:
+                    aliases_coalesced += 1
+                    by_key[key] = min((prior, row), key=public_alias_rank)
+                else:
+                    ambiguous.add(key)
+                    del by_key[key]
             continue
         by_key[key] = row
 
@@ -321,6 +337,7 @@ def build_library_from_archive(
             "raw_signatures": len(raw),
             "unique_signatures": len(entries),
             "dropped_ambiguous": len(ambiguous),
+            "aliases_coalesced": aliases_coalesced,
             "signatures_with_masked_bytes": masked,
             "signatures_with_crc": sum(1 for e in entries if int(e["crc_len"]) > 0),
             "signatures_with_refs": sum(1 for e in entries if e["refs"]),

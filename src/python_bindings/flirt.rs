@@ -23,8 +23,9 @@ use pyo3::types::{PyDict, PyList};
 ///     A list of dicts, one per function, with the keys ``name``,
 ///     ``prologue_hex``, ``mask_hex``, ``crc16``, ``crc_len``,
 ///     ``function_len``, ``refs`` (a list of ``{offset, name}``),
-///     ``source_binary``, ``member`` and ``masked_bytes``. The first eight are
-///     exactly the on-disk signature schema; the last two are provenance.
+///     ``source_binary``, ``member``, ``address`` and ``masked_bytes``. The
+///     first eight are exactly the on-disk signature schema; the last three
+///     are provenance used to distinguish aliases from ambiguity.
 ///
 /// Raises:
 ///     OSError: the file cannot be read.
@@ -71,6 +72,7 @@ fn flirt_signatures_from_archive_path_py(
         d.set_item("refs", refs)?;
         d.set_item("source_binary", &sig.entry.source_binary)?;
         d.set_item("member", &sig.member)?;
+        d.set_item("address", sig.address)?;
         d.set_item("masked_bytes", sig.masked_bytes)?;
         rows.append(d)?;
     }

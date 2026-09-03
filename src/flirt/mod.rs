@@ -312,6 +312,25 @@ impl FlirtLibrary {
         self.resolve(self.candidates(data), None)
     }
 
+    /// Match bytes while also using an exact discovered function length.
+    ///
+    /// Linker relocation can erase every distinguishing byte in the initial
+    /// pattern and prevent a CRC, while the linked function boundary still
+    /// preserves the archive symbol's exact size. Unknown recorded lengths do
+    /// not participate; a known disagreement eliminates that candidate.
+    pub fn match_at_with_length(&self, data: &[u8], function_len: u64) -> FlirtMatch<'_> {
+        let candidates = self
+            .candidates(data)
+            .into_iter()
+            .filter(|index| {
+                self.signatures[*index]
+                    .function_len
+                    .is_none_or(|expected| u64::from(expected) == function_len)
+            })
+            .collect();
+        self.resolve(candidates, None)
+    }
+
     /// Match `data`, using `resolver` to break ties.
     ///
     /// `resolver(offset)` answers "what is the name of the thing this function
@@ -651,6 +670,69 @@ pub fn apply_flirt_overrides(data: &[u8], functions: &mut [Function], lib: &Flir
     renamed
 }
 
+/// Match signatures only at concrete referenced function addresses.
+///
+/// Single-function decompilation intentionally bounds CFG discovery, but its
+/// direct callees still have exact entry addresses. Looking up those few VAs
+/// preserves static-library names without repeating the whole-section FLIRT
+/// scan or spending the discovery function budget on library bodies.
+pub fn names_at_vas(
+    data: &[u8],
+    vas: impl IntoIterator<Item = u64>,
+    lib: &FlirtLibrary,
+) -> Vec<(u64, String)> {
+    let maps = build_va_map(data);
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for va in vas {
+        if va == 0 || !seen.insert(va) {
+            continue;
+        }
+        let Some(offset) = va_to_file_off(&maps, va) else {
+            continue;
+        };
+        if offset.saturating_add(lib.prologue_len) > data.len() {
+            continue;
+        }
+        let end = data.len().min(offset.saturating_add(lib.match_window()));
+        if let Some(name) = lib.match_at(&data[offset..end]).unique() {
+            names.push((va, name.to_string()));
+        }
+    }
+    names
+}
+
+/// Match concrete function entries with their discovered byte lengths.
+pub fn names_at_vas_with_lengths(
+    data: &[u8],
+    vas: impl IntoIterator<Item = (u64, Option<u64>)>,
+    lib: &FlirtLibrary,
+) -> Vec<(u64, String)> {
+    let maps = build_va_map(data);
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (va, function_len) in vas {
+        if va == 0 || !seen.insert(va) {
+            continue;
+        }
+        let Some(offset) = va_to_file_off(&maps, va) else {
+            continue;
+        };
+        if offset.saturating_add(lib.prologue_len) > data.len() {
+            continue;
+        }
+        let end = data.len().min(offset.saturating_add(lib.match_window()));
+        let verdict = function_len.map_or_else(
+            || lib.match_at(&data[offset..end]),
+            |length| lib.match_at_with_length(&data[offset..end], length),
+        );
+        if let Some(name) = verdict.unique() {
+            names.push((va, name.to_string()));
+        }
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,6 +878,28 @@ mod tests {
           "index": {}
         }"#;
         FlirtLibrary::from_json(json).unwrap()
+    }
+
+    #[test]
+    fn exact_function_length_breaks_an_otherwise_unresolvable_tie() {
+        let json = r#"{
+          "schema_version": "2",
+          "arch": "aarch64",
+          "prologue_len": 4,
+          "entries": [
+            {"name": "puts", "prologue_hex": "3f2303d5", "function_len": 628},
+            {"name": "other", "prologue_hex": "3f2303d5", "function_len": 664}
+          ],
+          "index": {}
+        }"#;
+        let lib = FlirtLibrary::from_json(json).unwrap();
+        let prologue = 0xd503233fu32.to_le_bytes();
+        assert!(matches!(lib.match_at(&prologue), FlirtMatch::Ambiguous(_)));
+        assert_eq!(
+            lib.match_at_with_length(&prologue, 628),
+            FlirtMatch::Unique("puts")
+        );
+        assert_eq!(lib.match_at_with_length(&prologue, 640), FlirtMatch::None);
     }
 
     /// Two signatures sharing a pattern report ambiguity rather than a name.
