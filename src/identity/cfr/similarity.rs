@@ -298,7 +298,8 @@ impl MatchConfidence {
     }
 }
 
-/// [`BSIM_CALIBRATION`], log-linearly interpolated; `None` below 10.0.
+/// The false-positive rate of a significance score, as "one in N", by
+/// log-linear interpolation between the [`BSIM_CALIBRATION`] anchors.
 ///
 /// Below the lowest anchor Ghidra's help page says the correspondence does not
 /// hold -- "A general correspondence between low confidence scores and false

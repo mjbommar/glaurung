@@ -594,7 +594,7 @@ pub struct CfrWeights {
 
 #[pymethods]
 impl CfrWeights {
-    /// Rebuild a table from stored rows.
+    /// Rebuild a weight table from its stored `feature_weight` entries.
     ///
     /// `entries` is `[(feature_hash, doc_count), ...]`; the weights are
     /// recomputed from `documents` rather than trusted from the caller, so a

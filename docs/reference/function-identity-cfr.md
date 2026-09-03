@@ -2,11 +2,10 @@
 
 > **Kind:** reference · **Status:** maintained
 
-**Implemented, measured, and not yet weighted.** Everything below is in
-`src/identity/cfr/`. Every number carries the run it came from and the
-denominator it was measured over. The TF-IDF corpus table, the rare-feature
-inverted index and the peephole normaliser are separate, later lanes; the
-numbers here are what the representation does without any of them. The research
+**Implemented, weighted, indexed and measured.** Everything below is in
+`src/identity/cfr/` and `python/glaurung/llm/kb/cfr_index.py`. Every number
+carries the run it came from and the denominator it was measured over. The
+peephole normaliser is a separate, later lane. The research
 synthesis this implements is
 [`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md)
 and its four source reports in
@@ -269,11 +268,383 @@ and is not an index distance.
 same canonical form. 1-WL is one-sided: different features prove a difference,
 identical features do not prove identity.
 
-**Weights.** The `Weights` trait is defined now so call sites do not move when
-the TF-IDF corpus table lands. `UniformWeights` (`idf = 1`) is what every number
-below was measured under.
+**Weights.** `UniformWeights` (`idf = 1`) is the no-table fallback and is what
+every *unweighted* number below was measured under. The corpus table that
+replaces it is the next section.
+
+## Weighting: the corpus TF-IDF table
+
+`src/identity/cfr/weights.rs`. Without it a `mov` between two registers weighs
+as much as a call to `pthread_mutex_lock`, and the measured cost of that is at
+the bottom of this section.
+
+A feature's **document frequency** `df(f)` is the number of functions carrying
+it at least once -- not the number of occurrences, which is the term frequency
+and is already handled by the `1 + log2(tf)` term inside the kernel. Over a
+corpus of `N` functions:
+
+```text
+idf(f) = ln((N + 1) / (df(f) + 1))          [nats]
+```
+
+The `+1` on both sides is add-one smoothing and it is doing two jobs, neither
+cosmetic. It keeps the weight **finite** for a feature the corpus has never seen
+(`df = 0`), which is the ordinary case at query time and which plain
+`ln(N / df)` sends to infinity. And it keeps the weight **non-negative** for a
+feature every function carries (`df = N`), where plain `ln(N / df)` is exactly
+zero and one rounding error below it is negative -- and a negative weight makes
+the kernel indefinite, which takes the triangle inequality with it and with it
+everything the index rests on. `no_weight_is_ever_negative` asserts it directly.
+
+So the range is `[0, ln(N + 1)]`: a universal feature contributes nothing, and a
+feature seen once in a million-function corpus contributes about 13.
+
+### Quantisation
+
+BSim stores a `u16` per feature rather than a double
+(`LSH_ITEM{uint32 hash; uint16 tf; uint16 idf; double coeff;}`) and covers its
+commonest hashes with a fixed number of levels. This table does the same, with
+**512 levels evenly spaced over `[0, 16]` nats**:
+
+```text
+bucket(f) = round(clamp(idf(f), 0, 16) * 511 / 16)
+weight(f) = bucket(f) * 16 / 511
+```
+
+Sixteen nats is `ln` of about 8.9 million, so the ceiling binds only on a corpus
+larger than any this project indexes; fixing it as a constant rather than
+deriving it from `N` is what puts two tables built over differently sized
+corpora on the same scale. The step is 0.031 nats, a 3.2% resolution on the
+frequency ratio a weight encodes -- finer than the gap between two adjacent
+document counts anywhere the weight matters.
+
+Quantising is not only a storage saving. A weight table is part of a score that
+gets stored, compared and ratcheted, and a full-precision `f64` recomputed over
+a different corpus ordering can differ in its last bits; a bucket index cannot.
+Two tables that agree on every bucket produce bit-identical scores.
+
+### `weights_id`, and why a reweight is not an update
+
+Every stored vector's score depends on the table it was scored under. BSim
+freezes its weight scheme at database creation and documents that it "cannot be
+changed without reingesting". `CorpusWeights::weights_id` makes that explicit:
+a BLAKE3 over the scheme name, the full `(major, minor, settings)` triple, the
+quantisation parameters, the corpus size and every `(feature, bucket)` pair,
+printed as `cfr-1.0-s0-idf512-<16 hex>`. Anything that could change a weight
+changes the id, so a reweight is a new id rather than a silent rescoring of
+rows that are still sitting in the table.
+
+### What a feature the table has never seen is worth
+
+The corpus maximum, `ln(N + 1)`. That is the honest answer rather than a
+conservative one: the table's whole claim is that rarity is evidence, and a
+feature it has never seen is as rare as its evidence goes. It only inflates the
+norms, because a feature absent from the table can still be *shared* by two
+functions -- and then it is shared rarely, which is exactly the case worth
+scoring highly.
+
+## Confidence: BSim's significance
+
+`src/identity/cfr/similarity.rs`. The cosine says "how alike". It does not say
+"is this a coincidence", and it cannot: two four-feature functions sharing three
+features score 0.75 whether those features are in every function on earth or
+unique to one library. BSim returns two numbers from one comparison for this
+reason, and so does `confidence()`.
+
+**The formula is BSim's, recovered from public source rather than approximated.**
+It is `LSHVectorFactory.calculateSignificance` in
+`Ghidra/Framework/Generic/src/main/java/generic/lsh/vector/`, whose C twin is
+`lsh_compare_internal` in `Ghidra/Features/BSim/src/lshvector/c/weights.c`:
+
+```text
+sig = dotproduct
+    - numflip * (probflip0 + probflip1 / max)
+    - diff    * (probdiff0 + probdiff1 / max)
+    + addend
+```
+
+with, from `VectorCompare.fillOut()`:
+
+| Term | Definition |
+|---|---|
+| `acount`, `bcount` | total feature **occurrences** on each side -- BSim's `hashcount` is the sum of the term frequencies, not `numEntries()` |
+| `min`, `max` | min and max of those two |
+| `intersectcount` | `sum over shared f of min(tf_A, tf_B)` |
+| `numflip` | `min - intersectcount` |
+| `diff` | `max - min` |
+
+The model behind the two penalties is stated in Ghidra's own doc comment:
+*"Assume small vector is produced by flipping and removing hashes from big
+vector."* `numflip` counts occurrences the smaller function has that the larger
+does not -- the same computation spelled differently -- and `diff` counts the
+extra work the larger function does. Both are charged at a rate with a constant
+part and a part that decays as `max` grows, because a longer function has more
+chances to differ by accident.
+
+The five constants are `lshweights_64.xml`'s, divided through by that file's
+`scale`, and the weights are normalised by `Weights::max_idf` so the rarest
+feature the table can express again has coefficient 1 -- the normalisation BSim
+performs by folding `sqrt(scale)` into every loaded weight.
+
+### What is BSim's here and what is ours
+
+**BSim's, verbatim:** the shape, the definitions of `numflip`/`diff`/`max`
+(occurrences with multiplicity, which is easy to get wrong and changes all three
+at once), the five fitted constants, the self-significance bound, and therefore
+the calibration below.
+
+**Ours:** the features being counted, and the coefficient. BSim's is
+`idfweight[bucket] * sqrt(1 + log2(tf))` with `idfweight[0] = 1` for any feature
+outside its thousand-entry lookup; this module's is `idf(f) * (1 + log2(tf))`.
+The two agree exactly at `tf = 1`, the overwhelming majority of features, and
+diverge for repeated ones: BSim's `coeff^2` is linear in `1 + log2(tf)` where
+this module's is quadratic. That difference is inherited from the kernel above,
+which was measured and published before this function existed.
+
+**The consequence, stated plainly:** the constants were fitted by the NSA to a
+feature distribution that is not this one. The score is on BSim's scale by
+construction and on BSim's calibration only by assumption. Read the table below
+as an order of magnitude for this representation, not as a measured
+false-positive rate for it.
+
+### Calibration
+
+Ghidra's `help/topics/BSim/FeatureWeight.html`, verbatim, and the reason
+`false_positive_one_in` returns nothing below 10:
+
+| Confidence | False positive rate |
+|---|---|
+| 10 | 1 in 4,000 |
+| 26 | 1 in 100,000 |
+| 43 | 1 in 1,000,000 |
+| 93 | 1 in 1,000,000,000 |
+
+The page states the rate halves every four to five points, and states that it
+holds "for scores of 10.0 and greater" because "a general correspondence between
+low confidence scores and false positive rates can be somewhat skewed by
+wrappers and other small functions". Below 10 there is no rate to quote and
+`false_positive_one_in` answers `None` rather than extrapolating one. Above 93
+the last segment's slope continues. `CONFIDENT_SIGNIFICANCE` is 26.
+
+### The bound is a theorem, not a clamp
+
+`min(cA, cB)^2 <= cA^2` termwise and both penalties are non-negative, so
+
+```text
+significance(A, B) <= min(self_significance(A), self_significance(B))
+```
+
+falls out of the definition with nothing clamping anything.
+`self_significance` is `length^2 + addend`, which is the formula above
+specialised to a self-comparison where the intersection is everything and both
+penalties vanish -- BSim's `getSelfSignificance`, and the quantity its query
+paths use as a pre-filter:
+
+```text
+// Self significance should be bigger than the significance threshold
+// (or its impossible our result can exceed the threshold)
+if (len2 < query.signifthresh) { continue; }
+```
+
+It grows with the function, so **a small function cannot reach a confident match
+however well it matches.** That is the property report 03 names as the thing
+BSim's confidence has and a fixed threshold does not, and it is asserted three
+times: on constructed vectors
+(`a_small_function_cannot_reach_a_confident_match_however_well_it_matches`), on
+real functions through the Python boundary (`test_cfr_index.py`), and over the
+corpus (`cfr_significance_is_bounded_by_self_significance`).
+
+## Storage and retrieval: the inverted index
+
+`python/glaurung/llm/kb/cfr_index.py`, implementing section 4 of
+[`03-schema.sql`](../history/program-measures-2026-09-02/03-schema.sql).
+
+| Table | Holds |
+|---|---|
+| `cfr_weight_table` | one row per frozen table: `weights_id`, the CFR version triple, the corpus size, `top_k` |
+| `feature_weight` | `(weights_id, feature_hash) -> (doc_count, weight)` |
+| `feature_vector` | one row per **distinct canonical form**, keyed by the CFR digest, with the packed `(u32 hash, u16 count)` blob, the norm under the table, and a refcount |
+| `function_vector` | `(binary_id, entry_va) -> vector_id` |
+| `feature_posting` | `(feature_hash, vector_id)` for each vector's **32 rarest** features |
+
+**Deduplicated and refcounted** is BSim's `vectable.count` / `desctable.id_signature`
+split. It is a large saving on a library-heavy corpus and it is also the cheapest
+false-positive signal available: a vector with a refcount of two hundred is CRT
+boilerplate and a match against it means nothing. `CfrMatch` carries the
+refcount for that reason.
+
+**K = 32** postings per vector, so the index is linear in the corpus and
+independent of function size -- a full postings list would give a 900-feature
+function 900 rows, and the commonest features would contribute the longest and
+least useful lists. The reasoning is AllPairs' prefix filter's: a rare feature's
+posting list is short and its evidence is high, and two functions that are
+genuinely the same overwhelmingly share more than one of their rarest features.
+Note what K does *not* affect: nothing is scored from the index. It generates
+candidates; every candidate is then rescored exactly against its full stored
+vector. So K trades recall for time, never precision.
+
+**Two retrieval paths, chosen by corpus size rather than by a knob.** At or
+below **100,000 stored vectors** `query_cfr` scans every vector, which is exact
+by construction. Above it, candidates come from the postings of the query's own
+highest-IDF features, rarest first, so a truncated candidate set has dropped the
+weakest evidence rather than an arbitrary slice of it. The figure is the
+research synthesis's -- "Flat scan until about 1e5 to 1e6 vectors. Ghidra's own
+embedded BSim backend has no LSH index at all; it is an exact hash plus a linear
+scan" -- and below it the cheaper answer is also the better one.
+`test_the_index_and_the_scan_agree_on_the_top_hit` runs both on the fixture
+corpus and pins that they agree, which is the only thing that stops the index
+path silently rotting while the scan carries every real query.
+
+**A rebuild rather than an append**, by default, and the docstring says why: a
+feature's IDF is a property of the whole corpus, so adding one binary moves
+every stored norm. Pinning a table (`build_cfr_index(..., weights=...,
+replace=False)`) lets an index be extended; mixing two `weights_id`s in one
+index is refused rather than allowed to produce two incomparable scorings
+sharing a column.
+
+```python
+from glaurung.llm.kb.cfr_index import build_cfr_index, query_cfr
+
+summary = build_cfr_index(kb, ["libfoo-gcc-O2.so", "libbar-gcc-O2.so"])
+matches = query_cfr(kb, unknown_signature, k=10,
+                    min_significance=g.analysis.CFR_CONFIDENT_SIGNIFICANCE)
+for match in matches:
+    print(match.entry_va, match.cosine, match.significance, match.refcount)
+```
 
 ## Measured numbers
+
+Two harnesses measure this, over two corpora, and they answer different
+questions.
+
+`tests/identity_cfr_retrieval.rs` is the CFR's own lane: size-matched pools,
+LLIR instruction count as the size, its own filter set stated per lane. Its
+numbers are below under [Its own lane](#its-own-lane).
+
+`tests/identity_retrieval/` is the **shared** protocol every identity scheme is
+scored under -- Marcelli's task taxonomy, the published filters, 100 negatives
+per positive drawn from the task's own pool slice, pessimistic ties. Those
+numbers are directly comparable with CTPH and with the L1 structural invariants
+and are the ones to quote. The full tables live in
+[`docs/development/identity-measurement.md`](../development/identity-measurement.md);
+the summary is here.
+
+### Unweighted, the shared protocol
+
+Release build, 2026-09-02, bit-identical in a debug build. Sampled pool 101
+throughout, so chance Recall@1 is 0.0099.
+
+| Corpus | Task | Scored | Global pool | AUC | MRR10 | R@1 |
+|---|---|---|---|---|---|---|
+| in-house | XO-gcc | 389 | 410 | 0.7569 | 0.2543 | 0.1799 |
+| in-house | XO-clang | 366 | 377 | 0.7135 | 0.1808 | 0.1120 |
+| in-house | **XC-O0** | 487 | 494 | **0.9663** | **0.9162** | **0.8706** |
+| in-house | XC-O2 | 357 | 377 | 0.8921 | 0.5688 | 0.5014 |
+| in-house | XM | 365 | 377 | 0.7296 | 0.1990 | 0.1342 |
+| Dataset-1 | XO | 50 | 229 | 0.9127 | 0.7570 | 0.6800 |
+| Dataset-1 | XC | 65 | 348 | 0.9638 | 0.9667 | 0.9385 |
+| Dataset-1 | XM | 36 | 262 | 0.8806 | 0.7301 | 0.6667 |
+| Dataset-1 | **XB** | 72 | 260 | **0.9353** | 0.6695 | 0.5694 |
+| Dataset-1 | **XA-arm64** | 47 | 228 | **0.9131** | 0.8045 | 0.7447 |
+| Dataset-1 | XA-mips64 | **0** | -- | -- | -- | -- |
+| Dataset-1 | XA+XB-mips32 | **0** | -- | -- | -- | -- |
+
+The two zeroes are the honest cell. `src/ir/lift/` covers x86, x86-64, ARM and
+AArch64 and reaches MIPS not at all, so the CFR has no signature to give on
+those slices and `CfrScheme::extract` **refuses** rather than returning an empty
+vector -- which would score 0.0 against everything and read as a measured
+failure instead of a coverage hole. CTPH scored those rows at exactly 0.5000
+(chance) and `structural` at 0.574 and 0.552; this scores them not at all, and
+the difference between "wrong" and "cannot answer" is the whole point of
+`SchemeError`.
+
+### Weighted against unweighted
+
+The delta is measured on the **held-out half** of each corpus, against an
+unweighted control over the identical population. The split is SplitMix64 over
+the ground-truth label (`scheme::cfr_in_training_half`), so a function is in
+training or held out in every slice at once -- its `-O0` build never trains the
+table that scores its `-O2` build. That is *stricter* than production: BSim
+counts its IDF over the corpus it later searches, as does every TF-IDF retrieval
+system, because a document frequency is a property of the collection and not a
+fitted parameter. These rows therefore understate what the weighting is worth in
+a deployment that indexes what it searches.
+
+In-house corpus, weight table over 910 training-half functions, 39,969 weighted
+features:
+
+| Task | Scored | Pool | AUC unw. -> wtd. | MRR10 unw. -> wtd. | R@1 unw. -> wtd. |
+|---|---|---|---|---|---|
+| **XO-gcc** | 187 | 200 | 0.7800 -> **0.8592** (+0.079) | 0.2549 -> **0.5080** (+0.253) | 0.1872 -> **0.4064** (+0.219) |
+| **XO-clang** | 178 | 184 | 0.7419 -> **0.8152** (+0.073) | 0.1829 -> **0.3729** (+0.190) | 0.1124 -> **0.2809** (+0.169) |
+| XC-O0 | 241 | 243 | 0.9679 -> 0.9938 (+0.026) | 0.9501 -> 0.9557 (+0.006) | 0.9253 -> 0.9253 (0.000) |
+| XC-O2 | 172 | 184 | 0.8935 -> 0.9461 (+0.053) | 0.5681 -> 0.6549 (+0.087) | 0.5116 -> 0.5698 (+0.058) |
+| XM | 177 | 184 | 0.7625 -> 0.8131 (+0.051) | 0.1984 -> 0.4232 (+0.225) | 0.1243 -> 0.3333 (+0.209) |
+| XM-S | 141 | 184 | 0.7474 -> 0.7963 (+0.049) | 0.1699 -> 0.4128 (+0.243) | 0.0922 -> 0.3191 (+0.227) |
+| XM-M | 34 | 184 | 0.8355 -> 0.8797 (+0.044) | 0.2394 -> 0.4303 (+0.191) | 0.1176 -> 0.3235 (+0.206) |
+
+Dataset-1, weight table over 958 training-half functions (the MIPS half of the corpus contributes none), 212,090 weighted features:
+
+| Task | Scored | Pool | AUC unw. -> wtd. | MRR10 unw. -> wtd. | R@1 unw. -> wtd. |
+|---|---|---|---|---|---|
+| **XO** | 18 | 106 | 0.8880 -> **0.9902** (+0.102) | 0.5718 -> 0.8426 (+0.271) | 0.5000 -> 0.7222 (+0.222) |
+| XC | 29 | 171 | 0.9586 -> 0.9972 (+0.039) | 0.9483 -> 0.9425 (-0.006) | 0.8966 -> 0.8966 (0.000) |
+| XM | 18 | 125 | 0.8681 -> 0.9291 (+0.061) | 0.5802 -> 0.6543 (+0.074) | 0.5000 -> 0.6111 (+0.111) |
+| XB | 30 | 127 | 0.9642 -> 0.9844 (+0.020) | 0.7001 -> 0.8722 (+0.172) | 0.5667 -> 0.8000 (+0.233) |
+| XA-arm64 | 19 | 115 | 0.9185 -> 0.9855 (+0.067) | 0.8132 -> 0.8921 (+0.079) | 0.7895 -> 0.8421 (+0.053) |
+| XA+XB-arm32 *(n=9)* | 9 | 128 | 0.9667 -> 0.8878 (-0.079) | 0.7778 -> 0.8148 (+0.037) | 0.7778 -> 0.7778 (0.000) |
+| XA+XO *(n=9)* | 9 | 115 | 0.8635 -> 0.8983 (+0.035) | 0.4251 -> 0.3529 (-0.072) | 0.2222 -> 0.1111 (-0.111) |
+
+**Three things to read off these.**
+
+**The plan's hypothesis holds, and holds on every metric.** Weighting was
+predicted to lift **XO** most, and it does: the largest AUC gain on both corpora
+(+0.079 in-house, +0.102 on Dataset-1) and the largest ranking gains anywhere in
+either table (+0.253 MRR10, +0.219 Recall@1). The mechanism is visible in the
+row that gains least: XC-O0 was already at AUC 0.968 with Recall@1 0.925 and had
+almost nothing left to gain, while XO sat at 0.780 -- and what separates a
+function from its `-O2` twin's neighbours is exactly the rare structure a
+uniform weighting drowns in `mov`-shaped noise.
+
+**Ranking gains far outrun AUC gains.** XM moves +0.05 AUC and +0.225 MRR10.
+AUC asks whether a positive pair outscores a random negative pair, which
+unweighted CFR already mostly gets right; MRR10 asks whether the twin outranks
+one hundred *size-matched* negatives, and that is the question weighting
+answers. A scheme evaluated on AUC alone would have reported this lane as a
+modest improvement.
+
+**The two negative cells are the two underpowered rows.** `XA+XB-arm32` and
+`XA+XO` score nine queries each -- one query is 11 percentage points of
+Recall@1 -- and both are flagged and unratcheted for exactly that reason. Read
+them as noise, and read the seven powered Dataset-1 and in-house rows as the
+result.
+
+### Cost
+
+| Build | us/function | Note |
+|---|---|---|
+| release | 1,810 | in-house corpus, 1,787 samples |
+| debug | 12,004 | the profile `cargo test --features python-ext` uses |
+| release | 25,331 | Dataset-1, 2,441 samples, six architectures |
+
+An order of magnitude past TikNib's published 20-1030 us band, and structurally
+so: the CFR is the only scheme in the harness that lifts to LLIR and runs SSA,
+where CTPH reads bytes (41 us) and `structural` reads a discovered CFG (267 us).
+The Dataset-1 figure is higher again because its binaries are larger and the
+harness's per-image signature cache turns over more.
+
+**Retrieval scores are bit-identical between the two profiles**, which is worth
+recording: the numbers above were read off a release run and reproduced exactly
+by the debug ratchet run in the same commit.
+
+### Its own lane
+
+`tests/identity_cfr_retrieval.rs`, unweighted, release, 2026-09-02. A different
+filter set and a different negative-sampling rule from the shared protocol
+above -- negatives are the 100 candidates nearest the query in **LLIR
+instruction count** -- so these are not comparable with the tables above and are
+kept because the whole-slice lane is comparable with `tests/similarity_retrieval.rs`'s
+CTPH number on the identical task.
 
 Corpus: `tests/decompiler_fixtures/build/`, 206 C sources compiled by gcc and
 clang at `-O0` and `-O2` with symbol tables intact, so `(fixture, function
@@ -306,8 +677,11 @@ Three things are worth reading off that table.
 pins CTPH at **0.32%** on the same corpus and the same task (924 queries, 1,096
 candidates, no duplicate filter). 7.41% is twenty-three times that, which is the
 expected ordering -- and still nowhere near a tool you would point at a stripped
-binary unassisted. That gap is what the TF-IDF weighting, the rare-feature
-inverted index and the peephole normaliser are for.
+binary unassisted. Two of the three things that gap was said to be waiting for
+-- the TF-IDF weighting and the rare-feature index -- have landed since, and
+the shared-protocol tables above are where their effect is measured; this lane
+is deliberately left unweighted so it stays comparable with the CTPH number it
+was written to sit beside.
 
 **Cross-compiler is three times cross-optimisation**, and the contrast is the
 entire argument for canonicalising over an IR. gcc and clang at one optimisation
@@ -332,17 +706,19 @@ filter set and its denominator is not a number.
   and the rest of the local algebraic variation are different features today.
   Plan item 8 is an unsound local normaliser (VexINE's template) run before
   hashing; its delta is measurable against the numbers above.
-- **No TF-IDF weighting.** Every feature counts the same, so a `mov` between two
-  registers weighs as much as a call to `pthread_mutex_lock`. This is the single
-  largest expected improvement and it is plan item 5.
+- **The confidence's constants are borrowed, not fitted.** The five numbers in
+  BSim's causal model were fitted by the NSA to their p-code features over their
+  corpus. The formula is theirs verbatim and the features are ours, so the score
+  is on their scale by construction and on their published calibration only by
+  assumption. Refitting needs a labelled corpus of the size BSim was fitted on.
 - **CFR-I is not built.** The typed interface record -- return type, parameters
   by ABI position, locals by frame offset, callee set, effect summary -- is
   specified in the research and not implemented here.
-- **ARM and cross-architecture coverage is unmeasured.** Every number above is
-  x86-64. `stack_registers_for` covers AArch64 and both ARM32 conventions, and
-  the lifters exist, but the fixture matrix lane was not run. The `nosize`
-  setting exists for the 32-to-64-bit case and its benefit is likewise
-  unmeasured.
+- **`nosize` is still unmeasured.** Cross-architecture coverage is not: the
+  Dataset-1 lane above scores x86, x86-64, ARM32 and AArch64, and refuses MIPS.
+  But the setting that exists specifically for 32-to-64-bit matching has never
+  been run against the XB lane it was built for -- every number on this page is
+  `nosize = false`.
 - **Memory dependence is block-granular.** One chain per block, merged at block
   entries, with no aliasing analysis: two stores to provably distinct objects
   are still ordered. That is conservative rather than wrong, and it makes a
@@ -374,8 +750,16 @@ import glaurung as g
 
 left = g.analysis.cfr_signatures_path("libfoo-gcc-O0.so")
 right = g.analysis.cfr_signatures_path("libfoo-gcc-O2.so")
-score = g.analysis.cfr_similarity(left[0], right[0])   # weighted cosine, [0, 1]
+score = g.analysis.cfr_similarity(left[0], right[0])   # cosine, [0, 1]
 gap = g.analysis.cfr_distance(left[0], right[0])       # the metric distance
+
+# ...and the same three under a corpus TF-IDF table, which is what the
+# measured numbers below were produced with.
+weights = g.analysis.cfr_build_weights(left + right)
+score = g.analysis.cfr_similarity(left[0], right[0], weights)
+verdict = g.analysis.cfr_confidence(left[0], right[0], weights)
+verdict["significance"]             # BSim's "Confidence"; >= 26 is ~1 in 1e5
+verdict["false_positive_one_in"]    # None below BSim's lowest published anchor
 
 # 32-to-64-bit matching. A different setting is a different quotient: a
 # nosize signature compared with a plain one answers 0.0, not a low score.
@@ -410,9 +794,13 @@ two holds rows that silently disagree.
 | `src/identity/cfr/wl.rs` | Weisfeiler-Lehman relabelling |
 | `src/identity/cfr/blocks.rs` | CFR-C |
 | `src/identity/cfr/signature.rs` | the versioned artifact |
-| `src/identity/cfr/similarity.rs` | the kernel, the cosine, the distance, the `Weights` trait |
+| `src/identity/cfr/similarity.rs` | the kernel, the cosine, the distance, the `Weights` trait, and BSim's significance |
+| `src/identity/cfr/weights.rs` | the corpus IDF table, its quantisation and its `weights_id` |
 | `src/identity/cfr/extract.rs` | path to signatures |
 | `src/identity/cfr/tests.rs` | the invariance specification |
 | `tests/identity_cfr_retrieval.rs` | the measurement |
 | `src/python_bindings/identity.rs` | the Python surface |
 | `python/tests/test_cfr_identity.py` | the boundary and the KB writer |
+| `python/glaurung/llm/kb/cfr_index.py` | the stored vectors, the weight table and the inverted index |
+| `python/tests/test_cfr_index.py` | the weighting, the confidence and the index, through Python |
+| `tests/identity_retrieval/scheme.rs` | `CfrScheme`, the shared-protocol lane |
