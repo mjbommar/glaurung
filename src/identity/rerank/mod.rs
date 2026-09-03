@@ -92,6 +92,11 @@
 //!    [`RerankSettings::adjacency_same_group`], the paper's constant.
 //! 6. **No GPU.** Sections 4 and 5 of the paper are a parallel implementation
 //!    of the same recurrence. The cost here is `layers * K^2` f64 additions.
+//! 7. **The default turns the paper's two provenance terms off.** Not a change
+//!    to the algorithm -- both are implemented, and
+//!    [`RerankSettings::revdecode_paper`] runs them -- but a change to what a
+//!    caller gets without asking, and it is measured rather than assumed. See
+//!    the note on [`Default`].
 //!
 //! # Cost
 //!
@@ -175,8 +180,39 @@ pub struct RerankSettings {
     pub normalization: Normalization,
 }
 
+/// The **measured** configuration, not the paper's: similarity and call
+/// agreement on, RevDecode's two provenance terms off.
+///
+/// The paper's own configuration is [`RerankSettings::revdecode_paper`], and it
+/// is not the default because it is measurably worse on both of our corpora --
+/// it moves 8 of 40 measured cells up and 31 down, by as much as 0.225 MRR10,
+/// against 16 up and 0 down for the call-agreement term.
+/// The reasons are in `docs/reference/function-identity-rerank.md`; the short
+/// version is that Alg. 1's 0.7 constant was calibrated for firmware-sized
+/// libraries against sigmoid-spread similarities, and neither holds here. A
+/// default that loses on thirty-one of forty measured cells is a trap, so the
+/// faithful configuration is available and named rather than automatic.
+///
+/// The call-agreement term, by contrast, did not cost a single query a rank in
+/// any of those forty cells.
 impl Default for RerankSettings {
     fn default() -> Self {
+        Self {
+            adjacency_weight: 0.0,
+            library_weight: 0.0,
+            ..Self::revdecode_paper()
+        }
+    }
+}
+
+impl RerankSettings {
+    /// RevDecode's own configuration: every term the paper has, at the paper's
+    /// constants.
+    ///
+    /// Faithful, and measurably worse than [`Default`] on both of our corpora.
+    /// Use it to reproduce the paper's design, or on a corpus whose libraries
+    /// are large enough for a provenance prior to mean something.
+    pub fn revdecode_paper() -> Self {
         Self {
             top_k: 10,
             similarity_weight: 1.0,
@@ -189,13 +225,11 @@ impl Default for RerankSettings {
             normalization: Normalization::Identity,
         }
     }
-}
 
-impl RerankSettings {
     /// Similarity only: every context term off.
     ///
     /// The null hypothesis. A re-rank under these settings reproduces the input
-    /// ordering exactly, which is what makes any movement under the full
+    /// ordering exactly, which is what makes any movement under any other
     /// settings attributable to context rather than to the machinery.
     pub fn similarity_only() -> Self {
         Self {
@@ -203,22 +237,15 @@ impl RerankSettings {
             library_weight: 0.0,
             adjacency_weight: 0.0,
             call_weight: 0.0,
-            ..Self::default()
+            ..Self::revdecode_paper()
         }
     }
 
     /// Similarity plus the call-graph agreement term, with RevDecode's
-    /// provenance terms off.
-    ///
-    /// The ablation that says what the *call graph* alone is worth, separately
-    /// from the library-provenance signal the paper already had.
+    /// provenance terms off. Identical to [`Default`]; spelled out so an
+    /// ablation table can name what it ran.
     pub fn call_graph_only() -> Self {
-        Self {
-            confidence_weight: 0.0,
-            library_weight: 0.0,
-            adjacency_weight: 0.0,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     /// Similarity plus RevDecode's provenance terms, with the call-graph term
@@ -227,7 +254,7 @@ impl RerankSettings {
         Self {
             confidence_weight: 0.0,
             call_weight: 0.0,
-            ..Self::default()
+            ..Self::revdecode_paper()
         }
     }
 }

@@ -636,12 +636,15 @@ fn register_cfr(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
 ///     A ``reference_id`` of ``None`` is the "no match" node: candidates below
 ///     it have less contextual support than an empty answer.
 ///
-/// **Read the measured table in ``docs/reference/function-identity-rerank.md``
-/// before changing a weight.** The call-graph term never cost a rank in any
-/// measured cell; the provenance terms (``adjacency_weight``,
-/// ``library_weight``), which are the paper's own, cost several points of
-/// MRR10 on both of our corpora, so they default to on for fidelity to the
-/// paper and should be turned off for our schemes.
+/// The defaults are the **measured** configuration, not the paper's:
+/// ``adjacency_weight`` and ``library_weight`` are ``0.0``. Both terms are the
+/// paper's own and both are implemented; they are off because in the sweep
+/// behind ``docs/reference/function-identity-rerank.md`` they moved 8 of 40
+/// measured cells up and 31 down, by as much as 0.225 MRR10, while the
+/// call-graph term moved 16 up, 0 down, and cost no query a rank in any of
+/// them. Pass ``adjacency_weight=1.0,
+/// library_weight=1.0`` to reproduce RevDecode's own configuration -- and read
+/// that table before doing so.
 #[pyfunction]
 #[pyo3(name = "rerank_candidates")]
 #[pyo3(signature = (
@@ -652,8 +655,8 @@ fn register_cfr(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
     top_k = 10usize,
     similarity_weight = 1.0,
     confidence_weight = 1.0,
-    library_weight = 1.0,
-    adjacency_weight = 1.0,
+    library_weight = 0.0,
+    adjacency_weight = 0.0,
     call_weight = 1.0,
     adjacency_same_group = 0.7,
     no_match_similarity = Some(0.0),

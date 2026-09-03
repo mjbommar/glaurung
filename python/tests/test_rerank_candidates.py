@@ -99,6 +99,7 @@ def test_adjacency_prefers_two_candidates_from_one_library() -> None:
     result = analysis.rerank_candidates(
         queries,
         reference_groups=groups,
+        adjacency_weight=1.0,
         confidence_weight=0.0,
         library_weight=0.0,
         call_weight=0.0,
@@ -128,3 +129,27 @@ def test_the_decode_is_deterministic_across_calls() -> None:
 
 def test_an_empty_query_list_decodes_to_nothing() -> None:
     assert analysis.rerank_candidates([]) == []
+
+
+def test_the_defaults_are_the_measured_configuration() -> None:
+    """``adjacency_weight`` and ``library_weight`` default to zero.
+
+    Departure 7 in ``docs/reference/function-identity-rerank.md``: both terms
+    are RevDecode's own and both are implemented, but in the measured sweep they
+    moved 8 of 40 cells up and 31 down, so a caller who passes nothing does not
+    get them. Asserted through the binding as well as in Rust because the two
+    defaults are written out separately and could drift.
+    """
+    queries = [
+        (0, 0x1000, [(10, 0.90), (11, 0.60)]),
+        (1, 0x2000, [(20, 0.90), (21, 0.60)]),
+    ]
+    groups = [(10, 1), (20, 2), (11, 3), (21, 3)]
+
+    bare = analysis.rerank_candidates(queries, reference_groups=groups)
+    assert _order(bare[0][1])[0] == 10, "a provenance term fired by default"
+
+    paper = analysis.rerank_candidates(
+        queries, reference_groups=groups, adjacency_weight=1.0, library_weight=1.0
+    )
+    assert paper != bare, "the paper's configuration is unreachable"

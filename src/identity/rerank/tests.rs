@@ -358,7 +358,7 @@ fn the_dp_agrees_with_brute_force_enumeration() {
     context.add_query_call(1, 2);
     context.add_reference_call(11, 30);
     context.add_reference_call(21, 31);
-    let settings = RerankSettings::default();
+    let settings = RerankSettings::revdecode_paper();
 
     let decoded = rerank(&queries, &context, &settings);
 
@@ -453,8 +453,8 @@ fn the_decode_is_deterministic() {
     context.set_reference_group(10, 1);
     context.set_reference_group(20, 1);
 
-    let first = rerank(&queries, &context, &RerankSettings::default());
-    let second = rerank(&queries, &context, &RerankSettings::default());
+    let first = rerank(&queries, &context, &RerankSettings::revdecode_paper());
+    let second = rerank(&queries, &context, &RerankSettings::revdecode_paper());
     assert_eq!(first, second);
 
     // Same input, different insertion order, same answer.
@@ -468,7 +468,7 @@ fn the_decode_is_deterministic() {
     rebuilt.set_reference_group(10, 1);
     rebuilt.add_reference_call(11, 20);
     rebuilt.add_query_call(0, 1);
-    let third = rerank(&shuffled, &rebuilt, &RerankSettings::default());
+    let third = rerank(&shuffled, &rebuilt, &RerankSettings::revdecode_paper());
     assert_eq!(first, third);
 }
 
@@ -536,12 +536,45 @@ fn confidence_enters_the_weight_when_it_is_supplied() {
             Candidate::new(2, 0.50).with_confidence(0.9),
         ],
     }];
-    let settings = RerankSettings {
-        library_weight: 0.0,
-        ..RerankSettings::default()
-    };
-    let decoded = rerank(&queries, &CallContext::new(), &settings);
+    let decoded = rerank(&queries, &CallContext::new(), &RerankSettings::default());
     assert_eq!(decoded.layers[0].ranked[0].reference, Some(2));
+}
+
+/// The default is the **measured** configuration, not the paper's.
+///
+/// Pinned as a test because it is a recommendation, and a recommendation that
+/// lives only in prose drifts away from the code that is supposed to carry it.
+/// The two provenance terms moved 8 of 40 measured cells up and 31 down in the
+/// sweep behind `docs/reference/function-identity-rerank.md`; the call term
+/// moved 16 up and none down. If this assertion is ever changed, the measured
+/// table is what has to justify it.
+#[test]
+fn the_default_runs_the_call_term_and_not_the_provenance_terms() {
+    let measured = RerankSettings::default();
+    assert_eq!(measured.call_weight, 1.0);
+    assert_eq!(measured.similarity_weight, 1.0);
+    assert_eq!(measured.adjacency_weight, 0.0);
+    assert_eq!(measured.library_weight, 0.0);
+    assert_eq!(measured, RerankSettings::call_graph_only());
+
+    let paper = RerankSettings::revdecode_paper();
+    assert_eq!(paper.adjacency_weight, 1.0);
+    assert_eq!(paper.library_weight, 1.0);
+    assert_eq!(paper.adjacency_same_group, 0.7);
+    assert_ne!(paper, measured);
+
+    // Every preset shares everything that is not a weight, so an ablation
+    // table's rows differ in exactly the term they name.
+    for preset in [
+        RerankSettings::similarity_only(),
+        RerankSettings::call_graph_only(),
+        RerankSettings::adjacency_only(),
+        paper,
+    ] {
+        assert_eq!(preset.top_k, paper.top_k);
+        assert_eq!(preset.no_match_similarity, paper.no_match_similarity);
+        assert_eq!(preset.normalization, paper.normalization);
+    }
 }
 
 /// Sigmoid normalisation is monotone and lands in `[0, 1]`, which is all the

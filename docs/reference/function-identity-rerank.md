@@ -25,14 +25,16 @@ tolerance in the control flow.
 **Run the call-agreement term; leave RevDecode's provenance terms off.** In 40
 measured cells — two schemes, two corpora, twelve tasks, both candidate lanes —
 the call term never cost a single query a rank and improved up to 1.8% of them.
-The paper's own adjacency and library terms cost up to 0.19 MRR10. The
-[measured table](#measured) has the whole grid and
-[why](#why-the-papers-provenance-terms-lose-here) has the reading.
+The paper's own adjacency and library terms moved 8 cells up and **31 down**,
+by as much as 0.225 MRR10. The [measured table](#measured) has the whole grid
+and [why](#why-the-papers-provenance-terms-lose-here) has the reading.
+
+**That is what the defaults do**, so the short form is the right form:
 
 ```rust
 use glaurung::identity::rerank::{rerank, CallContext, Candidate, QueryFunction, RerankSettings};
 
-let decoded = rerank(&queries, &context, &RerankSettings::call_graph_only());
+let decoded = rerank(&queries, &context, &RerankSettings::default());
 for layer in &decoded.layers {
     // best first; `reference == None` is the "no match" node
     println!("{} -> {:?}", layer.query, layer.ranked.first());
@@ -46,10 +48,13 @@ analysis.rerank_candidates(
     [(0, 0x1000, [(10, 0.90), (11, 0.80)]), (1, 0x2000, [(20, 0.80), (21, 0.90)])],
     query_calls=[(0, 1)],
     reference_calls=[(11, 20)],
-    adjacency_weight=0.0,   # see "Why the paper's provenance terms lose here"
-    library_weight=0.0,
 )
 ```
+
+`RerankSettings::revdecode_paper()` — or `adjacency_weight=1.0,
+library_weight=1.0` from Python — is the paper's own configuration, available
+and named because both terms are implemented and faithful. It is not the default
+because a default that loses on 31 of 40 measured cells is a trap.
 
 ## The graph
 
@@ -112,7 +117,8 @@ in 11 ms for the largest in-house task (487 layers, release build).
 
 ## Where this departs from the paper
 
-Six departures, none of them silent; the first is an addition and the rest are
+Seven departures, none of them silent. The first is an addition, the last is a
+change of default rather than of algorithm, and the rest are
 reductions.
 
 1. **A call-agreement term is added.** RevDecode's contextual edge term is
@@ -151,6 +157,13 @@ reductions.
    not the library key.
 6. **No GPU.** Sections 4 and 5 of the paper are a parallel implementation of
    the same recurrence.
+7. **The default turns the paper's two provenance terms off.** Not a change to
+   the algorithm — both are implemented and `RerankSettings::revdecode_paper()`
+   runs them — but a change to what a caller gets without asking, made on the
+   measurement below rather than on taste. `RerankSettings::default()` sets
+   `adjacency_weight` and `library_weight` to `0.0`;
+   `the_default_runs_the_call_term_and_not_the_provenance_terms` pins it, so the
+   recommendation cannot drift away from the code that carries it.
 
 ## Measured
 
@@ -182,7 +195,7 @@ sign of every finding below is the same on both lanes.
 
 Sampled lane, pool 101 (chance R@1 0.0099).
 
-| Task | Scored | base MRR10 | base R@1 | call MRR10 | call R@1 | imp/wor | adj MRR10 | adj R@1 | imp/wor | full MRR10 | full R@1 | imp/wor |
+| Task | Scored | base MRR10 | base R@1 | call MRR10 | call R@1 | imp/wor | adj MRR10 | adj R@1 | imp/wor | paper MRR10 | paper R@1 | imp/wor |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | XO-gcc | 389 | 0.1753 | 0.1183 | 0.1770 | 0.1208 | 1/0 | 0.1810 | 0.1157 | 36/42 | 0.1815 | 0.1157 | 37/42 |
 | XO-clang | 366 | 0.1171 | 0.0738 | 0.1171 | 0.0738 | 0/0 | 0.1293 | 0.0792 | 33/31 | 0.1293 | 0.0792 | 33/31 |
@@ -277,20 +290,22 @@ result can be told from an untested one, and
 
 ## Why the paper's provenance terms lose here
 
-The adjacency and library terms improve exactly one cell in the whole grid —
-`structural` on XC-O0, +0.094 MRR10 sampled and +0.077 global — and cost
-everywhere else, up to −0.19 MRR10 on Dataset-1 XC. On the CFR they are
-negative on 15 of 16 cells. Three things are going on, and none of them is a
-defect in the paper.
+The adjacency and library terms move 8 of the 40 cells up, 31 down and 1 not at
+all. Every gain is `structural`, and the two largest are XC-O0 (+0.094 MRR10
+sampled, +0.077 global); the losses reach −0.225 (Dataset-1 XA-arm64, sampled)
+and −0.204 (Dataset-1 XC). On the CFR the terms are negative on 15 of 16 cells.
+By query rather than by cell the split is 933 improved against 1,297 worsened,
+where the call term is 38 improved against 0. Three things are going on, and
+none of them is a defect in the paper.
 
 **The 0.7 constant is calibrated against a different score distribution.**
 RevDecode tuned it on 30 synthetic firmware samples with sigmoid-normalised
 similarities spread over the whole of `[0, 1]`. Our matchers' scores occupy a
 narrow band — the CFR's cosine gaps between adjacent candidates are typically
 well under 0.1 — so the same constant is a far larger prior here than there. We
-tested that reading directly with a `full-sigmoid` preset that re-spreads the
+tested that reading directly with a `paper-sigmoid` preset that re-spreads the
 similarities through a logistic before they enter the weight: it does not
-recover the loss (CFR XO-gcc sampled −0.0258 full, −0.0206 full-sigmoid), so
+recover the loss (CFR XO-gcc sampled −0.0258 paper, −0.0206 paper-sigmoid), so
 score compression is at most part of it.
 
 **The stronger the matcher, the more a prior costs.** `structural` on XC-O0
@@ -305,10 +320,10 @@ where a same-library run really does span many consecutive functions. A term
 that says "your neighbour came from library L, so you probably did too" needs
 neighbours, and ours mostly have none.
 
-The terms are implemented, faithful and left on by `RerankSettings::default()`
-because that is the paper's configuration. **For Glaurung's schemes, use
-`RerankSettings::call_graph_only()`** — or, from Python, pass
-`adjacency_weight=0.0, library_weight=0.0`.
+The terms are implemented and faithful, and `RerankSettings::revdecode_paper()`
+runs them. They are **off in `RerankSettings::default()`**, which is departure 7
+above and the only place this stage disagrees with the paper about what should
+happen by default rather than about what the algorithm is.
 
 One further interaction is worth knowing because it looks like a bug and is not:
 the library and adjacency terms *pull against each other*. Two candidates

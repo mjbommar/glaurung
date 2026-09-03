@@ -422,8 +422,8 @@ results that matter here:
 
 | | Effect |
 |---|---|
-| Call-agreement term (ours) | **0 worsened in 40 of 40 cells**; up to +0.0177 MRR10 / +0.0213 R@1 (Dataset-1 XA-arm64) and +0.0128 / +0.0185 (in-house XC-O0, `structural`) |
-| RevDecode's adjacency + library terms | one cell gains (`structural` XC-O0, +0.094 MRR10); the other 39 are flat or negative, down to −0.19 MRR10 on Dataset-1 XC |
+| Call-agreement term (ours) | **0 queries worsened in any of the 40 cells**; 16 cells up, 24 unchanged; up to +0.0177 MRR10 / +0.0213 R@1 (Dataset-1 XA-arm64) and +0.0128 / +0.0185 (in-house XC-O0, `structural`) |
+| RevDecode's adjacency + library terms | 8 cells up, **31 down**; the gains are all `structural` (best XC-O0 +0.094 MRR10), the losses reach −0.225 on Dataset-1 XA-arm64 |
 
 Read 2026-09-03, release build. Two additions to the protocol were needed and
 both are stated on the reference page: a **global candidate lane** (every layer

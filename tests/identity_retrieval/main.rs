@@ -2094,7 +2094,7 @@ fn rerank_full_sweep() {
         ("similarity-only", RerankSettings::similarity_only()),
         ("call-graph-only", RerankSettings::call_graph_only()),
         ("adjacency-only", RerankSettings::adjacency_only()),
-        ("full", RerankSettings::default()),
+        ("paper", RerankSettings::revdecode_paper()),
         // The paper normalises raw similarities with a sigmoid before they
         // enter the weight, and its adjacency constant (0.7) is calibrated
         // against scores spread over the whole of [0, 1] by that step. Our
@@ -2104,13 +2104,13 @@ fn rerank_full_sweep() {
         // the paper's balance -- see the measured table in
         // docs/reference/function-identity-rerank.md.
         (
-            "full-sigmoid",
+            "paper-sigmoid",
             RerankSettings {
                 normalization: glaurung::identity::rerank::Normalization::Sigmoid {
                     centre: 0.5,
                     steepness: 8.0,
                 },
-                ..RerankSettings::default()
+                ..RerankSettings::revdecode_paper()
             },
         ),
     ];
