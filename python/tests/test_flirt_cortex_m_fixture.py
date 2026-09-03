@@ -72,7 +72,7 @@ def test_the_archive_yields_three_signatures(library: dict) -> None:
     }
     names = sorted(e["name"] for e in library["entries"])
     assert names == ["memset", "tolower", "toupper"]
-    assert library["stats"]["dropped_ambiguous"] == 0
+    assert library["stats"]["ambiguous_keys"] == 0
 
 
 def _entry(library: dict, name: str) -> dict:
