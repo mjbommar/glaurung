@@ -291,6 +291,16 @@ pub fn run_seed(function: &LlirFunction, context: &ValueContext<'_>, seed: u8) -
 
                 // Pre-step: effective addresses (set A), and the value a store
                 // is about to write, which cannot be read back afterwards.
+                //
+                // The two predicated forms are handled as though the predicate
+                // were true: a `CondLoad` pre-faults memory it may not read,
+                // and a `CondStore` records a value it may not write. Both are
+                // deliberate and both are cheap to be wrong about -- the
+                // pre-fault only initialises a slot nothing later reads, and
+                // the recorded value is one element among hundreds. They are
+                // also ARM predication, which the x86-64 lifter does not emit,
+                // so on the architecture this scheme supports neither arm
+                // fires at all.
                 let mut stored: Option<(u64, Width)> = None;
                 match op {
                     Op::Load { addr, .. } | Op::CondLoad { addr, .. } => {
