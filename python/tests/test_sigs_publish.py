@@ -30,6 +30,14 @@ import pytest
 from glaurung.sigs import minisign, paths
 from glaurung.sigs.manifest import Manifest, validate_against_schema
 
+
+def _canonical_comment(manifest_path: Path) -> str:
+    """The trusted comment the client will demand for this exact manifest."""
+    from glaurung.sigs.manifest import Manifest
+
+    return Manifest.from_json(manifest_path.read_text()).trusted_comment()
+
+
 ROOT = Path(__file__).resolve().parents[2]
 PUBLISH = ROOT / "tools" / "publish_signature_set.py"
 
@@ -923,7 +931,7 @@ def test_signature_first_run_refuses_and_prints_the_command_to_sign(simple):
     assert (out / "manifest.json").is_file(), "the manifest is still built"
     assert not signature.is_file()
     assert f"minisign -Sm {out / 'manifest.json'} -s {key}" in result.stderr
-    assert '-t "2026.09.1 serial=1"' in result.stderr
+    assert f'-t "{_canonical_comment(out / "manifest.json")}"' in result.stderr
 
 
 def test_signature_second_run_verifies_and_reuses_the_signed_manifest(
@@ -958,7 +966,7 @@ def test_signature_second_run_verifies_and_reuses_the_signed_manifest(
     minisign.sign_file(
         signer_secret,
         out / "manifest.json",
-        trusted_comment="2026.09.1 serial=1",
+        trusted_comment=_canonical_comment(out / "manifest.json"),
     )
     assert (out / "manifest.json").read_bytes() == manifest_bytes_after_build, (
         "signing must not have touched the manifest bytes"

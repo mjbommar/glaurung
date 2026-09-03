@@ -683,9 +683,13 @@ def sign_command(manifest_path: Path, secret_key: Path, manifest: Manifest) -> s
     for. `--secret-key`/`--generate-key` (below) remain the local-testing
     flow only, for a throwaway password-less dev key.
     """
+    # The trusted comment must be the manifest's canonical one: the client
+    # compares the signed comment against the manifest body and refuses a
+    # mismatch, so a shorter comment verifies with stock minisign and then
+    # fails in every client.
     return (
         f"minisign -Sm {manifest_path} -s {secret_key} "
-        f'-t "{manifest.set_version} serial={manifest.serial}"'
+        f'-t "{manifest.trusted_comment()}"'
     )
 
 
@@ -942,14 +946,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{keys_dir()}: {exc}"
             )
         comment = minisign.Signature.read(signature_path).trusted_comment
-        if (
-            manifest.set_version not in comment
-            or f"serial={manifest.serial}" not in comment
-        ):
+        expected = manifest.trusted_comment()
+        if comment != expected:
             raise SystemExit(
-                "--signature's trusted comment does not name this set's "
-                f"version ({manifest.set_version!r}) and serial "
-                f"({manifest.serial}); refusing to publish: {comment!r}"
+                "--signature's trusted comment is not this manifest's canonical "
+                "comment, so clients would refuse it; refusing to publish.\n"
+                f"  signed:   {comment!r}\n"
+                f"  expected: {expected!r}\n"
+                f"Re-sign with: {sign_command(manifest_path, secret_key_path, manifest)}"
             )
         signed_by = (
             f"{signature_path}  (externally signed, key {key.key_id_hex}, verified)"
