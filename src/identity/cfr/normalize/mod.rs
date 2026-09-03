@@ -121,7 +121,8 @@ impl Passes {
     /// No pass at all -- the identity normaliser, and the ablation's zero row.
     pub const NONE: Passes = Passes(0);
 
-    /// The set [`super::CfrSettings::normalize`] turns on: (a) through (e).
+    /// `DEFAULT` is the pass set [`super::CfrSettings::normalize`] turns on:
+    /// (a) through (e), and deliberately not (f).
     ///
     /// **(f) is implemented, measured and excluded.** The rule stated in
     /// advance is that a pass whose *solo* row in the ablation is below the

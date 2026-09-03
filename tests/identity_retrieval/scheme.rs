@@ -15,10 +15,13 @@
 //! # Adding a scheme
 //!
 //! Implement [`Scheme`] over your signature type and add a test that calls
-//! `crate::metrics::evaluate`. The slots below say exactly what the three
-//! in-flight lanes should write.
+//! `crate::metrics::evaluate`. Three are implemented -- [`CtphScheme`],
+//! [`StructuralScheme`] and [`CfrScheme`] -- and the comment at the foot of
+//! this file says what the one still to come should write.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use glaurung::identity::structural::code_facts_from_function_bytes;
 
@@ -254,8 +257,151 @@ impl Scheme for StructuralScheme {
     }
 }
 
+/// L2, the Canonical Function Representation (`glaurung::identity::cfr`):
+/// a Weisfeiler-Lehman feature multiset over the operator-typed SSA dataflow
+/// graph and the degree-labelled CFG, compared with BSim's merge-join cosine.
+///
+/// # Why this one needs the image and the others do not
+///
+/// CTPH reads the function's bytes and the structural scheme reads its blocks
+/// and edges; both are already in a [`FunctionSample`]. The CFR is computed
+/// over *lifted LLIR in SSA form*, which needs the whole image: relocation
+/// targets, the PLT map that resolves an external callee's name, whether an
+/// address is mapped. So this scheme opens the image the sample came from and
+/// asks `glaurung::identity::cfr::signatures_for_path` for every function in
+/// it at once, then answers by entry address.
+///
+/// That is the *same* extraction `tests/identity_cfr_retrieval.rs` measures, on
+/// purpose: two ways of computing one representation is two numbers that will
+/// eventually disagree. The two files then differ only in protocol -- this one
+/// reports AUC and MRR10 over Marcelli's task taxonomy and over Cisco
+/// Dataset-1, the other reports Recall@1 with the published duplicate filter.
+///
+/// # The image cache
+///
+/// [`CACHED_IMAGES`] images are held at a time, evicted oldest-first. The
+/// corpus loaders sort samples by `(fixture, name)`, and one fixture is one
+/// image, so a linear pass over a slice touches each image once; the driver
+/// walks the pool slice and then the query slice, so two entries would do and
+/// four is slack against a task that interleaves them. A cache miss is a whole
+/// image's discovery plus a lift of every function in it, which is why the
+/// extraction cost this scheme reports is dominated by whichever samples
+/// happened to be first in their image.
+///
+/// A sample whose image cannot be signed at all -- no modelled calling
+/// convention for the target, which is the case for some of Dataset-1's
+/// architectures -- fails with a [`SchemeError`] naming it, so the driver
+/// counts and prints it rather than scoring an empty signature against
+/// everything.
+pub struct CfrScheme {
+    settings: glaurung::identity::cfr::CfrSettings,
+    name: String,
+    cache: std::cell::RefCell<
+        std::collections::VecDeque<(
+            PathBuf,
+            BTreeMap<u64, glaurung::identity::cfr::CfrSignature>,
+        )>,
+    >,
+}
+
+/// Images held in [`CfrScheme`]'s cache at once.
+const CACHED_IMAGES: usize = 4;
+
+impl CfrScheme {
+    /// The plain canonical form, no peephole normaliser. The floor.
+    pub fn plain() -> Self {
+        Self::with(glaurung::identity::cfr::CfrSettings::default(), "cfr")
+    }
+
+    /// With the unsound local peephole normaliser
+    /// (`src/identity/cfr/normalize/`, plan item 8) run over a copy of each
+    /// lifted function before hashing.
+    pub fn normalized() -> Self {
+        Self::with(
+            glaurung::identity::cfr::CfrSettings {
+                normalize: true,
+                ..Default::default()
+            },
+            "cfr-normalized",
+        )
+    }
+
+    fn with(settings: glaurung::identity::cfr::CfrSettings, name: &str) -> Self {
+        Self {
+            settings,
+            name: name.to_string(),
+            cache: std::cell::RefCell::new(std::collections::VecDeque::new()),
+        }
+    }
+}
+
+impl Scheme for CfrScheme {
+    type Sig = glaurung::identity::cfr::CfrSignature;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        if self.settings.normalize {
+            "L2 CFR: Weisfeiler-Lehman multiset over the SSA dataflow graph and \
+             the degree-labelled CFG, with the unsound local peephole \
+             normaliser (glaurung::identity::cfr, normalize=true)"
+        } else {
+            "L2 CFR: Weisfeiler-Lehman multiset over the SSA dataflow graph and \
+             the degree-labelled CFG (glaurung::identity::cfr)"
+        }
+    }
+
+    fn extract(&self, sample: &FunctionSample) -> Result<Self::Sig, SchemeError> {
+        let mut cache = self.cache.borrow_mut();
+        if !cache.iter().any(|(path, _)| path == &sample.image_path) {
+            let signatures = glaurung::identity::cfr::signatures_for_path(
+                &sample.image_path,
+                self.settings,
+                &crate::corpus::harness_budgets(),
+            )
+            .map_err(|error| {
+                SchemeError::new(format!("{}: {error}", sample.image_path.display()))
+            })?;
+            let by_va: BTreeMap<u64, Self::Sig> = signatures
+                .into_iter()
+                .map(|entry| (entry.entry_va, entry.signature))
+                .collect();
+            if cache.len() >= CACHED_IMAGES {
+                cache.pop_front();
+            }
+            cache.push_back((sample.image_path.clone(), by_va));
+        }
+        let (_, by_va) = cache
+            .iter()
+            .find(|(path, _)| path == &sample.image_path)
+            .expect("just inserted above");
+        match by_va.get(&sample.va) {
+            // An empty signature compares as "no answer" to everything, which
+            // is indistinguishable from a genuinely featureless function; say
+            // so instead.
+            Some(signature) if !signature.is_empty() => Ok(signature.clone()),
+            Some(_) => Err(SchemeError::new(format!(
+                "no CFR features at {:#x} in {}",
+                sample.va,
+                sample.image_path.display()
+            ))),
+            None => Err(SchemeError::new(format!(
+                "discovery found no function at {:#x} in {}",
+                sample.va,
+                sample.image_path.display()
+            ))),
+        }
+    }
+
+    fn similarity(&self, a: &Self::Sig, b: &Self::Sig) -> f64 {
+        glaurung::identity::cfr::cosine(a, b, None)
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Slots for the two schemes still to come.
+// Slot for the scheme still to come.
 //
 // Each is a `Scheme` impl of maybe twenty lines plus a test that calls
 // `crate::metrics::evaluate(&scheme, corpus, &tasks)`. Nothing else in this
@@ -271,10 +417,8 @@ impl Scheme for StructuralScheme {
 //   read the pool size before believing either. Needs `image_path` and `va` to
 //   re-read the image for its relocation table.
 //
-// * `cfr` -- `src/identity/cfr/`, the L2 rung. `Sig` is the sorted
-//   `(u32 feature_hash, u16 count)` multiset. `similarity` is BSim's
-//   merge-join cosine with `min(cA, cB)^2` in the numerator. Needs
-//   `image_path` and `va` so it can lift the function to LLIR; a TF-IDF
-//   weighting needs a corpus count table, which is a second pass over the
-//   slice before scoring and belongs in the impl, not in the driver.
+// `cfr` is no longer a slot: it is [`CfrScheme`] above, in both its plain and
+// its peephole-normalised configuration. A TF-IDF weighting still needs a
+// corpus count table, which is a second pass over the slice before scoring and
+// belongs in that impl rather than in the driver.
 // ---------------------------------------------------------------------------

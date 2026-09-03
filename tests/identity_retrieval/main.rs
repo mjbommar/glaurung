@@ -68,7 +68,7 @@ mod tasks;
 
 use corpus::{Corpus, MIN_BASIC_BLOCKS};
 use metrics::{SchemeReport, NEGATIVES_PER_POSITIVE};
-use scheme::{CtphScheme, Scheme, StructuralScheme};
+use scheme::{CfrScheme, CtphScheme, Scheme, StructuralScheme};
 use tasks::TASKS;
 
 /// How far above its floor a measurement may drift before this file demands
@@ -765,6 +765,308 @@ fn structural_retrieval_ratchets() {
 }
 
 // ---------------------------------------------------------------------------
+// L2: the CFR, plain and with the peephole normaliser (plan items 3+4 and 8).
+//
+// `tests/identity_cfr_retrieval.rs` reports the CFR's Recall@1 under the
+// published duplicate filter; this lane reports the same representation's AUC,
+// MRR10 and Recall@k under Marcelli's task taxonomy, over the same corpus and
+// the same driver that scored CTPH and the structural invariants -- which is
+// the only way the four rungs of the identity ladder can be read against each
+// other.
+//
+// Every constant below was read off a release run on 2026-09-02 before it was
+// written down.
+// ---------------------------------------------------------------------------
+
+/// Score the plain CFR over every supported task, once.
+fn cfr_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| Some(run_cfr(CfrScheme::plain())?))
+        .as_ref()
+}
+
+/// Score the peephole-normalised CFR over every supported task, once.
+fn cfr_normalized_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| Some(run_cfr(CfrScheme::normalized())?))
+        .as_ref()
+}
+
+fn run_cfr(scheme: CfrScheme) -> Option<SchemeReport> {
+    let corpus = load()?;
+    let report = metrics::evaluate(&scheme, corpus, TASKS);
+    eprintln!(
+        "\n=== scheme {} -- {} ===",
+        report.scheme, report.description
+    );
+    eprintln!(
+        "extraction {:.2} us/function over {} samples",
+        report.extraction_us_per_function, report.extraction_samples
+    );
+    for result in &report.results {
+        eprintln!("{}", result.line());
+    }
+    if let Some(path) = report.write_json(&metrics::report_dir()) {
+        eprintln!("report: {}", path.display());
+    }
+    Some(report)
+}
+
+/// XO (gcc O0 -> gcc O2) AUC for the plain CFR.
+///
+/// **Measured: 0.7569** over 389 scored queries, sampled pool 101, global pool
+/// 410. CTPH reads 0.5015 and the structural invariants 0.75 on this lane, so
+/// the CFR arrives level with L1 on AUC and well ahead of it on ranking --
+/// which is the distinction Marcelli warns about, models that tie on AUC and
+/// diverge sharply on MRR.
+const CFR_XO_GCC_MIN_AUC: f64 = 0.7568;
+/// XO (gcc O0 -> gcc O2) Recall@1 for the plain CFR, 100 sampled negatives.
+///
+/// **Measured: 0.1799** (70 of 389) against 0.0099 chance. The number in
+/// `tests/identity_cfr_retrieval.rs` for the same representation on the same
+/// corpus is 0.1496, and the difference is entirely the filter set: that file
+/// drops functions whose canonical form is shared with another in the slice,
+/// this one does not, and it samples its negatives with a seeded draw rather
+/// than by nearest size. Neither number is wrong and neither is comparable to
+/// the other -- which is exactly the failure the protocol document names.
+const CFR_XO_GCC_MIN_RECALL_AT_1: f64 = 0.1799;
+/// XO (gcc O0 -> gcc O2) MRR10 for the plain CFR.
+///
+/// **Measured: 0.2543.** FunctionSimSearch's published ceiling is MRR10 0.26,
+/// and this is a whole representation class above the token fingerprint that
+/// sits in FunctionSimSearch territory -- on the hardest of the four in-house
+/// lanes.
+const CFR_XO_GCC_MIN_MRR10: f64 = 0.2542;
+/// XC (gcc O2 -> clang O2) AUC for the plain CFR.
+///
+/// **Measured: 0.8921** over 357 queries. The XC-O0 lane, not ratcheted here
+/// because one lane per task is enough, reads AUC 0.9663 and Recall@1 0.8706:
+/// two compilers at `-O0` build so nearly the same graph that the projection
+/// erases almost all of the difference.
+const CFR_XC_O2_MIN_AUC: f64 = 0.8920;
+/// XM (gcc O0 -> clang O2) AUC for the plain CFR.
+///
+/// **Measured: 0.7296** over 365 queries: both compilation variables free, the
+/// hardest task this corpus expresses. CTPH reads 0.5025.
+const CFR_XM_MIN_AUC: f64 = 0.7295;
+
+/// XO AUC with the normaliser. **Measured: 0.7583**, against 0.7569 plain.
+const CFR_NORM_XO_GCC_MIN_AUC: f64 = 0.7582;
+/// XO Recall@1 with the normaliser.
+///
+/// **Measured: 0.2031** (79 of 389), against 0.1799 (70 of 389) plain: nine
+/// more functions retrieved, +2.32 percentage points, a 12.9% relative gain.
+/// This is the same movement `tests/identity_cfr_retrieval.rs` reports as
+/// 14.96% -> 17.60% under its own filter set, measured a second way.
+const CFR_NORM_XO_GCC_MIN_RECALL_AT_1: f64 = 0.2030;
+/// XO MRR10 with the normaliser. **Measured: 0.2657**, against 0.2543 plain.
+const CFR_NORM_XO_GCC_MIN_MRR10: f64 = 0.2656;
+/// XC (O2) AUC with the normaliser.
+///
+/// **Measured: 0.8856**, against 0.8921 plain -- a *loss* of 0.0065, while the
+/// same lane's Recall@1 rises from 0.5014 to 0.5182 and its MRR10 from 0.5688
+/// to 0.5790. Both directions are recorded because both are real: the
+/// normaliser makes the top of the ranking better and the whole-distribution
+/// separation slightly worse on the cross-compiler lane, and a lane summary
+/// that quoted only the metric that improved would be choosing its evidence.
+/// The XC-O0 lane moves the same way (Recall@1 0.8706 -> 0.8624, AUC
+/// unchanged at 0.9663).
+const CFR_NORM_XC_O2_MIN_AUC: f64 = 0.8855;
+/// XM AUC with the normaliser. **Measured: 0.7329**, against 0.7296 plain.
+const CFR_NORM_XM_MIN_AUC: f64 = 0.7328;
+
+/// Same axiom suite the other two schemes get.
+#[test]
+fn cfr_obeys_the_similarity_axioms() {
+    let Some(corpus) = load() else { return };
+    let scheme = CfrScheme::plain();
+    let Some(slice) = corpus.slice("gcc", "O0") else {
+        return;
+    };
+    let mut checked = 0usize;
+    for (index, sample) in slice.samples.iter().take(120).enumerate() {
+        let Ok(left) = scheme.extract(sample) else {
+            continue;
+        };
+        let self_score = scheme.similarity(&left, &left);
+        assert!(
+            (self_score - 1.0).abs() < 1e-9,
+            "similarity(a, a) = {self_score} at sample {index}"
+        );
+        for other in slice.samples.iter().skip(index + 1).take(3) {
+            let Ok(right) = scheme.extract(other) else {
+                continue;
+            };
+            let forward = scheme.similarity(&left, &right);
+            let backward = scheme.similarity(&right, &left);
+            assert!(
+                (forward - backward).abs() < 1e-9,
+                "asymmetric at {index}: {forward} vs {backward}"
+            );
+            assert!(
+                (0.0..=1.0).contains(&forward),
+                "similarity out of range at {index}: {forward}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 50, "only {checked} pairs checked");
+    eprintln!("cfr axioms: {checked} pairs");
+}
+
+/// Extraction is a pure function of the sample, with and without the
+/// normaliser. A canonical form that moved between two calls in one process
+/// would not be an identity, and the normaliser is the newest thing that could
+/// break it.
+#[test]
+fn cfr_extraction_is_deterministic() {
+    let Some(corpus) = load() else { return };
+    let Some(slice) = corpus.slice("gcc", "O2") else {
+        return;
+    };
+    for scheme in [CfrScheme::plain(), CfrScheme::normalized()] {
+        let mut checked = 0usize;
+        for sample in slice.samples.iter().take(150) {
+            let (Ok(first), Ok(second)) = (scheme.extract(sample), scheme.extract(sample)) else {
+                continue;
+            };
+            assert_eq!(
+                first.digest,
+                second.digest,
+                "{} is not deterministic on {}::{}",
+                scheme.name(),
+                sample.fixture,
+                sample.name
+            );
+            checked += 1;
+        }
+        assert!(checked >= 50, "only {checked} samples checked");
+    }
+}
+
+#[test]
+fn cfr_retrieval_ratchets() {
+    let Some(report) = cfr_report() else { return };
+
+    let xo = report.result("XO-gcc").expect("XO-gcc ran");
+    assert_ratchet("cfr XO-gcc AUC", xo.auc, CFR_XO_GCC_MIN_AUC, &xo.line());
+    assert_ratchet(
+        "cfr XO-gcc Recall@1",
+        xo.recall(1),
+        CFR_XO_GCC_MIN_RECALL_AT_1,
+        &xo.line(),
+    );
+    assert_ratchet(
+        "cfr XO-gcc MRR10",
+        xo.mrr10,
+        CFR_XO_GCC_MIN_MRR10,
+        &xo.line(),
+    );
+
+    let xc = report.result("XC-O2").expect("XC-O2 ran");
+    assert_ratchet("cfr XC-O2 AUC", xc.auc, CFR_XC_O2_MIN_AUC, &xc.line());
+
+    let xm = report.result("XM").expect("XM ran");
+    assert_ratchet("cfr XM AUC", xm.auc, CFR_XM_MIN_AUC, &xm.line());
+}
+
+#[test]
+fn normalized_cfr_retrieval_ratchets() {
+    let Some(report) = cfr_normalized_report() else {
+        return;
+    };
+
+    let xo = report.result("XO-gcc").expect("XO-gcc ran");
+    assert_ratchet(
+        "cfr-normalized XO-gcc AUC",
+        xo.auc,
+        CFR_NORM_XO_GCC_MIN_AUC,
+        &xo.line(),
+    );
+    assert_ratchet(
+        "cfr-normalized XO-gcc Recall@1",
+        xo.recall(1),
+        CFR_NORM_XO_GCC_MIN_RECALL_AT_1,
+        &xo.line(),
+    );
+    assert_ratchet(
+        "cfr-normalized XO-gcc MRR10",
+        xo.mrr10,
+        CFR_NORM_XO_GCC_MIN_MRR10,
+        &xo.line(),
+    );
+
+    let xc = report.result("XC-O2").expect("XC-O2 ran");
+    assert_ratchet(
+        "cfr-normalized XC-O2 AUC",
+        xc.auc,
+        CFR_NORM_XC_O2_MIN_AUC,
+        &xc.line(),
+    );
+
+    let xm = report.result("XM").expect("XM ran");
+    assert_ratchet(
+        "cfr-normalized XM AUC",
+        xm.auc,
+        CFR_NORM_XM_MIN_AUC,
+        &xm.line(),
+    );
+}
+
+/// The comparison the normaliser lane exists to make, task by task, in one
+/// place: both schemes, same corpus, same driver, same negatives.
+///
+/// The assertion is deliberately weak -- the normaliser must not make the
+/// *cross-optimisation* lane worse -- because a per-task "must improve" would
+/// be a ratchet on eight numbers whose individual movements are single
+/// functions. The table it prints is the deliverable.
+#[test]
+fn the_normaliser_is_not_a_regression_on_the_cross_optimisation_lane() {
+    let (Some(plain), Some(normalised)) = (cfr_report(), cfr_normalized_report()) else {
+        return;
+    };
+    eprintln!("\ncfr vs cfr-normalized, in-house corpus");
+    eprintln!(
+        "{:<8} {:>8} {:>8}   {:>8} {:>8}   {:>8} {:>8}   {:>7}",
+        "task", "AUC", "AUC'", "MRR10", "MRR10'", "R@1", "R@1'", "scored"
+    );
+    for result in &plain.results {
+        let Some(other) = normalised.result(&result.task_name) else {
+            continue;
+        };
+        eprintln!(
+            "{:<8} {:8.4} {:8.4}   {:8.4} {:8.4}   {:8.4} {:8.4}   {:>7}{}",
+            result.task_name,
+            result.auc,
+            other.auc,
+            result.mrr10,
+            other.mrr10,
+            result.recall(1),
+            other.recall(1),
+            result.scored,
+            if result.underpowered() {
+                "  (underpowered)"
+            } else {
+                ""
+            }
+        );
+    }
+
+    let plain_xo = plain.result("XO-gcc").expect("XO-gcc ran");
+    let normalised_xo = normalised.result("XO-gcc").expect("XO-gcc ran");
+    assert!(
+        normalised_xo.recall(1) >= plain_xo.recall(1),
+        "the normaliser lowered XO Recall@1 from {:.4} to {:.4}",
+        plain_xo.recall(1),
+        normalised_xo.recall(1)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Cisco Talos Dataset-1: the XA (cross-architecture) and XB (cross-bitness)
 // lanes, and CTPH retro-scored on them.
 //
@@ -1428,4 +1730,102 @@ fn structural_full_sweep() {
         "\nextraction {:.2} us/function over {} samples",
         report.extraction_us_per_function, report.extraction_samples
     );
+}
+
+// ---------------------------------------------------------------------------
+// The CFR on Cisco Talos Dataset-1.
+//
+// Both configurations, plain and peephole-normalised, over the three tasks
+// plan item 8 names: XO, XC and XM. These are `#[ignore]`d and the reason is
+// cost, not taste: the CFR's extraction is a whole-image discovery plus a lift
+// of every function in that image, which on Dataset-1's real binaries is
+// orders of magnitude more work than the CTPH and structural schemes this file
+// runs by default. The lane exists, the command that runs it is in the
+// attribute, and the numbers it produced are recorded in
+// `docs/reference/function-identity-cfr.md`.
+// ---------------------------------------------------------------------------
+
+/// The three Dataset-1 tasks this lane runs, which are the ones plan item 8
+/// names. `XB` and the `XA-*` lanes are deliberately excluded: they cost the
+/// same again, and a local peephole rewriter has nothing to say about a change
+/// of instruction set that the mask list does not already say.
+fn cisco_cfr_tasks() -> Vec<cisco::CiscoTask> {
+    cisco::TASKS
+        .iter()
+        .filter(|task| matches!(task.name, "XO" | "XC" | "XM"))
+        .copied()
+        .collect()
+}
+
+fn run_cisco_cfr(scheme: CfrScheme) -> Option<SchemeReport> {
+    let corpus = cisco::corpus()?;
+    let report = cisco::evaluate(&scheme, corpus, &cisco_cfr_tasks());
+    eprintln!("\n=== {} -- {} ===", report.scheme, report.corpus_name);
+    eprintln!(
+        "extraction {:.2} us/function over {} samples ({} profile)",
+        report.extraction_us_per_function, report.extraction_samples, report.profile
+    );
+    for note in &report.coverage_notes {
+        eprintln!("coverage: {note}");
+    }
+    for result in &report.results {
+        eprintln!("{}", result.line());
+    }
+    if let Some(path) = report.write_json(&metrics::report_dir()) {
+        eprintln!("report: {}", path.display());
+    }
+    Some(report)
+}
+
+/// `cargo test --release --features python-ext --test identity_retrieval -- \
+///   --ignored --nocapture cisco_cfr`
+#[test]
+#[ignore = "Dataset-1 CFR: lifts every function of every image. Minutes. GLAURUNG_CISCO_CORPUS must be set."]
+fn cisco_cfr_xo_xc_xm() {
+    let Some(plain) = run_cisco_cfr(CfrScheme::plain()) else {
+        return;
+    };
+    let Some(normalised) = run_cisco_cfr(CfrScheme::normalized()) else {
+        return;
+    };
+    eprintln!("\ncfr vs cfr-normalized, Cisco Dataset-1");
+    eprintln!(
+        "{:<6} {:>8} {:>8}   {:>8} {:>8}   {:>8} {:>8}   {:>7} {:>7}",
+        "task", "AUC", "AUC'", "MRR10", "MRR10'", "R@1", "R@1'", "scored", "fail"
+    );
+    for result in &plain.results {
+        let Some(other) = normalised.result(&result.task_name) else {
+            continue;
+        };
+        eprintln!(
+            "{:<6} {:8.4} {:8.4}   {:8.4} {:8.4}   {:8.4} {:8.4}   {:>7} {:>7}{}",
+            result.task_name,
+            result.auc,
+            other.auc,
+            result.mrr10,
+            other.mrr10,
+            result.recall(1),
+            other.recall(1),
+            result.scored,
+            result.extraction_failures,
+            if result.underpowered() {
+                "  (underpowered)"
+            } else {
+                ""
+            }
+        );
+    }
+    // No ratchet: an `#[ignore]`d lane cannot regress in CI, so a floor here
+    // would be a floor nothing checks. What this lane must do is RUN -- a
+    // scheme that refused every Dataset-1 sample would print an empty table
+    // and look like a measurement.
+    for result in &plain.results {
+        assert!(
+            result.scored > 0,
+            "{}: nothing scored. Either the twin join is broken or the CFR \
+             refused every sample ({} extraction failures).",
+            result.task_name,
+            result.extraction_failures
+        );
+    }
 }

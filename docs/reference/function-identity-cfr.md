@@ -4,9 +4,11 @@
 
 **Implemented, measured, and not yet weighted.** Everything below is in
 `src/identity/cfr/`. Every number carries the run it came from and the
-denominator it was measured over. The TF-IDF corpus table, the rare-feature
-inverted index and the peephole normaliser are separate, later lanes; the
-numbers here are what the representation does without any of them. The research
+denominator it was measured over. The TF-IDF corpus table and the rare-feature
+inverted index are separate, later lanes; the numbers in [Measured
+numbers](#measured-numbers) are what the representation does without either of
+them, and without the opt-in peephole normaliser, which has landed and has its
+own section ([Normalisation](#normalisation)). The research
 synthesis this implements is
 [`docs/history/program-measures-2026-09-02.md`](../history/program-measures-2026-09-02.md)
 and its four source reports in
@@ -38,6 +40,7 @@ instead of gradients, no model and no GPU. The literature it comes from is
 ```
 lift_function_from_image      machine code -> LLIR
 abi::annotate_calls           call effects, so a call has defs and uses
+[ normalize::normalize_function ]  OPT-IN, on a COPY -- see "Normalisation"
 ssa::compute_ssa_for_target   SSA identities
 --------------------------------- CFR is computed HERE
 value_number, types_recover, structure_v2, ast, render
@@ -307,7 +310,8 @@ pins CTPH at **0.32%** on the same corpus and the same task (924 queries, 1,096
 candidates, no duplicate filter). 7.41% is twenty-three times that, which is the
 expected ordering -- and still nowhere near a tool you would point at a stripped
 binary unassisted. That gap is what the TF-IDF weighting, the rare-feature
-inverted index and the peephole normaliser are for.
+inverted index and the peephole normaliser are for. The normaliser has since
+landed and takes it to 8.59%; see [Normalisation](#normalisation).
 
 **Cross-compiler is three times cross-optimisation**, and the contrast is the
 entire argument for canonicalising over an IR. gcc and clang at one optimisation
@@ -322,16 +326,264 @@ Every one of those 206 extra hits was the same piece of CRT boilerplate. It is
 the clearest illustration in this work of why a retrieval number without its
 filter set and its denominator is not a number.
 
+## Normalisation
+
+Plan item 8: an **unsound, local peephole normaliser**, applied to a copy of the
+lifted function before the graph is built. `src/identity/cfr/normalize/`, opt-in
+through `CfrSettings::normalize`, off by default.
+
+### This artifact is unsound, and it never feeds the decompiler
+
+Every pass here is allowed to be wrong in ways the decompiler's own passes may
+never be: to fold at the wrong width, to forward a load past a store it cannot
+prove non-aliasing, to flip a predicate a successor block also reads. That is
+the licence VexIR2Vec's authors take for VexINE, the system this is modelled on,
+and they state it plainly:
+
+> soundness is not important in this context: the normalizations are designed to
+> reduce the differences in IR generated from different architectures and
+> compilers.
+
+Three mechanical facts keep that licence contained.
+
+1. **It runs on a clone.** `normalize_function` borrows the caller's
+   `LlirFunction` and returns a new one; the input is never mutated
+   (`tests::the_input_function_is_not_touched`). The clone is dropped as soon as
+   the feature multiset exists.
+2. **Nothing in `src/ir/` calls it, and this lane changed no file there.**
+   Glaurung already has sound, global versions of most of these transformations
+   -- `ir::copy_prop`, `ir::const_fold`, `ir::value_number`, `ir::dce`,
+   `ir::dead_stores` -- and they exist to make rendered C correct. These are a
+   second, deliberately worse implementation for a different purpose.
+3. **It is a bit in the version triple.** A normalised signature and an
+   unnormalised one are *not comparable*: `cosine` answers `0.0`, the same
+   answer it gives across a `nosize` difference, because they are different
+   quotients rather than different precisions.
+
+With the flag off, every signature byte is what it was before the directory
+existed. `tests::with_the_flag_off_every_signature_byte_is_what_it_was` pins
+three hand-built functions against digests measured on `a5ba7f7c`, the commit
+before this work started.
+
+### The peephole
+
+One basic block, straight-line, with VexINE's invariant: **a value used but not
+defined in the peephole is a parameter and must survive**. No pass looks outside
+its block, so no pass needs liveness, dominance or a call graph. Passes run in a
+fixed order for at most `MAX_ROUNDS = 4` rounds per block -- rounds because the
+passes feed each other (CSE turns a duplicate into a copy that copy propagation
+then forwards), a cap because no pass individually proves the system terminates.
+Every container is a `BTreeMap` or a `Vec`, never a `HashMap`: a canonical form
+whose features depended on hash iteration order would not be an identity.
+
+### The rules
+
+| Pass | Rule | Precedent | Default? |
+|---|---|---|---|
+| (a) `opcodes` | intrinsic width suffix stripped (`intr:x86.smul_hi.64` -> `intr:x86.smul_hi`); `Sub x, C` -> `Add x, -C`; `Xor x, x` and `Sub x, x` -> `0`; `And x, x`, `Or x, x` and every algebraic identity (`+0`, `*1`, `&-1`, `<<0`, ...) -> a copy; a width-neutral `ZExt`/`SExt`/`Trunc` -> a copy; `intr:x86.{s,u}div_quot` -> `BinOp::Div` | VexIR2Vec rules 1 and 3, `Add8\|Add16\|Add32 -> Add` and the immediate-sign rule; LLVM `InstCombine`; Cranelift's egraph rules | yes |
+| (b) `constants` | block-local constant folding and copy propagation, plus a constant memory base folded into the displacement | VexINE ("copy propagation, constant propagation/folding"); Fraser and Davidson | yes |
+| (c) `cse` | local common-subexpression elimination over pure operations, invalidated on any redefinition | VexINE ("CSE"); Cocke 1970; Alpern-Wegman-Zadeck generalises it | yes |
+| (d) `redundancy` | load-after-store forwarding, store-store elimination, redundant register-write elimination | VexINE ("redundant-write elimination ... load-store and store-store elimination"); BSim's "abstracting stack mechanics" | yes |
+| (e) `polarity` | an inverted consumer's negation pushed back into the `Cmp` that produced the predicate, with the operand swap the ordered relations need (`!Ult(a,b)` is `Ule(b,a)`) | Ghidra's `normalize` folding `BOOL_NEGATE` into its comparison; Binary Ninja LLIL folding flags into conditionals | yes |
+| (f) `strength` | `Mul x, 2^k` -> `Shl x, k`; the three provable magic-number division idioms -> `BinOp::Div` | Granlund and Montgomery (PLDI 1994) for the construction; Ghidra `divopt`, Hex-Rays and rev.ng all recognise the shape | **no -- measured negative** |
+
+The direction of (a)'s `Sub`/`Add` rule is the **opposite** of VexIR2Vec's,
+which converts `add(-1,t)` to `sub(+1,t)`. This representation buckets constants
+by magnitude rather than keeping their values, so `Add x, -C` is the form that
+leaves the *operator* -- the part that survives into the label -- the same for
+both spellings.
+
+`a < b` versus `b > a` needs no rule at all: the IR has no greater-than
+operator, so the lifter has already made that choice once, for every
+architecture.
+
+Each module's doc comment states its own rule, precedent, unsoundness and bound.
+
+### Measured
+
+Corpus, filters and protocol are exactly the ones the unnormalised numbers above
+were measured under, in the same process, in the same run. Release build,
+2026-09-02. Harness: `tests/identity_cfr_retrieval.rs`.
+
+| Lane | Free variables | Unnormalised | Normalised | Delta | Pool |
+|---|---|---|---|---|---|
+| XO gcc `-O0` -> gcc `-O2`, size-matched | optimisation | 51/341 = **14.96%** | 60/341 = **17.60%** | +2.64 pt, +17.6% rel | 1 + 100 |
+| XC gcc `-O2` -> clang `-O2`, size-matched | compiler | 148/309 = **47.90%** | 155/309 = **50.16%** | +2.26 pt | 1 + 100 |
+| XO gcc `-O0` -> gcc `-O2`, whole slice | optimisation | 44/594 = **7.41%** | 51/594 = **8.59%** | +1.18 pt, +15.9% rel | 610 candidates |
+
+The whole-slice row is the one comparable with `tests/similarity_retrieval.rs`'s
+**0.32%** for CTPH on the same corpus and the same task: the normalised CFR is
+twenty-seven times the byte digest where the plain one was twenty-three.
+
+The same representation under the *other* protocol -- Marcelli's task taxonomy,
+AUC and MRR10, a seeded negative draw instead of nearest-size, no duplicate
+filter. Harness: `tests/identity_retrieval/`, scheme `cfr` and
+`cfr-normalized`. The two Recall@1 columns are not comparable with the table
+above and the filter set is why.
+
+| Task | Scored | AUC | AUC' | MRR10 | MRR10' | R@1 | R@1' |
+|---|---|---|---|---|---|---|---|
+| XO-gcc (gcc O0 -> gcc O2) | 389 | 0.7569 | **0.7583** | 0.2543 | **0.2657** | 0.1799 | **0.2031** |
+| XO-clang (clang O0 -> clang O2) | 366 | 0.7135 | **0.7175** | 0.1808 | **0.2007** | 0.1120 | **0.1366** |
+| XC-O0 (gcc O0 -> clang O0) | 487 | 0.9663 | 0.9663 | 0.9162 | 0.9104 | 0.8706 | 0.8624 |
+| XC-O2 (gcc O2 -> clang O2) | 357 | 0.8921 | 0.8856 | 0.5688 | **0.5790** | 0.5014 | **0.5182** |
+| XM (gcc O0 -> clang O2) | 365 | 0.7296 | **0.7329** | 0.1990 | **0.2120** | 0.1342 | **0.1425** |
+| XM-S (< 20 blocks) | 308 | 0.7030 | **0.7077** | 0.1637 | **0.1801** | 0.1039 | **0.1104** |
+| XM-M (20-100 blocks) | 54 | 0.8708 | **0.8727** | 0.3125 | **0.3586** | 0.2037 | **0.2593** |
+| XM-L (> 100 blocks) | 3 | \-- | \-- | \-- | \-- | \-- | \-- |
+
+Sampled pool 101 on every row; the global pool is 377 to 494 depending on the
+slice. XM-L has three scored queries and is below
+`MIN_SCORED_FOR_A_MEASUREMENT`, so its numbers are printed by the harness and
+are not quoted here.
+
+**Two rows go the other way and are kept.** `XC-O0` loses 0.8 points of
+Recall@1 and `XC-O2` loses 0.0065 of AUC while gaining 1.7 points of Recall@1.
+The cross-compiler lanes are where the projection already erases most of the
+difference, so a rewriter that merges spellings has less to gain and the same
+amount to lose. Quoting only the metric that improved would be choosing the
+evidence.
+
+**Cost.** Extraction goes from 2,032 to 2,802 microseconds per function over the
+1,787-sample in-house corpus, a 38% increase, all of it the four rounds of
+rewriting over every block of every function.
+
+### Cisco Dataset-1: no measurable effect
+
+The same two schemes over Marcelli's Dataset-1 testing split (`ncat`, `nmap`,
+`nping`; `tests/identity_retrieval/main.rs::cisco_cfr_xo_xc_xm`, which is
+`#[ignore]`d because the CFR's extraction is a whole-image lift and the run
+takes five minutes). Slices are x86-64 only for these three tasks; extraction
+failures were zero on all of them.
+
+| Task | Scored | Global pool | AUC | AUC' | MRR10 | MRR10' | R@1 | R@1' |
+|---|---|---|---|---|---|---|---|---|
+| XO (x64 gcc-9 O0 -> O2) | 50 | 229 | 0.9127 | 0.9176 | 0.7570 | 0.7713 | 0.6800 | 0.6800 |
+| XC (x64 gcc-9 O0 -> clang-9 O0) | 65 | 348 | 0.9638 | 0.9605 | 0.9667 | 0.9654 | 0.9385 | 0.9385 |
+| XM (x64 gcc-9 O0 -> clang-9 O2) | 36 | 262 | 0.8806 | 0.8754 | 0.7301 | 0.7035 | 0.6667 | 0.6389 |
+
+**Read the denominators before reading the numbers.** These are three to ten
+times the in-house Recall@1 for the same representation, and none of that is the
+representation getting better: Dataset-1's ground truth samples roughly a tenth
+of each binary's functions independently per binary, so a pool of 101 candidates
+drawn from it holds far fewer near-twins than a pool drawn from 206 small
+fixtures that share their CRT. The two corpora answer different questions and
+their numbers do not belong in one column.
+
+**The normaliser does nothing here that can be told from noise.** Recall@1 is
+identical on XO and XC and one function lower on XM; AUC moves by +0.005,
+-0.003 and -0.005. With 36 to 65 scored queries a row moves by 1.5 to 2.8
+percentage points when a single function changes rank, so none of these
+differences is a measurement. What the lane establishes is that the normaliser
+*runs* on real binaries -- zero extraction failures over 2,441 samples -- at
+21,533 microseconds per function plain and 31,627 normalised, a 47% increase.
+
+The three tasks are XO, XC and XM. `XB` and the `XA-*` lanes are deliberately
+not run: they cost the same again, and a local peephole rewriter has nothing to
+say about a change of instruction set that the mask list does not already say.
+
+### Every function has something to normalise
+
+**710/710 = 100.00%** of the gcc `-O0` slice has its feature multiset changed by
+the normaliser (`the_normaliser_moves_a_measured_fraction_of_the_corpus`,
+comparing feature multisets rather than digests, because the digest carries the
+settings word and would differ regardless).
+
+The research synthesis predicted the opposite, from Cranelift's measured **1.13
+e-nodes per e-class** after rewriting, and used it to argue against building an
+e-graph canonicaliser: "limited algebraic variation to recover". That prediction
+does not transfer, and the reason is that the two numbers are not measuring the
+same thing. Cranelift's is about *algebraic* variation in an IR a compiler front
+end produced. Most of what fires here is lifter and calling-convention
+boilerplate: the `lea` expansion's constant seed, the stack round-trip every
+`-O0` local performs, the width-suffixed intrinsic name. So a changed-form
+fraction of 100% is not the same claim as a large retrieval gain -- the
+retrieval tables above are the ones that say what the change is worth, and they
+say two to three points.
+
+### Per-pass ablation
+
+XO, gcc `-O0` -> gcc `-O2`, 1 + 100 size-matched candidates, the lane the
+normaliser exists for. Each pass alone, then each pass removed from the full
+set. `tests/identity_cfr_retrieval.rs::the_per_pass_ablation_on_the_cross_optimisation_lane`.
+
+| Configuration | Recall@1 | | Configuration | Recall@1 |
+|---|---|---|---|---|
+| unnormalised (`none`) | 51/341 = 0.1496 | | all six (`all`) | 57/341 = 0.1672 |
+| only (a) opcodes | 54/341 = 0.1584 | | all but (a) | 52/342 = 0.1520 |
+| only (b) constants | 51/341 = 0.1496 | | all but (b) | 58/341 = 0.1701 |
+| only (c) cse | 51/341 = 0.1496 | | all but (c) | 58/341 = 0.1701 |
+| only (d) redundancy | 55/342 = 0.1608 | | all but (d) | 55/341 = 0.1613 |
+| only (e) polarity | 51/341 = 0.1496 | | all but (e) | 57/341 = 0.1672 |
+| only (f) strength | 48/341 = 0.1408 | | all but (f) | **60/341 = 0.1760** |
+
+Denominators move by one between rows because dropping duplicates depends on the
+canonical form: a configuration that merges two functions' forms removes both
+from the scored set.
+
+Three things to read off it.
+
+**(a) and (d) carry the lane.** Opcode collapse and the memory/register
+redundancy rules are the only two passes that move the number on their own, and
+they are the two that address what actually differs between `-O0` and `-O2`
+code: the spelling of an operator, and whether a local lives in a register or in
+the frame.
+
+**(b), (c) and (e) are worth nothing alone and something together.** Each reads
+exactly the unnormalised 0.1496 by itself; removing any one of them from the
+full set changes the result. They are enablers -- copy propagation is what
+exposes the operand identities CSE and the redundancy rules match on, and it has
+nothing to propagate until (a) has collapsed the operators.
+
+**(f) costs, in both directions, so it does not ship.** `Passes::DEFAULT` is (a)
+through (e), under a rule stated before the measurement: *a pass whose solo
+ablation row is below the unnormalised baseline does not ship in the default
+set*. Only `strength` fails it. The cost is entirely rule 1, the power-of-two
+collapse -- with only the magic-division rule enabled `only strength` returns to
+exactly 51/341, which also says that recogniser never fires on this corpus. The
+**opposite** direction was measured too (`Shl x, k` -> `Mul x, 2^k`, the other
+way to make the two spellings one) and is also a loss: 49/340 = 0.1441 alone and
+59/340 = 0.1735 in the full pipeline. Two spellings of a scaled index carry
+discrimination this corpus wants kept, in both directions, so the pass stays
+implemented, tested and ablated but out of the default set rather than being
+tuned until it stops hurting.
+
+Every number above is unweighted. TF-IDF (plan item 5) is expected to change all
+of them, including possibly the sign of the `strength` row, which is why the
+pass is kept rather than deleted.
+
+### What is deliberately not here
+
+- **No cross-block rewriting.** A peephole is a block. Global value numbering
+  over the whole function is `ir::value_number`'s job and would be a different
+  artifact with a different failure mode.
+- **No remainder rule.** `intr:x86.{s,u}div_rem` has no single IR node to
+  collapse onto, and inventing `a - (a / b) * b` for it would manufacture three
+  features where the program has one operation. So an `-O0` `%` stays an
+  intrinsic while its `-O2` twin is a magic multiply, and they do not match.
+- **No unsigned add-back division idiom.** The signed add-back form is
+  recognised; the unsigned one (`(h - x) >> 1 + x`, then a shift) is not.
+- **No alias analysis.** `may_alias` proves exactly one thing apart: two
+  accesses through the same base and index at disjoint displacements. Everything
+  else may alias, which costs recall rather than correctness.
+- **No architecture but x86.** The rules that name an intrinsic name
+  (`x86.smul_hi`, `x86.sdiv_quot`) are x86-only; every other rule is
+  architecture-neutral, and none of them has been measured on ARM.
+
 ## Known gaps
 
 - **Inlining.** The field's unsolved failure: roughly 82 to 84 percent of the
   best tools' failures involve differential inlining, and Marcelli's benchmark
   disables inlining to sidestep it. Nothing here addresses it, and the
   cross-optimisation number above is what that costs.
-- **No peephole normaliser.** `x * 2` and `x << 1`, `~(a | b)` and `~a & ~b`,
-  and the rest of the local algebraic variation are different features today.
-  Plan item 8 is an unsound local normaliser (VexINE's template) run before
-  hashing; its delta is measurable against the numbers above.
+- **The peephole normaliser is off by default, and does not close the gap.**
+  [Normalisation](#normalisation) is worth two to three points on every lane; it
+  is not what turns 8.59% into a tool you would point at a stripped binary. And
+  what it reaches is local: `~(a | b)` against `~a & ~b` is a De Morgan
+  rewrite no pass here performs, and the research synthesis's advice on that
+  stands -- revisit an e-graph only if measurement says algebraic variation is
+  material, and this lane's measurement says the material variation is lifter
+  boilerplate rather than algebra.
 - **No TF-IDF weighting.** Every feature counts the same, so a `mov` between two
   registers weighs as much as a call to `pthread_mutex_lock`. This is the single
   largest expected improvement and it is plan item 5.
@@ -380,6 +632,11 @@ gap = g.analysis.cfr_distance(left[0], right[0])       # the metric distance
 # 32-to-64-bit matching. A different setting is a different quotient: a
 # nosize signature compared with a plain one answers 0.0, not a low score.
 collapsed = g.analysis.cfr_signatures_path("libfoo.so", nosize=True)
+
+# The unsound local peephole normaliser. Two to three points on every lane,
+# 38% more extraction time, and the same "different quotient" rule: a
+# normalised signature answers 0.0 against an unnormalised one.
+canonical = g.analysis.cfr_signatures_path("libfoo.so", normalize=True)
 ```
 
 Into a `.glaurung` project:
@@ -391,9 +648,10 @@ stored = index_cfr_identities(kb, "libfoo.so")
 ```
 
 `function_identity`'s key is `(binary_id, entry_va, scheme)`, so this is new
-rows beside `glaurung-structural-v1`, not a migration. Pick one `nosize` setting
-per project: the scheme name is the same either way, so a table that mixes the
-two holds rows that silently disagree.
+rows beside `glaurung-structural-v1`, not a migration. Pick one settings value
+per project -- `nosize` and `normalize` both -- because the scheme name is the
+same whichever way they are set, so a table that mixes two settings holds rows
+that silently disagree.
 
 ## Where the code is
 
@@ -413,6 +671,16 @@ two holds rows that silently disagree.
 | `src/identity/cfr/similarity.rs` | the kernel, the cosine, the distance, the `Weights` trait |
 | `src/identity/cfr/extract.rs` | path to signatures |
 | `src/identity/cfr/tests.rs` | the invariance specification |
-| `tests/identity_cfr_retrieval.rs` | the measurement |
+| `src/identity/cfr/normalize/mod.rs` | the normaliser's driver, pass bit field and round cap |
+| `src/identity/cfr/normalize/common.rs` | the peephole model: mutable use walk, purity, the alias rule |
+| `src/identity/cfr/normalize/opcodes.rs` | (a) same-semantics opcode collapse |
+| `src/identity/cfr/normalize/constants.rs` | (b) constant folding and copy propagation |
+| `src/identity/cfr/normalize/cse.rs` | (c) local common-subexpression elimination |
+| `src/identity/cfr/normalize/redundancy.rs` | (d) dead-store and redundant-write elimination |
+| `src/identity/cfr/normalize/polarity.rs` | (e) comparison-polarity canonicalisation |
+| `src/identity/cfr/normalize/strength.rs` | (f) strength-reduction canonical forms -- measured negative, not in the default set |
+| `src/identity/cfr/normalize/tests.rs` | one test per rule, the round cap, determinism, and the off-flag byte identity |
+| `tests/identity_cfr_retrieval.rs` | the measurement: Recall@1, the normalised lanes, the ablation |
+| `tests/identity_retrieval/scheme.rs` | `CfrScheme`, plain and normalised, for the AUC/MRR10 protocol |
 | `src/python_bindings/identity.rs` | the Python surface |
 | `python/tests/test_cfr_identity.py` | the boundary and the KB writer |
