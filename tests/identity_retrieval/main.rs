@@ -68,7 +68,7 @@ mod tasks;
 
 use corpus::{Corpus, MIN_BASIC_BLOCKS};
 use metrics::{SchemeReport, NEGATIVES_PER_POSITIVE};
-use scheme::{CtphScheme, Scheme, StructuralScheme};
+use scheme::{CfrScheme, CtphScheme, Scheme, StructuralScheme};
 use tasks::TASKS;
 
 /// How far above its floor a measurement may drift before this file demands
@@ -225,6 +225,147 @@ const STRUCTURAL_XM_MIN_AUC: f64 = 0.695000;
 /// wall clock on a shared developer machine.
 const STRUCTURAL_MAX_EXTRACTION_US: f64 = 2500.0;
 
+// ---------------------------------------------------------------------------
+// L2 CFR ratchets, plan items 4 and 5 of
+// `docs/history/program-measures-2026-09-02.md`. Every value below was read
+// off the release run of 2026-09-02 recorded in
+// `docs/development/identity-measurement.md`, then floored a little under it
+// -- never predicted, and never rounded up from a four-decimal print.
+// ---------------------------------------------------------------------------
+
+/// The CFR's XO-gcc AUC over the whole corpus, uniform weights.
+///
+/// **Measured 0.7569.** Above `structural`'s 0.7536 by a hair, which is the
+/// least interesting comparison in this file: the interesting one is the
+/// weighted row (0.8592 on the held-out half), because cross-optimisation is
+/// where a rarity weighting was predicted to help most and where it does.
+const CFR_XO_GCC_MIN_AUC: f64 = 0.750000;
+
+/// The CFR's XC-O2 AUC over the whole corpus, uniform weights.
+///
+/// **Measured 0.8921**, against `structural`'s 0.7238 and the Python
+/// fingerprint's 0.7287 on the identical task. A compiler swap at a fixed
+/// optimisation level is precisely what the mask list erases -- register
+/// allocation, instruction selection, block order -- so this is the cell the
+/// representation was designed for and the one it should win by the most.
+const CFR_XC_O2_MIN_AUC: f64 = 0.885000;
+
+/// **Measured 0.5688**, against `structural`'s 0.2381 and FunctionSimSearch's
+/// published 0.26 ceiling for token-shaped representations.
+const CFR_XC_O2_MIN_MRR10: f64 = 0.560000;
+
+/// The CFR's XM AUC over the whole corpus, uniform weights.
+///
+/// **Measured 0.7296**, against `structural`'s 0.7026. The bar the previous
+/// version of `docs/development/identity-measurement.md` set for a new scheme
+/// was "beats 0.70" on this task, and this clears it -- narrowly, unweighted.
+/// Weighted, on the held-out half, XM reaches 0.8131.
+const CFR_XM_MIN_AUC: f64 = 0.722000;
+
+/// Extraction ceiling, deliberately loose for two reasons rather than one.
+///
+/// The usual one first: this is wall clock on a shared developer machine,
+/// where a tight floor fails for reasons unrelated to the code. The second is
+/// specific to this scheme. **Measured 1,810 us/function in a release build**
+/// -- already an order of magnitude past TikNib's published 20-1030 us band,
+/// because the CFR is the only scheme here that lifts to LLIR and runs SSA
+/// rather than reading bytes or a discovered CFG. The ordinary gate
+/// (`cargo test --features python-ext`) is a *debug* build, where the same
+/// work is roughly ten times slower, and this constant has to admit both.
+///
+/// A ceiling that admits a 30x range is not a performance gate; it is a
+/// tripwire for an extraction that becomes another order of magnitude more
+/// expensive. The real number, with its profile named, belongs in the docs
+/// table, and it is there.
+const CFR_MAX_EXTRACTION_US: f64 = 60_000.0;
+
+/// The weighted CFR's AUC floor per task, on the held-out half.
+///
+/// **Read off the release run of 2026-09-02.** The population is the half of
+/// the corpus the weight table never counted (see
+/// `scheme::cfr_in_training_half`), so these denominators are roughly half the
+/// unweighted lane's and the rows are not comparable with `CFR_*_MIN_AUC`
+/// above -- the row they *are* comparable with is `cfr-heldout`, which
+/// `cfr_weighting_ratchets` prints beside each of these.
+///
+/// The deltas that run printed, unweighted -> weighted:
+///
+/// | Task | AUC | MRR10 | R@1 |
+/// |---|---|---|---|
+/// | XO-gcc | 0.7800 -> 0.8592 (+0.079) | 0.2549 -> 0.5080 (+0.253) | 0.1872 -> 0.4064 (+0.219) |
+/// | XO-clang | 0.7419 -> 0.8152 (+0.073) | 0.1829 -> 0.3729 (+0.190) | 0.1124 -> 0.2809 (+0.169) |
+/// | XC-O0 | 0.9679 -> 0.9938 (+0.026) | 0.9501 -> 0.9557 (+0.006) | 0.9253 -> 0.9253 (0.000) |
+/// | XC-O2 | 0.8935 -> 0.9461 (+0.053) | 0.5681 -> 0.6549 (+0.087) | 0.5116 -> 0.5698 (+0.058) |
+/// | XM | 0.7625 -> 0.8131 (+0.051) | 0.1984 -> 0.4232 (+0.225) | 0.1243 -> 0.3333 (+0.209) |
+///
+/// The plan's hypothesis was that weighting lifts **XO** most, and it does, on
+/// every metric: the largest AUC gain (+0.079) and the largest ranking gains
+/// (+0.253 MRR10, +0.219 Recall@1). The mechanism is visible in the two
+/// already-strong cells: XC-O0 was at 0.968 unweighted and had almost nothing
+/// left to gain, while XO was at 0.780 and the features that separate a
+/// function from its `-O2` twin's neighbours are exactly the rare ones a
+/// uniform weighting drowns in `mov`-shaped noise.
+const CFR_WEIGHTED_MIN_AUC: &[(&str, f64)] = &[
+    ("XO-gcc", 0.852000),
+    ("XO-clang", 0.808000),
+    ("XC-O0", 0.988000),
+    ("XC-O2", 0.939000),
+    ("XM", 0.806000),
+];
+
+/// The CFR's measured Dataset-1 AUC floor per task, uniform weights over the
+/// whole corpus.
+///
+/// **Read off the release run of 2026-09-02**, nine configurations of gcc 9
+/// and clang 9 over the three `nmap`-project libraries, `testing` split,
+/// sampled pool 101 throughout. Set beside `structural`'s floors, which are
+/// the numbers this scheme had to beat:
+///
+/// | Task | `structural` | `cfr` |
+/// |---|---|---|
+/// | XO | 0.8283 | **0.9127** |
+/// | XC | 0.8851 | **0.9638** |
+/// | XM | 0.8045 | **0.8806** |
+/// | XB | 0.8985 | **0.9353** |
+/// | XA-arm64 | 0.9486 | 0.9131 |
+///
+/// Four of the five improve, and the one that does not is the cell a
+/// CFG-shape scheme was already strongest on. Read against Marcelli's Table 3
+/// the XC cell (0.964) is above every published row including GMN + BoW
+/// opcodes (0.85), on a much smaller query set -- 65 scored queries against
+/// his 50k pairs -- so it is comparable in kind and not in confidence
+/// interval.
+const CISCO_CFR_MIN_AUC: &[(&str, f64)] = &[
+    ("XO", 0.905000),
+    ("XC", 0.956000),
+    ("XM", 0.873000),
+    ("XB", 0.928000),
+    ("XA-arm64", 0.906000),
+];
+
+/// Dataset-1 tasks the CFR scores, but on too few twins to quote.
+///
+/// The same two rows CTPH and `structural` cannot quote, for the same reason:
+/// the selection CSV samples about a tenth of each binary's functions
+/// independently, so the *twin join* between two slices is small even though
+/// the slices are not.
+const CISCO_CFR_UNDERPOWERED_TASKS: &[&str] = &["XA+XB-arm32", "XA+XO"];
+
+/// Dataset-1 tasks whose pool the LLIR lifter cannot reach at all.
+///
+/// `src/ir/lift/` covers x86, x86-64, ARM and AArch64; `disasm::registry`
+/// reaches MIPS only through Capstone. So on these two slices the CFR has no
+/// signature to give, and `CfrScheme::extract` refuses rather than returning
+/// an empty vector -- which would score 0.0 against everything and read as a
+/// measured failure instead of a coverage hole.
+///
+/// This is the one place in this file where a *zero* is the assertion. CTPH
+/// scored these rows at exactly 0.5000 (chance) and `structural` at 0.574 and
+/// 0.552; the CFR scores them not at all, and that difference is the honest
+/// one. If a MIPS lifter ever lands, `cisco_cfr_retrieval_ratchets` fires and
+/// says to promote them.
+const CISCO_CFR_UNLIFTABLE_TASKS: &[&str] = &["XA-mips64", "XA+XB-mips32"];
+
 /// CTPH's measured AUC floor on each Cisco Dataset-1 task.
 ///
 /// **Read off a run, not predicted.** Every value here is the truncated
@@ -245,6 +386,7 @@ const STRUCTURAL_MAX_EXTRACTION_US: f64 = 2500.0;
 /// sets never share a block and the pessimistic tie rule then ranks every
 /// candidate ahead of the twin. That is the shape of the result the protocol
 /// document predicts, now measured on the corpus the prediction came from.
+
 const CISCO_CTPH_MIN_AUC: &[(&str, f64)] = &[
     // Marginally BELOW chance: mean negative 0.0001 against mean positive
     // 0.0000. Worth seeing rather than clamping.
@@ -1307,6 +1449,61 @@ fn cisco_full_sweep() {
     );
 }
 
+/// Print a report to stderr and write its JSON, then hand it back.
+///
+/// Every scheme's `*_report()` did this inline; the CFR adds three more
+/// reports and three more copies of it would be three more places for the
+/// printed form and the stored form to drift apart.
+fn print_report(report: SchemeReport) -> SchemeReport {
+    eprintln!(
+        "\n=== scheme {} -- {} ===",
+        report.scheme, report.description
+    );
+    eprintln!(
+        "extraction {:.2} us/function over {} samples ({})",
+        report.extraction_us_per_function, report.extraction_samples, report.profile
+    );
+    for result in &report.results {
+        eprintln!("{}", result.line());
+    }
+    if let Some(path) = report.write_json(&metrics::report_dir()) {
+        eprintln!("report: {}", path.display());
+    }
+    report
+}
+
+/// The markdown rows `docs/development/identity-measurement.md` holds, so the
+/// table in the docs is copied from a run rather than typed.
+fn print_markdown_rows(title: &str, report: &SchemeReport) {
+    eprintln!("\n--- markdown rows for docs/development/identity-measurement.md: {title} ---");
+    eprintln!(
+        "| Task | Free variables | Scored | Pool (sampled / global) | AUC | \
+         MRR10 | R@1 | R@5 | R@10 | R@50 | Global R@1 |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|---|");
+    for r in &report.results {
+        eprintln!(
+            "| {} | {} | {} | {} / {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            r.task_name,
+            r.conditions,
+            r.scored,
+            r.sampled_pool_size,
+            r.global_pool_size,
+            r.auc,
+            r.mrr10,
+            r.recall(1),
+            r.recall(5),
+            r.recall(10),
+            r.recall(50),
+            r.global_recall_at_1,
+        );
+    }
+    eprintln!(
+        "extraction {:.2} us/function over {} samples ({})",
+        report.extraction_us_per_function, report.extraction_samples, report.profile
+    );
+}
+
 /// Assert a measured number against its floor, in both directions.
 ///
 /// Six decimals, not four. Several of these numbers are small integer ratios
@@ -1325,6 +1522,557 @@ fn assert_ratchet(what: &str, measured: f64, floor: f64, context: &str) {
          tests/identity_retrieval/main.rs in the same commit, or the \
          improvement is unprotected.\n{context}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// L2, the Canonical Function Representation, plan items 4 and 5 of
+// `docs/history/program-measures-2026-09-02.md`. Three rows, and the reason
+// there are three is the comparison:
+//
+//   `cfr`          uniform weights, WHOLE corpus. Comparable with the CTPH and
+//                  `structural` rows above, which are also over the whole
+//                  corpus.
+//   `cfr-heldout`  uniform weights, the half no weight table has counted.
+//   `cfr-weighted` the same half, scored under a TF-IDF table counted over the
+//                  other half.
+//
+// The last two are the delta. Comparing `cfr-weighted` against `cfr` instead
+// would compare two populations as well as two weightings, and the pool sizes
+// alone would make it unreadable.
+// ---------------------------------------------------------------------------
+
+/// Score the unweighted CFR over the whole corpus, once.
+fn cfr_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| {
+            let corpus = load()?;
+            let scheme = CfrScheme::default();
+            Some(print_report(metrics::evaluate(&scheme, corpus, TASKS)))
+        })
+        .as_ref()
+}
+
+/// Score the two held-out rows, once: the unweighted control and the weighted
+/// treatment, over the identical population.
+fn cfr_weighted_reports() -> Option<&'static (SchemeReport, SchemeReport)> {
+    use std::sync::OnceLock;
+    static REPORTS: OnceLock<Option<(SchemeReport, SchemeReport)>> = OnceLock::new();
+    REPORTS
+        .get_or_init(|| {
+            let corpus = load()?;
+            let settings = glaurung::identity::cfr::CfrSettings::default();
+            let weights = scheme::cfr_train_weights(
+                corpus.slices().flat_map(|slice| slice.samples.iter()),
+                settings,
+            )?;
+            eprintln!(
+                "\n=== CFR weight table {} : {} documents (training half), {} \
+                 weighted features ===",
+                weights.weights_id(),
+                weights.documents(),
+                weights.len()
+            );
+            let control = CfrScheme::unweighted_held_out(settings);
+            let treatment = CfrScheme::weighted(settings, weights);
+            Some((
+                print_report(metrics::evaluate(&control, corpus, TASKS)),
+                print_report(metrics::evaluate(&treatment, corpus, TASKS)),
+            ))
+        })
+        .as_ref()
+}
+
+/// The same axiom suite the other schemes get: identity on the quotient,
+/// symmetry, and a score inside `[0, 1]`.
+#[test]
+fn cfr_obeys_the_similarity_axioms() {
+    let Some(corpus) = load() else { return };
+    let scheme = CfrScheme::default();
+    let Some(slice) = corpus.slice("gcc", "O0") else {
+        return;
+    };
+
+    let mut checked = 0usize;
+    for (i, a) in slice.samples.iter().enumerate().take(300) {
+        let Ok(sig_a) = scheme.extract(a) else {
+            continue;
+        };
+        let self_score = scheme.similarity(&sig_a, &sig_a);
+        assert!(
+            (self_score - 1.0).abs() < 1e-9,
+            "{}::{} does not match itself: {self_score}",
+            a.fixture,
+            a.name
+        );
+        if let Some(b) = slice.samples.get(i + 1) {
+            if let Ok(sig_b) = scheme.extract(b) {
+                let ab = scheme.similarity(&sig_a, &sig_b);
+                let ba = scheme.similarity(&sig_b, &sig_a);
+                assert!((ab - ba).abs() < 1e-12, "asymmetric: {ab} vs {ba}");
+                assert!((0.0..=1.0).contains(&ab), "score {ab} outside [0, 1]");
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        checked >= 80,
+        "only {checked} axiom checks ran; CFR extraction is failing across the slice"
+    );
+}
+
+/// The self-significance bound, on real functions rather than constructed
+/// vectors.
+///
+/// `min(cA, cB)^2 <= cA^2` termwise and both of BSim's penalties are
+/// non-negative, so `significance(a, b) <= min(selfsig(a), selfsig(b))` is a
+/// theorem. A violation would mean the weight table can return a negative
+/// weight, which would also mean the kernel is no longer positive
+/// semi-definite and the distance no longer obeys the triangle inequality --
+/// so this is the cheapest possible check on the property the whole index
+/// design rests on.
+#[test]
+fn cfr_significance_is_bounded_by_self_significance() {
+    let Some(corpus) = load() else { return };
+    let settings = glaurung::identity::cfr::CfrSettings::default();
+    let Some(weights) = scheme::cfr_train_weights(
+        corpus.slices().flat_map(|slice| slice.samples.iter()),
+        settings,
+    ) else {
+        return;
+    };
+    let scheme = CfrScheme::weighted(settings, weights);
+    let Some(slice) = corpus.slice("gcc", "O0") else {
+        return;
+    };
+    let signatures: Vec<_> = slice
+        .samples
+        .iter()
+        .filter_map(|sample| scheme.extract(sample).ok())
+        .take(60)
+        .collect();
+    assert!(signatures.len() >= 20, "too few signatures to check");
+
+    let mut checked = 0usize;
+    let mut confident = 0usize;
+    for a in &signatures {
+        let self_a = scheme.self_significance(a);
+        for b in &signatures {
+            let significance = scheme.significance(a, b);
+            let bound = self_a.min(scheme.self_significance(b));
+            assert!(
+                significance <= bound + 1e-9,
+                "significance {significance} exceeds the self-significance bound {bound}"
+            );
+            if significance >= glaurung::identity::cfr::CONFIDENT_SIGNIFICANCE {
+                confident += 1;
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked >= 400);
+    // At least the diagonal must be confident, or the threshold is
+    // unreachable on real functions and the number is decorative.
+    assert!(
+        confident >= signatures.len() / 2,
+        "only {confident} of {checked} pairs cleared \
+         {} significance; a threshold nothing reaches is not a threshold",
+        glaurung::identity::cfr::CONFIDENT_SIGNIFICANCE
+    );
+}
+
+/// Extraction must be deterministic across calls, same discipline as the other
+/// schemes'.
+#[test]
+fn cfr_extraction_is_deterministic() {
+    let Some(corpus) = load() else { return };
+    let scheme = CfrScheme::default();
+    let Some(slice) = corpus.slice("gcc", "O2") else {
+        return;
+    };
+    let mut checked = 0usize;
+    for sample in slice.samples.iter().take(150) {
+        let (Ok(first), Ok(second)) = (scheme.extract(sample), scheme.extract(sample)) else {
+            continue;
+        };
+        assert_eq!(
+            first.digest, second.digest,
+            "{}::{} signed twice to two different digests",
+            sample.fixture, sample.name
+        );
+        checked += 1;
+    }
+    assert!(checked >= 80, "only {checked} determinism checks ran");
+}
+
+/// The training / held-out split must be a function of the label and of
+/// nothing else, and it must be roughly balanced.
+///
+/// A split that depended on slice order or on a hash seed that moved would
+/// make every weighted number in this file unreproducible, and a split that
+/// put 95% of the corpus on one side would make the control row underpowered
+/// while looking exactly like a fair one.
+#[test]
+fn the_cfr_training_split_is_stable_and_balanced() {
+    let Some(corpus) = load() else { return };
+    let mut training = 0usize;
+    let mut held_out = 0usize;
+    for slice in corpus.slices() {
+        for sample in &slice.samples {
+            if scheme::cfr_in_training_half(&sample.fixture, &sample.name) {
+                training += 1;
+            } else {
+                held_out += 1;
+            }
+        }
+    }
+    let total = training + held_out;
+    assert!(total > 500, "corpus too small to split: {total}");
+    let share = training as f64 / total as f64;
+    assert!(
+        (0.40..=0.60).contains(&share),
+        "training half is {training}/{total} = {share:.3}, which is not a half"
+    );
+
+    // The same label must land on the same side every time it is asked, and
+    // in every slice: that is what stops a function's -O0 build training the
+    // table that scores its -O2 build.
+    for slice in corpus.slices() {
+        for sample in slice.samples.iter().take(50) {
+            let first = scheme::cfr_in_training_half(&sample.fixture, &sample.name);
+            let again = scheme::cfr_in_training_half(&sample.fixture, &sample.name);
+            assert_eq!(first, again);
+        }
+    }
+    // ...and it must actually depend on the label.
+    assert_ne!(
+        scheme::cfr_in_training_half("a", "b"),
+        (0..64)
+            .map(|i| scheme::cfr_in_training_half("a", &format!("b{i}")))
+            .all(|x| x),
+        "the split assigns every label the same way"
+    );
+}
+
+/// The unweighted CFR over the whole corpus: comparable with the CTPH and
+/// `structural` rows above, and the floor the weighting has to move.
+#[test]
+fn cfr_retrieval_ratchets() {
+    let Some(report) = cfr_report() else { return };
+
+    let xo = report.result("XO-gcc").expect("XO-gcc ran");
+    assert_ratchet("cfr XO-gcc AUC", xo.auc, CFR_XO_GCC_MIN_AUC, &xo.line());
+
+    let xc = report.result("XC-O2").expect("XC-O2 ran");
+    assert_ratchet("cfr XC-O2 AUC", xc.auc, CFR_XC_O2_MIN_AUC, &xc.line());
+    assert_ratchet("cfr XC-O2 MRR10", xc.mrr10, CFR_XC_O2_MIN_MRR10, &xc.line());
+
+    let xm = report.result("XM").expect("XM ran");
+    assert_ratchet("cfr XM AUC", xm.auc, CFR_XM_MIN_AUC, &xm.line());
+
+    assert!(
+        report.extraction_us_per_function <= CFR_MAX_EXTRACTION_US,
+        "CFR extraction cost {:.2} us/function over {} samples, ceiling \
+         {CFR_MAX_EXTRACTION_US:.2} ({})",
+        report.extraction_us_per_function,
+        report.extraction_samples,
+        report.profile
+    );
+}
+
+/// What the TF-IDF table is worth: the weighted row against the unweighted
+/// control, over the identical held-out population.
+///
+/// The plan's hypothesis is that weighting lifts **XO** most, because
+/// cross-optimisation is where two builds of one function agree on their rare
+/// structure and disagree on their common structure -- exactly the case a
+/// rarity weighting is for. The assertion below is on the measured deltas, not
+/// on the hypothesis: it pins each task's weighted floor, and separately
+/// asserts that the weighting does not make any task *worse* by more than the
+/// ratchet slack, which is the failure a weight table can plausibly produce and
+/// which no per-task floor would catch on its own.
+#[test]
+fn cfr_weighting_ratchets() {
+    let Some((control, weighted)) = cfr_weighted_reports() else {
+        return;
+    };
+
+    for (task, floor) in CFR_WEIGHTED_MIN_AUC {
+        let r = weighted
+            .result(task)
+            .unwrap_or_else(|| panic!("{task} did not run"));
+        assert!(
+            !r.underpowered(),
+            "{task} is ratcheted but scored only {} queries, below {}.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+        assert_ratchet(
+            &format!("cfr-weighted {task} AUC"),
+            r.auc,
+            *floor,
+            &r.line(),
+        );
+    }
+
+    eprintln!("\n--- weighted vs unweighted, held-out half, in-house corpus ---");
+    let mut regressed = Vec::new();
+    for (task, _) in CFR_WEIGHTED_MIN_AUC {
+        let (Some(before), Some(after)) = (control.result(task), weighted.result(task)) else {
+            continue;
+        };
+        eprintln!(
+            "{task}: AUC {:.4} -> {:.4} ({:+.4}), MRR10 {:.4} -> {:.4} ({:+.4}), \
+             R@1 {:.4} -> {:.4} ({:+.4}), scored {} of {} pool",
+            before.auc,
+            after.auc,
+            after.auc - before.auc,
+            before.mrr10,
+            after.mrr10,
+            after.mrr10 - before.mrr10,
+            before.recall(1),
+            after.recall(1),
+            after.recall(1) - before.recall(1),
+            after.scored,
+            after.global_pool_size,
+        );
+        assert_eq!(
+            before.scored, after.scored,
+            "{task}: the control and the weighted row must score the identical \
+             population, or the delta is not a delta"
+        );
+        if after.auc < before.auc - RATCHET_SLACK {
+            regressed.push(format!("{task}: AUC {:.6} -> {:.6}", before.auc, after.auc));
+        }
+    }
+    assert!(
+        regressed.is_empty(),
+        "the TF-IDF table made these tasks worse by more than {RATCHET_SLACK}: {}",
+        regressed.join("; ")
+    );
+}
+
+/// Every CFR number on the in-house corpus, no ratchet in the way, with the
+/// weighted-vs-unweighted deltas printed as markdown rows for the docs.
+///
+/// `cargo test --features python-ext --test identity_retrieval -- --ignored
+/// --nocapture cfr`
+#[test]
+#[ignore = "full CFR sweep: minutes. cargo test --features python-ext --test identity_retrieval -- --ignored --nocapture cfr_full_sweep"]
+fn cfr_full_sweep() {
+    let Some(report) = cfr_report() else { return };
+    print_markdown_rows("cfr (uniform weights, whole corpus)", report);
+    let Some((control, weighted)) = cfr_weighted_reports() else {
+        return;
+    };
+    print_markdown_rows("cfr-heldout (uniform weights, held-out half)", control);
+    print_markdown_rows("cfr-weighted (TF-IDF, held-out half)", weighted);
+
+    eprintln!("\n| Task | Scored | Pool | AUC unw. | AUC wtd. | d AUC | MRR10 unw. | MRR10 wtd. | d MRR10 | R@1 unw. | R@1 wtd. | d R@1 |");
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|---|---|");
+    for result in &weighted.results {
+        let Some(before) = control.result(&result.task_name) else {
+            continue;
+        };
+        eprintln!(
+            "| {} | {} | {} | {:.4} | {:.4} | {:+.4} | {:.4} | {:.4} | {:+.4} | {:.4} | {:.4} | {:+.4} |",
+            result.task_name,
+            result.scored,
+            result.global_pool_size,
+            before.auc,
+            result.auc,
+            result.auc - before.auc,
+            before.mrr10,
+            result.mrr10,
+            result.mrr10 - before.mrr10,
+            before.recall(1),
+            result.recall(1),
+            result.recall(1) - before.recall(1),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The CFR on Dataset-1: the XA, XB and XA+XB lanes, and the two MIPS rows the
+// lifter cannot reach at all.
+// ---------------------------------------------------------------------------
+
+/// Score the unweighted and weighted CFR over every Dataset-1 task, once.
+///
+/// Returns `(unweighted whole corpus, unweighted held-out, weighted held-out)`
+/// -- the same three rows as the in-house lane and for the same reason: the
+/// first is comparable with the CTPH and `structural` rows, and the last two
+/// are the delta over one population.
+#[allow(clippy::type_complexity)]
+fn cisco_cfr_reports() -> Option<&'static (SchemeReport, SchemeReport, SchemeReport)> {
+    use std::sync::OnceLock;
+    static REPORTS: OnceLock<Option<(SchemeReport, SchemeReport, SchemeReport)>> = OnceLock::new();
+    REPORTS
+        .get_or_init(|| {
+            let corpus = cisco::corpus()?;
+            let settings = glaurung::identity::cfr::CfrSettings::default();
+            let weights = scheme::cfr_train_weights(
+                corpus.slices().flat_map(|(_, slice)| slice.samples.iter()),
+                settings,
+            )?;
+            eprintln!(
+                "\n=== Dataset-1 CFR weight table {} : {} documents (training \
+                 half), {} weighted features ===",
+                weights.weights_id(),
+                weights.documents(),
+                weights.len()
+            );
+            let plain = CfrScheme::default();
+            let control = CfrScheme::unweighted_held_out(settings);
+            let treatment = CfrScheme::weighted(settings, weights);
+            Some((
+                print_report(cisco::evaluate(&plain, corpus, cisco::TASKS)),
+                print_report(cisco::evaluate(&control, corpus, cisco::TASKS)),
+                print_report(cisco::evaluate(&treatment, corpus, cisco::TASKS)),
+            ))
+        })
+        .as_ref()
+}
+
+/// The CFR's Dataset-1 floors, and the two rows it must refuse.
+///
+/// The refusal is the point of half this test. `src/ir/lift/` covers x86,
+/// x86-64, ARM and AArch64 and reaches MIPS not at all, so on the two MIPS
+/// slices this scheme has no signature to give. A scheme that answered anyway
+/// -- with an empty vector, scoring 0.0 against everything -- would produce a
+/// row that looks exactly like a measurement and is a coverage hole. So
+/// [`CISCO_CFR_UNLIFTABLE_TASKS`] asserts those rows score *zero* queries, and
+/// if a MIPS lifter ever lands this test fires and says to promote them.
+#[test]
+fn cisco_cfr_retrieval_ratchets() {
+    let Some((plain, control, weighted)) = cisco_cfr_reports() else {
+        return;
+    };
+
+    for (task, floor) in CISCO_CFR_MIN_AUC {
+        let r = plain
+            .result(task)
+            .unwrap_or_else(|| panic!("{task} did not run"));
+        assert!(
+            !r.underpowered(),
+            "{task} is ratcheted but scored only {} queries, below {}.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+        assert_ratchet(&format!("cisco cfr {task} AUC"), r.auc, *floor, &r.line());
+    }
+
+    for task in CISCO_CFR_UNDERPOWERED_TASKS {
+        let r = plain
+            .result(task)
+            .unwrap_or_else(|| panic!("{task} did not run"));
+        assert!(
+            r.underpowered(),
+            "{task} now scores {} queries, at or above {}. Quote the row and \
+             move it into CISCO_CFR_MIN_AUC.\n{}",
+            r.scored,
+            metrics::MIN_SCORED_FOR_A_MEASUREMENT,
+            r.line()
+        );
+    }
+
+    for task in CISCO_CFR_UNLIFTABLE_TASKS {
+        let r = plain
+            .result(task)
+            .unwrap_or_else(|| panic!("{task} did not run"));
+        assert_eq!(
+            r.scored,
+            0,
+            "{task} scored {} queries, but its pool is a MIPS slice and \
+             `src/ir/lift/` has no MIPS lifter. Either a lifter landed -- in \
+             which case quote the row and move this task into \
+             CISCO_CFR_MIN_AUC -- or the scheme is answering where it should \
+             be refusing.\n{}",
+            r.scored,
+            r.line()
+        );
+    }
+    assert_eq!(
+        CISCO_CFR_MIN_AUC.len()
+            + CISCO_CFR_UNDERPOWERED_TASKS.len()
+            + CISCO_CFR_UNLIFTABLE_TASKS.len(),
+        cisco::TASKS.len(),
+        "{} Dataset-1 tasks run but only {} are accounted for; a task in none \
+         of the three tables is a lane nothing checks",
+        cisco::TASKS.len(),
+        CISCO_CFR_MIN_AUC.len()
+            + CISCO_CFR_UNDERPOWERED_TASKS.len()
+            + CISCO_CFR_UNLIFTABLE_TASKS.len()
+    );
+
+    eprintln!("\n--- weighted vs unweighted, held-out half, Dataset-1 ---");
+    for (task, _) in CISCO_CFR_MIN_AUC {
+        let (Some(before), Some(after)) = (control.result(task), weighted.result(task)) else {
+            continue;
+        };
+        eprintln!(
+            "{task}: AUC {:.4} -> {:.4} ({:+.4}), MRR10 {:.4} -> {:.4} ({:+.4}), \
+             R@1 {:.4} -> {:.4} ({:+.4}), scored {} of {} pool",
+            before.auc,
+            after.auc,
+            after.auc - before.auc,
+            before.mrr10,
+            after.mrr10,
+            after.mrr10 - before.mrr10,
+            before.recall(1),
+            after.recall(1),
+            after.recall(1) - before.recall(1),
+            after.scored,
+            after.global_pool_size,
+        );
+        assert_eq!(
+            before.scored, after.scored,
+            "{task}: the control and the weighted row must score the identical \
+             population"
+        );
+    }
+}
+
+/// Every Dataset-1 CFR number, with the weighted-vs-unweighted deltas as
+/// markdown rows.
+///
+/// `GLAURUNG_CISCO_CORPUS=... cargo test --features python-ext --test
+/// identity_retrieval -- --ignored --nocapture cisco_cfr_full_sweep`
+#[test]
+#[ignore = "full Dataset-1 CFR sweep: minutes. GLAURUNG_CISCO_CORPUS=... cargo test --features python-ext --test identity_retrieval -- --ignored --nocapture cisco_cfr_full_sweep"]
+fn cisco_cfr_full_sweep() {
+    let Some((plain, control, weighted)) = cisco_cfr_reports() else {
+        return;
+    };
+    print_markdown_rows("Dataset-1 cfr (uniform weights, whole corpus)", plain);
+    print_markdown_rows("Dataset-1 cfr-heldout (uniform weights)", control);
+    print_markdown_rows("Dataset-1 cfr-weighted (TF-IDF)", weighted);
+
+    eprintln!("\n| Task | Scored | Pool | AUC unw. | AUC wtd. | d AUC | MRR10 unw. | MRR10 wtd. | d MRR10 | R@1 unw. | R@1 wtd. | d R@1 |");
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|---|---|");
+    for result in &weighted.results {
+        let Some(before) = control.result(&result.task_name) else {
+            continue;
+        };
+        eprintln!(
+            "| {} | {} | {} | {:.4} | {:.4} | {:+.4} | {:.4} | {:.4} | {:+.4} | {:.4} | {:.4} | {:+.4} |",
+            result.task_name,
+            result.scored,
+            result.global_pool_size,
+            before.auc,
+            result.auc,
+            result.auc - before.auc,
+            before.mrr10,
+            result.mrr10,
+            result.mrr10 - before.mrr10,
+            before.recall(1),
+            result.recall(1),
+            result.recall(1) - before.recall(1),
+        );
+    }
 }
 
 /// The full sweep: every task's every number printed, and the JSON report
