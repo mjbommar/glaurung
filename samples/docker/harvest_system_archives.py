@@ -48,6 +48,14 @@ from pathlib import Path
 
 SCHEMA_VERSION = "1"
 
+#: The eight bytes that open an ``ar`` archive.
+AR_MAGIC = b"!<arch>\n"
+
+#: ``GROUP ( ... )`` / ``INPUT ( ... )`` in a GNU ld script. glibc ships
+#: ``libm.a`` as a script naming the versioned ``libm-2.35.a``, so a harvest
+#: that does not read this misses libm entirely.
+_LD_SCRIPT_RE = re.compile(r"(?:GROUP|INPUT)\s*\(([^)]*)\)")
+
 #: A GNU target triplet as Debian spells one in a directory name.
 _TRIPLET_RE = re.compile(
     r"^[a-z0-9_]+-(?:linux-gnu[a-z0-9]*|linux-musl[a-z0-9]*|w64-mingw32)$"
@@ -356,26 +364,86 @@ def _os_release() -> dict[str, str]:
     return fields
 
 
-def discover_archives() -> list[Path]:
+def resolve_archive(path: Path) -> list[tuple[Path, str]]:
+    """Return the real ``ar`` archives an allowlisted path stands for.
+
+    Not every file named ``lib*.a`` is an archive, and two of the exceptions
+    matter:
+
+    * **Linker scripts.** glibc's ``/usr/lib/<triplet>/libm.a`` is six lines of
+      ``GNU ld script`` reading ``GROUP ( libm-2.35.a libmvec.a )``. Taking it
+      at face value loses libm entirely -- the archive the signature builder
+      needs is the *versioned* file the script names, and no allowlist of
+      unversioned basenames can reach it.
+    * **Bare relocatable objects.** ``libmcheck.a`` is a single ELF ``.o``
+      wearing a ``.a`` name. It has no archive header, the builder rejects it,
+      and there is nothing to salvage.
+
+    Args:
+        path: An allowlisted candidate found under one of the search roots.
+
+    Returns:
+        A list of ``(archive, resolved_from)`` pairs. ``resolved_from`` is the
+        empty string for a file that is itself an archive, and the path of the
+        linker script otherwise. An empty list means the file is not an archive
+        and nothing it names is one.
+    """
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return []
+    if head.startswith(AR_MAGIC):
+        return [(path, "")]
+
+    text = head.decode("ascii", "replace")
+    groups = _LD_SCRIPT_RE.findall(text)
+    if not groups:
+        return []
+
+    out: list[tuple[Path, str]] = []
+    for group in groups:
+        for token in group.replace(",", " ").split():
+            if not token.endswith(".a"):
+                continue
+            target = Path(token) if token.startswith("/") else path.parent / token
+            if not target.is_file():
+                continue
+            try:
+                with target.open("rb") as fh:
+                    if not fh.read(len(AR_MAGIC)).startswith(AR_MAGIC):
+                        continue
+            except OSError:
+                continue
+            out.append((target, str(path)))
+    return out
+
+
+def discover_archives() -> list[tuple[Path, str]]:
     """Return every allowlisted archive present in the image, deduplicated.
 
-    Deterministic: roots are visited in a fixed order and each root's contents
-    are sorted, so two harvests of the same image list the same paths in the
+    Deterministic: roots are visited in a fixed order and the allowlist is a
+    fixed tuple, so two harvests of the same image list the same paths in the
     same order.
+
+    Returns:
+        ``(archive, resolved_from)`` pairs, as :func:`resolve_archive` defines
+        them.
     """
     seen: set[str] = set()
-    found: list[Path] = []
+    found: list[tuple[Path, str]] = []
     for root in search_roots():
         for name in ARCHIVE_NAMES:
             candidate = root / name
             if not candidate.is_file():
                 continue
-            real = os.path.realpath(candidate)
-            key = f"{triplet_for_path(candidate)}\t{name}\t{real}"
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append(candidate)
+            for archive, resolved_from in resolve_archive(candidate):
+                real = os.path.realpath(archive)
+                key = f"{triplet_for_path(archive)}\t{archive.name}\t{real}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append((archive, resolved_from))
     return found
 
 
@@ -415,12 +483,12 @@ def harvest(
     }
 
     archives = discover_archives()
-    owners = dpkg_owners(archives)
+    owners = dpkg_owners([p for p, _ in archives])
     versions = dpkg_versions(list(owners.values()))
 
     by_triplet: dict[str, list[dict]] = {}
     skipped_duplicates = 0
-    for src in archives:
+    for src, resolved_from in archives:
         triplet = triplet_for_path(src)
         rows = by_triplet.setdefault(triplet, [])
         if any(r["name"] == src.name for r in rows):
@@ -437,6 +505,7 @@ def harvest(
                 "name": src.name,
                 "relative_path": f"lib/{src.name}",
                 "source_path": str(src),
+                "resolved_from": resolved_from,
                 "size": dest.stat().st_size,
                 "sha256": _sha256(dest),
                 "package": pkg,
@@ -506,12 +575,34 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def is_image_harvest(index_path: Path) -> bool:
+    """Is this ``index.json`` one written by :func:`harvest`?
+
+    The harvest root is a cache directory, and a cache directory acquires
+    neighbours: the derived signature set lands in ``sigs/`` and other lanes
+    of the same program have written ``warp/`` next to it, each with an
+    ``index.json`` of its own shape. "Has a file called index.json" is
+    therefore not the test -- the schema is.
+    """
+    try:
+        data = json.loads(index_path.read_text())
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(data, dict)
+        and data.get("schema_version") == SCHEMA_VERSION
+        and isinstance(data.get("image"), dict)
+        and isinstance(data.get("triplets"), list)
+    )
+
+
 def build_index(root: Path) -> dict:
     """Build a top-level index over a directory of per-image harvests.
 
     Args:
         root: A directory whose children are image harvest trees, each with
-            its own ``index.json``.
+            its own ``index.json``. Children that are not harvests are
+            skipped, not guessed at; see :func:`is_image_harvest`.
 
     Returns:
         The aggregate index, also written to ``<root>/index.json``.
@@ -519,7 +610,7 @@ def build_index(root: Path) -> dict:
     images: list[dict] = []
     for child in sorted(root.iterdir()):
         per_image = child / "index.json"
-        if not per_image.is_file():
+        if not per_image.is_file() or not is_image_harvest(per_image):
             continue
         data = json.loads(per_image.read_text())
         images.append(
@@ -575,8 +666,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--output",
         type=Path,
-        required=True,
-        help="Harvest root. Archives land under <output>/<triplet>/lib/.",
+        default=None,
+        help=(
+            "Harvest root. Archives land under <output>/<triplet>/lib/. "
+            "Required unless --index-root is given."
+        ),
     )
     p.add_argument("--image-base", default="unknown", help="The Dockerfile FROM image.")
     p.add_argument(
@@ -606,6 +700,12 @@ def main(argv: list[str] | None = None) -> int:
             f"{t['bytes']} bytes -> {args.index_root / 'index.json'}"
         )
         return 0
+
+    if args.output is None:
+        print(
+            "error: --output is required unless --index-root is given", file=sys.stderr
+        )
+        return 2
 
     index = harvest(
         args.output,
