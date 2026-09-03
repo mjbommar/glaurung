@@ -507,15 +507,15 @@ XO, gcc `-O0` -> gcc `-O2`, 1 + 100 size-matched candidates, the lane the
 normaliser exists for. Each pass alone, then each pass removed from the full
 set. `tests/identity_cfr_retrieval.rs::the_per_pass_ablation_on_the_cross_optimisation_lane`.
 
-| Configuration | Recall@1 | | Configuration | Recall@1 |
-|---|---|---|---|---|
-| unnormalised (`none`) | 51/341 = 0.1496 | | all six (`all`) | 57/341 = 0.1672 |
-| only (a) opcodes | 54/341 = 0.1584 | | all but (a) | 52/342 = 0.1520 |
-| only (b) constants | 51/341 = 0.1496 | | all but (b) | 58/341 = 0.1701 |
-| only (c) cse | 51/341 = 0.1496 | | all but (c) | 58/341 = 0.1701 |
-| only (d) redundancy | 55/342 = 0.1608 | | all but (d) | 55/341 = 0.1613 |
-| only (e) polarity | 51/341 = 0.1496 | | all but (e) | 57/341 = 0.1672 |
-| only (f) strength | 48/341 = 0.1408 | | all but (f) | **60/341 = 0.1760** |
+| One pass alone | Recall@1 | The full set less one | Recall@1 |
+|---|---|---|---|
+| unnormalised (`none`) | 51/341 = 0.1496 | all six (`all`) | 57/341 = 0.1672 |
+| only (a) opcodes | 54/341 = 0.1584 | all but (a) | 52/342 = 0.1520 |
+| only (b) constants | 51/341 = 0.1496 | all but (b) | 58/341 = 0.1701 |
+| only (c) cse | 51/341 = 0.1496 | all but (c) | 58/341 = 0.1701 |
+| only (d) redundancy | 55/342 = 0.1608 | all but (d) | 55/341 = 0.1613 |
+| only (e) polarity | 51/341 = 0.1496 | all but (e) | 57/341 = 0.1672 |
+| only (f) strength | 48/341 = 0.1408 | all but (f) | **60/341 = 0.1760** |
 
 Denominators move by one between rows because dropping duplicates depends on the
 canonical form: a configuration that merges two functions' forms removes both
