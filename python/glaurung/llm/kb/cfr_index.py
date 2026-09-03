@@ -49,9 +49,16 @@ import struct
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .persistent import PersistentKnowledgeBase
+
+if TYPE_CHECKING:  # pragma: no cover - types only
+    # Imported for annotations only. At runtime every entry point does its own
+    # `import glaurung as g` inside the function body, so this module stays
+    # importable without the extension being loaded first -- the same
+    # discipline `function_identity.py` uses.
+    from glaurung.analysis import CfrSignature, CfrWeights
 
 #: How many of a vector's rarest features go into the inverted index.
 #:
@@ -265,7 +272,7 @@ def build_cfr_index(
     kb: PersistentKnowledgeBase,
     binaries: Iterable[str | Path],
     *,
-    weights: Optional[object] = None,
+    weights: Optional["CfrWeights"] = None,
     nosize: bool = False,
     min_doc_count: int = 1,
     top_k: int = TOP_K_POSTINGS,
@@ -314,7 +321,7 @@ def build_cfr_index(
     _ensure(kb._conn)
     paths = [Path(p) for p in binaries]
 
-    signed: List[Tuple[int, object]] = []
+    signed: List[Tuple[int, "CfrSignature"]] = []
     skipped_empty = 0
     for path in paths:
         binary_id = PersistentKnowledgeBase._resolve_binary(kb._conn, path)
@@ -333,7 +340,7 @@ def build_cfr_index(
             min_doc_count=int(min_doc_count),
             nosize=nosize,
         )
-    weights_id = weights.weights_id  # type: ignore[attr-defined]
+    weights_id = weights.weights_id
 
     cur = kb._conn.cursor()
     stored_id = _stored_weights_id(cur)
@@ -406,7 +413,7 @@ def build_cfr_index(
         binaries=len(paths),
         functions=len(signed),
         vectors=vectors,
-        weighted_features=len(weights),  # type: ignore[arg-type]
+        weighted_features=len(weights),
         postings=posting_rows,
         skipped_empty=skipped_empty,
         top_k=top_k,
@@ -432,10 +439,12 @@ def _clear_index(cur: sqlite3.Cursor) -> None:
         cur.execute(f"DELETE FROM {table}")
 
 
-def _write_weight_table(cur: sqlite3.Cursor, weights: object, *, top_k: int) -> None:
-    entries = weights.entries()  # type: ignore[attr-defined]
-    weights_id = weights.weights_id  # type: ignore[attr-defined]
-    major, minor, settings = weights.version  # type: ignore[attr-defined]
+def _write_weight_table(
+    cur: sqlite3.Cursor, weights: "CfrWeights", *, top_k: int
+) -> None:
+    entries = weights.entries()
+    weights_id = weights.weights_id
+    major, minor, settings = weights.version
     cur.execute(
         "INSERT OR REPLACE INTO cfr_weight_table "
         "(weights_id, cfr_major, cfr_minor, cfr_settings, documents, "
@@ -445,7 +454,7 @@ def _write_weight_table(cur: sqlite3.Cursor, weights: object, *, top_k: int) -> 
             int(major),
             int(minor),
             int(settings),
-            int(weights.documents),  # type: ignore[attr-defined]
+            int(weights.documents),
             len(entries),
             int(top_k),
             int(time.time()),
@@ -462,7 +471,7 @@ def _write_weight_table(cur: sqlite3.Cursor, weights: object, *, top_k: int) -> 
 
 
 def _rarest_features(
-    features: Sequence[Tuple[int, int]], weights: object, top_k: int
+    features: Sequence[Tuple[int, int]], weights: "CfrWeights", top_k: int
 ) -> List[int]:
     """The ``top_k`` highest-IDF feature hashes of one vector.
 
@@ -472,8 +481,7 @@ def _rarest_features(
     holding the same corpus.
     """
     scored = [
-        (-weights.idf(feature_hash), feature_hash)  # type: ignore[attr-defined]
-        for feature_hash, _count in features
+        (-weights.idf(feature_hash), feature_hash) for feature_hash, _count in features
     ]
     scored.sort()
     return [feature_hash for _, feature_hash in scored[:top_k]]
@@ -483,7 +491,7 @@ def _write_postings(
     cur: sqlite3.Cursor,
     vector_id: int,
     features: Sequence[Tuple[int, int]],
-    weights: object,
+    weights: "CfrWeights",
     top_k: int,
 ) -> int:
     rows = [
@@ -505,7 +513,7 @@ def _write_postings(
 
 def load_cfr_weights(
     kb: PersistentKnowledgeBase, weights_id: Optional[str] = None
-) -> Optional[object]:
+) -> Optional["CfrWeights"]:
     """Rebuild the stored weight table as a ``glaurung.analysis.CfrWeights``.
 
     The weights are recomputed from the stored document counts rather than
@@ -561,7 +569,7 @@ def cfr_index_size(kb: PersistentKnowledgeBase) -> Tuple[int, int]:
 
 def query_cfr(
     kb: PersistentKnowledgeBase,
-    signature: object,
+    signature: "CfrSignature",
     k: int = 10,
     *,
     min_significance: Optional[float] = None,
@@ -639,7 +647,7 @@ def query_cfr(
             "SELECT vector_id, vector_hash, features, refcount FROM feature_vector"
         )
 
-    scored: List[Tuple[float, float, int, str, int, object]] = []
+    scored: List[Tuple[float, float, int, str, int, Dict[str, Any]]] = []
     for vector_id, digest, blob, refcount in cur.fetchall():
         candidate = g.analysis.CfrSignature.from_features(
             decode_features(blob), nosize=bool(weights.version[2] & 1)
@@ -686,8 +694,8 @@ def query_cfr(
 
 def _candidates_from_postings(
     cur: sqlite3.Cursor,
-    signature: object,
-    weights: object,
+    signature: "CfrSignature",
+    weights: "CfrWeights",
     candidate_limit: int,
 ) -> List[int]:
     """Vector ids reachable from the query's rarest features, rarest first.
@@ -698,7 +706,7 @@ def _candidates_from_postings(
     truncated candidate set has dropped the weakest evidence rather than an
     arbitrary slice of it.
     """
-    query_features = list(signature.features)  # type: ignore[attr-defined]
+    query_features = list(signature.features)
     ordered = _rarest_features(query_features, weights, len(query_features))
     seen: Dict[int, None] = {}
     for feature_hash in ordered:
