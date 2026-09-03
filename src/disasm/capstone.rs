@@ -341,204 +341,216 @@ impl Disassembler for CapstoneDisassembler {
         let mnemonic = insn.mnemonic().unwrap_or("").to_string();
         // Try detailed operands when available (ARM64 focus)
         let mut operands: Vec<Operand> = Vec::new();
-        if let Ok(detail) = cs.insn_detail(insn) {
-            match self.arch {
-                Architecture::ARM64 => {
-                    if let Some(ad) = detail.arch_detail().arm64() {
-                        // `s0`/`h0` are 32/16-bit lanes, `d0`/`q0` are wider.
-                        // Used only to pick the precision of an FP immediate.
-                        let ins_reg_width: Option<u32> =
-                            ad.operands().find_map(|op| match op.op_type {
-                                Arm64OperandType::Reg(r) => cs
-                                    .reg_name(r)
-                                    .and_then(|n| n.chars().next())
-                                    .map(|c| if c == 's' { 32 } else { 64 }),
-                                _ => None,
-                            });
-                        // Track writeback so pre-indexed forms (`[sp,
-                        // #-0x30]!`) can be distinguished from non-
-                        // writeback forms downstream. When writeback is
-                        // set, we zero the memory operand's disp and
-                        // append an explicit Immediate operand carrying
-                        // that disp — which makes pre-indexed look exactly
-                        // like post-indexed in our operand form. The
-                        // ARM64 lifter then adds the base writeback in
-                        // both cases.
-                        let writeback = ad.writeback();
-                        let mut pending_writeback: Option<i64> = None;
-                        for op in ad.operands() {
-                            match op.op_type {
-                                Arm64OperandType::Reg(r) => {
-                                    let name = cs.reg_name(r).unwrap_or_default();
-                                    let shape = arm64_vector_shape(op.vas);
-                                    let mut operand = Operand::register(
-                                        name,
-                                        shape.and_then(VectorShape::total_bits).unwrap_or(0),
-                                        Access::Read,
-                                    );
-                                    operand.vector_shape = shape;
-                                    operand.vector_index = op.vector_index;
-                                    operands.push(operand);
-                                }
-                                Arm64OperandType::Imm(i) => {
-                                    operands.push(Operand::immediate(i, 0));
-                                }
-                                // A scalar FP immediate, e.g. `fmov d2, #2.0`.
-                                // This fell into the catch-all and was DROPPED,
-                                // so the instruction reached the lifter with one
-                                // operand, failed its arity check, and lifted to
-                                // nothing -- leaving the destination register
-                                // undefined. That is usually the constant feeding
-                                // the value a function returns, so the function
-                                // recovers as `void(void)`. Same shape as the
-                                // ARM32 VFP handling directly below; capstone
-                                // exposes the immediate as an `f64` regardless of
-                                // the encoded precision, so preserve the exact
-                                // IEEE payload and let the typed intrinsic supply
-                                // the interpretation.
-                                Arm64OperandType::Fp(value) => {
-                                    let (bits, width) = match ins_reg_width {
-                                        Some(32) => (i64::from((value as f32).to_bits()), 32),
-                                        _ => (value.to_bits() as i64, 64),
-                                    };
-                                    operands.push(Operand::immediate(bits, width));
-                                }
-                                Arm64OperandType::Mem(m) => {
-                                    let base = if m.base().0 != 0 {
-                                        Some(cs.reg_name(m.base()).unwrap_or_default())
-                                    } else {
-                                        None
-                                    };
-                                    let index = if m.index().0 != 0 {
-                                        Some(cs.reg_name(m.index()).unwrap_or_default())
-                                    } else {
-                                        None
-                                    };
-                                    let scale = shift_to_scale(arm64_lsl_amount(op.shift));
-                                    let disp = m.disp() as i64;
-                                    operands.push(Operand::memory(
-                                        0,
-                                        Access::Read,
-                                        Some(disp),
-                                        base,
-                                        index,
-                                        scale,
-                                    ));
-                                    // Pre-indexed writeback: surface the
-                                    // non-zero disp as a trailing Imm so
-                                    // the lifter emits a matching base-
-                                    // adjust. Loads/stores themselves use
-                                    // [base + disp], which is the post-
-                                    // writeback effective address —
-                                    // equivalent to sp_new + 0.
-                                    if writeback && disp != 0 {
-                                        pending_writeback = Some(disp);
+        // capstone-rs 0.12 represents AArch64 MRS/MSR system-register ids as
+        // an enum and uses `transmute` while constructing detailed operands.
+        // Newer Capstone can return architectural encodings (for example
+        // TPIDR_EL0 = 0xd53bd040's sysreg field) that are not enum variants;
+        // Rust then raises a non-unwinding invalid-enum panic before we can
+        // decline the instruction. The textual operand is authoritative for
+        // these two mnemonics and the generic fallback below preserves it, so
+        // never ask the affected binding to materialise their detail record.
+        let unsafe_arm64_system_detail =
+            self.arch == Architecture::ARM64 && matches!(mnemonic.as_str(), "mrs" | "msr");
+        if !unsafe_arm64_system_detail {
+            if let Ok(detail) = cs.insn_detail(insn) {
+                match self.arch {
+                    Architecture::ARM64 => {
+                        if let Some(ad) = detail.arch_detail().arm64() {
+                            // `s0`/`h0` are 32/16-bit lanes, `d0`/`q0` are wider.
+                            // Used only to pick the precision of an FP immediate.
+                            let ins_reg_width: Option<u32> =
+                                ad.operands().find_map(|op| match op.op_type {
+                                    Arm64OperandType::Reg(r) => cs
+                                        .reg_name(r)
+                                        .and_then(|n| n.chars().next())
+                                        .map(|c| if c == 's' { 32 } else { 64 }),
+                                    _ => None,
+                                });
+                            // Track writeback so pre-indexed forms (`[sp,
+                            // #-0x30]!`) can be distinguished from non-
+                            // writeback forms downstream. When writeback is
+                            // set, we zero the memory operand's disp and
+                            // append an explicit Immediate operand carrying
+                            // that disp — which makes pre-indexed look exactly
+                            // like post-indexed in our operand form. The
+                            // ARM64 lifter then adds the base writeback in
+                            // both cases.
+                            let writeback = ad.writeback();
+                            let mut pending_writeback: Option<i64> = None;
+                            for op in ad.operands() {
+                                match op.op_type {
+                                    Arm64OperandType::Reg(r) => {
+                                        let name = cs.reg_name(r).unwrap_or_default();
+                                        let shape = arm64_vector_shape(op.vas);
+                                        let mut operand = Operand::register(
+                                            name,
+                                            shape.and_then(VectorShape::total_bits).unwrap_or(0),
+                                            Access::Read,
+                                        );
+                                        operand.vector_shape = shape;
+                                        operand.vector_index = op.vector_index;
+                                        operands.push(operand);
                                     }
+                                    Arm64OperandType::Imm(i) => {
+                                        operands.push(Operand::immediate(i, 0));
+                                    }
+                                    // A scalar FP immediate, e.g. `fmov d2, #2.0`.
+                                    // This fell into the catch-all and was DROPPED,
+                                    // so the instruction reached the lifter with one
+                                    // operand, failed its arity check, and lifted to
+                                    // nothing -- leaving the destination register
+                                    // undefined. That is usually the constant feeding
+                                    // the value a function returns, so the function
+                                    // recovers as `void(void)`. Same shape as the
+                                    // ARM32 VFP handling directly below; capstone
+                                    // exposes the immediate as an `f64` regardless of
+                                    // the encoded precision, so preserve the exact
+                                    // IEEE payload and let the typed intrinsic supply
+                                    // the interpretation.
+                                    Arm64OperandType::Fp(value) => {
+                                        let (bits, width) = match ins_reg_width {
+                                            Some(32) => (i64::from((value as f32).to_bits()), 32),
+                                            _ => (value.to_bits() as i64, 64),
+                                        };
+                                        operands.push(Operand::immediate(bits, width));
+                                    }
+                                    Arm64OperandType::Mem(m) => {
+                                        let base = if m.base().0 != 0 {
+                                            Some(cs.reg_name(m.base()).unwrap_or_default())
+                                        } else {
+                                            None
+                                        };
+                                        let index = if m.index().0 != 0 {
+                                            Some(cs.reg_name(m.index()).unwrap_or_default())
+                                        } else {
+                                            None
+                                        };
+                                        let scale = shift_to_scale(arm64_lsl_amount(op.shift));
+                                        let disp = m.disp() as i64;
+                                        operands.push(Operand::memory(
+                                            0,
+                                            Access::Read,
+                                            Some(disp),
+                                            base,
+                                            index,
+                                            scale,
+                                        ));
+                                        // Pre-indexed writeback: surface the
+                                        // non-zero disp as a trailing Imm so
+                                        // the lifter emits a matching base-
+                                        // adjust. Loads/stores themselves use
+                                        // [base + disp], which is the post-
+                                        // writeback effective address —
+                                        // equivalent to sp_new + 0.
+                                        if writeback && disp != 0 {
+                                            pending_writeback = Some(disp);
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
-                        }
-                        // Surface the writeback displacement as a trailing
-                        // Immediate operand so the ARM64 lifter sees a
-                        // uniform shape for pre- and post-indexed LDP/STP/
-                        // LDR.
-                        if let Some(wb) = pending_writeback {
-                            operands.push(Operand::immediate(wb, 0));
-                        }
-                    }
-                }
-                Architecture::ARM => {
-                    if let Some(ad) = detail.arch_detail().arm() {
-                        for op in ad.operands() {
-                            match op.op_type {
-                                ArmOperandType::Reg(r) => {
-                                    let name = cs.reg_name(r).unwrap_or_default();
-                                    operands.push(Operand::register(name, 0, Access::Read));
-                                }
-                                ArmOperandType::Imm(i) => {
-                                    operands.push(Operand::immediate(i as i64, 0))
-                                }
-                                ArmOperandType::Fp(value) => {
-                                    // Capstone exposes an ARM VFP immediate as an
-                                    // `f64`, independently of the instruction's
-                                    // encoded precision. Preserve its exact IEEE
-                                    // payload in the ordinary immediate container;
-                                    // the typed VFP intrinsic supplies the semantic
-                                    // interpretation downstream.
-                                    let (bits, width) = if mnemonic.contains(".f32") {
-                                        (i64::from((value as f32).to_bits()), 32)
-                                    } else {
-                                        (value.to_bits() as i64, 64)
-                                    };
-                                    operands.push(Operand::immediate(bits, width));
-                                }
-                                ArmOperandType::Mem(m) => {
-                                    let base = if m.base().0 != 0 {
-                                        Some(cs.reg_name(m.base()).unwrap_or_default())
-                                    } else {
-                                        None
-                                    };
-                                    let index = if m.index().0 != 0 {
-                                        Some(cs.reg_name(m.index()).unwrap_or_default())
-                                    } else {
-                                        None
-                                    };
-                                    let scale = shift_to_scale(arm_lsl_amount(op.shift));
-                                    let disp = if m.disp() != 0 {
-                                        Some(m.disp() as i64)
-                                    } else {
-                                        Some(0)
-                                    };
-                                    operands.push(Operand::memory(
-                                        0,
-                                        Access::Read,
-                                        disp,
-                                        base,
-                                        index,
-                                        scale,
-                                    ));
-                                }
-                                // A Cortex-M special register (BASEPRI, IPSR,
-                                // PSP, ...). It was falling into the catch-all
-                                // and being dropped, so `mrs r0, BASEPRI`
-                                // reached the lifter with ONE operand and no
-                                // indication of which system register it read.
-                                // The lifter cannot name the intrinsic without
-                                // it, and BASEPRI_MAX must stay distinct from
-                                // BASEPRI.
-                                ArmOperandType::SysReg(r) => {
-                                    // `reg_name` resolves `arm_reg` ids and
-                                    // returns empty for an `arm_sysreg` one,
-                                    // so the printed operand text is the only
-                                    // place the register's identity survives.
-                                    // Losing it would collapse BASEPRI_MAX
-                                    // into BASEPRI, whose update semantics
-                                    // differ.
-                                    let name = match cs.reg_name(r) {
-                                        Some(n) if !n.is_empty() => n,
-                                        _ => insn
-                                            .op_str()
-                                            .unwrap_or("")
-                                            .split(',')
-                                            .nth(operands.len())
-                                            .map(|s| s.trim().to_ascii_lowercase())
-                                            .unwrap_or_default(),
-                                    };
-                                    operands.push(Operand::register(name, 0, Access::Read));
-                                }
-                                _ => {}
+                            // Surface the writeback displacement as a trailing
+                            // Immediate operand so the ARM64 lifter sees a
+                            // uniform shape for pre- and post-indexed LDP/STP/
+                            // LDR.
+                            if let Some(wb) = pending_writeback {
+                                operands.push(Operand::immediate(wb, 0));
                             }
                         }
                     }
+                    Architecture::ARM => {
+                        if let Some(ad) = detail.arch_detail().arm() {
+                            for op in ad.operands() {
+                                match op.op_type {
+                                    ArmOperandType::Reg(r) => {
+                                        let name = cs.reg_name(r).unwrap_or_default();
+                                        operands.push(Operand::register(name, 0, Access::Read));
+                                    }
+                                    ArmOperandType::Imm(i) => {
+                                        operands.push(Operand::immediate(i as i64, 0))
+                                    }
+                                    ArmOperandType::Fp(value) => {
+                                        // Capstone exposes an ARM VFP immediate as an
+                                        // `f64`, independently of the instruction's
+                                        // encoded precision. Preserve its exact IEEE
+                                        // payload in the ordinary immediate container;
+                                        // the typed VFP intrinsic supplies the semantic
+                                        // interpretation downstream.
+                                        let (bits, width) = if mnemonic.contains(".f32") {
+                                            (i64::from((value as f32).to_bits()), 32)
+                                        } else {
+                                            (value.to_bits() as i64, 64)
+                                        };
+                                        operands.push(Operand::immediate(bits, width));
+                                    }
+                                    ArmOperandType::Mem(m) => {
+                                        let base = if m.base().0 != 0 {
+                                            Some(cs.reg_name(m.base()).unwrap_or_default())
+                                        } else {
+                                            None
+                                        };
+                                        let index = if m.index().0 != 0 {
+                                            Some(cs.reg_name(m.index()).unwrap_or_default())
+                                        } else {
+                                            None
+                                        };
+                                        let scale = shift_to_scale(arm_lsl_amount(op.shift));
+                                        let disp = if m.disp() != 0 {
+                                            Some(m.disp() as i64)
+                                        } else {
+                                            Some(0)
+                                        };
+                                        operands.push(Operand::memory(
+                                            0,
+                                            Access::Read,
+                                            disp,
+                                            base,
+                                            index,
+                                            scale,
+                                        ));
+                                    }
+                                    // A Cortex-M special register (BASEPRI, IPSR,
+                                    // PSP, ...). It was falling into the catch-all
+                                    // and being dropped, so `mrs r0, BASEPRI`
+                                    // reached the lifter with ONE operand and no
+                                    // indication of which system register it read.
+                                    // The lifter cannot name the intrinsic without
+                                    // it, and BASEPRI_MAX must stay distinct from
+                                    // BASEPRI.
+                                    ArmOperandType::SysReg(r) => {
+                                        // `reg_name` resolves `arm_reg` ids and
+                                        // returns empty for an `arm_sysreg` one,
+                                        // so the printed operand text is the only
+                                        // place the register's identity survives.
+                                        // Losing it would collapse BASEPRI_MAX
+                                        // into BASEPRI, whose update semantics
+                                        // differ.
+                                        let name = match cs.reg_name(r) {
+                                            Some(n) if !n.is_empty() => n,
+                                            _ => insn
+                                                .op_str()
+                                                .unwrap_or("")
+                                                .split(',')
+                                                .nth(operands.len())
+                                                .map(|s| s.trim().to_ascii_lowercase())
+                                                .unwrap_or_default(),
+                                        };
+                                        operands.push(Operand::register(name, 0, Access::Read));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    // For other arches, rely on textual parsing fallback below.
+                    Architecture::RISCV
+                    | Architecture::RISCV64
+                    | Architecture::MIPS
+                    | Architecture::MIPS64
+                    | Architecture::PPC
+                    | Architecture::PPC64 => {}
+                    _ => {}
                 }
-                // For other arches, rely on textual parsing fallback below.
-                Architecture::RISCV
-                | Architecture::RISCV64
-                | Architecture::MIPS
-                | Architecture::MIPS64
-                | Architecture::PPC
-                | Architecture::PPC64 => {}
-                _ => {}
             }
         }
         if operands.is_empty() {
@@ -723,6 +735,20 @@ mod tests {
                 })
                 && operand.size == 128
         }));
+    }
+
+    #[test]
+    fn arm64_system_register_operand_cannot_abort_the_decoder() {
+        // `mrs x0, tpidr_el0` = 0xd53bd040. capstone-rs 0.12 attempts to
+        // transmute the system-register encoding while building its detailed
+        // operand and can abort on values absent from its generated enum.
+        let cs = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("capstone arm64 backend");
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &0xd53bd040u32.to_le_bytes())
+            .expect("decode system-register read without detailed-enum conversion");
+        assert_eq!(ins.mnemonic, "mrs");
+        assert_eq!(ins.operands.len(), 2);
     }
 
     #[test]
