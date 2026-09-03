@@ -1019,6 +1019,17 @@ three unaccepted i386 baseline regressions are recorded in
 This is one bounded WP9 increment. It does not close the shared `MachineModel`,
 ARM32/VFP, capability-census, or whole-architecture exit criteria below.
 
+### Implementation evidence - 2026-09-03 store-width demand
+
+The bit-demand oracle now treats a register-valued memory-store source as the
+width actually written, while retaining whole-value demand for address and
+predicate operands. This removes the false entry-`rax`/undefined-`ret` input
+from both Clang `atomic_flag_round_trip` lanes without inventing an initializer
+or adding an architecture special case. The definedness module's six tests
+pass, a narrow definition-health census reports no O0 or O2 violation, and all
+four host atomic lanes remain baseline-stable. Exact RED/GREEN and fixture
+evidence is in `results/wp9-store-width-demand.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
