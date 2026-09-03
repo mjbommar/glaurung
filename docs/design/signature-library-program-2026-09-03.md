@@ -46,6 +46,26 @@ at `5e882019`), but its import libraries are pure thunks and worthless; only
 `libmingwex`, `libgcc` and `libstdc++` carry bodies. MSVC CRT patterns need a
 Build Tools or `xwin` acquisition on a device where the licence was accepted.
 
+## Sources on the NAS, surveyed 2026-09-03
+
+`/nas4/data/binary-analysis/` (read-only) adds three things the box does not
+have. `armtc/` is a full ARM GNU 13.2.1 `arm-none-eabi` toolchain with 780
+static archives across every Cortex-M multilib (newlib `libc`, `libc_nano`,
+`libm`, `libstdc++`, `libsupc++`, `libnosys`, and per-multilib `libgcc`), the
+bare-metal signature source we lacked; its provenance is the vendor release,
+not a build log. The round-trip trees (`rt-libopencm3/`, `rt-diffutils/`,
+`rt-dpkg/`, `rt-sysvinit/`) and `decbench-holdout-source-rebuild-2026-08-06/`
+(42 projects at O0, O2 and O2-noinline, including eight ARM EABI5 static
+firmware projects) keep source, stripped and unstripped outputs and
+address-to-name maps, so they are validation ground truth, though they discard
+the intermediate objects. `glaurung/binaries/` also holds distro userland from
+Ubuntu 20.04 to 24.04, Debian bullseye and bookworm, Alpine 3.18 and 3.19, and
+a glibc BusyBox, which is what the `base` set gets scored against. There is no
+MIPS or RISC-V material anywhere in the tree; those need a Buildroot or
+OpenWrt toolchain sourced elsewhere. The 548,303-entry driver manifest is a
+file inventory with hashes only, no PE metadata. The earlier survey of the
+`workspace-infosec` tree stands: no unlinked Windows objects anywhere.
+
 ## Decisions
 
 1. **Unit of distribution** is one blob per `(scheme, library, version,
@@ -124,3 +144,4 @@ records per-archive outcomes and never treats an empty result as success.
 | 10 | MSVC via xwin/vcpkg | queued | | NOTICE review first |
 | 11 | Rust sysroot harvester; gopclntab path for Go | queued | | |
 | 12 | R2 mirror, dictionary training, delta channel | queued | | after the corpus is large |
+| 13 | Cortex-M libraries from the ARM toolchain, validated on `rt-libopencm3` and the holdout firmware | in flight | `siglib/cortex-m` | the only bare-metal source; 780 archives |
