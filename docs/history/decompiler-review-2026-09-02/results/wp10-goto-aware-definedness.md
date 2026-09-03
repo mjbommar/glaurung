@@ -3,7 +3,7 @@
 ## Revisions and build
 
 - Before: `2419372380e229d938bc54da0e3e656289b262c2`
-- After: pending the focused commit containing this report
+- After: `96afcb2e` (`ir: verify definitions across goto control flow`)
 - Release extension SHA-256:
   `e2701cb13bcf9e203c35a1b5ce49957a3892949aefcc8e62af5013b2ae0d2c1c`
 - Toolchain: `rustc 1.97.0-nightly (f53b654a8 2026-04-30)`,
