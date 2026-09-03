@@ -1394,7 +1394,6 @@ mod tests {
         assert!(cfg.validate().is_empty());
     }
 
-
     #[test]
     fn identical_event_streams_build_byte_identical_graphs() {
         let flows = vec![

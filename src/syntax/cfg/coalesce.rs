@@ -337,5 +337,4 @@ mod tests {
         assert_eq!(block.node(cycle).map(|n| n.spans().len()), Some(2));
         assert_eq!(block.successors(cycle).next(), Some(cycle));
     }
-
 }

@@ -324,5 +324,4 @@ mod tests {
         assert!(cfg.successor_edges(bogus).is_empty());
         assert!(cfg.predecessors(bogus).is_empty());
     }
-
 }

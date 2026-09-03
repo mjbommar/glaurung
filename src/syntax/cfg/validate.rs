@@ -359,5 +359,4 @@ mod tests {
             .iter()
             .any(|d| d.message.contains("lands on no loop")));
     }
-
 }
