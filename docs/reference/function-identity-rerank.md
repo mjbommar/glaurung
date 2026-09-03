@@ -112,8 +112,11 @@ reference id, with the "no match" node last among equals.
 
 Cost is `2 * sum_j K_{j-1} * K_j` edge relaxations —
 `O(layers * K^2)` — reported exactly as `RerankResult::relaxations` so a caller
-can assert the bound rather than trust a comment. Measured: 118,584 relaxations
-in 11 ms for the largest in-house task (487 layers, release build).
+can assert the bound rather than trust a comment. The largest task measured here
+is in-house XC-O0 on the global lane: 487 layers, **124,580 relaxations**. That
+count is deterministic; the wall clock is not, and the same task was timed at
+11 ms on an idle machine and 198 ms under two other test suites. Quote the
+count.
 
 ## Where this departs from the paper
 
@@ -348,7 +351,8 @@ GLAURUNG_IDENTITY_CORPUS=/path/to/tests/decompiler_fixtures/build \
   cargo test --features python-ext --test identity_retrieval
 
 # The full grid above -- every scheme, every ablation, both lanes, both
-# corpora. Under a minute once the corpora are loaded.
+# corpora. Measured 228s end to end, most of it loading the two corpora and
+# lifting every image for the CFR; the decodes themselves are ~4s of it.
 GLAURUNG_IDENTITY_CORPUS=/path/to/tests/decompiler_fixtures/build \
 GLAURUNG_CISCO_CORPUS="$HOME/.cache/glaurung/corpora/cisco-talos-dataset1" \
   cargo test --release --features python-ext --test identity_retrieval -- \
@@ -378,9 +382,10 @@ build profile, the call-edge counts and every per-task number.
 - **Only the twin's rank is counted.** `improved`/`worsened` say nothing about
   movement elsewhere in the list, which is what the paper's NDCG measures. Our
   numbers are not comparable to its 56.3–98.8%.
-- **No global-lane extraction-cost figure.** The decode itself is 8–11 ms per
-  task; what a caller pays to *produce* the candidate lists is the scheme's cost
-  and is reported in
+- **No extraction-cost figure for the stage.** There is nothing to report: the
+  decode adds 11–198 ms per task depending on machine load, against seconds to
+  minutes for producing the candidate lists, which is the underlying scheme's
+  cost and is reported in
   [identity-measurement.md](../development/identity-measurement.md).
 
 ## Where the code is
