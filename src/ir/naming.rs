@@ -197,6 +197,105 @@ pub fn apply_authoritative_local_names(f: &mut Function, source_names: &HashMap<
     rewrite_body(&mut f.body, source_names);
 }
 
+/// Give the two strongest source-level loop roles conventional names when no
+/// debug name survived.
+///
+/// This deliberately recognizes only a promoted local initialized to zero and
+/// used as the induction variable of an already-recovered `for`, plus a second
+/// zero-initialized promoted local updated by `self + value` in that loop. The
+/// structure pass has already proved the loop; this pass changes identities
+/// only, and declines when `i` or `sum` is already in use.
+pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, String> {
+    fn is_reg(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::Reg(VReg::Phys(candidate)) => candidate == name,
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => is_reg(expr, name),
+            _ => false,
+        }
+    }
+
+    fn local_assignment(statement: &Stmt) -> Option<(&str, &Expr)> {
+        match statement {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src,
+            }
+            | Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(name)),
+                src,
+                ..
+            } if crate::ir::types::is_promoted_local_name(name) => Some((name, src)),
+            _ => None,
+        }
+    }
+
+    fn unit_increment(statement: &Stmt, name: &str) -> bool {
+        let Some((dst, Expr::Bin { op, lhs, rhs })) = local_assignment(statement) else {
+            return false;
+        };
+        dst == name
+            && *op == crate::ir::types::BinOp::Add
+            && ((is_reg(lhs, name) && matches!(rhs.as_ref(), Expr::Const(1)))
+                || (is_reg(rhs, name) && matches!(lhs.as_ref(), Expr::Const(1))))
+    }
+
+    fn has_additive_update(body: &[Stmt], name: &str) -> bool {
+        body.iter().any(|statement| match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                has_additive_update(then_body, name)
+                    || else_body
+                        .as_deref()
+                        .is_some_and(|body| has_additive_update(body, name))
+            }
+            _ => local_assignment(statement).is_some_and(|(dst, src)| {
+                matches!(src, Expr::Bin { op: crate::ir::types::BinOp::Add, lhs, rhs }
+                    if dst == name && (is_reg(lhs, name) || is_reg(rhs, name)))
+            }),
+        })
+    }
+
+    let used = collect_first_appearance_phys(&f.body)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
+    let mut roles = HashMap::new();
+    for (loop_index, statement) in f.body.iter().enumerate() {
+        let Stmt::For {
+            init, step, body, ..
+        } = statement
+        else {
+            continue;
+        };
+        let Some((induction, Expr::Const(0))) = local_assignment(init.as_ref()) else {
+            continue;
+        };
+        if !used.contains("i")
+            && !roles.values().any(|name| name == "i")
+            && unit_increment(step, induction)
+        {
+            roles.insert(induction.to_string(), "i".to_string());
+        }
+
+        if used.contains("sum") || roles.values().any(|name| name == "sum") {
+            continue;
+        }
+        if let Some(accumulator) = f.body[..loop_index].iter().rev().find_map(|candidate| {
+            let (name, Expr::Const(0)) = local_assignment(candidate)? else {
+                return None;
+            };
+            (name != induction && has_additive_update(body, name)).then_some(name.to_string())
+        }) {
+            roles.insert(accumulator, "sum".to_string());
+        }
+        break;
+    }
+    rewrite_body(&mut f.body, &roles);
+    roles
+}
+
 /// Whether a debug-provided local name can safely enter the generated C namespace.
 ///
 /// Source names that collide with C keywords, ABI roles, or identities reserved
@@ -1092,6 +1191,65 @@ mod tests {
         apply_role_names(&mut f, CallConv::SysVAmd64);
         let text = render(&f);
         assert!(text.contains("call puts(%arg0);"), "got: {}", text);
+    }
+
+    #[test]
+    fn canonical_loop_names_identify_induction_and_additive_accumulator() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::For {
+                    init: Box::new(Stmt::Store {
+                        addr: Expr::Reg(reg("stack_5")),
+                        src: Expr::Const(0),
+                        size: 4,
+                    }),
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("stack_5"))),
+                        rhs: Box::new(Expr::Reg(reg("arg0"))),
+                    },
+                    step: Box::new(Stmt::Store {
+                        addr: Expr::Reg(reg("stack_5")),
+                        src: Expr::Bin {
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("stack_5"))),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                        size: 4,
+                    }),
+                    body: vec![Stmt::Store {
+                        addr: Expr::Reg(reg("stack_4")),
+                        src: Expr::Bin {
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("stack_4"))),
+                            rhs: Box::new(Expr::Call {
+                                target: Box::new(Expr::Named {
+                                    va: 0,
+                                    name: "strlen".into(),
+                                }),
+                                args: vec![],
+                                call_spec: None,
+                                result_width: Some(8),
+                            }),
+                        },
+                        size: 4,
+                    }],
+                },
+            ],
+        };
+
+        apply_canonical_loop_local_names(&mut f);
+        let text = render(&f);
+        assert!(text.contains("%sum = 0"), "{text}");
+        assert!(text.contains("for (%i = 0;"), "{text}");
+        assert!(text.contains("%sum = (%sum + strlen())"), "{text}");
     }
 
     #[test]
