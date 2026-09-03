@@ -640,7 +640,7 @@ the maintainer must pass to `minisign -t`, and what the client compares against
 the manifest body — was:
 
 ```
-glaurung-sigs set=base version=2026.09.2 serial=2 blobs=446 built=2026-09-03T21:54:01Z
+glaurung-sigs set=base version=2026.09.2 serial=2 blobs=446 built=2026-09-03T22:07:53Z
 ```
 
 **Every blob is converted to `gsig/1` before it is hashed**, so the digest names
