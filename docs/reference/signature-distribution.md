@@ -341,6 +341,13 @@ running them, and drives the S3 (primary) upload itself — but only when told
 to: by default it prints the exact `aws` commands instead of running them, and
 `--upload` is what makes it real.
 
+The worked example below uses one `--blobs` directory, which is what the
+2026.09.1 release was. A real set is several sources under two identity
+schemes: see
+[Publishing the whole database](#publishing-the-whole-database-several-sources-several-schemes)
+below for the `--source` form, how a contested key is resolved, and the
+measured sizes. Everything about signing and uploading is identical either way.
+
 **Signing is external, and that is the normal flow, not a fallback.** The
 production key (`data/sigs/trusted-keys/glaurung-sigs.pub`, key id
 `25655013D3F68BC1`) is password-protected, on the maintainer's own machine,

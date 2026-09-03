@@ -8,9 +8,22 @@ container" section of ``docs/reference/function-signature-libraries.md``.
 Both directions go through the Rust reader and writer
 (:mod:`glaurung.analysis`); nothing here parses container bytes in Python.
 
+**Two identity schemes share the container** -- masked FLIRT patterns
+(:data:`FLIRT_SCHEME`) and exact-match WARP GUIDs (:data:`WARP_SCHEME`) -- and
+they fill different sections of it. Every command detects which it is holding
+(a container states it in its header, a JSON library in a top-level ``scheme``
+key) and ``--scheme flirt``/``--scheme warp`` *asserts* it instead. Reading one
+scheme through the other's path returns an empty, well-formed library rather
+than an error, and an empty signature library is indistinguishable from a
+legitimately empty harvest -- so the mismatch is refused outright.
+
 Usage:
     # JSON -> gsig
     python -m glaurung.tools.sig_convert to-gsig lib.flirt.json lib.flirt.gsig
+
+    # ...and the same for a WARP GUID library
+    python -m glaurung.tools.sig_convert to-gsig --scheme warp \\
+        lib.warp.json lib.warp.gsig
 
     # gsig -> JSON, in the canonical on-disk form the builder writes
     python -m glaurung.tools.sig_convert to-json lib.flirt.gsig lib.flirt.json
