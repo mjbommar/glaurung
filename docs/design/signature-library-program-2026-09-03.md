@@ -137,7 +137,7 @@ records per-archive outcomes and never treats an empty result as success.
 | 3 | Docker harvest with dpkg provenance | landed (integration line) | `bab4dd8b`, `bea1e5ee` | 419 archives, 508 MB; 299 with signatures, 147,733 unique of 235,043 raw in 40 s after COFF |
 | 4 | WARP libraries from NAS PE+PDB | merged (integration line) | `68509346` | cross-servicing recall 0.83 to 0.94 with at most 3 wrong; cross-release 0.27 to 0.37; 0 false names on 48 MinGW PEs; 82 libraries, 226,346 GUIDs |
 | 5 | Matcher correctness: ambiguity key, resolver wiring, load-once | in flight | `siglib/matcher-correctness` | blocking before any publish |
-| 6 | `gsig/1` format and loader | in flight | `siglib/gsig-format` | JSON kept as import/export |
+| 6 | `gsig/1` format and loader | merged (integration line) | `cbc23304` | JSON 1,326 B/sig; gsig store (uncompressed) 229 B/sig; gsig zstd 101 B/sig, 13.1x smaller than JSON; load to first match, merged x86_64 (116,593 sigs), release: 153.6 ms JSON vs 81.1 ms gsig; RSS delta, same corpus: 296.3 vs 134.3 MiB; 0 round-trip failures over 561 harvested libraries |
 | 7 | Harvester v1: Debian, Ubuntu, Alpine | merged (integration line) | `b480e04c` | 14 network cells, 561 archives indexed, 140 MB fetched |
 | 8 | Distribution: manifest, minisign, client cache, CLI | merged (integration line) | `e0597778` | signed content-addressed manifest, minisign dev key `FA6FDB763B3E76EF` (to be replaced before a real release), `glaurung sigs list\|fetch\|verify\|status\|path`, publish dry run at `~/.cache/glaurung/release/2026.09.1`: 292 blobs, 211 MB, commands printed and unrun; `data/sigs` now packaged in the wheel |
 | 9 | Consume mandiant/siglib via lancelot-flirt | queued | | optional feature |
