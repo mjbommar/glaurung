@@ -65,6 +65,13 @@ pub mod disasm;
 /// Low-Level Intermediate Representation (Phase 2)
 pub mod ir;
 
+/// Language-neutral parsing substrate: spans, interning, tokens, events, CFGs
+pub mod syntax;
+
+/// C source front end: lexer, parser, control flow, and the parity layer
+pub mod csource;
+
+
 /// Shared decompilation pipeline and diagnostics.
 pub mod decompile;
 
