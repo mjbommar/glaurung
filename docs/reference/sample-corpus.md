@@ -283,15 +283,19 @@ package and version it came from.
 
 First real run, 2026-09-03, on this repository's own hardware. Three images
 were built with `docker build --target base` and harvested with
-`build-platform.sh --harvest-only`; the `linux/arm64` image was built and run
-under qemu-user (`binfmt`), which is why its numbers are slower and not why
-they are different.
+`build-platform.sh --harvest-only`. The `linux/arm64` image was built and run
+under qemu-user emulation, which is why its build and harvest are slower; the
+archives it exports are native aarch64 packages either way.
 
-| Image | Base | Build | Harvest |
+| Image | Base | Cold build | Harvest |
 | --- | --- | ---: | ---: |
 | `linux-amd64` | `ubuntu:22.04` | 316 s | 1 s |
 | `windows-amd64` | `ubuntu:22.04` | 295 s | under 1 s |
 | `linux-arm64` | `arm64v8/ubuntu:22.04`, qemu-user | 551 s | 29 s |
+
+Cold build is the first build, dominated by `apt-get`. Changing only the
+harvester and rebuilding takes **1 second** per image: it invalidates one
+`COPY` layer, so the harvest is cheap to iterate on once the images exist.
 
 **The harvest is reproducible.** Two consecutive harvests of the same
 `linux-amd64` image produced byte-identical output in all 9 JSON files apart
