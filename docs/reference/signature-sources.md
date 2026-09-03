@@ -406,6 +406,193 @@ Where a package declares its licence machine-readably -- Alpine's `L:` field,
 Debian's DEP-5 `License:` -- that string is quoted verbatim, including where it
 disagrees with the summary, as Alpine's libstdc++ does.
 
+## Rust
+
+Ledger item 11 (Rust half) of
+[the signature-library program](../design/signature-library-program-2026-09-03.md).
+Go is explicitly out of scope there -- solved by `gopclntab` recovery, not
+signatures -- so this section covers only Rust.
+
+`python/glaurung/tools/harvest_rust_sysroot.py` is a fourth backend, and a
+different shape from the three above: there is no distribution package
+manager to resolve. `rustup` installs a toolchain directory holding
+`lib/rustlib/<target>/lib/*.rlib`, one archive per crate in the standard
+library and its private dependency graph, and the only provenance is the
+toolchain itself -- `rustc -vV`'s release, commit hash and commit date. Every
+row records all three rather than a package version string. The harvester
+still writes the shared harvest-manifest schema (`schema_version`,
+`generated_utc`, `image`, `compiler`, `archives`, `totals` -- checked by the
+same `MANIFEST_SCHEMA`/`ARCHIVE_SCHEMA` in
+`python/tests/test_system_archive_harvest.py` the Docker and network
+harvesters are checked against), so a Rust harvest folds into the same
+top-level catalogue via `samples/docker/harvest_system_archives.py
+--index-root` without that script knowing a fourth backend exists.
+
+### What an `.rlib` is
+
+An `ar` archive (`!<arch>\n` magic). Measured on this box's five installed
+toolchains (`1.88.0`, `1.97.1`, `nightly-2026-05-01`, `nightly`, `stable`;
+139 rlibs total, matching the design page's count exactly): members are
+`lib.rmeta` (rustc's own metadata, not an object file), sometimes
+`lib.rmeta-link` (present on `1.97.1`'s layout, absent on `1.88.0`'s), and
+exactly one `*.rcgu.o` -- a normal ELF relocatable object. Its `.llvmbc`
+section is 43-45 percent of the object (measured on `libcore` from both
+toolchains) and carries no function bytes; the builder never reads it.
+`glaurung.analysis.flirt_signatures_from_archive_path` (`src/flirt/archive.rs`)
+already skips any archive member that does not parse as an object file, so
+`lib.rmeta`/`lib.rmeta-link` are silently skipped and the `.rcgu.o` member is
+read exactly as a distro archive's `.o` members are. **No defect was found in
+the existing builder against this input class; nothing in `src/flirt/`
+changed for this lane.**
+
+### Keying, and why it has to be the exact toolchain
+
+A library is keyed `rust-std/<rustc release>/<channel>-<target>/<arch>/<crate>`
+-- one `.flirt.json` per crate, the same "one package, one library" shape the
+distro backends use, with `channel` (`1.88.0`, `stable`, `nightly-2026-05-01`)
+standing in for `(distro, release)`. Two toolchains that happen to resolve to
+the same rustc build are still tracked as distinct channels: measured on this
+box, `stable` and `1.97.1` share a commit hash (`8bab26f4f...`), and `nightly`
+and `nightly-2026-05-01` share another (`f53b654a8...`) -- a signature's
+provenance is which toolchain a user has, not which commit it happens to
+alias today.
+
+**Mangling scheme is part of why cross-toolchain transfer is near zero, on
+top of codegen.** `1.88.0`'s `libcore` defines its 618 text symbols under
+legacy Itanium mangling (`_ZN4core...E`); `1.97.1`'s defines its 869 under v0
+(`_R...`). A relocation-masked pattern harvested from one will never
+byte-match a function compiled by the other even where the generated code is
+identical, and a name from the wrong scheme cannot be right by construction.
+
+### The measured harvest and build, 2026-09-03
+
+```bash
+uv run python -m glaurung.tools.harvest_rust_sysroot harvest \
+    --output ~/.cache/glaurung/system-libs \
+    --toolchain 1.88.0-x86_64-unknown-linux-gnu \
+    --toolchain 1.97.1-x86_64-unknown-linux-gnu \
+    --network
+uv run python -m glaurung.tools.harvest_rust_sysroot build \
+    --harvest-root ~/.cache/glaurung/system-libs \
+    --sigs-output ~/.cache/glaurung/system-libs/sigs
+```
+
+Harvest: 2 toolchains, 55 rlibs (28 + 27) enumerated, 2.65 s including one
+`channel-rust-<ver>.toml` fetch per toolchain (875 KB each, `pkg.rust-std
+.target.<triple>.xz_url`/`xz_hash` recorded as the re-fetch pointer). Zero
+`metadata_only` outcomes -- every rlib on this box carries an object member.
+
+Build, the thirteen priority crates (Decision 7), both toolchains, into the
+existing `sigs/index.json` (561 pre-existing rows from the distro/Docker/
+Cortex-M lanes, `--merge` semantics, nothing clobbered -- 587 after):
+
+| crate | 1.88.0 raw/unique | 1.88.0 s | 1.97.1 raw/unique | 1.97.1 s |
+|---|---|---|---|---|
+| std | 1203 / 924 | 0.012 | 1183 / 906 | 0.012 |
+| core | 528 / 392 | 0.014 | 500 / 383 | 0.003 |
+| alloc | 87 / 69 | 0.003 | 87 / 75 | 0.001 |
+| gimli | 135 / 117 | 0.002 | 127 / 110 | 0.001 |
+| object | 72 / 71 | 0.001 | 69 / 67 | 0.000 |
+| rustc_demangle | 61 / 57 | 0.000 | 51 / 50 | 0.001 |
+| memchr | 44 / 42 | 0.001 | 35 / 35 | 0.000 |
+| miniz_oxide | 15 / 15 | 0.000 | 12 / 12 | 0.000 |
+| addr2line | 11 / 11 | 0.001 | 11 / 11 | 0.000 |
+| hashbrown | 6 / 6 | 0.000 | 9 / 9 | 0.000 |
+| std_detect | 3 / 3 | 0.000 | 2 / 2 | 0.000 |
+| panic_unwind | 4 / 4 | 0.000 | 4 / 4 | 0.000 |
+| unwind | 0 / 0 | 0.000 | 0 / 0 | 0.000 |
+| **total** | **2169 / 1711** | **0.036** | **2090 / 1664** | **0.021** |
+
+**`unwind` yields zero signatures on both toolchains, and it is not a
+failure.** Measured directly with `nm --defined-only` on the extracted
+object: zero defined symbols of any kind. The crate's Rust source is
+`extern "C"` declarations binding the system unwinder; there are no bodies to
+sign. The harvester's `defined_text_symbols` field on the archive row records
+this so a zero in the build report is never mistaken for the builder being
+broken -- the same convention `outcome_metadata_only` uses for an `.rlib`
+with no object member at all (not observed on this box, but read by the same
+code path any cross-compiled sysroot would exercise).
+
+### Recall: same-toolchain versus cross-toolchain
+
+Two programs (`samples/source/rust/hello.rs`, and a 90-line `fsmap.rs` using
+`String`/`Vec`/`HashMap`/`format!`/`std::fs`, not committed -- see
+`tests/fixtures/rust_sysroot/` for the fixture this repository does commit),
+each compiled with both toolchains at `-C opt-level=0` and `3`, stripped, and
+matched with `glaurung.analysis.flirt_match_functions_with_evidence_path`
+against a merged library of the thirteen crates above -- once for the
+toolchain that built the binary, once for the other one. Denominator is
+`nm --defined-only`'s `T`/`t` count on the **unstripped** binary; "correct"
+requires the matched name to equal the true symbol exactly.
+
+| binary | opt | library | total | named | correct | wrong | ambiguous |
+|---|---|---|---|---|---|---|---|
+| hello (1.88.0) | O0 | 1.88.0 (same) | 1035 | 415 | **372** | 43 | 59 |
+| hello (1.88.0) | O0 | 1.97.1 (cross) | 1035 | 89 | **0** | 89 | 8 |
+| hello (1.88.0) | O3 | 1.88.0 (same) | 666 | 411 | **369** | 42 | 55 |
+| hello (1.88.0) | O3 | 1.97.1 (cross) | 666 | 89 | **0** | 89 | 10 |
+| hello (1.97.1) | O0 | 1.97.1 (same) | 1047 | 476 | **434** | 42 | 42 |
+| hello (1.97.1) | O0 | 1.88.0 (cross) | 1047 | 108 | **0** | 108 | 8 |
+| hello (1.97.1) | O3 | 1.97.1 (same) | 670 | 468 | **429** | 39 | 43 |
+| hello (1.97.1) | O3 | 1.88.0 (cross) | 670 | 108 | **0** | 108 | 8 |
+| fsmap (1.88.0) | O0 | 1.88.0 (same) | 964 | 391 | **351** | 40 | 57 |
+| fsmap (1.88.0) | O0 | 1.97.1 (cross) | 964 | 79 | **0** | 79 | 7 |
+| fsmap (1.88.0) | O3 | 1.88.0 (same) | 593 | 387 | **348** | 39 | 50 |
+| fsmap (1.88.0) | O3 | 1.97.1 (cross) | 593 | 78 | **0** | 78 | 9 |
+| fsmap (1.97.1) | O0 | 1.97.1 (same) | 963 | 451 | **410** | 41 | 40 |
+| fsmap (1.97.1) | O0 | 1.88.0 (cross) | 963 | 96 | **0** | 96 | 8 |
+| fsmap (1.97.1) | O3 | 1.97.1 (same) | 602 | 442 | **405** | 37 | 39 |
+| fsmap (1.97.1) | O3 | 1.88.0 (cross) | 602 | 95 | **0** | 95 | 8 |
+
+**Cross-toolchain correct is exactly 0 in all eight cells** -- the mangling
+scheme alone guarantees it (any match names a function in the other scheme,
+never equal to the truth symbol), on top of whatever codegen changed. Named
+counts are low too (79-108, versus 387-476 same-toolchain), so cross-toolchain
+is doubly bad: it rarely fires, and it is never right when it does.
+
+**Same-toolchain recall is 47-48 percent of every defined text symbol in the
+binary**, not close to 100, and the shortfall is legible rather than
+mysterious: roughly half of a small program's `.text` symbols are the
+program's own code and crates outside the thirteen built here (`cfg_if`,
+`panic_abort`, `rustc_std_workspace_*`), which have no entry in the library
+by construction. Of what the library *can* name, most of it lands right.
+
+**8-14 percent of same-toolchain matches are "wrong" under exact-name
+comparison, and about a third of those are not really wrong.** Diagnosed
+directly (`hello`, `1.88.0`, `O0`: 43 of 415 named): 16 are the *same*
+function under a *different* per-monomorphization hash suffix -- e.g. matched
+`core::fmt::Write::write_char::h19b07edce3a70564` against truth
+`core::fmt::Write::write_char::h4a482e3b0d0152bd`, a trait-default method
+instantiated once inside the harvested `core` rlib and again, independently,
+inside this binary's own crate graph, byte-identical but hashed differently
+per rustc's crate-disambiguator. Stripping that suffix before comparing drops
+the wrong count from 43 to 27. The remaining 27 are genuine ambiguity the
+matcher cannot resolve by bytes: `LowerHex::fmt for i8` matched against truth
+`for u8`, `DebugSet::entry` against truth `DebugList::entry`, and similarly
+for `i16`/`u16`, `i32`/`u32`, `i64`/`usize` -- monomorphizations over
+different integer types whose codegen is byte-identical, which is a known
+property of prologue/pattern matching in general and not specific to this
+harvester. This class of collision is exactly what ledger item 5 (matcher
+correctness, `siglib/matcher-correctness`) is tracking on the ambiguity-key
+side; this lane did not touch `src/flirt/`.
+
+### Licence
+
+Rust's standard library (`library/std`, `core`, `alloc`, `panic_unwind`,
+`unwind`, `std_detect`, ...) is dual **MIT OR Apache-2.0**, same as `rustc`
+itself. A handful of the private dependency graph's crates are vendored
+third-party code with their own permissive licence (e.g. `hashbrown`,
+`memchr`, `miniz_oxide`, `object`, `gimli`, `addr2line`, `rustc_demangle` are
+each their own MIT/Apache-2.0 or MIT-only crate) -- none of it is
+redistributed here any more than a distro's glibc is: the harvester reads
+sections from the local `.rlib` and emits masked patterns, a CRC and a name,
+per the same Hex-Rays FLIRT position quoted above. `tests/fixtures/rust_sysroot/`
+commits one real `.rlib` (36,178 bytes, well under the fixture size
+convention) plus the `LICENSE-MIT.txt`/`LICENSE-APACHE.txt` texts from the
+toolchain's own `share/doc/rust/licenses/`, following the same
+verbatim-licence-alongside-the-object convention as
+`tests/fixtures/flirt/armtc/LICENSE.newlib.txt`.
+
 ## What this lane did not do
 
 - **Fedora**, above.

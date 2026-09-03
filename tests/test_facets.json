@@ -3,7 +3,7 @@
  "counts": {
   "core": 315,
   "lfs": 113,
-  "toolchain": 34,
+  "toolchain": 35,
   "fixtures": 33,
   "docker": 18,
   "llm": 5,
@@ -927,6 +927,9 @@
   ],
   "test_runtime_classifier.py": [
    "core"
+  ],
+  "test_rust_sysroot_harvest.py": [
+   "toolchain"
   ],
   "test_sample_corpus_duplication.py": [
    "lfs"

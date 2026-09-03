@@ -1197,3 +1197,24 @@ uv run python tools/validate_cortex_m_signatures.py \
 Not shipped in `data/sigs/`, same as every other harvested set on this page:
 keying, deduplication and a shipping policy at this scale are the wider
 program's open questions, not this measurement's.
+
+## Rust standard library
+
+Ledger item 11 (Rust half) of the signature-library program.
+`python/glaurung/tools/harvest_rust_sysroot.py` reads a rustup toolchain's
+`lib/rustlib/<target>/lib/*.rlib` directly -- no distribution package manager
+involved, keyed by `rustc -vV`'s release, commit hash and channel rather than
+a package version. The archive builder needed no change: `.rlib` is an `ar`
+archive whose non-object members (`lib.rmeta`, `lib.rmeta-link`) are already
+skipped by `flirt_signatures_from_archive_path`, and its one `*.rcgu.o`
+member reads exactly like a distro `.o`. Measured, same-toolchain recall on
+two small stripped Rust binaries is 47-48% of every defined text symbol
+(limited mostly by application/non-priority-crate code the library was never
+going to name); cross-toolchain recall is **exactly 0 correct in every
+measured cell**, driven first by the mangling scheme itself (`1.88.0` uses
+legacy Itanium `_ZN...`, `1.97.1` uses v0 `_R...`) and second by codegen. See
+"Rust" in [Signature sources](signature-sources.md) for the full harvest and
+build tables, the per-crate zero-signature diagnosis (`unwind`: an object
+with zero defined symbols of any kind, confirmed with `nm`), and the
+monomorphization-hash-suffix caveat on "wrong" counts. Go is out of scope for
+signatures entirely -- `gopclntab` recovery is the design's answer there.
