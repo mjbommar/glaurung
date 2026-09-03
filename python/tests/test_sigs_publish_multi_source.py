@@ -220,6 +220,30 @@ def test_a_warp_blob_keeps_the_provenance_its_index_recorded(two_schemes):
     assert blob.provenance.arch == "x86_64"
 
 
+def test_an_unsigned_dry_run_warns_that_its_aws_commands_are_incomplete(two_schemes):
+    """An unsigned run still prints the upload recipe, and must say why it
+    cannot be run as printed.
+
+    The failure it guards against is an operator pasting the `aws` lines and
+    uploading blobs for a manifest that can never be verified, leaving the
+    bucket holding objects no signed manifest names.
+    """
+    flirt, warp, out = two_schemes
+    result = _publish(flirt, warp, out)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "--unsigned: manifest.json.minisig does not exist" in result.stdout
+    assert "minisign -Sm" in result.stdout
+    # ...and nothing was signed.
+    assert not (out / "manifest.json.minisig").exists()
+
+
+def test_unsigned_refuses_to_upload(two_schemes):
+    flirt, warp, out = two_schemes
+    result = _publish(flirt, warp, out, "--upload")
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
+
+
 def test_convert_none_publishes_the_harvesters_own_bytes(two_schemes):
     """The escape hatch still works, and says so in `format`."""
     flirt, warp, out = two_schemes

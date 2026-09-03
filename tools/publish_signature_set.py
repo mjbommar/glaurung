@@ -1539,6 +1539,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print()
     else:
         print("\n--- DRY RUN: nothing was published. Run these by hand: ---\n")
+        if args.unsigned:
+            # The commands below name a `manifest.json.minisig` this run did
+            # not produce. Say so where they are printed, not only in the
+            # `--unsigned` help: the failure mode is an operator pasting the
+            # `aws` lines and uploading blobs for a manifest that can never be
+            # verified, which leaves the bucket holding objects no signed
+            # manifest names.
+            print(
+                "# !! --unsigned: manifest.json.minisig does not exist, so the\n"
+                "# !! last two `aws s3 cp` lines below cannot run. Sign the\n"
+                "# !! manifest first (command printed above) and re-run with\n"
+                "# !! --signature; then these commands are complete.\n"
+            )
         for line in s3_dry_run_lines(
             out, manifest, bucket=args.s3_bucket, profile=args.aws_profile
         ):
