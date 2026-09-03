@@ -346,6 +346,7 @@ PURPOSES: dict[str, str] = {
     "PROBE_OUT": "Internal to `test_cli_startup_is_lazy.py`'s own subprocess probe -- a scratch path for passing a result back, not a project configuration variable.",
     # --- Rust: decompiler pass tracing / IR ------------------------------
     "GLAURUNG_DUMP_PASSES": "Dump each IR pipeline pass's output for inspection.",
+    "GLAURUNG_PARSE_FULL_CORPUS": "Opt in to the C front end's full-corpus sweep (1,606 files, 11.9 M lines); the default lane reads a 14-file slice so it stays about a second.",
     "GLAURUNG_PASS_HEALTH": "Emit per-pass health/diagnostic accounting.",
     "GLAURUNG_PASS_STATS": "Emit per-pass timing/statistics.",
     "GLAURUNG_ACCOUNT_STRUCTURE": "Emit structuring-pass accounting output.",
