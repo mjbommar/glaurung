@@ -147,6 +147,31 @@ Treat full corpus regeneration as a reviewable data change. Toolchain upgrades
 can change bytes, symbols, debug information, metadata, and expected analysis
 results even when the source program is unchanged.
 
+## System archives
+
+The build images can also export the distribution's own static archives --
+`libc.a`, `libstdc++.a`, `libssl.a`, the MinGW-w64 CRT and the rest -- with
+their `dpkg` package provenance. Those unlinked `.a` members, not the linked
+sample binaries, are what a FLIRT-style signature library has to be built from.
+
+The step is **off by default**, so a plain image build exports exactly what it
+exported before. Run it explicitly against a directory of your own:
+
+```bash
+docker build --target base -t glaurung-harvest-linux-amd64 \
+  -f samples/docker/linux/Dockerfile.amd64 samples/
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$HOME/.cache/glaurung/system-libs/linux-amd64:/out" \
+  glaurung-harvest-linux-amd64 \
+  /usr/local/bin/build-platform.sh --harvest-only /out
+```
+
+The archives are distribution packages under their own licences and are **not**
+checked in. See
+[`docs/reference/sample-corpus.md`](../docs/reference/sample-corpus.md),
+"System archives", for the manifest schema, the licence position, and the
+measured result.
+
 ## Derived fixtures
 
 Generate packed examples from existing Linux executables with:
