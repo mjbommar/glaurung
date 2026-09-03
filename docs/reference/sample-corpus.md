@@ -307,57 +307,90 @@ Signatures were built with
 `maturin develop --release` extension. Nineteen `(image, triplet)` pairs over
 **11 distinct triplets** and **37 distinct packages**:
 
+**Re-measured 2026-09-03 against `5e2e0c68`** (the `identity-integration` /
+`siglib/docker-archive-harvest` merge, which carries `5e882019`, "flirt:
+build signatures from COFF archives"). Same harvested archives, same
+allowlist, same `maturin develop --release` build discipline -- only the
+extension changed. This replaces the table below it, which was built from
+`935b7db1` (pre-COFF) and had every MinGW-w64 row at zero.
+
 | Image | Triplet | Arch | Archives | Archive bytes | Packages | Libraries with signatures | Raw | Unique | Dropped ambiguous | Signature bytes |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `linux-amd64` | `aarch64-linux-gnu` | aarch64 | 24 | 22.3 MB | 3 | 16 | 14525 | 8390 | 732 | 11.2 MB |
-| `linux-amd64` | `arm-linux-gnueabihf` | arm | 21 | 14.2 MB | 3 | 14 | 14226 | 7857 | 700 | 10.8 MB |
+| `linux-amd64` | `aarch64-linux-gnu` | aarch64 | 24 | 22.3 MB | 3 | 16 | 14527 | 8391 | 732 | 11.2 MB |
+| `linux-amd64` | `arm-linux-gnueabihf` | arm | 21 | 14.2 MB | 3 | 14 | 14237 | 7865 | 700 | 10.8 MB |
 | `linux-amd64` | `i686-linux-gnu` | i386 | 11 | 7.0 MB | 1 | 5 | 6215 | 3341 | 230 | 3.9 MB |
-| `linux-amd64` | `i686-w64-mingw32` | i386 | 20 | 19.3 MB | 3 | 0 | 0 | 0 | 0 | 0.0 MB |
+| `linux-amd64` | `i686-w64-mingw32` | i386 | 20 | 19.3 MB | 3 | 16 | 6158 | 3592 | 395 | 4.0 MB |
 | `linux-amd64` | `riscv64-linux-gnu` | riscv64 | 20 | 68.1 MB | 3 | 11 | 7917 | 4241 | 386 | 16.1 MB |
-| `linux-amd64` | `x86_64-linux-gnu` | x86_64 | 46 | 56.5 MB | 17 | 38 | 39039 | 26677 | 1840 | 32.3 MB |
-| `linux-amd64` | `x86_64-linux-musl` | x86_64 | 7 | 2.6 MB | 1 | 1 | 1617 | 1302 | 41 | 1.0 MB |
-| `linux-amd64` | `x86_64-w64-mingw32` | x86_64 | 20 | 20.7 MB | 3 | 0 | 0 | 0 | 0 | 0.0 MB |
-| `linux-arm64` | `aarch64-linux-gnu` | aarch64 | 44 | 47.8 MB | 17 | 36 | 32622 | 22973 | 1526 | 27.1 MB |
-| `linux-arm64` | `aarch64-linux-musl` | aarch64 | 7 | 2.4 MB | 1 | 1 | 1543 | 1215 | 41 | 0.9 MB |
-| `linux-arm64` | `arm-linux-gnueabihf` | arm | 21 | 14.2 MB | 3 | 14 | 14226 | 7857 | 700 | 10.8 MB |
-| `linux-arm64` | `i686-w64-mingw32` | i386 | 20 | 19.3 MB | 3 | 0 | 0 | 0 | 0 | 0.0 MB |
+| `linux-amd64` | `x86_64-linux-gnu` | x86_64 | 46 | 56.5 MB | 17 | 38 | 39041 | 26678 | 1840 | 32.3 MB |
+| `linux-amd64` | `x86_64-linux-musl` | x86_64 | 7 | 2.6 MB | 1 | 1 | 1644 | 1325 | 41 | 1.0 MB |
+| `linux-amd64` | `x86_64-w64-mingw32` | x86_64 | 20 | 20.7 MB | 3 | 16 | 6035 | 3554 | 367 | 3.9 MB |
+| `linux-arm64` | `aarch64-linux-gnu` | aarch64 | 44 | 47.8 MB | 17 | 36 | 32624 | 22974 | 1526 | 27.2 MB |
+| `linux-arm64` | `aarch64-linux-musl` | aarch64 | 7 | 2.4 MB | 1 | 1 | 1560 | 1228 | 41 | 1.0 MB |
+| `linux-arm64` | `arm-linux-gnueabihf` | arm | 21 | 14.2 MB | 3 | 14 | 14237 | 7865 | 700 | 10.8 MB |
+| `linux-arm64` | `i686-w64-mingw32` | i386 | 20 | 19.3 MB | 3 | 16 | 6158 | 3592 | 395 | 4.0 MB |
 | `linux-arm64` | `riscv64-linux-gnu` | riscv64 | 20 | 68.1 MB | 3 | 11 | 7917 | 4241 | 386 | 16.1 MB |
-| `linux-arm64` | `x86_64-linux-gnu` | x86_64 | 25 | 26.3 MB | 3 | 17 | 17858 | 10142 | 947 | 13.5 MB |
-| `linux-arm64` | `x86_64-w64-mingw32` | x86_64 | 20 | 20.7 MB | 3 | 0 | 0 | 0 | 0 | 0.0 MB |
-| `windows-amd64` | `i686-w64-mingw32` | i386 | 20 | 19.3 MB | 3 | 0 | 0 | 0 | 0 | 0.0 MB |
-| `windows-amd64` | `x86_64-linux-gnu` | x86_64 | 46 | 56.5 MB | 17 | 38 | 39039 | 26677 | 1840 | 32.3 MB |
-| `windows-amd64` | `x86_64-linux-musl` | x86_64 | 7 | 2.6 MB | 1 | 1 | 1617 | 1302 | 41 | 1.0 MB |
-| `windows-amd64` | `x86_64-w64-mingw32` | x86_64 | 20 | 20.7 MB | 3 | 0 | 0 | 0 | 0 | 0.0 MB |
-| **total** | 19 rows, 11 distinct | | **419** | **508.6 MB** | 37 | **203** | **198361** | **126215** | **9410** | **177.4 MB** |
+| `linux-arm64` | `x86_64-linux-gnu` | x86_64 | 25 | 26.3 MB | 3 | 17 | 17860 | 10143 | 947 | 13.5 MB |
+| `linux-arm64` | `x86_64-w64-mingw32` | x86_64 | 20 | 20.7 MB | 3 | 16 | 6035 | 3554 | 367 | 3.9 MB |
+| `windows-amd64` | `i686-w64-mingw32` | i386 | 20 | 19.3 MB | 3 | 16 | 6158 | 3592 | 395 | 4.0 MB |
+| `windows-amd64` | `x86_64-linux-gnu` | x86_64 | 46 | 56.5 MB | 17 | 38 | 39041 | 26678 | 1840 | 32.3 MB |
+| `windows-amd64` | `x86_64-linux-musl` | x86_64 | 7 | 2.6 MB | 1 | 1 | 1644 | 1325 | 41 | 1.0 MB |
+| `windows-amd64` | `x86_64-w64-mingw32` | x86_64 | 20 | 20.7 MB | 3 | 16 | 6035 | 3554 | 367 | 3.9 MB |
+| **total** | 19 rows, 11 distinct | | **419** | **508.6 MB** | 37 | **299** | **235043** | **147733** | **11696** | **201.0 MB** |
+
+Full re-run: `uv run python tools/build_signature_set.py` over all 419 rows
+took **39.5 s** (0 failures). **299 of 419 archives
+now produce at least one signature** (up from 203), all 120 of them the
+MinGW-w64 rows. The nine non-MinGW `(image, triplet)` groups also moved by a
+handful of signatures each (+1 to +27 raw per group): `archive.rs`'s
+size-derivation fix is not COFF-specific -- "extent = next symbol in the
+section, or the section end" applies to *any* format that reports
+`size() == 0`, and a few ELF assembly symbols with no `.size` directive newly
+qualify. The two `libc.a`/`libmathlib.a` A/B controls in
+[FLIRT-style signature libraries](function-signature-libraries.md) already
+established those ELF paths are otherwise untouched (zero-line diff on the
+shipped library and the `libmathlib.a` control); this is that same effect
+showing up at corpus scale on symbols the earlier, targeted A/B did not happen
+to include.
 
 The twelve largest libraries, deduplicated on `(archive, package, version,
 arch)` -- 245 of the 419 rows are distinct under that key, the rest being the
-same package harvested from two images:
+same package harvested from two images. Ranked by unique signatures; no
+MinGW-w64 library reaches this list (`libstdc++.a` under
+`g++-mingw-w64-i686-posix` tops out at 1,843 unique, below `libxml2.a`'s
+2,085):
 
 | Archive | Package | Version | Arch | Archive bytes | Raw | Unique | Dropped ambiguous | Build s |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `libcrypto.a` | `libssl-dev` | `3.0.2-0ubuntu1.29` | x86_64 | 9113168 | 8264 | 6042 | 435 | 0.23 |
-| `libcrypto.a` | `libssl-dev` | `3.0.2-0ubuntu1.29` | aarch64 | 9102826 | 7398 | 5276 | 417 | 0.29 |
+| `libcrypto.a` | `libssl-dev` | `3.0.2-0ubuntu1.29` | x86_64 | 9113168 | 8264 | 6042 | 435 | 0.26 |
+| `libcrypto.a` | `libssl-dev` | `3.0.2-0ubuntu1.29` | aarch64 | 9102826 | 7398 | 5276 | 417 | 0.28 |
 | `libc.a` | `libc6-dev-i386-cross` | `2.35-0ubuntu1cross3` | i386 | 5027870 | 4571 | 2726 | 177 | 0.15 |
 | `libc.a` | `libc6-dev` | `2.35-0ubuntu3.14` | x86_64 | 6028194 | 4127 | 2563 | 101 | 0.14 |
 | `libc.a` | `libc6-dev-amd64-cross` | `2.35-0ubuntu1cross3` | x86_64 | 6007420 | 4124 | 2560 | 101 | 0.12 |
-| `libc.a` | `libc6-dev-armhf-cross` | `2.35-0ubuntu1cross3` | arm | 3334034 | 3894 | 2439 | 114 | 0.11 |
-| `libsqlite3.a` | `libsqlite3-dev` | `3.37.2-2ubuntu0.7` | x86_64 | 2297592 | 2338 | 2269 | 28 | 0.11 |
-| `libc.a` | `libc6-dev` | `2.35-0ubuntu3.14` | aarch64 | 4983048 | 3720 | 2265 | 98 | 0.14 |
-| `libsqlite3.a` | `libsqlite3-dev` | `3.37.2-2ubuntu0.7` | aarch64 | 2287672 | 2313 | 2233 | 32 | 0.13 |
-| `libc.a` | `libc6-dev-arm64-cross` | `2.35-0ubuntu1cross3` | aarch64 | 4939918 | 3662 | 2223 | 97 | 0.20 |
-| `libxml2.a` | `libxml2-dev` | `2.9.13+dfsg-1ubuntu0.12` | x86_64 | 2847428 | 2350 | 2163 | 63 | 0.16 |
-| `libxml2.a` | `libxml2-dev` | `2.9.13+dfsg-1ubuntu0.12` | aarch64 | 2870708 | 2243 | 2085 | 54 | 0.21 |
+| `libc.a` | `libc6-dev-armhf-cross` | `2.35-0ubuntu1cross3` | arm | 3334034 | 3896 | 2440 | 114 | 0.33 |
+| `libsqlite3.a` | `libsqlite3-dev` | `3.37.2-2ubuntu0.7` | x86_64 | 2297592 | 2338 | 2269 | 28 | 0.12 |
+| `libc.a` | `libc6-dev` | `2.35-0ubuntu3.14` | aarch64 | 4983048 | 3720 | 2265 | 98 | 0.11 |
+| `libsqlite3.a` | `libsqlite3-dev` | `3.37.2-2ubuntu0.7` | aarch64 | 2287672 | 2313 | 2233 | 32 | 0.15 |
+| `libc.a` | `libc6-dev-arm64-cross` | `2.35-0ubuntu1cross3` | aarch64 | 4939918 | 3662 | 2223 | 97 | 0.16 |
+| `libxml2.a` | `libxml2-dev` | `2.9.13+dfsg-1ubuntu0.12` | x86_64 | 2847428 | 2350 | 2163 | 63 | 0.28 |
+| `libxml2.a` | `libxml2-dev` | `2.9.13+dfsg-1ubuntu0.12` | aarch64 | 2870708 | 2243 | 2085 | 54 | 0.19 |
 
-**Every MinGW-w64 archive scores zero in the table above, and that is a
-property of the build the numbers were taken against, not of the harvest.**
-The measurement used an extension built from `935b7db1`, where
-`src/flirt/archive.rs` read ELF and Mach-O relocation tables only; the MinGW
-CRT is COFF, so 120 of the 419 rows produced nothing. `5e882019`,
-"flirt: build signatures from COFF archives", landed on `master` while this
-harvest was running. **Those 120 rows need re-measuring on current `master`
-and are expected to become non-zero**; the archives themselves are harvested
-and keyed correctly either way, which is the part this section is about.
+The 120 MinGW-w64 rows, by triplet (six `(image, triplet)` groups, since each
+of the three images exports both `i686-w64-mingw32` and `x86_64-w64-mingw32`,
+and `i686-w64-mingw32`/`x86_64-w64-mingw32` are identical archives across the
+three images so their per-triplet totals repeat):
+
+| Triplet | Archives | Libraries with signatures | Raw | Unique | Dropped ambiguous | Signature bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `i686-w64-mingw32` (each image) | 20 | 16 | 6158 | 3592 | 395 | 4.0 MB |
+| `x86_64-w64-mingw32` (each image) | 20 | 16 | 6035 | 3554 | 367 | 3.9 MB |
+
+The same four archives are empty in both `i686-w64-mingw32` and
+`x86_64-w64-mingw32`: `libdelayimp.a` (8 bytes -- an empty archive, no
+members), `libm.a`, `libmoldname.a` and `libssp_nonshared.a` (800-1,462 bytes
+each -- import-alias archives with no function-carrying object inside). "16
+of 20" above is the ceiling for this allowlist, not a shortfall, matching the
+`import_only.msvc.lib` fixture's zero row in
+[FLIRT-style signature libraries](function-signature-libraries.md).
 
 Two smaller things the first run found, both now fixed in the harvester:
 

@@ -323,18 +323,28 @@ the derived signatures are redistributable -- and the measured table.
 **The first real set, 2026-09-03.** Three build images (`linux/amd64`,
 `windows/amd64`, and `linux/arm64` under qemu) yielded **419 archives,
 508.6 MB, across 11 distinct target triplets and 37 distinct Debian
-packages**. Building one library per archive gave **126,215 unique
-signatures** from 198,361 raw, with 9,410 dropped as ambiguous and no build
-failures. `libcrypto.a` alone contributes 6,042 and glibc's `libc.a` 2,563,
-against the 16 this repository's own `libmathlib.a` produces.
+packages**. `libcrypto.a` alone contributes 6,042 unique signatures and
+glibc's `libc.a` 2,563, against the 16 this repository's own `libmathlib.a`
+produces.
 
-**Every MinGW-w64 archive scores zero in that count, because of when it was
-taken.** The extension was built from `935b7db1`, where
-`src/flirt/archive.rs` read ELF and Mach-O relocations only, so 120 of the 419
-rows produced nothing. `5e882019` landed COFF archive support on `master`
-while the harvest was running; those 120 rows are unmeasured against it and
-should be expected to change. The archives are harvested and keyed correctly
-either way.
+**Re-measured against `5e882019`, "flirt: build signatures from COFF
+archives."** The number above was first taken against an extension built from
+`935b7db1`, where `src/flirt/archive.rs` read ELF and Mach-O relocations only,
+so all 120 MinGW-w64 rows (the `i686-w64-mingw32` and `x86_64-w64-mingw32`
+triplets, present in every one of the three images) scored zero. Rebuilding
+against `5e882019` and re-running `tools/build_signature_set.py` over the same
+419 archives (39.5 s, 0 failures) gives **147,733 unique signatures** from
+235,043 raw, with 11,696 dropped as ambiguous -- **299 of 419 archives** now
+produce at least one signature, up from 203, entirely the 120 MinGW-w64 rows
+(each triplet: 16 of 20 archives sign; the remaining four -- `libdelayimp.a`,
+`libm.a`, `libmoldname.a`, `libssp_nonshared.a` -- are empty or import-only by
+construction). The nine non-MinGW `(image, triplet)` groups also gained a
+handful of raw signatures each, because the same size-derivation fix ("extent
+= next symbol in the section, or the section end") applies to any format
+reporting `size() == 0`, not only COFF, and a few ELF assembly symbols with no
+`.size` directive newly qualify. See the [sample corpus
+page](sample-corpus.md), section "System archives", for the full re-measured
+table.
 
 None of these libraries is shipped in `data/sigs/` yet; keying,
 deduplication across variants and a shipping policy for a set this size are
