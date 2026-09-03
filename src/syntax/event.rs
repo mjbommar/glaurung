@@ -554,12 +554,8 @@ pub fn drive<S: Sink + ?Sized>(
             Event::Token { id } => sink.token(id),
             Event::Close => {
                 if depth == 0 {
-                    diagnostics.push(
-                        Violation::UnmatchedClose {
-                            at: index as u32,
-                        }
-                        .to_diagnostic(span),
-                    );
+                    diagnostics
+                        .push(Violation::UnmatchedClose { at: index as u32 }.to_diagnostic(span));
                     reported += 1;
                 } else {
                     sink.close();
@@ -882,11 +878,7 @@ mod tests {
 
     #[test]
     fn validate_finds_a_surplus_close_in_a_stream_built_elsewhere() {
-        let events = Events::from_raw(vec![
-            Event::Open { tag: ROOT },
-            Event::Close,
-            Event::Close,
-        ]);
+        let events = Events::from_raw(vec![Event::Open { tag: ROOT }, Event::Close, Event::Close]);
         assert_eq!(events.validate(), vec![Violation::UnmatchedClose { at: 2 }]);
     }
 
