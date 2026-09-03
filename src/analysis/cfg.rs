@@ -48,7 +48,7 @@ use crate::core::instruction::Instruction;
 use crate::debug::dwarf::{extract_dwarf_functions, DwarfFunction};
 use crate::disasm::registry;
 use crate::flirt::{
-    apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary,
+    apply_flirt_overrides_with_refs, discover_flirt_seeds, load_default_library, FlirtLibrary,
 };
 use crate::triage::heuristics;
 

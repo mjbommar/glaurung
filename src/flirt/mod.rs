@@ -682,6 +682,20 @@ impl FlirtLibrary {
     }
 
     /// Keep the candidates whose references the target binary confirms.
+    ///
+    /// **A contradiction alone never crowns a winner.** Eliminating every
+    /// candidate but one and then naming that one looks like sound
+    /// elimination and is not, because a library records *one* spelling of an
+    /// aliased symbol and the binary may legitimately show another: glibc's
+    /// `pthread_mutex_lock` and `__pthread_mutex_lock` are one address, and
+    /// the builder keeps the public spelling. Measured on four `gcc -O2
+    /// -static` binaries against a seven-library set, allowing it named
+    /// `__dlsym` and `__dlvsym` as each other -- and `dlsym`/`dlvsym` with
+    /// them -- 16 wrong names, every one of them a pair whose two variants
+    /// call the same helpers at offsets four bytes apart. So the winning
+    /// score has to be non-zero: at least one reference must have been
+    /// *positively* confirmed. With every candidate contradicted there is
+    /// nothing left to name and the verdict is `None`, which is unchanged.
     fn rank_by_references(
         &self,
         candidates: &[usize],
@@ -710,7 +724,14 @@ impl FlirtLibrary {
             scored.push((i, confirmed));
         }
         if scored.is_empty() {
+            // Every candidate was refuted: there is nothing here to name.
             return Vec::new();
+        }
+        if best == 0 {
+            // Some candidates were refuted, none confirmed. See the note above
+            // on aliases: leave the tie exactly as it was rather than let
+            // elimination decide it.
+            return candidates.to_vec();
         }
         scored
             .into_iter()
@@ -889,6 +910,129 @@ pub fn discover_flirt_seeds(
     seeds
 }
 
+/// Where one binary's functions reference other code, in the coordinates a
+/// signature's [`FlirtReference::offset`] uses.
+///
+/// A signature records a reference at the **relocation's** offset from the
+/// function entry -- the offset of the field the linker rewrites, not of the
+/// instruction that contains it (`archive.rs`, "References"). A linked image
+/// has no relocation table, so the analysis pass has to reconstruct that
+/// offset from the call site it already found. For a `call rel32` at
+/// instruction offset `k` the field is at `k + 1`; a `jcc rel32` puts it at
+/// `k + 2`; on ARM the whole instruction word is the field and it is at `k`.
+/// [`Self::from_call_sites`] reads the opcode and files each target under the
+/// one offset that opcode implies, falling back to the instruction offset
+/// where it cannot place a field.
+///
+/// Two different targets claiming one offset is recorded as a conflict and
+/// answers "unknown" rather than picking: a wrong answer here does not merely
+/// fail to break a tie, it *eliminates the correct candidate* and can leave
+/// the wrong one standing alone.
+#[derive(Debug, Clone, Default)]
+pub struct FlirtReferenceSites {
+    /// `entry VA -> (offset from entry -> target VA)`. A `None` target is an
+    /// offset two call sites disagreed about.
+    by_function: HashMap<u64, HashMap<u32, Option<u64>>>,
+}
+
+impl FlirtReferenceSites {
+    /// Build from `(caller entry VA, call-site VA, target VA)` triples --
+    /// exactly the call xrefs the discovery pass already collected.
+    pub fn from_call_sites(data: &[u8], sites: impl IntoIterator<Item = (u64, u64, u64)>) -> Self {
+        Self::from_call_sites_with_map(data, &build_va_map(data), sites)
+    }
+
+    /// [`Self::from_call_sites`] over a VA map the caller already has.
+    ///
+    /// Building one costs an object parse, and
+    /// `program::session_tests::discovery_parse_count_does_not_scale_with_the_number_of_functions`
+    /// counts those: a whole-binary discovery is not allowed to pay for the
+    /// same parse twice, so the rename pass builds the map once and both it
+    /// and this share it.
+    fn from_call_sites_with_map(
+        data: &[u8],
+        maps: &[(u64, u64, u64)],
+        sites: impl IntoIterator<Item = (u64, u64, u64)>,
+    ) -> Self {
+        let mut by_function: HashMap<u64, HashMap<u32, Option<u64>>> = HashMap::new();
+        for (entry_va, site_va, target_va) in sites {
+            if target_va == 0 || site_va < entry_va {
+                continue;
+            }
+            let Ok(raw_offset) = u32::try_from(site_va - entry_va) else {
+                continue;
+            };
+            // Exactly ONE offset per call site. Filing a target under both the
+            // instruction offset and the field offset looks like belt and
+            // braces and is not: the spare registration answers a *different*
+            // signature reference that happens to sit at that offset, and a
+            // wrong answer does not merely fail to break a tie -- it can
+            // eliminate the correct candidate. The opcode says where the field
+            // is; where it does not, the instruction *is* the field.
+            let offset = va_to_file_off(maps, site_va)
+                .and_then(|off| relocated_field_offset(data, off))
+                .map_or(raw_offset, |delta| raw_offset.saturating_add(delta));
+            by_function
+                .entry(entry_va)
+                .or_default()
+                .entry(offset)
+                .and_modify(|existing| {
+                    if *existing != Some(target_va) {
+                        *existing = None;
+                    }
+                })
+                .or_insert(Some(target_va));
+        }
+        Self { by_function }
+    }
+
+    /// The VA a reference `offset` bytes into `entry_va`'s body points at, if
+    /// exactly one call site claims that offset.
+    pub fn target(&self, entry_va: u64, offset: u32) -> Option<u64> {
+        *self.by_function.get(&entry_va)?.get(&offset)?
+    }
+
+    /// How many functions have at least one recorded reference site.
+    pub fn function_count(&self) -> usize {
+        self.by_function.len()
+    }
+}
+
+/// How far into the instruction at `off` the field a relocation would have
+/// covered begins, for the direct branches a call xref can name.
+///
+/// `None` when the opcode is not one we can place a field in; the caller then
+/// files the target under the raw instruction offset only, which is the right
+/// answer on the fixed-width architectures where the instruction *is* the
+/// field.
+fn relocated_field_offset(data: &[u8], off: usize) -> Option<u32> {
+    let mut i = off;
+    // Legacy prefixes and REX, so `rex.w call` and a branch hint land the same
+    // as the bare form.
+    let mut skipped = 0u32;
+    while let Some(&byte) = data.get(i) {
+        let is_prefix = matches!(
+            byte,
+            0x66 | 0x67 | 0xf0 | 0xf2 | 0xf3 | 0x2e | 0x3e | 0x26 | 0x36 | 0x64 | 0x65
+        ) || (0x40..=0x4f).contains(&byte);
+        if !is_prefix || skipped >= 4 {
+            break;
+        }
+        i += 1;
+        skipped += 1;
+    }
+    match data.get(i)? {
+        // call rel32 / jmp rel32
+        0xe8 | 0xe9 => Some(skipped + 1),
+        // 0f 8x: jcc rel32
+        0x0f if matches!(data.get(i + 1), Some(0x80..=0x8f)) => Some(skipped + 2),
+        // ff /2, ff /4 with a RIP-relative modrm: the displacement follows the
+        // opcode and the modrm byte.
+        0xff if matches!(data.get(i + 1), Some(0x15 | 0x25)) => Some(skipped + 2),
+        _ => None,
+    }
+}
+
 /// Rename every `sub_*` function whose entry-VA window matches a signature in
 /// `lib`. Reads bytes from `data` via the binary's section table (`object`
 /// crate). Returns the number of renames applied.
@@ -896,29 +1040,102 @@ pub fn discover_flirt_seeds(
 /// An ambiguous match renames nothing: `set_by=flirt` outranks `auto`, so a
 /// coin flip here is strictly worse than leaving the placeholder in place.
 pub fn apply_flirt_overrides(data: &[u8], functions: &mut [Function], lib: &FlirtLibrary) -> usize {
+    apply_flirt_overrides_with_refs(
+        data,
+        functions,
+        lib,
+        std::iter::empty(),
+        &HashMap::new(),
+    )
+}
+
+/// [`apply_flirt_overrides`] with FLIRT's referenced-name level wired in.
+///
+/// 17.6 percent of the signatures a real archive yields record **no CRC at
+/// all** (`crc_len == 0`, measured over 15,534 signatures from this box's
+/// libc, libm, libstdc++, libcrypto, libssl, libz and Rust sysroot), plus a
+/// further 8 percent with a range of one to three bytes. Those are the leaves
+/// FLIRT expects the caller-name discriminator to finish, and until this
+/// function existed the pass called the bare `match_at` and every such tie
+/// stayed a tie.
+///
+/// **Multi-pass, as FLIRT is.** Naming one function makes it usable as
+/// evidence for its callers and callees, so the loop repeats until a pass
+/// renames nothing (bounded by `MAX_REFERENCE_PASSES`, since each pass can
+/// only ever add names and the set of `sub_*` functions is finite).
+///
+/// `call_sites` is `(caller entry VA, call-site VA, target VA)`, exactly the
+/// call xrefs the discovery pass already collected; it is turned into a
+/// [`FlirtReferenceSites`] here so the VA map is built once and shared.
+/// `extra_names` supplies names for VAs that are not discovered functions --
+/// PLT stubs and import thunks, whose names a dynamically linked binary's
+/// references depend on. The discovery pass passes an empty map today: the
+/// only available source (`analysis::elf_plt::elf_plt_map`) parses the whole
+/// object a second time, and that pass's object-parse count is itself an
+/// asserted gate.
+pub fn apply_flirt_overrides_with_refs(
+    data: &[u8],
+    functions: &mut [Function],
+    lib: &FlirtLibrary,
+    call_sites: impl IntoIterator<Item = (u64, u64, u64)>,
+    extra_names: &HashMap<u64, String>,
+) -> usize {
     let maps = build_va_map(data);
-    let mut renamed = 0usize;
-    for f in functions.iter_mut() {
-        // Only rename placeholder sub_* names; never overwrite a name we
-        // already trust (DWARF, symbol table, manual).
+    let sites = FlirtReferenceSites::from_call_sites_with_map(data, &maps, call_sites);
+    let mut name_by_va: HashMap<u64, String> = extra_names.clone();
+    for f in functions.iter() {
         if !f.name.starts_with("sub_") {
-            continue;
+            name_by_va.insert(f.entry_point.value, f.name.clone());
         }
-        let foff = match va_to_file_off(&maps, f.entry_point.value) {
-            Some(o) => o,
-            None => continue,
-        };
-        if foff.saturating_add(lib.prologue_len) > data.len() {
-            continue;
+    }
+
+    let mut renamed = 0usize;
+    for _pass in 0..MAX_REFERENCE_PASSES {
+        let mut this_pass = 0usize;
+        for f in functions.iter_mut() {
+            // Only rename placeholder sub_* names; never overwrite a name we
+            // already trust (DWARF, symbol table, manual).
+            if !f.name.starts_with("sub_") {
+                continue;
+            }
+            let foff = match va_to_file_off(&maps, f.entry_point.value) {
+                Some(o) => o,
+                None => continue,
+            };
+            if foff.saturating_add(lib.prologue_len) > data.len() {
+                continue;
+            }
+            let end = std::cmp::min(data.len(), foff.saturating_add(lib.match_window()));
+            let entry_va = f.entry_point.value;
+            let resolve = |offset: u32| -> Option<String> {
+                let target = sites.target(entry_va, offset)?;
+                name_by_va.get(&target).cloned()
+            };
+            let verdict = lib.match_at_with_refs(&data[foff..end], &resolve);
+            if let Some(name) = verdict.unique() {
+                let name = name.to_string();
+                name_by_va.insert(entry_va, name.clone());
+                f.name = name;
+                this_pass += 1;
+            }
         }
-        let end = std::cmp::min(data.len(), foff.saturating_add(lib.match_window()));
-        if let Some(name) = lib.match_at(&data[foff..end]).unique() {
-            f.name = name.to_string();
-            renamed += 1;
+        renamed += this_pass;
+        if this_pass == 0 {
+            break;
         }
     }
     renamed
 }
+
+/// How many times [`apply_flirt_overrides_with_refs`] re-runs after a pass
+/// that named something.
+///
+/// Reference resolution is monotone -- a pass only ever adds names -- so the
+/// loop terminates on its own; this only bounds the cost of a long chain of
+/// one-new-name-per-pass. Four is enough for the two-hop cases that actually
+/// occur (a wrapper named by its callee, then the wrapper's own caller) and
+/// keeps the worst case at four scans of the `sub_*` set.
+const MAX_REFERENCE_PASSES: usize = 4;
 
 /// Match signatures only at concrete referenced function addresses.
 ///
@@ -1267,6 +1484,41 @@ mod tests {
         assert_eq!(lib.match_at_with_refs(&data, &resolver), FlirtMatch::None);
     }
 
+    /// Eliminating all but one candidate, with nothing confirmed, does not
+    /// name that one.
+    ///
+    /// This is the aliasing case: a library keeps one spelling of an aliased
+    /// symbol (`pthread_mutex_lock`, not `__pthread_mutex_lock`), so a
+    /// resolver reporting the other spelling contradicts a signature that is
+    /// in fact correct. Letting that contradiction alone decide named
+    /// `__dlsym` and `__dlvsym` as each other on four static binaries.
+    #[test]
+    fn a_contradiction_with_nothing_confirmed_does_not_decide() {
+        let lib = ambiguous_library();
+        let data = [0x55u8, 0x48, 0x89, 0xe5];
+        // `alpha` expects `helper_a` at 16 and is contradicted; `beta` expects
+        // `helper_b` at 16 -- also contradicted here, so both go...
+        let both = |off: u32| (off == 16).then(|| "helper_c".to_string());
+        assert_eq!(lib.match_at_with_refs(&data, &both), FlirtMatch::None);
+
+        // ...but with `alpha` contradicted and `beta` merely unconfirmed, the
+        // tie stands. `beta` has no positive evidence of its own.
+        let one_sided = |off: u32| (off == 16).then(|| "helper_a_v2".to_string());
+        let lib2 = FlirtLibrary::from_json(
+            r#"{"schema_version":"2","arch":"x86_64","prologue_len":4,"entries":[
+                 {"name":"alpha","prologue_hex":"554889e5",
+                  "refs":[{"offset":16,"name":"helper_a"}]},
+                 {"name":"beta","prologue_hex":"554889e5",
+                  "refs":[{"offset":32,"name":"helper_b"}]}
+               ],"index":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            lib2.match_at_with_refs(&data, &one_sided),
+            FlirtMatch::Ambiguous(vec!["alpha", "beta"])
+        );
+    }
+
     /// Two entries with the same NAME are not an ambiguity; the answer is the
     /// name either way.
     #[test]
@@ -1484,5 +1736,93 @@ mod tests {
             .map(|g| g.iter().map(|i| file.entries[*i].name.as_str()).collect())
             .collect();
         assert!(named.is_empty(), "{path:?} holds indistinguishable entries: {named:?}");
+    }
+
+    // -- reference sites -----------------------------------------------------
+
+    #[test]
+    fn a_call_rel32_puts_its_field_one_byte_in() {
+        // e8 <rel32>: the relocation covers bytes 1..5.
+        assert_eq!(relocated_field_offset(&[0xe8, 0, 0, 0, 0], 0), Some(1));
+        // 48 e8 ...: a REX prefix shifts it.
+        assert_eq!(relocated_field_offset(&[0x48, 0xe8, 0, 0, 0, 0], 0), Some(2));
+        // 0f 84 <rel32>: jcc.
+        assert_eq!(relocated_field_offset(&[0x0f, 0x84, 0, 0, 0, 0], 0), Some(2));
+        // ff 15 <disp32>: an indirect call through a RIP-relative slot.
+        assert_eq!(relocated_field_offset(&[0xff, 0x15, 0, 0, 0, 0], 0), Some(2));
+        // A fixed-width instruction word is its own field; the caller then
+        // uses the raw offset.
+        assert_eq!(relocated_field_offset(&[0x94, 0x00, 0x00, 0x00], 0), None);
+    }
+
+    #[test]
+    fn two_targets_at_one_offset_answer_unknown() {
+        // No object to read bytes from, so only the raw offsets are filed --
+        // which is enough to exercise the conflict rule.
+        let sites = FlirtReferenceSites::from_call_sites(
+            &[],
+            [(0x1000, 0x1010, 0x2000), (0x1000, 0x1010, 0x3000)],
+        );
+        assert_eq!(sites.target(0x1000, 0x10), None);
+        assert_eq!(sites.function_count(), 1);
+    }
+
+    #[test]
+    fn a_call_site_is_filed_under_its_offset_from_the_entry() {
+        let sites = FlirtReferenceSites::from_call_sites(&[], [(0x1000, 0x1014, 0x2000)]);
+        assert_eq!(sites.target(0x1000, 0x14), Some(0x2000));
+        assert_eq!(sites.target(0x1000, 0x15), None);
+        assert_eq!(sites.target(0x2000, 0x14), None);
+    }
+
+    // -- the wired-in resolver -----------------------------------------------
+
+    /// A `Function` placeholder at `va`, with no body, for the rename pass.
+    fn placeholder(va: u64) -> Function {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::function::FunctionKind;
+        Function::new(
+            format!("sub_{va:x}"),
+            Address::new(AddressKind::VA, va, 64, None, None).unwrap(),
+            FunctionKind::Normal,
+        )
+        .unwrap()
+    }
+
+    /// A name that exists only in `extra_names` -- a PLT stub, an import thunk
+    /// -- still breaks a tie. Nothing else in the pass would know it.
+    #[test]
+    fn a_name_from_the_import_map_breaks_a_tie() {
+        // A 4-byte ELF-less blob is enough: `build_va_map` returns nothing for
+        // it, so no function resolves to a file offset and no rename can
+        // happen. Use the reference machinery directly instead.
+        let lib = ambiguous_library();
+        let sites = FlirtReferenceSites::from_call_sites(&[], [(0x1000, 0x1010, 0x2000)]);
+        let mut names: HashMap<u64, String> = HashMap::new();
+        names.insert(0x2000, "helper_b".to_string());
+        let resolve = |offset: u32| -> Option<String> {
+            names.get(&sites.target(0x1000, offset)?).cloned()
+        };
+        // The site is at offset 0x10 = 16, which is where both signatures
+        // record their reference.
+        let data = [0x55u8, 0x48, 0x89, 0xe5];
+        assert_eq!(
+            lib.match_at_with_refs(&data, &resolve),
+            FlirtMatch::Unique("beta")
+        );
+    }
+
+    /// The rename pass leaves an established name alone and only ever fills a
+    /// `sub_*` placeholder.
+    #[test]
+    fn the_rename_pass_never_overwrites_an_established_name() {
+        let lib = _tiny_library();
+        let mut functions = vec![placeholder(0x1000)];
+        functions[0].name = "my_own_name".to_string();
+        // No object to map VAs through, so nothing can be renamed anyway; the
+        // point is that an established name is skipped before any of that.
+        let renamed = apply_flirt_overrides(&[], &mut functions, &lib);
+        assert_eq!(renamed, 0);
+        assert_eq!(functions[0].name, "my_own_name");
     }
 }
