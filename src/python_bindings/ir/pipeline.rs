@@ -319,15 +319,28 @@ pub(super) fn recognise_machine_frame(
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
             crate::ir::x86_prologue::recognise_x86_prologue(f);
         }
+        crate::ir::call_args::CallConv::Cdecl32 => {
+            crate::ir::x86_prologue::recognise_cdecl32_call_alignment(f);
+        }
         crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat => {
             crate::ir::arm32_prologue::recognise_arm32_frame(f);
         }
-        _ => {}
+        crate::ir::call_args::CallConv::Aarch64 => {
+            crate::ir::arm64_prologue::recognise_arm64_prologue(f);
+        }
+    }
+    if matches!(
+        cc,
+        crate::ir::call_args::CallConv::SysVAmd64
+            | crate::ir::call_args::CallConv::Win64
+            | crate::ir::call_args::CallConv::Cdecl32
+    ) {
+        crate::ir::x86_prologue::drop_implicit_main_runtime_call(f);
     }
     // Whatever the per-architecture recogniser could not attribute to a frame
     // pattern, the callee-saved spills themselves are still machine bookkeeping.
-    // This runs for every convention, including AArch64, which has no dedicated
-    // recogniser in this match.
+    // This runs for every convention. It also removes any independently proven
+    // dead spill that an architecture recogniser deliberately left alone.
     crate::ir::dead_stores::prune_callee_saved_spills(f, cc);
 }
 

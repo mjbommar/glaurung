@@ -15,6 +15,7 @@ pub(super) struct DwarfPrototypeContract {
     pub(super) return_type: crate::debug::dwarf::DwarfReturnType,
     pub(super) stack_objects: Vec<crate::debug::dwarf::DwarfStackObject>,
     pub(super) register_locals: Vec<crate::debug::dwarf::DwarfRegisterLocal>,
+    pub(super) static_locals: Vec<crate::debug::dwarf::DwarfStaticLocal>,
 }
 
 pub(super) fn dwarf_output_contracts(
@@ -50,6 +51,7 @@ pub(super) fn dwarf_output_contracts(
                     return_type: function.return_type.clone(),
                     stack_objects: function.stack_objects.clone(),
                     register_locals: function.register_locals.clone(),
+                    static_locals: function.static_locals.clone(),
                 },
             ))
         })
@@ -104,6 +106,7 @@ pub(super) fn pdb_output_contracts(
                     return_type,
                     stack_objects: Vec::new(),
                     register_locals: Vec::new(),
+                    static_locals: Vec::new(),
                 },
             ))
         })
@@ -242,9 +245,17 @@ pub(super) fn dwarf_stack_object_hints(
                 (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::CallFrameCfa) => {
                     ("rbp", 16, true)
                 }
-                (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0, false),
-                (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8, true),
+                // The decoder canonicalizes 32-bit x86 register operands into
+                // their parent identities (`ebp` -> `rbp`). Keep DWARF in that
+                // same coordinate space or an exact `DW_OP_breg5 - N` local
+                // seeds an unused `ebp` slot beside the real `rbp` access.
+                (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("rbp", 0, false),
+                (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("rbp", 8, true),
                 (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0, false),
+                // DWARF register 31 is SP in AArch64 location expressions.
+                // Clang O0 uses direct `DW_OP_breg31 + offset` locations for
+                // scalar locals even while DW_AT_frame_base names x29.
+                (CallConv::Aarch64, DwarfStackBase::Register(31)) => ("sp", 0, false),
                 // DW_OP_fbreg is relative to the call-frame address, which is
                 // the architectural entry SP. The stack-local pass retains
                 // this coordinate for proven aggregates and reconciles it with

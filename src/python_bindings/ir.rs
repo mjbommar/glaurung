@@ -268,6 +268,7 @@ pub(super) fn decompile_at_session(
             &data, &path, pdb_cache,
         );
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
@@ -398,7 +399,8 @@ pub(super) fn decompile_at_session(
         };
     }
     dp!("lower");
-    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    data_symbols.remove_truncated_character_arrays(&mut str_pool);
     let readonly_data = readonly_data_for(&session, &image, &str_pool);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
@@ -560,12 +562,14 @@ pub(super) fn decompile_at_session(
             width,
             exact_value_widths,
             &readonly_data,
+            &str_pool,
             prototype.as_ref(),
             declared_render.as_ref(),
             declared_parameter_names,
             dwarf_types.as_deref().unwrap_or(&[]),
             &stack_facts.source_types,
             &stack_facts.source_names,
+            dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
             cc,
             &addr_map,
             &callee_facts.env,
@@ -762,7 +766,8 @@ fn decompile_range_at_py(
     // hoisting them is order-preserving.
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    data_symbols.remove_truncated_character_arrays(&mut str_pool);
     let readonly_data = readonly_data_for(&session, &image, &str_pool);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
@@ -860,12 +865,14 @@ fn decompile_range_at_py(
             width,
             exact_value_widths,
             &readonly_data,
+            &str_pool,
             prototype.as_ref(),
             declared_render.as_ref(),
             dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
             dwarf_types.as_deref().unwrap_or(&[]),
             &stack_facts.source_types,
             &stack_facts.source_names,
+            dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
             cc,
             &addr_map,
             &callee_facts.env,
@@ -905,6 +912,29 @@ fn recover_decbench_prototype(
     .0
 }
 
+/// Whether source DWARF and machine evidence prove a hidden result pointer from
+/// a non-C language ABI.
+///
+/// The platform C classifier is deliberately not the oracle here: Rust's
+/// internal ABI may return an aggregate indirectly even where C would use a
+/// register pair. All independent facts must agree before the declared source
+/// signature is translated into that machine boundary.
+fn non_c_abi_hidden_result_evidence(
+    cc: crate::ir::call_args::CallConv,
+    inferred_output: crate::ir::types_recover::RecoveredOutputKind,
+    inferred_parameter_count: usize,
+    leading_parameter_is_pointer: bool,
+    declared_parameter_count: usize,
+    declared_result_is_non_scalar: bool,
+) -> bool {
+    crate::ir::abi::indirect_result_register(cc).is_none()
+        && !crate::ir::abi::argument_slots(cc).is_empty()
+        && inferred_output == crate::ir::types_recover::RecoveredOutputKind::Void
+        && inferred_parameter_count == declared_parameter_count.saturating_add(1)
+        && leading_parameter_is_pointer
+        && declared_result_is_non_scalar
+}
+
 /// Return the selected prototype and the untouched machine-recovered candidate.
 ///
 /// Keeping both from one recovery avoids paying for (and risking divergence
@@ -932,6 +962,7 @@ fn recover_decbench_prototype_with_inferred(
         arm_vfp_args,
     );
     let mut prototype = inferred.clone();
+    let mut non_c_hidden_result = false;
     if let Some(declared) = declared {
         // A MEMORY-class result is not in a register at all: the CALLER
         // allocates the object and passes its address in the first INTEGER
@@ -955,10 +986,27 @@ fn recover_decbench_prototype_with_inferred(
                 if crate::ir::return_class::declared_return_class(c_type, cc, type_env)
                     == Some(crate::ir::abi::ReturnClass::Memory)
         );
-        let hidden_return_hint =
-            hidden_return_pointer.then_some(Some(crate::ir::types_recover::TypeHint::Pointer {
-                pointee_width: 1,
-            }));
+        let declared_result_is_non_scalar = matches!(
+            &declared.return_type,
+            DwarfReturnType::Type(c_type)
+                if dwarf_return_hint_with_env(c_type, cc, type_env).is_none()
+        );
+        let leading_parameter_is_pointer = inferred
+            .parameters()
+            .first()
+            .and_then(|parameter| parameter.hint)
+            .is_some_and(|hint| matches!(hint, crate::ir::types_recover::TypeHint::Pointer { .. }));
+        non_c_hidden_result = non_c_abi_hidden_result_evidence(
+            cc,
+            inferred.output_kind(),
+            inferred.parameters().len(),
+            leading_parameter_is_pointer,
+            declared.parameter_types.len(),
+            declared_result_is_non_scalar,
+        );
+        let hidden_return_hint = (hidden_return_pointer || non_c_hidden_result).then_some(Some(
+            crate::ir::types_recover::TypeHint::Pointer { pointee_width: 1 },
+        ));
         let parameter_hints = hidden_return_hint
             .into_iter()
             .chain(declared.parameter_types.iter().flat_map(|parameter| {
@@ -1016,40 +1064,48 @@ fn recover_decbench_prototype_with_inferred(
             .collect::<Vec<_>>();
         prototype.apply_locked_parameters(cc, &parameter_hints);
     }
-    match declared.map(|contract| &contract.return_type) {
-        Some(DwarfReturnType::Void) => {
-            prototype.apply_locked_output(RecoveredOutputKind::Void, None);
-        }
-        Some(DwarfReturnType::Type(c_type)) => {
-            // A declared BY-VALUE aggregate is not a scalar in the result
-            // register, and locking it as one is how a 16-byte struct became
-            // `extern long f(int)` with its `rdx` half read but never defined.
-            // Take the ABI storage contract from the declared shape first; only
-            // a `Single` class is a scalar direct output.
-            let class = crate::ir::return_class::declared_return_class(c_type, cc, type_env);
-            if let Some(class) = class {
-                prototype.apply_return_class(class);
+    if non_c_hidden_result {
+        // Render the boundary the machine actually implements. The source
+        // aggregate remains available as metadata, but forcing its C ABI here
+        // would make the generated caller and callee disagree about both arity
+        // and result storage.
+        prototype.apply_locked_output(RecoveredOutputKind::Void, None);
+    } else {
+        match declared.map(|contract| &contract.return_type) {
+            Some(DwarfReturnType::Void) => {
+                prototype.apply_locked_output(RecoveredOutputKind::Void, None);
             }
-            let hint = dwarf_return_hint_with_env(c_type, cc, type_env);
-            match class {
-                // The result exists, but it is the caller's buffer rather than a
-                // value in a register. This is the only construction site of
-                // `HiddenReturn`, which the type system has known about since it
-                // was declared and no code could produce.
-                Some(crate::ir::abi::ReturnClass::Memory) => {
-                    prototype.apply_locked_output(RecoveredOutputKind::HiddenReturn, hint);
+            Some(DwarfReturnType::Type(c_type)) => {
+                // A declared BY-VALUE aggregate is not a scalar in the result
+                // register, and locking it as one is how a 16-byte struct became
+                // `extern long f(int)` with its `rdx` half read but never defined.
+                // Take the ABI storage contract from the declared shape first; only
+                // a `Single` class is a scalar direct output.
+                let class = crate::ir::return_class::declared_return_class(c_type, cc, type_env);
+                if let Some(class) = class {
+                    prototype.apply_return_class(class);
                 }
-                // Every other class — including an unclassifiable shape, which
-                // is every scalar — keeps the direct scalar output it has always
-                // had. Where the class is `IntegerPair`, the call-boundary
-                // spelling widens in `recovered_call_prototype`; nothing else
-                // about this function's own recovery changes.
-                _ => {
-                    prototype.apply_locked_output(RecoveredOutputKind::Direct, hint);
+                let hint = dwarf_return_hint_with_env(c_type, cc, type_env);
+                match class {
+                    // The result exists, but it is the caller's buffer rather than a
+                    // value in a register. This is the only construction site of
+                    // `HiddenReturn`, which the type system has known about since it
+                    // was declared and no code could produce.
+                    Some(crate::ir::abi::ReturnClass::Memory) => {
+                        prototype.apply_locked_output(RecoveredOutputKind::HiddenReturn, hint);
+                    }
+                    // Every other class — including an unclassifiable shape, which
+                    // is every scalar — keeps the direct scalar output it has always
+                    // had. Where the class is `IntegerPair`, the call-boundary
+                    // spelling widens in `recovered_call_prototype`; nothing else
+                    // about this function's own recovery changes.
+                    _ => {
+                        prototype.apply_locked_output(RecoveredOutputKind::Direct, hint);
+                    }
                 }
             }
+            Some(DwarfReturnType::Unknown) | None => {}
         }
-        Some(DwarfReturnType::Unknown) | None => {}
     }
     (prototype, inferred)
 }
@@ -1190,6 +1246,7 @@ fn decompile_all_py(
             &data, &path, pdb_cache,
         );
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
@@ -1209,7 +1266,8 @@ fn decompile_all_py(
         .then(|| session.environment(&budgets, cc, &addr_map, &environment_targets));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    data_symbols.remove_truncated_character_arrays(&mut str_pool);
     let readonly_data = readonly_data_for(&session, &image, &str_pool);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
@@ -1401,12 +1459,14 @@ fn decompile_all_py(
                 Some(&width),
                 Some(&exact_value_widths),
                 &readonly_data,
+                &str_pool,
                 prototype.as_ref(),
                 declared_render.as_ref(),
                 dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 &stack_facts.source_types,
                 &stack_facts.source_names,
+                dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
                 cc,
                 &addr_map,
                 &callee_facts.env,
@@ -1521,6 +1581,7 @@ fn decompile_many_py(
             &data, &path, pdb_cache,
         );
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
@@ -1535,7 +1596,8 @@ fn decompile_many_py(
         .then(|| session.environment(&budgets, cc, &addr_map, &func_vas));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    data_symbols.remove_truncated_character_arrays(&mut str_pool);
     let readonly_data = readonly_data_for(&session, &image, &str_pool);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
@@ -1768,12 +1830,14 @@ fn decompile_many_py(
                 Some(&width),
                 Some(&exact_value_widths),
                 &readonly_data,
+                &str_pool,
                 prototype.as_ref(),
                 declared_render.as_ref(),
                 dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 &stack_facts.source_types,
                 &stack_facts.source_names,
+                dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
                 cc,
                 &addr_map,
                 &callee_facts.env,
@@ -2096,6 +2160,57 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn rust_style_hidden_result_requires_the_full_machine_contradiction() {
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let classify = |cc, output, inferred, pointer, declared, aggregate| {
+            super::non_c_abi_hidden_result_evidence(
+                cc, output, inferred, pointer, declared, aggregate,
+            )
+        };
+        assert!(classify(
+            CallConv::SysVAmd64,
+            RecoveredOutputKind::Void,
+            4,
+            true,
+            3,
+            true,
+        ));
+        assert!(!classify(
+            CallConv::SysVAmd64,
+            RecoveredOutputKind::Direct,
+            4,
+            true,
+            3,
+            true,
+        ));
+        assert!(!classify(
+            CallConv::SysVAmd64,
+            RecoveredOutputKind::Void,
+            3,
+            true,
+            3,
+            true,
+        ));
+        assert!(!classify(
+            CallConv::SysVAmd64,
+            RecoveredOutputKind::Void,
+            4,
+            false,
+            3,
+            true,
+        ));
+        assert!(!classify(
+            CallConv::Aarch64,
+            RecoveredOutputKind::Void,
+            4,
+            true,
+            3,
+            true,
+        ));
+    }
+
+    #[test]
     fn source_local_rename_requires_a_renderable_authoritative_type() {
         use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
 
@@ -2240,6 +2355,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![
                 DwarfStackObject {
@@ -2280,6 +2396,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
                 base: DwarfStackBase::CallFrameCfa,
@@ -2307,6 +2424,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
                 base: DwarfStackBase::CallFrameCfa,
@@ -2336,6 +2454,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
                 base: DwarfStackBase::CallFrameCfa,
@@ -2359,6 +2478,34 @@ mod tests {
     }
 
     #[test]
+    fn cdecl32_dwarf_frame_register_joins_the_canonical_x86_identity() {
+        let contract = DwarfPrototypeContract {
+            function_name: None,
+            prototyped: true,
+            parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
+            register_locals: Vec::new(),
+            stack_objects: vec![DwarfStackObject {
+                base: DwarfStackBase::Register(5),
+                offset: -32,
+                byte_size: 4,
+                aggregate: false,
+                source_name: Some("sum".to_string()),
+                c_type: Some("int".to_string()),
+            }],
+        };
+
+        let hints = dwarf_stack_object_hints(Some(&contract), CallConv::Cdecl32);
+
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].base, "rbp");
+        assert_eq!(hints[0].disp, -32);
+        assert_eq!(hints[0].source_name.as_deref(), Some("sum"));
+    }
+
+    #[test]
     fn dwarf_register_range_selects_the_numbered_value_role() {
         use crate::core::binary::Arch;
         use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
@@ -2370,6 +2517,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
                 source_name: "i".to_string(),
@@ -2430,6 +2578,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
                 source_name: "i".to_string(),
@@ -2521,6 +2670,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![at_rsi("low", "uint32_t"), at_rsi("product", "uint64_t")],
         };
@@ -2585,6 +2735,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![at_rsi("first"), at_rsi("second")],
         };
@@ -2634,6 +2785,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
                 source_name: "i".to_string(),
@@ -2723,6 +2875,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
                 source_name: "result".to_string(),
@@ -2786,6 +2939,7 @@ mod tests {
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
+            static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
                 source_name: "return".to_string(),

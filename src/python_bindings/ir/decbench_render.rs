@@ -90,12 +90,14 @@ pub(super) fn decbench_text(
     width: Option<&crate::ir::types_recover::TypeMap>,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
+    string_pool: &std::collections::HashMap<u64, String>,
     recovered_prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
     declared_parameter_names: Option<&[Option<String>]>,
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
+    dwarf_static_locals: &[crate::debug::dwarf::DwarfStaticLocal],
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
     symbol_env: &crate::ir::symbol_env::SymbolEnv,
@@ -111,6 +113,7 @@ pub(super) fn decbench_text(
     // Same install/release discipline as the callee environment above: the
     // renderer reads these names and never owns them.
     crate::ir::ast::install_dec_global_names(data_symbols.clone());
+    crate::ir::ast::install_dec_function_static_locals(dwarf_static_locals.iter().cloned());
     let text = decbench_text_with_installed_environment(
         f,
         profiler,
@@ -120,6 +123,7 @@ pub(super) fn decbench_text(
         width,
         exact_value_widths,
         readonly_data,
+        string_pool,
         recovered_prototype,
         declared_prototype,
         declared_parameter_names,
@@ -131,6 +135,7 @@ pub(super) fn decbench_text(
     );
     crate::ir::symbol_env::clear();
     crate::ir::ast::clear_dec_global_names();
+    crate::ir::ast::clear_dec_function_static_locals();
     text
 }
 
@@ -146,6 +151,7 @@ fn decbench_text_with_installed_environment(
     width: Option<&crate::ir::types_recover::TypeMap>,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
+    string_pool: &std::collections::HashMap<u64, String>,
     recovered_prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
     declared_parameter_names: Option<&[Option<String>]>,
@@ -332,6 +338,13 @@ fn decbench_text_with_installed_environment(
         crate::ir::copy_prop::propagate_copies(&mut prepared);
         crate::ir::const_fold::fold_constants(&mut prepared);
     });
+    // PIC address materialisation on 32-bit ARM/x86 can become an absolute
+    // constant only during late AST preparation, after the ordinary LLIR
+    // string pass has run. Reapply the same evidence-based folder here so a
+    // proven character-pointer call argument does not leak a link-time VA.
+    pass!("fold_late_string_literals", {
+        crate::ir::strings_fold::fold_string_literals(&mut prepared, string_pool);
+    });
     if let Some(tm) = refined_decl.as_ref() {
         pass!(
             "collapse_range_guards_with_types",
@@ -399,11 +412,54 @@ fn decbench_text_with_installed_environment(
             dwarf_pointer_types.insert(crate::ir::types::VReg::phys(source_name), pointer_type);
         }
     }
+    // Typed refinement and authoritative local coalescing can be the first
+    // point where a call's result has one adjacent semantic consumer. Repeat
+    // the effect-moving fold before presentation renames `local_20` to `sum`:
+    // the promoted-local identity is what proves its AST Store is a scalar
+    // assignment rather than a write through a pointer. Thus an O0
+    // `tmp = strlen(...); sum += tmp` becomes the source expression without
+    // broadening Store interpretation. The pass proves whole-function single
+    // use and moves rather than copies the call.
+    pass!("fold_late_adjacent_single_use_call_results", {
+        crate::ir::lazy_call_select::fold_adjacent_single_use_call_results(
+            &mut prepared,
+            calling_convention_pointer_width(cc),
+        )
+    });
     pass!(
         "apply_authoritative_local_names",
         crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names)
     );
-    let rendered_local_types = dwarf_local_types
+    let canonical_loop_names = pass!(
+        "apply_canonical_loop_local_names",
+        crate::ir::naming::apply_canonical_loop_local_names(&mut prepared)
+    );
+    // The AST identity, declaration facts, and width facts are one contract.
+    // A presentation rename that updates only the AST turns an `int local_8`
+    // into an untyped `long sum`; keep the recovered facts reachable under the
+    // conventional spelling while retaining their internal keys for diagnostics.
+    let mut rendered_decl = refined_decl.clone();
+    let mut rendered_width = refined_width.clone();
+    for (internal_name, source_name) in &canonical_loop_names {
+        let internal = crate::ir::types::VReg::phys(internal_name);
+        let source = crate::ir::types::VReg::phys(source_name);
+        if let (Some(types), Some(hint)) = (
+            rendered_decl.as_mut(),
+            decl.and_then(|m| m.get(&internal))
+                .or_else(|| width.and_then(|m| m.get(&internal))),
+        ) {
+            types.upsert_public(source.clone(), hint);
+        }
+        if let (Some(types), Some(hint)) = (
+            rendered_width.as_mut(),
+            width.and_then(|m| m.get(&internal)),
+        ) {
+            types.upsert_public(source, hint);
+        }
+    }
+    let decl = rendered_decl.as_ref();
+    let width = rendered_width.as_ref();
+    let mut rendered_local_types = dwarf_local_types
         .iter()
         .map(|(internal_name, c_type)| {
             (
@@ -415,6 +471,15 @@ fn decbench_text_with_installed_environment(
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
+    if let Some(types) = decl {
+        for (_, source_name) in canonical_loop_names {
+            let c_type = types
+                .get(&crate::ir::types::VReg::phys(&source_name))
+                .map(crate::ir::types_recover::c_type_for_hint)
+                .unwrap_or("long");
+            rendered_local_types.insert(source_name, c_type.to_string());
+        }
+    }
     pass!(
         "recover_typed_handlers",
         crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites)
@@ -427,6 +492,17 @@ fn decbench_text_with_installed_environment(
         "prune_unobserved_promoted_object_stores",
         crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared)
     );
+    // Typed/local preparation can be the first point at which every saved
+    // cdecl32 frame identity has disappeared and GCC's entry-realignment
+    // prologue/epilogue becomes one exact balanced transaction. Repeat the
+    // idempotent architecture recognizer at the final semantic boundary so
+    // the verifier and renderer never inherit that now-provable ABI state.
+    pass!("recognise_final_machine_frame", {
+        recognise_machine_frame(&mut prepared, cc)
+    });
+    pass!("drop_final_machine_frame_comments", {
+        crate::ir::ast::drop_machine_frame_comments(&mut prepared.body)
+    });
     // A result the ABI splits across two register BANKS becomes the whole-object
     // load its declared class requires. Deliberately the LAST semantic pass:
     // the object's members must survive store pruning above (they are what the
