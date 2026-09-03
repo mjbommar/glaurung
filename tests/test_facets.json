@@ -3,7 +3,7 @@
  "counts": {
   "core": 310,
   "lfs": 109,
-  "fixtures": 32,
+  "fixtures": 33,
   "toolchain": 28,
   "docker": 18,
   "llm": 5,
@@ -350,6 +350,9 @@
   ],
   "test_decompiler_return_reaching_definitions.py": [
    "toolchain"
+  ],
+  "test_decompiler_rust_source_types.py": [
+   "fixtures"
   ],
   "test_decompiler_session.py": [
    "toolchain"
