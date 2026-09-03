@@ -7,11 +7,11 @@
 //!
 //! # Section ownership
 //!
-//! This file is shared between the three identity lanes (`structural`, `warp`,
-//! `cfr`). Each keeps its additions inside its own clearly marked section, and
-//! [`register_identity_bindings`] registers each section's items in its own
-//! block, so two lanes adding functions at once is a trivial merge rather than
-//! a conflict in the middle of a function body.
+//! This file is shared between the four identity lanes (`structural`, `warp`,
+//! `cfr`, `values`). Each keeps its additions inside its own clearly marked
+//! section, and [`register_identity_bindings`] registers each section's items
+//! in its own block, so two lanes adding functions at once is a trivial merge
+//! rather than a conflict in the middle of a function body.
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -593,6 +593,221 @@ fn register_cfr(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // ===========================================================================
+// SECTION: values (L3) -- owned by the identity/values lane
+//
+// `python-ext` implies `exec`, so this section needs no feature gate of its
+// own; `crate::identity::values` is always present in a build that has PyO3.
+// ===========================================================================
+
+/// One function's value fingerprint: the multiset of numbers it computes.
+///
+/// `values` is the sorted `(element, count)` list. For an ordinary computed
+/// value the element **is** the number, sign-extended to 64 bits and read as
+/// two's complement, so a fingerprint is readable rather than opaque: an
+/// element of `0xffffffffffffffff` is the integer -1. Branch-condition
+/// elements are hashed into a high band and are not readable that way.
+///
+/// `version` is the `(major, minor, settings)` triple; two fingerprints with
+/// different majors or different settings describe different quotients and
+/// must not be compared, which `value_similarity` enforces by answering 0.0.
+#[pyclass(module = "glaurung.analysis", name = "ValueFingerprint")]
+#[derive(Clone)]
+pub struct ValueFingerprint {
+    /// Entry virtual address of the function.
+    #[pyo3(get)]
+    pub entry_va: u64,
+    /// Symbol name where the image has one. Never part of the fingerprint.
+    #[pyo3(get)]
+    pub name: Option<String>,
+    #[pyo3(get)]
+    pub block_count: usize,
+    #[pyo3(get)]
+    pub instruction_count: usize,
+    /// Instructions retired across every seed's run.
+    #[pyo3(get)]
+    pub steps: u64,
+    /// How many of the runs reached a return.
+    #[pyo3(get)]
+    pub returned_runs: u8,
+    /// How many exhausted the instruction budget.
+    #[pyo3(get)]
+    pub budget_exhausted_runs: u8,
+    /// True when every run hit the budget *and* nothing survived the filters:
+    /// the coverage failure worth counting separately from a short run.
+    #[pyo3(get)]
+    pub starved: bool,
+    /// Values the filters removed as addresses (rules F1 to F4).
+    #[pyo3(get)]
+    pub addresses_filtered: usize,
+    /// `(major, minor, settings)`.
+    #[pyo3(get)]
+    pub version: (u16, u16, u32),
+    /// Sorted `(element, occurrence count)` pairs.
+    #[pyo3(get)]
+    pub values: Vec<(u64, u32)>,
+    /// Hex BLAKE3 digest over the version triple and the element list.
+    #[pyo3(get)]
+    pub digest: String,
+    /// The `function_identity` scheme name this digest belongs to.
+    #[pyo3(get)]
+    pub scheme: String,
+    inner: crate::identity::values::ValueFingerprint,
+}
+
+#[pymethods]
+impl ValueFingerprint {
+    fn __repr__(&self) -> String {
+        format!(
+            "ValueFingerprint(entry_va={:#x}, name='{}', values={}, digest={}...)",
+            self.entry_va,
+            self.name.as_deref().unwrap_or("<unnamed>"),
+            self.values.len(),
+            &self.digest[..16.min(self.digest.len())]
+        )
+    }
+
+    /// Total element occurrences, counts included.
+    fn total_count(&self) -> u64 {
+        self.inner.total_count()
+    }
+
+    /// vSim's Equation 2: weighted Jaccard over the element sets, in `[0, 1]`.
+    fn similarity(&self, other: &ValueFingerprint) -> f64 {
+        crate::identity::values::weighted_jaccard_set(&self.inner, &other.inner, None)
+    }
+
+    /// The multiset form, which uses the occurrence counts.
+    fn similarity_with_counts(&self, other: &ValueFingerprint) -> f64 {
+        crate::identity::values::weighted_jaccard(&self.inner, &other.inner, None)
+    }
+
+    /// The induced metric distance, `1 - J_w` over the multiset form.
+    fn distance(&self, other: &ValueFingerprint) -> f64 {
+        crate::identity::values::distance(&self.inner, &other.inner, None)
+    }
+}
+
+impl From<crate::identity::values::FunctionValues> for ValueFingerprint {
+    fn from(entry: crate::identity::values::FunctionValues) -> Self {
+        let version = entry.fingerprint.version;
+        ValueFingerprint {
+            entry_va: entry.entry_va,
+            name: entry.name,
+            block_count: entry.block_count,
+            instruction_count: entry.instruction_count,
+            steps: entry.stats.steps,
+            returned_runs: entry.stats.returned,
+            budget_exhausted_runs: entry.stats.budget_exhausted,
+            starved: entry.stats.budget_exhausted_before_any_value,
+            addresses_filtered: entry.stats.filter.addresses_removed(),
+            version: (version.major, version.minor, version.settings),
+            values: entry.fingerprint.values.clone(),
+            digest: entry.fingerprint.identity(),
+            scheme: crate::identity::values::VALUE_SCHEME.to_string(),
+            inner: entry.fingerprint,
+        }
+    }
+}
+
+/// Compute a value fingerprint for every discovered function in `path`.
+///
+/// The function is run under `seeds` fixed initial states, each bounded by
+/// `max_steps` retired LLIR instructions; every register write and memory
+/// store is recorded, the addresses are filtered out, and what is left is
+/// normalised to width-free signed integers.
+///
+/// `site_cap` bounds how many distinct values one instruction may contribute
+/// per run, which is what keeps a long loop from drowning the fingerprint.
+/// `filter` turns the address rules off (the published ablation); `branch_conditions`
+/// drops the `(comparison, constant)` elements; `role_seeds` gives each
+/// uninitialised register its own trial value instead of the one the run
+/// shares. All six are part of the version triple, so a fingerprint computed
+/// under different settings answers 0.0 against one computed under these.
+///
+/// **x86-64 only.** The interpreter this drives has an x86-64 register file;
+/// anything else raises rather than producing a fingerprint over a register
+/// file that does not match the code.
+///
+/// The remaining arguments are the function-discovery budgets, spelled as
+/// `cfr_signatures_path` spells them and defaulted the same way: `timeout_ms`
+/// is a wall clock on one function's block walk, and a wall clock inside an
+/// identity function means the digest depends on how busy the machine was.
+#[pyfunction]
+#[pyo3(name = "value_fingerprints_path")]
+#[pyo3(signature = (path, seeds=3u8, max_steps=20_000u32, site_cap=4u8, filter=true, branch_conditions=true, role_seeds=false, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=3_600_000u64, total_timeout_ms=0u64))]
+#[allow(clippy::too_many_arguments)]
+fn value_fingerprints_path(
+    path: String,
+    seeds: u8,
+    max_steps: u32,
+    site_cap: u8,
+    filter: bool,
+    branch_conditions: bool,
+    role_seeds: bool,
+    max_functions: usize,
+    max_blocks: usize,
+    max_instructions: usize,
+    timeout_ms: u64,
+    total_timeout_ms: u64,
+) -> PyResult<Vec<ValueFingerprint>> {
+    let budgets = crate::analysis::cfg::Budgets {
+        max_functions,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+        total_timeout_ms,
+    };
+    let settings = crate::identity::values::ValueSettings {
+        seeds,
+        max_steps,
+        site_cap,
+        filter,
+        branch_conditions,
+        role_seeds,
+    };
+    let rows = crate::identity::values::fingerprints_for_path(
+        std::path::Path::new(&path),
+        settings,
+        &budgets,
+    )
+    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    Ok(rows.into_iter().map(ValueFingerprint::from).collect())
+}
+
+/// Weighted Jaccard similarity between two value fingerprints, in `[0, 1]`.
+///
+/// vSim's Equation 2, over the element sets. `0.0` when the two were computed
+/// under incomparable settings, when either is empty, or when they share no
+/// element -- deliberately the same answer, because an unanswerable comparison
+/// and a comparison with no evidence are both "no".
+#[pyfunction]
+#[pyo3(name = "value_similarity")]
+fn value_similarity(a: &ValueFingerprint, b: &ValueFingerprint) -> f64 {
+    crate::identity::values::weighted_jaccard_set(&a.inner, &b.inner, None)
+}
+
+/// The metric distance between two value fingerprints, `1 - J_w`.
+///
+/// The Ruzicka distance over the weighted multisets: symmetric, zero exactly
+/// on equal fingerprints, and obeying the triangle inequality, so it can index
+/// a corpus.
+#[pyfunction]
+#[pyo3(name = "value_distance")]
+fn value_distance(a: &ValueFingerprint, b: &ValueFingerprint) -> f64 {
+    crate::identity::values::distance(&a.inner, &b.inner, None)
+}
+
+/// Register the value-fingerprint (L3) additions on `analysis_mod`.
+fn register_values(analysis_mod: &Bound<'_, PyModule>) -> PyResult<()> {
+    analysis_mod.add_class::<ValueFingerprint>()?;
+    analysis_mod.add_function(wrap_pyfunction!(value_fingerprints_path, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(value_similarity, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(value_distance, analysis_mod)?)?;
+    analysis_mod.add("VALUE_SCHEME", crate::identity::values::VALUE_SCHEME)?;
+    Ok(())
+}
+
+// ===========================================================================
 // SECTION: registration
 // ===========================================================================
 
@@ -605,5 +820,6 @@ pub fn register_identity_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     register_structural(&analysis_mod)?;
     register_warp(&analysis_mod)?;
     register_cfr(&analysis_mod)?;
+    register_values(&analysis_mod)?;
     Ok(())
 }
