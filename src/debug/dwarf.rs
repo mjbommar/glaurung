@@ -63,6 +63,10 @@ pub struct DwarfFunction {
     /// Source locals whose optimized value resides in a machine register over
     /// one or more address ranges.
     pub register_locals: Vec<DwarfRegisterLocal>,
+    /// Lexically nested source locals whose storage has a fixed image address.
+    /// A `DW_TAG_variable` child of this subprogram plus `DW_OP_addr`/`addrx`
+    /// proves function-local static storage rather than a file-scope global.
+    pub static_locals: Vec<DwarfStaticLocal>,
 }
 
 /// Coordinate used by a variable's ``DW_OP_fbreg`` location.
@@ -103,6 +107,15 @@ pub struct DwarfRegisterLocal {
     pub source_name: String,
     pub c_type: String,
     pub locations: Vec<DwarfRegisterLocation>,
+}
+
+/// One source variable with static storage and function lexical scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfStaticLocal {
+    pub address: u64,
+    pub byte_size: u16,
+    pub source_name: String,
+    pub c_type: String,
 }
 
 /// Source-level output contract attached to a DWARF subprogram.
@@ -254,10 +267,12 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
             gimli::UnitOffset<usize>,
             Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
+            Vec<gimli::UnitOffset<usize>>,
             isize,
         )> = Vec::new();
         let mut emitted: Vec<(
             gimli::UnitOffset<usize>,
+            Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
         )> = Vec::new();
@@ -269,10 +284,10 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 _ => break,
             }
             // Pop any subprograms whose subtree we've left.
-            while let Some((_, _, _, sub_depth)) = open.last() {
+            while let Some((_, _, _, _, sub_depth)) = open.last() {
                 if depth_of_next <= *sub_depth {
-                    if let Some((off, parameters, variables, _)) = open.pop() {
-                        emitted.push((off, parameters, variables));
+                    if let Some((off, parameters, variables, direct_variables, _)) = open.pop() {
+                        emitted.push((off, parameters, variables, direct_variables));
                     }
                 } else {
                     break;
@@ -284,11 +299,17 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
             };
             match entry.tag() {
                 gimli::DW_TAG_subprogram => {
-                    open.push((entry.offset(), Vec::new(), Vec::new(), depth_of_next));
+                    open.push((
+                        entry.offset(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        depth_of_next,
+                    ));
                 }
                 gimli::DW_TAG_formal_parameter => {
                     if let Some(top) = open.last_mut() {
-                        if depth_of_next == top.3 + 1 {
+                        if depth_of_next == top.4 + 1 {
                             top.1.push(entry.offset());
                         }
                     }
@@ -296,16 +317,19 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 gimli::DW_TAG_variable => {
                     if let Some(top) = open.last_mut() {
                         top.2.push(entry.offset());
+                        if depth_of_next == top.4 + 1 {
+                            top.3.push(entry.offset());
+                        }
                     }
                 }
                 _ => {}
             }
         }
-        while let Some((off, parameters, variables, _)) = open.pop() {
-            emitted.push((off, parameters, variables));
+        while let Some((off, parameters, variables, direct_variables, _)) = open.pop() {
+            emitted.push((off, parameters, variables, direct_variables));
         }
 
-        for (off, parameter_offsets, variable_offsets) in emitted {
+        for (off, parameter_offsets, variable_offsets, direct_variable_offsets) in emitted {
             let entry = match unit.entry(off) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -362,6 +386,11 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 &entry,
                 variable_offsets.iter().copied(),
             );
+            let static_locals = dwarf_static_locals_for_subprogram(
+                &dwarf,
+                &unit,
+                direct_variable_offsets.into_iter(),
+            );
             let register_locals = dwarf_register_locals_for_subprogram(
                 &dwarf,
                 &unit,
@@ -382,6 +411,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 return_type,
                 stack_objects,
                 register_locals,
+                static_locals,
             });
         }
     }
@@ -548,20 +578,27 @@ fn dwarf_stack_objects_for_subprogram<'a>(
     subprogram: &gimli::DebuggingInformationEntry<Slice<'a>, usize>,
     variables: impl Iterator<Item = gimli::UnitOffset<usize>>,
 ) -> Vec<DwarfStackObject> {
-    let base = match inherited_attr_value(unit, subprogram, gimli::DW_AT_frame_base)
+    let frame_base = match inherited_attr_value(unit, subprogram, gimli::DW_AT_frame_base)
         .and_then(|value| single_expression_operation(unit, value))
     {
-        Some(gimli::Operation::Register { register }) => DwarfStackBase::Register(register.0),
-        Some(gimli::Operation::CallFrameCFA) => DwarfStackBase::CallFrameCfa,
-        _ => return Vec::new(),
+        Some(gimli::Operation::Register { register }) => Some(DwarfStackBase::Register(register.0)),
+        Some(gimli::Operation::CallFrameCFA) => Some(DwarfStackBase::CallFrameCfa),
+        _ => None,
     };
     let mut objects = variables
         .filter_map(|offset| {
             let variable = unit.entry(offset).ok()?;
-            let offset = match inherited_attr_value(unit, &variable, gimli::DW_AT_location)
+            let (base, offset) = match inherited_attr_value(unit, &variable, gimli::DW_AT_location)
                 .and_then(|value| single_expression_operation(unit, value))
             {
-                Some(gimli::Operation::FrameOffset { offset }) => offset,
+                Some(gimli::Operation::FrameOffset { offset }) => (frame_base?, offset),
+                // Clang AArch64 O0 describes ordinary fixed stack locals as
+                // `DW_OP_breg31 + offset` even though the subprogram frame base
+                // is x29. This is already an explicit architectural coordinate;
+                // interpreting it through DW_AT_frame_base would be wrong.
+                Some(gimli::Operation::RegisterOffset {
+                    register, offset, ..
+                }) => (DwarfStackBase::Register(register.0), offset),
                 _ => return None,
             };
             let type_attr = inherited_attr_value(unit, &variable, gimli::DW_AT_type)?;
@@ -597,6 +634,36 @@ fn dwarf_stack_objects_for_subprogram<'a>(
         }
     }
     merged
+}
+
+fn dwarf_static_locals_for_subprogram<'a>(
+    dwarf: &gimli::Dwarf<Slice<'a>>,
+    unit: &Unit<'a>,
+    variables: impl Iterator<Item = gimli::UnitOffset<usize>>,
+) -> Vec<DwarfStaticLocal> {
+    let mut locals = variables
+        .filter_map(|offset| {
+            let variable = unit.entry(offset).ok()?;
+            let operation = inherited_attr_value(unit, &variable, gimli::DW_AT_location)
+                .and_then(|value| single_expression_operation(unit, value))?;
+            let address = match operation {
+                gimli::Operation::Address { address } => address,
+                gimli::Operation::AddressIndex { index } => dwarf.address(unit, index).ok()?,
+                _ => return None,
+            };
+            let type_attr = inherited_attr_value(unit, &variable, gimli::DW_AT_type)?;
+            let (byte_size, _) = referenced_type_info(unit, type_attr)?;
+            Some(DwarfStaticLocal {
+                address,
+                byte_size: u16::try_from(byte_size).ok().filter(|size| *size != 0)?,
+                source_name: inherited_name_of(dwarf, unit, &variable)?,
+                c_type: _resolve_type_string(dwarf, unit, type_attr)?,
+            })
+        })
+        .collect::<Vec<_>>();
+    locals.sort_by_key(|local| (local.address, local.source_name.clone()));
+    locals.dedup();
+    locals
 }
 
 fn dwarf_register_locals_for_subprogram<'a>(
@@ -1547,5 +1614,67 @@ mod tests {
             "main should have at least 1 parameter (argc), got {}",
             m.param_count
         );
+    }
+
+    #[test]
+    fn extracts_aarch64_clang_direct_sp_relative_locals() {
+        let path =
+            "samples/binaries/platforms/linux/arm64/export/native/clang/debug/hello-c-clang-debug";
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+        let functions = extract_dwarf_functions(&bytes);
+        let main = functions
+            .iter()
+            .find(|function| function.name.as_deref() == Some("main"))
+            .expect("AArch64 Clang debug fixture has main DWARF");
+
+        for (name, offset) in [("sum", 12), ("i", 8)] {
+            assert!(
+                main.stack_objects.iter().any(|object| {
+                    object.source_name.as_deref() == Some(name)
+                        && object.base == DwarfStackBase::Register(31)
+                        && object.offset == offset
+                        && object.byte_size == 4
+                }),
+                "missing direct sp-relative {name} at +{offset}: {:#?}",
+                main.stack_objects
+            );
+        }
+    }
+
+    #[test]
+    fn extracts_function_local_static_address_and_source_contract() {
+        for (path, address) in [
+            (
+                "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/hello-c-gcc-debug",
+                0x4018,
+            ),
+            (
+                "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug",
+                0x4040,
+            ),
+        ] {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(_) => return,
+            };
+            let functions = extract_dwarf_functions(&bytes);
+            let function = functions
+                .iter()
+                .find(|function| function.name.as_deref() == Some("static_function"))
+                .expect("debug fixture has static_function DWARF");
+            assert_eq!(
+                function.static_locals,
+                [DwarfStaticLocal {
+                    address,
+                    byte_size: 4,
+                    source_name: "static_var".to_string(),
+                    c_type: "int".to_string(),
+                }],
+                "wrong static-local contract for {path}"
+            );
+        }
     }
 }
