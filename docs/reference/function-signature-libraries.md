@@ -328,11 +328,13 @@ signatures** from 198,361 raw, with 9,410 dropped as ambiguous and no build
 failures. `libcrypto.a` alone contributes 6,042 and glibc's `libc.a` 2,563,
 against the 16 this repository's own `libmathlib.a` produces.
 
-**Every MinGW-w64 archive scores zero.** `src/flirt/archive.rs` reads ELF
-and Mach-O relocation tables and the MinGW CRT is COFF, so 120 of the 419
-rows produce nothing. They are harvested and keyed correctly and will yield
-signatures the day COFF relocations are read. That is a gap in the reader,
-not in the harvest.
+**Every MinGW-w64 archive scores zero in that count, because of when it was
+taken.** The extension was built from `935b7db1`, where
+`src/flirt/archive.rs` read ELF and Mach-O relocations only, so 120 of the 419
+rows produced nothing. `5e882019` landed COFF archive support on `master`
+while the harvest was running; those 120 rows are unmeasured against it and
+should be expected to change. The archives are harvested and keyed correctly
+either way.
 
 None of these libraries is shipped in `data/sigs/` yet; keying,
 deduplication across variants and a shipping policy for a set this size are

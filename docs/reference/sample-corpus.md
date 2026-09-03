@@ -349,11 +349,15 @@ same package harvested from two images:
 | `libxml2.a` | `libxml2-dev` | `2.9.13+dfsg-1ubuntu0.12` | x86_64 | 2847428 | 2350 | 2163 | 63 | 0.16 |
 | `libxml2.a` | `libxml2-dev` | `2.9.13+dfsg-1ubuntu0.12` | aarch64 | 2870708 | 2243 | 2085 | 54 | 0.21 |
 
-**Every MinGW-w64 archive scores zero, and that is a known gap, not a harvest
-failure.** `src/flirt/archive.rs` reads ELF and Mach-O relocation tables; the
-MinGW CRT is COFF, so 120 of the 419 rows produce no signatures at all. The
-archives are harvested and keyed correctly and will yield signatures the day
-COFF relocations are read; a separate lane owns that.
+**Every MinGW-w64 archive scores zero in the table above, and that is a
+property of the build the numbers were taken against, not of the harvest.**
+The measurement used an extension built from `935b7db1`, where
+`src/flirt/archive.rs` read ELF and Mach-O relocation tables only; the MinGW
+CRT is COFF, so 120 of the 419 rows produced nothing. `5e882019`,
+"flirt: build signatures from COFF archives", landed on `master` while this
+harvest was running. **Those 120 rows need re-measuring on current `master`
+and are expected to become non-zero**; the archives themselves are harvested
+and keyed correctly either way, which is the part this section is about.
 
 Two smaller things the first run found, both now fixed in the harvester:
 
