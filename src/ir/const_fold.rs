@@ -583,6 +583,31 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         _ => {}
     }
 
+    // A full-width load through the address of a scalar ABI parameter is the
+    // parameter itself. Cdecl32 exposes incoming arguments as stack objects,
+    // so stack promotion can retain `Deref(StackAddr(argN))` even after DWARF
+    // has proved the source parameter. Keep partial loads explicit: reading
+    // one byte of an `int` is not an `int` read, and aggregate/local objects
+    // are deliberately outside this parameter-only identity.
+    let parameter_address_load = match e {
+        Expr::Deref { addr, size } => match addr.as_ref() {
+            Expr::StackAddr {
+                object: crate::ir::types::VReg::Phys(name),
+                size: object_size,
+            } if usize::from(*size) == usize::from(*object_size)
+                && crate::ir::ast::parse_arg_index(name).is_some() =>
+            {
+                Some(Expr::Reg(crate::ir::types::VReg::phys(name.clone())))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = parameter_address_load {
+        rewrite(e, replacement, changed);
+        return;
+    }
+
     // A select whose predicate became literal has exactly one reachable arm.
     // Both arms were folded above, so replacing the node cannot hide additional
     // work and removes the unreachable expression without changing evaluation.
@@ -2556,5 +2581,45 @@ mod tests {
             panic!()
         };
         assert_eq!(*src, original, "truncation was folded away");
+    }
+
+    #[test]
+    fn full_width_load_of_parameter_address_is_the_parameter() {
+        let mut function = one_stmt(Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: reg("arg0"),
+                size: 4,
+            }),
+            size: 4,
+        });
+
+        assert!(fold_constants(&mut function));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Reg(parameter),
+                ..
+            } if parameter == &reg("arg0")
+        ));
+    }
+
+    #[test]
+    fn partial_load_of_parameter_address_is_not_widened() {
+        let original = Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: reg("arg0"),
+                size: 4,
+            }),
+            size: 1,
+        };
+        let mut function = one_stmt(original.clone());
+
+        fold_constants(&mut function);
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { src, .. } if src == &original
+        ));
     }
 }

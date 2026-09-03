@@ -329,6 +329,51 @@ pub(crate) fn render_pointer_name(c_type: &str, replacement: &str) -> Option<Str
     Some(rendered)
 }
 
+/// Attach an identifier to a plain C type using conventional pointer spacing.
+///
+/// Type recovery stores declarators independently from their names, with stars
+/// separated as tokens (`const char * *`). Merely joining those strings with a
+/// space produces the mechanically valid but source-hostile `char * * argv`.
+/// Keep non-pointer and complex declarators on the conservative old path; the
+/// plain pointer chain used by recovered parameters becomes `char **argv`.
+pub(crate) fn render_named_declaration(c_type: &str, name: &str) -> String {
+    let c_type = c_type.trim();
+    let Some(first_star) = c_type.find('*') else {
+        return format!("{c_type} {name}");
+    };
+    let base = c_type[..first_star].trim_end();
+    let suffix = &c_type[first_star..];
+    if base.is_empty()
+        || suffix
+            .chars()
+            .any(|ch| !(ch == '*' || ch == '_' || ch.is_ascii_alphabetic() || ch.is_whitespace()))
+    {
+        return format!("{c_type} {name}");
+    }
+
+    let mut rendered = String::with_capacity(c_type.len() + name.len() + 1);
+    rendered.push_str(base);
+    rendered.push(' ');
+    let mut previous_was_word = false;
+    for token in suffix.split_whitespace() {
+        if token.chars().all(|ch| ch == '*') {
+            if previous_was_word {
+                rendered.push(' ');
+            }
+            rendered.push_str(token);
+            previous_was_word = false;
+        } else {
+            rendered.push_str(token);
+            previous_was_word = true;
+        }
+    }
+    if previous_was_word {
+        rendered.push(' ');
+    }
+    rendered.push_str(name);
+    rendered
+}
+
 fn typedef_reference_name(c_type: &str) -> Option<&str> {
     if c_type.contains('*') {
         return pointed_type_name(c_type);
@@ -542,6 +587,23 @@ mod tests {
 
         assert!(env.aggregate_pointer("Left *").is_none());
         assert!(env.aggregate_pointer("struct node **").is_none());
+    }
+
+    #[test]
+    fn named_pointer_declarations_use_source_like_spacing() {
+        assert_eq!(render_named_declaration("int", "argc"), "int argc");
+        assert_eq!(
+            render_named_declaration("const char * *", "argv"),
+            "const char **argv"
+        );
+        assert_eq!(
+            render_named_declaration("char * const *", "items"),
+            "char *const *items"
+        );
+        assert_eq!(
+            render_named_declaration("void (*)(int)", "callback"),
+            "void (*)(int) callback"
+        );
     }
 
     #[test]
