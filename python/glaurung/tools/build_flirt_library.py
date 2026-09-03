@@ -271,10 +271,30 @@ def build_library_from_archive(
     ambiguous: set[tuple[str, str, object, int, object]] = set()
     aliases_coalesced = 0
 
-    def public_alias_rank(row: dict) -> tuple[int, int, str]:
-        """Prefer the public C spelling among proven same-address aliases."""
+    def public_alias_rank(row: dict) -> tuple[int, int, int, str]:
+        """Prefer the public spelling among proven same-address aliases.
+
+        The leading-underscore count is the primary tier: it is what makes
+        ``puts`` beat ``_IO_puts``. It does not, however, distinguish between
+        two *equally* underscore-prefixed names, and ARM EABI's libgcc ships
+        exactly that case: ``__aeabi_dadd`` (the RTABI-mandated helper name
+        every AAPCS-conformant compiler actually calls) aliases the generic
+        GCC libcall name ``__adddf3`` at the same address in the same ``.o``
+        -- measured in ``lib/gcc/arm-none-eabi/13.2.1/.../libgcc.a``'s
+        ``_arm_addsubdf3.o``. Both have two leading underscores, so a
+        length-only tie-break picks the shorter, generic name and every
+        Cortex-M firmware that calls the RTABI name goes unnamed -- measured
+        as 21 of 21 wrong names in the `rt-libopencm3` validation
+        (`docs/reference/function-signature-libraries.md`, "Cortex-M (bare
+        metal)"). ``__aeabi_`` is a reserved namespace the ARM RTABI
+        specification assigns to exactly these compiler helper entry points,
+        so it is the public spelling for this family the same way an
+        unprefixed name is for libc's.
+        """
         name = str(row["name"])
-        return (len(name) - len(name.lstrip("_")), len(name), name)
+        leading_underscores = len(name) - len(name.lstrip("_"))
+        not_aeabi = 0 if name.startswith("__aeabi_") else 1
+        return (leading_underscores, not_aeabi, len(name), name)
 
     for row in raw:
         key = (
@@ -289,10 +309,9 @@ def build_library_from_archive(
         prior = by_key.get(key)
         if prior is not None:
             if prior["name"] != row["name"]:
-                same_symbol = (
-                    prior["member"] == row["member"]
-                    and int(prior["address"]) == int(row["address"])
-                )
+                same_symbol = prior["member"] == row["member"] and int(
+                    prior["address"]
+                ) == int(row["address"])
                 if same_symbol:
                     aliases_coalesced += 1
                     by_key[key] = min((prior, row), key=public_alias_rank)

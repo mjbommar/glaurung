@@ -505,3 +505,239 @@ construction, a member.
   work once a library is large enough that a linear in-memory scan stops
   being the cheaper option (see the schema survey's "flat scan until 1e5"
   guidance).
+
+## Cortex-M (bare metal)
+
+Measured 2026-09-03 against the ARM GNU Toolchain 13.2.Rel1
+(`arm-none-eabi-gcc 13.2.1 20231009`, newlib `4.3.0`), on
+`/nas4/data/binary-analysis/armtc/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/`
+(read-only; never copied). This is the same builder and matcher documented
+above, aimed at bare-metal ARM (Cortex-M) instead of a hosted libc: no ELF
+dynamic section, no PLT, one statically linked image per firmware, Thumb-2
+throughout.
+
+### Source and harvest
+
+`tools/harvest_armtc.py` inventories the toolchain's static archives by NAS
+path plus sha256 -- it does not copy them, the same "unit of distribution is
+a blob plus provenance" policy the design doc states for the wider program.
+Output: `$HOME/.cache/glaurung/system-libs/armtc-13.2.1/manifest.json`, one
+entry per `.a` under `arm-none-eabi/lib/{arm,thumb}/**` and
+`lib/gcc/arm-none-eabi/13.2.1/**`, keyed by `multilib_path` (e.g.
+`thumb/v7e-m+fp/hard`) and `lib_root`. Measured: **780 of 780** archives on
+the box inventoried (39 multilibs x 20 archive basenames each), 752,307,272
+bytes, in well under a second (hashing dominates). Licence: newlib/libgloss
+is BSD-style (Red Hat/Cygnus plus a University of California, Berkeley
+notice; the toolchain's `license.txt` lines 8721-10644); libgcc, libstdc++
+and libsupc++ carry GPLv3 plus the GCC Runtime Library Exception, which
+permits linking without imposing the GPL on the linked program -- the same
+legal position as the rest of this page applies here unchanged: only masked
+patterns, CRCs and names are ever redistributed, never archive or object
+bytes.
+
+### Keying and multilibs built
+
+`tools/build_armtc_signatures.py` drives `build_flirt_library.py --archive`
+once per `(multilib, component)` pair for the six multilibs bare-metal
+firmware actually links (`thumb/v6-m/nofp`, `thumb/v7-m/nofp`,
+`thumb/v7e-m/nofp`, `thumb/v7e-m+fp/hard`, `thumb/v7e-m+dp/hard`,
+`thumb/v8-m.main/nofp`) and eight components each (`newlib`, `newlib-nano`,
+`newlib-libm`, `libgcc`, `libstdc++`, `libstdc++-nano`, `libsupc++`,
+`libnosys`). Keyed `(name, version, variant, arch)` exactly as the rest of
+this page: `variant = arm-gnu-<gcc-version>-<multilib-with-dashes>` (e.g.
+`newlib/4.3.0/arm-gnu-13.2.1-thumb-v7e-m+fp-hard/armv7`) -- no masked scheme
+crosses a multilib any more than it crosses an optimisation level, because
+the ABI, FPU and instruction-set variant all change the code the compiler
+emits. `--arch armv7` throughout: `object`'s `Architecture` enum does not
+distinguish M-profile sub-variants, so `src/flirt/archive.rs::arch_tag` maps
+every 32-bit ARM object to `"armv7"` regardless of Thumb-1/Thumb-2/v6-M/v8-M
+-- the profile lives in the *variant* string, which is why it has to be part
+of the key. (The task brief's illustrative key used `newlib/4.4.0/...`; the
+toolchain's actual newlib is measured at `4.3.0`, used throughout.)
+
+**All 48 libraries yielded signatures -- zero archives yielded nothing.**
+32,812 unique signatures total, 63,210 raw, 5,109 dropped ambiguous, built in
+3.2 seconds, 36.3 MB of JSON. Per-multilib totals are nearly identical (the
+six multilibs disagree only in FPU/architecture-dependent codegen, not in
+which symbols exist), so one representative row (`thumb/v7e-m+fp/hard`, the
+STM32F4 multilib both validations below actually exercise) stands for all
+six; the full 48-row table is `tools/build_armtc_signatures.py`'s own
+`index.json` output.
+
+| component | raw | unique | ambiguous | masked | with CRC | with refs | JSON bytes | build |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `newlib` | 825 | 588 | 59 | 482 | 451 | 467 | 498,669 | 63 ms |
+| `newlib-nano` | 723 | 563 | 36 | 500 | 385 | 440 | 403,293 | 60 ms |
+| `newlib-libm` | 298 | 212 | 39 | 171 | 164 | 173 | 288,080 | 52 ms |
+| `libgcc` | 562 | 337 | 75 | 311 | 176 | 113 | 172,781 | 51 ms |
+| `libstdc++` | 4,220 | 1,984 | 313 | 2,737 | 1,601 | 1,798 | 2,641,613 | 98 ms |
+| `libstdc++-nano` | 3,798 | 1,657 | 334 | 3,063 | 1,151 | 1,438 | 1,809,132 | 92 ms |
+| `libsupc++` | 160 | 141 | 3 | 99 | 104 | 120 | 121,437 | 48 ms |
+| `libnosys` | 1 | 1 | 0 | 1 | 0 | 1 | 1,065 | 53 ms |
+
+**`libnosys` yielding 1 of 23 candidate symbols is correct, not a defect.**
+Every syscall stub (`_read`, `_write`, `_close`, `_lseek`, `_fstat`,
+`_isatty`, `_kill`, `_getpid`, `_open`, `_link`, ...) is 16 bytes with only
+12 fixed after masking -- boilerplate "set `errno`, return -1" identical in
+shape across every stub, correctly declined by the same `min_fixed_bytes=16`
+floor documented above (measured directly: re-running the extractor with
+both floors at 0 recovers all 23, all but `_sbrk` at 12 fixed bytes).
+`_sbrk` alone (28 bytes, 20 fixed) clears the floor and is the one signature
+kept.
+
+### Validation: `rt-libopencm3` (20 STM32F4 firmwares, three optimisation levels)
+
+`/nas4/data/binary-analysis/rt-libopencm3/` -- built with this exact
+toolchain (`GCC: (15:13.2.rel1-2) 13.2.1 20231009`, confirmed from each
+firmware's own `.comment` section), `addr2name.json` ground truth (decimal
+VA, some carrying the Thumb bit -- cleared with `addr & ~1` on both the
+truth and the matcher's `entry_va` before comparing). Every firmware in the
+corpus reports `Tag_CPU_arch: v7E-M`, `Tag_FP_arch: VFPv4-D16`,
+`Tag_ABI_HardFP_use: SP only` in its own `.ARM.attributes` -- i.e. all 20 are
+`thumb/v7e-m+fp/hard`, read off the binary rather than inferred from a board
+name (`tools/validate_cortex_m_signatures.py::infer_multilib`). Matched with
+`glaurung.analysis.flirt_match_functions_with_evidence_path` against the
+`newlib` + `libgcc` + `libstdc++` + `libsupc++` + `libnosys` components
+merged (the non-nano set: this corpus's DWARF producer strings carry no
+`--specs=nano.specs`, and its `printf` pulls the full `_dtoa_r` double
+formatter, which newlib-nano does not build by default) -- **function
+discovery on a stripped, statically linked, bare-metal Thumb-2 ELF works
+with no changes**, which was the open risk item this measurement was meant
+to settle.
+
+| firmware | opt | in truth | named | correct | wrong | ambiguous |
+|---|---|--:|--:|--:|--:|--:|
+| adc-dac-printf | O0 | 167 | 34 | 34 | 0 | 0 |
+| lcd-dma | O0 | 192 | 36 | 36 | 0 | 0 |
+| lcd-serial | O0 | 115 | 8 | 8 | 0 | 0 |
+| usart-stdio | O0 | 147 | 35 | 34 | 1 | 0 |
+| usart_irq_console | O0 | 89 | 1 | 1 | 0 | 0 |
+| adc-dac-printf | O2 | 148 | 34 | 34 | 0 | 0 |
+| 15 more firmwares (blink, button, cdcacm, cryptobasic, dac-dma, fancyblink, mandel, miniblink, msc, random, sdram, tick_blink, timer, usart, usart_console, usart_irq, usbmidi) at O0/O2/O2-noinline | -- | 1,044 | 0 | 0 | 0 | 0 |
+| **total, 28 (firmware, opt) cells** | | **1,902** | **148** | **147** | **1** | **0** |
+
+The fifteen zero rows are correctly zero, not a matcher failure: those
+firmwares call nothing from newlib/libgcc/libstdc++ beyond what already
+matched in the rows above (they are pure `libopencm3` register-poking code,
+which this library was never built to know), and the point of the "wrong"
+column is that it stayed at **1 of 148** (0.7%) rather than that recall is
+high -- most of a Cortex-M firmware's text is project and HAL code no
+toolchain signature library can ever name.
+
+**Defect found and fixed: the archive builder's same-address alias
+tie-break picked the wrong ARM EABI name, every time.** Before the fix,
+`wrong` was **21 of 148** (14%), every single one a libgcc IEEE-754 helper:
+ARM's RTABI mandates helper names like `__aeabi_dadd`, and GCC's libgcc
+defines that symbol as a same-address alias of the *generic* portable
+libcall name (`__adddf3`) inside one object
+(`_arm_addsubdf3.o`, confirmed with
+`glaurung.analysis.flirt_signatures_from_archive_path`: both names, same
+`member`, same `address`, same bytes). `build_flirt_library.py`'s
+`public_alias_rank` (added for glibc's `puts`/`_IO_puts`, where the
+unprefixed name is public) broke the tie by length alone once leading-
+underscore counts matched, which always picked the shorter, non-RTABI name
+-- and every Cortex-M firmware calls the RTABI name, so it never matched.
+Fixed in `python/glaurung/tools/build_flirt_library.py::public_alias_rank`
+by adding an `__aeabi_`-prefix tier between the underscore-count tier and
+the length tie-break; a new test,
+`test_archive_builder_prefers_the_aeabi_alias_over_the_shorter_libgcc_name`
+in `python/tests/test_flirt_library_builder.py`, reproduces the exact
+`_arm_addsubdf3.o` case. The existing x86_64 `mathlib` library is
+unaffected (rebuild is still byte-identical; no `__aeabi_`-prefixed name
+exists in that archive).
+
+**Residual "wrong" (1 of 148): `usart-stdio`'s `fflush` names as
+`fflush_unlocked`, and this one is not fixable at the archive level.**
+`libc_a-fflush.o`'s own `fflush` is 116 bytes (`crc16=9051`); the function
+the firmware actually calls "fflush" is 72 bytes and byte-identical to
+`libc_a-fflush_u.o`'s `fflush_unlocked` (confirmed by reading both the
+signature patterns and the real firmware bytes at the call site: the first
+32 bytes match `fflush_unlocked`'s pattern exactly and diverge from
+`fflush`'s at byte 0). `nm` on the unstripped image shows only one name,
+`fflush`, at that address -- not the two-names-one-address case documented
+below for the holdout corpus. The most likely explanation is newlib's own
+weak-alias resolution across `fflush.o`/`fflush_u.o` selecting a definition
+this archive-only, unlinked-object analysis cannot see: which of several
+same-named implementations across different translation units in one static
+archive a specific link resolves to depends on link order and what else in
+the program references, which is invisible without simulating the link.
+FLIRT and Ghidra FunctionID share this exact blind spot for any archive with
+more than one body under a name. Not fixed; reported per the task brief's
+instruction to stop and report rather than paper over an archive-level
+defect.
+
+### Validation: `decbench-holdout` (3 of 8 available ARM EABI5 projects)
+
+`/nas4/data/binary-analysis/decbench-holdout-source-rebuild-2026-08-06/O0/`,
+all three built with the identical toolchain (`.comment`:
+`GCC: (15:13.2.rel1-2) 13.2.1 20231009`). Chosen for multilib diversity, read
+off `.ARM.attributes` the same way: `freertos/RTOSDemo.out` is `v7`/`7-M`
+(no FPU) -> `thumb/v7-m/nofp`; `nuttx/nuttx` is `v7E-M` with no `Tag_FP_arch`
+-> `thumb/v7e-m/nofp`; `betaflight/betaflight_STM32F405.elf` is `v7E-M` +
+`VFPv4-D16` + `HardFP SP only` -> `thumb/v7e-m+fp/hard`, same as the whole
+`rt-libopencm3` corpus. **Ground truth is `arm-none-eabi-nm -S
+--defined-only` on the binary itself, as a set of names per address, not
+`addr2name.json`**: this corpus's own `stripped/` output is
+byte-**identical** to `compiled/` for every ARM project checked (sha256
+verified for `freertos`, `betaflight` and `nuttx`) -- a real defect in that
+corpus's rebuild pipeline, recorded here because it means there is no
+separately-stripped ARM binary in that corpus to test against; the matcher
+itself does not care, since `flirt_match_functions_with_evidence_path` names
+functions from CFG discovery, never from the symbol table.
+
+| project | multilib | in truth | named | correct | wrong | ambiguous |
+|---|---|--:|--:|--:|--:|--:|
+| freertos | thumb/v7-m/nofp | 150 | 6 | 6 | 0 | 0 |
+| nuttx | thumb/v7e-m/nofp | 1,026 | 11 | 11 | 0 | 0 |
+| betaflight | thumb/v7e-m+fp/hard | 4,544 | 45 | 45 | 0 | 0 |
+| **total** | | **5,720** | **62** | **62** | **0** | **0** |
+
+**Zero wrong, and the reason it is not a coincidence is worth recording.**
+The first run, before the alias-set fix below, reported 23 wrong -- all the
+same libgcc IEEE-754 pairs as `rt-libopencm3`, but in the *opposite*
+direction (`got '__aeabi_d2uiz', truth '__fixunsdfsi'`). `nm -S` on both
+`nuttx` and `betaflight` shows **both** names at the same address for every
+one of these (`0801ff50 00000040 T __aeabi_d2uiz` and
+`0801ff50 00000040 T __fixunsdfsi` in the same `nm` listing) -- a genuine
+weak-alias pair present simultaneously in the final binary, unlike
+`usart-stdio`'s `fflush` above. Scoring against a single arbitrarily-chosen
+`nm` line would have manufactured 23 "wrong" verdicts out of what is
+actually 23 correct ones under a name the truth extraction happened not to
+prefer. `tools/validate_cortex_m_signatures.py::truth_from_nm` was changed
+to collect every name at an address into a set and accept membership, which
+is the same "no name beats a wrong name, but two names can both be right"
+principle the matcher itself already applies to `warp-guid` ambiguity.
+
+### Summary
+
+| corpus | cells | functions in truth | named | correct | wrong | ambiguous |
+|---|--:|--:|--:|--:|--:|--:|
+| `rt-libopencm3` | 28 (firmware x opt) | 1,902 | 148 | 147 | 1 | 0 |
+| `decbench-holdout` | 3 projects | 5,720 | 62 | 62 | 0 | 0 |
+| **total** | | **7,622** | **210** | **209** | **1** | **0** |
+
+Recall (named / in truth) is low in absolute terms -- **2.8%** -- because
+the denominator is *every* function in a firmware, and the overwhelming
+majority of a Cortex-M firmware's text is the RTOS/HAL/application code no
+toolchain signature library was ever going to name (`libopencm3`, ChibiOS,
+NuttX and application logic itself). Precision is what this measurement was
+actually for, and it holds: **209 of 210 named functions were correct**, and
+the one exception is a documented, reproducible archive-level limitation
+rather than a false positive from an under-specified pattern.
+
+### Reproduction
+
+```bash
+export GLAURUNG_ARMTC=/nas4/data/binary-analysis/armtc/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi
+uv run python tools/harvest_armtc.py --toolchain-root "$GLAURUNG_ARMTC" \
+    --output ~/.cache/glaurung/system-libs/armtc-13.2.1/manifest.json
+uv run python tools/build_armtc_signatures.py \
+    --manifest ~/.cache/glaurung/system-libs/armtc-13.2.1/manifest.json \
+    --output ~/.cache/glaurung/system-libs/armtc-13.2.1/sigs
+uv run python tools/validate_cortex_m_signatures.py \
+    --sigs-dir ~/.cache/glaurung/system-libs/armtc-13.2.1/sigs
+```
+
+Not shipped in `data/sigs/`, same as every other harvested set on this page:
+keying, deduplication and a shipping policy at this scale are the wider
+program's open questions, not this measurement's.
