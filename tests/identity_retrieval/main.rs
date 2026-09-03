@@ -1067,6 +1067,384 @@ fn the_normaliser_is_not_a_regression_on_the_cross_optimisation_lane() {
 }
 
 // ---------------------------------------------------------------------------
+// L3 value fingerprints (`glaurung::identity::values`), plan item 12.
+//
+// The scheme runs the concrete interpreter, so this whole section is behind
+// the `exec` feature -- `cargo test --features python-ext` builds it and a
+// bare `cargo test` does not.
+//
+// Every constant below was read off a run before it was written down.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "exec")]
+fn values_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| run_values(scheme::ValueScheme::plain()))
+        .as_ref()
+}
+
+#[cfg(feature = "exec")]
+fn values_unfiltered_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| run_values(scheme::ValueScheme::unfiltered()))
+        .as_ref()
+}
+
+#[cfg(feature = "exec")]
+fn values_weighted_report() -> Option<&'static SchemeReport> {
+    use std::sync::OnceLock;
+    static REPORT: OnceLock<Option<SchemeReport>> = OnceLock::new();
+    REPORT
+        .get_or_init(|| run_values(scheme::ValueScheme::weighted()))
+        .as_ref()
+}
+
+/// Prime the scheme over the whole corpus (which fills its cache and, for the
+/// weighted configuration, its document-frequency table) and then score it.
+#[cfg(feature = "exec")]
+fn run_values(scheme: scheme::ValueScheme) -> Option<SchemeReport> {
+    let corpus = load()?;
+    scheme.prime(corpus.slices().flat_map(|slice| slice.samples.iter()));
+    let report = metrics::evaluate(&scheme, corpus, TASKS);
+    eprintln!(
+        "\n=== scheme {} -- {} ===",
+        report.scheme, report.description
+    );
+    eprintln!(
+        "extraction {:.2} us/function over {} samples",
+        report.extraction_us_per_function, report.extraction_samples
+    );
+    for result in &report.results {
+        eprintln!("{}", result.line());
+    }
+    if let Some(path) = report.write_json(&metrics::report_dir()) {
+        eprintln!("report: {}", path.display());
+    }
+    Some(report)
+}
+
+#[cfg(feature = "exec")]
+#[test]
+fn values_obey_the_similarity_axioms() {
+    let Some(corpus) = load() else { return };
+    let scheme = scheme::ValueScheme::plain();
+    let Some(slice) = corpus.slice("gcc", "O0") else {
+        return;
+    };
+    let mut checked = 0usize;
+    for (index, sample) in slice.samples.iter().take(120).enumerate() {
+        let Ok(left) = scheme.extract(sample) else {
+            continue;
+        };
+        let self_score = scheme.similarity(&left, &left);
+        assert!(
+            (self_score - 1.0).abs() < 1e-9,
+            "similarity(a, a) = {self_score} at sample {index}"
+        );
+        for other in slice.samples.iter().skip(index + 1).take(3) {
+            let Ok(right) = scheme.extract(other) else {
+                continue;
+            };
+            let forward = scheme.similarity(&left, &right);
+            let backward = scheme.similarity(&right, &left);
+            assert!(
+                (forward - backward).abs() < 1e-9,
+                "asymmetric at {index}: {forward} vs {backward}"
+            );
+            assert!(
+                (0.0..=1.0).contains(&forward),
+                "similarity out of range at {index}: {forward}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 50, "only {checked} pairs checked");
+    eprintln!("values axioms: {checked} pairs");
+}
+
+/// Bounded *execution* is the one thing in the identity ladder that could
+/// plausibly not be a pure function of the bytes, so this is checked over
+/// freshly built schemes rather than over one cache.
+#[cfg(feature = "exec")]
+#[test]
+fn values_extraction_is_deterministic() {
+    let Some(corpus) = load() else { return };
+    let Some(slice) = corpus.slice("gcc", "O2") else {
+        return;
+    };
+    let first = scheme::ValueScheme::plain();
+    let second = scheme::ValueScheme::plain();
+    let mut checked = 0usize;
+    for sample in slice.samples.iter().take(120) {
+        let (Ok(left), Ok(right)) = (first.extract(sample), second.extract(sample)) else {
+            continue;
+        };
+        assert_eq!(
+            left.digest, right.digest,
+            "values is not deterministic on {}::{}",
+            sample.fixture, sample.name
+        );
+        checked += 1;
+    }
+    assert!(checked >= 50, "only {checked} samples checked");
+}
+
+/// The whole sweep, no ratchet in the way: every configuration, the cost, the
+/// budget-exhaustion fraction, and the filter ablation side by side.
+///
+/// `--ignored` because it extracts the corpus once per configuration, which is
+/// minutes rather than seconds. This is the command that produces the table in
+/// `docs/reference/function-identity-values.md`.
+#[cfg(feature = "exec")]
+#[test]
+#[ignore = "extracts the corpus once per configuration; minutes"]
+fn values_full_sweep() {
+    use glaurung::identity::values::ValueSettings;
+
+    let Some(corpus) = load() else { return };
+    let base = ValueSettings::default();
+    let configurations: Vec<(&str, ValueSettings, bool)> = vec![
+        ("values", base, false),
+        ("values-multiset", base, true),
+        (
+            "values-unfiltered",
+            ValueSettings {
+                filter: false,
+                ..base
+            },
+            false,
+        ),
+        (
+            "values-nobranch",
+            ValueSettings {
+                branch_conditions: false,
+                ..base
+            },
+            false,
+        ),
+        (
+            "values-roleseeds",
+            ValueSettings {
+                role_seeds: true,
+                ..base
+            },
+            false,
+        ),
+        ("values-1seed", ValueSettings { seeds: 1, ..base }, false),
+        ("values-5seeds", ValueSettings { seeds: 5, ..base }, false),
+        (
+            "values-cap1",
+            ValueSettings {
+                site_cap: 1,
+                ..base
+            },
+            false,
+        ),
+    ];
+
+    for (name, settings, use_counts) in configurations {
+        let scheme = scheme::ValueScheme::tuned(settings, name, use_counts);
+        scheme.prime(corpus.slices().flat_map(|slice| slice.samples.iter()));
+        let report = metrics::evaluate(&scheme, corpus, TASKS);
+        eprintln!("\n=== {name} ({}) ===", report.description);
+        eprintln!(
+            "extraction {:.2} us/function over {} samples, profile {}",
+            report.extraction_us_per_function, report.extraction_samples, report.profile
+        );
+        eprintln!("| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | R@5 | R@10 | R@50 |");
+        eprintln!("|---|---|---|---|---|---|---|---|---|---|");
+        for result in &report.results {
+            eprintln!(
+                "| {} | {} | {} | {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+                result.task_name,
+                result.conditions,
+                result.scored,
+                result.global_pool_size,
+                result.auc,
+                result.mrr10,
+                result.recall(1),
+                result.recall(5),
+                result.recall(10),
+                result.recall(50),
+            );
+        }
+        report.write_json(&metrics::report_dir());
+    }
+
+    // Cost and coverage, once, under the default settings, on a scheme with a
+    // cold cache: this is the number that says what an extraction costs, and
+    // the one in the reports above is a cache hit.
+    let scheme = scheme::ValueScheme::plain();
+    let started = std::time::Instant::now();
+    let (measured, mean_steps, budget_hits, starved) =
+        scheme.coverage(corpus.slices().flat_map(|slice| slice.samples.iter()));
+    let elapsed = started.elapsed();
+    eprintln!(
+        "\ncoverage: {measured} functions, {mean_steps:.0} instructions retired per function \
+         (all seeds); {budget_hits:.4} of runs hit the instruction budget, {starved:.4} of \
+         functions hit it before producing any value; {:.0} us/function cold, over whole images",
+        elapsed.as_secs_f64() * 1e6 / measured.max(1) as f64
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Measured ratchets for the value fingerprints.
+//
+// Read off a RELEASE run on 2026-09-03 over the 1,787-function fixture corpus,
+// with the same filters, the same seeded 100-negative draw and the same
+// pessimistic tie rule as every other scheme in this file. Sampled pool 101
+// (chance R@1 0.0099) throughout.
+// ---------------------------------------------------------------------------
+
+/// XO (gcc O0 -> gcc O2) AUC.
+///
+/// **Measured: 0.9059** over 389 scored queries, global pool 410. CTPH reads
+/// 0.5015 on this lane, `structural` 0.7536 and the plain CFR 0.7569.
+#[cfg(feature = "exec")]
+const VALUES_XO_GCC_MIN_AUC: f64 = 0.9058;
+/// XO (gcc O0 -> gcc O2) Recall@1, 100 sampled negatives.
+///
+/// **Measured: 0.5219** (203 of 389) against 0.0099 chance -- and against the
+/// CFR's 0.1799 and the structural invariants' 0.1183 on the identical rows.
+/// This is the cross-optimisation lane, the one the protocol document names as
+/// the hardest of the four the in-house corpus expresses, and the value
+/// fingerprint retrieves the right function first on more than half of it.
+#[cfg(feature = "exec")]
+const VALUES_XO_GCC_MIN_RECALL_AT_1: f64 = 0.5218;
+/// XO (gcc O0 -> gcc O2) MRR10. **Measured: 0.6274**, against the CFR's 0.2543
+/// and FunctionSimSearch's published 0.26 ceiling for token representations.
+#[cfg(feature = "exec")]
+const VALUES_XO_GCC_MIN_MRR10: f64 = 0.6273;
+/// XC (gcc O2 -> clang O2) AUC. **Measured: 0.9056** over 357 queries, against
+/// the CFR's 0.8921.
+#[cfg(feature = "exec")]
+const VALUES_XC_O2_MIN_AUC: f64 = 0.9055;
+/// XM (gcc O0 -> clang O2) AUC.
+///
+/// **Measured: 0.8518** over 365 queries: both compilation variables free, the
+/// hardest task this corpus expresses. CTPH reads 0.5025, `structural` 0.7026,
+/// the CFR 0.7296.
+#[cfg(feature = "exec")]
+const VALUES_XM_MIN_AUC: f64 = 0.8517;
+/// XM Recall@1. **Measured: 0.4055** (148 of 365).
+#[cfg(feature = "exec")]
+const VALUES_XM_MIN_RECALL_AT_1: f64 = 0.4054;
+
+#[cfg(feature = "exec")]
+#[test]
+fn values_retrieval_ratchets() {
+    let Some(report) = values_report() else {
+        return;
+    };
+
+    let xo = report.result("XO-gcc").expect("XO-gcc ran");
+    assert_ratchet(
+        "values XO-gcc AUC",
+        xo.auc,
+        VALUES_XO_GCC_MIN_AUC,
+        &xo.line(),
+    );
+    assert_ratchet(
+        "values XO-gcc Recall@1",
+        xo.recall(1),
+        VALUES_XO_GCC_MIN_RECALL_AT_1,
+        &xo.line(),
+    );
+    assert_ratchet(
+        "values XO-gcc MRR10",
+        xo.mrr10,
+        VALUES_XO_GCC_MIN_MRR10,
+        &xo.line(),
+    );
+
+    let xc = report.result("XC-O2").expect("XC-O2 ran");
+    assert_ratchet("values XC-O2 AUC", xc.auc, VALUES_XC_O2_MIN_AUC, &xc.line());
+
+    let xm = report.result("XM").expect("XM ran");
+    assert_ratchet("values XM AUC", xm.auc, VALUES_XM_MIN_AUC, &xm.line());
+    assert_ratchet(
+        "values XM Recall@1",
+        xm.recall(1),
+        VALUES_XM_MIN_RECALL_AT_1,
+        &xm.line(),
+    );
+}
+
+/// The document-frequency weighting is measured, not assumed.
+///
+/// vSim weights every element by `1 / ln(Occ(v) + 1)` and its ablation reports
+/// the weights as worth having. Ours is scored beside the unweighted lane
+/// rather than adopted: the weighting is only as good as the corpus the table
+/// came from, and this corpus is 1,787 functions.
+#[cfg(feature = "exec")]
+#[test]
+fn the_corpus_weighting_is_reported_beside_the_unweighted_lane() {
+    let (Some(plain), Some(weighted)) = (values_report(), values_weighted_report()) else {
+        return;
+    };
+    eprintln!("\nvalues vs values-weighted, in-house corpus");
+    eprintln!(
+        "{:<8} {:>8} {:>8}   {:>8} {:>8}   {:>8} {:>8}   {:>7}",
+        "task", "AUC", "AUC'", "MRR10", "MRR10'", "R@1", "R@1'", "scored"
+    );
+    for result in &plain.results {
+        let Some(other) = weighted.result(&result.task_name) else {
+            continue;
+        };
+        eprintln!(
+            "{:<8} {:8.4} {:8.4}   {:8.4} {:8.4}   {:8.4} {:8.4}   {:>7}",
+            result.task_name,
+            result.auc,
+            other.auc,
+            result.mrr10,
+            other.mrr10,
+            result.recall(1),
+            other.recall(1),
+            result.scored,
+        );
+    }
+}
+
+/// The ablation vSim's Table IV reports, on our corpus and our protocol.
+#[cfg(feature = "exec")]
+#[test]
+fn the_filter_is_worth_measuring_and_the_delta_is_recorded() {
+    let (Some(filtered), Some(unfiltered)) = (values_report(), values_unfiltered_report()) else {
+        return;
+    };
+    eprintln!("\nvalues vs values-unfiltered, in-house corpus");
+    eprintln!(
+        "{:<8} {:>8} {:>8}   {:>8} {:>8}   {:>8} {:>8}   {:>7}",
+        "task", "AUC", "AUC'", "MRR10", "MRR10'", "R@1", "R@1'", "scored"
+    );
+    for result in &filtered.results {
+        let Some(other) = unfiltered.result(&result.task_name) else {
+            continue;
+        };
+        eprintln!(
+            "{:<8} {:8.4} {:8.4}   {:8.4} {:8.4}   {:8.4} {:8.4}   {:>7}{}",
+            result.task_name,
+            result.auc,
+            other.auc,
+            result.mrr10,
+            other.mrr10,
+            result.recall(1),
+            other.recall(1),
+            result.scored,
+            if result.underpowered() {
+                "  (underpowered)"
+            } else {
+                ""
+            }
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Cisco Talos Dataset-1: the XA (cross-architecture) and XB (cross-bitness)
 // lanes, and CTPH retro-scored on them.
 //
@@ -1827,5 +2205,89 @@ fn cisco_cfr_xo_xc_xm() {
             result.task_name,
             result.extraction_failures
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Value fingerprints on Cisco Dataset-1.
+//
+// x86-64 lanes only, and that is a property of the scheme rather than of the
+// corpus: `glaurung::identity::values` drives the concrete interpreter, whose
+// register file is x86-64 (`glaurung::exec::Machine::new`). Running an ARM64
+// or a MIPS function through it would not fail loudly -- it would read every
+// register as zero and produce a fingerprint that looked like a measurement --
+// so `fingerprints_for_path` refuses the architecture instead, and the XB,
+// XA-* and XA+XO lanes fail extraction on every pool sample. They are asserted
+// to fail, below, rather than quietly omitted.
+// ---------------------------------------------------------------------------
+
+/// The Dataset-1 tasks whose query AND pool are both x86-64.
+#[cfg(feature = "exec")]
+const CISCO_X86_64_TASKS: &[&str] = &["XO", "XC", "XM"];
+
+/// `cargo test --release --features exec --test identity_retrieval -- \
+///   --ignored --nocapture cisco_values`
+#[cfg(feature = "exec")]
+#[test]
+#[ignore = "Dataset-1 values: runs the interpreter over every function of every image. Minutes. GLAURUNG_CISCO_CORPUS must be set."]
+fn cisco_values_x86_64_lanes() {
+    let Some(corpus) = cisco::corpus() else {
+        return;
+    };
+    let scheme = scheme::ValueScheme::plain();
+    let report = cisco::evaluate(&scheme, corpus, cisco::TASKS);
+    eprintln!(
+        "\n=== scheme {} on Cisco Dataset-1 -- {} ===",
+        report.scheme, report.description
+    );
+    eprintln!(
+        "extraction {:.2} us/function over {} samples ({} profile)",
+        report.extraction_us_per_function, report.extraction_samples, report.profile
+    );
+    eprintln!(
+        "| Task | Free variables | Scored | Global pool | AUC | MRR10 | R@1 | \
+         R@5 | R@10 | Extract fail |"
+    );
+    eprintln!("|---|---|---|---|---|---|---|---|---|---|");
+    for result in &report.results {
+        eprintln!(
+            "| {} | {} | {} | {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {} |",
+            result.task_name,
+            result.conditions,
+            result.scored,
+            result.global_pool_size,
+            result.auc,
+            result.mrr10,
+            result.recall(1),
+            result.recall(5),
+            result.recall(10),
+            result.extraction_failures,
+        );
+    }
+    if let Some(path) = report.write_json(&metrics::report_dir()) {
+        eprintln!("report: {}", path.display());
+    }
+
+    for result in &report.results {
+        if CISCO_X86_64_TASKS.contains(&result.task_name.as_str()) {
+            assert!(
+                result.scored > 0,
+                "{}: nothing scored on an x86-64 lane. Either the twin join is \
+                 broken or the scheme refused every sample ({} extraction \
+                 failures).",
+                result.task_name,
+                result.extraction_failures
+            );
+        } else {
+            // The cross-architecture lanes must fail LOUDLY: an unsupported
+            // architecture that scored anything would mean the interpreter had
+            // run x86-64 semantics over ARM or MIPS bytes.
+            assert_eq!(
+                result.scored, 0,
+                "{} scored {} queries, but its pool is not x86-64 and this \
+                 scheme cannot fingerprint it",
+                result.task_name, result.scored
+            );
+        }
     }
 }
