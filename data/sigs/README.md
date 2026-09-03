@@ -72,10 +72,49 @@ v1 behaviour, so an old file still loads and still matches exactly.
 Variant bytes hold whatever the builder happened to see and are never compared;
 do not read them as library content.
 
+## The `gsig/1` container
+
+`glaurung-base.x86_64.flirt.json` above is the interchange form: reviewable,
+diffable, what `build_flirt_library.py` writes and what a reviewer reads. It
+is not what a large corpus ships in. `gsig/1` (`src/flirt/gsig/`) is a chunked
+binary container carrying the same content -- interned strings, bitmap masks,
+64 KiB independently zstd-compressed sections -- at roughly 13x smaller over
+a 561-library, 222,339-signature harvested set (1,326 bytes/signature JSON
+against 101 bytes/signature `gsig`). See the "The gsig/1 container" section of
+[`docs/reference/function-signature-libraries.md`](../../docs/reference/function-signature-libraries.md)
+for the full measurements and the format layout.
+
+The matcher reads either format transparently, dispatching on the file's
+first four bytes (`GSIG` or `{`/whitespace), so nothing here needs to change
+to work with a `.gsig` library. Convert either way with:
+
+```bash
+uv run python -m glaurung.tools.sig_convert to-gsig \
+    data/sigs/glaurung-base.x86_64.flirt.json \
+    data/sigs/glaurung-base.x86_64.flirt.gsig
+
+uv run python -m glaurung.tools.sig_convert info \
+    data/sigs/glaurung-base.x86_64.flirt.gsig
+```
+
+Only the JSON form is shipped here today: this library is 16 signatures, far
+below the scale where the container's size advantage matters, and keeping one
+reviewable file per shipped library is simpler until the distribution lane
+(manifest, minisign, client cache) lands.
+
 ## Where the code is
 
-- `src/flirt/mod.rs` -- the loader and matcher.
+- `src/flirt/mod.rs` -- the loader and matcher; `FlirtLibrary::from_path`
+  dispatches between JSON and `gsig/1`.
 - `src/flirt/archive.rs` -- deriving masks, CRCs and references from a `.a`.
 - `src/flirt/crc16.rs` -- IDA's exact CRC16 variant.
-- `python/glaurung/tools/build_flirt_library.py` -- the builder CLI.
+- `src/flirt/gsig/` -- the `gsig/1` container: `wire.rs` (the on-disk record
+  shapes), `writer.rs`, `reader.rs`, `codec.rs` (zstd via `ruzstd`), `convert.rs`
+  (lossless JSON conversion).
+- `python/glaurung/tools/build_flirt_library.py` -- the builder CLI
+  (`--format gsig` writes a container directly).
+- `python/glaurung/tools/sig_convert.py` -- convert, describe, and round-trip
+  a library between the two formats.
 - `tests/flirt_signature_matching.rs` -- the measurements quoted above.
+- `tests/flirt_gsig_golden.rs`, `tests/fixtures/flirt/gsig/` -- the `gsig/1`
+  golden-hash fixture.
