@@ -31,14 +31,15 @@
 use std::fmt::Write;
 
 use crate::ir::call_contracts::CallSiteSpec;
-use crate::ir::types::VReg;
+use crate::ir::types::{BinOp, VReg};
 
 use super::super::{
-    dec_plan, declared_reg_ctype, indent, is_promoted_local, sanitize_c_ident, sanitize_comment,
-    store_pointee_ctype, write_unit_step, DeclarationPlan, Expr, Stmt,
+    dec_global_name, dec_global_scalar_width, dec_plan, declared_reg_ctype, direct_global_address,
+    indent, is_promoted_local, sanitize_c_ident, sanitize_comment, store_pointee_ctype,
+    take_dec_inline_scalar_decl, write_unit_step, DeclarationPlan, Expr, Stmt,
 };
 use super::{
-    call_prototype_for_render, dec_is_stack_object, dec_is_wide_local,
+    call_prototype_for_render, dec_is_stack_object, dec_is_wide_local, expr_machine_width,
     expression_has_pointer_representation, float_rendered_width, renderable_field_access,
     try_array_index, write_array_access_dec, write_call_dec, write_expr_dec,
     write_field_access_dec, write_float_expr_dec, write_reg_lvalue_dec,
@@ -72,9 +73,149 @@ fn write_call_result_conversion_dec(
 }
 
 fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
+    if let VReg::Phys(name) = dst {
+        if let Some(c_type) = take_dec_inline_scalar_decl(&sanitize_c_ident(name)) {
+            let _ = write!(out, "{c_type} ");
+        }
+    }
     write_reg_lvalue_dec(dst, out);
     out.push_str(" = ");
     write_assignment_value_dec(dst, src, out);
+}
+
+/// Print a condition inside syntax that already supplies its own parentheses.
+///
+/// `Expr::Cmp` is parenthesized by the general expression renderer because it
+/// may appear beneath another operator. In `if (...)`, `while (...)`, and the
+/// condition field of `for (...)`, that outer pair is already present, so one
+/// layer is redundant. Render first to preserve every specialized comparison
+/// spelling, then remove exactly that known outer layer.
+fn write_control_condition_dec(condition: &Expr, out: &mut String) {
+    if !matches!(condition, Expr::Cmp { .. }) {
+        write_expr_dec(condition, out);
+        return;
+    }
+    let mut rendered = String::new();
+    write_expr_dec(condition, &mut rendered);
+    if let Some(inner) = rendered
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        out.push_str(inner);
+    } else {
+        out.push_str(&rendered);
+    }
+}
+
+/// Prefer the source-level compound assignment for a proven 32-bit update.
+///
+/// The x86 lifter exposes both halves of `add r32, r32` through explicit
+/// unsigned 32-bit views. When the destination is already declared `int`, a
+/// simple lvalue compound assignment performs the same final conversion while
+/// stating the source operation directly. Keep every other width, operator,
+/// and destination on the representation-preserving assignment path.
+fn write_int_compound_assignment_dec(dst: &VReg, src: &Expr, out: &mut String) -> bool {
+    fn strip_casts(mut value: &Expr) -> (&Expr, u8) {
+        let mut widest_cast = 0;
+        while let Expr::Cast { width, expr, .. } = value {
+            widest_cast = widest_cast.max(*width);
+            value = expr;
+        }
+        (value, widest_cast)
+    }
+
+    let mut src = src;
+    while let Expr::Cast {
+        width: 4 | 8, expr, ..
+    } = src
+    {
+        src = expr;
+    }
+    let Expr::Bin { op, lhs, rhs } = src else {
+        return false;
+    };
+    let symbol = match op {
+        BinOp::Add => "+=",
+        BinOp::Sub => "-=",
+        _ => return false,
+    };
+    if !matches!(
+        declared_reg_ctype(dst).as_str(),
+        "int" | "signed int" | "int32_t"
+    ) {
+        return false;
+    }
+
+    let (lhs_value, lhs_widest_cast) = strip_casts(lhs);
+    let (rhs_value, rhs_widest_cast) = strip_casts(rhs);
+    let (other, self_widest_cast) = if matches!(lhs_value, Expr::Reg(read) if read == dst) {
+        (rhs.as_ref(), lhs_widest_cast)
+    } else if *op == BinOp::Add && matches!(rhs_value, Expr::Reg(read) if read == dst) {
+        // Integer addition is commutative. AArch64 GCC commonly materialises
+        // `strlen(...) + sum` where x86 emits `sum + strlen(...)`; both carry
+        // the same destination-read proof for `sum += strlen(...)`.
+        (lhs.as_ref(), rhs_widest_cast)
+    } else {
+        return false;
+    };
+
+    // `int sum; sum = (long)sum + size_t_value` is precisely `sum +=
+    // size_t_value`: C applies the same usual arithmetic conversions and then
+    // converts the result back to the lvalue type. A widening cast on only the
+    // left operand is removable only when the right operand proves arithmetic
+    // at that same width. Retain the established GCC narrow-view shape too.
+    let other = match other {
+        Expr::Cast {
+            signed: false,
+            width: 4,
+            expr,
+        } => expr.as_ref(),
+        other if self_widest_cast <= 4 => other,
+        other if expr_machine_width(other).is_some_and(|width| width >= self_widest_cast) => other,
+        _ => return false,
+    };
+    write_reg_lvalue_dec(dst, out);
+    let _ = write!(out, " {symbol} ");
+    write_expr_dec(other, out);
+    true
+}
+
+/// Recover `global++`/`global--` when both sides name the same exact scalar
+/// object and the only operation is a unit delta. Casts here are register-view
+/// residue around the four-byte load; the scalar declaration already fixes the
+/// operation's storage width.
+fn write_global_unit_step_dec(address: u64, src: &Expr, out: &mut String) -> bool {
+    fn without_casts(mut expression: &Expr) -> &Expr {
+        while let Expr::Cast { expr, .. } = expression {
+            expression = expr;
+        }
+        expression
+    }
+
+    let Expr::Bin { op, lhs, rhs } = without_casts(src) else {
+        return false;
+    };
+    let Expr::Deref {
+        addr,
+        size: loaded_width,
+    } = without_casts(lhs)
+    else {
+        return false;
+    };
+    if direct_global_address(addr) != Some(address)
+        || dec_global_scalar_width(address) != Some(*loaded_width)
+        || !matches!(without_casts(rhs), Expr::Const(1))
+    {
+        return false;
+    }
+    let suffix = match op {
+        BinOp::Add => "++",
+        BinOp::Sub => "--",
+        _ => return false,
+    };
+    out.push_str(&dec_global_name(address));
+    out.push_str(suffix);
+    true
 }
 
 /// Render a value at an assignment boundary using both declarations.
@@ -162,11 +303,24 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             // Keep that typed middle-layer node visible in benchmark C instead
             // of inventing statement-level CFG or an eager initializer.
             indent(out, level);
-            write_assign_dec(dst, src, out);
+            if !write_int_compound_assignment_dec(dst, src, out) {
+                write_assign_dec(dst, src, out);
+            }
             out.push_str(";\n");
         }
         Stmt::Store { addr, src, size } => {
             indent(out, level);
+            if let Some(address) = direct_global_address(addr) {
+                if dec_global_scalar_width(address) == Some(*size) {
+                    if !write_global_unit_step_dec(address, src, out) {
+                        out.push_str(&dec_global_name(address));
+                        out.push_str(" = ");
+                        write_store_value_dec(src, *size, out);
+                    }
+                    out.push_str(";\n");
+                    return;
+                }
+            }
             // A 128-bit machine move is a complete load followed by a complete
             // store. The scalar AST cannot name that value without narrowing it
             // to `long`, so preserve the memory-to-memory form with an
@@ -212,9 +366,15 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             // write: emit `local_0 = src` rather than `*(long *)(local_0) = src`.
             if let Expr::Reg(VReg::Phys(name)) = addr {
                 if is_promoted_local(name) && !dec_is_stack_object(name) {
-                    write_reg_lvalue_dec(&VReg::phys(name), out);
-                    out.push_str(" = ");
-                    write_assignment_value_dec(&VReg::phys(name), src, out);
+                    let destination = VReg::phys(name);
+                    if !write_int_compound_assignment_dec(&destination, src, out) {
+                        if let Some(c_type) = take_dec_inline_scalar_decl(&sanitize_c_ident(name)) {
+                            let _ = write!(out, "{c_type} ");
+                        }
+                        write_reg_lvalue_dec(&destination, out);
+                        out.push_str(" = ");
+                        write_assignment_value_dec(&destination, src, out);
+                    }
                     out.push_str(";\n");
                     return;
                 }
@@ -372,7 +532,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
         } => {
             indent(out, level);
             out.push_str("if (");
-            write_expr_dec(cond, out);
+            write_control_condition_dec(cond, out);
             out.push_str(") {\n");
             for s in then_body {
                 write_stmt_dec(s, out, level + 1);
@@ -392,7 +552,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
         Stmt::While { cond, body } => {
             indent(out, level);
             out.push_str("while (");
-            write_expr_dec(cond, out);
+            write_control_condition_dec(cond, out);
             out.push_str(") {\n");
             for s in body {
                 write_stmt_dec(s, out, level + 1);
@@ -441,7 +601,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             out.push_str("for (");
             write_for_clause_dec(init, out, false);
             out.push_str("; ");
-            write_expr_dec(cond, out);
+            write_control_condition_dec(cond, out);
             out.push_str("; ");
             write_for_clause_dec(step, out, true);
             out.push_str(") {\n");
@@ -459,7 +619,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             }
             indent(out, level);
             out.push_str("} while (");
-            write_expr_dec(cond, out);
+            write_control_condition_dec(cond, out);
             out.push_str(");\n");
         }
         Stmt::Switch {
@@ -557,6 +717,13 @@ fn write_for_clause_dec(s: &Stmt, out: &mut String, prefer_increment: bool) {
     };
     if prefer_increment && write_unit_step(dst, src, out, write_reg_lvalue_dec, true) {
         return;
+    }
+    if !prefer_increment {
+        if let VReg::Phys(name) = dst {
+            if let Some(c_type) = take_dec_inline_scalar_decl(&sanitize_c_ident(name)) {
+                let _ = write!(out, "{c_type} ");
+            }
+        }
     }
     write_reg_lvalue_dec(dst, out);
     out.push_str(" = ");

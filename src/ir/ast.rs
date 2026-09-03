@@ -81,7 +81,9 @@ pub use decbench_render::{
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
 pub use lower_region::lower;
-pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
+pub(crate) use prepare::{
+    drop_machine_frame_comments, prepare_for_decbench_with_output_and_protected_locals,
+};
 pub use prepare::{
     prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,
 };
@@ -1366,6 +1368,13 @@ thread_local! {
     static DEC_PLAN: std::cell::RefCell<std::rc::Rc<DeclarationPlan>> =
         std::cell::RefCell::new(std::rc::Rc::new(DeclarationPlan::default()));
 
+    /// Scalar locals whose first top-level definition is rendered as their C
+    /// declaration initializer. The value is the exact type selected by
+    /// `DeclarationPlan`; statement rendering only consumes this placement
+    /// decision and never guesses a type independently.
+    static DEC_INLINE_SCALAR_DECLS: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+
     /// Source-renamed promoted locals for the current render. Semantic passes
     /// retain their offset-bearing internal names; this presentation-only set
     /// preserves scalar assignment semantics after the final DWARF rename.
@@ -1409,6 +1418,18 @@ thread_local! {
     static DEC_GLOBAL_ADDRS: std::cell::RefCell<std::collections::BTreeSet<u64>> =
         std::cell::RefCell::new(std::collections::BTreeSet::new());
 
+    /// Exact symbol-backed scalar objects, keyed by image VA and carrying
+    /// their byte width. Objects without matching symbol/access evidence stay
+    /// byte arrays.
+    static DEC_GLOBAL_SCALARS: std::cell::RefCell<std::collections::BTreeMap<u64, u8>> =
+        std::cell::RefCell::new(std::collections::BTreeMap::new());
+
+    /// Address-backed variables whose DWARF DIE is lexically nested under the
+    /// function being rendered. Unlike ordinary image objects, these belong in
+    /// the function body as C `static` locals.
+    static DEC_FUNCTION_STATIC_LOCALS: std::cell::RefCell<std::collections::BTreeMap<u64, crate::debug::dwarf::DwarfStaticLocal>> =
+        std::cell::RefCell::new(std::collections::BTreeMap::new());
+
     /// C identifiers whose recovered value occupies all 16 bytes of a vector
     /// register. They render as byte-array temporaries, never scalar `long`s.
     static DEC_WIDE_LOCALS: std::cell::RefCell<std::collections::BTreeSet<String>> =
@@ -1443,9 +1464,65 @@ pub fn clear_dec_global_names() {
 /// spelling. See [`crate::ir::data_symbols`] for why the match is exact and
 /// never a nearest-symbol search.
 fn dec_global_name(address: u64) -> String {
+    if let Some(name) = DEC_FUNCTION_STATIC_LOCALS.with(|locals| {
+        locals
+            .borrow()
+            .get(&address)
+            .map(|local| sanitize_c_ident(&local.source_name))
+    }) {
+        return name;
+    }
     DEC_GLOBAL_NAMES
         .with(|names| names.borrow().name_for(address).map(str::to_string))
         .unwrap_or_else(|| format!("glaurung_global_{address:x}"))
+}
+
+/// Install authoritative function-local static objects for one render.
+pub fn install_dec_function_static_locals(
+    locals: impl IntoIterator<Item = crate::debug::dwarf::DwarfStaticLocal>,
+) {
+    DEC_FUNCTION_STATIC_LOCALS.with(|installed| {
+        *installed.borrow_mut() = locals
+            .into_iter()
+            .map(|local| (local.address, local))
+            .collect();
+    });
+}
+
+/// Clear the function-local static-object environment after rendering.
+pub fn clear_dec_function_static_locals() {
+    DEC_FUNCTION_STATIC_LOCALS.with(|locals| locals.borrow_mut().clear());
+}
+
+fn dec_global_symbol_size(address: u64) -> Option<u64> {
+    DEC_GLOBAL_NAMES.with(|names| names.borrow().size_for(address))
+}
+
+fn dec_global_initial_scalar(address: u64) -> Option<(u8, u64)> {
+    DEC_GLOBAL_NAMES.with(|names| names.borrow().initial_scalar_for(address))
+}
+
+fn inferred_function_static_local(
+    address: u64,
+    function: &str,
+) -> Option<crate::debug::dwarf::DwarfStaticLocal> {
+    DEC_GLOBAL_NAMES.with(|names| {
+        let names = names.borrow();
+        let size = names.size_for(address)?;
+        let width = u8::try_from(size)
+            .ok()
+            .filter(|width| [1, 2, 4, 8].contains(width))?;
+        Some(crate::debug::dwarf::DwarfStaticLocal {
+            address,
+            byte_size: u16::from(width),
+            source_name: names.function_static_name_for(address, function)?,
+            c_type: width_ctype(width).to_string(),
+        })
+    })
+}
+
+fn dec_global_scalar_width(address: u64) -> Option<u8> {
+    DEC_GLOBAL_SCALARS.with(|objects| objects.borrow().get(&address).copied())
 }
 
 /// The original-image identity of a direct static-storage access.
@@ -1489,13 +1566,15 @@ fn note_address_taken_global(address: u64, ids: &mut DecIdents) {
 
 /// The declared byte length of the portable object standing in for a VA.
 ///
-/// Never below 16 and always a multiple of 16, matching the `aligned(16)`
-/// attribute on the declaration. The floor is also what keeps every object that
-/// was already materialised — all of them proved by an access of at most 16
-/// bytes — declared at exactly the `[16]` it is today, so widening the map to
-/// storage-derived extents changes only the newly admitted address-taken sites.
+/// This is the widest access the function proved, not an alignment-rounded
+/// allocation. Alignment and extent are independent properties in C: a
+/// four-byte object may be 16-byte aligned without becoming a 16-byte object.
+/// Inflating every scalar to `[16]` loses a useful recovered fact (and made a
+/// four-byte function-local static look like an unknown SIMD buffer). The
+/// collector only records positive-width loads and stores, but retain a
+/// one-byte floor defensively for hand-built ASTs.
 fn dec_global_object_bytes(required: u32) -> u32 {
-    required.max(16).next_multiple_of(16)
+    required.max(1)
 }
 
 /// Ask the installed declaration plan a question.
@@ -1505,6 +1584,10 @@ fn dec_global_object_bytes(required: u32) -> u32 {
 /// under it consults a declared width) share one borrow safely.
 fn dec_plan<R>(question: impl FnOnce(&DeclarationPlan) -> R) -> R {
     DEC_PLAN.with(|plan| question(&plan.borrow()))
+}
+
+fn take_dec_inline_scalar_decl(name: &str) -> Option<String> {
+    DEC_INLINE_SCALAR_DECLS.with(|declarations| declarations.borrow_mut().remove(name))
 }
 
 fn dec_ptr_arg_type(name: &str) -> Option<String> {
@@ -1582,6 +1665,7 @@ fn expr_machine_width(e: &Expr) -> Option<u8> {
         Expr::Const(_) => None,
         Expr::Select { width, .. } => Some(*width),
         Expr::Cast { width, .. } => Some(*width).filter(|w| matches!(w, 1 | 2 | 4 | 8)),
+        Expr::Call { result_width, .. } => *result_width,
         Expr::Bin { op, lhs, rhs } if is_width_preserving_arith(*op) => {
             let lw = expr_machine_width(lhs);
             let rw = expr_machine_width(rhs);
@@ -3289,9 +3373,196 @@ function f @ 0x1000 {
             .1;
 
         assert!(
-            body.contains("extern unsigned char glaurung_global_4024[16];"),
+            body.contains("extern unsigned char glaurung_global_4024[4];"),
             "the sliced function body must declare the object it reads:\n{rendered}"
         );
+    }
+
+    /// An exact sized OBJECT symbol plus an equal-width access proves a scalar
+    /// C object. This is the ordinary function-local-static shape in unstripped
+    /// GCC/Clang output; retaining the byte-array fallback here would discard
+    /// both independent facts immediately before rendering.
+    #[test]
+    fn decbench_exact_sized_global_renders_as_a_scalar_object() {
+        let function = Function {
+            name: "increment_counter".to_string(),
+            entry_va: 0x1150,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Addr(0x4024),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Deref {
+                            addr: Box::new(Expr::Addr(0x4024)),
+                            size: 4,
+                        }),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "printf".to_string(),
+                    },
+                    args: vec![
+                        Expr::StringLit {
+                            value: "%d".to_string(),
+                        },
+                        Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Deref {
+                                    addr: Box::new(Expr::Addr(0x4024)),
+                                    size: 4,
+                                }),
+                            }),
+                        },
+                    ],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::Addr(0x4024)),
+                        size: 4,
+                    }),
+                },
+            ],
+        };
+        install_dec_global_names(crate::ir::data_symbols::DataSymbols::from_entries([(
+            0x4024u64,
+            4u64,
+            "increment_counter.counter",
+        )]));
+
+        let rendered = render_decbench(&function);
+        clear_dec_global_names();
+
+        assert!(
+            rendered.contains("static int increment_counter_counter;"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("increment_counter_counter++;"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("return increment_counter_counter;"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("printf(\"%d\", increment_counter_counter);"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("unsigned char"), "{rendered}");
+    }
+
+    #[test]
+    fn dwarf_owned_static_object_renders_in_its_function_scope() {
+        let function = Function {
+            name: "counter".to_string(),
+            entry_va: 0x1150,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Addr(0x4024),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Deref {
+                            addr: Box::new(Expr::Addr(0x4024)),
+                            size: 4,
+                        }),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                    size: 4,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut symbols = crate::ir::data_symbols::DataSymbols::from_entries([(
+            0x4024u64,
+            4u64,
+            "counter.value",
+        )]);
+        symbols.set_initial_scalar_for_test(0x4024, 4, 100);
+        install_dec_global_names(symbols);
+        install_dec_function_static_locals([crate::debug::dwarf::DwarfStaticLocal {
+            address: 0x4024,
+            byte_size: 4,
+            source_name: "value".to_string(),
+            c_type: "int".to_string(),
+        }]);
+
+        let rendered = render_decbench_typed_with_output(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+        );
+        clear_dec_function_static_locals();
+        clear_dec_global_names();
+
+        assert!(
+            rendered.contains("    static int value = 100;"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("    value++;"), "{rendered}");
+        assert!(!rendered.contains("extern int value;"), "{rendered}");
+        assert!(
+            !rendered.contains("static int counter_value;"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn compiler_scoped_data_symbol_renders_as_one_function_static_identity() {
+        let function = Function {
+            name: "static_function".to_string(),
+            entry_va: 0x1200,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Addr(0x4040),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Deref {
+                            addr: Box::new(Expr::Addr(0x4040)),
+                            size: 4,
+                        }),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                    size: 4,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        install_dec_global_names(crate::ir::data_symbols::DataSymbols::from_entries([(
+            0x4040u64,
+            4u64,
+            "static_function.static_var",
+        )]));
+
+        let rendered = render_decbench_typed_with_output(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+        );
+        clear_dec_function_static_locals();
+        clear_dec_global_names();
+
+        assert!(
+            rendered.contains("    static int static_var;"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("    static_var++;"), "{rendered}");
+        assert!(
+            !rendered.contains("static_function_static_var"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("extern int static_var"), "{rendered}");
     }
 
     /// A direct image address that became a portable object now renders as a C
@@ -3773,8 +4044,12 @@ function f @ 0x1000 {
         );
         assert_eq!(
             prepared.body.last(),
-            Some(&Stmt::Return { value: None }),
-            "a void prototype must erase the incidental machine output"
+            Some(&Stmt::Store {
+                addr: Expr::Const(0x4000),
+                src: Expr::Const(7),
+                size: 4,
+            }),
+            "a void prototype must erase the incidental machine output and terminal machine return"
         );
         let text = render_decbench_typed_with_output(
             &prepared,
@@ -3783,11 +4058,52 @@ function f @ 0x1000 {
             crate::ir::types_recover::RecoveredOutputKind::Void,
         );
         assert!(text.contains("void tick(void)"), "wrong signature:\n{text}");
-        assert!(text.contains("return;"), "wrong return statement:\n{text}");
+        assert!(
+            !text.contains("return"),
+            "redundant return survived:\n{text}"
+        );
         assert!(
             !text.contains("return ret;"),
             "machine residue leaked:\n{text}"
         );
+    }
+
+    #[test]
+    fn recovered_void_output_does_not_recreate_a_saved_result_register_return() {
+        let f = Function {
+            name: "print_sum".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_8")),
+                    src: Expr::Reg(VReg::phys("ret")),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x20,
+                        name: "printf".to_string(),
+                    },
+                    args: vec![Expr::Const(0x4000)],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("local_8")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench_with_output(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+        );
+
+        assert!(matches!(prepared.body.as_slice(), [Stmt::Call { .. }]));
     }
 
     #[test]
@@ -4193,8 +4509,10 @@ function f @ 0x1000 {
         let prepared = prepare_for_decbench(&f);
         let text = render_decbench(&prepared);
 
-        assert!(text.contains("consume_pointer(local_20)"), "{text}");
-        assert!(text.contains("local_20 = status"), "{text}");
+        assert!(
+            text.contains("local_20 = consume_pointer(local_20)"),
+            "{text}"
+        );
         assert!(text.contains("return local_20"), "{text}");
         assert!(!text.contains("return arg4"), "{text}");
     }
@@ -4980,6 +5298,32 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn decbench_uses_the_conventional_two_argument_main_signature() {
+        let f = Function {
+            name: "main".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("local_0"),
+                    src: Expr::Reg(VReg::phys("arg1")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("arg0"))),
+                },
+            ],
+        };
+
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("int main(int argc, char ** argv) {"),
+            "main signature was not recovered:\n{text}"
+        );
+        assert!(text.contains("argv"), "argv uses were not renamed:\n{text}");
+        assert!(text.contains("argc"), "argc uses were not renamed:\n{text}");
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
     fn decbench_abi_widths_preserve_high_halves_of_packed_arguments() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -5708,6 +6052,95 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn declared_local_pointer_width_overrides_machine_carrier_width() {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let pointer_result = CallPrototype {
+            return_type: "int *".to_string(),
+            parameter_types: Vec::new(),
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let f = Function {
+            name: "step_back".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "make_p".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(VReg::phys("p")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: None,
+                        call_prototype: pointer_result.clone(),
+                    }),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2010,
+                        name: "make_q".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(VReg::phys("q")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: None,
+                        call_prototype: pointer_result,
+                    }),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("p"),
+                    src: Expr::Lea {
+                        base: Some(VReg::phys("p")),
+                        index: None,
+                        scale: 1,
+                        disp: -4,
+                        segment: None,
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("q"),
+                    src: Expr::Lea {
+                        base: Some(VReg::phys("q")),
+                        index: None,
+                        scale: 1,
+                        disp: -2,
+                        segment: None,
+                    },
+                },
+            ],
+        };
+        let mut type_map = TypeMap::default();
+        // The recovered pointer fact describes the eight-byte machine carrier;
+        // the stronger local declaration describes four-byte C elements.
+        type_map.upsert_public(VReg::phys("p"), TypeHint::Pointer { pointee_width: 8 });
+        type_map.upsert_public(VReg::phys("q"), TypeHint::Pointer { pointee_width: 8 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&type_map),
+            Some(&type_map),
+            RecoveredOutputKind::Void,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(
+            text.contains("p = (int *)(p - 1);") || text.contains("p = (int *)((p - 1));"),
+            "the emitted int-pointer declaration must scale a four-byte displacement:\n{text}"
+        );
+        assert!(
+            text.contains("(long)q - 0x2"),
+            "a non-integral element displacement must remain byte arithmetic:\n{text}"
+        );
+        assert!(!text.contains("q - 2);"), "{text}");
+    }
+
+    #[test]
     fn nested_scaled_pointer_offset_returns_to_byte_arithmetic() {
         use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
 
@@ -6245,6 +6678,216 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn by_value_aggregate_parameter_is_read_through_its_machine_carrier() {
+        use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let function = Function {
+            name: "consume_pair".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "int".to_string(),
+            parameter_types: vec!["struct pair".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let layout = DwarfType {
+            kind: DwarfTypeKind::Struct,
+            name: "pair".to_string(),
+            byte_size: 8,
+            fields: vec![
+                DwarfField {
+                    offset: 0,
+                    name: "a".to_string(),
+                    c_type: "int".to_string(),
+                    size: 4,
+                },
+                DwarfField {
+                    offset: 4,
+                    name: "b".to_string(),
+                    c_type: "int".to_string(),
+                    size: 4,
+                },
+            ],
+            variants: Vec::new(),
+            typedef_target: None,
+            source_file: Some("pair.c".to_string()),
+        };
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &function,
+            None,
+            None,
+            RecoveredOutputKind::Direct,
+            Some(&prototype),
+            &[layout],
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(
+            text.contains("int consume_pair(struct pair arg0)"),
+            "{text}"
+        );
+        assert!(
+            text.matches("union { struct pair object; unsigned long long bits; }")
+                .count()
+                >= 2,
+            "every scalar use must explicitly read the aggregate carrier:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn by_value_aggregate_call_reconstructs_the_source_object_from_carrier_bits() {
+        use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let aggregate = CallPrototype {
+            return_type: "int".to_string(),
+            parameter_types: vec!["struct pair".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let function = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "consume_pair".to_string(),
+                },
+                args: vec![Expr::Deref {
+                    addr: Box::new(Expr::Reg(VReg::phys("rbp"))),
+                    size: 8,
+                }],
+                dst: Some(VReg::phys("ret")),
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(aggregate.clone()),
+                    call_prototype: aggregate,
+                }),
+            }],
+        };
+        let layout = DwarfType {
+            kind: DwarfTypeKind::Struct,
+            name: "pair".to_string(),
+            byte_size: 8,
+            fields: vec![
+                DwarfField {
+                    offset: 0,
+                    name: "a".to_string(),
+                    c_type: "int".to_string(),
+                    size: 4,
+                },
+                DwarfField {
+                    offset: 4,
+                    name: "b".to_string(),
+                    c_type: "int".to_string(),
+                    size: 4,
+                },
+            ],
+            variants: Vec::new(),
+            typedef_target: None,
+            source_file: Some("pair.c".to_string()),
+        };
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &function,
+            None,
+            None,
+            RecoveredOutputKind::Direct,
+            None,
+            &[layout],
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(
+            text.contains("extern int consume_pair(struct pair);"),
+            "{text}"
+        );
+        assert!(
+            text.contains("union { struct pair object; unsigned long long bits; }")
+                && text.contains(".object"),
+            "the call must rebuild the source object without numeric conversion:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn by_value_aggregate_return_reconstructs_the_source_object_from_carrier_bits() {
+        use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let function = Function {
+            name: "make_pair".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Const(0x0000_0002_0000_0001)),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "struct pair".to_string(),
+            parameter_types: Vec::new(),
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let layout = DwarfType {
+            kind: DwarfTypeKind::Struct,
+            name: "pair".to_string(),
+            byte_size: 8,
+            fields: vec![
+                DwarfField {
+                    offset: 0,
+                    name: "a".to_string(),
+                    c_type: "int".to_string(),
+                    size: 4,
+                },
+                DwarfField {
+                    offset: 4,
+                    name: "b".to_string(),
+                    c_type: "int".to_string(),
+                    size: 4,
+                },
+            ],
+            variants: Vec::new(),
+            typedef_target: None,
+            source_file: Some("pair.c".to_string()),
+        };
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &function,
+            None,
+            None,
+            RecoveredOutputKind::Direct,
+            Some(&prototype),
+            &[layout],
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(text.contains("struct pair make_pair(void)"), "{text}");
+        assert!(
+            text.contains("return ((union { struct pair object; unsigned long long bits; }")
+                && text.contains(".object;"),
+            "the return must rebuild the source object without numeric conversion:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
     fn enum_typedef_return_keeps_its_authoritative_name() {
         use crate::debug::dwarf::{DwarfEnumVariant, DwarfType, DwarfTypeKind};
         use crate::ir::types_recover::RecoveredOutputKind;
@@ -6328,7 +6971,7 @@ function f @ 0x1000 {
 
         let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
 
-        assert!(text.contains("while ((arg0 != 0))"), "{text}");
+        assert!(text.contains("while (arg0 != 0)"), "{text}");
         assert!(!text.contains("(long)arg0"), "{text}");
     }
 
@@ -6705,6 +7348,56 @@ function f @ 0x1000 {
             text
         );
 
+        // A common x86-64 index carries a width-only 32-bit register view
+        // inside the signed pointer-width extension. Once the declaration
+        // proves that value is an `int`, C's array subscript conversion already
+        // performs the same extension and neither cast belongs in the source.
+        let widened_index = Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                        }),
+                    }),
+                    rhs: Box::new(Expr::Const(8)),
+                }),
+            }),
+            size: 8,
+        };
+        let widened_function = Function {
+            name: "wide_ai".to_string(),
+            entry_va: 0x1010,
+            body: vec![Stmt::Return {
+                value: Some(widened_index),
+            }],
+        };
+        let mut widened_types = TypeMap::default();
+        widened_types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 8 });
+        widened_types.upsert_public(
+            VReg::phys("local_4"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let widened_text = render_decbench_typed(
+            &widened_function,
+            Some(&widened_types),
+            Some(&widened_types),
+        );
+        assert!(
+            widened_text.contains("arg0[local_4]") && !widened_text.contains("(long)(local_4)"),
+            "declared int index retained machine-width casts:\n{widened_text}"
+        );
+
         // Guard: a mismatched access width (2-byte read through an int* base)
         // must NOT array-index (the scale would be wrong) — keep the cast form.
         let deref2 = Expr::Deref {
@@ -6731,6 +7424,251 @@ function f @ 0x1000 {
             !text2.contains("arg0[local_4]"),
             "width mismatch must not array-index, got:\n{}",
             text2
+        );
+    }
+
+    #[test]
+    fn decbench_recovers_int_compound_assignment_from_narrow_machine_views() {
+        let f = Function {
+            name: "sum_length".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_8")),
+                src: Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Reg(VReg::phys("local_8"))),
+                            }),
+                            rhs: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Reg(VReg::phys("var1"))),
+                            }),
+                        }),
+                    }),
+                },
+                size: 4,
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_8"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.upsert_public(
+            VReg::phys("var1"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("local_8 += var1;"),
+            "narrow machine views obscured compound assignment:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_recovers_int_compound_assignment_with_a_wide_call_operand() {
+        let f = Function {
+            name: "sum_length".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_14")),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: true,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("local_14"))),
+                        }),
+                    }),
+                    rhs: Box::new(Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "strlen".to_string(),
+                        }),
+                        args: vec![Expr::Reg(VReg::phys("arg0"))],
+                        call_spec: None,
+                        result_width: Some(8),
+                    }),
+                },
+                size: 4,
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_14"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("local_14 += strlen(arg0);"),
+            "wide call operand obscured compound assignment:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_recovers_commuted_int_compound_assignment() {
+        let f = Function {
+            name: "sum_length".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_14")),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Call {
+                            target: Box::new(Expr::Named {
+                                va: 0x2000,
+                                name: "strlen".to_string(),
+                            }),
+                            args: vec![Expr::Reg(VReg::phys("arg0"))],
+                            call_spec: None,
+                            result_width: Some(8),
+                        }),
+                    }),
+                    rhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("local_14"))),
+                    }),
+                },
+                size: 4,
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_14"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("local_14 += strlen(arg0);"),
+            "commuted machine addition obscured compound assignment:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_passes_declared_int_directly_through_non_narrowing_views() {
+        let f = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "consume_int".to_string(),
+                },
+                args: vec![Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("var0"))),
+                    }),
+                }],
+                dst: None,
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: None,
+                    call_prototype: CallPrototype {
+                        return_type: "void".to_string(),
+                        parameter_types: vec!["int".to_string()],
+                        variadic: false,
+                        authority: CallPrototypeAuthority::Authoritative,
+                    },
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("consume_int(var0);"),
+            "non-narrowing views obscured declared int argument:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_uses_literal_printf_format_to_type_variadic_int() {
+        let f = Function {
+            name: "report".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "printf".to_string(),
+                },
+                args: vec![
+                    Expr::StringLit {
+                        value: "value: %d\n".to_string(),
+                    },
+                    Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("var0"))),
+                        }),
+                    },
+                ],
+                dst: None,
+                call_spec: None,
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("printf(\"value: %d\\n\", var0);"),
+            "literal printf contract did not remove integer views:\n{text}"
         );
     }
 
@@ -7329,11 +8267,10 @@ function f @ 0x1000 {
         let text = render_decbench_typed(&function, Some(&types), None);
 
         assert!(text.contains("unsigned char local_100[12];"), "{text}");
-        assert!(text.contains("int * local_140;"), "{text}");
         assert!(
-            text.contains("local_140 = (int *)local_100;")
-                || text.contains("local_140 = (int *)&local_100[0];")
-                || text.contains("local_140 = (int *)(&local_100[0]);"),
+            text.contains("int * local_140 = (int *)local_100;")
+                || text.contains("int * local_140 = (int *)&local_100[0];")
+                || text.contains("int * local_140 = (int *)(&local_100[0]);"),
             "the stack object's concrete byte-array declaration requires an explicit typed-pointer conversion:\n{text}"
         );
         assert_looks_like_c(&text);
@@ -8661,9 +9598,12 @@ function f @ 0x1000 {
             .iter()
             .find_map(|s| match s {
                 Stmt::Call { args, .. } => Some(args.clone()),
+                Stmt::Return {
+                    value: Some(Expr::Call { args, .. }),
+                } => Some(args.clone()),
                 _ => None,
             })
-            .expect("the call must survive preparation");
+            .expect("the call expression must survive preparation");
         assert!(
             !call.is_empty(),
             "the call lost its argument during preparation:\n{:#?}",
@@ -8695,7 +9635,7 @@ function f @ 0x1000 {
         };
         let out = render_decbench(&prepare_for_decbench(&f));
         assert!(
-            out.contains("return ret;"),
+            out.contains("return sum_arg6(arg0);"),
             "the call's result must satisfy the bare return:\n{out}"
         );
         assert!(
@@ -9137,7 +10077,7 @@ function f @ 0x1000 {
 
         assert!(
             rendered.contains(
-                "long mixed_dwarf_types(const char * arg0, long arg1, void * arg2, const char * * arg3)"
+                "long mixed_dwarf_types(const char *arg0, long arg1, void *arg2, const char **arg3)"
             ),
             "one opaque parameter discarded independently renderable DWARF types:\n{rendered}"
         );
@@ -9693,6 +10633,46 @@ function f @ 0x1000 {
         );
     }
 
+    #[test]
+    fn a_typed_double_call_is_a_value_not_a_bit_pattern() {
+        let call_prototype = crate::ir::call_contracts::CallPrototype {
+            return_type: "double".into(),
+            parameter_types: vec!["int".into()],
+            variadic: false,
+            authority: crate::ir::call_contracts::CallPrototypeAuthority::Authoritative,
+        };
+        let function = Function {
+            name: "double_call".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::NumericConvert {
+                    from: ScalarType::Float(8),
+                    to: ScalarType::SignedInt(4),
+                    expr: Box::new(Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "make_double".into(),
+                        }),
+                        args: vec![Expr::Const(1)],
+                        call_spec: Some(crate::ir::call_contracts::CallSiteSpec {
+                            callee_prototype: Some(call_prototype.clone()),
+                            call_prototype,
+                        }),
+                        result_width: Some(8),
+                    }),
+                }),
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(
+            rendered.contains("return (int)(make_double(1));"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("union"), "{rendered}");
+    }
+
     /// THE NEGATIVE CONTROL, and the reason the guard is structural rather
     /// than a heuristic. `cvttss2si` IS an arithmetic conversion, and the
     /// lifter states it as `NumericConvert { to: SignedInt }` — which
@@ -9841,5 +10821,252 @@ function f @ 0x1000 {
             rendered.contains("*(float *)((long)arg0) = var0;"),
             "a proven float store was emitted as integer memory:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn first_top_level_scalar_definition_becomes_its_declaration_initializer() {
+        let local = VReg::phys("local_4");
+        let function = Function {
+            name: "initialise".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "side_effect".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: local.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            local,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(rendered.contains("    int local_4 = 0;"), "{rendered}");
+        assert_eq!(rendered.matches("int local_4").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn scalar_read_before_definition_keeps_the_entry_declaration() {
+        let local = VReg::phys("local_4");
+        let function = Function {
+            name: "read_first".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "consume".into(),
+                    },
+                    args: vec![Expr::Reg(local.clone())],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: local.clone(),
+                    src: Expr::Const(0),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            local,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(rendered.contains("    int local_4;"), "{rendered}");
+        assert!(rendered.contains("    local_4 = 0;"), "{rendered}");
+    }
+
+    #[test]
+    fn loop_local_used_only_by_loop_is_declared_in_for_initializer() {
+        let index = VReg::phys("local_4");
+        let function = Function {
+            name: "loop_local".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::For {
+                init: Box::new(Stmt::Assign {
+                    dst: index.clone(),
+                    src: Expr::Const(0),
+                }),
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(index.clone())),
+                    rhs: Box::new(Expr::Const(3)),
+                },
+                step: Box::new(Stmt::Assign {
+                    dst: index.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(index.clone())),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }),
+                body: vec![],
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            index,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains("for (int local_4 = 0; local_4 < 3;"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("    int local_4;"), "{rendered}");
+    }
+
+    #[test]
+    fn dwarf_named_scalars_use_the_same_proven_inline_declarations() {
+        let sum = VReg::phys("sum");
+        let index = VReg::phys("i");
+        let function = Function {
+            name: "source_locals".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: sum.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::For {
+                    init: Box::new(Stmt::Assign {
+                        dst: index.clone(),
+                        src: Expr::Const(0),
+                    }),
+                    cond: Expr::Cmp {
+                        op: CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(index.clone())),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                    step: Box::new(Stmt::Assign {
+                        dst: index.clone(),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(index.clone())),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                    }),
+                    body: vec![Stmt::Assign {
+                        dst: sum.clone(),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(sum.clone())),
+                            rhs: Box::new(Expr::Reg(index.clone())),
+                        },
+                    }],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(sum.clone())),
+                },
+            ],
+        };
+        let dwarf_locals = std::collections::HashMap::from([
+            ("sum".to_string(), "int".to_string()),
+            ("i".to_string(), "int".to_string()),
+        ]);
+        let mut types = TypeMap::default();
+        for local in [sum, index] {
+            types.upsert_public(
+                local,
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        let rendered =
+            render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+                &function,
+                Some(&types),
+                None,
+                crate::ir::types_recover::RecoveredOutputKind::Direct,
+                None,
+                &[],
+                8,
+                &std::collections::HashMap::new(),
+                &dwarf_locals,
+            );
+
+        assert!(rendered.contains("    int sum = 0;"), "{rendered}");
+        assert!(rendered.contains("for (int i = 0; i < 3;"), "{rendered}");
+        assert_eq!(rendered.matches("int sum").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("int i").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn loop_index_used_after_loop_keeps_function_scope_declaration() {
+        let index = VReg::phys("local_4");
+        let function = Function {
+            name: "escaped_loop_local".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::For {
+                    init: Box::new(Stmt::Assign {
+                        dst: index.clone(),
+                        src: Expr::Const(0),
+                    }),
+                    cond: Expr::Cmp {
+                        op: CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(index.clone())),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                    step: Box::new(Stmt::Assign {
+                        dst: index.clone(),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(index.clone())),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                    }),
+                    body: vec![],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(index.clone())),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            index,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(rendered.contains("    int local_4;"), "{rendered}");
+        assert!(rendered.contains("for (local_4 = 0;"), "{rendered}");
     }
 }

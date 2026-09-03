@@ -87,6 +87,9 @@ pub(super) struct DeclarationInputs<'a> {
     /// Names that carry an authoritative source spelling, which is what makes a
     /// renamed slot count as a promoted local.
     pub(super) source_locals: &'a HashSet<String>,
+    /// Exact byte widths for complete by-value aggregate spellings referenced
+    /// by this function or one of its direct callees.
+    pub(super) aggregate_value_widths: &'a HashMap<String, u8>,
 }
 
 /// The declarations selected for one function render.
@@ -108,6 +111,9 @@ pub(super) struct DeclarationPlan {
     integer_widths: HashMap<String, u8>,
     integer_types: HashMap<String, (bool, u8)>,
     stack_objects: BTreeSet<String>,
+    aggregate_value_widths: HashMap<String, u8>,
+    aggregate_parameters: HashMap<String, (String, u8)>,
+    source_locals: HashSet<String>,
 }
 
 impl Default for DeclarationPlan {
@@ -130,6 +136,9 @@ impl Default for DeclarationPlan {
             integer_widths: HashMap::new(),
             integer_types: HashMap::new(),
             stack_objects: BTreeSet::new(),
+            aggregate_value_widths: HashMap::new(),
+            aggregate_parameters: HashMap::new(),
+            source_locals: HashSet::new(),
         }
     }
 }
@@ -153,6 +162,7 @@ impl DeclarationPlan {
             dwarf_type_env,
             struct_pointer_types,
             source_locals,
+            aggregate_value_widths,
         } = inputs;
 
         // Names declared as pointers, with their pointee width, so the
@@ -223,6 +233,7 @@ impl DeclarationPlan {
         // rather than by weakening the recovered signature.
         let mut declared_ctypes = HashMap::new();
         let mut pointer_parameters = HashMap::new();
+        let mut aggregate_parameters = HashMap::new();
         let mut parameters = Vec::with_capacity(arg_count);
         let mut parameter_names = Vec::with_capacity(arg_count);
         let mut used_parameter_names = HashSet::new();
@@ -237,6 +248,9 @@ impl DeclarationPlan {
                 });
             if c_type.ends_with('*') {
                 pointer_parameters.insert(name.clone(), c_type.clone());
+            }
+            if let Some(width) = aggregate_value_widths.get(&c_type).copied() {
+                aggregate_parameters.insert(name.clone(), (c_type.clone(), width));
             }
             declared_ctypes.insert(name, c_type.clone());
             parameters.push(c_type);
@@ -311,6 +325,9 @@ impl DeclarationPlan {
             integer_widths,
             integer_types,
             stack_objects: ids.stack_objects.keys().cloned().collect(),
+            aggregate_value_widths: aggregate_value_widths.clone(),
+            aggregate_parameters,
+            source_locals: source_locals.clone(),
         }
     }
 
@@ -356,6 +373,18 @@ impl DeclarationPlan {
         self.pointer_parameters.get(name).map(String::as_str)
     }
 
+    /// Source aggregate and exact carrier width for an incoming ABI role.
+    pub(super) fn aggregate_parameter(&self, name: &str) -> Option<(&str, u8)> {
+        self.aggregate_parameters
+            .get(name)
+            .map(|(c_type, width)| (c_type.as_str(), *width))
+    }
+
+    /// Exact width of a complete by-value aggregate spelling.
+    pub(super) fn aggregate_value_width(&self, c_type: &str) -> Option<u8> {
+        self.aggregate_value_widths.get(c_type).copied()
+    }
+
     /// The exact C type printed for a scalar local or argument.
     ///
     /// Type recovery can hold competing facts from different machine-value
@@ -394,6 +423,15 @@ impl DeclarationPlan {
     /// promoted-local spelling `object = value`.
     pub(super) fn is_stack_object(&self, displayed: &str) -> bool {
         self.stack_objects.contains(displayed)
+    }
+
+    /// Whether `displayed` is an authoritative source-local spelling.
+    ///
+    /// These names have already passed the same type/renderability checks as
+    /// synthetic promoted locals. Presentation decisions such as placing a
+    /// proven first definition may therefore treat both namespaces alike.
+    pub(super) fn is_source_local(&self, displayed: &str) -> bool {
+        self.source_locals.contains(displayed)
     }
 
     /// Body-local declarations, in the order they must be emitted.

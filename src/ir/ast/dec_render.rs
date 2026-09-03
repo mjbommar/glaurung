@@ -44,11 +44,13 @@ use std::fmt::Write;
 
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::types::{BinOp, CmpOp, UnOp, VReg};
+use crate::ir::types_recover::TypeHint;
 
-use super::dwarf_render_types::{pointed_struct_name, valid_c_identifier};
+use super::dwarf_render_types::{c_language_prototype, pointed_struct_name, valid_c_identifier};
 use super::{
-    binop_sym_c, callee_display_name, cmpop_sym_c, dec_global_name, dec_int_type, dec_plan,
-    dec_ptr_arg_type, dec_ptr_width, declared_reg_ctype, expr_machine_width, flag_ident, int_ctype,
+    binop_sym_c, callee_display_name, cmpop_sym_c, dec_global_name, dec_global_scalar_width,
+    dec_int_type, dec_plan, dec_ptr_arg_type, dec_ptr_width, declared_reg_ctype,
+    direct_global_address, expr_machine_width, flag_ident, int_ctype,
     normalize_wrapped_scaled_index_constant, parse_arg_index, sanitize_c_ident,
     signed_shift_operand, target_int_ctype, unop_sym, width_ctype, write_float_literal, Expr,
     PdbFieldHint, ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS, DEC_NAMED_CALL_PROTOTYPES,
@@ -224,7 +226,9 @@ fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
             lhs,
             rhs,
         } => match (lhs.as_ref(), rhs.as_ref()) {
-            (idx, Expr::Const(s)) | (Expr::Const(s), idx) if *s == size as i64 => Some(idx),
+            (idx, Expr::Const(s)) | (Expr::Const(s), idx) if *s == size as i64 => {
+                Some(strip_implicit_pointer_index_extension(idx))
+            }
             _ => None,
         },
         Expr::Bin {
@@ -233,7 +237,7 @@ fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
             rhs,
         } => match rhs.as_ref() {
             Expr::Const(k) if *k >= 0 && *k < 63 && (1i64 << *k) == size as i64 => {
-                Some(lhs.as_ref())
+                Some(strip_implicit_pointer_index_extension(lhs))
             }
             _ => None,
         },
@@ -326,7 +330,7 @@ fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
         return expr;
     };
     let Expr::Cast {
-        signed: inner_signed,
+        signed: _,
         width: inner_width,
         expr: inner,
     } = outer.as_ref()
@@ -336,10 +340,7 @@ fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
     let Expr::Reg(VReg::Phys(name)) = inner.as_ref() else {
         return expr;
     };
-    if outer_signed == inner_signed
-        && inner_width < outer_width
-        && dec_int_type(name) == Some((*inner_signed, *inner_width))
-    {
+    if inner_width < outer_width && dec_int_type(name) == Some((*outer_signed, *inner_width)) {
         inner
     } else {
         expr
@@ -352,16 +353,43 @@ fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
 /// `&`/`*`/`-`/pointer±pointer.
 fn write_reg_dec(v: &VReg, out: &mut String) {
     if let VReg::Phys(n) = v {
-        if dec_ptr_arg_type(n).is_some()
-            || dec_struct_ptr_type(n).is_some()
-            || dec_is_stack_object(n)
-        {
+        if let Some((aggregate, width)) = dec_plan(|plan| {
+            plan.aggregate_parameter(n)
+                .map(|(c_type, width)| (c_type.to_string(), width))
+        }) {
+            write_aggregate_carrier_dec(&aggregate, width, v, out);
+            return;
+        }
+        if declared_reg_ctype(v).ends_with('*') || dec_is_stack_object(n) {
             out.push_str("(long)");
             write_reg_lvalue_dec(v, out);
             return;
         }
     }
     write_reg_lvalue_dec(v, out);
+}
+
+fn aggregate_carrier_ctype(width: u8) -> Option<&'static str> {
+    match width {
+        1 => Some("unsigned char"),
+        2 => Some("unsigned short"),
+        4 => Some("unsigned int"),
+        8 => Some("unsigned long long"),
+        16 => Some("unsigned __int128"),
+        _ => None,
+    }
+}
+
+/// Cross from an authoritative source aggregate to the integer carrier used by
+/// the recovered machine-level AST without invoking a numeric conversion.
+fn write_aggregate_carrier_dec(c_type: &str, width: u8, value: &VReg, out: &mut String) {
+    let carrier = aggregate_carrier_ctype(width).expect("aggregate widths are filtered by plan");
+    let _ = write!(
+        out,
+        "((union {{ {c_type} object; {carrier} bits; }}){{ .object = "
+    );
+    write_reg_lvalue_dec(value, out);
+    out.push_str(" }).bits");
 }
 
 /// Render an operand of machine-level byte arithmetic.
@@ -398,13 +426,23 @@ fn scaled_pointer_offset<'a>(op: BinOp, lhs: &'a Expr, rhs: &Expr) -> Option<(&'
     if !matches!(op, BinOp::Add | BinOp::Sub) {
         return None;
     }
-    let Expr::Reg(reg @ VReg::Phys(name)) = lhs else {
+    let Expr::Reg(reg @ VReg::Phys(_)) = lhs else {
         return None;
     };
-    let Expr::Const(displacement) = rhs else {
-        return None;
+    let displacement = match rhs {
+        Expr::Const(displacement) => *displacement,
+        // Address symbolisation can retain a small arithmetic literal as an
+        // `Addr` even when it occupies the displacement side of a pointer
+        // add/subtract. In that role its numeric value is still bytes.
+        Expr::Addr(displacement) => i64::try_from(*displacement).ok()?,
+        _ => return None,
     };
-    let width = dec_ptr_width(name).filter(|width| *width > 0)?;
+    let width = declared_pointer_element_width(reg)?;
+    let width = i64::from(width);
+    (displacement % width == 0).then_some((reg, displacement / width))
+}
+
+fn declared_pointer_element_width(reg: &VReg) -> Option<u8> {
     let declared = declared_reg_ctype(reg);
     let mut pointee = declared.strip_suffix('*').map(str::trim)?;
     while let Some(unqualified) = pointee
@@ -414,17 +452,14 @@ fn scaled_pointer_offset<'a>(op: BinOp, lhs: &'a Expr, rhs: &Expr) -> Option<(&'
         pointee = unqualified.trim();
     }
     let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
-    let declared_pointee_width =
-        crate::ir::call_contracts::integer_c_type_width(pointee, pointer_width).or(match pointee {
+    let width = crate::ir::call_contracts::integer_c_type_width(pointee, pointer_width).or(
+        match pointee {
             "float" => Some(4),
             "double" => Some(8),
             _ => None,
-        });
-    if declared_pointee_width != Some(width) {
-        return None;
-    }
-    let width = i64::from(width);
-    (displacement % width == 0).then_some((reg, displacement / width))
+        },
+    )?;
+    (width > 0).then_some(width)
 }
 
 /// Prefer native C pointer arithmetic when an exact pointee width can express
@@ -503,6 +538,25 @@ fn write_addr_arith_dec(
     disp: i64,
     out: &mut String,
 ) {
+    if index.is_none() {
+        if let Some(base) = base {
+            if let Some(width) = declared_pointer_element_width(base) {
+                let width = i64::from(width);
+                if disp % width == 0 {
+                    let elements = disp / width;
+                    out.push('(');
+                    write_reg_lvalue_dec(base, out);
+                    if elements < 0 {
+                        let _ = write!(out, " - {}", elements.unsigned_abs());
+                    } else if elements > 0 {
+                        let _ = write!(out, " + {elements}");
+                    }
+                    out.push(')');
+                    return;
+                }
+            }
+        }
+    }
     out.push('(');
     let mut wrote = false;
     if let Some(b) = base {
@@ -705,7 +759,11 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         Expr::FloatConst { bits, width } => write_float_literal(*bits, *width, out),
         Expr::Addr(a) => {
             if dec_is_global_addr(*a) {
-                let _ = write!(out, "&{}[0]", dec_global_name(*a));
+                if dec_global_scalar_width(*a).is_some() {
+                    let _ = write!(out, "&{}", dec_global_name(*a));
+                } else {
+                    let _ = write!(out, "&{}[0]", dec_global_name(*a));
+                }
             } else {
                 let _ = write!(out, "0x{:x}", a);
             }
@@ -717,7 +775,11 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         // portable backing object rather than the old image mapping.
         Expr::Named { va, name } => {
             if dec_is_global_addr(*va) {
-                let _ = write!(out, "&{}[0]", dec_global_name(*va));
+                if dec_global_scalar_width(*va).is_some() {
+                    let _ = write!(out, "&{}", dec_global_name(*va));
+                } else {
+                    let _ = write!(out, "&{}[0]", dec_global_name(*va));
+                }
             } else {
                 // The identifier, when — and ONLY when — this render has
                 // selected a prototype for it. That gate is the whole
@@ -773,6 +835,12 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             ..
         } => write_addr_arith_dec(base, index, *scale, *disp, out),
         Expr::Deref { addr, size } => {
+            if let Some(address) = direct_global_address(addr) {
+                if dec_global_scalar_width(address) == Some(*size) {
+                    out.push_str(&dec_global_name(address));
+                    return;
+                }
+            }
             if let Some((base, index, hint)) = renderable_field_access(addr) {
                 write_field_access_dec(base, index, hint, out);
                 return;
@@ -1320,6 +1388,16 @@ fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
         // A string literal has C type `char *` after array-to-pointer decay,
         // whatever pointee the callee's recovered prototype names.
         Expr::StringLit { .. } => Some("char *".to_string()),
+        // An indexed load from a pointer-to-pointer declaration renders as
+        // `base[index]`, whose C type is the declaration with one pointer
+        // level removed. This is the ordinary `argv[i]` -> `char *` case; if
+        // the base points to scalars, removing its only `*` produces a
+        // non-pointer type and therefore supplies no pointer proof.
+        Expr::Deref { addr, size } => try_array_index(addr, *size).and_then(|(base, _)| {
+            let element = declared_reg_ctype(&VReg::phys(base));
+            let element = element.strip_suffix('*')?.trim_end().to_string();
+            element.ends_with('*').then_some(element)
+        }),
         // `write_expr_dec` prints an incoming-argument frame object as
         // `(void *)(argN)` and every other frame object as `&local_N[0]` over
         // an `unsigned char local_N[..]` declaration.
@@ -1336,19 +1414,58 @@ fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
 
 /// Whether a pointer parameter needs its argument reasserted with a cast.
 ///
-/// C converts between object pointers only through `void *`; every other pair
-/// of pointee types is a constraint violation that GCC 14 reports as an error.
-/// So the cast is skipped exactly when the argument is PROVEN to render as a
-/// pointer that C already accepts here: the same spelling, or a `void *` on
-/// either side. An argument whose rendered spelling is unknown keeps the cast,
-/// because that includes machine-word address arithmetic, which would
-/// otherwise be an implicit integer-to-pointer conversion.
+/// C converts between object pointers through `void *` and permits adding
+/// qualifiers to the pointed-to type. Otherwise the cast is skipped only when
+/// the argument is PROVEN to render with the same pointer spelling. An
+/// argument whose rendered spelling is unknown keeps the cast, because that
+/// includes machine-word address arithmetic, which would otherwise be an
+/// implicit integer-to-pointer conversion.
 fn pointer_parameter_needs_cast(parameter_type: &str, arg: &Expr) -> bool {
     match call_argument_pointer_ctype(arg) {
         Some(rendered) => {
-            rendered != parameter_type && rendered != "void *" && parameter_type != "void *"
+            rendered != parameter_type
+                && rendered != "void *"
+                && parameter_type != "void *"
+                // C permits adding qualifiers to the pointed-to type.  A
+                // string literal has the historical expression type
+                // `char[N]` and decays to `char *`, while every libc string
+                // consumer correctly declares `const char *`.  Reasserting
+                // that ordinary qualification conversion with a cast is
+                // redundant source noise.
+                && !(rendered == "char *" && parameter_type == "const char *")
         }
         None => true,
+    }
+}
+
+#[cfg(test)]
+mod pointer_parameter_tests {
+    use super::*;
+
+    fn string_literal() -> Expr {
+        Expr::StringLit {
+            value: "Hello, World!".into(),
+        }
+    }
+
+    #[test]
+    fn string_literal_needs_no_cast_when_parameter_adds_const() {
+        assert!(!pointer_parameter_needs_cast(
+            "const char *",
+            &string_literal()
+        ));
+    }
+
+    #[test]
+    fn string_literal_still_needs_cast_for_incompatible_pointer() {
+        assert!(pointer_parameter_needs_cast("long *", &string_literal()));
+    }
+
+    #[test]
+    fn typed_const_char_argument_renders_without_redundant_cast() {
+        let mut rendered = String::new();
+        write_typed_call_arg_dec("const char *", &string_literal(), &mut rendered);
+        assert_eq!(rendered, "\"Hello, World!\"");
     }
 }
 
@@ -1404,6 +1521,13 @@ fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
             let _ = write!(out, "({float_type})(");
             write_expr_dec(expr, out);
             out.push(')');
+        }
+        Expr::Call { .. } if float_rendered_width(expr) == Some(width) => {
+            // The call's C prototype already makes this a floating VALUE.
+            // Reinterpreting it through the fallback union would first convert
+            // the number to an integer and then treat that integer as IEEE
+            // bits, changing every nonzero result.
+            write_expr_dec(expr, out);
         }
         Expr::Deref {
             addr,
@@ -1497,6 +1621,14 @@ fn float_rendered_width(expr: &Expr) -> Option<u8> {
             ..
         } => Some(*width),
         Expr::FloatConst { width, .. } => Some(*width),
+        Expr::Call {
+            call_spec: Some(call_spec),
+            ..
+        } => match call_spec.call_prototype.return_type.as_str() {
+            "float" => Some(4),
+            "double" => Some(8),
+            _ => None,
+        },
         // Floating ARITHMETIC, which `write_float_expr_dec` already renders
         // recursively — this only decides whether to ask it. One floating
         // operand is enough, because C's usual arithmetic conversions make the
@@ -1566,6 +1698,24 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         return;
     }
 
+    if let Some(width) = dec_plan(|plan| plan.aggregate_value_width(parameter_type)) {
+        if let Expr::Reg(register) = arg {
+            if declared_reg_ctype(register) == parameter_type {
+                write_reg_lvalue_dec(register, out);
+                return;
+            }
+        }
+        let carrier =
+            aggregate_carrier_ctype(width).expect("aggregate widths are filtered by plan");
+        let _ = write!(
+            out,
+            "((union {{ {parameter_type} object; {carrier} bits; }}){{ .bits = ({carrier})("
+        );
+        write_call_arg_dec(arg, out);
+        out.push_str(") }).object");
+        return;
+    }
+
     if matches!(parameter_type, "float" | "double") {
         // A source-level parameter already declared with the exact scalar
         // floating type needs no conversion at the call boundary.  Retain the
@@ -1586,7 +1736,19 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         return;
     }
 
+    if let Some(address) = declared_global_integer_call_arg_through_views(parameter_type, arg) {
+        out.push_str(&dec_global_name(address));
+        return;
+    }
+    if let Some(register) = declared_integer_call_arg_through_views(parameter_type, arg) {
+        write_reg_lvalue_dec(register, out);
+        return;
+    }
     if integer_call_arg_cast_is_redundant(parameter_type, arg) {
+        write_call_arg_dec(arg, out);
+        return;
+    }
+    if parameter_type.ends_with('*') && !pointer_parameter_needs_cast(parameter_type, arg) {
         write_call_arg_dec(arg, out);
         return;
     }
@@ -1595,6 +1757,54 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
     out.push_str(")(");
     write_call_arg_dec(arg, out);
     out.push(')');
+}
+
+/// The scalar-global counterpart of
+/// [`declared_integer_call_arg_through_views`]. An exact symbol extent and an
+/// equal-width load prove that the expression already has the parameter's
+/// integer width; surrounding wider register views vanish at that boundary.
+fn declared_global_integer_call_arg_through_views(parameter_type: &str, arg: &Expr) -> Option<u64> {
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let parameter_width =
+        crate::ir::call_contracts::integer_c_type_width(parameter_type, pointer_width)?;
+    let mut current = arg;
+    while let Expr::Cast { width, expr, .. } = current {
+        if *width < parameter_width {
+            return None;
+        }
+        current = expr;
+    }
+    let Expr::Deref { addr, size } = current else {
+        return None;
+    };
+    let address = direct_global_address(addr)?;
+    (*size == parameter_width && dec_global_scalar_width(address) == Some(*size)).then_some(address)
+}
+
+/// Recover a declared integer value hidden only by non-narrowing machine views.
+///
+/// An `int` argument commonly arrives as `(uint64_t)(uint32_t)x` after x86-64
+/// register canonicalisation. Passing it to an `int` parameter selects the low
+/// 32 bits again, exactly as passing `x` directly does. A view narrower than
+/// the parameter can discard information, so that chain deliberately declines.
+fn declared_integer_call_arg_through_views<'a>(
+    parameter_type: &str,
+    arg: &'a Expr,
+) -> Option<&'a VReg> {
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let parameter_width =
+        crate::ir::call_contracts::integer_c_type_width(parameter_type, pointer_width)?;
+    let mut current = arg;
+    while let Expr::Cast { width, expr, .. } = current {
+        if *width < parameter_width {
+            return None;
+        }
+        current = expr;
+    }
+    let Expr::Reg(register @ VReg::Phys(_)) = current else {
+        return None;
+    };
+    (declared_reg_ctype(register) == parameter_type).then_some(register)
 }
 
 /// Whether the call-boundary cast onto `parameter_type` would convert nothing.
@@ -1698,7 +1908,12 @@ fn call_prototype_for_render(
     dst: Option<&VReg>,
     call_spec: Option<&CallSiteSpec>,
 ) -> (CallSiteSpec, Option<CallPrototype>, bool) {
-    let call_spec = effective_call_site_spec(target, args, dst, call_spec);
+    let mut call_spec = effective_call_site_spec(target, args, dst, call_spec);
+    call_spec.call_prototype = c_language_prototype(&call_spec.call_prototype);
+    call_spec.callee_prototype = call_spec
+        .callee_prototype
+        .as_ref()
+        .map(c_language_prototype);
     let declaration = match target {
         Expr::Named { name, .. } => selected_named_call_prototype(name),
         _ => None,
@@ -1768,6 +1983,7 @@ fn write_call_dec(
         _ => None,
     };
     out.push('(');
+    let variadic_parameter_types = printf_variadic_parameter_types(target, args);
     for (i, a) in args.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
@@ -1780,6 +1996,10 @@ fn write_call_dec(
                 .expect("a direct uncast call has a selected declaration")
         };
         if let Some(parameter_type) = emitted_prototype.parameter_types.get(i) {
+            if let Some(register) = declared_integer_call_arg_through_views(parameter_type, a) {
+                write_reg_lvalue_dec(register, out);
+                continue;
+            }
             // The expression and function-pointer declarator must consume the
             // same call-site type. This is essential for recovered pointer
             // parameters too: a machine-word carrier such as `rbp` otherwise
@@ -1812,6 +2032,16 @@ fn write_call_dec(
             } else {
                 write_call_arg_dec(a, out);
             }
+        } else if let Some(parameter_type) = variadic_parameter_types
+            .as_ref()
+            .and_then(|types| types.get(i))
+            .and_then(Option::as_deref)
+        {
+            // A completely parsed literal printf format is a real type
+            // contract for its variadic tail. Use it exactly like a fixed
+            // prototype parameter; unsupported formats leave every entry
+            // unknown and retain the representation-preserving spelling.
+            write_typed_call_arg_dec(parameter_type, a, out);
         } else {
             // Variadic tails and unknown calls retain their recovered value
             // spelling; default argument promotions belong to the C compiler.
@@ -1831,6 +2061,50 @@ fn write_call_dec(
         }
     }
     out.push(')');
+}
+
+/// Per-argument C types proven by a literal `printf`-family format string.
+///
+/// The shared parser declines positional parameters, dynamic widths, and all
+/// unsupported conversions atomically. Fixed arguments remain `None`; only the
+/// variadic conversions receive types. Integer formats narrower than `int`
+/// consume promoted `int`/`unsigned int` values at the ABI boundary.
+fn printf_variadic_parameter_types(target: &Expr, args: &[Expr]) -> Option<Vec<Option<String>>> {
+    let Expr::Named { name, .. } = target else {
+        return None;
+    };
+    let clean = callee_display_name(name);
+    let (format_index, variadic_start): (usize, usize) = match clean {
+        "printf" => (0, 1),
+        "fprintf" => (1, 2),
+        "__printf_chk" => (1, 2),
+        "__fprintf_chk" => (2, 3),
+        "error" => (2, 3),
+        _ => return None,
+    };
+    let Expr::StringLit { value } = args.get(format_index)? else {
+        return None;
+    };
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let hints = crate::ir::printf_format::parse_printf_hints(value, pointer_width)?;
+    if variadic_start.checked_add(hints.len())? != args.len() {
+        return None;
+    }
+    let mut types = vec![None; args.len()];
+    for (index, hint) in hints.into_iter().enumerate() {
+        let c_type = match hint {
+            TypeHint::Int { signed, width } if width <= 4 => {
+                if signed { "int" } else { "unsigned int" }.to_string()
+            }
+            TypeHint::Int { signed, width } => int_ctype(signed, width).to_string(),
+            TypeHint::Pointer { pointee_width: 1 } => "const char *".to_string(),
+            TypeHint::Pointer { .. } | TypeHint::CodePointer => "void *".to_string(),
+            TypeHint::Float { .. } => "double".to_string(),
+            TypeHint::BoolLike => "int".to_string(),
+        };
+        types[variadic_start + index] = Some(c_type);
+    }
+    Some(types)
 }
 
 fn expression_has_pointer_representation(expr: &Expr) -> bool {
@@ -2021,6 +2295,33 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
             }
             return;
         }
+    }
+
+    if let Some(width) = dec_plan(|plan| plan.aggregate_value_width(destination_type)) {
+        if let Expr::Reg(register) = src {
+            if declared_reg_ctype(register) == destination_type {
+                write_reg_lvalue_dec(register, out);
+                return;
+            }
+        }
+        let carrier =
+            aggregate_carrier_ctype(width).expect("aggregate widths are filtered by plan");
+        let _ = write!(
+            out,
+            "((union {{ {destination_type} object; {carrier} bits; }}){{ .bits = "
+        );
+        if float_rendered_width(src) == Some(width) {
+            // A scalar floating register can be the ABI carrier for an
+            // INTEGER-class union. C's numeric cast would truncate its value;
+            // retain the exact IEEE payload before rebuilding the union.
+            write_float_bits_expr_dec(src, width, out);
+        } else {
+            let _ = write!(out, "({carrier})(");
+            write_expr_dec(src, out);
+            out.push(')');
+        }
+        out.push_str(" }).object");
+        return;
     }
 
     if matches!(destination_type, "float" | "double") {

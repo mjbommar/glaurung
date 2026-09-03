@@ -44,7 +44,7 @@ fn repeated_memory_copy_lowers_to_an_exact_directional_loop() {
         entry_va: 0x1000,
         body: statements,
     });
-    assert!(rendered.contains("while ((copy_count != 0))"), "{rendered}");
+    assert!(rendered.contains("while (copy_count != 0)"), "{rendered}");
     assert!(
         rendered.contains("*(long *)(copy_destination) = *(long *)(copy_source);"),
         "{rendered}"

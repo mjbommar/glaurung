@@ -15,6 +15,36 @@ use crate::ir::call_contracts::CallPrototype;
 
 use super::sanitize_c_ident;
 
+/// Lower a source-language reference spelling to its C ABI representation.
+///
+/// DWARF from C++ correctly records `T &`/`T &&`, while the DecBench output is
+/// compiled as C. Both references are passed as addresses at this boundary, so
+/// retaining `&` creates invalid C without preserving any additional machine
+/// semantics.
+fn c_language_type(c_type: &str) -> String {
+    let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some(inner) = normalized.strip_suffix(" &&") {
+        format!("{inner} *")
+    } else if let Some(inner) = normalized.strip_suffix(" &") {
+        format!("{inner} *")
+    } else {
+        normalized
+    }
+}
+
+pub(super) fn c_language_prototype(prototype: &CallPrototype) -> CallPrototype {
+    CallPrototype {
+        return_type: c_language_type(&prototype.return_type),
+        parameter_types: prototype
+            .parameter_types
+            .iter()
+            .map(|c_type| c_language_type(c_type))
+            .collect(),
+        variadic: prototype.variadic,
+        authority: prototype.authority,
+    }
+}
+
 fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
     let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty()
@@ -122,11 +152,11 @@ fn align_up(value: u64, alignment: u64) -> Option<u64> {
     value.checked_add(mask).map(|value| value & !mask)
 }
 
-/// Select only complete, ordinary-layout structures that the emitted source
-/// prototype actually references. This is intentionally fail-closed: bitfields,
-/// packed layouts, ABI-dependent `long`, arrays, unions, and conflicting DWARF
-/// definitions stay as raw offset accesses until the middle IR can represent
-/// them exactly.
+/// Select only complete, ordinary-layout structures and unions that the emitted
+/// source prototype actually references. This is intentionally fail-closed:
+/// bitfields, packed layouts, ABI-dependent `long`, arrays, nested aggregates,
+/// and conflicting DWARF definitions stay as raw offset accesses until the
+/// middle IR can represent them exactly.
 pub(super) fn renderable_dwarf_structs<'a>(
     prototype: Option<&CallPrototype>,
     dwarf_types: &'a [crate::debug::dwarf::DwarfType],
@@ -141,12 +171,24 @@ pub(super) fn renderable_dwarf_structs<'a>(
         .filter_map(|c_type| {
             dwarf_type_env
                 .aggregate_pointer(c_type)
-                .filter(|pointer| pointer.kind == crate::debug::dwarf::DwarfTypeKind::Struct)
+                .filter(|pointer| {
+                    matches!(
+                        pointer.kind,
+                        crate::debug::dwarf::DwarfTypeKind::Struct
+                            | crate::debug::dwarf::DwarfTypeKind::Union
+                    )
+                })
                 .map(|pointer| pointer.tag_name)
                 .or_else(|| {
                     dwarf_type_env
                         .aggregate_layout(c_type)
-                        .filter(|layout| layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct)
+                        .filter(|layout| {
+                            matches!(
+                                layout.kind,
+                                crate::debug::dwarf::DwarfTypeKind::Struct
+                                    | crate::debug::dwarf::DwarfTypeKind::Union
+                            )
+                        })
                         .map(|layout| layout.name.as_str())
                 })
         })
@@ -155,14 +197,17 @@ pub(super) fn renderable_dwarf_structs<'a>(
         std::collections::BTreeMap::<String, &'a crate::debug::dwarf::DwarfType>::new();
     let mut conflicts = std::collections::BTreeSet::new();
     for layout in dwarf_types.iter().filter(|layout| {
-        layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct
-            && referenced.contains(layout.name.as_str())
+        matches!(
+            layout.kind,
+            crate::debug::dwarf::DwarfTypeKind::Struct | crate::debug::dwarf::DwarfTypeKind::Union
+        ) && referenced.contains(layout.name.as_str())
     }) {
         if !valid_c_identifier(&layout.name) || layout.byte_size == 0 || layout.fields.is_empty() {
             continue;
         }
         let mut cursor = 0_u64;
         let mut max_alignment = 1_u64;
+        let mut max_width = 0_u64;
         let mut valid = true;
         for field in &layout.fields {
             let Some(width) = dwarf_scalar_width(&field.c_type, pointer_width) else {
@@ -171,22 +216,35 @@ pub(super) fn renderable_dwarf_structs<'a>(
             };
             let alignment = width.min(u64::from(pointer_width)).max(1);
             max_alignment = max_alignment.max(alignment);
+            max_width = max_width.max(width);
+            let expected_offset = match layout.kind {
+                crate::debug::dwarf::DwarfTypeKind::Struct => align_up(cursor, alignment),
+                crate::debug::dwarf::DwarfTypeKind::Union => Some(0),
+                _ => None,
+            };
             if !valid_c_identifier(&field.name)
                 || !source_prototype_type_is_renderable(&field.c_type, false)
-                || align_up(cursor, alignment) != Some(field.offset)
+                || expected_offset != Some(field.offset)
             {
                 valid = false;
                 break;
             }
-            cursor = match field.offset.checked_add(width) {
-                Some(end) => end,
-                None => {
-                    valid = false;
-                    break;
-                }
-            };
+            if layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct {
+                cursor = match field.offset.checked_add(width) {
+                    Some(end) => end,
+                    None => {
+                        valid = false;
+                        break;
+                    }
+                };
+            }
         }
-        if !valid || align_up(cursor, max_alignment) != Some(layout.byte_size) {
+        let occupied = if layout.kind == crate::debug::dwarf::DwarfTypeKind::Union {
+            max_width
+        } else {
+            cursor
+        };
+        if !valid || align_up(occupied, max_alignment) != Some(layout.byte_size) {
             continue;
         }
         match selected.get(&layout.name) {
@@ -249,4 +307,31 @@ pub(super) fn collision_safe_local_aggregate_type(
         format!("{qualifiers} ")
     };
     Some(format!("{qualifiers}{keyword} {} *", pointer.tag_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::call_contracts::CallPrototypeAuthority;
+
+    #[test]
+    fn cpp_references_lower_to_c_pointer_parameters() {
+        let source = CallPrototype {
+            return_type: "const struct Fixed &".to_string(),
+            parameter_types: vec![
+                "const struct Fixed &".to_string(),
+                "Widget &&".to_string(),
+                "int".to_string(),
+            ],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let lowered = c_language_prototype(&source);
+        assert_eq!(lowered.return_type, "const struct Fixed *");
+        assert_eq!(
+            lowered.parameter_types,
+            ["const struct Fixed *", "Widget *", "int"]
+        );
+        assert_eq!(lowered.authority, CallPrototypeAuthority::Authoritative);
+    }
 }

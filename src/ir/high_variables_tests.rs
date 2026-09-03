@@ -777,9 +777,8 @@ fn pointer_stored_through_width_only_memory_is_explicitly_represented() {
     let rendered = crate::ir::ast::render_decbench_typed(&function, Some(&types), None);
 
     assert!(
-        rendered.contains(
-            "static unsigned char glaurung_global_1000[16] __attribute__((aligned(16)));"
-        ),
+        rendered
+            .contains("static unsigned char glaurung_global_1000[4] __attribute__((aligned(16)));"),
         "the original image address needs portable storage:\n{rendered}"
     );
     assert!(
@@ -844,7 +843,10 @@ fn proven_aggregate_cursor_becomes_a_byte_pointer_without_scaling_its_stride() {
     let rendered = crate::ir::ast::render_decbench_typed(&function, Some(&types), None);
 
     assert_eq!(pointer_width(&types, "local_8"), Some(1));
-    assert!(rendered.contains("char * local_8;"), "{rendered}");
+    assert!(
+        rendered.contains("char * local_8 = (char *)("),
+        "{rendered}"
+    );
     assert!(rendered.contains("(local_8 + 64)"), "{rendered}");
     assert!(!rendered.contains("local_8 + 256"), "{rendered}");
 }
