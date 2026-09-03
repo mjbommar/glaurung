@@ -927,6 +927,7 @@ class Fetcher:
     delay: float = DEFAULT_DELAY_SECONDS
     cap_bytes: int = DEFAULT_BYTE_CAP
     retries: int = DEFAULT_RETRIES
+    reuse_indexes: bool = False
     downloaded: int = 0
     served_from_cache: int = 0
     requests: int = 0
@@ -988,6 +989,33 @@ class Fetcher:
         """Fetch a URL and parse its body as JSON."""
         return json.loads(self.get(url, params=params))
 
+    def get_index(self, url: str, source: str) -> bytes:
+        """Fetch a package index, optionally from the cache.
+
+        Package *indexes* are the one thing here that legitimately changes:
+        `dists/noble/main/binary-amd64/Packages.xz` is a different file after
+        every security upload, and re-reading it is how a run notices. So the
+        default is to fetch it every time, and the ~40 MB that costs across the
+        `base` matrix is the price of a resolution that is current.
+
+        ``reuse_indexes`` turns that off, for the two cases where currency is
+        the wrong goal: re-deriving an old harvest exactly, and checking that a
+        second run over a warm cache produces byte-identical output.
+
+        Args:
+            url: The index URL.
+            source: Cache namespace.
+
+        Returns:
+            The index bytes, compressed as the server sent them.
+        """
+        if not self.reuse_indexes:
+            return self.get(url)
+        path, _digest, _cached = self.fetch_file(
+            url, source=source, name=Path(urllib.parse.urlparse(url).path).name
+        )
+        return path.read_bytes()
+
     def cached_path(self, source: str, digest: str, name: str) -> Path:
         """Return where a blob with this SHA-256 lives in the cache."""
         return self.cache_root / source / digest[:2] / digest / name
@@ -1022,19 +1050,28 @@ class Fetcher:
         Raises:
             HarvestError: The bytes did not match an expected hash.
         """
+        # Three ways to find a cached copy, because not every source hands out
+        # a hash of the whole file. Alpine's APKINDEX `C:` field covers the
+        # package's control stream only, so an apk has *no* usable hash before
+        # it is downloaded -- and a harvester that can only resume on a hash it
+        # was given re-fetches every Alpine package on every run, which is the
+        # one source that is small enough for nobody to notice.
         if expect_sha256:
             hit = self.cached_path(source, expect_sha256, name)
             if hit.is_file():
                 self.served_from_cache += hit.stat().st_size
                 return hit, expect_sha256, True
-        if expect_sha1:
-            marker = self.cache_root / source / "by-sha1" / f"{expect_sha1}.json"
-            if marker.is_file():
-                digest = json.loads(marker.read_text())["sha256"]
-                hit = self.cached_path(source, digest, name)
-                if hit.is_file():
-                    self.served_from_cache += hit.stat().st_size
-                    return hit, digest, True
+        for marker in (
+            self._marker(source, "by-sha1", expect_sha1),
+            self._marker(source, "by-url", hashlib.sha256(url.encode()).hexdigest()),
+        ):
+            if marker is None or not marker.is_file():
+                continue
+            digest = json.loads(marker.read_text())["sha256"]
+            hit = self.cached_path(source, digest, name)
+            if hit.is_file():
+                self.served_from_cache += hit.stat().st_size
+                return hit, digest, True
 
         body = self.get(url)
         digest = hashlib.sha256(body).hexdigest()
@@ -1050,11 +1087,29 @@ class Fetcher:
         staging = destination.with_name(destination.name + ".part")
         staging.write_bytes(body)
         staging.replace(destination)
-        if expect_sha1:
-            marker = self.cache_root / source / "by-sha1" / f"{expect_sha1}.json"
+        record = json.dumps({"sha256": digest, "name": name, "url": url}) + "\n"
+        for marker in (
+            self._marker(source, "by-sha1", expect_sha1),
+            self._marker(source, "by-url", hashlib.sha256(url.encode()).hexdigest()),
+        ):
+            if marker is None:
+                continue
             marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(json.dumps({"sha256": digest, "name": name}) + "\n")
+            marker.write_text(record)
         return destination, digest, False
+
+    def _marker(self, source: str, kind: str, key: str) -> Path | None:
+        """Return the cache-index path for one lookup key, or ``None``.
+
+        The markers are an index *into* the content-addressed store, never the
+        store itself: a stale one points at a digest whose file is simply
+        absent, and the caller falls through to fetching. A URL key is safe
+        here because every URL the harvester builds is version-pinned --
+        ``/file/<sha1>``, ``musl-dev-1.2.5-r11.apk``,
+        ``libc6-dev_2.39-0ubuntu8.8_amd64.deb`` -- so the same URL means the
+        same bytes.
+        """
+        return None if not key else self.cache_root / source / kind / f"{key}.json"
 
 
 def decompress(name: str, body: bytes) -> str:
@@ -1267,7 +1322,7 @@ class DebianBackend:
         if key in self._indexes:
             return self._indexes[key]
         url = f"{self.mirror}/dists/{release}/main/binary-{arch}/Packages.xz"
-        text = decompress(url, self._fetcher.get(url))
+        text = decompress(url, self._fetcher.get_index(url, self.name))
         index = index_deb822(parse_deb822(text))
         self._indexes[key] = index
         self.index_urls[key] = url
@@ -1450,7 +1505,7 @@ class UbuntuBackend:
         for pocket in self.POCKETS:
             url = f"{base}/dists/{release}{pocket}/main/binary-{arch}/Packages.xz"
             try:
-                text = decompress(url, self._fetcher.get(url))
+                text = decompress(url, self._fetcher.get_index(url, self.name))
             except (HarvestError, lzma.LZMAError):
                 # A series need not publish every pocket, and an EOL one may
                 # have dropped some. Missing is not failing.
@@ -1610,7 +1665,7 @@ class AlpineBackend:
         if key in self._indexes:
             return self._indexes[key]
         url = f"{self.cdn}/{release}/main/{arch}/APKINDEX.tar.gz"
-        body = self._fetcher.get(url)
+        body = self._fetcher.get_index(url, self.name)
         text = _apkindex_member(body)
         index: dict[str, dict[str, str]] = {}
         for record in parse_apkindex(text):
@@ -1909,7 +1964,12 @@ def harvest_cell(
             outcomes.append({**row_base, "outcome": "dry-run", "name": ""})
             continue
 
-        package_path, package_sha256, from_cache = backend.fetch(ref)
+        # Whether a package came off disk or off the network is a fact about
+        # this *run*, not about the cell, so it is counted globally on the
+        # Fetcher and kept out of the manifest. A field like that in a manifest
+        # makes a warm re-run diff against a cold one on every single row,
+        # which is exactly the noise the canonical-JSON rule exists to remove.
+        package_path, package_sha256, _from_cache = backend.fetch(ref)
         extract_root = workdir / key / ref.package
         if extract_root.exists():
             shutil.rmtree(extract_root)
@@ -1935,7 +1995,6 @@ def harvest_cell(
                 "extracted_path": relative,
                 "resolved_from": finding.resolved_from,
                 "package_sha256": package_sha256 or ref.sha256,
-                "fetched_from_cache": from_cache,
             }
             outcomes.append(record)
             if finding.outcome != OUTCOME_ARCHIVE:
@@ -2095,6 +2154,7 @@ def harvest(
     cap_bytes: int = DEFAULT_BYTE_CAP,
     only: Sequence[str] = (),
     dry_run: bool = False,
+    reuse_indexes: bool = False,
 ) -> dict[str, Any]:
     """Harvest every cell of a matrix spec.
 
@@ -2108,6 +2168,8 @@ def harvest(
         only: Substrings; a cell key that matches none of them is skipped.
             Empty means every cell.
         dry_run: Resolve versions and report, fetch no packages.
+        reuse_indexes: Serve package indexes from the cache when they are
+            already there, instead of re-reading them for the current version.
 
     Returns:
         A run summary. Per-cell failures are recorded in it, not raised: one
@@ -2115,7 +2177,12 @@ def harvest(
     """
     document = load_spec(spec_path)
     expected = dict(document.get("licences", {}))
-    fetcher = Fetcher(cache_root=cache_root, delay=delay, cap_bytes=cap_bytes)
+    fetcher = Fetcher(
+        cache_root=cache_root,
+        delay=delay,
+        cap_bytes=cap_bytes,
+        reuse_indexes=reuse_indexes,
+    )
 
     cells: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
@@ -2245,6 +2312,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Resolve versions and report; fetch no packages.",
     )
     parser.add_argument(
+        "--reuse-indexes",
+        action="store_true",
+        help=(
+            "Serve package indexes from the cache when present, instead of "
+            "re-reading them. Use it to re-derive an old harvest or to check "
+            "that a warm re-run is byte-identical; not for a current harvest."
+        ),
+    )
+    parser.add_argument(
         "--summary",
         type=Path,
         default=None,
@@ -2266,6 +2342,7 @@ def main(argv: list[str] | None = None) -> int:
         cap_bytes=args.cap_bytes,
         only=tuple(args.only),
         dry_run=args.dry_run,
+        reuse_indexes=args.reuse_indexes,
     )
     if args.summary:
         write_json(args.summary.expanduser(), summary)
