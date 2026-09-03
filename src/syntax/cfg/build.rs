@@ -91,11 +91,21 @@ pub struct CfgBuilder {
     labels: BTreeMap<Symbol, NodeId>,
     /// Each scope's resolved `continue` target, indexed by scope id.
     scope_continue: Vec<Option<NodeId>>,
-    /// Each scope's test node, indexed by scope id. A `continue` counts as a
-    /// loop back edge only when it lands here: a `for` loop's `continue` jumps
-    /// *forwards* into the step region, and the edge that actually closes the
-    /// cycle is the one from the step back to the test.
-    scope_head: Vec<NodeId>,
+    /// Each scope's back-edge target, indexed by scope id: the node a
+    /// `continue` has to land on for its edge to close that scope's cycle, and
+    /// `None` for a scope no `continue` can close a cycle in.
+    ///
+    /// Only a loop whose test sits *above* its body has one, because only there
+    /// does returning to the test go backwards. The other two loop shapes send
+    /// their `continue` forwards and close their cycle with a different edge
+    /// entirely: a `for` loop's `continue` jumps into the step region, and the
+    /// cycle is closed by the step's own edge back to the test; a `do`-`while`'s
+    /// test is a latch *below* the body, and the cycle is closed by the latch's
+    /// edge back into the body. Marking either eagerly makes
+    /// [`Cfg::validate`] report a phantom back edge that closes no cycle, which
+    /// is why this is resolved in the second pass against the resolved target
+    /// rather than at the `continue` itself.
+    scope_back_target: Vec<Option<NodeId>>,
     /// A label seen with no intervening event, waiting to name a construct.
     pending_scope_label: Option<Symbol>,
     /// The scope whose step region has begun and whose `continue` target is
@@ -130,7 +140,7 @@ impl CfgBuilder {
             scopes: Vec::new(),
             labels: BTreeMap::new(),
             scope_continue: Vec::new(),
-            scope_head: Vec::new(),
+            scope_back_target: Vec::new(),
             pending_scope_label: None,
             awaiting_step: None,
             diagnostics: Diagnostics::new(),
@@ -277,7 +287,15 @@ impl CfgBuilder {
         let id = self.next_scope_id;
         self.next_scope_id = self.next_scope_id.saturating_add(1);
         self.scope_continue.push(None);
-        self.scope_head.push(head);
+        // A bottom-tested loop's test is below its body, so no `continue` in it
+        // ever goes backwards; a `for` loop's target is resolved to its step
+        // region below, which is not `head` either, so the comparison in
+        // `finish` rejects it without a second rule.
+        self.scope_back_target.push(match kind {
+            ScopeKind::Loop(LoopKind::DoWhile) => None,
+            ScopeKind::Loop(_) => Some(head),
+            ScopeKind::Branch | ScopeKind::Switch => None,
+        });
         self.scopes.push(Scope {
             id,
             kind,
@@ -589,7 +607,12 @@ impl CfgBuilder {
                 Dest::Continue(scope, span) => {
                     match self.scope_continue.get(scope as usize).copied().flatten() {
                         Some(id) => {
-                            is_back = self.scope_head.get(scope as usize) == Some(&id);
+                            is_back = self
+                                .scope_back_target
+                                .get(scope as usize)
+                                .copied()
+                                .flatten()
+                                == Some(id);
                             Some(id)
                         }
                         None => {
@@ -619,8 +642,38 @@ impl CfgBuilder {
         }
 
         let targets = self.scope_continue.iter().copied().flatten().collect();
-        let cfg = Cfg::assemble(self.nodes, edges, self.entry, self.exit, targets);
+        let mut cfg = Cfg::assemble(self.nodes, edges, self.entry, self.exit, targets);
+        mark_cycle_closing_back_edges(&mut cfg);
         Parsed::new(cfg, self.diagnostics)
+    }
+}
+
+/// Mark as a loop back edge every edge of `cfg` that closes a cycle.
+///
+/// The first pass can only mark the back edges of the *constructs* it was told
+/// about, and a loop spelled out of a `goto` and a label is not one of those:
+/// nothing in the event stream says that `top: ...; if (c) goto top;` is a
+/// loop. It is one all the same --- `REQ-GEN-1`'s "back edges correspond to
+/// source loops" is about loops in the source, not about loop keywords --- and
+/// depth-first search finds it without being told, so the second pass reads the
+/// flag off the finished graph.
+///
+/// It reads it with [`Cfg::cycle_closing_edges`], the same scan
+/// [`Cfg::validate`] cross-checks `is_back` against, which is what makes the
+/// two agree by construction rather than by coincidence. Which edge of such a
+/// loop closes the cycle is the search's business and not the source's: a
+/// `goto` loop entered at its label closes on the `goto`, and one entered by a
+/// `goto` into the middle of its body closes on the *fall-in* edge to the
+/// label, which carries no [`EdgeKind::Jump`] to excuse it.
+///
+/// The flag is only ever set here, never cleared. A construct's back edge the
+/// scan never examined --- one in code unreachable from the entry, which the
+/// scan does not enter --- keeps the mark the first pass gave it, because the
+/// loop is still in the source and the unreachability is the separate finding.
+fn mark_cycle_closing_back_edges(cfg: &mut Cfg) {
+    let closes = cfg.cycle_closing_edges();
+    for (edge, closes) in cfg.edges.iter_mut().zip(closes) {
+        edge.is_back |= closes;
     }
 }
 
@@ -1392,6 +1445,128 @@ mod tests {
             Some(node_of(&cfg, 900_001))
         );
         assert!(cfg.validate().is_empty());
+    }
+
+    #[test]
+    fn a_backward_goto_forming_a_loop_is_marked_a_back_edge() {
+        // `goto head; body: g(); head: if (c) goto body;` --- a loop written
+        // out of a `goto` and a label, with no loop construct anywhere in it.
+        // Depth-first search enters it at `head`, so the edge that closes the
+        // cycle is the *fall-in* `g() -> head`, not the `goto`.
+        let body = sym(1);
+        let head = sym(2);
+        let (cfg, diagnostics) = build(vec![
+            Flow::Goto {
+                label: head,
+                span: s(10),
+            },
+            Flow::Label {
+                name: body,
+                span: s(20),
+            },
+            Flow::Stmt(s(30)),
+            Flow::Label {
+                name: head,
+                span: s(40),
+            },
+            Flow::Branch { cond: s(50) },
+            Flow::Then,
+            Flow::Goto {
+                label: body,
+                span: s(60),
+            },
+            Flow::EndScope,
+            Flow::Stmt(s(70)),
+        ]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let closes = cfg.cycle_closing_edges();
+        let closing: Vec<CfgEdge> = cfg
+            .edges()
+            .iter()
+            .zip(&closes)
+            .filter(|(_, &closes)| closes)
+            .map(|(edge, _)| *edge)
+            .collect();
+        assert_eq!(closing.len(), 1, "the goto loop closes exactly one cycle");
+        assert_eq!(closing[0].dst, node_of(&cfg, 40), "the loop's head");
+        assert!(
+            closing[0].is_back,
+            "a loop built from a goto and a label is still a loop"
+        );
+        let report = cfg.validate();
+        assert!(report.is_empty(), "{report:?}");
+        assert!(cfg.coalesced().validate().is_empty());
+    }
+
+    #[test]
+    fn a_goto_loop_entered_at_its_label_marks_the_jump_as_the_back_edge() {
+        // `top: g(); if (c) goto top;` --- the same loop reached the other way
+        // round, where depth-first search enters at `top` and the edge that
+        // closes the cycle is the `goto` itself.
+        let top = sym(1);
+        let (cfg, diagnostics) = build(vec![
+            Flow::Label {
+                name: top,
+                span: s(10),
+            },
+            Flow::Stmt(s(20)),
+            Flow::Branch { cond: s(30) },
+            Flow::Then,
+            Flow::Goto {
+                label: top,
+                span: s(40),
+            },
+            Flow::EndScope,
+            Flow::Stmt(s(50)),
+        ]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let jump = cfg
+            .successor_edges(node_of(&cfg, 40))
+            .first()
+            .copied()
+            .expect("the goto must reach its label");
+        assert_eq!(jump.dst, node_of(&cfg, 10));
+        assert!(jump.is_back, "the goto returns to the head of its own loop");
+        assert!(cfg.validate().is_empty());
+    }
+
+    #[test]
+    fn a_do_while_continue_jumps_forwards_to_the_bottom_test() {
+        // `do { g(); if (c) continue; h(); } while (p);` --- the test is a
+        // latch below the body, so the `continue` runs *forwards* into it and
+        // the edge that closes the cycle is the latch's own `test -> body`.
+        let (cfg, diagnostics) = build(vec![
+            Flow::LoopHeader {
+                kind: LoopKind::DoWhile,
+                cond: s(10),
+            },
+            Flow::Stmt(s(20)),
+            Flow::Branch { cond: s(30) },
+            Flow::Then,
+            Flow::Continue {
+                label: None,
+                span: s(40),
+            },
+            Flow::EndScope,
+            Flow::Stmt(s(50)),
+            Flow::EndScope,
+        ]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let header = node_of(&cfg, 10);
+        let continue_node = node_of(&cfg, 40);
+        let edge = cfg
+            .successor_edges(continue_node)
+            .first()
+            .copied()
+            .expect("the continue must reach the test");
+        assert_eq!(edge.dst, header, "the continue lands on the bottom test");
+        assert!(
+            !edge.is_back,
+            "a bottom-tested loop's continue jumps forwards, closing no cycle"
+        );
+        assert_eq!(cfg.continue_targets(), &[header]);
+        let report = cfg.validate();
+        assert!(report.is_empty(), "{report:?}");
     }
 
     #[test]
