@@ -238,7 +238,7 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
         timeout_ms=8000,
     )
 
-    assert " frame_return(int arg0)" in text.splitlines()[1], text
+    assert " frame_return(int wait)" in text.splitlines()[1], text
     assert "signed char c;" in text, text
     assert "return c;" in text, text
     assert "arg0 = " not in text, text
@@ -370,7 +370,7 @@ def test_real_arm_hard_float_decompile_recompile_execute_round_trip(
         timeout_ms=8000,
     )
 
-    assert "float arm_hard_float_formula(float arg0)" in generated, generated
+    assert "float arm_hard_float_formula(float throttle)" in generated, generated
     assert "asm:" not in generated, generated
     assert "return 0;" not in generated, generated
     assert all(literal in generated for literal in ("1.0f", "3.0f", "1.5f")), generated
@@ -476,8 +476,8 @@ def test_real_arm_hard_float_call_round_trip(tmp_path: Path) -> None:
         timeout_ms=8000,
     )
 
-    assert "float arm_hf_caller(float arg0, float arg1)" in generated, generated
-    assert "arm_hf_callee(arg0, arg1)" in generated, generated
+    assert "float arm_hf_caller(float x, float y)" in generated, generated
+    assert "arm_hf_callee(x, y)" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "hard_float_call_driver.c"
@@ -589,13 +589,13 @@ def test_real_arm_mixed_hard_float_call_round_trip(tmp_path: Path) -> None:
         max_functions=1,
     )
 
-    assert "float arm_hf_mixed_caller(float arg0, int arg1)" in generated, generated
+    assert "float arm_hf_mixed_caller(float measured, int negate)" in generated, generated
     # The callee prototype types every argument, so each one is already the
     # parameter's type and needs no conversion: `7` is an `int` literal and
-    # `arg1` is a declared `int`. This used to render `(int)(7), arg0,
+    # `negate` is a declared `int`. This used to render `(int)(7), arg0,
     # (int)(arg1)` — casts that state nothing and that a C-signature type_match
     # has to parse around. See the ARM hard-float call-argument cast fix.
-    assert "arm_hf_mixed_callee(7, arg0, arg1)" in generated, generated
+    assert "arm_hf_mixed_callee(7, measured, negate)" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "mixed_call_driver.c"
@@ -709,9 +709,9 @@ def test_real_arm_mixed_hard_float_spills_preserve_source_parameter_order(
         timeout_ms=8000,
     )
 
-    assert "float arm_mixed_storage(int arg0, float arg1, int arg2)" in generated, (
-        generated
-    )
+    assert (
+        "float arm_mixed_storage(int token, float measured, int negate)" in generated
+    ), generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "mixed_driver.c"
@@ -814,7 +814,7 @@ def test_real_arm_stack_backed_float_round_trip(tmp_path: Path) -> None:
         timeout_ms=8000,
     )
 
-    assert "float arm_stack_backed_float(float arg0)" in generated, generated
+    assert "float arm_stack_backed_float(float arg)" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "stack_float_driver.c"
@@ -924,7 +924,7 @@ def test_real_thumb_leaf_frame_save_does_not_become_a_source_local(
         timeout_ms=8000,
     )
 
-    assert "thumb_leaf_frame(int arg0)" in generated, generated
+    assert "thumb_leaf_frame(int wait)" in generated, generated
     assert "signed char value;" in generated, generated
     assert "local_4" not in generated, generated
     assert "= var0;" not in generated, generated
@@ -1390,8 +1390,8 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
     )
 
     signature = next(line for line in text.splitlines() if "arm_narrow_params(" in line)
-    assert "unsigned char arg1" in signature, text
-    assert "unsigned char arg2" in signature, text
+    assert "unsigned char address" in signature, text
+    assert "unsigned char nak" in signature, text
 
     word_target = next(
         (function for function in functions if function.name == "arm_word_params"),
@@ -1408,8 +1408,8 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
         line for line in word_text.splitlines() if "arm_word_params(" in line
     )
     assert "arm_word_params(" in word_signature, word_text
-    assert "int arg1" in word_signature, word_text
-    assert "* arg1" not in word_signature, word_text
+    assert "int count" in word_signature, word_text
+    assert "* count" not in word_signature, word_text
 
     scalar_target = next(
         (function for function in functions if function.name == "arm_unsigned_scalars"),
@@ -1424,10 +1424,10 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
     )
     scalar_signature = scalar_text.splitlines()[1]
     assert "arm_unsigned_scalars(" in scalar_signature, scalar_text
-    assert "int arg0" in scalar_signature, scalar_text
-    assert "unsigned int arg1" in scalar_signature, scalar_text
-    assert "* arg0" not in scalar_signature, scalar_text
-    assert "* arg1" not in scalar_signature, scalar_text
+    assert "unsigned int port" in scalar_signature, scalar_text
+    assert "unsigned int baud" in scalar_signature, scalar_text
+    assert "* port" not in scalar_signature, scalar_text
+    assert "* baud" not in scalar_signature, scalar_text
 
 
 def test_real_stripped_arm64_loop_does_not_invent_trailing_parameters(

@@ -10,6 +10,7 @@ worse than no harness — it hides regressions.
 from __future__ import annotations
 
 import ctypes
+import re
 import subprocess
 import sys
 import tempfile
@@ -1352,7 +1353,15 @@ def test_real_stack_object_initialization_remains_a_memory_store():
     function_va = D.exported_functions(binary)["build_stack_pair"]
     decompiled = D.decompiled_c(binary, function_va)
     assert decompiled is not None
-    assert "unsigned char local_" in decompiled, decompiled
+    array = re.search(r"unsigned char ([A-Za-z_]\w*)\[8\];", decompiled)
+    assert array is not None, decompiled
+    array_name = re.escape(array.group(1))
+    assert re.search(rf"\*\(int \*\)\(&{array_name}\[0\]\)\s*=\s*5", decompiled), (
+        decompiled
+    )
+    assert not re.search(rf"^[ \t]*{array_name}\s*=", decompiled, re.MULTILINE), (
+        decompiled
+    )
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         source_path = Path(td) / "stack_object_store.c"
@@ -1426,8 +1435,8 @@ def test_real_pointer_parameter_arithmetic_has_a_pointer_boundary():
     function_va = D.exported_functions(binary)["advance_pointer"]
     decompiled = D.decompiled_c(binary, function_va)
     assert decompiled is not None
-    assert "advance_pointer(char * arg0" in decompiled, decompiled
-    assert "arg0 = (char *)" in decompiled, decompiled
+    assert "advance_pointer(char * cursor" in decompiled, decompiled
+    assert "cursor = (char *)" in decompiled, decompiled
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         source_path = Path(td) / "pointer_parameter_arithmetic.c"

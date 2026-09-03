@@ -141,7 +141,7 @@ def test_a32_o0_shift_and_signed_multiply_round_trip_loop_fixture(
     assert "===== prepared numbered LLIR =====" in lifted.stderr
     assert re.search(r"Shl %r3#\d+ 2", lifted.stderr), lifted.stderr
     assert not re.search(r"Shl %r3#\d+ %r3#\d+", lifted.stderr), lifted.stderr
-    assert re.search(r"arg0\[\w+\]", lifted.stdout), lifted.stdout
+    assert re.search(r"p\[\w+\]", lifted.stdout), lifted.stdout
 
     signed = _decompile(target, signed_function)
     assert signed.returncode == 0, signed.stderr
@@ -178,7 +178,7 @@ def test_a32_o0_frame_pointer_stack_arguments_round_trip(
     assert re.search(r"load\[4 bytes\].*Phys\(\"fp\"\).*disp: 4", lifted.stderr), (
         lifted.stderr
     )
-    assert "int arg4" in lifted.stdout, lifted.stdout
+    assert "int a4" in lifted.stdout, lifted.stdout
     assert "stack_0" not in lifted.stdout, lifted.stdout
 
     functions = {
@@ -431,10 +431,13 @@ def test_arm32_o0_rb_validate_round_trips_split_frame_addresses(
     # The `(__SIZE_TYPE__)` cast beside it must survive — dropping that one too
     # would mean the elision had stopped checking the declared type.
     assert re.search(
-        r"memset\(\(void \*\)\(&local_[0-9a-f]+\[0\]\),\s*0,"
+        r"memset\(&local_[0-9a-f]+\[0\],\s*0,"
         r"\s*\(__SIZE_TYPE__\)\(64\)\)",
         decompiled.stdout,
     ), decompiled.stdout
+    assert "long lr;" not in decompiled.stdout
+    assert " = lr;" not in decompiled.stdout
+    assert not re.search(r"unsigned char local_[48]\[(?:4|8)\];", decompiled.stdout)
     assert not re.search(r"<< 2\) - 4", decompiled.stdout), decompiled.stdout
     assert not re.search(r"\+ 384\).+- 132", decompiled.stdout), decompiled.stdout
 

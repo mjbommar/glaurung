@@ -74,8 +74,8 @@ __attribute__((noinline)) int caller(int value) {
     )
     decompiled = g.ir.decompile_at(str(binary), caller_address & ~1, style="decbench")
 
-    assert "int caller(int arg0)" in decompiled
-    assert "return (var1 + 2);" in decompiled
+    assert "int caller(int value)" in decompiled
+    assert "return (callee(value) + 2);" in decompiled
     assert "local_4" not in decompiled
     assert "long lr" not in decompiled
     assert "= lr" not in decompiled

@@ -601,27 +601,69 @@ def test_a_join_selected_pointer_is_defined_on_every_path_to_its_use(
 ) -> None:
     """`join_selected_length` picks a pointer in two predecessors, then reads it.
 
-    Whatever name the decompiler gives the merged value, that name must be
-    assigned in both arms — merging two definitions into one name and keeping
-    only one of the assignments is the defect family behind lost string
-    arguments and mis-coalesced phis alike.
+    Whatever name the decompiler gives the merged value, it must either be
+    assigned in both arms or receive one complete conditional expression.
+    Merging two definitions into one name and keeping only one predecessor is
+    the defect family behind lost string arguments and mis-coalesced phis alike.
     """
     if (arch, opt) not in built:
         pytest.skip(f"no compiler for {arch}")
     text = _decompile(built[(arch, opt)], func="join_selected_length")
     body = next(iter(_units(text).values()), text)
-    #: the loop reads the chosen pointer; find what it dereferences
-    deref = re.findall(r"\*\s*\(?\s*\(?[\w \*]*\)?\s*\(?\b(var\d+|arg\d+)\b", body)
+    signature = next(
+        line for line in body.splitlines() if "join_selected_length(" in line
+    )
+    parameter_fields = signature.split("(", 1)[1].rsplit(")", 1)[0].split(",")
+    parameters = {
+        match.group(1)
+        for field in parameter_fields
+        if (match := re.search(r"\b([A-Za-z_]\w*)\s*$", field.strip()))
+    }
+    pointer_parameters = {
+        match.group(1)
+        for field in parameter_fields
+        if "*" in field
+        and (match := re.search(r"\b([A-Za-z_]\w*)\s*$", field.strip()))
+    }
+    pointer_locals = set(
+        re.findall(
+            r"^[ \t]*(?:const\s+)?[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*\s*\*\s*"
+            r"([A-Za-z_]\w*)\s*(?:=|;)",
+            body,
+            re.MULTILINE,
+        )
+    )
+    pointer_candidates = pointer_parameters | pointer_locals
+    #: Find pointer candidates used by an indexed or explicit dereference.
+    dereference_lines = [
+        line for line in body.splitlines() if "[" in line or "*(" in line
+    ]
+    value_names = set(
+        re.findall(r"\b(?:var\d+|arg\d+|stack_\d+|local_[0-9a-fA-F]+)\b", body)
+    ) | pointer_candidates
+    deref = [
+        value
+        for value in value_names
+        if any(re.search(rf"\b{value}\b", line) for line in dereference_lines)
+    ]
     assert deref, f"{arch} {opt}: no pointer dereference recovered\n{body}"
     problems = []
     for value in sorted(set(deref)):
-        if value.startswith("arg"):
+        if value in parameters:
             continue  # a parameter is defined on entry by definition
-        assigns = re.findall(rf"^[ \t]*{value}\s*=[^=]", body, re.MULTILINE)
-        if len(assigns) < 2:
+        assignment_lines = [
+            line
+            for line in body.splitlines()
+            if re.search(rf"\b{value}\s*=(?!=)", line)
+        ]
+        conditional_assign = any(
+            "?" in line and ":" in line for line in assignment_lines
+        )
+        if len(assignment_lines) < 2 and not conditional_assign:
             problems.append(
-                f"{value} is dereferenced but assigned {len(assigns)} time(s); "
-                "a value merged from two predecessors needs a definition on each"
+                f"{value} is dereferenced but assigned {len(assignment_lines)} time(s); "
+                "a value merged from two predecessors needs a definition on each "
+                "or one complete conditional assignment"
             )
     assert not problems, f"{arch} {opt} join-selected pointer:\n" + "\n".join(problems)
 
