@@ -642,7 +642,7 @@ one authoritative set of case edges.
   ownership. The former strict xfail is green with no goto or indirect-jump
   placeholder.
   Other compiler/optimization and named fixture lanes remain.
-- [ ] Unit tests for malformed, out-of-range, overlapping, and truncated
+- [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
   shadow-output path now runs the exact typed C returned by
@@ -657,6 +657,44 @@ one authoritative set of case edges.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
   parseable C rendering. Corpus-wide census coverage remains.
+
+### Implementation evidence — 2026-09-03 malformed-table safety
+
+The bounded relative decoder and whole-section scanner previously computed
+`table_va + signed_offset` through wrapping integer arithmetic. At either edge
+of the address space, malformed table bytes could therefore wrap into an
+address accepted by the executable-region predicate and manufacture a switch
+target. Two RED tests reproduced both directions: `u64::MAX - 7 + 16` was
+accepted as target `8`, and `4 + (-16)` was accepted near `u64::MAX`.
+
+`src/analysis/jump_table.rs` now uses checked signed address arithmetic. The
+bounded decoder reports the existing typed
+`TableDecline::TargetArithmeticOverflow { index }`; the heuristic scanner
+terminates the candidate run. Explicit unit coverage now includes malformed
+object bytes, a table extent truncated at both the section end and a non-zero
+offset, a target overlapping the absolute table itself, a non-executable
+relative target, adjacent tables, and both arithmetic boundaries.
+
+Validation against the working tree and a fresh release extension:
+
+- `cargo test --features python-ext analysis::jump_table::tests -- --nocapture`:
+  18 passed, 0 failed;
+- `cargo test --features python-ext`: all 3,089 library tests and every ordinary
+  integration target passed; its final CFR doctest hit a transient duplicate
+  `pyo3` artifact error, then
+  `cargo test --features python-ext --doc identity::cfr` passed 1/1 in
+  isolation;
+- the six named WP5 fixture families selected 24 baseline lanes with no scoped
+  regressions; one `206_aarch64_wide_dispatch:gcc:O2:dispatch_in_loop`
+  improvement was visible but is not attributed to this address-boundary fix
+  in the concurrent worktree; and
+- `08_indirect_dispatch` across i386, ARMv7, AArch64, and x86-64 GCC 15 selected
+  eight architecture lanes with no scoped regressions.
+
+The def-use census passed its five safety checks and stopped at the improvement
+ratchet because concurrent work removed many baseline violations; it requires
+a separately reviewed baseline refresh. The corpus-wide structural command was
+still running when this evidence was written and is not claimed green here.
 
 ### Exit criteria
 

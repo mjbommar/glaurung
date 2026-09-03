@@ -570,7 +570,9 @@ where
         } else {
             i32::from_be_bytes(bytes)
         };
-        let target = (table_va as i64).wrapping_add(raw as i64) as u64;
+        let target = table_va
+            .checked_add_signed(i64::from(raw))
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
         if !is_executable_va(target) {
             return Err(TableDecline::NonExecutableTarget { index, target });
         }
@@ -652,7 +654,9 @@ where
                 } else {
                     i32::from_be_bytes([bytes[j], bytes[j + 1], bytes[j + 2], bytes[j + 3]])
                 };
-                let target = (table_va as i64).wrapping_add(raw as i64) as u64;
+                let Some(target) = table_va.checked_add_signed(i64::from(raw)) else {
+                    break;
+                };
                 if !is_executable_va(target) {
                     break;
                 }
@@ -802,6 +806,75 @@ mod tests {
         })
         .expect("the dispatch-proven extent must recover the second table");
         assert_eq!(decoded, second_targets);
+    }
+
+    #[test]
+    fn relative_target_overflow_declines_instead_of_wrapping_into_code() {
+        let table_va = u64::MAX - 7;
+        let entry = 16i32.to_le_bytes();
+
+        assert_eq!(
+            decode_relative_entries(&entry, table_va, 1, true, &|target| target == 8),
+            Err(TableDecline::TargetArithmeticOverflow { index: 0 }),
+            "a malformed offset must not wrap to a low executable address"
+        );
+    }
+
+    #[test]
+    fn relative_target_underflow_declines_instead_of_wrapping_into_code() {
+        let table_va = 4;
+        let entry = (-16i32).to_le_bytes();
+
+        assert_eq!(
+            decode_relative_entries(&entry, table_va, 1, true, &|target| {
+                target == u64::MAX - 11
+            }),
+            Err(TableDecline::TargetArithmeticOverflow { index: 0 }),
+            "a malformed negative offset must not wrap above the address space"
+        );
+    }
+
+    #[test]
+    fn malformed_object_and_truncated_extent_decline_without_partial_targets() {
+        assert_eq!(
+            decode_bounded_relative_jump_table(None, b"not an object", 0x4000, 4, |_| true),
+            Err(TableDecline::ObjectParseFailed)
+        );
+        assert_eq!(section_entries(0x4000, &[0; 15], 0x4000, 16), None);
+        assert_eq!(section_entries(0x4000, &[0; 16], 0x4004, 16), None);
+    }
+
+    #[test]
+    fn absolute_target_inside_its_table_declines_as_overlapping_data() {
+        let table_va = 0x4000;
+        let entries = (table_va as u32).to_le_bytes();
+        assert_eq!(
+            decode_absolute_word_entries(&entries, table_va, true, &|_| true),
+            Err(TableDecline::TargetInsideTable {
+                index: 0,
+                target: table_va,
+            })
+        );
+    }
+
+    #[test]
+    fn relative_non_executable_target_declines_the_whole_table() {
+        let table_va = 0x4000;
+        let first = (0x1100i64 - table_va as i64) as i32;
+        let second = (0x9000i64 - table_va as i64) as i32;
+        let entries: Vec<u8> = [first, second]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect();
+        assert_eq!(
+            decode_relative_entries(&entries, table_va, 2, true, &|target| {
+                (0x1000..0x2000).contains(&target)
+            }),
+            Err(TableDecline::NonExecutableTarget {
+                index: 1,
+                target: 0x9000,
+            })
+        );
     }
 
     /// `08_indirect_dispatch.c:dispatch_switch`, built by
