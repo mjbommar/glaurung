@@ -295,6 +295,135 @@ code generation. `.text$mn` COMDAT handling in particular is argued from the
 code path -- the builder never looks at a section's name -- rather than
 measured. That is the first thing to check the day a real `.lib` is to hand.
 
+## The gsig/1 container
+
+Added 2026-09-03 (`src/flirt/gsig/`), from
+`docs/design/signature-library-program-2026-09-03.md` Decision 2 and its
+`sourcing-and-distribution.md` §Q3 struct sketch -- both landed on
+`origin/master` after this work started and are not yet a link target from
+this page for that reason, not because they do not exist. JSON is a fine
+interchange format -- reviewable, diffable,
+`git`-mergeable -- and an impossible *distribution* one: at the corpus scale
+this project is aiming at (10^5 to 10^6 signatures, one library per
+`(distro, release, arch, package version)`), it is gigabytes of text re-parsed
+from scratch on every load.
+
+`gsig/1` is a chunked binary container carrying the same content: a fixed
+64-byte uncompressed header (`b"GSIG"`, `format_version`, `reader_min`, `arch`,
+`scheme`, counts, `dict_id`, `chunk_count`, `header_len`), a chunk table
+(`kind`, `compression`, `compressed_size`, `uncompressed_size`, `file_offset`;
+an unknown `kind` is skipped by its recorded size), and eight columnar
+sections -- `postcard`-encoded records over an interned, sorted string table,
+masks as bitmaps (one bit per pattern byte, not one byte), 64 KiB
+independently zstd-compressed chunks. Records are sorted by `(name, pattern)`.
+Nothing about the bytes depends on a hash map's iteration order, a timestamp,
+or a path, so two writes of one input are identical -- the property a
+content-addressed distribution needs. `src/flirt/gsig/mod.rs`'s module docs
+carry the full layout table and the versioning rules; this section is the
+measurements and the commands that produced them.
+
+JSON stays the import/export format -- what a harvester writes and a reviewer
+diffs. `python -m glaurung.tools.sig_convert` converts either way and proves
+the round trip lossless; `glaurung.analysis.flirt_library_info_path` and
+`glaurung.tools.build_flirt_library --format gsig` are the two other new
+surfaces. The matcher (`FlirtLibrary::from_path`, and every Python entry point
+that takes a library path) dispatches on the file's first four bytes, so a
+caller never has to say which format it is holding.
+
+### Crates
+
+Verified against the crates.io API on 2026-09-03 (see
+`sourcing-and-distribution.md` §3.5 for the full survey):
+
+| Crate | Version | Licence | Last release | Role |
+|---|---|---|---|---|
+| `postcard` | 1.1.3 | MIT OR Apache-2.0 | 2025-07-24 | Record encoding. Varint, no struct-evolution story of its own -- versioning lives in the container. |
+| `ruzstd` | 0.9.0 | MIT | 2026-07-26 | Pure-Rust Zstandard, **shipped reader and default writer**. Since 0.9 it compresses (`Fastest` level only) as well as decompresses, so the wheel needs no C toolchain to read a library. |
+| `zstd` | 0.13.3 | MIT | 2025-02-20 | Reference C zstd at level 19, **builder-only**, behind the `gsig-zstd` cargo feature (`dep:zstd`, pulls in `zstd-sys`). Never the shipped reader's codec, and never the writer's *default* codec -- enabling the feature adds a codec, it does not move the golden hash. |
+
+`memmap2` (0.9.4, already a dependency) backs the reader's `open()`. Not used:
+`bincode` (Glaurung already depends on 2.0.1 elsewhere, but 3.0.0 is a
+deliberate tombstone -- `compile_error!` in `lib.rs` -- and this format does
+not build on a dead crate), `rkyv`/FlatBuffers (rejected in the design doc: a
+zero-copy format's alignment or schema-compiler cost buys back a load-time
+saving that measures at a few hundred milliseconds per 10^6 records, once per
+process).
+
+### Measured: bytes per signature
+
+`python -m glaurung.tools.sig_convert roundtrip ~/.cache/glaurung/system-libs/sigs/`,
+561 harvested libraries (Debian, Ubuntu, Alpine, MinGW; i386/x86_64/aarch64/arm/riscv64),
+222,339 signatures, release build:
+
+| Encoding | Total bytes | Bytes/signature | vs. JSON |
+|---|--:|--:|--:|
+| JSON (current interchange format) | 294,902,199 | 1,326 | 1.0x |
+| `gsig/1`, `store` codec (packed, uncompressed) | 50,984,619 | 229 | 5.8x smaller |
+| `gsig/1`, `zstd` codec (default, `ruzstd` `Fastest`) | 22,543,729 | 101 | **13.1x smaller** |
+
+0 round-trip failures across all 561 libraries in both directions (JSON to
+gsig to JSON byte-identical after canonical sorting; gsig to gsig
+byte-identical). The 12-signature committed fixture
+(`tests/fixtures/flirt/gsig/`) is the golden-hash tripwire for this property in
+CI; this command is the corpus-scale version, run by hand against a machine's
+local harvest -- `~/.cache/glaurung/system-libs/sigs/` is not part of this
+repository.
+
+### Measured: load time to first match
+
+`glaurung.analysis.flirt_library_match_bytes(path, data)` -- load the file,
+build the index, answer one 32-byte lookup -- median of 7 runs, same machine:
+
+| Library | Format | Debug | Release |
+|---|---|--:|--:|
+| glibc alone (2,563 sigs, this box's `libc6-dev` 2.35) | JSON | 33.8 ms | 3.24 ms |
+| glibc alone | gsig (zstd) | 16.2 ms | 2.34 ms |
+| merged x86_64 (116,593 sigs, every harvested x86_64 library concatenated) | JSON (91 MB) | 1,374.6 ms | 153.6 ms |
+| merged x86_64 | gsig (zstd, 4.9 MB) | 602.7 ms | 81.1 ms |
+
+`gsig` loads 1.4-1.9x faster than JSON at both scales and both profiles --
+smaller to parse, no hex decoding, no `serde_json::Value` intermediate. The
+debug/release gap (roughly 9x) is the same effect
+[`docs/development/traps.md`](../development/traps.md) records elsewhere:
+`uv run maturin develop` builds debug by default, and a number without a
+build label is not a measurement.
+
+### Measured: write time
+
+`glaurung.analysis.flirt_gsig_write_from_json_str`, default `zstd` codec,
+release build:
+
+| Library | Signatures | Write time |
+|---|--:|--:|
+| glibc alone | 2,563 | 13.2 ms |
+| merged x86_64 | 116,593 | 501.2 ms |
+
+### Measured: resident memory
+
+Peak RSS delta (`resource.getrusage(RUSAGE_SELF).ru_maxrss`) around one
+`flirt_library_match_bytes` call in a fresh interpreter, release build:
+
+| Library | Format | RSS delta |
+|---|---|--:|
+| glibc alone | JSON | 11.3 MiB |
+| glibc alone | gsig | 10.5 MiB |
+| merged x86_64 | JSON | 296.3 MiB |
+| merged x86_64 | gsig | **134.3 MiB, 2.2x less** |
+
+The ratio widens with scale: at glibc's size, fixed per-process overhead
+(interpreter, extension, libc) dominates both numbers; at the merged corpus's
+size, the difference is almost entirely the format -- `serde_json::Value` plus
+`FlirtLibraryFile`'s owned `String`s and `Vec`s per entry, against one arena
+allocation plus fixed-size records.
+
+### What this is not
+
+Not zero-copy, deliberately -- see `src/flirt/gsig/mod.rs`'s module docs and
+the design doc's §3.3. The reader `mmap`s the file, parses the header and
+chunk table without inflating anything, then inflates the sections it needs
+into one arena allocation and rebuilds `by_first_byte` (and, for a WARP-GUID
+library, a sorted `u128` array for binary search) from scratch every load.
+
 ## Keying
 
 A library is `(name, version, variant, arch)`. **No exact or masked scheme

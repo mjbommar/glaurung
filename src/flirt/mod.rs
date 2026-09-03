@@ -58,6 +58,7 @@
 
 pub mod archive;
 pub mod crc16;
+pub mod gsig;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -326,6 +327,21 @@ impl FlirtLibrary {
             });
         }
 
+        Self::from_parts(file.arch, file.prologue_len, file.library, signatures)
+    }
+
+    /// Build the runtime index over already-compiled signatures.
+    ///
+    /// Shared by [`Self::from_file`] and [`Self::from_gsig_bytes`] so the two
+    /// load paths cannot drift into bucketing candidates differently — which
+    /// would show up as a format-dependent match rate, the worst possible
+    /// shape for that bug.
+    fn from_parts(
+        arch: String,
+        prologue_len: usize,
+        library: Option<FlirtLibraryKey>,
+        signatures: Vec<FlirtSignature>,
+    ) -> Self {
         let mut by_first_byte: HashMap<u8, Vec<usize>> = HashMap::new();
         let mut always_try: Vec<usize> = Vec::new();
         for (i, sig) in signatures.iter().enumerate() {
@@ -337,9 +353,9 @@ impl FlirtLibrary {
         }
 
         Self {
-            arch: file.arch,
-            prologue_len: file.prologue_len,
-            library: file.library,
+            arch,
+            prologue_len,
+            library,
             signatures,
             by_first_byte,
             always_try,
@@ -350,6 +366,70 @@ impl FlirtLibrary {
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
         let f: FlirtLibraryFile = serde_json::from_str(s)?;
         Ok(Self::from_file(f))
+    }
+
+    /// Compile a library from `gsig/1` bytes.
+    ///
+    /// Goes straight from the container's arena to the matcher's signatures:
+    /// no hex, no JSON, no `FlirtLibraryFile` in between. The same drop rule
+    /// as [`Self::from_file`] applies — an entry whose pattern is not
+    /// `prologue_len` bytes is skipped, because a signature we cannot compare
+    /// correctly is worse than a missing one.
+    pub fn from_gsig_bytes(data: &[u8]) -> Result<Self, gsig::GsigError> {
+        Self::from_gsig_library(&gsig::GsigLibrary::parse(data)?)
+    }
+
+    /// Compile a library from a `.gsig` on disk, `mmap`ing it to read.
+    pub fn from_gsig(path: &std::path::Path) -> Result<Self, gsig::GsigError> {
+        Self::from_gsig_library(&gsig::GsigLibrary::open(path)?)
+    }
+
+    fn from_gsig_library(loaded: &gsig::GsigLibrary) -> Result<Self, gsig::GsigError> {
+        let prologue_len = loaded.prologue_len();
+        let mut signatures = Vec::with_capacity(loaded.records().len());
+        for record in loaded.records() {
+            let pattern = loaded.pattern(record);
+            if pattern.len() != prologue_len {
+                continue;
+            }
+            signatures.push(FlirtSignature {
+                name: loaded.string(record.name)?.to_string(),
+                pattern: pattern.to_vec(),
+                fixed: loaded.fixed(record),
+                crc: record.crc16,
+                crc_len: usize::from(record.crc_len),
+                function_len: record.function_len,
+                refs: loaded.refs(record)?,
+            });
+        }
+        Ok(Self::from_parts(
+            loaded.arch().to_string(),
+            prologue_len,
+            loaded.library().cloned(),
+            signatures,
+        ))
+    }
+
+    /// Load a library from disk, dispatching on its first four bytes.
+    ///
+    /// `gsig/1` files begin with [`gsig::MAGIC`]; a JSON library begins with
+    /// `{` or whitespace. That is the whole dispatch, and it is why the
+    /// container's magic has to sit at byte 0 rather than inside a Zstandard
+    /// skippable frame.
+    pub fn from_path(path: &std::path::Path) -> Result<Self, LoadError> {
+        let mut magic = [0u8; 4];
+        {
+            use std::io::Read;
+            let mut file = std::fs::File::open(path)?;
+            // A file shorter than four bytes is not a library of either kind;
+            // let the JSON parser produce the error, which names the file.
+            let _ = file.read(&mut magic)?;
+        }
+        if gsig::is_gsig(&magic) {
+            return Ok(Self::from_gsig(path)?);
+        }
+        let text = std::fs::read_to_string(path)?;
+        Ok(Self::from_json(&text)?)
     }
 
     /// Match `data`, read from a candidate function's entry.
@@ -583,6 +663,25 @@ impl FlirtLibrary {
     }
 }
 
+/// Why [`FlirtLibrary::from_path`] could not load a library.
+///
+/// One error type over both formats, because a caller that has just been
+/// handed a path does not yet know which one it is holding — and the useful
+/// thing to report is "this file is not a signature library", not "it is not
+/// the format I guessed".
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    /// The file could not be opened or read.
+    #[error("cannot read signature library: {0}")]
+    Io(#[from] std::io::Error),
+    /// It began with `{` but did not parse as a JSON library.
+    #[error("signature library is not valid JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    /// It began with `GSIG` but did not parse as a `gsig/1` container.
+    #[error("{0}")]
+    Gsig(#[from] gsig::GsigError),
+}
+
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>, &'static str> {
     if s.len() % 2 != 0 {
         return Err("odd hex length");
@@ -600,12 +699,14 @@ fn hex_to_bytes(s: &str) -> Result<Vec<u8>, &'static str> {
 pub const MAX_CRC_LEN: usize = 255;
 
 /// Look up the default library file. Search order:
-///   1. `GLAURUNG_FLIRT_LIB` env var (single file).
-///   2. `data/sigs/glaurung-base.<arch>.flirt.json` relative to the cwd.
-///   3. `data/sigs/glaurung-base.x86_64.flirt.json` as a final fallback.
+///   1. `GLAURUNG_FLIRT_LIB` env var (single file, either format).
+///   2. `data/sigs/glaurung-base.x86_64.flirt.gsig` relative to the cwd.
+///   3. `data/sigs/glaurung-base.x86_64.flirt.json` relative to the cwd.
 ///
-/// Returns `None` if no library is reachable — that's fine, the matcher
-/// pass becomes a no-op when no library is available.
+/// The container is preferred where both exist: it is the same content and
+/// loads without parsing a megabyte of text. Returns `None` if no library is
+/// reachable — that's fine, the matcher pass becomes a no-op when no library
+/// is available.
 pub fn default_library_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("GLAURUNG_FLIRT_LIB") {
         let pb = PathBuf::from(p);
@@ -614,20 +715,23 @@ pub fn default_library_path() -> Option<PathBuf> {
         }
     }
     let cwd = std::env::current_dir().ok()?;
-    let candidate = cwd.join("data/sigs/glaurung-base.x86_64.flirt.json");
-    if candidate.exists() {
-        return Some(candidate);
+    for name in [
+        "data/sigs/glaurung-base.x86_64.flirt.gsig",
+        "data/sigs/glaurung-base.x86_64.flirt.json",
+    ] {
+        let candidate = cwd.join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
     }
     None
 }
 
-/// Try to load the default FLIRT library. Returns `None` silently if no
-/// library is available; analysis falls back to whatever DWARF and
-/// symbol-table renaming already accomplished.
+/// Try to load the default FLIRT library, in whichever format it is on disk.
+/// Returns `None` silently if no library is available; analysis falls back to
+/// whatever DWARF and symbol-table renaming already accomplished.
 pub fn load_default_library() -> Option<FlirtLibrary> {
-    let path = default_library_path()?;
-    let text = std::fs::read_to_string(&path).ok()?;
-    FlirtLibrary::from_json(&text).ok()
+    FlirtLibrary::from_path(&default_library_path()?).ok()
 }
 
 /// Build a (vm_start, vm_size, file_offset) → (vm_start, vm_size, file_offset)

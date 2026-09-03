@@ -48,6 +48,16 @@ Usage:
         --output data/sigs/glaurung-base.x86_64.flirt.json \\
         --arch x86_64 \\
         samples/binaries/platforms/linux/amd64/export/native/clang/debug
+
+    # ...as the binary container a corpus ships in, ~25x smaller:
+    python -m glaurung.tools.build_flirt_library --archive libc.a \\
+        --library-name c --arch x86_64 --format gsig \\
+        --output data/sigs/c.x86_64.flirt.gsig
+
+``--format`` defaults to ``json`` and will keep doing so until the
+distribution lane flips it; the matcher already reads both, dispatching on
+the file's magic bytes rather than its name. ``glaurung.tools.sig_convert``
+converts an existing library either way.
 """
 
 from __future__ import annotations
@@ -68,6 +78,19 @@ SCHEMA_VERSION = "1"
 
 #: Masks, CRC16 and referenced names. What the archive path produces.
 SCHEMA_VERSION_MASKED = "2"
+
+#: The interchange format: reviewable, diffable, ~1,330 bytes per signature.
+FORMAT_JSON = "json"
+
+#: The distribution container: ~46 bytes per signature over a merged corpus.
+#: See ``docs/reference/function-signature-libraries.md``.
+FORMAT_GSIG = "gsig"
+
+#: ``--format`` stays ``json`` until the distribution lane flips it: every
+#: existing caller, fixture and committed library is JSON, and a builder that
+#: silently changed what it wrote would break all of them at once. The
+#: matcher already reads both.
+DEFAULT_FORMAT = FORMAT_JSON
 
 _EXEC_MAGICS = (
     b"\x7fELF",
@@ -393,15 +416,35 @@ def _expand_roots(roots: list[Path]) -> list[Path]:
     return out
 
 
-def _write(output: Path, lib: dict) -> None:
-    """Write a library file deterministically.
+def _write(
+    output: Path, lib: dict, fmt: str = FORMAT_JSON, codec: str = "zstd"
+) -> None:
+    """Write a library file deterministically, in ``fmt``.
 
-    ``sort_keys`` plus a trailing newline so a rebuild that changed nothing
-    produces a zero-line diff, which is what makes the committed library
-    reviewable.
+    JSON gets ``sort_keys`` plus a trailing newline so a rebuild that changed
+    nothing produces a zero-line diff, which is what makes the committed
+    library reviewable. ``gsig`` is deterministic by construction -- see
+    ``src/flirt/gsig`` -- so the same input gives the same bytes and therefore
+    the same sha256, which is what a content-addressed distribution needs.
+
+    Args:
+        output: Where to write.
+        lib: The library, as :func:`build_library` and
+            :func:`build_library_from_archive` return it.
+        fmt: :data:`FORMAT_JSON` or :data:`FORMAT_GSIG`.
+        codec: The ``gsig`` chunk codec; ignored for JSON.
+
+    Raises:
+        ValueError: ``fmt`` is neither format, or the container rejects the
+            library.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(lib, indent=2, sort_keys=True) + "\n")
+    if fmt == FORMAT_JSON:
+        output.write_text(json.dumps(lib, indent=2, sort_keys=True) + "\n")
+        return
+    if fmt != FORMAT_GSIG:
+        raise ValueError(f"unknown output format {fmt!r}")
+    g.analysis.flirt_gsig_write_from_json_str(json.dumps(lib), str(output), codec)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -457,8 +500,25 @@ def main(argv: list[str] | None = None) -> int:
             "functions that cannot be identified by their bytes."
         ),
     )
+    p.add_argument("--output", type=Path, required=True, help="Library output path.")
     p.add_argument(
-        "--output", type=Path, required=True, help="JSON library output path."
+        "--format",
+        choices=(FORMAT_JSON, FORMAT_GSIG),
+        default=DEFAULT_FORMAT,
+        help=(
+            "Output format. 'json' (default) is the reviewable interchange "
+            "form; 'gsig' is the chunked binary container a corpus ships in, "
+            "roughly 25x smaller. The matcher reads both, dispatching on the "
+            "file's magic bytes."
+        ),
+    )
+    p.add_argument(
+        "--codec",
+        default="zstd",
+        help=(
+            "gsig chunk codec: 'zstd' (default, pure Rust), 'store', or "
+            "'zstd-max' when the crate was built with the gsig-zstd feature."
+        ),
     )
     p.add_argument("--arch", default="x86_64", help="Target architecture tag.")
     p.add_argument("--quiet", action="store_true")
@@ -490,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
-        _write(args.output, lib)
+        _write(args.output, lib, args.format, args.codec)
         if not args.quiet:
             s = lib["stats"]
             print(
@@ -513,7 +573,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(f"harvesting from {len(binaries)} binaries…", file=sys.stderr)
     lib = build_library(binaries, args.arch)
-    _write(args.output, lib)
+    _write(args.output, lib, args.format, args.codec)
     if not args.quiet:
         s = lib["stats"]
         print(

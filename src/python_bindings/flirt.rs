@@ -98,8 +98,10 @@ fn flirt_signatures_from_archive_path_py(
 ///
 /// Args:
 ///     path: Path to an executable or object file.
-///     library_path: Path to a FLIRT-style JSON signature library (schema
-///         version ``"1"`` or ``"2"``).
+///     library_path: Path to a FLIRT-style signature library, in **either**
+///         format: a JSON library (schema version ``"1"`` or ``"2"``) or a
+///         ``gsig/1`` container. The format is decided by the file's first
+///         four bytes, not by its name.
 ///
 /// Returns:
 ///     A list of dicts, one per matched function, sorted by entry VA, with
@@ -119,9 +121,7 @@ fn flirt_match_functions_with_evidence_path_py<'py>(
     library_path: &str,
 ) -> PyResult<Bound<'py, PyList>> {
     let data = std::fs::read(path)?;
-    let library_text = std::fs::read_to_string(library_path)?;
-    let lib = crate::flirt::FlirtLibrary::from_json(&library_text)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let lib = load_library(library_path)?;
 
     let mut matches = py.detach(|| {
         let budgets = crate::analysis::cfg::Budgets::default();
@@ -142,6 +142,283 @@ fn flirt_match_functions_with_evidence_path_py<'py>(
     Ok(rows)
 }
 
+/// Load a signature library in whichever format it is on disk, mapping the
+/// one error type onto `OSError` / `ValueError` the way Python callers expect.
+fn load_library(path: &str) -> PyResult<crate::flirt::FlirtLibrary> {
+    crate::flirt::FlirtLibrary::from_path(std::path::Path::new(path)).map_err(|e| match e {
+        crate::flirt::LoadError::Io(io) => PyErr::from(io),
+        other => pyo3::exceptions::PyValueError::new_err(format!("{path}: {other}")),
+    })
+}
+
+/// Read a JSON library off disk into the shared in-memory shape.
+fn read_library_file(path: &str) -> PyResult<crate::flirt::FlirtLibraryFile> {
+    let text = std::fs::read_to_string(path)?;
+    serde_json::from_str(&text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))
+}
+
+fn codec_from_name(codec: &str) -> PyResult<crate::flirt::gsig::Encoder> {
+    crate::flirt::gsig::Encoder::from_name(codec).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown gsig codec {codec:?}; this build has \"store\" and \"zstd\"\
+             , and \"zstd-max\" only with the `gsig-zstd` cargo feature"
+        ))
+    })
+}
+
+/// Describe a signature library: what format it is, what it holds, and --
+/// for a ``gsig/1`` container -- how each section is sized and compressed.
+///
+/// The per-section sizes come from the chunk table, which is uncompressed by
+/// design, so they are exact rather than estimated. Both formats are loaded to
+/// answer the metadata questions (`schema_version` and the library key live in
+/// the container's own Meta section); this is not a header-only peek.
+///
+/// Args:
+///     path: Path to a JSON or ``gsig/1`` signature library.
+///
+/// Returns:
+///     A dict. Both formats carry ``format`` (``"gsig"`` or ``"json"``),
+///     ``file_size``, ``schema_version``, ``arch``, ``prologue_len``,
+///     ``n_signatures`` and ``library`` (the ``(name, version, variant,
+///     arch)`` key, or ``None``). A ``gsig`` library adds ``format_version``,
+///     ``reader_min``, ``arch_tag``, ``scheme``, ``n_strings``, ``n_guids``,
+///     ``dict_id``, ``header_len``, ``chunk_count`` and ``chunks`` -- one dict
+///     per section with ``kind``, ``name``, ``chunks``, ``compressed_bytes``
+///     and ``uncompressed_bytes``.
+///
+/// Raises:
+///     OSError: the file cannot be read.
+///     ValueError: it is neither format.
+#[pyfunction]
+#[pyo3(name = "flirt_library_info_path", signature = (path))]
+fn flirt_library_info_path_py<'py>(py: Python<'py>, path: &str) -> PyResult<Bound<'py, PyDict>> {
+    let file_size = std::fs::metadata(path)?.len();
+    let out = PyDict::new(py);
+    out.set_item("path", path)?;
+    out.set_item("file_size", file_size)?;
+
+    let mut magic = [0u8; 4];
+    {
+        use std::io::Read;
+        let mut handle = std::fs::File::open(path)?;
+        let _ = handle.read(&mut magic)?;
+    }
+
+    if crate::flirt::gsig::is_gsig(&magic) {
+        let loaded = crate::flirt::gsig::GsigLibrary::open(std::path::Path::new(path))
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))?;
+        let header = loaded.header();
+        out.set_item("format", "gsig")?;
+        out.set_item("format_version", header.format_version)?;
+        out.set_item("reader_min", header.reader_min)?;
+        out.set_item("arch", loaded.arch())?;
+        out.set_item("arch_tag", loaded.arch_tag().as_str())?;
+        out.set_item("scheme", loaded.scheme().as_str())?;
+        out.set_item("schema_version", loaded.schema_version())?;
+        out.set_item("prologue_len", loaded.prologue_len())?;
+        out.set_item("n_signatures", header.n_signatures)?;
+        out.set_item("n_strings", header.n_strings)?;
+        out.set_item("n_guids", loaded.guid_count())?;
+        out.set_item("dict_id", header.dict_id)?;
+        out.set_item("header_len", header.header_len)?;
+        out.set_item("chunk_count", header.chunk_count)?;
+        let chunks = PyList::empty(py);
+        for (kind, count, compressed, uncompressed) in loaded.chunk_summary() {
+            let row = PyDict::new(py);
+            row.set_item("kind", *kind)?;
+            row.set_item(
+                "name",
+                crate::flirt::gsig::ChunkKind::from_u8(*kind).map(|k| k.as_str()),
+            )?;
+            row.set_item("chunks", *count)?;
+            row.set_item("compressed_bytes", *compressed)?;
+            row.set_item("uncompressed_bytes", *uncompressed)?;
+            chunks.append(row)?;
+        }
+        out.set_item("chunks", chunks)?;
+        set_library_key(py, &out, loaded.library())?;
+        return Ok(out);
+    }
+
+    let file = read_library_file(path)?;
+    out.set_item("format", "json")?;
+    out.set_item("schema_version", &file.schema_version)?;
+    out.set_item("arch", &file.arch)?;
+    out.set_item(
+        "arch_tag",
+        crate::flirt::gsig::Arch::from_name(&file.arch).as_str(),
+    )?;
+    out.set_item("scheme", crate::flirt::MASKED_PATTERN_SCHEME)?;
+    out.set_item("prologue_len", file.prologue_len)?;
+    out.set_item("n_signatures", file.entries.len())?;
+    set_library_key(py, &out, file.library.as_ref())?;
+    Ok(out)
+}
+
+fn set_library_key(
+    py: Python<'_>,
+    out: &Bound<'_, PyDict>,
+    key: Option<&crate::flirt::FlirtLibraryKey>,
+) -> PyResult<()> {
+    match key {
+        None => out.set_item("library", py.None()),
+        Some(key) => {
+            let d = PyDict::new(py);
+            d.set_item("name", &key.name)?;
+            d.set_item("version", &key.version)?;
+            d.set_item("variant", &key.variant)?;
+            d.set_item("arch", &key.arch)?;
+            out.set_item("library", d)
+        }
+    }
+}
+
+/// Read a signature library of either format and return it as JSON text.
+///
+/// This is how a Python caller reads a ``.gsig``: through the reader that
+/// wrote it, never by parsing container bytes in Python. The text is compact
+/// (no indentation) and its key order is `serde`'s, so a caller that wants the
+/// canonical on-disk form should re-dump it with ``json.dumps(...,
+/// indent=2, sort_keys=True)`` -- which is exactly what
+/// ``glaurung.tools.sig_convert`` does.
+///
+/// Args:
+///     path: Path to a JSON or ``gsig/1`` signature library.
+///
+/// Returns:
+///     The library as a JSON string.
+///
+/// Raises:
+///     OSError: the file cannot be read.
+///     ValueError: it is neither format.
+#[pyfunction]
+#[pyo3(name = "flirt_library_to_json_str", signature = (path))]
+fn flirt_library_to_json_str_py(path: &str) -> PyResult<String> {
+    let mut magic = [0u8; 4];
+    {
+        use std::io::Read;
+        let mut handle = std::fs::File::open(path)?;
+        let _ = handle.read(&mut magic)?;
+    }
+    let file = if crate::flirt::gsig::is_gsig(&magic) {
+        let loaded = crate::flirt::gsig::GsigLibrary::open(std::path::Path::new(path))
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))?;
+        crate::flirt::gsig::library_file_from_gsig(&loaded)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{path}: {e}")))?
+    } else {
+        read_library_file(path)?
+    };
+    serde_json::to_string(&file).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// Load a signature library and match one window of bytes against it.
+///
+/// The narrowest thing a matcher can be asked to do, and therefore what
+/// "time to first match" means for a library: load the file, build the index,
+/// answer one lookup. It is also how a test asserts that a `.gsig` and the
+/// JSON it came from resolve a window identically.
+///
+/// Args:
+///     library_path: A JSON or ``gsig/1`` signature library.
+///     data: Bytes read from a candidate function's entry. Must be at least
+///         the library's ``prologue_len``; a signature that records a CRC
+///         needs up to 255 bytes more, and one whose CRC range runs off the
+///         end simply does not match.
+///
+/// Returns:
+///     A dict with ``names`` (empty when nothing matched, one name for a
+///     unique verdict, several when ambiguous), ``ambiguous`` and
+///     ``evidence`` (``"flirt-L1"``, ``"flirt-L2"``, or ``None``).
+///
+/// Raises:
+///     OSError: the library cannot be read.
+///     ValueError: it is neither format.
+#[pyfunction]
+#[pyo3(name = "flirt_library_match_bytes", signature = (library_path, data))]
+fn flirt_library_match_bytes_py<'py>(
+    py: Python<'py>,
+    library_path: &str,
+    data: &[u8],
+) -> PyResult<Bound<'py, PyDict>> {
+    let lib = load_library(library_path)?;
+    let (verdict, evidence) = lib.match_at_with_evidence(data, None);
+    let out = PyDict::new(py);
+    match verdict {
+        crate::flirt::FlirtMatch::None => {
+            out.set_item("names", Vec::<String>::new())?;
+            out.set_item("ambiguous", false)?;
+            out.set_item("evidence", py.None())?;
+        }
+        crate::flirt::FlirtMatch::Unique(name) => {
+            out.set_item("names", vec![name])?;
+            out.set_item("ambiguous", false)?;
+            out.set_item("evidence", evidence)?;
+        }
+        crate::flirt::FlirtMatch::Ambiguous(names) => {
+            out.set_item("names", names)?;
+            out.set_item("ambiguous", true)?;
+            out.set_item("evidence", py.None())?;
+        }
+    }
+    Ok(out)
+}
+
+/// Write a `gsig/1` container from a JSON library's text.
+///
+/// Takes text rather than a path so a builder that has just produced a
+/// library in memory does not have to write JSON to disk first.
+///
+/// Args:
+///     json_text: A JSON signature library, schema version ``"1"`` or ``"2"``.
+///     output_path: Where to write the container.
+///     codec: ``"zstd"`` (default, pure Rust), ``"store"``, or ``"zstd-max"``
+///         when the crate was built with the ``gsig-zstd`` feature.
+///
+/// Returns:
+///     A dict with ``bytes_written``, ``n_signatures``, ``n_strings``,
+///     ``chunk_count`` and ``sha256``.
+///
+/// Raises:
+///     OSError: the output cannot be written.
+///     ValueError: the text is not a library, the codec is unknown, or the
+///         library holds something the container cannot represent (an entry
+///         whose mask length disagrees with its pattern, for instance).
+#[pyfunction]
+#[pyo3(name = "flirt_gsig_write_from_json_str", signature = (json_text, output_path, codec = "zstd"))]
+fn flirt_gsig_write_from_json_str_py<'py>(
+    py: Python<'py>,
+    json_text: &str,
+    output_path: &str,
+    codec: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let file: crate::flirt::FlirtLibraryFile = serde_json::from_str(json_text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let options = crate::flirt::gsig::WriteOptions {
+        encoder: codec_from_name(codec)?,
+        ..Default::default()
+    };
+    let bytes = py
+        .detach(|| crate::flirt::gsig::library_file_to_gsig(&file, &options))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    std::fs::write(output_path, &bytes)?;
+
+    let header = crate::flirt::gsig::GsigHeader::parse(&bytes)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let out = PyDict::new(py);
+    out.set_item("bytes_written", bytes.len())?;
+    out.set_item("n_signatures", header.n_signatures)?;
+    out.set_item("n_strings", header.n_strings)?;
+    out.set_item("chunk_count", header.chunk_count)?;
+    out.set_item("codec", codec)?;
+    out.set_item("sha256", {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&bytes))
+    })?;
+    Ok(out)
+}
+
 /// Register the FLIRT bindings onto the existing `analysis` submodule.
 ///
 /// Must run **after** `analysis::register_analysis_bindings`.
@@ -156,6 +433,23 @@ pub fn register_flirt_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
         flirt_match_functions_with_evidence_path_py,
         analysis_mod
     )?)?;
-    analysis_mod.add("FLIRT_MASKED_PATTERN_SCHEME", crate::flirt::MASKED_PATTERN_SCHEME)?;
+    analysis_mod.add_function(wrap_pyfunction!(flirt_library_info_path_py, analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        flirt_library_to_json_str_py,
+        analysis_mod
+    )?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        flirt_library_match_bytes_py,
+        analysis_mod
+    )?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        flirt_gsig_write_from_json_str_py,
+        analysis_mod
+    )?)?;
+    analysis_mod.add(
+        "FLIRT_MASKED_PATTERN_SCHEME",
+        crate::flirt::MASKED_PATTERN_SCHEME,
+    )?;
+    analysis_mod.add("GSIG_FORMAT_VERSION", crate::flirt::gsig::FORMAT_VERSION)?;
     Ok(())
 }
