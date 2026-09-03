@@ -62,6 +62,8 @@ three reasons in descending weight:
    `auto`; the ambiguity policy ("no name beats a wrong name") is ours and has
    to be enforced at our boundary regardless of who does the comparing.
 
+**Third-party signature sets are not consumed** (decision 2026-09-03): every shipped signature is derived by this repository from a named, re-fetchable archive. The paragraph below is kept as the record of why the crate was priced.
+
 **It remains the right answer to a different question.** The day we want to
 *consume* third-party `.sig`/`.pat` libraries -- which is the only way to get
 libc and MSVC coverage without building those toolchains ourselves -- that is

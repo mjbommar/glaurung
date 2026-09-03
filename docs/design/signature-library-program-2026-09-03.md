@@ -101,10 +101,11 @@ file inventory with hashes only, no PE metadata. The earlier survey of the
    `-Os` corpus; Fedora koji `-static` RPMs; Rust sysroot rlibs pinned via
    `channel-rust-*.toml` with `.llvmbc` stripped; MinGW from our own Docker
    images with dpkg provenance; MSVC via `xwin`/vcpkg static triplets after a
-   NOTICE review; `mandiant/siglib` consumed under Apache-2.0 via
-   `lancelot-flirt` behind an optional feature. Go is solved by `gopclntab`
-   recovery, not signatures. Libraries with no licence (FLIRTDB, sig-database)
-   are never consumed.
+   NOTICE review; Go is solved by `gopclntab` recovery, not signatures.
+   **No third-party signature sets are consumed** (decision of 2026-09-03:
+   every published signature is derived by us from an archive we can name
+   and re-fetch; `mandiant/siglib`, FLIRTDB, sig-database and similar are
+   out, regardless of licence).
 6. **Legal position**: we redistribute signatures and names, never archives
    or objects, on the property Hex-Rays states for the format ("contains no
    byte from the original libraries, except for the names"); every blob
@@ -140,7 +141,7 @@ records per-archive outcomes and never treats an empty result as success.
 | 6 | `gsig/1` format and loader | merged (integration line) | `cbc23304` | JSON 1,326 B/sig; gsig store (uncompressed) 229 B/sig; gsig zstd 101 B/sig, 13.1x smaller than JSON; load to first match, merged x86_64 (116,593 sigs), release: 153.6 ms JSON vs 81.1 ms gsig; RSS delta, same corpus: 296.3 vs 134.3 MiB; 0 round-trip failures over 561 harvested libraries |
 | 7 | Harvester v1: Debian, Ubuntu, Alpine | merged (integration line) | `b480e04c` | 14 network cells, 561 archives indexed, 140 MB fetched |
 | 8 | Distribution: manifest, minisign, client cache, CLI | merged (integration line) | `e0597778` | signed content-addressed manifest, minisign dev key `FA6FDB763B3E76EF` (to be replaced before a real release), `glaurung sigs list\|fetch\|verify\|status\|path`, publish dry run at `~/.cache/glaurung/release/2026.09.1`: 292 blobs, 211 MB, commands printed and unrun; `data/sigs` now packaged in the wheel |
-| 9 | Consume mandiant/siglib via lancelot-flirt | queued | | optional feature |
+| 9 | Consume mandiant/siglib via lancelot-flirt | dropped | | user decision 2026-09-03: no third-party signature sources; the lane was stopped and its outputs removed |
 | 10 | MSVC via xwin/vcpkg | queued | | NOTICE review first |
 | 11 | Rust sysroot harvester; gopclntab path for Go | Rust half merged (lane) | `siglib/rust-sysroot`, `96187c92` | 13 crates x 2 toolchains (1.88.0, 1.97.1), 26 libraries, 3,375 unique signatures, 0.06 s build; same-toolchain recall 47-48% of defined text symbols on two stripped Rust binaries, cross-toolchain **0 correct** in every cell (mangling scheme plus codegen); `unwind` yields 0 sigs on both (object has zero defined symbols, confirmed); no `src/flirt/` change needed. Go: gopclntab path still queued, unchanged from Decision 5 |
 | 12 | R2 mirror, dictionary training, delta channel | queued | | after the corpus is large |
