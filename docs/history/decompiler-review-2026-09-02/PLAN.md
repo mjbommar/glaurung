@@ -237,8 +237,9 @@ If rejected:
   `src/ir/memory_ssa.rs`, and the MIR adapters in `src/ir/memory_objects/`.
 - [~] Delete only after porting any independent LLIR invariant checks and
   demonstrating the `release` profile remains green.
-- [ ] Implement goto-aware definedness later over authoritative SSA or the AST
-  label CFG, choosing the cheaper complete representation.
+- [x] Implement goto-aware definedness over the final AST label CFG; malformed
+  label graphs decline the stronger flow-sensitive claim while preserving the
+  always-safe whole-function finding.
 
 If accepted:
 
@@ -1016,7 +1017,7 @@ closed, and remove superseded code only after equivalence is demonstrated.
 - [x] Restore the independent LLIR invariants currently stranded in
   `src/ir/verify.rs` by compiling the module or porting each invariant to its
   correct owner.
-- [ ] Complete goto-aware used-before-definition using the WP1 winner.
+- [x] Complete goto-aware used-before-definition using the WP1 winner.
 - [ ] Promote `BlockDropped`, `EdgeUnaccounted`, `UsedBeforeDefinition`, and
   constant-false live latches to fixture/release failures.
 - [ ] Preserve best-effort output with structured health/completeness metadata.
@@ -1044,6 +1045,26 @@ Validation:
 This closes only the stranded-module item. The verifier is a query API, not yet
 a release gate, and the remaining health promotion and lane-keyed expectations
 below stay open.
+
+### Implementation evidence - 2026-09-03 goto-aware definedness
+
+`src/ir/verify_defs.rs` now builds a fixed-point CFG from the exact final AST
+for functions containing labels and gotos. The graph includes nested
+conditionals, loops, switches, breaks, exception arms, explicit labels, and
+direct gotos. Missing or duplicate labels fail closed for the stronger
+flow-sensitive claim; `NeverDefined` remains active, including for throw,
+indirect-goto, and try/catch reads.
+
+The focused suite passed 38 tests and the full
+`cargo test --features python-ext` gate passed. A release-built, goto-heavy
+fixture slice selected 20 of 838 lanes with no scoped behavior regressions.
+The full def-use census correctly remained red: it surfaced newly visible real
+undefined reads while concurrent work resolved many baseline findings, so this
+increment did not rewrite the shared baseline. The structural test file also
+remained red with the expected new exception-body finding plus unrelated
+concurrent output/baseline drift. Commands, build fingerprint, scope, and the
+detected repair targets are recorded in
+`results/wp10-goto-aware-definedness.md`.
 
 ### Selective deletion checklist
 

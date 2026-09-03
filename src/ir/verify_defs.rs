@@ -32,12 +32,14 @@
 //! * [`ViolationKind::UsedBeforeDefinition`] — flow-sensitive, and deliberately
 //!   *may*-defined rather than must-defined: a name defined in only one arm of an
 //!   `if` counts as defined at the join, and a loop body is checked with its own
-//!   definitions pre-seeded (a later iteration may have produced the value). Only
-//!   attempted for structured bodies; a function containing `goto`/labels has
-//!   flow this walk does not model, so the rule is skipped there rather than
-//!   guessed at.
+//!   definitions pre-seeded (a later iteration may have produced the value).
+//!   Structured bodies use the direct AST walk. Bodies containing labels or
+//!   gotos use a fixed-point CFG built from the same AST, including nested
+//!   conditionals, loops, switches, breaks, and exception arms. A missing or
+//!   duplicate label makes that stronger rule decline rather than guess; the
+//!   always-safe `NeverDefined` rule still runs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::VReg;
@@ -307,6 +309,227 @@ fn has_unstructured_flow(body: &[Stmt]) -> bool {
     })
 }
 
+/// Flow-sensitive maybe-defined analysis for arbitrary structured statements
+/// containing labels and gotos.
+///
+/// Each condition and leaf statement becomes one CFG node. Structured edges,
+/// loop backedges, breaks, labels, and gotos are explicit; joins take the union
+/// of reaching definitions, matching [`walk`]'s deliberately permissive
+/// policy. We reach a fixed point before inspecting reads, otherwise the first
+/// visit to a loop header would be diagnosed before its backedge arrived.
+/// Missing or duplicate labels return `None`: the caller retains the always-safe
+/// `NeverDefined` result and declines this stronger finding rather than guessing.
+fn goto_aware_undefined_reads(body: &[Stmt]) -> Option<BTreeSet<String>> {
+    #[derive(Default)]
+    struct Node {
+        reads: BTreeSet<String>,
+        defs: BTreeSet<String>,
+        successors: Vec<usize>,
+    }
+
+    #[derive(Default)]
+    struct Builder {
+        nodes: Vec<Node>,
+        labels: BTreeMap<u64, usize>,
+        pending_gotos: Vec<(usize, u64)>,
+        invalid: bool,
+    }
+
+    impl Builder {
+        fn node(&mut self, reads: BTreeSet<String>, defs: BTreeSet<String>) -> usize {
+            let index = self.nodes.len();
+            self.nodes.push(Node {
+                reads,
+                defs,
+                successors: Vec::new(),
+            });
+            index
+        }
+
+        fn expression_node(&mut self, expression: &Expr) -> usize {
+            let mut reads = BTreeSet::new();
+            undefined_reads(expression, &BTreeSet::new(), &mut reads);
+            self.node(reads, BTreeSet::new())
+        }
+
+        fn leaf_node(&mut self, statement: &Stmt) -> usize {
+            let mut defs = BTreeSet::new();
+            let mut reads = BTreeSet::new();
+            walk(std::slice::from_ref(statement), &mut defs, &mut reads);
+            self.node(reads, defs)
+        }
+
+        fn sequence(
+            &mut self,
+            body: &[Stmt],
+            continuation: Option<usize>,
+            break_target: Option<usize>,
+        ) -> Option<usize> {
+            let mut next = continuation;
+            for statement in body.iter().rev() {
+                next = Some(self.statement(statement, next, break_target)?);
+            }
+            next
+        }
+
+        fn statement(
+            &mut self,
+            statement: &Stmt,
+            continuation: Option<usize>,
+            break_target: Option<usize>,
+        ) -> Option<usize> {
+            match statement {
+                Stmt::Label(address) => {
+                    let node = self.node(BTreeSet::new(), BTreeSet::new());
+                    if self.labels.insert(*address, node).is_some() {
+                        self.invalid = true;
+                    }
+                    self.nodes[node].successors.extend(continuation);
+                    Some(node)
+                }
+                Stmt::Goto { target } => {
+                    let node = self.node(BTreeSet::new(), BTreeSet::new());
+                    self.pending_gotos.push((node, *target));
+                    Some(node)
+                }
+                Stmt::Break => {
+                    let node = self.node(BTreeSet::new(), BTreeSet::new());
+                    self.nodes[node].successors.extend(break_target);
+                    Some(node)
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    let condition = self.expression_node(cond);
+                    let then_entry = self.sequence(then_body, continuation, break_target);
+                    let else_entry = if let Some(body) = else_body {
+                        self.sequence(body, continuation, break_target)
+                    } else {
+                        None
+                    };
+                    self.nodes[condition]
+                        .successors
+                        .extend(then_entry.or(continuation));
+                    self.nodes[condition]
+                        .successors
+                        .extend(else_entry.or(continuation));
+                    Some(condition)
+                }
+                Stmt::While { cond, body } => {
+                    let condition = self.expression_node(cond);
+                    let body_entry = self.sequence(body, Some(condition), continuation)?;
+                    self.nodes[condition].successors.push(body_entry);
+                    self.nodes[condition].successors.extend(continuation);
+                    Some(condition)
+                }
+                Stmt::DoWhile { body, cond } => {
+                    let condition = self.expression_node(cond);
+                    let body_entry = self.sequence(body, Some(condition), continuation)?;
+                    self.nodes[condition].successors.push(body_entry);
+                    self.nodes[condition].successors.extend(continuation);
+                    Some(body_entry)
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    let condition = self.expression_node(cond);
+                    let step_entry = self.statement(step, Some(condition), continuation)?;
+                    let body_entry = self.sequence(body, Some(step_entry), continuation)?;
+                    self.nodes[condition].successors.push(body_entry);
+                    self.nodes[condition].successors.extend(continuation);
+                    self.statement(init, Some(condition), break_target)
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    let dispatch = self.expression_node(discriminant);
+                    for (_, arm) in cases {
+                        let entry = self.sequence(arm, continuation, continuation);
+                        self.nodes[dispatch].successors.extend(entry);
+                    }
+                    if let Some(default) = default {
+                        let entry = self.sequence(default, continuation, continuation);
+                        self.nodes[dispatch].successors.extend(entry);
+                    } else {
+                        self.nodes[dispatch].successors.extend(continuation);
+                    }
+                    Some(dispatch)
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    let branch = self.node(BTreeSet::new(), BTreeSet::new());
+                    let try_entry = self.sequence(try_body, continuation, break_target);
+                    self.nodes[branch].successors.extend(try_entry);
+                    for catch in catches {
+                        let mut defs = BTreeSet::new();
+                        defs.extend(checked_name(&catch.binding));
+                        let binding = self.node(BTreeSet::new(), defs);
+                        let body_entry = self.sequence(&catch.body, continuation, break_target);
+                        self.nodes[binding].successors.extend(body_entry);
+                        self.nodes[branch].successors.push(binding);
+                    }
+                    Some(branch)
+                }
+                leaf => {
+                    let node = self.leaf_node(leaf);
+                    if !matches!(
+                        leaf,
+                        Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::IndirectGoto { .. }
+                    ) {
+                        self.nodes[node].successors.extend(continuation);
+                    }
+                    Some(node)
+                }
+            }
+        }
+    }
+
+    let mut builder = Builder::default();
+    let Some(entry) = builder.sequence(body, None, None) else {
+        return None;
+    };
+    if builder.invalid {
+        return None;
+    }
+    for (node, target) in builder.pending_gotos {
+        builder.nodes[node]
+            .successors
+            .push(*builder.labels.get(&target)?);
+    }
+
+    let mut incoming: Vec<Option<BTreeSet<String>>> = vec![None; builder.nodes.len()];
+    incoming[entry] = Some(BTreeSet::new());
+    let mut work = VecDeque::from([entry]);
+    while let Some(index) = work.pop_front() {
+        let mut outgoing = incoming[index].clone().unwrap_or_default();
+        outgoing.extend(builder.nodes[index].defs.iter().cloned());
+        for &successor in &builder.nodes[index].successors {
+            let first_reachable = incoming[successor].is_none();
+            let state = incoming[successor].get_or_insert_with(BTreeSet::new);
+            let old_len = state.len();
+            state.extend(outgoing.iter().cloned());
+            if first_reachable || state.len() != old_len {
+                work.push_back(successor);
+            }
+        }
+    }
+
+    let mut found = BTreeSet::new();
+    for (index, node) in builder.nodes.iter().enumerate() {
+        let Some(defined) = incoming[index].as_ref() else {
+            continue;
+        };
+        found.extend(node.reads.difference(defined).cloned());
+    }
+    Some(found)
+}
+
 /// Names an expression reads that are not yet (maybe-)defined.
 fn undefined_reads(e: &Expr, defined: &BTreeSet<String>, found: &mut BTreeSet<String>) {
     for name in reads_of(e) {
@@ -483,6 +706,13 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
             Stmt::Return { value } => {
                 if let Some(v) = value {
                     push(v, out);
+                }
+            }
+            Stmt::Throw { value } | Stmt::IndirectGoto { target: value } => push(value, out),
+            Stmt::TryCatch { try_body, catches } => {
+                all_reads(try_body, out);
+                for catch in catches {
+                    all_reads(&catch.body, out);
                 }
             }
             Stmt::Push { value } => push(value, out),
@@ -819,10 +1049,15 @@ pub fn check(f: &Function) -> Vec<Violation> {
         }
     }
 
-    if !has_unstructured_flow(&f.body) {
+    let flow_findings = if has_unstructured_flow(&f.body) {
+        goto_aware_undefined_reads(&f.body)
+    } else {
         let mut flow_defined = BTreeSet::new();
         let mut found = BTreeSet::new();
         walk(&f.body, &mut flow_defined, &mut found);
+        Some(found)
+    };
+    if let Some(found) = flow_findings {
         for name in found {
             // Already reported as never-defined; do not double-report.
             if defined.contains(&name) {
@@ -1300,10 +1535,26 @@ mod tests {
     }
 
     #[test]
-    fn unstructured_flow_disables_only_the_flow_sensitive_rule() {
-        // With a label/goto present the walk cannot model the flow, so no
-        // use-before-definition is claimed — but a name defined NOWHERE is still a
-        // violation, because no control flow can rescue it.
+    fn goto_flow_still_reports_names_defined_only_on_unreachable_text() {
+        // The jump skips the only textual definition of var2. A whole-function
+        // definition inventory sees the assignment, but no executable path to
+        // the read does.
+        let f = func(vec![
+            Stmt::Goto { target: 0x1010 },
+            assign("var2", Expr::Const(1)),
+            Stmt::Label(0x1010),
+            assign("var1", reg("var2")),
+        ]);
+        let v = check(&f);
+        assert!(
+            v.iter()
+                .any(|x| x.name == "var2" && x.kind == ViolationKind::UsedBeforeDefinition),
+            "the unreachable textual definition must not satisfy the labelled read: {v:?}"
+        );
+    }
+
+    #[test]
+    fn goto_flow_keeps_never_defined_as_the_stronger_finding() {
         let f = func(vec![
             Stmt::Label(0x1010),
             assign("var1", reg("var9")),
@@ -1312,16 +1563,88 @@ mod tests {
         let v = check(&f);
         assert_eq!(names(&v), vec!["var9"]);
         assert_eq!(v[0].kind, ViolationKind::NeverDefined);
+    }
 
-        // A backward goto whose definition appears textually later is NOT reported
-        // (the flow-sensitive rule is off for this body).
-        let f2 = func(vec![
+    #[test]
+    fn a_backward_goto_accepts_a_definition_reaching_the_next_iteration() {
+        // The checker is deliberately may-defined. The backedge makes the
+        // later assignment available to a subsequent visit to the label, so it
+        // must not produce a false positive.
+        let f = func(vec![
             Stmt::Label(0x1010),
             assign("var1", reg("var2")),
             assign("var2", Expr::Const(1)),
             Stmt::Goto { target: 0x1010 },
         ]);
-        assert_eq!(check(&f2), vec![]);
+        assert_eq!(check(&f), vec![]);
+    }
+
+    #[test]
+    fn nested_gotos_do_not_let_unreachable_arm_text_define_a_value() {
+        let f = func(vec![
+            Stmt::If {
+                cond: reg("arg0"),
+                then_body: vec![
+                    Stmt::Goto { target: 0x1010 },
+                    assign("var2", Expr::Const(1)),
+                ],
+                else_body: Some(vec![Stmt::Goto { target: 0x1010 }]),
+            },
+            Stmt::Label(0x1010),
+            assign("var1", reg("var2")),
+        ]);
+        let v = check(&f);
+        assert!(
+            v.iter()
+                .any(|x| x.name == "var2" && x.kind == ViolationKind::UsedBeforeDefinition),
+            "neither branch reaches the textual definition: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_goto_nested_in_a_loop_reaches_its_outer_label() {
+        let f = func(vec![
+            Stmt::While {
+                cond: reg("arg0"),
+                body: vec![
+                    Stmt::Goto { target: 0x1010 },
+                    assign("var2", Expr::Const(1)),
+                ],
+            },
+            Stmt::Label(0x1010),
+            assign("var1", reg("var2")),
+        ]);
+        let v = check(&f);
+        assert!(
+            v.iter()
+                .any(|x| x.name == "var2" && x.kind == ViolationKind::UsedBeforeDefinition),
+            "neither the zero-iteration path nor the goto reaches var2's dead definition: {v:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_label_graphs_decline_the_flow_sensitive_claim() {
+        assert_eq!(
+            goto_aware_undefined_reads(&[Stmt::Goto { target: 0xdead }]),
+            None
+        );
+        assert_eq!(
+            goto_aware_undefined_reads(&[Stmt::Label(0x1010), Stmt::Label(0x1010)]),
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_label_graphs_still_report_never_defined_indirect_targets() {
+        let f = func(vec![
+            Stmt::IndirectGoto {
+                target: reg("var9"),
+            },
+            Stmt::Goto { target: 0xdead },
+        ]);
+        let v = check(&f);
+        assert_eq!(names(&v), vec!["var9"]);
+        assert_eq!(v[0].kind, ViolationKind::NeverDefined);
     }
 
     #[test]
