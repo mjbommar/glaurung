@@ -131,6 +131,56 @@ def test_ingest_flirt_library_rejects_a_schema_v1_file_with_no_key(
         siglib.ingest_flirt_library(kb, str(v1))
 
 
+def test_ingest_flirt_library_accepts_a_gsig_container(tmp_path: Path) -> None:
+    """`ingest_flirt_library` reads either format -- through the Rust reader
+    that wrote it, never by parsing container bytes in Python -- and records
+    the same provenance either way, except the hash: it is deliberately the
+    hash of the file *as it sits on disk*, so the JSON and the container it
+    was built from record different hashes because they are different blobs
+    of the same content."""
+    json_path = _need(_FLIRT_LIB)
+    gsig_path = tmp_path / "mathlib.x86_64.flirt.gsig"
+    g.analysis.flirt_gsig_write_from_json_str(
+        json_path.read_text(), str(gsig_path), "zstd"
+    )
+
+    (tmp_path / "from_json").mkdir()
+    (tmp_path / "from_gsig").mkdir()
+    kb_json = _fresh_kb(tmp_path / "from_json", _need(_LINK_A))
+    kb_gsig = _fresh_kb(tmp_path / "from_gsig", _need(_LINK_A))
+    from_json = siglib.ingest_flirt_library(kb_json, str(json_path))
+    from_gsig = siglib.ingest_flirt_library(kb_gsig, str(gsig_path))
+
+    assert from_gsig.functions_ingested == from_json.functions_ingested
+    row_json = siglib.get_siglib(
+        kb_json,
+        name="mathlib",
+        version="1.0.0",
+        variant="gcc-15.2.0-O2",
+        architecture="x86_64",
+    )
+    row_gsig = siglib.get_siglib(
+        kb_gsig,
+        name="mathlib",
+        version="1.0.0",
+        variant="gcc-15.2.0-O2",
+        architecture="x86_64",
+    )
+    assert row_json is not None and row_gsig is not None
+    assert row_json.source_sha256 != row_gsig.source_sha256, (
+        "the JSON and gsig are different blobs and must record different "
+        "content-addressed hashes"
+    )
+
+    names_json = {
+        f.name for f in siglib.list_siglib_functions(kb_json, row_json.siglib_id)
+    }
+    names_gsig = {
+        f.name for f in siglib.list_siglib_functions(kb_gsig, row_gsig.siglib_id)
+    }
+    assert names_json == names_gsig
+
+
 # ---------------------------------------------------------------------------
 # The BinaryFuse8 gate
 # ---------------------------------------------------------------------------

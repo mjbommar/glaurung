@@ -490,13 +490,30 @@ def ingest_flirt_library(
     *,
     source_sha256: Optional[str] = None,
 ) -> IngestSummary:
-    """Record a FLIRT-style JSON library's provenance in the KB.
+    """Record a FLIRT-style signature library's provenance in the KB.
 
     Reads the file's ``library`` key for the ``siglib`` row
     (``(name, version, variant, architecture)``) and inserts one
     ``siglib_function`` row per entry under :data:`FLIRT_MASKED_PATTERN_V1`,
     keyed by the masked-pattern identity so it can also seed
     :func:`build_identity_filter`.
+
+    Either format is accepted -- a JSON library or a ``gsig/1`` container --
+    and the container is read through
+    :func:`glaurung.analysis.flirt_library_to_json_str`, i.e. through the
+    reader that wrote it, never by parsing container bytes here.
+
+    Args:
+        kb: The knowledge base to record into.
+        flirt_library_path: A JSON or ``gsig/1`` signature library.
+        source_sha256: Override the recorded provenance hash. By default it
+            is the SHA-256 of the file **as it sits on disk**, which is what a
+            content-addressed distribution keys a blob by -- so a library and
+            the container built from it record different hashes, as they
+            should: they are different blobs of the same content.
+
+    Returns:
+        What was ingested.
 
     Raises:
         ValueError: the file has no ``library`` key. A schema-version-1 file
@@ -507,8 +524,10 @@ def ingest_flirt_library(
     import json
     from pathlib import Path
 
-    text = Path(flirt_library_path).read_text()
-    data = json.loads(text)
+    import glaurung as g
+
+    raw = Path(flirt_library_path).read_bytes()
+    data = json.loads(g.analysis.flirt_library_to_json_str(flirt_library_path))
     library = data.get("library")
     if not library:
         raise ValueError(
@@ -517,7 +536,7 @@ def ingest_flirt_library(
             "has a (name, version, variant, arch) key to file provenance under"
         )
     if source_sha256 is None:
-        source_sha256 = hashlib.sha256(text.encode()).hexdigest()
+        source_sha256 = hashlib.sha256(raw).hexdigest()
 
     siglib_id = get_or_create_siglib(
         kb,
