@@ -1797,11 +1797,14 @@ relevant ratchet's accepted-regression record.
    this shape; a more permissive fallback reintroduced 20 execution regressions
    in the expanded build inventory and was removed. Any replacement must keep
    the pinned corpus at zero execution regressions.
-2. Replace the preserved nested loop-header gotos with a proved
-   source-level `continue` representation, or classify them from typed edge
-   evidence. The pinned `c3bbe2a6` report has 584 comparable shadow gotos and
-   nine unexplained structural regressions; never delete required transfers to
-   improve the count.
+2. [x] Replace the preserved nested loop-header gotos with a proved
+   source-level `continue` representation. Commit `85a61693` introduces an AST
+   `Continue` only while lowering transfers to the current multi-exit loop
+   header; traversal does not cross nested loops. The pinned 715-function
+   comparison reduces comparable shadow gotos from 584 to 324, moves improved
+   rows from 204 to 220, and reduces nine unexplained regressions to zero. The
+   250-candidate execution comparison remains at zero regressions. See
+   `results/wp4-source-level-continue.md`.
 3. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide
    rows are classified at `ca91dc68` by exact, fail-closed
    suffix/shared-effect-entry contracts, and the clean pinned full comparison
