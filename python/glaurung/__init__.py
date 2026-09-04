@@ -400,3 +400,13 @@ __all__ += [
     "init_logging",
     "log_message",
 ]
+
+# The C source front end's Joern-parity CFGs. Imported eagerly (rather than
+# left to `import glaurung.source_cfg`) because `tools/source_cfg_parity.py`
+# resolves its provider with `getattr(glaurung, "source_cfg")`, and an
+# unimported submodule is indistinguishable there from a missing front end.
+from . import source_cfg as source_cfg
+
+__all__ += [
+    "source_cfg",
+]

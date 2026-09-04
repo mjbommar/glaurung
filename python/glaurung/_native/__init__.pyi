@@ -13,6 +13,7 @@
 from typing import Any
 
 from . import analysis as analysis
+from . import csource as csource
 from . import debug as debug
 from . import disasm as disasm
 from . import engine as engine
