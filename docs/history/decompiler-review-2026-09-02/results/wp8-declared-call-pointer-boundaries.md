@@ -21,7 +21,7 @@ recovered local.
 
 ## Change
 
-Implementation commit: `d8acf6aa9a4a6c676e76b3976c6f19d7dde6a708`.
+Implementation commit: `d8acf6aa91733c8db2f23260acd8854dc784e462`.
 Base revision: `38cb69131b67bf9fd565eb6e79fdb3e10e7fe58b`.
 
 `src/ir/ast/dec_render.rs` now:
