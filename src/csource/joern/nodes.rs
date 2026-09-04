@@ -1,8 +1,17 @@
-//! F-9: Joern's expression-level node granularity for `&&`, `||` and `?:`.
+//! F-9: which constructs cost Joern a CFG node, and which cost none.
 //!
 //! Spec: `docs/design/static-c-analysis/implementation-inventory.md` F-9, and
-//! `docs/design/static-c-analysis/joern-behavior.md` section 4. Owned by stage
-//! S3 of `docs/design/static-c-analysis/roadmap.md`.
+//! `docs/design/static-c-analysis/joern-behavior.md` sections 1.2 and 4. Owned
+//! by stage S3 of `docs/design/static-c-analysis/roadmap.md`.
+//!
+//! Two halves, and the second one is the larger. The *expression* half is what
+//! the inventory describes: `&&`, `||` and `?:` are forks whose operator is
+//! itself a node, and a bare operand is not. The *jump* half is the converse
+//! and is not in the inventory at all: `goto`, `break`, `continue` and every
+//! label --- ordinary, `case` and `default` --- cost Joern **nothing**, where
+//! S2 gives each of them a node. See [`is_jump_node`] for the corpus census
+//! that fixes that, and [`elide_jumps`] for why F-10 does not already absorb
+//! them.
 //!
 //! # The rule, and the published functions that establish it
 //!
@@ -57,8 +66,8 @@
 //! duplicating the statement walk to change two rules about expressions would
 //! buy a second thing to keep correct.
 //!
-//! Three phases, in this order, because the middle one has to see the shape the
-//! first one validated:
+//! Four phases, in this order, because the second has to see the shape the
+//! first validated and the last must not disturb either:
 //!
 //! 1. **Collect and validate.** Every short-circuit AST node under the function
 //!    body, its operands, and the CFG node each operand's evaluation ends at
@@ -68,10 +77,14 @@
 //!    malformed graph (`REQ-CFG-11`, `REQ-SYN-2`).
 //! 2. **Nest.** Insert `n - 2` operator nodes into every flat chain of `n`
 //!    operands.
-//! 3. **Elide.** Delete every operand node whose AST operand materializes
-//!    nothing, reconnecting each predecessor to each successor --- which is
-//!    exactly what makes the fork move to the predecessor in the `load_history`
-//!    shape and vanish in the `evalstring` one.
+//! 3. **Elide operands.** Delete every operand node whose AST operand
+//!    materializes nothing, reconnecting each predecessor to each successor ---
+//!    which is exactly what makes the fork move to the predecessor in the
+//!    `load_history` shape and vanish in the `evalstring` one.
+//! 4. **Elide jumps.** Delete every `goto`, `break`, `continue` and label node
+//!    the same way. Last, because it is the only phase that does not consult
+//!    the AST and because phases 1-3 resolve operands onto S2 node positions
+//!    that this one then invalidates.
 //!
 //! # What this deliberately does not do
 //!
@@ -86,6 +99,22 @@
 //! Those nodes are single-entry, single-successor, so F-10 chain contraction
 //! merges every one of them away before the metric sees anything
 //! (`joern-behavior.md` section 1.2).
+//!
+//! [`NodeKind::Diverge`] is deliberately kept. S2 writes it both for a transfer
+//! whose target it could not resolve (`REQ-CFG-7`'s computed `goto`, a `break`
+//! outside any loop) and for a construct that simply does not return, and only
+//! the first of those is a jump. Eliding the union would delete real nodes to
+//! remove synthetic ones; the corpus has not been read closely enough to split
+//! them, so nothing here touches the kind.
+//!
+//! Unreachable statements are also left alone, and they are the other half of
+//! the remaining gap. S2 prunes them by design (`REQ-GEN-1`, and
+//! `crate::csource::cfg::reach`'s module docs); Joern's CFG is syntax-directed
+//! and keeps them as components with no path from the entry --- 105 published
+//! functions carry one. On goto-dense decompiler output that difference is
+//! large: `O0/openssh-portable` `sshd` `process_server_config_line_depth` is
+//! 1,743 lines of which S2 reaches about 500, and no rewrite over the pruned
+//! graph can put the rest back. The fix belongs in the S2 emitter, not here.
 //!
 //! # What it costs and how far it reaches
 //!
@@ -103,6 +132,37 @@
 //! Every one of the 362 declines is the same guard: no CFG node carries the
 //! operand's span, because S2 placed none --- an unevaluated context, an
 //! unreachable region, or a recovered parse. None is a shape mismatch.
+//!
+//! Phase 4 was added after that sweep and is measured end to end instead, by
+//! the gate itself. `tools/source_cfg_parity.py <tree> --provider glaurung`
+//! over all 85,645 stored cells, release wheel, at `025fbddb`, with only this
+//! file differing between the two rows:
+//!
+//! ```text
+//!             exact              mismatch by |delta|
+//!             cells    rate      <=1    <=5    <=20   >20
+//! phases 1-3  62487    72.9605%  1365   6392   10325  5076
+//! phases 1-4  79790    93.1636%  1527   2454   1463    411
+//! ```
+//!
+//! Both rows are the harness as fixed by `a75d92cb`, which scores a cell the
+//! way `GEDMetric` did rather than with bare `vj_ged`. Read against the older
+//! harness the same change reads 62416 -> 79535; the difference is the gate,
+//! not the graphs, and the two must not be mixed.
+//!
+//! Per cell: 17,427 mismatches became exact and **124 exact cells became
+//! mismatches**, every one of them by 20 or less and 106 of them by 5 or less.
+//! Those 124 are real, not an artifact --- they are cells where two wrongs had
+//! cancelled in the degree multiset. 20,862 further cells moved closer and 914
+//! further away. The `<=1` bucket grows for the same reason: cells arrive there
+//! from above.
+//!
+//! What phase 4 was for shows in the residue. Of the 5,076 cells over 20
+//! before, 2,928 (57.7%) had a graph more than 1.25x the published node count;
+//! of the 411 left, 24 do. What is left is the opposite failure: 260 (63.3%)
+//! are now *under* 0.75x, and 211 of those hold a statement after an
+//! unconditional transfer --- the unreachable code S2 prunes and Joern keeps,
+//! which is the next paragraph and is not this module's to fix.
 //!
 //! `inserted 0` is real and is a property of *this* corpus, not of the rewrite:
 //! Glaurung's own C printer parenthesizes, so `(a && b) && c` reaches the
@@ -146,6 +206,8 @@ pub struct GranularityStats {
     pub inserted: u32,
     /// Operand nodes deleted because the operand materializes nothing (phase 3).
     pub elided: u32,
+    /// Jump and jump-target nodes deleted because Joern has none (phase 4).
+    pub jumps_elided: u32,
 }
 
 /// Rewrite one function's S2 graph to Joern's expression granularity.
@@ -172,7 +234,10 @@ pub fn expression_granular(
 ) -> (Cfg, GranularityStats) {
     let mut stats = GranularityStats::default();
     let regions = collect(tree, token_spans, body, cfg, &mut stats);
-    if regions.is_empty() {
+    let jumps = cfg.nodes().iter().any(|node| is_jump_node(node.kind()));
+    // Staying free where neither half applies is deliberate: `Cfg`'s `PartialEq`
+    // is over the edge *vector*, and rebuilding one through `Work` reorders it.
+    if regions.is_empty() && !jumps {
         return (cfg.clone(), stats);
     }
     let mut work = Work::from_cfg(cfg);
@@ -183,6 +248,7 @@ pub fn expression_granular(
     for region in &regions {
         elide(tree, &mut work, region, &mut stats);
     }
+    elide_jumps(&mut work, &mut stats);
     (work.finish(cfg.entry(), cfg.exit()), stats)
 }
 
@@ -403,6 +469,73 @@ fn elide(tree: &Tree, work: &mut Work, region: &Region, stats: &mut GranularityS
     }
 }
 
+/// Whether S2 gave `kind` a node that Joern's CFG has none for.
+///
+/// Joern's CFG is a graph over CPG nodes *in evaluation order*, so a construct
+/// with no expression to evaluate contributes nothing. `goto`, `break` and
+/// `continue` are `CONTROL_STRUCTURE` nodes and a label --- ordinary, `case` or
+/// `default` --- is a `JUMP_TARGET`; the CFG export carries neither. The
+/// selector of a `switch` and the condition of an `if` do appear, but as the
+/// *expression* node (`IDENTIFIER,rl_editing_mode,switch(rl_editing_mode)`),
+/// which S2 already emits as [`NodeKind::Switch`] / [`NodeKind::Cond`].
+///
+/// Measured over the whole published corpus --- 91,548 functions, 6,567,528
+/// statement lines in `<tree>/*/*/source_cfgs/*.json` --- there is not one
+/// `CONTROL_STRUCTURE` token, not one `JUMP_TARGET` token, not one statement
+/// whose code is `goto <label>;`, `break;`, `continue;`, `case ...:` or
+/// `default:`. `RETURN`, by contrast, appears 114,781 times, so
+/// [`NodeKind::Return`] stays and is not in this set.
+fn is_jump_node(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Case | NodeKind::Label | NodeKind::Goto | NodeKind::Break | NodeKind::Continue
+    )
+}
+
+/// Phase 4: delete every jump and jump-target node, wiring past it.
+///
+/// # Why chain contraction does not already do this
+///
+/// Most of these nodes have in-degree 1 and out-degree 1 and so are absorbed by
+/// F-10 anyway --- which is why the layer scored 72.9% without this phase. The
+/// ones that are not absorbed are exactly the ones decompiler output is made
+/// of:
+///
+/// * `if (c) { goto L; }` --- the `goto` node's predecessor is the fork, so it
+///   has out-degree 2 and cannot absorb it, and its successor is the label,
+///   which several `goto`s reach and so has in-degree > 1. The node survives
+///   contraction as a block of its own that Joern never had. `O2-noinline`
+///   `grep/grep` `pr_sgr_start` is that shape end to end and is published as
+///   2 nodes and 1 edge where S2 gives 3 and 2.
+/// * `case 0: case 32: return 10;` --- the arm labels sit between a
+///   many-successor `switch` and a many-predecessor statement, so none of them
+///   contracts either. Deleting them is also what makes duplicate arms collapse
+///   into one edge, because [`Work::add_edge`] keeps one edge per pair: `O0`
+///   `coreutils/echo` `hextobin` has thirteen arm labels reaching seven
+///   distinct statements and is published as 8 nodes and 7 edges, the selector
+///   at out-degree 7, where S2 gives 14 and 19.
+///
+/// # Why one pass in id order suffices
+///
+/// Every kind here has at most one successor, so [`Work::bypass`] moves at most
+/// `in_degree` edges and the phase is `O(V + E)` rather than quadratic. Two
+/// adjacent jump nodes --- a `goto` into a label --- resolve whichever is taken
+/// first: the second one's predecessor set has already been rewritten to the
+/// first one's predecessors, so the result does not depend on the order
+/// (`REQ-OUT-3`).
+fn elide_jumps(work: &mut Work, stats: &mut GranularityStats) {
+    // `bypass` never adds a node, so the bound taken here covers every node the
+    // earlier phases could have inserted.
+    for index in 0..work.kinds.len() {
+        if !work.alive[index] || !is_jump_node(work.kinds[index]) {
+            continue;
+        }
+        if work.bypass(NodeId::new(index as u32)) {
+            stats.jumps_elided = stats.jumps_elided.saturating_add(1);
+        }
+    }
+}
+
 /// Whether `node` costs Joern at least one CFG node.
 ///
 /// Everything does except a bare identifier and a bare literal, parentheses
@@ -492,7 +625,7 @@ struct Out {
     is_back: bool,
 }
 
-/// The S2 graph in a form the three phases can edit in place.
+/// The S2 graph in a form the rewrite phases can edit in place.
 ///
 /// Adjacency lists rather than [`Cfg`]'s CSR arrays, because every edit here is
 /// a local insertion or removal and CSR would have to be rebuilt for each one.
@@ -1143,6 +1276,154 @@ mod tests {
         text.push_str("; }");
         let (_, after, _) = rewrite(&text, "f");
         assert!(after.node_count() >= 2, "a graph came back");
+    }
+
+    /// `O2-noinline` `grep/grep` `pr_sgr_start`, from the stored decompiled C
+    /// (`<tree>/O2-noinline/grep/decompiled/glaurung-229fbb1-clean_grep.c`),
+    /// published as 2 nodes and 1 edge with entry `[1]` and no exit.
+    ///
+    /// This cell's stored GED is **0.0**, so Joern's CFG of exactly this text
+    /// is isomorphic to the published one: the published numbers are Joern's
+    /// answer for the decompiled side, not merely for the original source. S2
+    /// gives 3 nodes and 2 edges --- the `goto` block is the extra one, and it
+    /// survives F-10 because its predecessor is a fork and its successor a
+    /// label with more than one predecessor.
+    #[test]
+    fn a_goto_taken_from_a_fork_costs_no_node() {
+        let text = "void pr_sgr_start(char * arg0) {\n\
+                    \x20   if (((unsigned long)((unsigned char)(*(char *)(((long)arg0)))) != 0)) {\n\
+                    \x20       goto L_1d970;\n\
+                    \x20   }\n\
+                    \x20   return;\n\
+                    \x20   L_1d970: ;\n\
+                    }\n";
+        let (before, after, stats) = rewrite(text, "pr_sgr_start");
+        assert_eq!(stats.operators, 0, "no short-circuit operator is involved");
+        assert_eq!(stats.jumps_elided, 2, "the `goto` and its label");
+        let (before_nodes, before_edges, _) = projected(&before);
+        assert_eq!(
+            (before_nodes, before_edges),
+            (3, 2),
+            "S2 spends a block on the `goto` that Joern never had"
+        );
+        assert_eq!(
+            projected(&after),
+            published(2, &[(1, 0)]),
+            "grep pr_sgr_start, published as 2 nodes / 1 edge"
+        );
+    }
+
+    /// `O2` `tar/tar` `open_diag`, stored GED **0.0**, published as 4 nodes and
+    /// 3 edges with entry `[3]` and no exit.
+    ///
+    /// The same rule one level up: eliding the `goto` leaves the second `if`
+    /// with one real successor and one edge into the function end, and the
+    /// function end has two predecessors, so it stays a singleton and F-12
+    /// takes it. The published in/out degrees are `(0,2)`, `(1,1)`, `(1,0)`,
+    /// `(1,0)` --- the `(1,1)` is that second `if`, which S2 reports at `(1,2)`.
+    #[test]
+    fn eliding_a_goto_gives_its_fork_back_the_right_out_degree() {
+        let text = "void open_diag(long arg0, long arg1) {\n\
+                    \x20   extern long sub_32ea0(long, long);\n\
+                    \x20   extern unsigned char glaurung_global_81b82[16];\n\
+                    \x20   extern unsigned char glaurung_global_82b52[16];\n\
+                    \x20   long ret;\n\
+                    \x20   if (((unsigned long)((unsigned char)(*(char *)(&glaurung_global_82b52[0]))) == 0)) {\n\
+                    \x20       ret = sub_32ea0(arg0, arg1);\n\
+                    \x20       return;\n\
+                    \x20   }\n\
+                    \x20   if (((unsigned long)((unsigned char)((*(char *)(&glaurung_global_81b82[0]) & -128))) != 0)) {\n\
+                    \x20       goto L_32ee0;\n\
+                    \x20   }\n\
+                    \x20   return;\n\
+                    \x20   L_32ee0: ;\n\
+                    }\n";
+        let (before, after, stats) = rewrite(text, "open_diag");
+        assert_eq!(stats.jumps_elided, 2);
+        assert_eq!(
+            projected(&before),
+            published(5, &[(0, 1), (0, 2), (2, 3), (2, 4)]),
+            "S2's shape, one node and one edge too many"
+        );
+        assert_eq!(
+            projected(&after),
+            published(4, &[(0, 2), (3, 0), (3, 1)]),
+            "tar open_diag, published as 4 nodes / 3 edges"
+        );
+    }
+
+    /// `O0` `coreutils/echo` `hextobin`, stored GED **0.0**, published as
+    /// 8 nodes and 7 edges with entry `[7]` and no exit: the selector node has
+    /// out-degree **7**, not 13.
+    ///
+    /// Thirteen arm labels reach seven distinct statements, and Joern's CFG
+    /// reaches those statements directly --- a `JUMP_TARGET` is not in the CFG
+    /// export, and the graph DecBench scores is a `networkx.DiGraph`, which
+    /// cannot hold the duplicate edge `case 0:` and `case 32:` would otherwise
+    /// produce. S2 gives 14 nodes and 19 edges. This is the shape
+    /// `joern-behavior.md` section 4 states as "the switch selector is one node
+    /// whose out-degree is the number of distinct jump targets".
+    #[test]
+    fn duplicate_switch_arms_collapse_to_one_edge_per_target() {
+        let text = "int hextobin(unsigned char arg0) {\n\
+                    \x20   switch ((unsigned long)((unsigned int)(((unsigned int)(arg0) - 65)))) {\n\
+                    \x20       case 0:\n\
+                    \x20       case 32:\n\
+                    \x20           return 10;\n\
+                    \x20       case 1:\n\
+                    \x20       case 33:\n\
+                    \x20           return 11;\n\
+                    \x20       case 2:\n\
+                    \x20       case 34:\n\
+                    \x20           return 12;\n\
+                    \x20       case 3:\n\
+                    \x20       case 35:\n\
+                    \x20           return 13;\n\
+                    \x20       case 4:\n\
+                    \x20       case 36:\n\
+                    \x20           return 14;\n\
+                    \x20       case 5:\n\
+                    \x20       case 37:\n\
+                    \x20           return 15;\n\
+                    \x20       default:\n\
+                    \x20           return (unsigned int)(((unsigned int)(arg0) - 48));\n\
+                    \x20   }\n\
+                    }\n";
+        let (before, after, stats) = rewrite(text, "hextobin");
+        assert_eq!(stats.jumps_elided, 13, "twelve `case`s and the `default`");
+        let (before_nodes, before_edges, _) = projected(&before);
+        assert_eq!((before_nodes, before_edges), (14, 19), "S2's arm-per-label");
+        assert_eq!(
+            projected(&after),
+            published(8, &[(7, 0), (7, 1), (7, 2), (7, 3), (7, 4), (7, 5), (7, 6)]),
+            "coreutils hextobin, published as 8 nodes / 7 edges"
+        );
+    }
+
+    /// `break` and `continue` are `CONTROL_STRUCTURE` nodes too, and the corpus
+    /// has none of those either, so a loop that uses them must not pay for
+    /// them. Checked as a census rather than against one published function
+    /// because the shape is the same rule as the two above; what this pins is
+    /// that the set in [`is_jump_node`] is applied to all five kinds.
+    #[test]
+    fn break_and_continue_cost_no_node_either() {
+        let text = "int f(int n) {\n\
+                    \x20   int i;\n\
+                    \x20   for (i = 0; i < n; i = i + 1) {\n\
+                    \x20       if (g(i)) { continue; }\n\
+                    \x20       if (h(i)) { break; }\n\
+                    \x20   }\n\
+                    \x20   return i;\n\
+                    }\n";
+        let (before, after, stats) = rewrite(text, "f");
+        assert_eq!(stats.jumps_elided, 2, "one `continue` and one `break`");
+        let (before_nodes, ..) = projected(&before);
+        let (after_nodes, ..) = projected(&after);
+        assert_eq!(
+            before_nodes - after_nodes,
+            2,
+            "both transfers were blocks of their own before"
+        );
     }
 
     /// A function with no short-circuit at all must come back as the very same
