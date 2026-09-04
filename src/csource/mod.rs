@@ -11,5 +11,6 @@
 pub mod cfg;
 pub mod joern;
 pub mod lex;
+pub mod lower;
 pub mod normalize;
 pub mod parse;
