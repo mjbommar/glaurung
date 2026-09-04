@@ -328,6 +328,35 @@ Two known weaknesses of this gate, both to be stated whenever it is quoted:
 **Ratchet.** Commit the pass count as a baseline under `tests/` and fail the
 gate on any decrease, in the style of the existing fixture baselines.
 
+### What the remaining gap would cost
+
+The 5,855 cells that still differ are not one problem, and two of the three
+groups are bounded by *evidence* rather than by effort:
+
+* **411 beyond delta 20.** 260 are undershoots where S2 prunes statements
+  control cannot reach (`REQ-GEN-1`, `src/csource/cfg/reach.rs`) and Joern,
+  being syntax-directed, keeps them --- 105 published functions carry an
+  unreachable component. `sshd process_server_config_line_depth` is 1,743 lines
+  with 258 `goto`s where we emit 48 nodes against a published 663. Tractable,
+  and the only group that is straightforwardly ours to fix.
+* **1,527 within one.** Diagnosed and *not* a flag problem: 42 are unwinnable
+  (our CFG is role-isomorphic to the published **source** CFG where Joern's of
+  the decompiled text was not, so we score 0 where the metric's `max(1.0, ...)`
+  floor stores 1 --- we are penalised for recovering the original shape), 8 are
+  the size lower bound off by one, and corpus-wide only **8 of 5,855**
+  mismatches have the signature a flag defect must have.
+* **The remaining 1,477 + 3,917 are shape differences nobody can localize
+  offline.** The tree publishes Joern's CFG of the *source*, never of the
+  decompiled C, and a scalar GED under-determines the graph that produced it.
+  Distinguishing "we emit one node too many here" from "one too few there"
+  needs either a published decompiled-CFG dump or real Joern runs.
+
+So the honest ceiling on offline docking is roughly the 260-cell group plus
+whatever the `<= 5` band yields to the same reachability fix. Past that,
+closing the gap is a **data** request, not an engineering one, and it should be
+costed as such rather than pursued by guessing. `uncovered 0` is what makes the
+remainder a shape argument rather than a coverage one.
+
 ### Phase 4 — source-side parity
 
 **Deliverable.** Direct comparison of our `.i` CFGs against published source
