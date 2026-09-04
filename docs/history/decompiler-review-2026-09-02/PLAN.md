@@ -643,6 +643,15 @@ that preserves honest local gotos when required.
   shadow gotos fall from 571 to **505**, with no new decline or status
   regression. The remaining wide gotos are suffix/shared-effect entries rather
   than transfers to the switch continuation.
+  The comparison report now preserves those four raw `regressed` statuses and
+  records a separate, fail-closed classification. Only the exact reviewed
+  debug/stripped rows can match; each candidate must still contain a recovered
+  switch, at least one direct goto, and a definition for every goto target.
+  The pinned `ca91dc68` full run reports **4 accepted honest-goto rows / 0
+  unexplained regressions**, alongside the unchanged raw **236 improved / 32
+  unchanged / 4 regressed / 443 declined** counts. This closes classification,
+  not WP4 promotion: execution, accounting, GED, structure-axis, and budget
+  evidence below remain required.
 
 ### RED fixtures
 
@@ -1751,11 +1760,13 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Classify the remaining Duff and clang-wide rows by their verified
-   suffix/shared-effect entry properties, then obtain a clean pinned rerun and
-   finish promotion evidence: corpus-wide execution differential, unexplained
-   block/edge accounting, pinned GED, structure-axis movement, and accepted
-   runtime/output-size budgets.
+1. Finish WP4 promotion evidence. The remaining Duff and clang-wide rows are
+   classified at `ca91dc68` by exact, fail-closed suffix/shared-effect-entry
+   contracts, and the clean pinned full comparison reports zero unexplained
+   regressions without rewriting the four raw regression statuses. Still run
+   the corpus-wide execution differential, unexplained block/edge accounting,
+   pinned GED, structure-axis movement, and accepted runtime/output-size
+   budgets.
 2. Complete WP5's shared typed-case transport so discovery, accounting, both
    structurers, and rendering consume one case/default/provenance object; add
    the remaining fixture/compiler/architecture execution cells and classify

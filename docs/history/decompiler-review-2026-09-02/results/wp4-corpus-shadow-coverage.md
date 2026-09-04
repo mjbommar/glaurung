@@ -416,6 +416,41 @@ waived or called green.
 
 No DecBench run or upstream interaction was performed.
 
+## Pinned residual-goto classification — `ca91dc68`
+
+The comparison tool now reports reviewed residual control flow separately from
+the raw goto-count status. It does not relabel or suppress a regression. Only
+four exact object/function contracts exist: the GCC-O2 Duff debug/stripped pair
+and the clang-O2 wide-effects debug/stripped pair. A contract fails closed
+unless the shadow output still contains a recovered switch, one or more direct
+gotos, and a matching label for every goto target.
+
+```text
+uv run python tools/structure_v2_compare.py --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-classified-ca91dc68.json"
+
+revision: ca91dc68b23554491a9c4dff66c25a7cfb0b99f9
+objects / functions: 436 / 715
+raw: 236 improved / 32 unchanged / 4 regressed / 443 declined / 0 missing
+classification: 4 accepted_honest_goto / 0 unexplained_regression
+comparable gotos: 2303 production / 505 shadow
+comparable bytes: 964207 production / 1474223 shadow
+wall: 24.289579 seconds
+max RSS: 879792 KiB
+```
+
+The four accepted rows retain their raw `regressed` status in the JSON. Their
+properties are `verified_switch_suffix_entry_shared_region` for Duff and
+`verified_switch_shared_effect_entry` for the wide switch. Six focused
+comparison-tool tests cover exact-row acceptance, raw-status preservation,
+missing-switch and missing-label refusal, an unreviewed-object refusal, and
+separate raw/classified aggregates. Ruff format, Ruff lint, and `git diff
+--check` passed over the owned files.
+
+This closes only the residual-row classification called for by WP4. It does
+not establish the remaining corpus-wide execution, block/edge, GED,
+structure-axis, runtime, or output-size promotion criteria.
+
 For the linear-tail increment, focused and scoped validation additionally
 recorded:
 
