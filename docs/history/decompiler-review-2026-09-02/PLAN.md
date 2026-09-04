@@ -1375,6 +1375,22 @@ concurrent output/baseline drift. Commands, build fingerprint, scope, and the
 detected repair targets are recorded in
 `results/wp10-goto-aware-definedness.md`.
 
+### Implementation evidence - 2026-09-04 performance-gate preflight
+
+The post-`src/` full Python suite exposed a gate-ordering defect: the
+incomparable-unit fail-closed test launched nine intentionally expensive
+whole-binary decompilations before checking metadata that already proved the
+run could not be compared. The same problem affected missing baselines and
+impossible baseline references. The interrupted suite reached 71% in 1:51:36;
+its 372 failures, 2,761 passes, and 892 expected failures are partial
+accounting, not a completed gate result.
+
+`ef24d729` moves those metadata-only exit-3 decisions ahead of measurement
+while preserving real comparison, baseline-write, and runtime partial-result
+paths. The four focused contract tests now complete in 0.62 seconds and assert
+that rejected preflight states never enter measurement. Exact diagnosis,
+commands, and limits are recorded in `results/wp10-perf-gate-preflight.md`.
+
 ### Selective deletion checklist
 
 For each candidate module/pass:
@@ -1538,4 +1554,6 @@ relevant ratchet's accepted-regression record.
 7. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned
-   responsibility per commit.
+   responsibility per commit. The metadata-only performance-gate hang is
+   closed at `ef24d729`; the remaining full-suite failures and unbounded real
+   measurement paths still require triage.

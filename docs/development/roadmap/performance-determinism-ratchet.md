@@ -22,6 +22,13 @@ P1's missing-file condition is resolved and P2/P3 are covered by the
 fail-closed states. P4–P8 remain open: provenance, RSS, output identity, and
 returned-body completeness are still absent from the baseline contract.
 
+`ef24d729` also makes the P1/P3 and statically impossible P2 decisions true
+preflight checks. They now return exit 3 before launching the gate's nine
+large-binary decompilations. The focused fail-closed suite fell from an
+effectively unbounded full-suite stall to 0.62 seconds; assertions pin that
+these paths never reach the measurement marker. Runtime failure of a configured
+reference remains a post-measurement P2 check.
+
 ## Why this gate counts instructions
 
 Carried from the earlier estate phase this plan supersedes, because the
@@ -73,25 +80,26 @@ This is useful substrate. It is not yet a fail-closed release ratchet.
 
 ## Proven gaps in the current gate
 
-### P1 — baseline recorded; absence still fails open
+### P1 — baseline absence fails closed before measurement (closed)
 
-`bench/perf_baseline.json` is now present. However, if it is missing,
-`tools/perf_gate.py` still prints instructions and exits zero. The release
-contract must distinguish developer bootstrap from a passing gate.
+`bench/perf_baseline.json` is present. If an overridden or production baseline
+is missing, `tools/perf_gate.py` now returns exit 3 before measurement. The
+developer bootstrap state is distinct from a passing gate without paying for a
+measurement that cannot be compared.
 
-### P2 — incomplete measurements can pass
+### P2 — incomplete measurements fail closed (closed; typed detail remains)
 
-Absent references are skipped. A failed measurement removes that reference.
-Comparison iterates only current results, so neither a missing baseline row nor
-a missing current row is a regression. If no rows are measured the tool fails;
-if one of three is measured it may pass.
+A positive baseline reference outside the configured population or absent from
+disk now returns exit 3 before measurement. A configured reference that fails
+during measurement is detected afterward and also returns exit 3. Per-reference
+typed failure detail remains part of the v2 schema work.
 
-### P3 — the wall-clock fallback is not comparable
+### P3 — incomparable units fail closed before measurement (closed)
 
 The intended baseline uses retired instructions. On a host without usable
 `perf`, the tool switches to seconds. If baseline and current units differ, it
-prints “not comparable” and exits zero. That is a useful developer fallback
-but not a gate verdict.
+now returns exit 3 before measurement. That remains a useful developer
+diagnostic but is never a passing gate verdict.
 
 ### P4 — provenance is insufficient
 
