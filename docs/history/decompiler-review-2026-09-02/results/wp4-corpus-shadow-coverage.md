@@ -44,6 +44,37 @@ largest observed regressions include wide switches, Duff-style control flow,
 flattened control flow, and dispatch nested in loops. Those families are the
 next focused WP4 inputs.
 
+## Nested-join repair
+
+The first regression investigation found an ownership-order bug. When a
+nested conditional's immediate post-dominator was exactly its enclosing stop
+boundary, recovery discarded that boundary. The first visited arm then owned
+the shared continuation and nested it under itself; siblings reached the
+misplaced continuation with artificial gotos. Commit `1e0f41c7` retains the
+join as the arms' stop while leaving its single emission to the enclosing
+region.
+
+On `07_packet_parser-gcc-O0.so::parse_packet`, the stack-canary/return epilogue
+moved from a 20-space-deep branch to function scope and candidate size fell
+from 3,572 to 3,492 bytes. Two avoidable transfers to that correctly placed
+join remain and are pinned as explicit debt.
+
+A second complete exploratory census measured the generic effect:
+
+- among previously comparable candidates, 57 functions lost gotos, 173 tied,
+  and 17 gained gotos;
+- their aggregate goto count fell by 100 and output size fell by 122,459 bytes;
+- 21 previously declined rows became renderable: 18 improved and 3 regressed;
+- overall coverage rose from 247 to 268 candidates, with 217 improved, 10
+  unchanged, 41 regressed, and 447 declined.
+
+The apparent increase from 29 to 41 regressed rows is concentrated partly in
+one Rust runtime `get_backtrace_style` body repeated across many fixtures, but
+it remains a real blocker rather than being erased as duplication. The next
+WP4 step is to eliminate or locally refuse those 17 worsened existing
+candidates and the three newly renderable regressions, then rerun from a clean
+native build.
+
 ## Provenance limitation
 
 The report named committed revision
@@ -56,6 +87,11 @@ recorded. The JSON remains in the local cache and is deliberately not committed
 as a pinned benchmark result. Re-run from a clean native build after those
 lanes land before accepting timing, output-size, or exact per-function counts
 as promotion evidence.
+
+The nested-join follow-up report likewise ran in the shared worktree before
+the fix was committed, so its JSON revision field is `9a741786` rather than
+`1e0f41c7`. Its before/after deltas are exploratory engineering evidence, not
+a replacement for the required clean pinned run.
 
 ## Validation
 

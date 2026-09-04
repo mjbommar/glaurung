@@ -541,6 +541,16 @@ that preserves honest local gotos when required.
   29 individual regressions plus 65.5% decline rate remain blockers. The exact
   command, provenance limit, timing, and next target families are recorded in
   `results/wp4-corpus-shadow-coverage.md`.
+  The first regression-driven repair now preserves an immediate
+  post-dominator when it equals the enclosing recovery boundary, preventing a
+  nested arm from taking ownership of a shared continuation. Across previously
+  comparable candidates this removed 100 aggregate gotos and 122,459 output
+  bytes: 57 rows improved, 173 tied, and 17 worsened. It also made 21 declined
+  rows renderable. Overall shadow coverage rose from 247 to 268 candidates,
+  but 41 raw rows now regress, including repeated copies of one Rust runtime
+  body. The repair is therefore landed evidence and improved output, not a
+  promotion claim; clean pinned reruns and focused removal/refusal of the
+  worsened cells remain open.
 
 ### RED fixtures
 
