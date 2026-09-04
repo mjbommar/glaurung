@@ -1029,6 +1029,30 @@ improvement ratchets because of broad current-tip drift in both directions;
 the PDB fixture is outside that census and no corpus movement is attributed to
 this increment.
 
+### Implementation evidence — 2026-09-04 declared-call pointer boundaries
+
+Call rendering now keeps parameter selection independent from result
+representation conversion. A trusted declaration is no longer replaced with a
+whole function-pointer cast merely because the recovered destination carrier
+spells its return differently; incompatible parameter lists still retain the
+per-site cast. At the argument boundary, the renderer now consumes the
+declaration plan's selected local type, so a recovered `char *` local is passed
+as a pointer rather than being weakened back to `(long)`. One pointer-width
+transport cast may be removed only when the inner expression is already proven
+compatible with the declared pointer parameter.
+
+The real nullable-locale fixture improved from uncompilable calls such as
+`strdup((long)old_locale)`, `strlen((long)saved_locale)`, and
+`free((long)saved_locale)` to direct typed calls. All three libc pointer
+fixtures compile, recompile, and execute equivalently. The full Rust gate and
+the four-lane smoke matrix are green. The structural gate did not start a test:
+its fixture setup lost the decompiler subprocess and waited indefinitely in
+`subprocess.communicate`, so it was interrupted after 276.89 seconds. The
+def-use census remains red on the same broad current-tip drift recorded above;
+this fixture is outside that census and no baseline was refreshed. Exact
+commands and limitations are in
+`results/wp8-declared-call-pointer-boundaries.md`.
+
 ### Exit criteria
 
 - [ ] No rendered prototype is worse than an available trusted declaration.
