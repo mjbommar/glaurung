@@ -349,13 +349,29 @@ structural fixture remained green. The execution differential then crashed the
 rebuilt function on vector selector 1. An A/B release rebuild of the committed
 form passed all 34 cases, so the experiment was rejected and fully reverted.
 
-Inspection showed that selector 1 reaches normalized recovered case 129, which
-the rewrite did not modify. The recovered C in that path contains signed
-overflow-sensitive arithmetic; changing unrelated control-flow text altered
-the native compiler's treatment of existing undefined C behavior. Therefore a
-goto-count-only cleanup is not safe here. Width-defined arithmetic emission is
-a prerequisite to revisiting these two rows, and execution differential remains
-the acceptance authority.
+The accepted implementation moves this rewrite to the final semantic AST
+boundary, after every copy, fallthrough, type, naming, and frame pass. It acts
+only when a switch is immediately followed by the target label, descends only
+through conditionals inside that switch's arms, and refuses an intervening
+effect or a transfer inside a nested loop/switch. Unit tests pin all three
+boundaries. The resulting C is equivalent to the independently tested textual
+rewrite rather than exposing `Break` to earlier semantic consumers.
+
+After a release rebuild, clang-O2 `wide154_dense_effects` passed all **34
+execution cases** and fell from 54 to 32 gotos; gcc-O0 fell from 22 to zero.
+The full comparison retained **236 improved / 32 unchanged / 4 regressed / 443
+declined / 0 production-missing**, while comparable shadow gotos fell from 571
+to **505**. Production output also lost six redundant join gotos. No row gained
+a goto, declined, or changed to a worse status. The run exited 0 in 26.92
+seconds, peaked at 885,408 KiB RSS, and is archived locally at:
+
+```text
+$HOME/.cache/glaurung/tmp/structure-v2-late-switch-breaks-final.json
+```
+
+The report names `fa762545` because the final-boundary implementation was still
+uncommitted, and the native extension included the concurrent parser lane.
+These totals therefore remain exploratory until the required clean pinned run.
 
 ## Validation
 

@@ -134,6 +134,20 @@ def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
     assert verification["unverified"] == [], verification
 
 
+def test_verified_shadow_switch_spells_its_adjacent_join_as_break() -> None:
+    """Final rendering must not retain case gotos to the switch continuation."""
+    exports = D.exported_functions(str(WIDE_CLANG_O2))
+    [(_name, _va, body, *_extra)] = g.ir.decompile_many(
+        str(WIDE_CLANG_O2),
+        [exports["wide154_dense_effects"]],
+        style="decbench",
+        shadow_v2=True,
+    )
+
+    assert "goto L_26fe;" not in body, body
+    assert body.count("goto ") <= 32, body
+
+
 def _source_for(fixture: str) -> Path:
     for suffix in (".c", ".cpp"):
         candidate = FIXTURES / "src" / f"{fixture}{suffix}"

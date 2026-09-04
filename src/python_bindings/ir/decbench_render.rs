@@ -518,6 +518,16 @@ fn decbench_text_with_installed_environment(
             )
         );
     }
+    // This is intentionally the final semantic pass. A verified structure-v2
+    // switch may retain case-local gotos to the label immediately following
+    // it. They are source-level `break`, but introducing `Break` before copy
+    // and fallthrough preparation can perturb those passes on large switches.
+    // At this boundary the rewrite is exact, independently verifiable, and no
+    // later transform consumes the altered control-flow spelling.
+    pass!(
+        "recover_existing_switch_join_breaks",
+        crate::ir::switch_ladder::recover_existing_switch_join_breaks(&mut prepared)
+    );
     crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
     // THE pre-render verification boundary. Every semantic transform is behind us
     // and the renderer below is formatting-only, so this AST is exactly what is

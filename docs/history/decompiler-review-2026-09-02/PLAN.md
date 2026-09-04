@@ -633,13 +633,16 @@ that preserves honest local gotos when required.
   different dispositions. GCC-O2 `duff_copy` recompiles and passes all 34
   execution cases; its eight shadow gotos are verified suffix entries into the
   recovered Duff body, while production reports four only by leaving the
-  indirect dispatch unrecovered. Clang-O2 `wide154_dense_effects` still has a
-  real cleanup prerequisite. Recursively spelling its 22 switch-join transfers
-  as `break` reduced shadow gotos from 54 to 32, but the rebuilt output crashed
-  on an otherwise passing execution vector because existing signed-overflow-
-  sensitive recovered arithmetic changed optimization. That experiment was
-  rejected and fully reverted. Width-defined C emission must precede further
-  cosmetic cleanup of that row.
+  indirect dispatch unrecovered. An initial attempt to spell the 22
+  clang-O2 `wide154_dense_effects` switch-join transfers as `break` ran before
+  copy/fallthrough preparation and failed execution differential, so it was
+  rejected. The accepted implementation performs the same adjacency-proved
+  rewrite as the final semantic AST pass, after every consumer that could
+  reinterpret `Break`. All 34 execution cases pass; clang-O2 falls from 54 to
+  32 gotos and gcc-O0 falls from 22 to zero. Across the complete comparison,
+  shadow gotos fall from 571 to **505**, with no new decline or status
+  regression. The remaining wide gotos are suffix/shared-effect entries rather
+  than transfers to the switch continuation.
 
 ### RED fixtures
 
@@ -1748,9 +1751,8 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Classify the two GCC-O2 Duff rows as verified suffix-entry control flow,
-   then repair width-defined arithmetic before revisiting the two clang-O2
-   wide-switch rows. Afterward obtain a clean pinned rerun and
+1. Classify the remaining Duff and clang-wide rows by their verified
+   suffix/shared-effect entry properties, then obtain a clean pinned rerun and
    finish promotion evidence: corpus-wide execution differential, unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted
    runtime/output-size budgets.

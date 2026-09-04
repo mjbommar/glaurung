@@ -44,6 +44,72 @@ pub fn recover_switches(f: &mut Function) {
     prune_labels(&mut f.body, &live);
 }
 
+/// Replace case-local gotos to an immediately following switch join with
+/// source-level `break` after every other semantic AST pass has finished.
+///
+/// Running this at the final semantic boundary matters: an earlier `Break` can
+/// change how copy and fallthrough passes reason about neighbouring cases even
+/// though the rendered C is equivalent. The adjacency proof also matters. If
+/// any effect lies between the switch and label, a `break` would execute it
+/// while the original goto skipped it, so that shape is left untouched.
+pub fn recover_existing_switch_join_breaks(f: &mut Function) {
+    recover_existing_switch_join_breaks_body(&mut f.body);
+}
+
+fn recover_existing_switch_join_breaks_body(body: &mut [Stmt]) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_existing_switch_join_breaks_body(then_body);
+                if let Some(else_body) = else_body {
+                    recover_existing_switch_join_breaks_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                recover_existing_switch_join_breaks_body(body)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                recover_existing_switch_join_breaks_body(std::slice::from_mut(init.as_mut()));
+                recover_existing_switch_join_breaks_body(body);
+                recover_existing_switch_join_breaks_body(std::slice::from_mut(step.as_mut()));
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    recover_existing_switch_join_breaks_body(case_body);
+                }
+                if let Some(default_body) = default {
+                    recover_existing_switch_join_breaks_body(default_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for index in 0..body.len().saturating_sub(1) {
+        let (prefix, suffix) = body.split_at_mut(index + 1);
+        let Stmt::Switch { cases, default, .. } = &mut prefix[index] else {
+            continue;
+        };
+        let Some(Stmt::Label(join)) = suffix.first() else {
+            continue;
+        };
+        for (_, case_body) in cases {
+            replace_join_gotos(case_body, *join);
+            drop_renderer_supplied_break(case_body);
+        }
+        if let Some(default_body) = default {
+            replace_join_gotos(default_body, *join);
+            drop_renderer_supplied_break(default_body);
+        }
+    }
+}
+
 /// Recover the other form produced when region structuring cannot nest GCC's
 /// comparisons: a linear run of guarded gotos followed by labelled case bodies.
 ///
@@ -1617,5 +1683,98 @@ mod tests {
             "expected a switch inside the loop, got:\n{:#?}",
             body[0]
         );
+    }
+
+    #[test]
+    fn an_existing_switchs_conditional_join_goto_becomes_break_at_the_final_boundary() {
+        const JOIN: u64 = 0x2000;
+        let mut f = Function {
+            name: "joined".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Switch {
+                    discriminant: reg("arg0"),
+                    cases: vec![(
+                        Some(0),
+                        vec![Stmt::If {
+                            cond: reg("arg1"),
+                            then_body: vec![Stmt::Goto { target: JOIN }],
+                            else_body: Some(vec![assign("ret", 7)]),
+                        }],
+                    )],
+                    default: None,
+                },
+                Stmt::Label(JOIN),
+                Stmt::Return {
+                    value: Some(reg("ret")),
+                },
+            ],
+        };
+
+        recover_existing_switch_join_breaks(&mut f);
+
+        let Stmt::Switch { cases, .. } = &f.body[0] else {
+            panic!("switch must survive");
+        };
+        let Stmt::If { then_body, .. } = &cases[0].1[0] else {
+            panic!("conditional case must survive");
+        };
+        assert_eq!(then_body, &[Stmt::Break]);
+    }
+
+    #[test]
+    fn an_effect_between_switch_and_label_blocks_join_break_recovery() {
+        const JOIN: u64 = 0x2000;
+        let mut f = Function {
+            name: "not_adjacent".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Switch {
+                    discriminant: reg("arg0"),
+                    cases: vec![(Some(0), vec![Stmt::Goto { target: JOIN }])],
+                    default: None,
+                },
+                assign("ret", 9),
+                Stmt::Label(JOIN),
+            ],
+        };
+        let before = f.clone();
+
+        recover_existing_switch_join_breaks(&mut f);
+
+        assert_eq!(f, before, "the goto skips the intervening assignment");
+    }
+
+    #[test]
+    fn a_nested_loop_transfer_is_not_misrendered_as_a_switch_break() {
+        const JOIN: u64 = 0x2000;
+        let mut f = Function {
+            name: "nested".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Switch {
+                    discriminant: reg("arg0"),
+                    cases: vec![(
+                        Some(0),
+                        vec![Stmt::While {
+                            cond: Expr::Const(1),
+                            body: vec![Stmt::Goto { target: JOIN }],
+                        }],
+                    )],
+                    default: None,
+                },
+                Stmt::Label(JOIN),
+            ],
+        };
+
+        recover_existing_switch_join_breaks(&mut f);
+
+        let Stmt::Switch { cases, .. } = &f.body[0] else {
+            panic!("switch must survive");
+        };
+        let Stmt::While { body, .. } = &cases[0].1[0] else {
+            panic!("nested loop must survive");
+        };
+        assert_eq!(body, &[Stmt::Goto { target: JOIN }]);
     }
 }
