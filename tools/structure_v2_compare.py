@@ -26,6 +26,47 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 INVENTORY = ROOT / "tests" / "open_defects" / "known_failures.json"
 GOTO_RE = re.compile(r"\bgoto\s+\w+\s*;")
+GOTO_TARGET_RE = re.compile(r"\bgoto\s+(\w+)\s*;")
+LABEL_RE = re.compile(r"(?m)^\s*(\w+)\s*:(?!:)")
+SWITCH_RE = re.compile(r"(?m)^\s*switch\s*\(")
+
+# These are exact shadow-v2 comparison rows, not general fixture waivers.  Each
+# property has real-fixture Rust coverage plus execution-differential and
+# control-flow evidence in the WP4 report.  The classifier below additionally
+# fails closed unless the rendered candidate still has a switch, direct
+# transfers, and definitions for every transfer target.
+SHADOW_HONEST_GOTO_CONTRACTS: dict[tuple[str, str], str] = {
+    (
+        "102_duffs_device-gcc-O2.so",
+        "duff_copy",
+    ): "verified_switch_suffix_entry_shared_region",
+    (
+        "102_duffs_device-gcc-O2strip.dwarf.so",
+        "duff_copy",
+    ): "verified_switch_suffix_entry_shared_region",
+    (
+        "154_wide_switch-clang-O2.so",
+        "wide154_dense_effects",
+    ): "verified_switch_shared_effect_entry",
+    (
+        "154_wide_switch-clang-O2strip.dwarf.so",
+        "wide154_dense_effects",
+    ): "verified_switch_shared_effect_entry",
+}
+
+
+def _honest_goto_property(
+    name: str, function: str, status: str, text: str | None
+) -> str | None:
+    """Return independently reviewed residual-goto evidence, or fail closed."""
+    property_name = SHADOW_HONEST_GOTO_CONTRACTS.get((name, function))
+    if property_name is None or status != "regressed" or text is None:
+        return None
+    targets = set(GOTO_TARGET_RE.findall(text))
+    labels = set(LABEL_RE.findall(text))
+    if not targets or not SWITCH_RE.search(text) or not targets <= labels:
+        return None
+    return property_name
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -104,11 +145,18 @@ def compare_object(name: str, rows: list[dict]) -> dict:
             status = "regressed"
         else:
             status = "unchanged"
+        property_name = _honest_goto_property(
+            name, row_by_va[va]["fn"], status, candidate
+        )
         comparisons.append(
             {
                 "fn": row_by_va[va]["fn"],
                 "va": va,
                 "status": status,
+                "classification": (
+                    "accepted_honest_goto" if property_name is not None else None
+                ),
+                "classification_property": property_name,
                 "production_gotos": baseline_gotos,
                 "shadow_gotos": candidate_gotos,
                 "production_bytes": len((baseline or "").encode()),
@@ -151,6 +199,16 @@ def build_report(targets: dict[str, list[dict]], jobs: int) -> dict:
             "production_missing",
         )
     }
+    classification_counts = {
+        "accepted_honest_goto": sum(
+            function["classification"] == "accepted_honest_goto"
+            for function in functions
+        ),
+        "unexplained_regression": sum(
+            function["status"] == "regressed" and function["classification"] is None
+            for function in functions
+        ),
+    }
     comparable = [
         function
         for function in functions
@@ -168,6 +226,7 @@ def build_report(targets: dict[str, list[dict]], jobs: int) -> dict:
         "objects": len(objects),
         "requested_functions": len(functions),
         "status_counts": status_counts,
+        "classification_counts": classification_counts,
         "production_gotos_comparable": sum(
             function["production_gotos"] for function in comparable
         ),
