@@ -259,8 +259,26 @@ PYTHONPATH=$HOME/.cache/glaurung/cp312-site:$DECBENCH_DIR \
   ~/.cache/glaurung/decbench-full/tree --provider glaurung
 ```
 
-The step from 72.8776% to 93.1636% was **not** a front-end change: it was this
-harness learning what the stored cells are. They are
+**Correction (recorded because it was published wrong).** An earlier revision
+of this section, and commit `3d50103c`, attributed the whole step from 72.8776%
+to 93.1636% to the harness fix. That was measured on a shared checkout in which
+the jump-elision change to `src/csource/joern/nodes.rs` was already present but
+uncommitted, so the two causes were confounded. Measured in isolation, one file
+different, both sides from a clean release wheel:
+
+```
+                                  exact    rate      <=1    <=5    <=20   >20
+  harness fix only              62,487  72.9605%   1,365  6,392  10,325  5,076
+  harness fix + jump elision    79,790  93.1636%   1,527  2,454   1,463    411
+```
+
+The harness fix is worth **+71 cells**; the front-end change is worth
+**+17,303**, and takes the `> 20` bucket down 92%. Attributing it the other way
+round pointed at the wrong place for the remaining work, which is the reason to
+record the error rather than quietly restate the number.
+
+What the harness fix genuinely was: this harness learning what the stored cells
+are. They are
 `decbench.metrics.ged.GEDMetric._compute_uncached` -- isomorphism fast path,
 size-delta above the cap, and `max(1.0, vj_ged(...))` -- and we were diffing
 against the third step unclamped. Since a non-isomorphic pair can never be
