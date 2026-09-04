@@ -42,6 +42,75 @@ pub fn prune_unreachable_tails(f: &mut Function) {
     }
 }
 
+/// Remove gotos that are already the structured lexical fallthrough.
+///
+/// A region join may sit after several closing braces. A goto at the end of
+/// each nested `if` arm that targets that exact next label is redundant: C
+/// reaches it by ordinary fallthrough. Track only an immediately following
+/// label (ignoring comments/nops), and thread that destination through nested
+/// conditionals. Loops and switches deliberately do not inherit the outer
+/// destination because reaching the end of their bodies has different control
+/// semantics.
+pub fn prune_structured_fallthrough_gotos(function: &mut Function) {
+    prune_fallthrough_body(&mut function.body, None);
+    prune_unreferenced_labels(function);
+}
+
+fn prune_fallthrough_body(body: &mut Vec<Stmt>, inherited: Option<u64>) {
+    let mut following = inherited;
+    for index in (0..body.len()).rev() {
+        match &mut body[index] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                prune_fallthrough_body(then_body, following);
+                if let Some(else_body) = else_body {
+                    prune_fallthrough_body(else_body, following);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prune_fallthrough_body(body, None);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    prune_fallthrough_body(case_body, None);
+                }
+                if let Some(default) = default {
+                    prune_fallthrough_body(default, None);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                prune_fallthrough_body(try_body, None);
+                for catch in catches {
+                    prune_fallthrough_body(&mut catch.body, None);
+                }
+            }
+            _ => {}
+        }
+
+        match body[index] {
+            Stmt::Label(target) => following = Some(target),
+            Stmt::Nop | Stmt::Comment(_) => {}
+            _ => following = None,
+        }
+    }
+
+    let Some(target) = inherited else {
+        return;
+    };
+    let Some(index) = body
+        .iter()
+        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+    else {
+        return;
+    };
+    if matches!(body[index], Stmt::Goto { target: seen } if seen == target) {
+        body.remove(index);
+    }
+}
+
 /// Inline uniquely labelled, straight-line return tails at their goto sites.
 ///
 /// Compilers routinely share one return epilogue across several branches. A
@@ -900,6 +969,73 @@ mod tests {
         inline_terminal_goto_tails(&mut function);
 
         assert_eq!(function.body, original);
+    }
+
+    #[test]
+    fn nested_branch_gotos_to_the_following_join_are_fallthrough() {
+        let mut function = Function {
+            name: "nested_join".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("outer")),
+                    then_body: vec![Stmt::If {
+                        cond: Expr::Reg(VReg::phys("inner")),
+                        then_body: vec![Stmt::Goto { target: 0x1200 }],
+                        else_body: Some(vec![Stmt::Assign {
+                            dst: VReg::phys("value"),
+                            src: Expr::Const(1),
+                        }]),
+                    }],
+                    else_body: Some(vec![Stmt::Goto { target: 0x1200 }]),
+                },
+                Stmt::Label(0x1200),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("value"))),
+                },
+            ],
+        };
+
+        prune_structured_fallthrough_gotos(&mut function);
+
+        assert!(!format!("{:#?}", function.body).contains("Goto"));
+        assert!(!format!("{:#?}", function.body).contains("Label"));
+    }
+
+    #[test]
+    fn an_intervening_effect_or_loop_iteration_keeps_the_goto() {
+        let guarded_goto = Stmt::If {
+            cond: Expr::Reg(VReg::phys("condition")),
+            then_body: vec![Stmt::Goto { target: 0x1200 }],
+            else_body: None,
+        };
+        let mut function = Function {
+            name: "not_fallthrough".into(),
+            entry_va: 0,
+            body: vec![
+                guarded_goto.clone(),
+                Stmt::Call {
+                    target: Expr::Reg(VReg::phys("effect")),
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::While {
+                    cond: Expr::Reg(VReg::phys("running")),
+                    body: vec![Stmt::Goto { target: 0x1200 }],
+                },
+                Stmt::Label(0x1200),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_structured_fallthrough_gotos(&mut function);
+
+        assert_eq!(function.body[0], guarded_goto);
+        assert!(matches!(
+            &function.body[2],
+            Stmt::While { body, .. } if matches!(body.as_slice(), [Stmt::Goto { target: 0x1200 }])
+        ));
     }
 
     #[test]

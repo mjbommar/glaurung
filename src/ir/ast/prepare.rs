@@ -359,6 +359,10 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     // phi-coalesced cursors retain their source-level pre-test.
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::latch_predicate::fold_latched_predicates(&mut owned);
+    // A verified join can remain after several closing braces. Branch-final
+    // gotos to that exact lexical successor carry no control information and
+    // only make otherwise structured output look unstructured.
+    crate::ir::label_prune::prune_structured_fallthrough_gotos(&mut owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
     drop_machine_frame_comments(&mut owned.body);
     // A call result consumed exactly once by the immediately following scalar

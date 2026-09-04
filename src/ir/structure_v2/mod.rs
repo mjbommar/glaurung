@@ -547,7 +547,7 @@ mod tests {
             .as_deref()
             .unwrap_or_else(|| panic!("verified packet tree should prepare: {report:#?}"));
         assert!(
-            prepared.contains("\n    L_14dd:"),
+            !prepared.contains("L_14dd"),
             "prepared v2 tree:\n{prepared}"
         );
     }

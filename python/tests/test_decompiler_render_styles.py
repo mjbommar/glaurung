@@ -103,11 +103,8 @@ def test_shadow_keeps_a_shared_epilogue_outside_sibling_branches() -> None:
         str(PACKET_GCC_O0), [va], style="decbench", shadow_v2=True
     )
 
-    assert "\n    L_14dd: ;" in shadow, shadow
-    assert "\n                        L_14dd: ;" not in shadow, shadow
-    # This slice fixes ownership and placement. Two avoidable transfers to the
-    # now-correctly placed join remain visible to the corpus regression gate.
-    assert shadow.count("goto ") == production.count("goto ") + 2, shadow
+    assert "L_14dd" not in shadow, shadow
+    assert shadow.count("goto ") <= production.count("goto "), shadow
 
 
 def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
