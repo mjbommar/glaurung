@@ -60,7 +60,7 @@ independent of everything and can be done whenever.
 | S0 | shared kernel | byte-exact against the reference's pure functions | no |
 | S1 | `src/syntax` substrate + `src/csource` lexer, AST, parser | parse coverage over 210 in-repo `.c` files and 1,606 stored decompiled `.c` | no |
 | S2 | general source CFG | structural invariants and per-construct fixtures | no |
-| S3 | Joern-parity layer + GED | 85,645 reproducible GED cells matched exactly | no |
+| S3 | Joern-parity layer + GED | 85,645 reproducible GED cells matched exactly — **72.8776% (62,416) as of 2026-09-04, 0 uncovered** | no |
 | S4 | C → LLIR lowering | the existing interpreter runs a lowered C function | no |
 | S5 | bounded equivalence checking | a known-good and a known-bad decompilation are separated | **the point** |
 | S6 | native `type_match` | per-function `(tp, fp, fn)` equality with the reference | no |
@@ -251,6 +251,14 @@ The same corpus caveat as S1 applies to the sweep: every artifact in it is
 Glaurung's own output.
 
 ## 5. S3 — Joern parity and GED
+
+**Status, 2026-09-04: the layer exists and is measured.** F-9, F-10, F-11,
+F-12, F-13, F-14 and F-15 are implemented in `src/csource/joern/`, the PyO3
+provider is wired, and `tools/source_cfg_parity.py --provider glaurung` scores
+**62,416 of 85,645 cells exact (72.8776%) with zero uncovered**. The command and
+the component-by-component progression are in
+[`parity-plan.md`](parity-plan.md) §3, Phase 3. Not yet done: F-16 per-TU
+resolution, F-17's on-disk `--source-cfgs` round trip, and the ratchet.
 
 **Deliverable.** The parity layer over S2 — Joern's expression-level node
 granularity, chain coalescing, derived entry/exit flags, the singleton-funcend

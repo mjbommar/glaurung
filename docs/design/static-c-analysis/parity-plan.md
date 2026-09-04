@@ -237,6 +237,44 @@ that must lose its funcend and end with **no exit flag**.
 
 **Deliverable.** Nothing new — this is the measurement Phase 0 built.
 
+**Status, 2026-09-04: 62,416 of 85,645 exact (72.8776%), zero uncovered.**
+
+```
+binaries    785
+cells       85645 stored
+  attempted 85645
+  exact     62416  (72.8776%)
+  mismatch  23229
+  uncovered 0  (provider produced no CFG)
+  no source 0  (dataset gap, not a failure)
+  gained    4333  (functions Joern did not produce)
+mismatch by |delta|:  <=1 1382   <=5 6385   <=20 10283   >20 5179
+  worst sshd:process_server_config_line_depth: expected 590.0, got 2547.0
+```
+
+```bash
+DECBENCH_DIR=$HOME/.cache/glaurung/decbench-full/decbench \
+PYTHONPATH=$HOME/.cache/glaurung/cp312-site:$DECBENCH_DIR \
+  $DECBENCH_DIR/.venv/bin/python tools/source_cfg_parity.py \
+  ~/.cache/glaurung/decbench-full/tree --provider glaurung
+```
+
+How it got there, on the three-binary slice the components were measured
+against (2,525 cells): the anchor alone scored 31 exact (1.23%); F-9 took it to
+30 (1.19%) while moving 27 cells out of the `>20` bucket; F-11/F-12 plus the
+Joern-shaped chain partition took it to 2,178 (86.26%). Scored with our own
+`syntax::ged` over the whole corpus the same three variants give 2.36%, 0.60%
+and 72.44% — the middle figure being F-11/F-12 on the *general* partition,
+which is **worse than shipping none of it**, and the reason those two landed
+together. That 72.44% against this harness's 72.88% is also an independent
+cross-check of `syntax::ged` on the full corpus, not just the 11,979 pairs
+`tools/ged_cross_check.py` covers.
+
+`uncovered 0` is the structural claim: the front end produced a CFG for every
+stored cell, and 4,333 functions Joern produced none for. What is left is shape
+agreement on 23,229 cells, of which 1,382 are within one.
+
+
 **Gate — L3, the primary gate.** For each of the 85,645 reproducible cells, our
 CFG of the stored decompiled C must reproduce the stored value exactly. The
 harness is `tools/source_cfg_parity.py`; it fails on any mismatch **and on any
