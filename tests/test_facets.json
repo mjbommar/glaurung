@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 318,
+  "core": 319,
   "lfs": 113,
   "fixtures": 36,
   "toolchain": 36,
@@ -842,6 +842,9 @@
    "core"
   ],
   "test_parser_recovery.py": [
+   "core"
+  ],
+  "test_parser_recovery_decbench.py": [
    "decbench"
   ],
   "test_partial_findings_writes.py": [
