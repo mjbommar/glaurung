@@ -332,6 +332,31 @@ was not committed when measured. The extension also included the concurrent
 uncommitted parser lane, so these exact totals remain exploratory rather than
 clean promotion evidence.
 
+## Remaining-regression execution audit
+
+The four raw goto regressions are two debug/stripped pairs, not four independent
+defects. GCC-O2 `duff_copy` retains eight shadow gotos versus four in production.
+The shadow form recovers the indirect dispatch and uses verified suffix entries
+into one shared Duff body; production's smaller count accompanies an
+`unrecovered indirect jump` placeholder. The shadow output recompiles and
+matches the original across all **34 cases**, so this row needs evidence-backed
+honest-control-flow classification rather than edge deletion.
+
+For clang-O2 `wide154_dense_effects`, a local experiment recursively converted
+switch-arm jumps to the shared post-dominator into C `break`. It reduced each
+row from 54 to 32 gotos, exactly removing 22 join transfers, and the focused
+structural fixture remained green. The execution differential then crashed the
+rebuilt function on vector selector 1. An A/B release rebuild of the committed
+form passed all 34 cases, so the experiment was rejected and fully reverted.
+
+Inspection showed that selector 1 reaches normalized recovered case 129, which
+the rewrite did not modify. The recovered C in that path contains signed
+overflow-sensitive arithmetic; changing unrelated control-flow text altered
+the native compiler's treatment of existing undefined C behavior. Therefore a
+goto-count-only cleanup is not safe here. Width-defined arithmetic emission is
+a prerequisite to revisiting these two rows, and execution differential remains
+the acceptance authority.
+
 ## Validation
 
 ```text
