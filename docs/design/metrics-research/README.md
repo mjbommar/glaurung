@@ -92,6 +92,23 @@ directory uses a WL certificate as an exact isomorphism test, and it is also why
 kernel cannot distinguish anything here that the existing isomorphism check does
 not already distinguish.
 
+## What has been built from this
+
+Recommendation 1 has landed. `tools/metric_stratify.py` (`db09aed9`) computes
+the null baseline from whatever corpus it is pointed at rather than quoting the
+27.24% figure, stratifies by CFG size, and reports
+`skill = (perfect% - null%) / (100% - null%)`. Its full-corpus run is the
+evidence for the sentence this directory exists to make sayable: **Ghidra
+(25.52%) and Binary Ninja (20.58%) score below a `return 0;` stub (27.24%)**,
+and claude-code and codex fall from first and second on DecBench's
+own-denominator style to ninth and tenth when judged on the population everyone
+else is judged on, having attempted 242 and 243 of 89,014 functions.
+
+Recommendations 2 and 3 -- the mutation harness's missing specificity half, and
+the control-skeleton tree edit distance -- are in progress. Until the former
+lands, **no specificity number in this directory is measured**, and every
+sensitivity figure here should be read with that missing.
+
 ## Related
 
 * [`../static-c-analysis/`](../static-c-analysis/README.md) — the C front end
