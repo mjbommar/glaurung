@@ -21,6 +21,44 @@ use crate::program::types::TypeStore;
 const MAX_CODE_TARGETS: usize = 8;
 const LINUX_SA_SIGINFO: i64 = 4;
 
+/// Provenance and authority of a function declaration, weakest first.
+///
+/// This is the single program-owned ordering used when more than one source
+/// describes the same function boundary. Library catalogs and call-site
+/// observations are inference inputs, not source declarations for this image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeclarationSource {
+    /// Recovered from machine code or its callers.
+    Inferred,
+    /// Trusted PDB procedure/type records for the exact PE address.
+    Pdb,
+    /// Trusted DWARF declaration for the exact image function.
+    Dwarf,
+    /// Explicit analyst decision for this query.
+    Analyst,
+}
+
+impl DeclarationSource {
+    /// Stable external spelling used by structured conflict metadata.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Inferred => "inferred",
+            Self::Pdb => "pdb",
+            Self::Dwarf => "dwarf",
+            Self::Analyst => "analyst",
+        }
+    }
+
+    /// Select the stronger of two competing declaration sources.
+    pub fn strongest<T>(left: (Self, T), right: (Self, T)) -> (Self, T) {
+        if right.0 > left.0 {
+            right
+        } else {
+            left
+        }
+    }
+}
+
 /// Proven source-level function contract owned by the program environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionPrototypeFact {

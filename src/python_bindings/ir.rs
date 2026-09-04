@@ -515,25 +515,49 @@ pub(super) fn decompile_at_session(
         let dwarf_render_contract = dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va));
-        let declared_render = analyst_prototype
-            .map(|prototype| {
-                crate::ir::call_contracts::CallPrototype::from_analyst(
-                    &prototype.return_type,
-                    &prototype.parameter_types,
-                    prototype.variadic,
+        let debug_source = if pdb_contract_vas.contains(&func_va) {
+            crate::program::environment::DeclarationSource::Pdb
+        } else {
+            crate::program::environment::DeclarationSource::Dwarf
+        };
+        let debug_render = dwarf_render_contract.and_then(dwarf_render_prototype);
+        let analyst_render = analyst_prototype.map(|prototype| {
+            crate::ir::call_contracts::CallPrototype::from_analyst(
+                &prototype.return_type,
+                &prototype.parameter_types,
+                prototype.variadic,
+            )
+        });
+        let (declared_source, declared_render) = match (analyst_render, debug_render) {
+            (Some(analyst), Some(debug)) => {
+                crate::program::environment::DeclarationSource::strongest(
+                    (
+                        crate::program::environment::DeclarationSource::Analyst,
+                        Some(analyst),
+                    ),
+                    (debug_source, Some(debug)),
                 )
-            })
-            .or_else(|| dwarf_render_contract.and_then(dwarf_render_prototype));
-        let declared_parameter_names = analyst_prototype
-            .map(|prototype| prototype.parameter_names.as_slice())
-            .or_else(|| dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()));
+            }
+            (Some(analyst), None) => (
+                crate::program::environment::DeclarationSource::Analyst,
+                Some(analyst),
+            ),
+            (None, debug) => (debug_source, debug),
+        };
+        let declared_parameter_names =
+            if declared_source == crate::program::environment::DeclarationSource::Analyst {
+                analyst_prototype.map(|prototype| prototype.parameter_names.as_slice())
+            } else {
+                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice())
+            };
         if analyst_prototype.is_some() {
+            use crate::program::environment::DeclarationSource;
             record_prototype_conflict_with_candidate(
                 &f.name,
                 func_va,
-                "analyst",
+                DeclarationSource::Analyst.label(),
                 declared_render.as_ref(),
-                "dwarf",
+                DeclarationSource::Dwarf.label(),
                 dwarf_render_contract
                     .and_then(dwarf_render_prototype)
                     .as_ref(),
@@ -542,13 +566,7 @@ pub(super) fn decompile_at_session(
         record_recovered_prototype_conflict(
             &f.name,
             func_va,
-            if analyst_prototype.is_some() {
-                "analyst"
-            } else if pdb_contract_vas.contains(&func_va) {
-                "pdb"
-            } else {
-                "dwarf"
-            },
+            declared_source.label(),
             declared_render.as_ref(),
             inferred_prototype.as_ref(),
             cc,
@@ -848,9 +866,9 @@ fn decompile_range_at_py(
             &f.name,
             func_va,
             if pdb_contract_vas.contains(&func_va) {
-                "pdb"
+                crate::program::environment::DeclarationSource::Pdb.label()
             } else {
-                "dwarf"
+                crate::program::environment::DeclarationSource::Dwarf.label()
             },
             declared_render.as_ref(),
             inferred_prototype.as_ref(),
@@ -1152,7 +1170,7 @@ fn record_recovered_prototype_conflict(
         entry_va,
         source,
         Some(declared),
-        "inferred",
+        crate::program::environment::DeclarationSource::Inferred.label(),
         Some(&inferred),
     );
 }
@@ -1442,9 +1460,9 @@ fn decompile_all_py(
                 &f.name,
                 func.entry_point.value,
                 if pdb_contract_vas.contains(&func.entry_point.value) {
-                    "pdb"
+                    crate::program::environment::DeclarationSource::Pdb.label()
                 } else {
-                    "dwarf"
+                    crate::program::environment::DeclarationSource::Dwarf.label()
                 },
                 declared_render.as_ref(),
                 inferred_prototype.as_ref(),
@@ -1813,9 +1831,9 @@ fn decompile_many_py(
                 &f.name,
                 func_va,
                 if pdb_contract_vas.contains(&func_va) {
-                    "pdb"
+                    crate::program::environment::DeclarationSource::Pdb.label()
                 } else {
-                    "dwarf"
+                    crate::program::environment::DeclarationSource::Dwarf.label()
                 },
                 declared_render.as_ref(),
                 inferred_prototype.as_ref(),

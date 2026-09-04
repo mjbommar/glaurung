@@ -124,17 +124,27 @@ pub(super) fn debug_output_contracts(
     std::collections::HashSet<u64>,
     Vec<crate::debug::dwarf::DwarfType>,
 ) {
-    let mut contracts = dwarf_output_contracts(image);
+    use crate::program::environment::DeclarationSource;
+
+    let dwarf_contracts = dwarf_output_contracts(image);
+    let mut contracts = dwarf_contracts.clone();
     let mut pdb_addresses = std::collections::HashSet::new();
     let mut pdb_types = Vec::new();
     if let Some(cache_dir) = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache)) {
         let pdb_contracts = pdb_output_contracts(binary_path, cache_dir);
         pdb_types = pdb_type_layouts(binary_path, cache_dir, pdb_contracts.values());
-        for (va, contract) in pdb_contracts {
-            if let std::collections::hash_map::Entry::Vacant(entry) = contracts.entry(va) {
-                entry.insert(contract);
+        for (va, pdb_contract) in pdb_contracts {
+            let selected = match dwarf_contracts.get(&va).cloned() {
+                Some(dwarf_contract) => DeclarationSource::strongest(
+                    (DeclarationSource::Pdb, pdb_contract),
+                    (DeclarationSource::Dwarf, dwarf_contract),
+                ),
+                None => (DeclarationSource::Pdb, pdb_contract),
+            };
+            if selected.0 == DeclarationSource::Pdb {
                 pdb_addresses.insert(va);
             }
+            contracts.insert(va, selected.1);
         }
     }
     (contracts, pdb_addresses, pdb_types)

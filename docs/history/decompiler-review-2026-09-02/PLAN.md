@@ -826,7 +826,7 @@ without concealing inference disagreement.
   `src/python_bindings/ir/type_maps.rs`,
   `src/ir/ast/declaration_plan.rs`, and
   `src/ir/ast/decbench_render.rs`.
-- [ ] Define authority order once in the program/session fact layer: analyst,
+- [x] Define authority order once in the program/session fact layer: analyst,
   trusted debug declaration, inferred recovery.
 - [x] Preserve all candidates with provenance and record a typed
   `PrototypeConflict` health finding when they disagree.
@@ -972,8 +972,25 @@ Known baseline failures in those families remain open; these commands prove
 the bounded increment did not add regressions, not that aggregate, return, or
 Rust recovery is complete.
 
-Still open in WP8: defining authority in the session fact layer rather than at
-the binding boundary, and the explicitly annotated analyst render mode.
+Still open in WP8: the explicitly annotated analyst render mode.
+
+### Implementation evidence — 2026-09-03 program-owned declaration authority
+
+`src/program/environment.rs` now owns the single total declaration order:
+inferred recovery, trusted PDB, trusted DWARF, then an explicit analyst
+decision. Stable source labels come from the same type. PDB-versus-DWARF
+selection, analyst-versus-debug selection, and conflict metadata in all four
+binding entry paths consume that order instead of independently encoding it as
+vacant-map insertion, `Option::or_else`, and raw strings.
+
+The focused Rust authority test passes, and a fresh debug extension passes all
+four real-binary declaration-authority tests, including deterministic scored
+text and analyst-over-DWARF conflict provenance. The PDB suite passes 10 of 11;
+its existing `record_value` aggregate-typedef defect still renders `void *`
+instead of `Record *` and is not attributed to this ordering-only increment.
+The def-use census fails closed on broad shared-tip drift in both directions;
+no baseline was refreshed and no corpus movement is claimed for this
+output-neutral change.
 
 ### Exit criteria
 

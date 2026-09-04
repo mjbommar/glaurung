@@ -5,8 +5,30 @@ use crate::ir::types_recover::TypeHint;
 
 use super::{
     callback_api_identity, merge_pair, merge_prototype_fact, message_identity_result,
-    AbstractValue, CallbackState, FunctionPrototypeFact,
+    AbstractValue, CallbackState, DeclarationSource, FunctionPrototypeFact,
 };
+
+#[test]
+fn declaration_authority_is_total_and_has_stable_metadata_labels() {
+    let ordered = [
+        DeclarationSource::Inferred,
+        DeclarationSource::Pdb,
+        DeclarationSource::Dwarf,
+        DeclarationSource::Analyst,
+    ];
+    assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(
+        ordered.map(DeclarationSource::label),
+        ["inferred", "pdb", "dwarf", "analyst"]
+    );
+    assert_eq!(
+        DeclarationSource::strongest(
+            (DeclarationSource::Pdb, "pdb"),
+            (DeclarationSource::Dwarf, "dwarf"),
+        ),
+        (DeclarationSource::Dwarf, "dwarf")
+    );
+}
 
 #[test]
 fn conditional_fact_requires_both_arms_to_agree() {
