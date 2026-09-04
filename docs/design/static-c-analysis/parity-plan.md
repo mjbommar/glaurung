@@ -141,6 +141,31 @@ the 88,963-cell inventory are correct.)*
 source CFGs plus the stored C, there is no offline oracle and this plan is
 replaced by one that budgets for real Joern runs.
 
+**Status: the inventory is verified.** The plumbing gate ran on 2026-09-04 and
+the oracle is what the plan assumed it was:
+
+```
+tree        ~/.cache/glaurung/decbench-full/tree
+column      glaurung-229fbb1-clean   provider null
+binaries    785
+cells       85645 stored
+  uncovered 85645  (provider produced no CFG)
+  no source 0  (dataset gap, not a failure)
+```
+
+```bash
+DECBENCH_DIR=/nas4/data/workspace-infosec/decbench \
+PYTHONPATH=$DECBENCH_DIR $DECBENCH_DIR/.venv/bin/python \
+  tools/source_cfg_parity.py ~/.cache/glaurung/decbench-full/tree --provider null
+```
+
+`no source 0` is the load-bearing line: every stored cell has its published
+source CFG, so there is no dataset gap silently capping what parity can reach,
+and the 85,645 denominator quoted throughout this plan is measured rather than
+assumed. The harness imports `cfgutils` and `decbench` as libraries, so it needs
+their venv on `PYTHONPATH`; it spawns no JVM, and only the `joern` provider
+would.
+
 **Status: the distance half is done and verified.** `src/syntax/ged.rs`
 implements G-1, G-2 and G-4, and `tools/ged_cross_check.py` diffs it against
 the live reference over real published CFGs rather than against vectors we
