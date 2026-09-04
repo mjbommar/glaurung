@@ -7,7 +7,7 @@
   "toolchain": 36,
   "docker": 18,
   "llm": 5,
-  "decbench": 3
+  "decbench": 4
  },
  "files": {
   "test_abi_argument_recovery.py": [
@@ -840,6 +840,9 @@
   ],
   "test_packers.py": [
    "core"
+  ],
+  "test_parser_recovery.py": [
+   "decbench"
   ],
   "test_partial_findings_writes.py": [
    "core"
