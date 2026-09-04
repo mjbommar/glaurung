@@ -185,7 +185,20 @@ def run(
     tree: Path, column: str, provider: Provider, limit: int | None, verbose: bool
 ) -> dict[str, Any]:
     """Walk the oracle and score `provider` against every stored cell."""
-    from cfgutils.similarity import vj_ged
+    # `decbench.metrics.vj_ged` is the same cost model on scipy's
+    # `linear_sum_assignment`; `cfgutils.similarity.vj_ged` is a pure-Python
+    # Munkres. Both are O((n+m)^3), but the constant is the difference between
+    # a run that finishes and one that does not: `bash` alone carries 582-,
+    # 570- and 490-node published CFGs, and the cfgutils path did not produce
+    # a `--limit 3` result in over 20 minutes where scipy takes 5.6 seconds.
+    # The scipy one is also what the pipeline used to compute the stored
+    # values. They were checked to agree on every one of `update-passwd`'s 48
+    # cells before this was changed. The fallback keeps a non-fork checkout,
+    # which has no `decbench.metrics.vj_ged`, working.
+    try:
+        from decbench.metrics.vj_ged import vj_ged
+    except ImportError:  # pragma: no cover - depends on which checkout is on the path
+        from cfgutils.similarity import vj_ged
     from decbench.metrics.ged import GED_MAX_NODES
     from decbench.publish.cfg_export import rebuild_cfg
 

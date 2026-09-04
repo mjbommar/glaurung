@@ -347,6 +347,11 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     # a skip or a failure. Set in CI so a missing compiler is loud there;
     # unset locally so a machine without cross-compilers still works.
     ("testing.rs", "REQUIRE_ENV"): "diagnostic",
+    # Its fixture twin, added in `5c4778b1`. Same file, same `#[cfg(test)]`
+    # gating, same shape: it decides only whether a test whose prebuilt binary
+    # is absent reports a skip or a failure. Set by the Decompiler Fixture
+    # Gate, the one lane that builds `tests/decompiler_fixtures/build`.
+    ("testing.rs", "REQUIRE_FIXTURES_ENV"): "diagnostic",
     ("ir/value_number/coalesce.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/format_environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
