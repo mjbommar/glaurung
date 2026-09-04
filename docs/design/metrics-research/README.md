@@ -104,10 +104,34 @@ and claude-code and codex fall from first and second on DecBench's
 own-denominator style to ninth and tenth when judged on the population everyone
 else is judged on, having attempted 242 and 243 of 89,014 functions.
 
-Recommendations 2 and 3 -- the mutation harness's missing specificity half, and
-the control-skeleton tree edit distance -- are in progress. Until the former
-lands, **no specificity number in this directory is measured**, and every
-sensitivity figure here should be read with that missing.
+Recommendation 2 has landed. `tools/metric_mutation.py` (`a2d9e292`) implements
+both halves -- 15 semantics-changing classes and 14 semantics-preserving ones,
+the latter validated by compiling each rewrite and requiring byte-identical
+output over 24 inputs. **GED measures 21.8% sensitivity and 95.3% specificity**
+on published samples (20.5% / 99.2% on our own decompiled output). Two results
+sharpen the audit above: across the ten classes that cannot change the CFG by
+construction, GED detected **12 of 1,188** on sources and **0 of 2,817** on
+decompiled output; and its false alarms are one front-end fact, not a spread --
+every `and-to-nested-if` (44/44) and `demorgan` (21/21) false alarm is our C
+front end collapsing a short-circuit condition into fewer blocks than explicit
+branching.
+
+Recommendation 3 has landed. `src/metrics/tree_distance.rs` (`eaa62fda`) is a
+Zhang-Shasha edit distance over the control skeleton. It splits the class every
+CFG metric collapses -- 34 distinct skeletons among the branchless functions
+where GED has one, 92.28% of pairs at non-zero distance -- and takes the null
+decompiler's false-perfect rate from **27.24% to 6.09%**. It sees
+goto-ification, where the parity CFG is byte-identical and GED is correctly
+0.0. Its documented weakness is the normalization rather than the distance:
+`1 - TED/|source|` saturates past 2x expansion, so the raw distance must be
+published beside it.
+
+Two caveats travel with any number these produce. The tree metric cannot see
+the six semantics-only defect classes at all -- asserted in a test, and a
+ceiling that closes only with semantics, i.e. stages S4/S5. And **175 of 1,998
+offered decompiler outputs (8.76%) hold no resolvable definition for our front
+end, 144 of them `dewolf`** (85% of its offers), so a per-column mean is
+meaningless without its unresolved count beside it.
 
 ## Related
 
