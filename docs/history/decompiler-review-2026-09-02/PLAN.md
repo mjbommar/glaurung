@@ -531,6 +531,16 @@ that preserves honest local gotos when required.
   inventory removes two unrecovered rows (debug and stripped) but records the
   readability tradeoff honestly: each form grows from 3 to 12 gotos. This is a
   behavioural/coverage improvement, not evidence that v1 structuring improved.
+  The first complete shadow coverage census now batches all 715 current
+  structure rows across 436 objects. Shadow-v2 returned 247 candidates: 180
+  reduced goto count, 38 tied, and 29 regressed; the remaining 468 declined
+  locally without discarding supported siblings. Comparable goto totals fell
+  from 2,166 to 1,570, while comparable rendered size grew 64.4%. This is
+  rejection evidence rather than promotion evidence: the run used a native
+  extension built alongside unrelated dirty shared-worktree changes, and the
+  29 individual regressions plus 65.5% decline rate remain blockers. The exact
+  command, provenance limit, timing, and next target families are recorded in
+  `results/wp4-corpus-shadow-coverage.md`.
 
 ### RED fixtures
 
