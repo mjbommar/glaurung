@@ -779,7 +779,6 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::csource::parse::parse;
     use crate::syntax::diag::Severity;
 
