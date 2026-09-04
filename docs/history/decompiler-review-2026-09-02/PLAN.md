@@ -652,6 +652,19 @@ that preserves honest local gotos when required.
   unchanged / 4 regressed / 443 declined** counts. This closes classification,
   not WP4 promotion: execution, accounting, GED, structure-axis, and budget
   evidence below remain required.
+  The ordinary execution-differential harness now accepts an explicit
+  `shadow_v2` selection without changing its production default, including
+  batched roots and recursively included local helpers. The pinned `6175d67d`
+  comparison executes every one of the 272 rendered candidates from the same
+  revision through identical fixture contracts and vectors. It reports **14
+  improved / 175 stable pass / 23 stable non-pass / 21 regressed / 39 not
+  executable**, with zero infrastructure findings. The 39 are internal/static
+  functions absent from the dynamic ABI and remain visible rather than being
+  mislabeled as missing. Eight function families account for all 21 semantic
+  regressions: branch hints, flattened accumulation, returning switch arms,
+  Base64, bitset selection, bisection square root, internal rate of return, and
+  trie insertion. Seven families improve. This is the first corpus-wide
+  execution result and is a promotion blocker, not an accepted trade-off.
 
 ### RED fixtures
 
@@ -715,7 +728,9 @@ that preserves honest local gotos when required.
 
 ### Promotion criteria
 
-- [ ] No execution-differential regressions.
+- [~] No execution-differential regressions. The fail-closed corpus route is
+  now implemented and pinned at `6175d67d`; it exposes 21 regressions across
+  eight families that must be repaired or locally declined before promotion.
 - [ ] No unexplained block/edge accounting findings.
 - [ ] GED does not regress on the pinned sample.
 - [ ] The structure axis improves after accepted honest gotos are separated.
@@ -1760,32 +1775,37 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Finish WP4 promotion evidence. The remaining Duff and clang-wide rows are
+1. Repair or locally decline the 21 execution regressions now isolated by the
+   pinned `6175d67d` corpus comparison. Start with one repeated family whose
+   structural ownership error explains multiple compiler/stripped cells, then
+   rerun the exact 272-candidate gate; do not promote while any production-pass
+   cell becomes a shadow failure.
+2. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide rows are
    classified at `ca91dc68` by exact, fail-closed suffix/shared-effect-entry
    contracts, and the clean pinned full comparison reports zero unexplained
    regressions without rewriting the four raw regression statuses. Still run
    the corpus-wide execution differential, unexplained block/edge accounting,
    pinned GED, structure-axis movement, and accepted runtime/output-size
    budgets.
-2. Complete WP5's shared typed-case transport so discovery, accounting, both
+3. Complete WP5's shared typed-case transport so discovery, accounting, both
    structurers, and rendering consume one case/default/provenance object; add
    the remaining fixture/compiler/architecture execution cells and classify
    every residual decline. Malformed, truncated, overlapping, and wrapping
    table safety tests are already present and must remain green.
-3. Begin WP2/WP3 as an independent architecture lane, using conservative
+4. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
-4. Continue WP6 from the landed stripped-C per-use signedness slice: add the
+5. Continue WP6 from the landed stripped-C per-use signedness slice: add the
    next independently testable width or confidence constraint without waiting
    for the full solver design, and keep Rust totals separate.
-5. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
+6. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.
-6. Continue WP9 from the landed ARM32 register-view and capability-census
+7. Continue WP9 from the landed ARM32 register-view and capability-census
    slices: migrate one remaining shared consumer or fact class at a time,
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
    into a named required architecture profile. Do not canonicalize partial
    VFP/NEON writes until LLIR can represent the untouched lanes.
-7. Under WP10, triage the current red full-gate failures by exact base/overlay
+8. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned
    responsibility per commit. The metadata-only performance-gate hang is

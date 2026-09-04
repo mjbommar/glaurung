@@ -451,6 +451,67 @@ This closes only the residual-row classification called for by WP4. It does
 not establish the remaining corpus-wide execution, block/edge, GED,
 structure-axis, runtime, or output-size promotion criteria.
 
+## Pinned corpus-wide execution comparison — `6175d67d`
+
+The normal fixture differential can now explicitly select shadow v2 while
+retaining production as the default. Both sides use the same original object,
+DWARF oracle, manifest contract, deterministic boundary cases, seeded fuzz
+vectors, compiler, and local-helper closure. A separate fail-closed comparator
+consumes a structure report from exactly `HEAD`; stale structural input is an
+error.
+
+```text
+uv run python tools/structure_v2_compare.py --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-6175d67d.json"
+uv run python tools/structure_v2_execution.py \
+  "$HOME/.cache/glaurung/tmp/structure-v2-6175d67d.json" --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-execution-6175d67d.json"
+
+revision: 6175d67df3bdfa03029779243d0c11d98e08c6c3
+candidate objects / functions: 182 / 272
+improved: 14
+stable pass: 175
+stable non-pass: 23
+regressed: 21
+not executable through the dynamic fixture ABI: 39
+infrastructure findings: 0
+production CPU-time sum: 129.037668 seconds
+shadow CPU-time sum: 116.396179 seconds
+execution wall: 61.966893 seconds
+```
+
+The 14 improved cells belong to seven families: `duff_copy`,
+`flattened_accumulate` and `flattened_classify` at clang O0,
+`obfuscated_transform`, `wide154_dense_effects`, `bounded_sample`, and
+`lru_access`. The 21 production-pass to shadow-fail cells belong to eight
+families:
+
+- `119_branch_hints::hinted_validation` (clang O2 and stripped twin);
+- `145_control_flow_flattening::flattened_accumulate` (clang O2 and twin);
+- `212_loop_with_returning_arm::two_returning_arms` (clang O0);
+- `43_base64::base64_decode` (clang O2 and twin);
+- `46_bitset::bitset_select` (four host lanes);
+- `64_root_finding::bisection_sqrt` (four optimized lanes);
+- `73_present_value::internal_rate_of_return` (four optimized lanes);
+- `80_trie::trie_insert` (both O0 lanes).
+
+The 39 non-executable candidates are retained in the denominator with an
+explicit status. They are internal/static functions, including Rust runtime
+bodies, which are not dynamically exported and therefore cannot be called by
+the fixture ABI. Treating them as infrastructure failures would be false;
+treating them as behavioral passes would be worse.
+
+The paired structural report at the same revision records 964,207 production
+bytes versus 1,474,223 shadow bytes over comparable candidates, a **52.9%
+increase**. The shadow execution CPU-time sum is 9.8% lower in this paired run,
+but the measurements include recompilation and vector execution and are not a
+standalone decompiler benchmark. Output growth has not been accepted. Runtime
+and output-size therefore remain open promotion criteria.
+
+This result blocks promotion. The next WP4 work is to repair or locally decline
+the eight regression families, rerunning this exact gate until no
+production-pass cell becomes a shadow failure.
+
 For the linear-tail increment, focused and scoped validation additionally
 recorded:
 
