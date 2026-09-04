@@ -302,6 +302,66 @@ def default_column(tree: Path) -> str | None:
     return counts.most_common(1)[0][0] if counts else None
 
 
+#: The fields a baseline pins. Deliberately not the whole report: `worst` names
+#: individual functions and would churn on every unrelated front-end change,
+#: turning a ratchet into noise nobody reads.
+BASELINE_FIELDS = ("column", "binaries", "cells", "attempted", "exact", "uncovered")
+
+
+def baseline_of(report: dict[str, Any]) -> dict[str, Any]:
+    """The subset of `report` a committed baseline pins."""
+    pinned = {field: report[field] for field in BASELINE_FIELDS}
+    pinned["delta_histogram"] = dict(sorted(report["delta_histogram"].items()))
+    return pinned
+
+
+def compare_to_baseline(report: dict[str, Any], path: Path) -> int:
+    """Fail on any regression against `path`; report an improvement as a diff.
+
+    Ratchets on two numbers rather than one. `exact` must not fall, and
+    `uncovered` must not rise -- a front end that quietly stops producing a CFG
+    for some function would otherwise show up as *fewer mismatches* and read as
+    an improvement, which is the failure mode `docs/design/static-c-analysis/
+    parity-plan.md` §3 Phase 0 exists to prevent.
+    """
+    try:
+        want = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"unreadable baseline {path}: {exc}", file=sys.stderr)
+        return 2
+
+    problems: list[str] = []
+    if report["cells"] != want["cells"]:
+        problems.append(
+            f"scored population changed: {want['cells']} -> {report['cells']} cells; "
+            "the two runs are not comparable"
+        )
+    if report["exact"] < want["exact"]:
+        problems.append(f"exact fell: {want['exact']} -> {report['exact']}")
+    if report["uncovered"] > want["uncovered"]:
+        problems.append(
+            f"coverage lost: uncovered {want['uncovered']} -> {report['uncovered']}"
+        )
+
+    if problems:
+        print("PARITY REGRESSION", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        print(
+            "\nIf this is a deliberate change, refresh with --write-baseline on a "
+            "tree with no uncommitted work in it, and say in the commit what moved.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if report["exact"] > want["exact"]:
+        print(f"IMPROVED  exact {want['exact']} -> {report['exact']}")
+        print("Refresh the baseline with --write-baseline to record it.")
+    else:
+        print(f"HELD      exact {report['exact']} / {report['cells']}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("tree", type=Path, help="materialized DecBench tree root")
@@ -312,6 +372,18 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None, help="stop after N binaries")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--verbose", action="store_true", help="report provider errors")
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="compare against a committed baseline and fail on any regression",
+    )
+    parser.add_argument(
+        "--write-baseline",
+        type=Path,
+        default=None,
+        help="write the current run as the baseline (do this on a CLEAN tree)",
+    )
     args = parser.parse_args()
 
     if not args.tree.is_dir():
@@ -333,6 +405,14 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.write_baseline is not None:
+        args.write_baseline.write_text(json.dumps(baseline_of(report), indent=2) + "\n")
+        print(f"wrote {args.write_baseline}")
+        return 0
+
+    if args.baseline is not None:
+        return compare_to_baseline(report, args.baseline)
 
     if args.json:
         print(json.dumps(report, indent=2))
