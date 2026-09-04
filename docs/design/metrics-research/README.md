@@ -164,6 +164,13 @@ offered decompiler outputs (8.76%) hold no resolvable definition for our front
 end, 144 of them `dewolf`** (85% of its offers), so a per-column mean is
 meaningless without its unresolved count beside it.
 
+## Start here
+
+[`interpreting-results.md`](interpreting-results.md) is the practical summary:
+the base-rate, guessing and degenerate-case traps that change how a DecBench
+number should be read, each with its measurement and command, plus a checklist.
+Read it before quoting any score from this benchmark.
+
 ## Related
 
 * [`../static-c-analysis/`](../static-c-analysis/README.md) — the C front end
