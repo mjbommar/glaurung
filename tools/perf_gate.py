@@ -286,6 +286,57 @@ def main() -> int:
     unit = "instructions" if use_perf else "seconds"
     threshold = INSTRUCTION_THRESHOLD if use_perf else WALLCLOCK_THRESHOLD
 
+    # Reject metadata-only failure states before starting nine deliberately
+    # expensive whole-binary decompilations. A missing baseline or a unit
+    # mismatch cannot become comparable because of anything measurement might
+    # discover. Baseline creation is the exception: it exists to measure and
+    # write the current unit.
+    baseline: dict | None = None
+    expected: set[str] = set()
+    if not args.write_baseline:
+        if not BASELINE.is_file():
+            print(
+                f"NOT EVIDENCE: no baseline at {BASELINE}. Record one with\n"
+                "--write-baseline. This is exit 3, not 0: absence of evidence is\n"
+                "not evidence of no regression, and a caller cannot tell the two\n"
+                "apart from an exit status alone.",
+                file=sys.stderr,
+            )
+            return NOT_EVIDENCE
+
+        baseline = json.loads(BASELINE.read_text())
+        if baseline.get("unit") != unit:
+            print(
+                f"NOT EVIDENCE: baseline is in {baseline.get('unit')} and this run\n"
+                f"is in {unit}; the two cannot be compared. This is the ordinary\n"
+                "state on a host without usable `perf` (every GitHub runner blocks\n"
+                "instruction counting via kernel.perf_event_paranoid), where the\n"
+                "gate falls back to wall-clock. Exit 3 so an unsupported runner is\n"
+                "visibly not evidence rather than a pass.",
+                file=sys.stderr,
+            )
+            return NOT_EVIDENCE
+
+        expected = {
+            name
+            for name, value in baseline.get("measures", {}).items()
+            if isinstance(value, (int, float)) and value > 0
+        }
+        impossible = sorted(
+            name
+            for name in expected
+            if name not in REFERENCES or not (REPO / name).is_file()
+        )
+        if impossible:
+            print(
+                "NOT EVIDENCE: the baseline records references this run cannot\n"
+                f"measure: {impossible}. A partial measurement is not a\n"
+                "measurement -- the missing rows would otherwise vanish from the\n"
+                "comparison and the gate would pass on the remainder.",
+                file=sys.stderr,
+            )
+            return NOT_EVIDENCE
+
     print(f"measuring ({unit}, minimum of {RUNS}):", file=sys.stderr)
     current = measure(use_perf)
     if not current:
@@ -303,37 +354,11 @@ def main() -> int:
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
 
-    if not BASELINE.is_file():
-        print(
-            f"NOT EVIDENCE: no baseline at {BASELINE}. Record one with\n"
-            "--write-baseline. This is exit 3, not 0: absence of evidence is\n"
-            "not evidence of no regression, and a caller cannot tell the two\n"
-            "apart from an exit status alone.",
-            file=sys.stderr,
-        )
-        return NOT_EVIDENCE
-
-    baseline = json.loads(BASELINE.read_text())
-    if baseline.get("unit") != unit:
-        print(
-            f"NOT EVIDENCE: baseline is in {baseline.get('unit')} and this run\n"
-            f"is in {unit}; the two cannot be compared. This is the ordinary\n"
-            "state on a host without usable `perf` (every GitHub runner blocks\n"
-            "instruction counting via kernel.perf_event_paranoid), where the\n"
-            "gate falls back to wall-clock. Exit 3 so an unsupported runner is\n"
-            "visibly not evidence rather than a pass.",
-            file=sys.stderr,
-        )
-        return NOT_EVIDENCE
+    assert baseline is not None
 
     # P2: comparison iterates CURRENT results, so a reference that failed to
     # measure silently leaves the comparison rather than failing it. Measure
     # one of three and the gate would pass on a third of the evidence.
-    expected = {
-        name
-        for name, value in baseline.get("measures", {}).items()
-        if isinstance(value, (int, float)) and value > 0
-    }
     unmeasured = sorted(expected - set(current))
     if unmeasured:
         print(

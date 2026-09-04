@@ -80,6 +80,7 @@ def test_a_missing_baseline_is_not_a_pass(tmp_path):
         f"exit {proc.returncode}; a missing baseline used to return 0, which "
         f"is indistinguishable from a pass.\n{proc.stderr[-600:]}"
     )
+    assert "measuring (" not in proc.stderr
 
 
 def test_an_incomparable_unit_is_not_a_pass(tmp_path):
@@ -99,6 +100,7 @@ def test_an_incomparable_unit_is_not_a_pass(tmp_path):
         f"exit {proc.returncode}; a unit mismatch used to print "
         f"'not comparable, skipping the gate' and return 0.\n{proc.stderr[-600:]}"
     )
+    assert "measuring (" not in proc.stderr
 
 
 def test_a_partial_measurement_is_not_a_pass(tmp_path):
@@ -117,3 +119,4 @@ def test_a_partial_measurement_is_not_a_pass(tmp_path):
         f"measure. Comparison iterates current results, so a reference that "
         f"failed to measure vanishes instead of failing.\n{proc.stderr[-600:]}"
     )
+    assert "measuring (" not in proc.stderr
