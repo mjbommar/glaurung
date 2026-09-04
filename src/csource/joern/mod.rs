@@ -24,6 +24,10 @@
 //! rest (F-8..F-17); `tools/source_cfg_parity.py --provider glaurung` is the
 //! number that says where we are.
 
+pub mod flags;
+pub mod nodes;
+pub mod resolve;
+
 use std::collections::BTreeMap;
 
 use crate::syntax::cfg::{Cfg, NodeKind};
