@@ -1463,3 +1463,255 @@ build tables, the per-crate zero-signature diagnosis (`unwind`: an object
 with zero defined symbols of any kind, confirmed with `nm`), and the
 monomorphization-hash-suffix caveat on "wrong" counts. Go is out of scope for
 signatures entirely -- `gopclntab` recovery is the design's answer there.
+
+## Coverage on installed systems
+
+Everything above measures a library against the code it was built from or a
+rebuild of it. This section answers the question an analyst actually asks --
+**"what fraction of the functions in front of me does the published set
+name?"** -- against two installed systems. The tool is
+`tools/measure_signature_coverage.py`; every number here is one of its runs,
+release build (`uv run maturin develop --release`), 2026-09-03.
+
+The set measured is **2026.09.2**, serial 2: 446 `gsig/1` blobs, 364
+`flirt-masked-pattern-v1` plus 82 `warp-function-guid-v1`, 533,820 signatures.
+The x86-64 slice an x86-64 target loads is **156 FLIRT blobs (84,857
+signatures, 30,279 distinct names)** and **82 WARP blobs (329,695 entries,
+221,638 distinct GUIDs at the 16-byte evidence floor)**. The other 208 blobs
+are aarch64/armv7/arm/i386/riscv64 and are correctly not loaded.
+
+### Two denominators, and why one number is not an answer
+
+**Of all functions** is named over every function discovery finds. It is what
+an analyst feels, and on a dynamically linked Linux userland it is small *by
+construction*: glibc lives in `libc.so.6`, which the executable does not
+contain, so there is no libc code in the file for a libc signature to match.
+No amount of library building moves that number for a dynamically linked
+image.
+
+**Of functions that are library code** is named over the functions whose
+ground-truth name is one a harvested library actually carries (for a PE, one
+any WARP library carries -- no PDB API exposed here reports a symbol's source
+file, so the CRT/STL-source-path test the design asks for falls back to this).
+It is the number that says whether the *matcher* works, and the one a
+library-building programme can move.
+
+Both are reported for every lane, with precision over the population ground
+truth names -- because a coverage figure without precision is an invitation to
+raise coverage by naming things wrongly.
+
+### Linux: this box's `/usr/bin` (Ubuntu 26.04 amd64)
+
+**The population signatures can help is five files.** `/usr/bin` holds 4,397
+entries, of which 2,191 are regular ELF files (1,451 symlinks, the rest
+scripts). `file(1)` reports **2,153 dynamically linked and 5 statically
+linked** -- and three of the five (`containerd-shim-runc-v2`, `gh`,
+`tailscale`) are Go, which is out of scope for signatures entirely. That is
+the honest ceiling for the "of all functions" denominator on a modern
+distribution: a FLIRT library of `libc.a` cannot name code that lives in
+`libc.so.6`.
+
+Ground truth: **17** of the 2,191 have a separate debug object this box can
+resolve by build ID -- one from `/usr/lib/debug` (`ld.so`) and 16 from ten
+`-dbgsym` packages fetched from `ddebs.ubuntu.com` at the **exact installed
+version** (`bash 5.3-2ubuntu1`, `findutils 4.10.0-3build2`, `grep 3.12-1` from
+`resolute`; `curl 8.18.0-1ubuntu2.4`, `diffutils 1:3.12-1ubuntu0.1`, `gzip
+1.14-1~exp2ubuntu1.1`, `openssl 3.5.5-1ubuntu3.5`, `sed 4.9-2ubuntu1`,
+`sqlite3 3.46.1-9ubuntu0.2`, `tar 1.35+dfsg-4ubuntu0.4` from
+`resolute-updates`; 5.2 MB total). `coreutils` has no dbgsym in either pocket,
+so `ls`, `cp` and friends are not in this lane.
+
+| binary | functions | truth | scored | named | correct | wrong | ambiguous | library fns | library named |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| `bash` | 2954 | 2488 | 2485 | 13 | 0 | 13 | 7 | 11 | 0 |
+| `rbash` | 2954 | 2488 | 2485 | 13 | 0 | 13 | 7 | 11 | 0 |
+| `openssl` | 3958 | 609 | 606 | 3 | 0 | 3 | 0 | 5 | 0 |
+| `tar` | 1032 | 716 | 605 | 6 | 3 | 3 | 0 | 37 | 3 |
+| `sqlite3` | 857 | 390 | 386 | 0 | 0 | 0 | 0 | 2 | 0 |
+| `find` | 683 | 490 | 402 | 1 | 0 | 1 | 0 | 7 | 0 |
+| `curl` | 452 | 229 | 166 | 0 | 0 | 0 | 0 | 2 | 0 |
+| `grep` | 422 | 223 | 167 | 2 | 0 | 2 | 0 | 5 | 0 |
+| **`ld.so`** | 366 | 367 | 361 | **87** | **75** | 12 | 1 | **215** | **84** |
+| `sed` | 348 | 157 | 123 | 2 | 1 | 1 | 0 | 13 | 1 |
+| `diff` | 329 | 172 | 116 | 0 | 0 | 0 | 0 | 1 | 0 |
+| `xargs` | 214 | 104 | 62 | 0 | 0 | 0 | 0 | 3 | 0 |
+| `gzip` | 207 | 99 | 70 | 0 | 0 | 0 | 0 | 11 | 0 |
+| `sdiff` | 201 | 83 | 53 | 0 | 0 | 0 | 0 | 2 | 0 |
+| `diff3` | 165 | 70 | 38 | 0 | 0 | 0 | 0 | 1 | 0 |
+| `cmp` | 156 | 70 | 38 | 0 | 0 | 0 | 0 | 1 | 0 |
+| `clear_console` | 51 | 13 | 9 | 0 | 0 | 0 | 0 | 1 | 0 |
+| **total (17)** | **15,349** | 8,768 | 8,172 | **127** | 79 | 48 | 15 | **328** | **88** |
+
+* **of all functions**: 127 / 15,349 = **0.83%**
+* **of functions that are library code**: 88 / 328 = **26.8%**
+* precision on the population the truth names: 79 / 127 = 62.2%
+
+**`ld.so` is the whole result, and it is the result the premise predicts.**
+The dynamic loader is the one file in `/usr/bin` that contains a self-linked
+copy of glibc's own code, so it is the one file the `libc6-dev 2.43-2ubuntu2.3`
+signatures -- the `ubuntu-resolute-amd64` cell of the set, the exact
+distribution and version this box runs -- can match. 87 of its 366 functions
+are named, 215 of them are library code, and 84 of those 215 are named. Every
+other binary contributes between 0 and 13.
+
+**Read the "wrong" column carefully -- most of it is an alias-spelling
+artifact, not a false positive.** All of `ld.so`'s 12 are the same shape:
+`__tunable_set_val` against a truth of `__GI___tunable_set_val`, or
+`__memchr_sse2` against `__memchr|memchr`. The code identified is correct; the
+`nm` truth carries one spelling and the library carries another, and the
+scorer compares strings. `tests/flirt_signature_matching.rs` already accepts a
+*set* of names per address for exactly this reason; a dbgsym symbol table
+supplies only the one it has.
+
+**The remaining 36 wrong are genuine false positives, and they are the honest
+bad news of this measurement.** `strdup` applied to gnulib's `xstrdup` (in
+`sed`, `grep`, `find`, `tar`), `try_nocreate` applied to `file_exists`,
+`is_regular_file` and `opt_isdir`, `_ZNSt8ios_base4InitC1Ev` applied to
+`get_gnu_dumpdir.constprop.0`. Thirteen of `bash`'s and thirteen of `rbash`'s
+are the same functions in the same code counted twice. A 156-blob merged
+library aimed at a binary that links almost none of it is a false-positive
+generator, and the ambiguity rule (15 rows) does not catch these because the
+colliding entries carry one name.
+
+**Not run: the whole-`/usr/bin` naming sweep.** A run over all 2,191 ELF files
+-- which needs no ground truth, and would give the "of all functions" figure
+over the real population -- was started and **killed at ~55 minutes before it
+produced any output**. The 0.83% above is over the 17-file truth-bearing
+subset only, and that subset is biased *upward* by containing `ld.so`. Nothing
+here claims a number for the other 2,174 files.
+
+### Linux: the NAS round-trip corpora (Ubuntu 22.04, gcc 11.4.0)
+
+`/nas4/data/binary-analysis/rt-{diffutils,dpkg}`, stripped, dynamically
+linked, with `addr2name.json` ground truth. The matching set cell is
+`ubuntu-jammy-amd64` (`libc6-dev 2.35-0ubuntu3.14`, `libstdc++-11-dev
+11.4.0-1ubuntu1~22.04.3`, `zlib1g-dev 1:1.2.11`), which the set does contain.
+
+| corpus | cells | functions | truth | scored | named | correct | wrong | ambiguous |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `rt-diffutils` | 10 | 4,029 | 417 | 332 | 13 | 0 | 3 | 16 |
+| `rt-dpkg` | 7 | 5,924 | 737 | 604 | 49 | 0 | 4 | 25 |
+| **total** | 17 | **9,953** | 1,154 | 936 | **62** | **0** | **7** | 41 |
+
+**of all functions: 62 / 9,953 = 0.62%.** The "of library code" denominator is
+**not usable here** (9 and 6 functions respectively), and neither is the
+correct/wrong split, for one reason: `addr2name.json` is derived from the
+project's own DWARF, so it names the project's functions and *not* the library
+code the signatures target. 55 of the 62 names land at addresses the truth
+says nothing about and cannot be graded either way. The seven that can be
+graded are all wrong, and they are the same shapes as above
+(`__nss_action_freeres` for `clear_deconfigure_queue`, `inet_network` for
+`set_pipe`, `try_nocreate` for `diraccess`). `rt-sysvinit` was not run: its
+truth files (`amap_O0.json`, `addrs_O2_*.json`) are not in the
+`{"<opt>/<stem>": {...}}` shape the other two use.
+
+### Windows 11 x64
+
+Corpus: `/nas4/.../binaries/windows-11-x64`, **5,408** `.dll`/`.exe`/`.sys`
+files. Ground truth is each module's own PDB from the 7.3 GB Microsoft symbol
+cache, and **that cache is the binding constraint**: only **169 of the 5,408**
+resolve one, so 3.1% of the tree can be scored at all. The other 5,239 are not
+counted anywhere below -- a coverage figure over a population with no ground
+truth is not a measurement.
+
+| | binaries | functions | scored | named | correct | wrong | ambiguous | of all fns | of library code | precision |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| **same build as a library source** | 38 | 155,316 | 133,913 | 105,766 | 105,554 | **0** | 18,430 | **68.1%** | **85.4%** | **100%** |
+| **no library for the module at all** | 131 | 261,049 | 226,192 | 2,726 | 2,053 | 614 | 2,138 | **1.04%** | **27.0%** | 77.0% |
+| **all 169** | 169 | **416,365** | 360,105 | **108,492** | 107,607 | 614 | 20,568 | **26.1%** | **81.8%** | 99.4% |
+
+**The 26.1% headline is almost entirely the 38 modules the set was built
+from, and it must be read that way.** The 82 WARP blobs were built from this
+exact tree (plus windows-8, windows-10 and patch-tuesday), so 38 of the 169
+score *by construction* -- the manifest's `(package, version, variant, arch)`
+key matches the PE's own key exactly. The three-way split is in fact two-way:
+**zero** of the 169 are "same module, different build", because within one
+build tree every module the set knows is at the build the library was made
+from. The cross-build recall tables earlier on this page are where that
+question is answered properly.
+
+| module | group | functions | scored | named | correct | wrong | ambiguous |
+|---|---|--:|--:|--:|--:|--:|--:|
+| `ntoskrnl.exe` | source | 28,970 | 27,237 | 24,279 | 24,275 | 0 | 2,017 |
+| `combase.dll` | source | 15,735 | 15,109 | 11,647 | 11,625 | 0 | 2,042 |
+| `KernelBase.dll` | source | 17,107 | 7,172 | 3,802 | 3,666 | 0 | 3,200 |
+| `win32kfull.sys` | source | 9,119 | 8,030 | 7,364 | 7,364 | 0 | 443 |
+| `dxgkrnl.sys` | source | 7,989 | 7,074 | 6,098 | 6,092 | 0 | 582 |
+| `tcpip.sys` | source | 5,778 | 5,497 | 5,007 | 5,005 | 0 | 338 |
+| `ntdll.dll` | source | 4,558 | 4,095 | 3,692 | 3,689 | 0 | 145 |
+| `ntfs.sys` | source | 4,225 | 2,816 | 2,708 | 2,708 | 0 | 83 |
+| `IntelIHVRouter10.dll` | no library | 8,137 | 7,022 | 667 | 494 | 149 | 523 |
+| `Netwtw10.sys` | no library | 13,191 | 11,407 | 39 | 10 | 29 | 91 |
+| `rtwlane.sys` | no library | 11,518 | 10,354 | 26 | 14 | 11 | 44 |
+| `mlx4_bus.sys` | no library | 2,429 | 1,873 | 73 | 48 | 23 | 47 |
+| `iaStorAVC.sys` | no library | 4,301 | 4,191 | 19 | 6 | 13 | 30 |
+| `AppleSSD.sys` | no library | 277 | 234 | 6 | 6 | 0 | 1 |
+
+**The 131 with no library are third-party IHV drivers, and 1.04% is the
+statically linked CRT showing through** -- the same effect the vendor-driver
+measurement above reports at 7.8%, lower here because this population is
+mostly `.sys` files and a kernel driver does not link the user-mode CRT. Their
+614 wrong names all come from that residue, and they are why precision on that
+group is 77% rather than 99%.
+
+**The FLIRT half contributes essentially nothing on Windows: 5 names across
+all 169 binaries**, against WARP's 108,492. The set's 16 `x86_64-w64-mingw32`
+FLIRT blobs describe MinGW's CRT, and Windows system modules are MSVC-built.
+That is the expected result, and it is also the negative control: a
+MinGW-derived library aimed at MSVC code produces five names in 416,365
+functions.
+
+### What this population can and cannot be helped by
+
+* **A dynamically linked Linux executable cannot be helped much at all.** The
+  library code is not in the file. The lever is not more FLIRT libraries; it is
+  naming *imports* (the PLT/import resolver this page lists under "Not done
+  here") and recognising statically linked application libraries.
+* **`ld.so` and static binaries are where a distro FLIRT set pays.** 84 of 215
+  library functions named in the loader, from the exact `(distro, release,
+  package version)` cell, is the shape to expect from a static binary too.
+* **Windows is the opposite case and the set already covers it well** -- 85.4%
+  of library code where a library for the module exists, at 100% precision --
+  but coverage is bounded by the *PDB cache*, not the matcher: 38 modules out
+  of 5,408 files. `glaurung.pdb_fetch` against `msdl.microsoft.com` remains
+  the highest-value follow-up, exactly as the Windows section above says.
+* **A merged 156-blob library aimed at code it does not describe generates
+  false positives.** 36 genuine ones in 15,349 Linux functions is a small
+  absolute number and a 62% precision figure, and it argues for the
+  catalog-aware, architecture- and distribution-scoped selection the
+  [Loading](#loading) section files as future work, rather than "load every
+  blob in the cache".
+
+### Reproducing
+
+```bash
+export TMPDIR="$HOME/.cache/glaurung/tmp"; mkdir -p "$TMPDIR"
+SIGS=~/.cache/glaurung/release/2026.09.2/blobs
+
+# Linux: /usr/bin, truth from the build-id-indexed debug objects.
+uv run python tools/measure_signature_coverage.py \
+    --sig-dir "$SIGS" --arch x86_64 --truth elf-dbgsym \
+    --debug-root /usr/lib/debug --debug-root ~/dbgsym/usr/lib/debug \
+    --binaries /usr/bin --require-truth \
+    --json-out usrbin.json --markdown-out usrbin.md
+
+# Linux: a round-trip corpus, truth from its addr2name.json.
+uv run python tools/measure_signature_coverage.py \
+    --sig-dir "$SIGS" --arch x86_64 --truth addr2name \
+    --addr2name /nas4/data/binary-analysis/rt-dpkg/addr2name.json \
+    --binaries /nas4/data/binary-analysis/rt-dpkg/stripped \
+    --recursive --require-truth
+
+# Windows: PEs whose PDB is in the cache (pre-filter with
+# build_warp_library.resolve_pdb, then --binaries-from, so discovery is not
+# paid for inputs that cannot be scored).
+uv run python tools/measure_signature_coverage.py \
+    --sig-dir "$SIGS" --arch x86_64 --truth pdb \
+    --pdb-cache /nas4/data/symbol-cache/microsoft \
+    --binaries-from win11-with-pdb.txt --require-truth
+```
+
+`python/tests/test_measure_signature_coverage.py` pins the tool's counting
+against the `mathlib` relink pair -- 16 named, 16 correct, 0 wrong, 0
+ambiguous in both links -- so an arithmetic error in the coverage numbers
+above would fail a test rather than ship as a percentage.
