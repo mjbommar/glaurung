@@ -66,6 +66,35 @@ fn materialize_multi_exit_transfers(
     exits: &std::collections::HashMap<u64, Vec<Stmt>>,
     implicit_continue: bool,
 ) -> Vec<Stmt> {
+    let mut deferred_switch_exits = std::collections::BTreeSet::new();
+    let mut out = materialize_multi_exit_transfers_inner(
+        statements,
+        header_va,
+        exits,
+        implicit_continue,
+        false,
+        &mut deferred_switch_exits,
+    );
+    if !deferred_switch_exits.is_empty() {
+        // Falling off the ordinary body means another loop iteration. Keep
+        // that path ahead of the exit trampolines, which are reached only by
+        // explicit gotos escaping nested switches.
+        out.push(Stmt::Goto { target: header_va });
+        for target in deferred_switch_exits {
+            out.extend(exits[&target].clone());
+        }
+    }
+    out
+}
+
+fn materialize_multi_exit_transfers_inner(
+    statements: Vec<Stmt>,
+    header_va: u64,
+    exits: &std::collections::HashMap<u64, Vec<Stmt>>,
+    implicit_continue: bool,
+    inside_switch: bool,
+    deferred_switch_exits: &mut std::collections::BTreeSet<u64>,
+) -> Vec<Stmt> {
     let mut out = Vec::new();
     let statement_count = statements.len();
     for (index, statement) in statements.into_iter().enumerate() {
@@ -77,7 +106,20 @@ fn materialize_multi_exit_transfers(
             Stmt::Goto { target }
                 if target == header_va && implicit_continue && index + 1 == statement_count => {}
             Stmt::Goto { target } if exits.contains_key(&target) => {
-                out.extend(exits[&target].clone());
+                let mut materialized = exits[&target].clone();
+                // A C `break` inside a switch exits that switch, not the
+                // enclosing loop named by this typed transfer. Keep the
+                // original edge instead: the label-repair pass will place the
+                // destination on the continuation outside the loop. Cloning
+                // that continuation here and replacing its break with a goto
+                // would put the destination label before the goto and create
+                // a self-loop.
+                if inside_switch && matches!(materialized.last(), Some(Stmt::Break)) {
+                    deferred_switch_exits.insert(target);
+                    out.push(Stmt::Goto { target });
+                } else {
+                    out.append(&mut materialized);
+                }
             }
             Stmt::If {
                 cond,
@@ -85,9 +127,24 @@ fn materialize_multi_exit_transfers(
                 else_body,
             } => out.push(Stmt::If {
                 cond,
-                then_body: materialize_multi_exit_transfers(then_body, header_va, exits, false),
-                else_body: else_body
-                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits, false)),
+                then_body: materialize_multi_exit_transfers_inner(
+                    then_body,
+                    header_va,
+                    exits,
+                    false,
+                    inside_switch,
+                    deferred_switch_exits,
+                ),
+                else_body: else_body.map(|body| {
+                    materialize_multi_exit_transfers_inner(
+                        body,
+                        header_va,
+                        exits,
+                        false,
+                        inside_switch,
+                        deferred_switch_exits,
+                    )
+                }),
             }),
             Stmt::Switch {
                 discriminant,
@@ -100,12 +157,27 @@ fn materialize_multi_exit_transfers(
                     .map(|(value, body)| {
                         (
                             value,
-                            materialize_multi_exit_transfers(body, header_va, exits, false),
+                            materialize_multi_exit_transfers_inner(
+                                body,
+                                header_va,
+                                exits,
+                                false,
+                                true,
+                                deferred_switch_exits,
+                            ),
                         )
                     })
                     .collect(),
-                default: default
-                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits, false)),
+                default: default.map(|body| {
+                    materialize_multi_exit_transfers_inner(
+                        body,
+                        header_va,
+                        exits,
+                        false,
+                        true,
+                        deferred_switch_exits,
+                    )
+                }),
             }),
             other => out.push(other),
         }
@@ -177,6 +249,33 @@ mod multi_exit_transfer_tests {
             cases[0].1.as_slice(),
             [Stmt::Goto { target: 0x2000 }]
         ));
+    }
+
+    #[test]
+    fn a_loop_exit_inside_a_switch_does_not_become_a_switch_break() {
+        let exits = std::collections::HashMap::from([(
+            0x3000,
+            vec![Stmt::Comment("loop exit".to_string()), Stmt::Break],
+        )]);
+        let lowered = materialize_multi_exit_transfers(
+            vec![Stmt::Switch {
+                discriminant: Expr::Const(0),
+                cases: vec![(Some(0), vec![Stmt::Goto { target: 0x3000 }])],
+                default: None,
+            }],
+            0x2000,
+            &exits,
+            true,
+        );
+        let Stmt::Switch { cases, .. } = &lowered[0] else {
+            panic!("expected switch exit: {lowered:#?}");
+        };
+        assert!(matches!(
+            cases[0].1.as_slice(),
+            [Stmt::Goto { target: 0x3000 }]
+        ));
+        assert!(matches!(lowered[1], Stmt::Goto { target: 0x2000 }));
+        assert!(matches!(lowered[2..], [Stmt::Comment(_), Stmt::Break]));
     }
 }
 

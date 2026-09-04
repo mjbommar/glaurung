@@ -665,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn real_dowhile_fixture_has_a_post_tested_loop_with_explicit_exits() {
+    fn real_dowhile_fixture_declines_to_flatten_its_internal_early_exit() {
         let Some(lifted) = lift_real_fixture("03_loop_shapes-gcc-O0.so", "dowhile_atleastonce")
         else {
             return;
@@ -707,15 +707,12 @@ mod tests {
             region,
             StructuredRegion::Break { .. }
         )));
-        let pseudocode = report
-            .raw_pseudocode
-            .as_deref()
-            .unwrap_or_else(|| panic!("verified post-tested loop should render: {report:#?}"));
-        assert!(pseudocode.contains("do {"), "{pseudocode}");
-        assert!(pseudocode.contains("} while ("), "{pseudocode}");
-        assert!(pseudocode.contains("break;"), "{pseudocode}");
-        assert!(!pseudocode.contains("goto "), "{pseudocode}");
-        assert_prepared_c(&report);
+        // This machine loop contains an internal conditional exit before its
+        // latch. Flattening that branch into a textbook `do while` executes
+        // the other arm unconditionally. Retain the verified typed tree but
+        // decline rendered C until the AST can express the nested post-test.
+        assert!(report.raw_pseudocode.is_none(), "{report:#?}");
+        assert!(report.prepared_pseudocode.is_none(), "{report:#?}");
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
         let repeated = observe(&lifted, &ssa);
         assert_eq!(report.tree, repeated.tree);
@@ -1136,7 +1133,10 @@ mod tests {
             .as_deref()
             .unwrap_or_else(|| panic!("flattened switch should remain renderable: {report:#?}"));
         assert!(prepared.contains("switch ("), "{prepared}");
-        assert!(prepared.matches("goto ").count() <= 8, "{prepared}");
+        assert!(
+            prepared.matches("goto ").count() <= 9,
+            "the ninth edge is the required loop-exit trampoline from inside the switch:\n{prepared}"
+        );
     }
 
     #[test]
@@ -1217,7 +1217,7 @@ mod tests {
     }
 
     #[test]
-    fn real_wide_effect_switches_reach_shadow_without_losing_cases() {
+    fn real_wide_effect_switches_keep_typed_cases_when_rendering_declines() {
         for (binary, case_count) in [
             ("154_wide_switch-gcc-O2.so", 208usize),
             ("154_wide_switch-clang-O2.so", 256usize),
@@ -1261,10 +1261,15 @@ mod tests {
                 region,
                 StructuredRegion::Switch { .. }
             )));
-            let pseudocode = report
-                .raw_pseudocode
-                .as_deref()
-                .unwrap_or_else(|| panic!("wide switch should render: {report:#?}"));
+            let Some(pseudocode) = report.raw_pseudocode.as_deref() else {
+                // The switch inventory remains verified even when an enclosing
+                // post-tested loop contains conditional work the AST cannot
+                // lower without flattening. That is a local rendering decline,
+                // not lost cases or a rejected typed tree.
+                assert!(report.prepared_pseudocode.is_none(), "{report:#?}");
+                assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+                continue;
+            };
             assert!(pseudocode.contains("switch ("), "{pseudocode}");
             assert!(pseudocode.contains("case 0:"), "{pseudocode}");
             assert!(

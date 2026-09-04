@@ -520,17 +520,7 @@ fn collect_post_tested_facts(
             }
             Some(())
         }
-        StructuredRegion::If {
-            then_region,
-            else_region,
-            ..
-        } => {
-            collect_post_tested_facts(then_region, header, facts)?;
-            if let Some(else_region) = else_region {
-                collect_post_tested_facts(else_region, header, facts)?;
-            }
-            Some(())
-        }
+        StructuredRegion::If { .. } => None,
         StructuredRegion::Break { to, .. } => {
             facts.break_targets.push(*to);
             Some(())
@@ -712,6 +702,26 @@ fn entry_block(region: &StructuredRegion) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::ir::structure_v2::BlockRegion;
+
+    #[test]
+    fn post_tested_fact_collection_refuses_to_flatten_an_internal_branch() {
+        let branch = StructuredRegion::If {
+            source_block: 1,
+            condition: crate::ir::structure_v2::ConditionId(1),
+            then_region: Box::new(StructuredRegion::Block(BlockRegion {
+                block: 2,
+                transfers: Vec::new(),
+                terminal: None,
+            })),
+            else_region: Some(Box::new(StructuredRegion::Block(BlockRegion {
+                block: 3,
+                transfers: Vec::new(),
+                terminal: None,
+            }))),
+        };
+
+        assert!(collect_post_tested_facts(&branch, 0, &mut PostTestedFacts::default()).is_none());
+    }
 
     #[test]
     fn adapter_consumes_the_separate_condition_owner_leaf_once() {
