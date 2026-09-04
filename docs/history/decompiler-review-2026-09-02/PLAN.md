@@ -551,6 +551,15 @@ that preserves honest local gotos when required.
   body. The repair is therefore landed evidence and improved output, not a
   promotion claim; clean pinned reruns and focused removal/refusal of the
   worsened cells remain open.
+  The follow-up structured-fallthrough pass now removes only branch-final
+  gotos whose exact lexical successor is their target label; loops, switches,
+  exception regions, and intervening effects block the rewrite. Across all 268
+  shadow candidates it made 41 rows better and none worse, removed 89 more
+  gotos, and moved 22 regressions to ties plus two to improvements. The current
+  exploratory census is therefore 219 improved / 32 unchanged / 17 regressed /
+  447 declined. The report was still built from shared dirty native sources,
+  so `results/wp4-corpus-shadow-coverage.md` retains the clean-pinned rerun as
+  an explicit prerequisite rather than accepting these counts for promotion.
 
 ### RED fixtures
 

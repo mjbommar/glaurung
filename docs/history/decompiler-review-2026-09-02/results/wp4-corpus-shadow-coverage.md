@@ -75,6 +75,34 @@ WP4 step is to eliminate or locally refuse those 17 worsened existing
 candidates and the three newly renderable regressions, then rerun from a clean
 native build.
 
+## Structured-fallthrough repair
+
+The new Rust regression was not an honest goto. Its two added transfers were
+the final statements of nested `if` arms and targeted the exact label reached
+after their closing braces. Commit `a6a31eb1` adds a conservative AST rule that
+removes only that exact lexical fallthrough. It does not carry an outer
+destination into loops, switches, or exception regions, and it refuses when an
+effect lies between the branch and label.
+
+The focused real outputs now show:
+
+| function | production gotos | shadow before | shadow after |
+|---|---:|---:|---:|
+| `07_packet_parser-gcc-O0::parse_packet` | 2 | 4 | 2 |
+| `166_rust_generics-rustc-O0::get_backtrace_style` | 3 | 5 | 3 |
+
+The complete 715-row exploratory rerun changed no candidate for the worse:
+
+- 41 of the 268 comparable candidates lost gotos and 227 were unchanged;
+- aggregate shadow gotos fell by 89 and output size fell by 5,877 bytes;
+- 22 regressions became ties and two became improvements;
+- the census moved from 217/10/41/447 to **219 improved, 32 unchanged, 17
+  regressed, and 447 declined**.
+
+This closes the artificial-fallthrough family exposed by the nested-join
+repair. The 17 remaining regression rows are different shapes and remain a
+promotion blocker.
+
 ## Provenance limitation
 
 The report named committed revision
@@ -92,6 +120,12 @@ The nested-join follow-up report likewise ran in the shared worktree before
 the fix was committed, so its JSON revision field is `9a741786` rather than
 `1e0f41c7`. Its before/after deltas are exploratory engineering evidence, not
 a replacement for the required clean pinned run.
+
+The structured-fallthrough report records revision `cf575e2e`, the concurrent
+C-source improvement that became `master` while the run was active. The WP4
+change itself was still uncommitted and the native extension also contained
+uncommitted parser/metrics work, so this result has the same exploratory-only
+status. A clean build pinned at or after `a6a31eb1` remains required.
 
 ## Validation
 
