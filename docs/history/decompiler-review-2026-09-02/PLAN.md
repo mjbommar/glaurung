@@ -578,6 +578,15 @@ that preserves honest local gotos when required.
   engineering evidence rather than promotion evidence. The remaining 16
   regressions, including the still-regressed clang-O2 and gcc-O2 wide-switch
   rows, remain explicit blockers.
+  Duff's-device local regions are now placed inside their typed switch when at
+  least two arms enter the same independently verified multi-entry region.
+  The region remains single-owned and displaced fallthrough remains explicit.
+  Both O0 rows moved from regressed to unchanged (clang 10 to 2 gotos, gcc 9
+  to 1), and both gcc-O2 rows fell from 9 to 8 while remaining regressions. No
+  other corpus row changed. The exploratory census is now 222 improved / 32
+  unchanged / 14 regressed / 447 declined, with 988 comparable shadow gotos.
+  Focused tests rule out the same-address self-loop found during development,
+  retain exact tree verification, and compile the prepared real outputs.
 
 ### RED fixtures
 
@@ -1682,7 +1691,7 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Remove or faithfully structure the remaining 16 WP4 goto regressions, then
+1. Remove or faithfully structure the remaining 14 WP4 goto regressions, then
    finish promotion evidence: corpus-wide execution differential, unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted
    runtime/output-size budgets.

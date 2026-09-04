@@ -134,6 +134,36 @@ The full report took 145.76 seconds with four workers and peaked at 910,120 KiB
 RSS. Its JSON is local at
 `$HOME/.cache/glaurung/tmp/structure-v2-suffix-full.json`.
 
+## Duff local-region placement follow-up
+
+Commit `e4130d20` uses the verifier's existing single-ownership boundary for
+Duff's device. When at least two typed switch arms enter the same verified
+multi-entry local region, the adapter embeds that region in one switch arm
+instead of appending it after the switch. The local block order is rotated to
+the owner's real entry; displaced machine fallthroughs remain explicit gotos,
+so the placement does not erase CFG edges or duplicate effects.
+
+The complete 715-row exploratory comparison changed exactly the four Duff
+rows and no others:
+
+| object | production | shadow before | shadow after | result after |
+|---|---:|---:|---:|---|
+| clang O0 | 2 | 10 | 2 | unchanged |
+| gcc O0 | 1 | 9 | 1 | unchanged |
+| gcc O2 | 4 | 9 | 8 | regressed |
+| gcc O2 stripped | 4 | 9 | 8 | regressed |
+
+The corpus census moved to **222 improved / 32 unchanged / 14 regressed / 447
+declined / 0 production-missing**. Aggregate comparable shadow gotos fell from
+1,006 to **988** (-18). Output grew by 1,545 bytes because the honest local
+region is now nested under its switch rather than emitted at function scope.
+Both real O0 fixtures have regression tests proving all eight case entries are
+labels at their owned blocks, no same-address entry becomes a self-loop, the
+tree verifier remains green, and the prepared output passes host C syntax.
+The full report took 148.51 seconds with four workers and peaked at 902,704 KiB
+RSS; its local JSON is
+`$HOME/.cache/glaurung/tmp/structure-v2-duff-full.json`.
+
 ## Provenance limitation
 
 The report named committed revision
@@ -163,6 +193,11 @@ was not committed until `9ab097f1`, and the native extension still shared
 uncommitted parser sources. Its exact deltas are useful regression evidence,
 but the required promotion run remains a clean native build pinned at or after
 `9ab097f1`.
+
+The Duff placement report records `963f8992` because the measured adapter was
+committed immediately afterward as `e4130d20`. It also used the shared dirty
+native build. Treat its exact four-row delta as exploratory engineering
+evidence and retain the clean pinned rerun requirement.
 
 ## Validation
 
