@@ -20,4 +20,5 @@
 //!   diff, so nothing that iterates a `HashMap` may reach output.
 
 pub mod calibrate;
+pub mod tree_distance;
 pub mod type_name;
