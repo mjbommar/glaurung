@@ -4,7 +4,7 @@
   "core": 317,
   "lfs": 113,
   "toolchain": 35,
-  "fixtures": 33,
+  "fixtures": 34,
   "docker": 18,
   "llm": 5,
   "decbench": 2
@@ -332,6 +332,7 @@
    "fixtures"
   ],
   "test_decompiler_observable_parameter_width.py": [
+   "fixtures",
    "toolchain"
   ],
   "test_decompiler_output_canaries.py": [
