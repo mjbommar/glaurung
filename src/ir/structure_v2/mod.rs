@@ -1072,6 +1072,10 @@ mod tests {
                     1,
                     "the guarded switch adapter must not execute its owner block twice:\n{pseudocode}"
                 );
+                assert!(
+                    pseudocode.matches("goto ").count() < case_count / 2,
+                    "suffix-entry cases should be labels at their owned blocks, not one goto per case:\n{pseudocode}"
+                );
             }
             let repeated = observe(&lifted, &compute_ssa(&lifted));
             assert_eq!(report.tree, repeated.tree);

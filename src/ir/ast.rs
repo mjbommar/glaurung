@@ -613,6 +613,34 @@ pub enum Stmt {
     },
 }
 
+/// Find switch cases whose entire body is a jump into a labelled suffix owned
+/// by another arm. C can express that CFG directly by placing the redirected
+/// `case` label at the existing label inside the owner arm. Keeping this as a
+/// rendering fact avoids duplicating the suffix or pretending the edge is an
+/// implicit fallthrough when it is not.
+pub(crate) fn switch_suffix_case_labels(
+    cases: &[(Option<i64>, Vec<Stmt>)],
+) -> std::collections::BTreeMap<u64, Vec<i64>> {
+    let direct_labels: std::collections::HashSet<u64> = cases
+        .iter()
+        .flat_map(|(_, body)| body.iter())
+        .filter_map(|stmt| match stmt {
+            Stmt::Label(target) => Some(*target),
+            _ => None,
+        })
+        .collect();
+    let mut suffixes = std::collections::BTreeMap::<u64, Vec<i64>>::new();
+    for (label, body) in cases {
+        let (Some(label), [Stmt::Goto { target }]) = (label, body.as_slice()) else {
+            continue;
+        };
+        if direct_labels.contains(target) {
+            suffixes.entry(*target).or_default().push(*label);
+        }
+    }
+    suffixes
+}
+
 /// One typed handler owned by [`Stmt::TryCatch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatchClause {
@@ -9114,6 +9142,57 @@ function f @ 0x1000 {
             text.matches("return 20;").count(),
             1,
             "equal destinations should render as stacked labels over one body:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_switch_spells_suffix_entry_cases_without_gotos() {
+        let f = Function {
+            name: "suffix_switch".to_string(),
+            entry_va: 0x80,
+            body: vec![Stmt::Switch {
+                discriminant: Expr::Reg(VReg::phys("arg0")),
+                cases: vec![
+                    (
+                        Some(0),
+                        vec![
+                            Stmt::Assign {
+                                dst: VReg::phys("result"),
+                                src: Expr::Const(1),
+                            },
+                            Stmt::Label(0x1234),
+                            Stmt::Assign {
+                                dst: VReg::phys("result"),
+                                src: Expr::Const(2),
+                            },
+                        ],
+                    ),
+                    (Some(1), vec![Stmt::Goto { target: 0x1234 }]),
+                    (
+                        Some(2),
+                        vec![
+                            Stmt::Assign {
+                                dst: VReg::phys("result"),
+                                src: Expr::Const(3),
+                            },
+                            Stmt::Goto { target: 0x1234 },
+                        ],
+                    ),
+                ],
+                default: None,
+            }],
+        };
+
+        let text = render_decbench(&f);
+        assert!(text.contains("case 0:"), "{text}");
+        assert!(text.contains("case 1:"), "{text}");
+        assert_eq!(text.matches("goto L_1234").count(), 1, "{text}");
+        assert!(text.contains("L_1234:"), "{text}");
+        assert!(
+            text.find("result = 1;") < text.find("case 1:")
+                && text.find("case 1:") < text.find("result = 2;"),
+            "the redirected case must enter at the owned suffix: {text}"
         );
         assert_looks_like_c(&text);
     }

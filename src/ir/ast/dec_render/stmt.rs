@@ -640,9 +640,14 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
             let mut default_arms: Vec<&Vec<Stmt>> = Vec::new();
             let mut case_groups: Vec<(Vec<i64>, &Vec<Stmt>)> = Vec::new();
+            let suffix_labels = super::super::switch_suffix_case_labels(cases);
             for (label, body) in cases {
                 match label {
                     Some(n) if seen.insert(*n) => {
+                        if matches!(body.as_slice(), [Stmt::Goto { target }] if suffix_labels.contains_key(target))
+                        {
+                            continue;
+                        }
                         if case_groups
                             .last()
                             .is_some_and(|(_, grouped_body)| *grouped_body == body)
@@ -663,6 +668,14 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
                     let _ = writeln!(out, "case {}:", label);
                 }
                 for s in body {
+                    if let Stmt::Label(target) = s {
+                        if let Some(labels) = suffix_labels.get(target) {
+                            for label in labels {
+                                indent(out, level + 1);
+                                let _ = writeln!(out, "case {}:", label);
+                            }
+                        }
+                    }
                     write_stmt_dec(s, out, level + 2);
                 }
                 if !case_body_has_terminal_transfer(body) {

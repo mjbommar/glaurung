@@ -40,8 +40,9 @@ use std::fmt::Write;
 use crate::ir::types::{BinOp, VReg};
 
 use super::{
-    binop_sym, cmpop_sym, indent, int_ctype, one_armed_select, unop_sym, write_call_proto_hint,
-    write_float_literal, write_pdb_field_hints, write_unit_step, Expr, Function, Stmt,
+    binop_sym, cmpop_sym, indent, int_ctype, one_armed_select, switch_suffix_case_labels, unop_sym,
+    write_call_proto_hint, write_float_literal, write_pdb_field_hints, write_unit_step, Expr,
+    Function, Stmt,
 };
 
 /// Render a function in a C-like mode that strips the register-prefix
@@ -484,7 +485,12 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             out.push_str("switch (");
             write_expr_c(discriminant, out);
             out.push_str(") {\n");
+            let suffix_labels = switch_suffix_case_labels(cases);
             for (label, body) in cases {
+                if matches!((label, body.as_slice()), (Some(_), [Stmt::Goto { target }]) if suffix_labels.contains_key(target))
+                {
+                    continue;
+                }
                 indent(out, level + 1);
                 if let Some(n) = label {
                     let _ = writeln!(out, "case {}:", n);
@@ -492,6 +498,14 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
                     out.push_str("case _:\n");
                 }
                 for s in body {
+                    if let Stmt::Label(target) = s {
+                        if let Some(labels) = suffix_labels.get(target) {
+                            for label in labels {
+                                indent(out, level + 1);
+                                let _ = writeln!(out, "case {}:", label);
+                            }
+                        }
+                    }
                     write_stmt_c(s, out, level + 2);
                 }
                 indent(out, level + 2);
