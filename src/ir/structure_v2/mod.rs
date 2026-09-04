@@ -665,14 +665,13 @@ mod tests {
     }
 
     #[test]
-    fn real_dowhile_fixture_declines_to_flatten_its_internal_early_exit() {
+    fn real_dowhile_fixture_preserves_its_internal_early_exit() {
         let Some(lifted) = lift_real_fixture("03_loop_shapes-gcc-O0.so", "dowhile_atleastonce")
         else {
             return;
         };
         let ssa = compute_ssa(&lifted);
         let report = observe(&lifted, &ssa);
-
         assert_eq!(report.loops.len(), 1, "{report:#?}");
         let loop_info = &report.loops.loops()[0];
         assert_eq!(loop_info.kind, LoopKind::PostTested);
@@ -708,11 +707,16 @@ mod tests {
             StructuredRegion::Break { .. }
         )));
         // This machine loop contains an internal conditional exit before its
-        // latch. Flattening that branch into a textbook `do while` executes
-        // the other arm unconditionally. Retain the verified typed tree but
-        // decline rendered C until the AST can express the nested post-test.
-        assert!(report.raw_pseudocode.is_none(), "{report:#?}");
-        assert!(report.prepared_pseudocode.is_none(), "{report:#?}");
+        // latch. Preserve that branch inside a do-while; never concatenate its
+        // arms into unconditional work.
+        let raw = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("nested post-tested loop should render: {report:#?}"));
+        assert!(raw.contains("do {"), "{raw}");
+        assert!(raw.contains("if ("), "{raw}");
+        assert!(raw.contains("break;"), "{raw}");
+        assert_prepared_c(&report);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
         let repeated = observe(&lifted, &ssa);
         assert_eq!(report.tree, repeated.tree);

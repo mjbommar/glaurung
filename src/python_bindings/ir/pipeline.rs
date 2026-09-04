@@ -572,7 +572,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     let shadow_v2_region = prepare_shadow_v2
         .then(|| {
             let report = crate::ir::structure_v2::observe(function, &ssa);
-            crate::ir::structure_v2::render::adapt_tree(report.tree.as_ref()?)
+            crate::ir::structure_v2::render::adapt_tree(function, report.tree.as_ref()?)
         })
         .flatten();
     let (numbered, definition_widths, mut parameter_slots) = if recover_semantic_prototype {

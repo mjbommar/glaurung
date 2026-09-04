@@ -17,7 +17,7 @@ pub(super) fn render_pseudocode(
     lf: &LlirFunction,
     tree: &StructuredTree,
 ) -> Option<RenderedPseudocode> {
-    let region = adapt_tree(tree)?;
+    let region = adapt_tree(lf, tree)?;
     let function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
     let raw = crate::ir::ast::render_c(&function);
     let prepared = crate::ir::ast::prepare_for_decbench(&function);
@@ -28,7 +28,7 @@ pub(super) fn render_pseudocode(
 }
 
 /// Adapt an independently verified v2 tree into the production AST boundary.
-pub(crate) fn adapt_tree(tree: &StructuredTree) -> Option<Region> {
+pub(crate) fn adapt_tree(lf: &LlirFunction, tree: &StructuredTree) -> Option<Region> {
     let mut root = adapt_region(&tree.root)?;
     let mut embedded = std::collections::BTreeSet::new();
     embed_switch_local_regions(&mut root, &tree.local_regions, &mut embedded)?;
@@ -44,7 +44,66 @@ pub(crate) fn adapt_tree(tree: &StructuredTree) -> Option<Region> {
             regions.push(adapt_region(&exit.region)?);
         }
     }
-    Some(Region::Seq(regions))
+    let region = Region::Seq(regions);
+    materialized_post_tested_exits_are_terminal(&region, lf).then_some(region)
+}
+
+/// Prove every exit block synthesized after a nested post-tested loop is a
+/// complete terminal tail. A nonterminal target would need its remaining
+/// owned region too, so declining is safer than emitting a partial path.
+fn materialized_post_tested_exits_are_terminal(region: &Region, lf: &LlirFunction) -> bool {
+    let terminal_block = |block: usize| {
+        lf.blocks
+            .get(block)
+            .and_then(|block| block.instrs.last())
+            .is_some_and(|instruction| instruction.op.is_unconditional_return())
+    };
+    match region {
+        Region::Seq(parts) => {
+            let local_is_sound = match parts.as_slice() {
+                [Region::DoWhile {
+                    exit: Some(exit), ..
+                }, Region::Block(block)]
+                    if exit == block =>
+                {
+                    terminal_block(*block)
+                }
+                _ => true,
+            };
+            local_is_sound
+                && parts
+                    .iter()
+                    .all(|part| materialized_post_tested_exits_are_terminal(part, lf))
+        }
+        Region::IfThen { then_r, .. } => materialized_post_tested_exits_are_terminal(then_r, lf),
+        Region::IfThenElse { then_r, else_r, .. } => {
+            materialized_post_tested_exits_are_terminal(then_r, lf)
+                && materialized_post_tested_exits_are_terminal(else_r, lf)
+        }
+        Region::While { body, .. } | Region::DoWhile { body, .. } => {
+            materialized_post_tested_exits_are_terminal(body, lf)
+        }
+        Region::MultiExitLoop { body, exits, .. } => {
+            materialized_post_tested_exits_are_terminal(body, lf)
+                && exits
+                    .iter()
+                    .all(|(_, exit)| materialized_post_tested_exits_are_terminal(exit, lf))
+        }
+        Region::Switch {
+            arms,
+            formal_default,
+            ..
+        } => {
+            arms.iter()
+                .all(|arm| materialized_post_tested_exits_are_terminal(arm, lf))
+                && formal_default
+                    .as_deref()
+                    .is_none_or(|default| materialized_post_tested_exits_are_terminal(default, lf))
+        }
+        Region::Block(_) | Region::RawLoop { .. } | Region::Goto(_) | Region::Unstructured(_) => {
+            true
+        }
+    }
 }
 
 /// Place a verified multi-entry local region inside a switch when at least two
@@ -250,23 +309,22 @@ fn adapt_loop(
         return None;
     }
     let mut facts = PostTestedFacts::default();
-    collect_post_tested_facts(body, header, &mut facts)?;
+    let body = adapt_post_tested_body(body, header, &mut facts)?;
     let latch = facts.latch?;
     let exit = facts.exit?;
     if facts.break_targets.iter().any(|target| *target != exit) {
         return None;
     }
-    facts.blocks.retain(|block| *block != latch);
-    if facts.blocks.is_empty() {
-        return None;
-    }
-    Some(Region::DoWhile {
-        body: Box::new(Region::Seq(
-            facts.blocks.into_iter().map(Region::Block).collect(),
-        )),
+    let post_tested = Region::DoWhile {
+        body: Box::new(body),
         cond: latch,
         exit: Some(exit),
-    })
+    };
+    if continuation.is_none() {
+        Some(Region::Seq(vec![post_tested, Region::Block(exit)]))
+    } else {
+        Some(post_tested)
+    }
 }
 
 fn unique_loop_break_target(region: &StructuredRegion, header: usize) -> Option<usize> {
@@ -485,53 +543,119 @@ fn adapt_loop_if(
 
 #[derive(Default)]
 struct PostTestedFacts {
-    blocks: Vec<usize>,
     latch: Option<usize>,
     exit: Option<usize>,
     break_targets: Vec<usize>,
 }
 
-fn collect_post_tested_facts(
+/// Adapt a post-tested loop without flattening conditional arms.
+///
+/// The exact `Continue(header)` / `Break(exit)` conditional is the bottom
+/// test and is absorbed by `Region::DoWhile`. Every other conditional remains
+/// a conditional region. As in the general adapter, an owner block immediately
+/// preceding its control node is consumed exactly once.
+fn adapt_post_tested_body(
     region: &StructuredRegion,
     header: usize,
     facts: &mut PostTestedFacts,
-) -> Option<()> {
+) -> Option<Region> {
     match region {
-        StructuredRegion::Empty => Some(()),
-        StructuredRegion::Block(block) => {
-            facts.blocks.push(block.block);
-            Some(())
-        }
+        StructuredRegion::Empty => Some(Region::Seq(Vec::new())),
+        StructuredRegion::Block(block) => Some(Region::Block(block.block)),
         StructuredRegion::Sequence(regions) => {
-            for region in regions {
-                collect_post_tested_facts(region, header, facts)?;
+            let mut adapted = Vec::new();
+            let mut index = 0usize;
+            while index < regions.len() {
+                if control_node_consumes_owner_leaf(&regions[index], regions.get(index + 1)) {
+                    index += 1;
+                }
+                let next = regions.get(index + 1).and_then(entry_block);
+                let region = match &regions[index] {
+                    StructuredRegion::If {
+                        source_block,
+                        then_region,
+                        else_region,
+                        ..
+                    } => adapt_post_tested_if(
+                        *source_block,
+                        then_region,
+                        else_region.as_deref(),
+                        next,
+                        header,
+                        facts,
+                    )?,
+                    region => adapt_post_tested_body(region, header, facts)?,
+                };
+                adapted.push(region);
+                index += 1;
             }
-            Some(())
+            Some(Region::Seq(adapted))
         }
         StructuredRegion::If {
             source_block,
             then_region,
-            else_region: Some(else_region),
+            else_region,
             ..
-        } if latch_exit(then_region, else_region, header).is_some() => {
-            let exit = latch_exit(then_region, else_region, header)?;
-            if facts.latch.replace(*source_block).is_some() || facts.exit.replace(exit).is_some() {
-                return None;
-            }
-            Some(())
-        }
-        StructuredRegion::If { .. } => None,
-        StructuredRegion::Break { to, .. } => {
+        } => adapt_post_tested_if(
+            *source_block,
+            then_region,
+            else_region.as_deref(),
+            None,
+            header,
+            facts,
+        ),
+        StructuredRegion::Break {
+            header: seen, to, ..
+        } if *seen == header => {
             facts.break_targets.push(*to);
-            Some(())
+            Some(Region::Goto(*to))
         }
-        StructuredRegion::Return { .. }
-        | StructuredRegion::DuplicatedReturn { .. }
+        StructuredRegion::Return { block } => Some(Region::Block(*block)),
+        StructuredRegion::DuplicatedReturn { blocks, .. } => Some(Region::Seq(
+            blocks.iter().copied().map(Region::Block).collect(),
+        )),
+        StructuredRegion::LocalGoto { to, .. } | StructuredRegion::SharedGoto { to, .. } => {
+            Some(Region::Goto(*to))
+        }
+        StructuredRegion::Break { .. }
         | StructuredRegion::Loop { .. }
         | StructuredRegion::Switch { .. }
-        | StructuredRegion::Continue { .. }
-        | StructuredRegion::LocalGoto { .. }
-        | StructuredRegion::SharedGoto { .. } => None,
+        | StructuredRegion::Continue { .. } => None,
+    }
+}
+
+fn adapt_post_tested_if(
+    source_block: usize,
+    then_region: &StructuredRegion,
+    else_region: Option<&StructuredRegion>,
+    join: Option<usize>,
+    header: usize,
+    facts: &mut PostTestedFacts,
+) -> Option<Region> {
+    if let Some(exit) =
+        else_region.and_then(|else_region| latch_exit(then_region, else_region, header))
+    {
+        if facts.latch.replace(source_block).is_some() || facts.exit.replace(exit).is_some() {
+            return None;
+        }
+        return Some(Region::Seq(Vec::new()));
+    }
+
+    let then_r = Box::new(adapt_post_tested_body(then_region, header, facts)?);
+    match else_region {
+        None | Some(StructuredRegion::Empty) => Some(Region::IfThen {
+            cond: source_block,
+            then_r,
+            join,
+            invert: false,
+        }),
+        Some(else_region) => Some(Region::IfThenElse {
+            cond: source_block,
+            then_r,
+            else_r: Box::new(adapt_post_tested_body(else_region, header, facts)?),
+            join,
+            invert: false,
+        }),
     }
 }
 
@@ -702,9 +826,46 @@ fn entry_block(region: &StructuredRegion) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::ir::structure_v2::BlockRegion;
+    use crate::ir::types::{LlirBlock, LlirInstr, Op};
+
+    fn single_block_function(op: Op) -> LlirFunction {
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1004,
+                instrs: vec![LlirInstr { va: 0x1000, op }],
+                succs: Vec::new(),
+            }],
+        }
+    }
+
+    fn materialized_post_tested_exit() -> Region {
+        Region::Seq(vec![
+            Region::DoWhile {
+                body: Box::new(Region::Seq(Vec::new())),
+                cond: 0,
+                exit: Some(0),
+            },
+            Region::Block(0),
+        ])
+    }
 
     #[test]
-    fn post_tested_fact_collection_refuses_to_flatten_an_internal_branch() {
+    fn materialized_post_tested_exit_requires_a_terminal_block() {
+        let region = materialized_post_tested_exit();
+        assert!(materialized_post_tested_exits_are_terminal(
+            &region,
+            &single_block_function(Op::Return)
+        ));
+        assert!(!materialized_post_tested_exits_are_terminal(
+            &region,
+            &single_block_function(Op::Nop)
+        ));
+    }
+
+    #[test]
+    fn post_tested_adapter_preserves_an_internal_branch() {
         let branch = StructuredRegion::If {
             source_block: 1,
             condition: crate::ir::structure_v2::ConditionId(1),
@@ -720,7 +881,9 @@ mod tests {
             }))),
         };
 
-        assert!(collect_post_tested_facts(&branch, 0, &mut PostTestedFacts::default()).is_none());
+        let adapted = adapt_post_tested_body(&branch, 0, &mut PostTestedFacts::default())
+            .expect("an ordinary internal branch is representable");
+        assert!(matches!(adapted, Region::IfThenElse { .. }));
     }
 
     #[test]
