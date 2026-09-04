@@ -92,6 +92,37 @@ directory uses a WL certificate as an exact isomorphism test, and it is also why
 kernel cannot distinguish anything here that the existing isomorphism check does
 not already distinguish.
 
+## The same weakness, in the second metric
+
+The audit below covers `ged`. `type_match` was measured the same way on
+2026-09-04 while porting it (`7a00d586`), against real DWARF from 321 functions
+across 30 fixture binaries and scored by **the reference implementation
+itself**:
+
+| "backend" | mean | perfect functions |
+|---|---:|---:|
+| width-echo (`undefinedN` at the right slot) | 0.9051 | **236/321 = 73.5%** |
+| everything typed `int` | 0.8110 | 193/321 = 60.1% |
+| everything typed `undefined8` | 0.0582 | 12/321 = 3.7% |
+
+**A backend that recovers no type at all -- only each slot's width -- is scored
+perfect on 73.5% of functions by a metric named "Type Correctness."** The causes
+are the same two this directory found in `ged`: the population is trivial (89.2%
+of ground-truth variables are integer or bool scalars; pointers 9.9%, aggregates
+1.0%) and the denominators are tiny (52% of functions have two or fewer
+ground-truth variables).
+
+One structural fact compounds it. `tp + fp + fn` is identically
+`len(ground_truth_vars)` -- the reference indexes its `decided` array by
+ground-truth variable -- so the score is **recall, not a Jaccard**, and
+inventing variables is free unless the invention collides on ABI index, offset
+or name. Verified over 10,272 differential cases, 10,272 of 10,272, and the
+inventory row that said otherwise is corrected.
+
+So the recommendation this directory makes for `ged` -- stratify, and publish a
+null baseline beside every column -- applies unchanged to `type_match`, and
+`tools/metric_stratify.py` is the shape the fix should take.
+
 ## What has been built from this
 
 Recommendation 1 has landed. `tools/metric_stratify.py` (`db09aed9`) computes
