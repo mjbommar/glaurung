@@ -164,6 +164,49 @@ The full report took 148.51 seconds with four workers and peaked at 902,704 KiB
 RSS; its local JSON is
 `$HOME/.cache/glaurung/tmp/structure-v2-duff-full.json`.
 
+## Bounded linear return-tail follow-up
+
+The next cleanup increment generalizes terminal-block duplication to a maximum
+four-block straight-line chain ending in return. The eight-instruction per-tail
+and 64-instruction per-function ceilings remain unchanged. Provenance now names
+the complete cloned block sequence, and the independent verifier rejects a
+branch, cycle/repeated block, non-return terminal, forged count, wrong clone
+site, or any exceeded bound. Clone sites within a separately owned local-labelled
+region are not planned because those exits are definitions, not tree-builder
+materialization sites.
+
+The real gcc-O0 `hybrid_switch` is the fixture-backed regression case. Its
+verified shadow output fell from four gotos to one, tying production. The
+remaining label preserves the real `selector == 4` path (`total = 20`, then the
+shared `total += 5`, then return); the other short shared return paths are
+rendered directly. Prepared C remains parseable and recovery is deterministic.
+
+The release-mode 715-row exploratory comparison changed ten rows relative to
+the preceding Duff report and made no previously comparable candidate worse:
+
+- `hybrid_switch` moved from regressed (4 versus production 1) to unchanged
+  (1 versus 1);
+- clang-O0 `trie_insert` moved from regressed (8 versus 4) to improved (1
+  versus 4);
+- `sc_mixed`, clang-O0 Duff, and both `lru_access` copies each lost one goto;
+- two `bitset_select` and two optimized `trie_insert` rows changed from local
+  decline to verified output.
+
+The census is **230 improved / 30 unchanged / 12 regressed / 443 declined / 0
+production-missing**. Comparable shadow gotos are **980**. Because four rows
+joined the comparable denominator, aggregate production gotos and bytes cannot
+be compared directly with the preceding run. The exact command was:
+
+```bash
+uv run maturin develop --release
+uv run python tools/structure_v2_compare.py --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-linear-tails.json"
+```
+
+The comparison exited 0 in 21.49 seconds and peaked at 896,840 KiB RSS. This
+timing is release-build evidence and is not compared with the preceding
+debug/shared-build timing.
+
 ## Provenance limitation
 
 The report named committed revision
@@ -198,6 +241,12 @@ The Duff placement report records `963f8992` because the measured adapter was
 committed immediately afterward as `e4130d20`. It also used the shared dirty
 native build. Treat its exact four-row delta as exploratory engineering
 evidence and retain the clean pinned rerun requirement.
+
+The linear-tail report records `74481815` because this increment was still
+uncommitted. Its release extension also contained the concurrent parser lane's
+uncommitted Rust sources. The per-row structural deltas and focused real-binary
+test are useful engineering evidence, but exact totals remain unpinned until a
+clean native build reruns the same command after both lanes land.
 
 ## Validation
 
@@ -241,3 +290,26 @@ Python result is nevertheless recorded as a red, incomplete broad gate, not
 waived or called green.
 
 No DecBench run or upstream interaction was performed.
+
+For the linear-tail increment, focused and scoped validation additionally
+recorded:
+
+```text
+cargo test --features python-ext --lib 'ir::'
+2,103 passed, 0 failed, 3 ignored
+
+python/tests/test_structure_v2_compare.py
+1 passed
+
+shadow-focused tests from python/tests/test_decompiler_render_styles.py
+3 passed
+```
+
+The complete Rust gate was attempted but could not finish in the shared dirty
+tree: `csource::parse::decl::tests::a_convention_inside_a_declarator_names_the_pointer`
+continued past three minutes, alongside several older orphaned parser-test
+processes consuming CPU. Only the gate process started for this increment was
+stopped; the other lane and its files were not modified. The focused Python
+group also retained one current fixed-width spelling failure (`int` versus the
+test's `int32_t`) and three fitness-ratchet failures caused by broader current
+tree growth. None is reported as green or attributed to the return-tail change.

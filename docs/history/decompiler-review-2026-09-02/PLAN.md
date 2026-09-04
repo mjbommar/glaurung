@@ -587,6 +587,22 @@ that preserves honest local gotos when required.
   unchanged / 14 regressed / 447 declined, with 988 comparable shadow gotos.
   Focused tests rule out the same-address self-loop found during development,
   retain exact tree verification, and compile the prepared real outputs.
+  Bounded cleanup now also clones a short straight-line tail ending in return,
+  rather than only one terminal block. The plan records every cloned block and
+  independently verifies unique linear successors, terminal return identity,
+  instruction counts, clone sites, and both per-tail and per-function budgets;
+  local-labelled-region exits are excluded because they are separately owned
+  definitions rather than tree-builder clone sites. The limits remain eight
+  instructions and 64 total cloned instructions, with a new four-block cap.
+  On the real gcc-O0 `hybrid_switch`, verified shadow output fell from four
+  gotos to one, tying production while preserving the `20 + 5` path as an
+  explicit labelled continuation. The 715-row exploratory release comparison
+  moved to **230 improved / 30 unchanged / 12 regressed / 443 declined**, with
+  980 comparable shadow gotos; no previously comparable row gained a goto.
+  Four formerly declined rows also rendered, so totals and output bytes are not
+  directly comparable with the preceding denominator. The native extension
+  still included another lane's uncommitted parser changes, so these numbers
+  remain engineering evidence, not promotion evidence.
 
 ### RED fixtures
 
@@ -627,18 +643,20 @@ that preserves honest local gotos when required.
 - [x] Local failure cannot collapse an otherwise structured function. The real
   nested-irreducible fixture retains its outer natural loop while only the
   inner multi-entry SCC degrades to local gotos.
-- [~] Tail duplication is size-bounded and terminal-block-only initially.
-  Shadow cleanup now plans clones only for explicit shared return blocks, keeps
-  one deterministic canonical predecessor, records source/predecessor/count
-  provenance, and is independently verified against the typed CFG. The initial
-  ceilings are eight lifted instructions per tail and 64 cloned instructions
-  per function. Synthetic boundary tests, a forged-provenance rejection test,
-  and the real `loop_return_on_neg` shared return are green. Each planned clone
-  is now materialized as an explicit `DuplicatedReturn` in the recovered tree;
-  the tree verifier rejects missing or invented materializations one-for-one
-  against the independently checked plan. The real multi-exit rendering now
-  consumes that materialization and retains both return paths; corpus-wide
-  output measurement remains open.
+- [~] Tail duplication is size-bounded and restricted to straight-line return
+  tails. Shadow cleanup keeps one deterministic canonical predecessor and
+  records the complete block chain, source/predecessor identities, and total
+  instruction count. Independent verification rejects repeated blocks,
+  non-linear edges, a non-return terminal, forged counts or clone sites, and
+  any plan above four blocks, eight instructions per tail, or 64 cloned
+  instructions per function. Clone sites inside separately owned local-labelled
+  regions are excluded. Synthetic single- and two-block boundary tests,
+  branching-tail refusal, forged non-linear provenance, the real
+  `loop_return_on_neg` shared return, and the real gcc-O0 `hybrid_switch` are
+  green. Each planned clone is materialized as an explicit `DuplicatedReturn`
+  carrying its whole chain; the tree verifier rejects missing, altered, or
+  invented materializations one-for-one against the checked plan. Promotion
+  still requires clean-pinned corpus and execution evidence.
 - [x] Condition simplification preserves machine-width predicate semantics.
   Each shadow condition atom now carries the SSA producer's exact `CmpOp`,
   recoverable operand width, and `CondJump` inversion; unavailable producer or
@@ -1691,7 +1709,8 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Remove or faithfully structure the remaining 14 WP4 goto regressions, then
+1. Remove or faithfully structure the remaining 12 exploratory WP4 goto
+   regressions, then obtain a clean pinned rerun and
    finish promotion evidence: corpus-wide execution differential, unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted
    runtime/output-size budgets.

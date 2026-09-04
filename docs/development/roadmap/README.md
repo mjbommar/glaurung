@@ -112,7 +112,12 @@ is landed, while responsibility-by-responsibility MIR cleanup remains in WP10.
 WP4's replacement structurer and WP5's typed-switch recovery now have verified
 shadow/opt-in vertical slices over real conditionals, reducible and irreducible
 loops, multi-exit loops, and switches as large as 256 cases. They are not the
-production default and do not yet have corpus-wide promotion evidence.
+production default and do not yet have corpus-wide promotion evidence. WP4's
+bounded cleanup now handles verified short straight-line return tails as well
+as one-block epilogues: the real gcc-O0 `hybrid_switch` shadow fell from four
+gotos to one, and the current exploratory corpus has 12 rather than 14 goto
+regressions. The run shared uncommitted parser sources, so the review plan keeps
+a clean pinned rerun as a promotion prerequisite.
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
