@@ -237,19 +237,19 @@ that must lose its funcend and end with **no exit flag**.
 
 **Deliverable.** Nothing new — this is the measurement Phase 0 built.
 
-**Status, 2026-09-04: 62,416 of 85,645 exact (72.8776%), zero uncovered.**
+**Status, 2026-09-04: 79,790 of 85,645 exact (93.1636%), zero uncovered.**
 
 ```
 binaries    785
 cells       85645 stored
   attempted 85645
-  exact     62416  (72.8776%)
-  mismatch  23229
+  exact     79790  (93.1636%)
+  mismatch  5855
   uncovered 0  (provider produced no CFG)
   no source 0  (dataset gap, not a failure)
   gained    4333  (functions Joern did not produce)
-mismatch by |delta|:  <=1 1382   <=5 6385   <=20 10283   >20 5179
-  worst sshd:process_server_config_line_depth: expected 590.0, got 2547.0
+mismatch by |delta|:  <=1 1527   <=5 2454   <=20 1463   >20 411
+  worst ssh-keysign:process_config_line_depth: expected 366.0, got 1433.0
 ```
 
 ```bash
@@ -258,6 +258,19 @@ PYTHONPATH=$HOME/.cache/glaurung/cp312-site:$DECBENCH_DIR \
   $DECBENCH_DIR/.venv/bin/python tools/source_cfg_parity.py \
   ~/.cache/glaurung/decbench-full/tree --provider glaurung
 ```
+
+The step from 72.8776% to 93.1636% was **not** a front-end change: it was this
+harness learning what the stored cells are. They are
+`decbench.metrics.ged.GEDMetric._compute_uncached` -- isomorphism fast path,
+size-delta above the cap, and `max(1.0, vj_ged(...))` -- and we were diffing
+against the third step unclamped. Since a non-isomorphic pair can never be
+stored as 0 while bare `vj_ged` returns 0 whenever the degree multisets agree,
+the clamp alone accounted for most of the gap. `syntax::ged`'s node cap was
+also 60 against the reference's 200 (`f216a179`).
+
+The remaining shape gap is 5,855 cells, and the `<= 1` bucket is now the
+largest of them at 1,527 -- larger than before the fix, because cells that used
+to miss by more moved down into it.
 
 How it got there, on the three-binary slice the components were measured
 against (2,525 cells): the anchor alone scored 31 exact (1.23%); F-9 took it to
