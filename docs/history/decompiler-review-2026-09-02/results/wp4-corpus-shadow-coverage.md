@@ -207,6 +207,52 @@ The comparison exited 0 in 21.49 seconds and peaked at 896,840 KiB RSS. This
 timing is release-build evidence and is not compared with the preceding
 debug/shared-build timing.
 
+## Shared switch-join follow-up
+
+The next recovery increment stops switch arms at their shared immediate
+post-dominator, emits that continuation once after the switch, and passes its
+block identity to the existing `Region::Switch` lowering boundary. The lowerer
+then removes only the trailing jump to that exact join and emits the ordinary C
+case `break`. Effects in the join are neither cloned nor moved into an arm.
+
+The rule is loop-scoped. When recovery is already inside a natural loop, the
+switch join must be another block in that loop and cannot be the loop header.
+This restriction came from a deliberately retained RED case: the first version
+made both optimized `flattened_accumulate` objects decline by trying to own the
+enclosing loop exit inside the switch. The final version keeps those outputs
+renderable and has fixture tests for both the accepted in-loop join and rejected
+outer-loop exit.
+
+Nine rows changed relative to the bounded-linear-tail report, with no added
+goto or new decline:
+
+- clang-O0 `flattened_accumulate`, `flattened_search`, and
+  `flattened_classify` moved from regressed to improved, at 0, 1, and 1 shadow
+  gotos respectively;
+- clang-O0 `obfuscated_transform` moved from 7 gotos to **0**, versus six in
+  production, while retaining the recovered six-way state-machine switch that
+  production leaves as an unrecovered indirect jump;
+- gcc-O2 `wide154_dense_effects`, debug and stripped, moved from regressed to
+  improved (208 to 75 shadow gotos versus 203 in production);
+- clang-O2 wide debug and stripped remained regressions but fell from 87 to 54;
+- gcc-O0 wide fell from 63 to 22 and remained improved.
+
+The complete census is **236 improved / 30 unchanged / 6 regressed / 443
+declined / 0 production-missing**. Comparable shadow gotos fell from **980 to
+581**. The release command was:
+
+```bash
+uv run maturin develop --release
+uv run python tools/structure_v2_compare.py --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-switch-join-final.json"
+```
+
+It exited 0 in 28.17 seconds and peaked at 843,068 KiB RSS. Independent
+execution differentials passed all 34 deterministic cases for each of
+`flattened_accumulate`, `flattened_search`, `flattened_classify`, and
+`obfuscated_transform`. The latter also reported one verified render, zero
+undefined uses, and zero dropped verdicts.
+
 ## Provenance limitation
 
 The report named committed revision
@@ -247,6 +293,11 @@ uncommitted. Its release extension also contained the concurrent parser lane's
 uncommitted Rust sources. The per-row structural deltas and focused real-binary
 test are useful engineering evidence, but exact totals remain unpinned until a
 clean native build reruns the same command after both lanes land.
+
+The shared-switch-join report records `a81f7f00` because this increment was
+still uncommitted, and its release extension likewise contained the concurrent
+parser lane. Its no-worse per-row comparison and execution differentials are
+valid engineering evidence, but the exact corpus totals remain unpinned.
 
 ## Validation
 
@@ -313,3 +364,22 @@ stopped; the other lane and its files were not modified. The focused Python
 group also retained one current fixed-width spelling failure (`int` versus the
 test's `int32_t`) and three fitness-ratchet failures caused by broader current
 tree growth. None is reported as green or attributed to the return-tail change.
+
+For the shared-switch-join increment:
+
+```text
+cargo test --features python-ext structure_v2
+34 passed, 0 failed
+
+cargo test --features python-ext --lib 'ir::'
+2,105 passed, 0 failed, 3 ignored
+
+python/tests/test_structure_v2_compare.py
+1 passed
+
+shadow-focused tests from python/tests/test_decompiler_render_styles.py
+3 passed
+
+four real-function shadow execution differentials
+4 functions x 34 cases: pass
+```

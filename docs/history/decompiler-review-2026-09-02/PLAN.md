@@ -603,6 +603,22 @@ that preserves honest local gotos when required.
   directly comparable with the preceding denominator. The native extension
   still included another lane's uncommitted parser changes, so these numbers
   remain engineering evidence, not promotion evidence.
+  Switch recovery now stops every arm at a shared immediate post-dominator and
+  owns that continuation once after the switch. Inside a natural loop, the
+  join must remain within that same loop and cannot be its header; an enclosing
+  loop exit remains owned by the loop. This converts case-final jumps into C
+  `break` without moving or duplicating the shared effects. Real regressions
+  cover both sides: clang-O0 `obfuscated_transform` proves a shared in-loop
+  continuation moves after the switch, while clang-O2 `flattened_accumulate`
+  proves an outer loop exit is not claimed as a switch join. The three clang-O0
+  flattened functions and `obfuscated_transform` pass 34-case execution
+  differentials. The complete exploratory comparison now reports **236
+  improved / 30 unchanged / 6 regressed / 443 declined**, and comparable
+  shadow gotos fell from 980 to 581. The two remaining clang-O2 wide rows fell
+  from 87 to 54 gotos, and both gcc-O2 wide rows moved from regressed to
+  improved (208 to 75 versus production's 203). No row declined or gained a
+  goto relative to the preceding run. Shared dirty native provenance still
+  prevents treating these totals as promotion evidence.
 
 ### RED fixtures
 
@@ -1709,7 +1725,7 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Remove or faithfully structure the remaining 12 exploratory WP4 goto
+1. Remove or faithfully structure the remaining 6 exploratory WP4 goto
    regressions, then obtain a clean pinned rerun and
    finish promotion evidence: corpus-wide execution differential, unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted
