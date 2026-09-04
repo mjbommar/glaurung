@@ -177,9 +177,9 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
         StructuredRegion::Empty => Some(Region::Seq(Vec::new())),
         StructuredRegion::Block(block) => Some(Region::Block(block.block)),
         StructuredRegion::Return { block } => Some(Region::Block(*block)),
-        StructuredRegion::DuplicatedReturn { source_block, .. } => {
-            Some(Region::Block(*source_block))
-        }
+        StructuredRegion::DuplicatedReturn { blocks, .. } => Some(Region::Seq(
+            blocks.iter().copied().map(Region::Block).collect(),
+        )),
         StructuredRegion::Sequence(regions) => adapt_sequence(regions),
         StructuredRegion::If {
             source_block,
@@ -392,9 +392,9 @@ fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
         StructuredRegion::Empty => Some(Region::Seq(Vec::new())),
         StructuredRegion::Block(block) => Some(Region::Block(block.block)),
         StructuredRegion::Return { block } => Some(Region::Block(*block)),
-        StructuredRegion::DuplicatedReturn { source_block, .. } => {
-            Some(Region::Block(*source_block))
-        }
+        StructuredRegion::DuplicatedReturn { blocks, .. } => Some(Region::Seq(
+            blocks.iter().copied().map(Region::Block).collect(),
+        )),
         StructuredRegion::Sequence(regions) => adapt_loop_sequence(regions, header),
         StructuredRegion::If {
             source_block,

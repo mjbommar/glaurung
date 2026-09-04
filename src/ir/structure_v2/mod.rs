@@ -15,7 +15,8 @@ pub(crate) mod render;
 mod verify;
 
 pub use cleanup::{
-    DuplicatedTail, MAX_TAIL_DUPLICATION_INSTRUCTIONS, MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
+    DuplicatedTail, MAX_TAIL_DUPLICATION_BLOCKS, MAX_TAIL_DUPLICATION_INSTRUCTIONS,
+    MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
 };
 pub use conditions::{ConditionDag, ConditionId, ConditionNode};
 pub use dominators::{LoopForest, LoopInfo, LoopKind};
@@ -80,7 +81,7 @@ pub(crate) fn observe_cfg(
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
     let loops = LoopForest::from_cfg(cfg);
     let local_regions = LocalRegions::from_cfg(cfg, &loops);
-    let duplicated_tails = cleanup::plan_tail_duplication(cfg);
+    let duplicated_tails = cleanup::plan_tail_duplication(cfg, &local_regions);
     let branch_predicates = cfg.branch_predicates(lf, ssa);
     match ConditionDag::from_cfg(cfg, &loops, &local_regions, &branch_predicates) {
         Ok(conditions) => {
@@ -240,6 +241,19 @@ mod tests {
                     instrs: tail_instrs,
                     succs: vec![],
                 },
+            ],
+        }
+    }
+
+    fn shared_linear_return_tail_cfg() -> LlirFunction {
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(0x1000, condition(0x1100), vec![0x1100, 0x1200]),
+                block(0x1100, Op::Nop, vec![0x1300]),
+                block(0x1200, Op::Nop, vec![0x1300]),
+                block(0x1300, Op::Nop, vec![0x1400]),
+                block(0x1400, Op::Return, vec![]),
             ],
         }
     }
@@ -423,12 +437,48 @@ mod tests {
             report.duplicated_tails[0],
             DuplicatedTail {
                 source_block: 3,
+                blocks: vec![3],
                 canonical_predecessor: 1,
                 cloned_at_predecessor: 2,
                 instruction_count: MAX_TAIL_DUPLICATION_INSTRUCTIONS,
             }
         );
         assert!(report.verification_errors.is_empty());
+    }
+
+    #[test]
+    fn a_short_shared_linear_return_tail_is_cloned_as_one_verified_unit() {
+        let function = shared_linear_return_tail_cfg();
+        let report = observe(&function, &compute_ssa(&function));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        assert_eq!(report.duplicated_tails.len(), 1, "{report:#?}");
+        assert_eq!(
+            report.duplicated_tails[0],
+            DuplicatedTail {
+                source_block: 3,
+                blocks: vec![3, 4],
+                canonical_predecessor: 1,
+                cloned_at_predecessor: 2,
+                instruction_count: 2,
+            }
+        );
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert!(report.raw_pseudocode.is_some(), "{report:#?}");
+    }
+
+    #[test]
+    fn a_shared_branching_tail_is_not_cloned() {
+        let mut function = shared_linear_return_tail_cfg();
+        function.blocks[3].instrs[0].op = condition(0x1400);
+        function.blocks[3].succs = vec![0x1400, 0x1500];
+        function.blocks.push(block(0x1500, Op::Return, vec![]));
+
+        let report = observe(&function, &compute_ssa(&function));
+
+        assert!(report.duplicated_tails.is_empty(), "{report:#?}");
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
     }
 
     #[test]
@@ -753,6 +803,7 @@ mod tests {
                     StructuredRegion::DuplicatedReturn {
                         source_block,
                         cloned_at_predecessor,
+                        ..
                     } if source_block == &tail.source_block
                         && cloned_at_predecessor == &tail.cloned_at_predecessor
                 )),
@@ -1005,6 +1056,35 @@ mod tests {
         assert_prepared_c(&report);
         assert!(report.verification_errors.is_empty(), "{report:#?}");
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+    }
+
+    #[test]
+    fn real_hybrid_switch_clones_short_return_tails_without_goto_growth() {
+        let Some(lifted) =
+            lift_real_fixture("106_switch_shapes_dense_sparse-gcc-O0.so", "hybrid_switch")
+        else {
+            return;
+        };
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert!(
+            report
+                .duplicated_tails
+                .iter()
+                .any(|tail| tail.blocks.len() > 1),
+            "the real regression requires a multi-block return tail: {report:#?}"
+        );
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_prepared_c(&report);
+        let prepared = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("hybrid switch should render: {report:#?}"));
+        assert!(
+            prepared.matches("goto ").count() <= 1,
+            "short return tails should not remain as shared gotos:\n{prepared}"
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub enum StructuredRegion {
     },
     DuplicatedReturn {
         source_block: usize,
+        blocks: Vec<usize>,
         cloned_at_predecessor: usize,
     },
     Sequence(Vec<StructuredRegion>),
@@ -346,13 +347,14 @@ impl TreeBuilder<'_> {
     ) -> Option<StructuredRegion> {
         match transfer {
             Transfer::Flow { to } | Transfer::Branch { to, .. } => {
-                if self
+                if let Some(tail) = self
                     .duplicated_tails
                     .iter()
-                    .any(|tail| tail.source_block == *to && tail.cloned_at_predecessor == from)
+                    .find(|tail| tail.source_block == *to && tail.cloned_at_predecessor == from)
                 {
                     Some(StructuredRegion::DuplicatedReturn {
                         source_block: *to,
+                        blocks: tail.blocks.clone(),
                         cloned_at_predecessor: from,
                     })
                 } else if Some(*to) == stop {

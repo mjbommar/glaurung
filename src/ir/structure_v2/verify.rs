@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     ConditionDag, ConditionNode, DuplicatedTail, LocalRegions, LoopForest, RegionCandidate,
-    StructuredRegion, StructuredTree, Terminal, Transfer, MAX_TAIL_DUPLICATION_INSTRUCTIONS,
-    MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
+    StructuredRegion, StructuredTree, Terminal, Transfer, MAX_TAIL_DUPLICATION_BLOCKS,
+    MAX_TAIL_DUPLICATION_INSTRUCTIONS, MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
 };
 use crate::ir::structure::Cfg;
 
@@ -194,9 +194,11 @@ pub(super) fn verify_tree(
                 && matches!(transfer, Transfer::Break { to, .. } if *to == tail.source_block)
         })
     });
-    for (source_block, cloned_at_predecessor) in materialized_tails {
+    for (source_block, blocks, cloned_at_predecessor) in materialized_tails {
         if let Some(position) = expected_tails.iter().position(|tail| {
-            tail.source_block == source_block && tail.cloned_at_predecessor == cloned_at_predecessor
+            tail.source_block == source_block
+                && tail.blocks == blocks
+                && tail.cloned_at_predecessor == cloned_at_predecessor
         }) {
             expected_tails.remove(position);
         } else {
@@ -265,7 +267,7 @@ fn visit_tree<'a>(
     loops: &LoopForest,
     leaves: &mut [Option<BlockRegionView<'a>>],
     controls: &mut Vec<(usize, Transfer)>,
-    materialized_tails: &mut Vec<(usize, usize)>,
+    materialized_tails: &mut Vec<(usize, Vec<usize>, usize)>,
     errors: &mut Vec<TreeError>,
 ) {
     match region {
@@ -284,8 +286,9 @@ fn visit_tree<'a>(
         }
         StructuredRegion::DuplicatedReturn {
             source_block,
+            blocks,
             cloned_at_predecessor,
-        } => materialized_tails.push((*source_block, *cloned_at_predecessor)),
+        } => materialized_tails.push((*source_block, blocks.clone(), *cloned_at_predecessor)),
         StructuredRegion::Sequence(regions) => {
             for region in regions {
                 visit_tree(
@@ -701,12 +704,35 @@ fn verify_duplicated_tails(
     let mut total_instructions = 0usize;
     for tail in duplicated_tails {
         total_instructions = total_instructions.saturating_add(tail.instruction_count);
+        let blocks_in_range = tail.blocks.iter().all(|block| *block < cfg.succs.len());
+        let unique_blocks =
+            tail.blocks.iter().copied().collect::<BTreeSet<_>>().len() == tail.blocks.len();
+        let linear_edges = blocks_in_range
+            && tail
+                .blocks
+                .windows(2)
+                .all(|pair| cfg.succs[pair[0]].as_slice() == [pair[1]]);
+        let terminal_return = blocks_in_range
+            && tail
+                .blocks
+                .last()
+                .is_some_and(|block| cfg.succs[*block].is_empty() && cfg.ends_in_return[*block]);
+        let instruction_count = blocks_in_range.then(|| {
+            tail.blocks
+                .iter()
+                .map(|block| cfg.block_instruction_counts[*block])
+                .fold(0usize, usize::saturating_add)
+        });
         let valid = tail.source_block < cfg.succs.len()
             && tail.canonical_predecessor < cfg.succs.len()
             && tail.cloned_at_predecessor < cfg.succs.len()
-            && cfg.succs[tail.source_block].is_empty()
-            && cfg.ends_in_return[tail.source_block]
-            && cfg.block_instruction_counts[tail.source_block] == tail.instruction_count
+            && tail.blocks.first() == Some(&tail.source_block)
+            && !tail.blocks.is_empty()
+            && tail.blocks.len() <= MAX_TAIL_DUPLICATION_BLOCKS
+            && unique_blocks
+            && linear_edges
+            && terminal_return
+            && instruction_count == Some(tail.instruction_count)
             && tail.instruction_count <= MAX_TAIL_DUPLICATION_INSTRUCTIONS
             && total_instructions <= MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS
             && cfg.preds[tail.source_block].len() >= 2
@@ -815,7 +841,7 @@ mod tests {
         let cfg = Cfg::from(&function, &compute_ssa(&function));
         let loops = LoopForest::from_cfg(&cfg);
         let locals = LocalRegions::from_cfg(&cfg, &loops);
-        let duplicated_tails = super::super::cleanup::plan_tail_duplication(&cfg);
+        let duplicated_tails = super::super::cleanup::plan_tail_duplication(&cfg, &locals);
         let errors = verify_candidate(
             &cfg,
             &loops,
@@ -954,6 +980,7 @@ mod tests {
                 },
                 StructuredRegion::DuplicatedReturn {
                     source_block: 1,
+                    blocks: vec![1],
                     cloned_at_predecessor: 0,
                 },
             ]),
@@ -1041,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn verifier_rejects_forged_nonterminal_tail_provenance() {
+    fn verifier_rejects_forged_non_linear_tail_provenance() {
         let function = LlirFunction {
             entry_va: 0x1000,
             blocks: vec![
@@ -1088,16 +1115,17 @@ mod tests {
         let locals = LocalRegions::from_cfg(&cfg, &loops);
         let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
         let forged = [DuplicatedTail {
-            source_block: 1,
-            canonical_predecessor: 0,
+            source_block: 3,
+            blocks: vec![3, 1],
+            canonical_predecessor: 1,
             cloned_at_predecessor: 2,
-            instruction_count: 1,
+            instruction_count: 2,
         }];
 
         let errors = verify_candidate(&cfg, &loops, &locals, &forged, &candidate);
 
         assert!(errors.contains(&CandidateError::DuplicatedTailInvalid {
-            source_block: 1,
+            source_block: 3,
             cloned_at_predecessor: 2,
         }));
     }
