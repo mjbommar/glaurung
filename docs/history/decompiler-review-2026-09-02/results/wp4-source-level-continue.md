@@ -51,6 +51,22 @@ expected `Some(Aggregate("struct"))` and received `None`. Therefore the global
 Rust gate is **red** in the shared working tree; it is not reported as a pass
 for this increment.
 
+The required post-commit Python gate also completed:
+
+```bash
+uv run pytest python/tests/
+```
+
+Result after 2,862.19 seconds: 4,559 passed, 117 failed, 69 skipped, 125
+deselected, 897 expected failures, 11 warnings, and 2 subtests passed. The
+global Python gate is therefore **red**. Its failures span the concurrent C
+dialect/parser lane, cross-architecture emission and execution, fixture and
+structural baselines, generated references and inventories, source fitness,
+documentation indexing, and other global checks. This result is recorded as a
+repository-wide gate result, not attributed to the source-level continuation
+change; the focused structure-v2 and execution evidence below supplies that
+change's behavioral contract.
+
 ## Pinned corpus evidence
 
 Commands:
