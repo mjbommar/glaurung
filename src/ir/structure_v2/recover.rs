@@ -257,6 +257,19 @@ impl TreeBuilder<'_> {
             }
             self.owned[dispatch] = true;
         }
+        // A switch may own a local continuation, but it must not reach across
+        // the natural-loop boundary that is currently structuring it. Loop
+        // exits belong to `build_loop`, and the header is a typed `Continue`.
+        let join = self.cfg.immediate_postdominator(block).filter(|join| {
+            self.active_loops.last().is_none_or(|header| {
+                *join != *header
+                    && self
+                        .loops
+                        .by_header(*header)
+                        .is_some_and(|loop_info| loop_info.blocks.contains(join))
+            })
+        });
+        let arm_stop = join.or(stop);
         let mut cases = Vec::with_capacity(evidence.cases.len());
         for case in evidence.cases {
             let transfer = self
@@ -265,7 +278,7 @@ impl TreeBuilder<'_> {
                 .iter()
                 .find(|transfer| transfer_target(transfer) == case.target)?
                 .to_owned();
-            let region = self.build_tree_transfer(dispatch, &transfer, stop)?;
+            let region = self.build_tree_transfer(dispatch, &transfer, arm_stop)?;
             cases.push(SwitchCaseRegion {
                 target: case.target,
                 values: case.values,
@@ -282,7 +295,7 @@ impl TreeBuilder<'_> {
             Some(SwitchDefaultRegion {
                 target: default.target,
                 taken: default.taken,
-                region: Box::new(self.build_tree_transfer(block, &transfer, stop)?),
+                region: Box::new(self.build_tree_transfer(block, &transfer, arm_stop)?),
             })
         } else {
             None
@@ -293,11 +306,15 @@ impl TreeBuilder<'_> {
             cases,
             default,
         };
-        Some(if dispatch == block {
-            switch
+        let mut regions = if dispatch == block {
+            vec![switch]
         } else {
-            sequence([guard_leaf, switch])
-        })
+            vec![guard_leaf, switch]
+        };
+        if let Some(join) = join.filter(|join| Some(*join) != stop) {
+            regions.push(self.build(join, stop)?);
+        }
+        Some(sequence(regions))
     }
 
     fn build_local_entry_block(

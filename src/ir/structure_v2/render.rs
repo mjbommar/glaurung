@@ -187,29 +187,7 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
             else_region,
             ..
         } => adapt_if(*source_block, then_region, else_region.as_deref(), None),
-        StructuredRegion::Switch {
-            guard,
-            dispatch,
-            cases,
-            default,
-        } => {
-            let formal_default = if let Some(default) = default {
-                Some(Box::new(adapt_region(&default.region)?))
-            } else {
-                None
-            };
-            Some(Region::Switch {
-                guard: *guard,
-                dispatch: *dispatch,
-                case_labels: cases.iter().map(|case| case.values.clone()).collect(),
-                arms: cases
-                    .iter()
-                    .map(|case| adapt_region(&case.region))
-                    .collect::<Option<Vec<_>>>()?,
-                formal_default,
-                join: None,
-            })
-        }
+        StructuredRegion::Switch { .. } => adapt_switch(region, None, None),
         StructuredRegion::Loop {
             header,
             kind,
@@ -408,29 +386,7 @@ fn adapt_loop_body(region: &StructuredRegion, header: usize) -> Option<Region> {
             None,
             header,
         ),
-        StructuredRegion::Switch {
-            guard,
-            dispatch,
-            cases,
-            default,
-        } => {
-            let formal_default = if let Some(default) = default {
-                Some(Box::new(adapt_loop_body(&default.region, header)?))
-            } else {
-                None
-            };
-            Some(Region::Switch {
-                guard: *guard,
-                dispatch: *dispatch,
-                case_labels: cases.iter().map(|case| case.values.clone()).collect(),
-                arms: cases
-                    .iter()
-                    .map(|case| adapt_loop_body(&case.region, header))
-                    .collect::<Option<Vec<_>>>()?,
-                formal_default,
-                join: None,
-            })
-        }
+        StructuredRegion::Switch { .. } => adapt_switch(region, None, Some(header)),
         StructuredRegion::Break {
             header: seen, to, ..
         } if *seen == header => Some(Region::Goto(*to)),
@@ -488,6 +444,11 @@ fn adapt_loop_sequence(regions: &[StructuredRegion], header: usize) -> Option<Re
                 else_region.as_deref(),
                 regions.get(index + 1).and_then(entry_block),
                 header,
+            )?,
+            StructuredRegion::Switch { .. } => adapt_switch(
+                &regions[index],
+                regions.get(index + 1).and_then(entry_block),
+                Some(header),
             )?,
             region => adapt_loop_body(region, header)?,
         };
@@ -634,12 +595,52 @@ fn adapt_sequence(regions: &[StructuredRegion]) -> Option<Region> {
                 exits,
                 regions.get(index + 1).and_then(entry_block),
             )?,
+            StructuredRegion::Switch { .. } => adapt_switch(
+                &regions[index],
+                regions.get(index + 1).and_then(entry_block),
+                None,
+            )?,
             region => adapt_region(region)?,
         };
         adapted.push(adapted_region);
         index += 1;
     }
     Some(Region::Seq(adapted))
+}
+
+fn adapt_switch(
+    region: &StructuredRegion,
+    join: Option<usize>,
+    loop_header: Option<usize>,
+) -> Option<Region> {
+    let StructuredRegion::Switch {
+        guard,
+        dispatch,
+        cases,
+        default,
+    } = region
+    else {
+        return None;
+    };
+    let adapt = |region: &StructuredRegion| match loop_header {
+        Some(header) => adapt_loop_body(region, header),
+        None => adapt_region(region),
+    };
+    let formal_default = match default {
+        Some(default) => Some(Box::new(adapt(&default.region)?)),
+        None => None,
+    };
+    Some(Region::Switch {
+        guard: *guard,
+        dispatch: *dispatch,
+        case_labels: cases.iter().map(|case| case.values.clone()).collect(),
+        arms: cases
+            .iter()
+            .map(|case| adapt(&case.region))
+            .collect::<Option<Vec<_>>>()?,
+        formal_default,
+        join,
+    })
 }
 
 fn control_node_consumes_owner_leaf(

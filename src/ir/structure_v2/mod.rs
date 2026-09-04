@@ -1088,6 +1088,52 @@ mod tests {
     }
 
     #[test]
+    fn real_obfuscated_switch_keeps_its_shared_loop_continuation_outside_arms() {
+        let Some(lifted) = lift_real_fixture(
+            "150_obfuscation_composite-clang-O0.so",
+            "obfuscated_transform",
+        ) else {
+            return;
+        };
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_prepared_c(&report);
+        let prepared = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("obfuscated state machine should render: {report:#?}"));
+        assert!(prepared.contains("switch ("), "{prepared}");
+        assert!(!prepared.contains("L_12c8"), "{prepared}");
+        assert!(
+            prepared.matches("goto ").count() <= 2,
+            "the only remaining gotos are outside the switch:\n{prepared}"
+        );
+    }
+
+    #[test]
+    fn real_flattened_switch_does_not_claim_its_enclosing_loop_exit_as_a_join() {
+        let Some(lifted) = lift_real_fixture(
+            "145_control_flow_flattening-clang-O2.so",
+            "flattened_accumulate",
+        ) else {
+            return;
+        };
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_prepared_c(&report);
+        let prepared = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("flattened switch should remain renderable: {report:#?}"));
+        assert!(prepared.contains("switch ("), "{prepared}");
+        assert!(prepared.matches("goto ").count() <= 8, "{prepared}");
+    }
+
+    #[test]
     fn real_duff_o0_embeds_the_shared_local_region_inside_the_switch() {
         for binary in ["102_duffs_device-clang-O0.so", "102_duffs_device-gcc-O0.so"] {
             let Some(lifted) = lift_real_fixture(binary, "duff_copy") else {
