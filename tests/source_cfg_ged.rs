@@ -127,11 +127,33 @@ fn corpus(limit: usize) -> Option<Vec<(String, String, GedGraph)>> {
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        let binary = json
-            .get("binary")
-            .and_then(|b| b.as_str())
-            .unwrap_or("?")
-            .to_string();
+        // Qualify by the tree location, not just the `binary` field. Three
+        // optimization levels publish a `sulogin.json` whose `binary` is
+        // `sulogin`, so a bare `binary:function` key collides across them --- and
+        // the Python side of the cross-check stores these in a dict, where a
+        // collision silently overwrites. That made it possible to compare our
+        // O0 value against the reference's O2 graph and call the difference a
+        // GED disagreement.
+        let qualifier = path
+            .parent()
+            .and_then(|dir| dir.parent())
+            .map(|project| {
+                let project_name = project
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let opt = project
+                    .parent()
+                    .and_then(|o| o.file_name())
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                format!("{opt}/{project_name}")
+            })
+            .unwrap_or_default();
+        let binary = format!(
+            "{qualifier}/{}",
+            json.get("binary").and_then(|b| b.as_str()).unwrap_or("?")
+        );
         let Some(functions) = json.get("functions").and_then(|f| f.as_object()) else {
             continue;
         };

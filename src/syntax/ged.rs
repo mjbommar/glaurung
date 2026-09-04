@@ -67,7 +67,8 @@ pub type Cost = i128;
 ///
 /// At real CFG sizes this is a prohibition rather than a price: deleting and
 /// re-inserting a node costs `2 + in_i + out_i + in_j + out_j`, which cannot
-/// reach `100000` while degrees are bounded by a 60-node cap. The optimal
+/// reach `100000` while degrees are bounded by a 200-node cap (worst case
+/// `2 + 4 * 200 = 802`). The optimal
 /// assignment therefore never *contains* the penalty; it is the penalty's
 /// presence in the matrix that changes which assignment is optimal.
 pub const INVALID_CHOICE_PENALTY: Cost = 100_000;
@@ -77,7 +78,21 @@ pub const INVALID_CHOICE_PENALTY: Cost = 100_000;
 /// `decbench.metrics.ged.GED_MAX_NODES`, overridable there by
 /// `DECBENCH_GED_MAX_NODES`. The reference compares with `>`, so a graph of
 /// exactly this many nodes is still scored exactly.
-pub const DEFAULT_MAX_NODES: usize = 60;
+///
+/// This was 60 from `d59b438c` until 2026-09-04, which did not mirror the
+/// reference's 200 despite the sentence above saying it did. The gap is not
+/// academic: 2,547 of the 91,548 published CFGs (2.78%) have between 61 and
+/// 200 nodes, so on every one of them we returned a size delta where the
+/// reference ran the assignment -- a disagreement by construction, on the
+/// exact population the parity gate is scored over.
+///
+/// ```text
+/// published function CFGs: 91548
+///   <=60  (both exact)                      88728  (96.92%)
+///   61..200 (we approximated, they did not)  2547  (2.78%)
+///   >200  (both approximate)                  273  (0.30%)
+/// ```
+pub const DEFAULT_MAX_NODES: usize = 200;
 
 /// One CFG node, reduced to everything the distance can read.
 ///
@@ -1261,14 +1276,18 @@ mod tests {
         assert!(ged(&above, &above).approximated);
 
         // An approximated 0 is distinguishable from an exact 0. Both graphs
-        // have 61 nodes and 61 edges but wildly different degree sequences, so
-        // the true distance is not 0 --- yet the fallback reports 0.
-        let mut left = vec![GedNode::plain(1, 1); 61];
+        // have the same node and edge counts but wildly different degree
+        // sequences, so the true distance is not 0 --- yet the fallback reports
+        // 0. Sized just past the cap: at 61 nodes this demonstrated nothing
+        // once the cap moved from 60 to the reference's 200, because the pair
+        // then took the exact path and scored 245.
+        let over = DEFAULT_MAX_NODES + 1;
+        let mut left = vec![GedNode::plain(1, 1); over];
         left[0] = GedNode::new(0, 1, true, false);
-        let mut right = vec![GedNode::plain(0, 0); 61];
-        right[0] = GedNode::new(61, 61, false, true);
-        let a = GedGraph::new(left, 61);
-        let b = GedGraph::new(right, 61);
+        let mut right = vec![GedNode::plain(0, 0); over];
+        right[0] = GedNode::new(over as u32, over as u32, false, true);
+        let a = GedGraph::new(left, over as u64);
+        let b = GedGraph::new(right, over as u64);
         let r = ged(&a, &b);
         assert_eq!(r.value, 0.0);
         assert!(r.approximated, "an approximated 0 must say so");
@@ -1282,10 +1301,13 @@ mod tests {
         assert_eq!(ged_with_max_nodes(&three, &four, 3).value, 2.0);
         assert_eq!(ged_with_max_nodes(&three, &four, 4).value, 3.0);
 
-        // Edge counts feed only the fallback.
-        let same_nodes_more_edges = GedGraph::new(vec![GedNode::plain(1, 1); 61], 100);
-        let baseline = GedGraph::new(vec![GedNode::plain(1, 1); 61], 61);
-        assert_eq!(ged(&baseline, &same_nodes_more_edges).value, 39.0);
+        // Edge counts feed only the fallback --- so this must be measured above
+        // the cap. Below it the two have identical degree sequences and the
+        // exact path correctly returns 0.
+        let same_nodes_more_edges =
+            GedGraph::new(vec![GedNode::plain(1, 1); over], 100 + over as u64);
+        let baseline = GedGraph::new(vec![GedNode::plain(1, 1); over], over as u64);
+        assert_eq!(ged(&baseline, &same_nodes_more_edges).value, 100.0);
     }
 
     // ------------------------------------------------------ 8. determinism

@@ -78,7 +78,14 @@ def graphs(root: Path, limit: int) -> list[tuple[str, Any]]:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        binary = data.get("binary", "?")
+        # Mirrors the Rust side's qualifier. A bare `binary:function` key
+        # collides across optimization levels -- three of them publish a
+        # `sulogin.json` whose `binary` is `sulogin` -- and this dict would
+        # silently keep only the last, so our O0 value could be scored against
+        # the reference's O2 graph.
+        project_dir = path.parent.parent
+        qualifier = f"{project_dir.parent.name}/{project_dir.name}"
+        binary = f"{qualifier}/{data.get('binary', '?')}"
         for name, func in sorted(data.get("functions", {}).items()):
             out.append((f"{binary}:{name}", rebuild_cfg(func)))
     return out
