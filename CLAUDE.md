@@ -78,10 +78,10 @@ uv run python tools/dectest.py @loops   # a named set; --list-sets to see them
 scripts/decbench-local-gate.sh                              # our fixture lanes 1-3
 scripts/decbench-local-gate.sh --decbench                   # + DecBench lanes 4-5
 
-# Ten criterion benches: triage, entropy, strings, lang_detect, emulator
+# Eleven criterion benches: triage, entropy, strings, lang_detect, emulator
 # (needs --features exec), ir_lift, ir_dataflow, ir_structure, analysis_cfg,
-# decompile_pipeline
-cargo bench --bench ir_lift             # ...one of the ten
+# decompile_pipeline, source_parse
+cargo bench --bench ir_lift             # ...one of the eleven
 uv run python fuzz/seed_corpus.py       # seed the 8 fuzz targets from our binaries
 cargo fuzz run disasm_decode -- -max_total_time=120
 uv run python -m glaurung.bench         # regression scorecard

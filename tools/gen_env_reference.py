@@ -323,6 +323,8 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_FIXTURE_TMPDIR": "Scratch directory for the fixture build (CI: `${{ runner.temp }}`).",
     "GLAURUNG_FIXTURE_TOOLCHAIN": "Select the pinned fixture-toolchain Docker image tag.",
     "GLAURUNG_REQUIRE_TOOLCHAINS": "Fail (instead of skip) a test that needs a compiler toolchain and finds none; set by CI's `rust`/`symbolic` jobs.",
+    "GLAURUNG_REQUIRE_FIXTURES": "Fail (instead of skip) a test that reads a prebuilt binary from the gitignored `tests/decompiler_fixtures/build`; set by the Decompiler Fixture Gate, the only lane that builds that corpus.",
+    "GLAURUNG_SIGS_NETWORK_TEST": "Opt in to the signature-publisher test that reads the on-disk harvest cache at `~/.cache/glaurung/system-libs`; skipped when unset.",
     "GLAURUNG_REDECOMP_FORCE": "Force re-decompilation even when cached output looks current.",
     "GLAURUNG_TRACE_ORACLE_VERSION": "Runtime version tag recorded into ordered-trace oracle output.",
     # --- Python: decbench (opt-in evaluation harness) -------------------
