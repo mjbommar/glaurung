@@ -15,11 +15,28 @@
 //! ([`crate::csource::normalize`]) has already run over the text. A `#` that
 //! survives to here is a token like any other.
 //!
-//! It also does not decide what an identifier *means*. `undefined4`,
-//! `__usercall` and `GLIBC_2` are identifiers; `::` is two colons; `@` is
-//! [`kind::TokenKind::Unknown`] with a diagnostic. Every one of those is a
-//! token, because `REQ-IN-4` says an illegal token must reach the parser as
-//! something it can skip rather than as a reason to abandon the file.
+//! It also does not decide what an identifier *means*. `undefined4`, `_QWORD`
+//! and `GLIBC_2` are identifiers; `::` is two colons; a `@` that begins no
+//! register annotation is [`kind::TokenKind::Unknown`] with a diagnostic. Every
+//! one of those is a token, because `REQ-IN-4` says an illegal token must reach
+//! the parser as something it can skip rather than as a reason to abandon the
+//! file.
+//!
+//! # The two decompiler constructs this layer does classify
+//!
+//! `REQ-IN-4`'s "skippable token" is only useful if the parser can in fact skip
+//! it, and two decompiler spellings could not be skipped as long as they lexed
+//! as an identifier or as a stray byte:
+//!
+//! * **Calling conventions.** `__fastcall`, `__usercall` and their family are
+//!   keywords ([`kind::TokenKind::KwCallConv`]), because as identifiers they
+//!   occupy the declarator's *name* slot --- `int __fastcall f(int a)` named
+//!   the function `__fastcall` and then lost it. The kind carries no ABI
+//!   meaning; see [`kind`]'s docs.
+//! * **Register annotations.** `f@<eax>` becomes one
+//!   [`kind::TokenKind::RegisterAnnotation`] token rather than a stray `@`
+//!   followed by a comparison; [`scan_register_annotation`] argues why here
+//!   rather than in [`crate::csource::normalize`].
 //!
 //! # Trivia is skipped, and the extent trap that follows from it
 //!
@@ -222,6 +239,17 @@ fn lex_one(text: &str, at: usize, diagnostics: &mut Diagnostics) -> (TokenKind, 
         return (kind, number.len);
     }
 
+    if let Some(annotation) = scan_register_annotation(text, at) {
+        if !annotation.complete {
+            let span = Span::new(at as u32, at.saturating_add(annotation.len) as u32);
+            diagnostics.push(Diagnostic::warning(
+                span,
+                "malformed register annotation: expected `@<reg>` or `@reg`",
+            ));
+        }
+        return (TokenKind::RegisterAnnotation, annotation.len.max(1));
+    }
+
     if let Some((kind, len)) = punctuator(bytes, at) {
         return (kind, len);
     }
@@ -303,6 +331,124 @@ fn stray_byte(text: &str, at: usize, width: usize) -> Diagnostic {
         Some(found) => Diagnostic::error(span, format!("stray {found:?} in program")),
         None => Diagnostic::error(span, "stray byte in program"),
     }
+}
+
+/// One IDA/binja register annotation, measured but not interpreted.
+///
+/// `len` counts the bytes from the `@` through the end of whatever annotation
+/// shape was actually present; `complete` says whether that shape was a whole
+/// one, which is the only thing that decides whether a diagnostic is issued.
+#[derive(Debug, Clone, Copy)]
+struct RegisterAnnotation {
+    /// Bytes the annotation occupies, starting at the `@`. Never zero.
+    len: usize,
+    /// Whether the full `@<reg>` / `@reg` shape was found.
+    complete: bool,
+}
+
+/// How many bytes of blanks start at `at`.
+///
+/// Spaces and tabs only, **not** newlines: a register annotation binds to the
+/// declarator it follows on the same line, and letting the scan cross a line
+/// break would let a stray `@` at the end of one function swallow the name at
+/// the head of the next.
+fn blank_len(bytes: &[u8], at: usize) -> usize {
+    let mut index = at;
+    while matches!(bytes.get(index), Some(b' ') | Some(b'\t')) {
+        index += 1;
+    }
+    index - at
+}
+
+/// The register annotation starting at `at`, or `None` when one does not.
+///
+/// # Why this is a token and not a text rewrite
+///
+/// IDA writes the register a value lives in onto the declarator that names it:
+/// `int __usercall f@<eax>(int a@<ecx>)`. `@` is not a C token at all, so
+/// before this the whole declaration hit [`lex_one`]'s stray-byte arm, the
+/// parser found an unknown token where a declarator should continue, and the
+/// **entire function** --- body, control flow and all --- was lost. That is the
+/// worst possible failure for a front end whose job is recovering CFGs from C
+/// that does not compile.
+///
+/// DecBench's own answer is a regex in the text pipeline that deletes binja's
+/// `@ rax` form before Joern ever sees it. That answer is unavailable here for
+/// two independent reasons. First, [`crate::csource::joern::parity_cfgs`] does
+/// not run [`crate::csource::normalize`] at all, so a rewrite there would not
+/// reach the path that actually scores. Second, and more fundamental, deleting
+/// bytes moves every offset after the deletion, and `REQ-GEN-2` requires spans
+/// into the *original* text --- the identical argument the module docs make for
+/// handling line splices in place rather than pre-passing them away.
+///
+/// So the annotation is recognised where every other lexical oddity is
+/// recognised, as one token the parser can drop. Both shapes are accepted: the
+/// bracketed IDA form `@<eax>` (which DecBench's regex does *not* match, since
+/// it requires an identifier right after the `@`) and the bare binja form
+/// `@ rax`. Accepting the bare form costs nothing, because there is no correct
+/// C in which `@` may appear outside a literal or a comment, so no legal
+/// construct is being taken away to pay for it.
+///
+/// An incomplete shape --- `f@<`, a trailing `@` --- still returns a token,
+/// with `complete: false` so the caller can warn. `REQ-SYN-2` wants a graph and
+/// a diagnostic on every input; it never wants a dropped function, and a
+/// truncated annotation is exactly the kind of thing truncated decompiler
+/// output contains.
+fn scan_register_annotation(text: &str, at: usize) -> Option<RegisterAnnotation> {
+    let bytes = text.as_bytes();
+    if bytes.get(at) != Some(&b'@') {
+        return None;
+    }
+    // Every early return hands back at least the `@` itself, which is what
+    // keeps `lex_one`'s "always advance" contract true on this path.
+    let lone = RegisterAnnotation {
+        len: 1,
+        complete: false,
+    };
+
+    let mut index = at + 1;
+    index += blank_len(bytes, index);
+    let bracketed = bytes.get(index) == Some(&b'<');
+    if bracketed {
+        index += 1;
+        index += blank_len(bytes, index);
+    }
+
+    let name = scan_identifier(text, index, C_SCAN);
+    if name == 0 {
+        // `@<` on its own: keep the `<` inside the token so the parser does not
+        // then have to reason about a dangling less-than in declarator
+        // position, but say the annotation was not whole.
+        return Some(if bracketed {
+            RegisterAnnotation {
+                len: index - at,
+                complete: false,
+            }
+        } else {
+            lone
+        });
+    }
+    index += name;
+
+    if !bracketed {
+        return Some(RegisterAnnotation {
+            len: index - at,
+            complete: true,
+        });
+    }
+    let after_name = index + blank_len(bytes, index);
+    if bytes.get(after_name) == Some(&b'>') {
+        return Some(RegisterAnnotation {
+            len: after_name + 1 - at,
+            complete: true,
+        });
+    }
+    // `@<eax` with no closer. Consume what is there rather than re-lexing the
+    // register name as an identifier that would collide with the declarator's.
+    Some(RegisterAnnotation {
+        len: index - at,
+        complete: false,
+    })
 }
 
 /// The length of the backslash-newline splice at `at`, or `None` when one does
@@ -687,9 +833,9 @@ mod tests {
     #[test]
     fn a_stray_byte_becomes_a_token_rather_than_a_reason_to_stop() {
         // `REQ-IN-4`: the file must keep lexing past the garbage.
-        let (tokens, messages) = lexed("int a @ 1;");
+        let (tokens, messages) = lexed("int a ` 1;");
         assert_eq!(
-            kinds("int a @ 1;"),
+            kinds("int a ` 1;"),
             [
                 TokenKind::KwInt,
                 TokenKind::Identifier,
@@ -698,9 +844,9 @@ mod tests {
                 TokenKind::Semi
             ]
         );
-        assert_eq!(tokens[2].1, "@");
+        assert_eq!(tokens[2].1, "`");
         assert_eq!(messages.len(), 1, "{messages:?}");
-        assert!(messages[0].contains("stray '@' in program"), "{messages:?}");
+        assert!(messages[0].contains("stray '`' in program"), "{messages:?}");
 
         // A multi-byte character is consumed whole, so no later span can start
         // off a character boundary.
@@ -708,6 +854,81 @@ mod tests {
         assert_eq!(tokens.len(), 3);
         assert_eq!(tokens[1], (TokenKind::Unknown, "\u{20ac}".to_string()));
         assert_eq!(messages.len(), 1, "{messages:?}");
+    }
+
+    #[test]
+    fn a_register_annotation_is_one_token_in_both_of_its_spellings() {
+        // IDA's bracketed form and binja's bare one, plus the whitespace both
+        // tools sometimes leave around the `@`. One token each, and no
+        // diagnostic: this is expected input, not an error to be tolerated.
+        for (text, lexeme) in [
+            ("f@<eax>", "@<eax>"),
+            ("f@ <eax>", "@ <eax>"),
+            ("f@< eax >", "@< eax >"),
+            ("f@rax", "@rax"),
+            ("f@ rax", "@ rax"),
+            ("f@<xmm0_4>", "@<xmm0_4>"),
+        ] {
+            let (tokens, messages) = lexed(text);
+            assert_eq!(
+                tokens.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+                [TokenKind::Identifier, TokenKind::RegisterAnnotation],
+                "{text}"
+            );
+            assert_eq!(tokens[1].1, lexeme, "{text}");
+            assert!(messages.is_empty(), "{text}: {messages:?}");
+        }
+    }
+
+    #[test]
+    fn a_truncated_register_annotation_is_still_one_token_and_says_so() {
+        // The `@` is claimed even when nothing usable follows it, because the
+        // alternative --- an `Unknown` in declarator position --- is what used
+        // to cost the enclosing function. Every case below reports exactly one
+        // warning and leaves the tokens after it intact.
+        for (text, lexeme, rest) in [
+            ("f@<", "@<", &[][..]),
+            ("f@<eax", "@<eax", &[]),
+            ("f@", "@", &[]),
+            ("f@ ", "@", &[]),
+            ("f@(", "@", &[TokenKind::LParen]),
+            ("f@<>", "@<", &[TokenKind::Gt]),
+            ("f@ 1", "@", &[TokenKind::IntLiteral]),
+            // A newline ends the search: an annotation binds to the declarator
+            // on its own line, and crossing the break would let a stray `@` at
+            // the end of one function eat the head of the next.
+            (
+                "f@\n<eax>",
+                "@",
+                &[TokenKind::Lt, TokenKind::Identifier, TokenKind::Gt],
+            ),
+        ] {
+            let (tokens, messages) = lexed(text);
+            let kinds: Vec<TokenKind> = tokens.iter().map(|(kind, _)| *kind).collect();
+            let mut expected = vec![TokenKind::Identifier, TokenKind::RegisterAnnotation];
+            expected.extend_from_slice(rest);
+            assert_eq!(kinds, expected, "{text}");
+            assert_eq!(tokens[1].1, lexeme, "{text}");
+            assert_eq!(messages.len(), 1, "{text}: {messages:?}");
+            assert!(
+                messages[0].contains("malformed register annotation"),
+                "{text}: {messages:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_calling_convention_lexes_as_one_keyword_and_a_lookalike_does_not() {
+        // The consequence that made this a keyword: as an identifier it would
+        // take the declarator's name slot. The lookalikes have to stay
+        // identifiers, because a correct program may be using them.
+        for spelling in ["__fastcall", "__stdcall", "_cdecl", "__usercall"] {
+            assert_eq!(kinds(spelling), [TokenKind::KwCallConv], "{spelling}");
+        }
+        for spelling in ["fastcall", "pascal", "usercall", "__fastcalls"] {
+            assert_eq!(kinds(spelling), [TokenKind::Identifier], "{spelling}");
+        }
+        assert_eq!(kinds("__declspec"), [TokenKind::KwDeclspec]);
     }
 
     #[test]

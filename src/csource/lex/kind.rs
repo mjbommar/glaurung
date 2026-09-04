@@ -25,6 +25,29 @@
 //! token's byte span still addresses the original spelling in the source text
 //! (`REQ-GEN-2`), which is where a renderer or a diagnostic reads it from.
 //!
+//! [`TokenKind::KwCallConv`] stretches "alias family" one step further and says
+//! so out loud. `__cdecl` and `__stdcall` are *different* ABIs; they are not
+//! different spellings of one thing. But an ABI is a property of the call, not
+//! of the control-flow graph, and this front end recovers control-flow graphs:
+//! wherever one of them may appear, all of them may, and every one of them is
+//! discarded. Collapsing them buys a single parser arm instead of a dozen, and
+//! the cost --- a diagnostic that prints `__cdecl` for a `__stdcall` token ---
+//! is the same cost the GNU alias families already pay, with the same fix (read
+//! the span).
+//!
+//! # Which decompiler spellings are deliberately *not* keywords
+//!
+//! MSVC also accepts `cdecl`, `pascal` and `fastcall` with no leading
+//! underscore. Those are **not** in the table: unlike `_cdecl`, they are not in
+//! the implementation's reserved namespace, so `int pascal;` is a legal C
+//! declaration of a variable and making `pascal` a keyword would turn it into a
+//! syntax error. That is the same trade the C23 keywords lose above, decided
+//! the same way --- a spelling only enters the table when no correct program
+//! can be using it as an identifier. The single-underscore forms `_cdecl`,
+//! `_stdcall`, `_fastcall`, `_thiscall`, `_vectorcall`, `_pascal` and
+//! `_declspec` are reserved at file scope, are what MSVC's own headers emit
+//! under `/Za`, and are therefore safe.
+//!
 //! # Which keywords are deliberately absent
 //!
 //! C23's `bool`, `true`, `false`, `nullptr`, `constexpr`, `static_assert`,
@@ -86,6 +109,7 @@ token_kinds! {
     FloatLiteral => "floating literal",
     CharLiteral => "character literal",
     StringLiteral => "string literal",
+    RegisterAnnotation => "register annotation",
     Unknown => "unknown token",
 
     // --- C11 keywords --------------------------------------------------------
@@ -142,6 +166,8 @@ token_kinds! {
     KwBuiltinTypesCompatibleP => "__builtin_types_compatible_p",
     KwBuiltinVaArg => "__builtin_va_arg",
     KwBuiltinVaList => "__builtin_va_list",
+    KwCallConv => "__cdecl",
+    KwDeclspec => "__declspec",
     KwExtension => "__extension__",
     KwImag => "__imag__",
     KwInt128 => "__int128",
@@ -325,6 +351,16 @@ pub fn keyword_kind(name: &str) -> Option<TokenKind> {
         "__builtin_va_arg" => TokenKind::KwBuiltinVaArg,
         "__builtin_va_list" => TokenKind::KwBuiltinVaList,
         "__extension__" => TokenKind::KwExtension,
+
+        // Calling conventions, MSVC and IDA. One kind: see the module docs for
+        // why different ABIs share it, and why the underscore-free MSVC
+        // spellings (`cdecl`, `pascal`, `fastcall`) are absent.
+        "__cdecl" | "_cdecl" | "__stdcall" | "_stdcall" | "__fastcall" | "_fastcall"
+        | "__thiscall" | "_thiscall" | "__vectorcall" | "_vectorcall" | "__regcall"
+        | "__clrcall" | "__pascal" | "_pascal" | "__watcall" | "__usercall" | "__userpurge" => {
+            TokenKind::KwCallConv
+        }
+        "__declspec" | "_declspec" => TokenKind::KwDeclspec,
         "__imag" | "__imag__" => TokenKind::KwImag,
         "__int128" => TokenKind::KwInt128,
         "__label__" => TokenKind::KwLabel,
@@ -423,6 +459,25 @@ mod tests {
         "typeof",
         "__typeof",
         "__typeof__",
+        "__cdecl",
+        "_cdecl",
+        "__stdcall",
+        "_stdcall",
+        "__fastcall",
+        "_fastcall",
+        "__thiscall",
+        "_thiscall",
+        "__vectorcall",
+        "_vectorcall",
+        "__regcall",
+        "__clrcall",
+        "__pascal",
+        "_pascal",
+        "__watcall",
+        "__usercall",
+        "__userpurge",
+        "__declspec",
+        "_declspec",
     ];
 
     #[test]
@@ -476,7 +531,14 @@ mod tests {
         let keywords = TokenKind::ALL.iter().filter(|k| k.is_keyword()).count();
         println!("keywords = {keywords}, punctuators = {punctuators}");
         assert_eq!(punctuators, 48);
-        assert_eq!(keywords, 57);
+        assert_eq!(keywords, 59);
+        // `RegisterAnnotation` is a token with no fixed spelling, like
+        // `Identifier`: it must stay outside all three groups, because the
+        // keyword range is a discriminant comparison that a misplaced variant
+        // silently widens.
+        assert!(!TokenKind::RegisterAnnotation.is_keyword());
+        assert!(!TokenKind::RegisterAnnotation.is_punctuator());
+        assert!(!TokenKind::RegisterAnnotation.is_literal());
         for kind in TokenKind::ALL {
             let groups = [kind.is_keyword(), kind.is_punctuator(), kind.is_literal()]
                 .iter()
@@ -505,6 +567,39 @@ mod tests {
     }
 
     #[test]
+    fn every_calling_convention_collapses_to_one_ignorable_kind() {
+        // The whole point of the kind: a parser arm that discards it does not
+        // have to enumerate the ABIs, so adding a spelling is a table edit.
+        for spelling in [
+            "__cdecl",
+            "_cdecl",
+            "__stdcall",
+            "_stdcall",
+            "__fastcall",
+            "_fastcall",
+            "__thiscall",
+            "_thiscall",
+            "__vectorcall",
+            "_vectorcall",
+            "__regcall",
+            "__clrcall",
+            "__pascal",
+            "_pascal",
+            "__watcall",
+            "__usercall",
+            "__userpurge",
+        ] {
+            assert_eq!(
+                keyword_kind(spelling),
+                Some(TokenKind::KwCallConv),
+                "{spelling} is not a calling convention"
+            );
+        }
+        assert_eq!(keyword_kind("_declspec"), keyword_kind("__declspec"));
+        assert_ne!(keyword_kind("__declspec"), keyword_kind("__cdecl"));
+    }
+
+    #[test]
     fn an_ordinary_identifier_is_not_a_keyword() {
         for name in [
             "x",
@@ -512,7 +607,19 @@ mod tests {
             "_restrict",
             "Return",
             "undefined4",
-            "__usercall",
+            // The underscore-free MSVC convention spellings: legal identifiers
+            // in a correct program, so the table must not claim them.
+            "cdecl",
+            "stdcall",
+            "fastcall",
+            "thiscall",
+            "pascal",
+            "declspec",
+            "usercall",
+            // ...and a near miss on either side of a real one.
+            "__fastcall_",
+            "___fastcall",
+            "_QWORD",
             "bool",
             "true",
             "false",

@@ -19,6 +19,26 @@
 //! members declare types, and section 8 says there is no type resolution here;
 //! a member declaration contributes no statement, no edge and no node.
 //!
+//! # Decorations that are consumed and produce nothing
+//!
+//! A calling convention ([`TokenKind::KwCallConv`]) and an IDA register
+//! annotation ([`TokenKind::RegisterAnnotation`]) are legal in three places
+//! each --- among the specifiers, inside the declarator, and trailing it ---
+//! and in all three they are bumped and no node is opened. That is stronger
+//! than "ignored": an opened-and-abandoned node would still carry a span, and
+//! [`crate::csource::joern`] counts nodes. The invariant the tests state is the
+//! one that matters, and it is an equality rather than a bound --- the tree for
+//! `int __fastcall f(int a) { ... }` is the tree for `int f(int a) { ... }`,
+//! tag for tag.
+//!
+//! `__declspec(...)` is the fourth, and it is *not* free: it takes a balanced
+//! parenthesis group, so it shares [`Parser::eat_attribute_run`] with
+//! `__attribute__((...))` and produces the same [`NodeTag::Attribute`] node
+//! both already produced. Before it was recognised, `__declspec(noreturn) int
+//! f(void) {...}` parsed as a function named **`noreturn`** --- a silently
+//! wrong answer, which is worse than the dropped function a convention keyword
+//! cost.
+//!
 //! # The declaration-versus-expression ambiguity, and why it is cheap here
 //!
 //! `A * b;` needs a typedef table to disambiguate in general. This parser does
@@ -35,6 +55,14 @@ use super::{Parser, Task};
 use crate::csource::lex::TokenKind;
 use crate::syntax::event::Marker;
 use crate::syntax::recover::SyncSet;
+
+/// How many tokens an IDA `__spoils<...>` register list may hold before the
+/// shape is not believed.
+///
+/// Sixteen registers plus their commas covers every architecture IDA
+/// decompiles for; a longer run is far more likely to be arithmetic that
+/// happens to contain a `<`.
+const MAX_SPOILS_LIST: u32 = 32;
 
 /// Where a declaration that could not be finished resumes.
 ///
@@ -119,9 +147,28 @@ impl Parser<'_> {
             if self.at_eof() || !self.work.charge(1) {
                 return;
             }
+            // Every arm below consumes at least one token, and the loop ends
+            // the moment one does not. The guard is not decoration: an arm that
+            // dispatches on a kind its consumer does not consume spins here
+            // until the work budget --- four billion steps --- is gone, which
+            // terminates on paper (`REQ-SYN-4`) and hangs in practice. Stopping
+            // on no progress turns that class of mistake into one token the
+            // caller reports instead.
+            let before = self.cursor.pos();
             match self.peek() {
                 KwTypedef | KwExtern | KwStatic | KwAuto | KwRegister | KwInline | KwNoreturn
                 | KwThreadLocal | KwConst | KwVolatile | KwRestrict => self.bump(),
+                // A calling convention is a specifier with no grammar and no
+                // CFG contribution, so it is consumed and nothing is opened:
+                // `int __fastcall f(int)` must build the same tree as
+                // `int f(int)`, which
+                // `a_calling_convention_changes_nothing_it_touches` asserts.
+                KwCallConv => self.bump(),
+                // Out of place here --- a register annotation belongs to a
+                // declarator --- but `REQ-SYN-2` is about what happens when
+                // input is not what it should be, and stopping the specifier
+                // run on one would cost the whole declaration.
+                RegisterAnnotation => self.bump(),
                 KwVoid | KwChar | KwShort | KwInt | KwLong | KwFloat | KwDouble | KwSigned
                 | KwUnsigned | KwBool | KwComplex | KwImaginary | KwInt128 | KwBuiltinVaList => {
                     saw_type = true;
@@ -161,34 +208,154 @@ impl Parser<'_> {
                         self.eat_balanced();
                     }
                 }
-                KwAttribute => self.eat_attribute_run(),
+                KwAttribute | KwDeclspec => self.eat_attribute_run(),
                 KwExtension => self.bump(),
-                Identifier if !saw_type && self.identifier_is_a_specifier() => {
+                Identifier if self.spoils_list_ahead() => {
+                    // Not a type, so `saw_type` is left alone: `__spoils<...>`
+                    // decorates the declaration that already has one.
+                    self.bump();
+                    while !self.at_eof() && !self.at(Gt) && self.work.charge(1) {
+                        self.bump();
+                    }
+                    self.eat(Gt);
+                }
+                Identifier if self.identifier_is_a_specifier(saw_type) => {
                     saw_type = true;
                     self.bump();
                 }
                 _ => return,
             }
+            if self.cursor.pos() == before {
+                return;
+            }
         }
     }
 
-    /// Whether the identifier under the cursor names a type in this specifier
-    /// run, decided by what follows it and never by a typedef table.
-    fn identifier_is_a_specifier(&self) -> bool {
+    /// Whether the identifier under the cursor belongs to this specifier run
+    /// rather than starting the declarator, decided by what follows it and
+    /// never by a typedef table.
+    ///
+    /// # Why an identifier before another identifier is always a specifier
+    ///
+    /// `saw_type` is what normally stops the run: once a type has been seen,
+    /// the next identifier is the name. That rule is wrong for exactly one
+    /// shape, and it is the shape decompilers write constantly ---
+    ///
+    /// ```text
+    /// undefined8 __rustcall FUN_00101169(void)
+    /// __int64 __fastcall sub_401000(__int64 a1)
+    /// long int64_t history_def_last(void *arg1)(void *arg1)
+    /// void processEntry entry(void)
+    /// ```
+    ///
+    /// --- where a *third* word sits between the type and the name. Under the
+    /// `saw_type` rule the middle word becomes the function's name and the real
+    /// name becomes an unexpected token, which costs the whole definition.
+    ///
+    /// The fix is structural, and deliberately not a keyword list. Measured
+    /// over 4,287 captured Ghidra functions the middle position held
+    /// `__rustcall` (436), `__cdecl` (320), `__thiscall` (59), `__stdcall` (10)
+    /// and `processEntry` (6) --- the last being Ghidra's own name for the
+    /// convention it gives every ELF `_start`, and evidence that the set is
+    /// open. Any whitelist is a list that a decompiler release can invalidate.
+    /// So: **an identifier directly followed by another identifier is a
+    /// specifier**, however many have come before it. The name is the last
+    /// identifier in the run, which is what C's own grammar says too.
+    ///
+    /// Nothing is given up. `int a b;` is not a legal declaration, so no
+    /// correct program distinguishes the two readings, and the incorrect
+    /// programs this front end exists to read all mean the same thing by it.
+    ///
+    /// # The array-return shape
+    ///
+    /// Ghidra writes a function returning an aggregate as `undefined1 [16]
+    /// f(void)`. The `[16]` binds to the *return type*, and the giveaway is
+    /// that an identifier follows the bracket group --- `undefined1 auVar1
+    /// [16];`, a real array variable, has a `;` there instead. Recognising the
+    /// specifier hands the `[16]` to [`Parser::eat_declarator`] as an ordinary
+    /// array suffix, which is exactly how angr's already-working `unsigned long
+    /// long [4] f(void)` reaches the same place.
+    fn identifier_is_a_specifier(&self, saw_type: bool) -> bool {
         use TokenKind::*;
         let next = self.nth(1);
+        if next == Identifier {
+            return true;
+        }
+        if next == LBracket {
+            return self.array_return_ahead();
+        }
+        if saw_type {
+            return false;
+        }
         matches!(
             next,
-            Identifier | Star | LParen | KwConst | KwVolatile | KwRestrict
+            Star | LParen | KwConst | KwVolatile | KwRestrict | KwCallConv | KwDeclspec
         ) || is_type_keyword(next)
     }
 
-    /// Consume a run of `__attribute__((...))`, each as its own node.
+    /// Whether the identifier under the cursor carries an angle-bracketed
+    /// register list --- IDA's `void __spoils<R1,R2,R3,R12,LR> f(char a)`.
+    ///
+    /// `<` and `>` are comparison operators in C, so this asks for the whole
+    /// shape before believing any of it: a run of at most
+    /// [`MAX_SPOILS_LIST`] identifiers and commas between the brackets, and an
+    /// **identifier immediately after the `>`**. The last condition is what
+    /// separates it from arithmetic --- `a < b > c` would have to appear where
+    /// a declaration's specifiers go, which only file scope can produce and no
+    /// correct program does. Nothing inside the brackets is kept: a spoiled
+    /// register list says nothing about control flow.
+    fn spoils_list_ahead(&self) -> bool {
+        use TokenKind::*;
+        if self.nth(1) != Lt {
+            return false;
+        }
+        // A reserved-namespace spelling. Not a word list --- `__spoils` is the
+        // only one IDA writes today and a later release may add another --- but
+        // a leading `__` is reserved to the implementation at every scope, so
+        // no correct program can lose a construct to this rule, and `a < b > c`
+        // at file scope keeps its (nonsensical) reading instead of silently
+        // becoming a declaration.
+        if !self.current_text().starts_with("__") {
+            return false;
+        }
+        for step in 2..(2 + MAX_SPOILS_LIST) {
+            match self.nth(step) {
+                Identifier | Comma => {}
+                Gt => return self.nth(step + 1) == Identifier,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Whether the identifier under the cursor is followed by `[` *integer* `]`
+    /// and then another identifier --- Ghidra's array-return spelling.
+    ///
+    /// Tight on purpose. Requiring a literal bound rules out `a[i]`, and
+    /// requiring an identifier after the bracket group rules out every real
+    /// array declaration: `char buf[16];` has `;` there, `int a[3] = {...}` has
+    /// `=`, and `int m[2][3];` has another `[`.
+    fn array_return_ahead(&self) -> bool {
+        use TokenKind::*;
+        self.nth(1) == LBracket
+            && self.nth(2) == IntLiteral
+            && self.nth(3) == RBracket
+            && self.nth(4) == Identifier
+    }
+
+    /// Consume a run of `__attribute__((...))` or `__declspec(...)`, each as
+    /// its own node.
+    ///
+    /// The two share a loop because they are the same construct to a parser:
+    /// a keyword, a balanced parenthesis group, no control flow inside either.
+    /// [`Parser::eat_balanced`] does not care that GNU doubles the parentheses
+    /// and MSVC does not, so nothing here has to.
     fn eat_attribute_run(&mut self) {
-        while self.at(TokenKind::KwAttribute) && self.work.charge(1) {
+        use TokenKind::*;
+        while (self.at(KwAttribute) || self.at(KwDeclspec)) && self.work.charge(1) {
             let marker = self.open(NodeTag::Attribute);
             self.bump();
-            if self.at(TokenKind::LParen) {
+            if self.at(LParen) {
                 self.eat_balanced();
             }
             self.close(marker);
@@ -201,8 +368,24 @@ impl Parser<'_> {
     /// eat the `;`, which belongs to the declaration rather than to the `asm`.
     fn eat_gnu_declarator_tail(&mut self) {
         loop {
-            if self.at(TokenKind::KwAttribute) {
+            // Unlike the two loops above, every branch here ends in `continue`,
+            // so the only thing between this and a live-lock is that each one
+            // consumed something. Asserting that rather than trusting it is
+            // what a mutation of `eat_attribute_run` proved necessary: make it
+            // stop consuming `__declspec` and this loop spins forever on the
+            // token it keeps dispatching to a consumer that no longer takes it.
+            let before = self.cursor.pos();
+            if self.at(TokenKind::KwAttribute) || self.at(TokenKind::KwDeclspec) {
                 self.eat_attribute_run();
+                if self.cursor.pos() == before {
+                    return;
+                }
+                continue;
+            }
+            // `int f(int a) @<eax>` --- the annotation trails the parameter
+            // list rather than the name in some IDA output.
+            if self.at(TokenKind::RegisterAnnotation) {
+                self.bump();
                 continue;
             }
             if self.at(TokenKind::KwAsm) {
@@ -214,8 +397,73 @@ impl Parser<'_> {
                 self.close(marker);
                 continue;
             }
+            if self.eat_trailing_attribute_run() && self.cursor.pos() != before {
+                continue;
+            }
             return;
         }
+    }
+
+    /// Consume the bare-identifier attributes that follow a parameter list,
+    /// reporting whether any were there.
+    ///
+    /// # The construct
+    ///
+    /// Binary Ninja writes `void usage() __noreturn { ... }` and `uint64_t
+    /// bi_reverse(uint32_t a) __pure { ... }`; dewolf writes the same word with
+    /// an empty argument list, `void Default_Handler() __noreturn() { ... }`.
+    /// It is not valid C --- these are macro names the decompiler prints
+    /// unexpanded --- but Eclipse CDT tolerates it, DecBench does not sanitize
+    /// it away, and it is the single largest measured gap against Joern in the
+    /// sample corpus: 33 of binja's 34 lost functions are this and nothing else.
+    ///
+    /// # The one thing it must not eat
+    ///
+    /// A K&R definition puts *parameter declarations* in the same position:
+    /// `int f(a) size_t a; { ... }`. `size_t` is an identifier followed by an
+    /// identifier, so a naive "identifier after the declarator is an attribute"
+    /// rule swallows the parameter list and loses the function --- trading one
+    /// dialect for another.
+    ///
+    /// The discriminator already exists and is already tested:
+    /// [`Parser::starts_declaration`], the same syntactic rule
+    /// [`super::look`] uses to tell a declaration from an expression
+    /// statement. `size_t a;` starts a declaration, `__noreturn {` does not.
+    /// Reusing it means this construct cannot disagree with the K&R path in
+    /// [`Parser::decl_tail`] about which of them owns the tokens.
+    ///
+    /// # And why it is anchored to a closing parenthesis
+    ///
+    /// Without that anchor the rule reaches past its construct. `int a` with a
+    /// forgotten semicolon, followed by `foo(void) { ... }`, would read `foo`
+    /// as an attribute of `a` and then attach the *body* to `a` --- a function
+    /// silently recovered under the wrong name, which is worse than losing it,
+    /// because a name is what the metric matches on. Requiring the previous
+    /// token to be the `)` of the parameter list confines the rule to the
+    /// position the construct actually occupies.
+    ///
+    /// Measured honestly: with today's [`Parser::starts_declaration`] follow set
+    /// (`;` `,` `=` `[` `(` `__attribute__` `asm`) no input reaches this check
+    /// and fails it --- deleting the anchor breaks no test. It is kept as the
+    /// statement of the rule's scope, because the day that follow set grows is
+    /// the day the anchor starts carrying weight, and the failure it prevents
+    /// is a function recovered under the wrong name rather than a loud error.
+    fn eat_trailing_attribute_run(&mut self) -> bool {
+        use TokenKind::*;
+        if self.previous_kind() != Some(RParen) {
+            return false;
+        }
+        let mut ate = false;
+        while self.at(Identifier) && !self.starts_declaration() && self.work.charge(1) {
+            let marker = self.open(NodeTag::Attribute);
+            self.bump();
+            if self.at(LParen) {
+                self.eat_balanced();
+            }
+            self.close(marker);
+            ate = true;
+        }
+        ate
     }
 
     /// One declarator, and then whichever of the four things can follow it.
@@ -373,12 +621,46 @@ impl Parser<'_> {
             if self.at_eof() || !self.work.charge(1) {
                 return;
             }
+            // The same no-progress guard `eat_decl_specifiers` carries, for the
+            // same reason.
+            let before = self.cursor.pos();
             match self.peek() {
                 Star | KwConst | KwVolatile | KwRestrict | KwAtomic => self.bump(),
-                KwAttribute => self.eat_attribute_run(),
+                // `void (__stdcall *fp)(void)` puts the convention inside the
+                // declarator, and `f@<eax>` puts the annotation directly after
+                // the name. Both are dropped, and neither may set
+                // `found_name`: consuming them is what leaves the *next*
+                // identifier free to be the name.
+                KwCallConv | RegisterAnnotation => self.bump(),
+                KwAttribute | KwDeclspec => self.eat_attribute_run(),
+                // The specifier run's structural rule, continued past the `*`
+                // that ended it. dewolf writes `long * int64_t* f(long a)`, so
+                // the declarator opens on a pointer and *then* meets a second
+                // type word --- and an identifier followed by `*` or by another
+                // identifier is a type word, never a name. No legal C
+                // declarator has one there: `int *p` puts the star first,
+                // `int a, *b` has a comma, and `int a * b;` is not a
+                // declaration at all.
+                Identifier if !found_name && matches!(self.nth(1), Star | Identifier) => {
+                    self.bump()
+                }
                 Identifier if !found_name => {
                     let name = self.open(NodeTag::DeclName);
                     self.bump();
+                    // `switchD_0010101c::caseD_0`, and every C++ method Ghidra
+                    // prints into a `.c` file. `::` is not a C token, so it
+                    // ended the declarator and cost the definition. The whole
+                    // qualified spelling is one name: taking only the left half
+                    // would collide every `caseD_0` stub in the file onto one
+                    // entry, and `parity_cfgs` keys its output by name.
+                    while self.at(Colon) && self.nth(1) == Colon && self.nth(2) == Identifier {
+                        if !self.work.charge(1) {
+                            break;
+                        }
+                        self.bump();
+                        self.bump();
+                        self.bump();
+                    }
                     self.close(name);
                     found_name = true;
                 }
@@ -401,6 +683,9 @@ impl Parser<'_> {
                     self.close(suffix);
                 }
                 _ => return,
+            }
+            if self.cursor.pos() == before {
+                return;
             }
         }
     }
@@ -648,6 +933,376 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["good"]
         );
+    }
+
+    /// Every calling-convention and register-annotation decoration this front
+    /// end accepts, written once so each test below sweeps the same set. Each
+    /// entry is a `(prefix, suffix)` pair spliced into a fixed function header,
+    /// which is what keeps "the decorated form" and "the plain form" the same
+    /// text apart from the decoration.
+    const DECORATIONS: &[(&str, &str)] = &[
+        ("__cdecl ", ""),
+        ("__stdcall ", ""),
+        ("__fastcall ", ""),
+        ("__thiscall ", ""),
+        ("__vectorcall ", ""),
+        ("__usercall ", ""),
+        ("__userpurge ", ""),
+        ("__regcall ", ""),
+        ("_cdecl ", ""),
+        ("_stdcall ", ""),
+        ("_fastcall ", ""),
+        ("__declspec(dllexport) ", ""),
+        ("_declspec(noinline) ", ""),
+        ("", "@<eax>"),
+        ("", "@ <rax>"),
+        ("", "@rax"),
+        ("__usercall ", "@<eax>"),
+        ("__userpurge ", "@<rax>"),
+    ];
+
+    /// The body used by the decoration sweeps: two returns behind a branch, so
+    /// a CFG that lost the body would be a different shape rather than merely a
+    /// smaller one.
+    const BODY: &str = "(int a) { if (a) return 1; return 0; }";
+
+    #[test]
+    fn a_calling_convention_changes_nothing_it_touches() {
+        // The requirement in one assertion: with the decoration and without it
+        // the *whole* tree agrees, tag for tag, and so does the parity CFG the
+        // metric reads. An arm that opened a node, or one that let a
+        // convention keyword reach `found_name`, fails here.
+        let plain = format!("int f{BODY}");
+        let plain_tags = tags(&plain);
+        let plain_cfg = crate::csource::joern::parity_cfgs(&plain);
+        assert_eq!(plain_cfg["f"].nodes.len(), 3, "the fixture itself changed");
+        for (prefix, suffix) in DECORATIONS {
+            let decorated = format!("int {prefix}f{suffix}{BODY}");
+            let bad = errors(&decorated);
+            assert!(bad.is_empty(), "{decorated}: {bad:?}");
+            // `__declspec(...)` is the one decoration that is *not* free: it
+            // keeps the attribute node `__attribute__((...))` already kept.
+            let expected: Vec<&str> = if prefix.contains("declspec") {
+                let mut with_attribute = plain_tags.clone();
+                let at = with_attribute
+                    .iter()
+                    .position(|tag| *tag == "declarator")
+                    .expect("the plain tree has a declarator");
+                with_attribute.insert(at, "attribute");
+                with_attribute
+            } else {
+                plain_tags.clone()
+            };
+            assert_eq!(tags(&decorated), expected, "{decorated}");
+            assert_eq!(
+                crate::csource::joern::parity_cfgs(&decorated),
+                plain_cfg,
+                "{decorated} recovered a different CFG"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ida_function_header_recovers_its_body_and_its_name() {
+        // The shape this work exists for: an undeclared return type, a calling
+        // convention, and register annotations on the function and on every
+        // parameter. Before, each of the last two lost the whole function.
+        for text in [
+            "__int64 __fastcall sub_401000(__int64 a1) { if (a1) return 1; return 0; }",
+            "int __usercall sub_401000@<eax>(int a1@<ecx>) { if (a1) return 1; return 0; }",
+            "_QWORD *__userpurge f@<rax>(int a@<edi>, int b@<esi>) { if (a) return 0; return 0; }",
+            "void __stdcall f(unsigned __int8 a) { if (a) return; return; }",
+            "__declspec(noreturn) void __cdecl f(int a) { if (a) return; return; }",
+        ] {
+            let cfgs = crate::csource::joern::parity_cfgs(text);
+            let names: Vec<&String> = cfgs.keys().collect();
+            assert_eq!(names.len(), 1, "{text}: recovered {names:?}");
+            assert!(
+                names[0] == "sub_401000" || names[0] == "f",
+                "{text}: named {names:?}"
+            );
+            assert_eq!(
+                cfgs[names[0]].nodes.len(),
+                3,
+                "{text}: {:?}",
+                cfgs[names[0]]
+            );
+        }
+    }
+
+    #[test]
+    fn a_convention_inside_a_declarator_names_the_pointer() {
+        // `void (__stdcall *fp)(void)`: the convention sits where the parser
+        // is looking for the name, so an arm that skipped it only in the
+        // specifier run would take `fp` for a parameter list and lose it.
+        for (text, name) in [
+            ("int (__stdcall *fp)(int);", "fp"),
+            ("int (__cdecl f)(int);", "f"),
+            ("int (__declspec(dllimport) *g)(void);", "g"),
+        ] {
+            let bad = errors(text);
+            assert!(bad.is_empty(), "{text}: {bad:?}");
+            let tree = parse(text).into_parts().0;
+            let arena = tree.arena();
+            let spans = tree.token_spans(text);
+            let found: Vec<String> = arena
+                .preorder_roots()
+                .filter(|n| arena.tag(*n) == Some(NodeTag::DeclName.as_u16()))
+                .filter_map(|n| arena.span(n, &spans))
+                .map(|s| text[s.range()].to_string())
+                .collect();
+            assert_eq!(found, vec![name.to_string()], "{text}");
+        }
+    }
+
+    #[test]
+    fn a_declspec_declares_the_function_and_not_its_argument() {
+        // The regression this replaces was *silent*: `__declspec` lexed as an
+        // identifier, `(noreturn)` as grouping parentheses, and the parser
+        // reported a function named `noreturn`. A dropped function is visible
+        // in a count; a renamed one corrupts the score it is matched by.
+        let text = "__declspec(noreturn) int f(int a) { if (a) return 1; return 0; }";
+        let cfgs = crate::csource::joern::parity_cfgs(text);
+        assert_eq!(cfgs.keys().collect::<Vec<_>>(), vec!["f"], "{cfgs:?}");
+    }
+
+    #[test]
+    fn a_malformed_annotation_costs_a_diagnostic_and_never_the_function() {
+        // `REQ-SYN-2`: totality is about the inputs that are *not* well formed.
+        // Truncated decompiler output is the reason this matters -- each of
+        // these is a real annotation cut short somewhere different.
+        for text in [
+            "int __usercall f@<(int a) { if (a) return 1; return 0; }",
+            "int __usercall f@<eax(int a) { if (a) return 1; return 0; }",
+            "int __usercall f@(int a) { if (a) return 1; return 0; }",
+            "int __usercall f@ (int a) { if (a) return 1; return 0; }",
+            "int @<eax> f(int a) { if (a) return 1; return 0; }",
+            "int f(int a) @<eax> { if (a) return 1; return 0; }",
+        ] {
+            let cfgs = crate::csource::joern::parity_cfgs(text);
+            assert_eq!(
+                cfgs.keys().collect::<Vec<_>>(),
+                vec!["f"],
+                "{text}: {cfgs:?}"
+            );
+            assert_eq!(cfgs["f"].nodes.len(), 3, "{text}: {:?}", cfgs["f"]);
+        }
+        // ...and the ones that are genuinely truncated say so, while a
+        // well-formed annotation is accepted in silence.
+        let warned = parse("int __usercall f@<(int a) { return 1; }")
+            .diagnostics()
+            .iter()
+            .any(|d| d.severity == Severity::Warning);
+        assert!(warned, "a truncated annotation must be reported");
+        assert!(parse("int __usercall f@<eax>(int a) { return 1; }")
+            .diagnostics()
+            .is_empty());
+    }
+
+    /// One function, recovered from the header shape each row is named for.
+    ///
+    /// Every entry is copied from `samples.json`, the DecBench sample corpus,
+    /// with the body cut down to a branch and two returns so the assertion can
+    /// be an exact node count rather than "not empty" --- a recovered function
+    /// with a lost body is a different failure wearing the same face.
+    const CORPUS_HEADERS: &[(&str, &str, &str)] = &[
+        (
+            "ghidra: an open-set convention word",
+            "undefined8 __rustcall FUN_00101169(int a) { if (a) return 1; return 0; }",
+            "FUN_00101169",
+        ),
+        (
+            "ghidra: the convention word is not even a convention",
+            "void processEntry entry(int a) { if (a) return; return; }",
+            "entry",
+        ),
+        (
+            "ida: an undeclared return type and a convention",
+            "__int64 __fastcall sub_401000(int a1) { if (a1) return 1; return 0; }",
+            "sub_401000",
+        ),
+        (
+            "ida: a spoiled-register list",
+            "void __spoils<R1,R2,R3,R12,LR> dis_func1(char a1) { if (a1) return; return; }",
+            "dis_func1",
+        ),
+        (
+            "binja: a trailing attribute",
+            "void usage() __noreturn { if (1) return; return; }",
+            "usage",
+        ),
+        (
+            "binja: a trailing attribute after real parameters",
+            "unsigned long bi_reverse(unsigned a, int b) __pure { if (a) return 1; return b; }",
+            "bi_reverse",
+        ),
+        (
+            "dewolf: a trailing attribute with an argument list",
+            "void void Default_Handler() __noreturn() { if (1) return; return; }",
+            "Default_Handler",
+        ),
+        (
+            "dewolf: the parameter list written twice",
+            "long int64_t f(void* a)(void * a) { if (a) return 1; return 0; }",
+            "f",
+        ),
+        (
+            "dewolf: a pointer return written twice",
+            "long * int64_t* g(long a)(long a) { if (a) return 0; return 0; }",
+            "g",
+        ),
+        (
+            "ghidra: an array return type",
+            "undefined1 [16] h(int a) { if (a) return 1; return 0; }",
+            "h",
+        ),
+        (
+            "ghidra: a qualified jump-table stub name",
+            "void switchD_0010101c::caseD_0(int a) { if (a) return; return; }",
+            "switchD_0010101c::caseD_0",
+        ),
+    ];
+
+    #[test]
+    fn every_corpus_function_header_recovers_its_name_and_its_body() {
+        for (label, text, name) in CORPUS_HEADERS {
+            let cfgs = crate::csource::joern::parity_cfgs(text);
+            assert_eq!(
+                cfgs.keys().map(String::as_str).collect::<Vec<_>>(),
+                vec![*name],
+                "{label}: {text}"
+            );
+            assert_eq!(cfgs[*name].nodes.len(), 3, "{label}: {:?}", cfgs[*name]);
+        }
+    }
+
+    #[test]
+    fn the_specifier_rule_is_structural_rather_than_a_word_list() {
+        // The measured reason: over 4,287 captured Ghidra functions the word
+        // between the type and the name was `__rustcall`, `__cdecl`,
+        // `__thiscall`, `__stdcall` -- and `processEntry`, which is not a
+        // calling convention at all. A whitelist is a list that goes stale, so
+        // the test uses a word no list would ever hold.
+        for middle in ["__rustcall", "processEntry", "totally_made_up_word", "Z"] {
+            let text = format!("undefined8 {middle} f(int a) {{ if (a) return 1; return 0; }}");
+            let cfgs = crate::csource::joern::parity_cfgs(&text);
+            assert_eq!(
+                cfgs.keys().map(String::as_str).collect::<Vec<_>>(),
+                vec!["f"],
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_whole_type_run_lands_in_the_specifiers_and_not_in_the_declarator() {
+        // Recovery alone does not pin this. `eat_declarator` skips a type word
+        // too, for the pointer forms the specifier run cannot reach, so a
+        // regression in `identifier_is_a_specifier` still yields the right
+        // function -- with the type words filed under the declarator that does
+        // not declare them. Asserting the two node extents is what tells the
+        // two rules apart.
+        let text = "undefined8 __rustcall FUN_00101169(int a) { return a; }";
+        let bad = errors(text);
+        assert!(bad.is_empty(), "{text}: {bad:?}");
+        let tree = parse(text).into_parts().0;
+        let arena = tree.arena();
+        let spans = tree.token_spans(text);
+        let extent = |tag: NodeTag| -> Vec<String> {
+            arena
+                .preorder_roots()
+                .filter(|n| arena.tag(*n) == Some(tag.as_u16()))
+                .filter_map(|n| arena.span(n, &spans))
+                .map(|s| text[s.range()].trim().to_string())
+                .collect()
+        };
+        assert_eq!(
+            extent(NodeTag::DeclSpecifiers),
+            vec!["undefined8 __rustcall".to_string()],
+            "the convention word belongs to the specifier run"
+        );
+        assert_eq!(extent(NodeTag::DeclName), vec!["FUN_00101169".to_string()]);
+    }
+
+    #[test]
+    fn an_angle_bracket_run_is_only_read_as_a_register_list_when_it_can_be_one() {
+        // `<` and `>` are operators. The rule that lets IDA's
+        // `__spoils<R1,R2,R3,R12,LR>` through must not also let arithmetic
+        // through, so it asks for a reserved-namespace spelling and for an
+        // identifier after the `>`. Neither line below may become a
+        // declaration of `c`.
+        // Each fixture fails a different half of the test, and each names the
+        // identifier it would have swallowed: `x` is not reserved, and `3`
+        // cannot follow a register list.
+        for (text, named) in [("x<y> c;", "x"), ("__x<y> 3;", "__x")] {
+            let tree = parse(text).into_parts().0;
+            let arena = tree.arena();
+            let spans = tree.token_spans(text);
+            let names: Vec<String> = arena
+                .preorder_roots()
+                .filter(|n| arena.tag(*n) == Some(NodeTag::DeclName.as_u16()))
+                .filter_map(|n| arena.span(n, &spans))
+                .map(|s| text[s.range()].to_string())
+                .collect();
+            assert_eq!(names, vec![named.to_string()], "{text}");
+        }
+        // ...and the construct it exists for still parses clean.
+        let text = "void __spoils<R1,R2,R3,R12,LR> f(char a) { return; }";
+        let bad = errors(text);
+        assert!(bad.is_empty(), "{text}: {bad:?}");
+    }
+
+    #[test]
+    fn a_trailing_attribute_never_eats_a_k_and_r_parameter_list() {
+        // The trade the `starts_declaration` guard exists to refuse: reading
+        // `size_t a;` as an attribute of `add` would consume the parameter
+        // declarations and lose the definition, buying binja's dialect with
+        // K&R's.
+        let text = "int add(a, b) size_t a; size_t b; { return a + b; }\n";
+        let tree = parse(text).into_parts().0;
+        let functions = tree.functions(text);
+        assert_eq!(functions.len(), 1, "{:?}", errors(text));
+        assert_eq!(functions[0].name, "add");
+        // ...and the keyword-typed form it already handled stays handled.
+        let text = "int add(a, b) int a; int b; { return a + b; }\n";
+        assert_eq!(parse(text).into_parts().0.functions(text)[0].name, "add");
+    }
+
+    #[test]
+    fn a_trailing_attribute_cannot_reach_past_a_missing_semicolon() {
+        // Anchored to the `)` of a parameter list. Without that anchor a
+        // forgotten semicolon lets `after` be read as an attribute of `a` and
+        // its body attached to the wrong name -- silently wrong, where the
+        // status quo was merely lossy.
+        let text = "int a\nint after(void) { return 2; }\n";
+        let names: Vec<String> = parse(text)
+            .into_parts()
+            .0
+            .functions(text)
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(names, vec!["after"], "{:?}", errors(text));
+    }
+
+    #[test]
+    fn an_array_declaration_is_not_read_as_an_array_return_type() {
+        // `undefined1 [16] f(void)` and `undefined1 auVar1 [16];` differ only
+        // in what follows the bracket group, which is exactly what
+        // `array_return_ahead` tests.
+        let text = "void f(void) { undefined1 auVar1 [16]; auVar1[0] = 1; }";
+        let bad = errors(text);
+        assert!(bad.is_empty(), "{text}: {bad:?}");
+        let tree = parse(text).into_parts().0;
+        let arena = tree.arena();
+        let spans = tree.token_spans(text);
+        let names: Vec<String> = arena
+            .preorder_roots()
+            .filter(|n| arena.tag(*n) == Some(NodeTag::DeclName.as_u16()))
+            .filter_map(|n| arena.span(n, &spans))
+            .map(|s| text[s.range()].to_string())
+            .collect();
+        assert_eq!(names, vec!["f".to_string(), "auVar1".to_string()], "{text}");
     }
 
     #[test]
