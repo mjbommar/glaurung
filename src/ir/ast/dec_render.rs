@@ -1360,8 +1360,8 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     // `write_reg_dec` casts pointer arguments to integer addresses for machine
     // arithmetic. At a call boundary the recovered pointer declaration is the
     // stronger fact, so pass the pointer itself to the matching prototype.
-    if let Expr::Reg(reg @ VReg::Phys(name)) = arg {
-        if dec_ptr_arg_type(name).is_some() {
+    if let Expr::Reg(reg @ VReg::Phys(_)) = arg {
+        if declared_reg_ctype(reg).ends_with('*') {
             write_reg_lvalue_dec(reg, out);
             return;
         }
@@ -1698,6 +1698,22 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         return;
     }
 
+    // The middle layer may preserve a pointer value as an explicit
+    // pointer-width integer cast. Once an authoritative pointer parameter
+    // supplies the consuming type, retaining that transport cast creates the
+    // noisy and weaker `(T *)((long)(pointer))` spelling. Strip exactly one
+    // width-proved representation wrapper, and only when the inner expression
+    // already renders as a pointer compatible with the parameter.
+    if parameter_type.ends_with('*') {
+        if let Expr::Cast { width, expr, .. } = arg {
+            let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+            if *width == pointer_width && !pointer_parameter_needs_cast(parameter_type, expr) {
+                write_call_arg_dec(expr, out);
+                return;
+            }
+        }
+    }
+
     if let Some(width) = dec_plan(|plan| plan.aggregate_value_width(parameter_type)) {
         if let Expr::Reg(register) = arg {
             if declared_reg_ctype(register) == parameter_type {
@@ -1920,7 +1936,6 @@ fn call_prototype_for_render(
     };
     let requires_cast = declaration.as_ref().is_some_and(|declaration| {
         !crate::ir::call_contracts::prototype_accepts(declaration, &call_spec.call_prototype)
-            || (dst.is_some() && declaration.return_type != call_spec.call_prototype.return_type)
     });
     (call_spec, declaration, requires_cast)
 }

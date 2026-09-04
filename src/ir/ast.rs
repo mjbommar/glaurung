@@ -3934,6 +3934,53 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn declared_pointer_call_keeps_parameter_types_when_result_needs_conversion() {
+        let callee = CallPrototype {
+            return_type: "char *".into(),
+            parameter_types: vec!["const char *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let function = Function {
+            name: "save_locale".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "strdup@plt".into(),
+                },
+                args: vec![Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                }],
+                dst: Some(VReg::phys("saved_locale")),
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(callee),
+                    call_prototype: CallPrototype {
+                        return_type: "long".into(),
+                        parameter_types: vec!["const char *".into()],
+                        variadic: false,
+                        authority: CallPrototypeAuthority::Recovered,
+                    },
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+        types.upsert_public(
+            VReg::phys("saved_locale"),
+            TypeHint::Pointer { pointee_width: 1 },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(rendered.contains("strdup(arg0)"), "{rendered}");
+        assert!(!rendered.contains("strdup((long)"), "{rendered}");
+        assert_looks_like_c(&rendered);
+    }
+
+    #[test]
     fn decbench_stack_address_is_cast_to_the_recovered_pointer_parameter() {
         let prototype = CallPrototype {
             return_type: "int".into(),

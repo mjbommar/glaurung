@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
         style="decbench",
     )
 
-    assert "matches_name(const char * arg0)" in generated, generated
+    assert "matches_name(const char *candidate)" in generated, generated
     assert "matches_name(long" not in generated, generated
     assert "extern int strcmp(const char *, const char *);" in generated, generated
 
@@ -254,7 +254,7 @@ int main(void) {
     )
 
     assert "typedef struct __glaurung_opaque_FILE FILE;" in generated, generated
-    assert "write_marker(FILE * arg0, int arg1)" in generated, generated
+    assert "write_marker(FILE *arg0, int arg1)" in generated, generated
 
     rebuilt_source = tmp_path / "rebuilt.c"
     rebuilt_source.write_text(
