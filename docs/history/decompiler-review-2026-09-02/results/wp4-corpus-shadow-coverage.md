@@ -149,4 +149,23 @@ neither attributed to WP4 nor reported as a green gate. A clean full Rust gate,
 the full Python suite, execution differential, block/edge accounting, and GED
 remain required.
 
+After the metrics lane repaired that test, the complete Rust gate was rerun
+after `a6a31eb1`:
+
+```text
+cargo test --features python-ext
+main library: 3,951 passed, 0 failed, 4 ignored
+all integration binaries and doc tests: passed
+exit 0
+```
+
+The required full Python suite was also started. It was stopped at 19% after
+32 failures because the gate was already decisively red; continuing could not
+certify the increment. The failures were spread across pre-existing/current
+master analyst overlays, build-configuration invariants, ARM32 semantics, and
+control-flow fixtures. The focused fallthrough and shadow-v2 tests were green,
+and the corpus comparison found no candidate made worse by the new pass. The
+Python result is nevertheless recorded as a red, incomplete broad gate, not
+waived or called green.
+
 No DecBench run or upstream interaction was performed.

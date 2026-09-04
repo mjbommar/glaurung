@@ -560,6 +560,12 @@ that preserves honest local gotos when required.
   447 declined. The report was still built from shared dirty native sources,
   so `results/wp4-corpus-shadow-coverage.md` retains the clean-pinned rerun as
   an explicit prerequisite rather than accepting these counts for promotion.
+  Post-increment validation now has a complete green Rust gate (3,951 library
+  tests plus every integration and doc-test target). The full Python gate is
+  still red: it was stopped at 19% after 32 failures across current-master
+  analyst, build-configuration, ARM32, and control-flow tests. Focused v2 tests
+  and the no-worse corpus goto comparison are green, but they do not replace
+  that broad red result.
 
 ### RED fixtures
 
