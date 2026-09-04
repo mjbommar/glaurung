@@ -101,8 +101,16 @@ dynamically linked userland.
   or `xwin` install on a licensed device) and a NOTICE review.
 - A WARP matcher in the analysis pass: WARP libraries are ingested into the
   KB but not consulted during discovery.
-- The coverage measurement tool over `/usr/bin` and a Windows image
-  (branch `siglib/coverage-measurement`, unfinished at close).
+- Broadening the coverage measurement: `tools/measure_signature_coverage.py`
+  landed with these numbers. Ubuntu 26.04 `/usr/bin`: 2,153 of 2,191 ELF
+  files are dynamically linked and 5 static; over the 17 files with debug
+  truth, 0.83 percent of all functions and 26.8 percent of library-code
+  functions were named, almost all of it `ld.so` matching the exact
+  `ubuntu-resolute` glibc cell. Windows 11 image, 169 PEs with a cached PDB:
+  26.1 percent of all functions and 81.8 percent of library-code functions
+  named at 99.4 percent precision; on the 38 binaries whose build is a
+  library source, 68.1 percent of all functions with zero wrong. The
+  whole-`/usr/bin` sweep without truth was not completed.
 - The production fix for CFG wall-clock non-determinism (`design/cfg-discovery-determinism-2026-09-02.md`).
 - Breadth: the `base` matrix covers Debian bookworm and trixie, Ubuntu
   jammy, noble and resolute, Alpine 3.20 and 3.21, amd64 and arm64; Fedora,
