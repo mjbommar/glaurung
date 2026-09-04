@@ -498,3 +498,11 @@ The package is structurally complete when:
 * no plan claims an unimplemented selector, baseline, runner, or matrix exists;
 * stale older-plan claims are corrected where discovered; and
 * concurrent implementation work remains untouched.
+
+## Function identity and signature libraries
+
+A separate live list, because it is judged by retrieval and coverage
+measurements rather than by fixture cells:
+[`function-identity-and-signatures.md`](function-identity-and-signatures.md)
+collects every open item across the identity ladder and the signature
+program, each with its precondition and the measurement that deferred it.

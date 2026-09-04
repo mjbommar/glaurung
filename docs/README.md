@@ -40,6 +40,7 @@ and troubleshooting live in the [development setup guide](development/setup.md).
 | Read or test pseudocode output | [Decompiler output format](reference/decompiler-output-format.md), the [pass list](reference/decompiler-passes.md), and [decompiler testing](development/decompiler-testing.md) |
 | Understand how the decompiler is built | [Decompiler pipeline](architecture/decompiler-pipeline.md) and the [architecture index](architecture/README.md) |
 | Analyze PE files or Windows software | [Windows analysis](guides/windows-analysis.md) and [Windows configuration](reference/windows-analysis-config.md) |
+| See what is still open in function identity and signature libraries | [`development/roadmap/function-identity-and-signatures.md`](development/roadmap/function-identity-and-signatures.md) |
 | Work with Java, JVM bytecode, or archives | [Java and JVM analysis](guides/java-jvm.md) |
 | Detect packers or compare binaries | [Packer configuration](reference/packer-config.md) and [similarity analysis](reference/similarity.md) |
 | Tell which functions changed between two builds | [Structural function identity](reference/function-identity-structural.md) — the L1 control-flow invariants `glaurung diff` ranks by |

@@ -878,6 +878,9 @@ construction, a member.
 
 ### Not done here
 
+> The union of every open item, with preconditions, is kept in
+> [`development/roadmap/function-identity-and-signatures.md`](../development/roadmap/function-identity-and-signatures.md).
+
 - **Consuming third-party `.sig`/`.pat`.** See the `lancelot-flirt` decision
   above. This is the path to libc and MSVC coverage.
 - **PLT/import names in the referenced-name resolver.** Established names

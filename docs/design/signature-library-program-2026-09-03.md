@@ -144,6 +144,11 @@ Open items are in that record's last section and in the ledger below.
 
 ## Execution ledger
 
+Open items from this ledger and from the identity ladder are maintained
+together in
+[`development/roadmap/function-identity-and-signatures.md`](../development/roadmap/function-identity-and-signatures.md);
+this table records what happened, that page records what is next.
+
 | # | Item | State | Branch / commit | Notes |
 |---|---|---|---|---|
 | 1 | Baseline measurement | done | this page | glibc 731/1,090 named, 0 wrong |

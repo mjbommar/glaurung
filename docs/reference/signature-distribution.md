@@ -713,6 +713,9 @@ Other artefacts, carry-forward run: `SHA256SUMS` 61,182 bytes,
 
 ## Not done yet
 
+> The union of every open item, with preconditions, is kept in
+> [`development/roadmap/function-identity-and-signatures.md`](../development/roadmap/function-identity-and-signatures.md).
+
 * **The WARP blobs are fetched and ingested, but not yet matched.** A
   `warp-function-guid-v1` `.gsig` in the cache is skipped cleanly by the FLIRT
   loader (`FlirtLibrary::from_gsig_library` refuses a scheme that is not
@@ -731,8 +734,9 @@ Other artefacts, carry-forward run: `SHA256SUMS` 61,182 bytes,
 * **No delta channel.** ClamAV's `cdiff` model — ship only what changed — is
   worth having once full re-downloads become the complaint. Content-addressing
   already means an unchanged blob is never re-fetched, which covers most of it.
-* **No manifest has actually been uploaded to `assets.glaurung.dev` yet.** The
-  bucket, CloudFront distribution and DNS exist; the first real `--upload` run,
-  with a production signing key, is a maintainer action still to happen.
+* **Published.** Set `base 2026.09.2` (serial 2) is live at
+  `https://assets.glaurung.dev/sigs/v1/manifest.json`, signed by the
+  maintainer's key `25655013D3F68BC1`; the first `--upload` runs happened on
+  2026-09-03. Serial 1's JSON blobs remain on the CDN, immutable and unused.
 * **Sigstore attestations are not attached.** They come free with GitHub
   Immutable Releases once the repository exists.
