@@ -3,8 +3,8 @@
  "counts": {
   "core": 317,
   "lfs": 113,
+  "fixtures": 36,
   "toolchain": 36,
-  "fixtures": 35,
   "docker": 18,
   "llm": 5,
   "decbench": 3
@@ -1018,6 +1018,9 @@
   ],
   "test_structural_signature.py": [
    "lfs"
+  ],
+  "test_structure_v2_compare.py": [
+   "fixtures"
   ],
   "test_suggest_function_name.py": [
    "core"

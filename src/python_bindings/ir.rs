@@ -1530,6 +1530,11 @@ fn decompile_many_py(
     analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_many");
+    if shadow_v2 && style != "decbench" {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "shadow_v2 requires style='decbench'",
+        ));
+    }
     // Decompile an arbitrary SUBSET of functions in a SINGLE analysis pass.
     //
     // `decompile_at` re-runs `analyze_functions_bytes` (and the PDB/addr-map
@@ -1723,9 +1728,19 @@ fn decompile_many_py(
             dwarf_type_env.as_ref(),
             shadow_v2,
         );
-        prepared_llir
+        if prepared_llir
             .select_shadow_v2(shadow_v2, style == "decbench")
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            .is_err()
+        {
+            // Shadow-v2 is an explicitly requested, verified subset. A typed
+            // refusal for one function must not abort the rest of a batch:
+            // omit this row so the caller can compare requested VAs with
+            // returned VAs and account for the decline independently. The
+            // style contract is checked once above, so unavailability is the
+            // only possible error here. Default production selection never
+            // enters this branch.
+            continue;
+        }
         let PreparedLlir {
             region,
             cfg_health,

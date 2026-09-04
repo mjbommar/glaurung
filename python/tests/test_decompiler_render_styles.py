@@ -59,6 +59,36 @@ RENDER_CASES = [
 ]
 
 WIDE_CLANG_O2 = FIXTURES / "build" / "154_wide_switch-clang-O2.so"
+LOOPS_GCC_O0 = FIXTURES / "build" / "03_loop_shapes-gcc-O0.so"
+
+
+def test_shadow_batch_locally_declines_an_unavailable_function() -> None:
+    """One typed refusal must not discard a verified sibling's v2 output."""
+    exports = D.exported_functions(str(LOOPS_GCC_O0))
+    rows = g.ir.decompile_many(
+        str(LOOPS_GCC_O0),
+        [exports["for_sum"], exports["dowhile_recompute"]],
+        style="decbench",
+        shadow_v2=True,
+        max_functions=2,
+    )
+
+    assert [(name, va) for name, va, *_rest in rows] == [
+        ("for_sum", exports["for_sum"])
+    ]
+
+
+def test_shadow_batch_rejects_a_non_decbench_style() -> None:
+    """Local decline must not hide a caller error in the shadow contract."""
+    exports = D.exported_functions(str(LOOPS_GCC_O0))
+
+    with pytest.raises(ValueError, match="shadow_v2 requires style='decbench'"):
+        g.ir.decompile_many(
+            str(LOOPS_GCC_O0),
+            [exports["for_sum"]],
+            style="c",
+            shadow_v2=True,
+        )
 
 
 def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
