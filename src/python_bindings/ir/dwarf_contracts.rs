@@ -767,6 +767,22 @@ pub(super) fn dwarf_return_hint_with_env(
 /// pointers or aggregates.
 fn standalone_dwarf_type(source_type: &str) -> String {
     let source_type = source_type.trim();
+    let normalized = source_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut unqualified = normalized.as_str();
+    while let Some(rest) = ["const ", "volatile ", "restrict "]
+        .into_iter()
+        .find_map(|qualifier| unqualified.strip_prefix(qualifier))
+    {
+        unqualified = rest;
+    }
+    // `standalone_c_type` is also used for inferred library catalogs, where
+    // degrading an unknown aggregate pointee to `void *` is appropriately
+    // conservative.  A DWARF/PDB spelling is an authoritative declaration,
+    // however: retain its nominal tag and let the renderer's type environment
+    // prove whether it can emit the declaration and any recovered layout.
+    if unqualified.starts_with("struct ") || unqualified.starts_with("union ") {
+        return normalized;
+    }
     let rust_scalar = match source_type {
         "u8" => Some("unsigned char"),
         "i8" => Some("signed char"),
@@ -824,5 +840,17 @@ mod tests {
         assert_eq!(super::standalone_dwarf_type("isize"), "__PTRDIFF_TYPE__");
         assert_eq!(super::standalone_dwarf_type("usize"), "__SIZE_TYPE__");
         assert_eq!(super::standalone_dwarf_type("struct Pair"), "struct Pair");
+    }
+
+    #[test]
+    fn authoritative_tagged_pointers_keep_their_nominal_type() {
+        assert_eq!(
+            super::standalone_dwarf_type("struct Record *"),
+            "struct Record *"
+        );
+        assert_eq!(
+            super::standalone_dwarf_type("const union Payload *"),
+            "const union Payload *"
+        );
     }
 }

@@ -47,7 +47,7 @@ PROTOTYPES = [
     pytest.param("point_sum", "int point_sum(struct Point arg0)"),
     # The renderer emits `typedef struct Record Record;` before this definition,
     # so the alias is the same authoritative PDB type in valid standalone C.
-    pytest.param("record_value", "int record_value(Record * arg0)"),
+    pytest.param("record_value", "int record_value(Record *arg0)"),
     pytest.param("mix_float", "double mix_float(double arg0, float arg1)"),
     pytest.param("widen", "unsigned long long widen(unsigned int arg0)"),
     pytest.param("scale_pair", "int scale_pair(int arg0, short arg1, char arg2)"),

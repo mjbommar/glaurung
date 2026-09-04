@@ -985,12 +985,28 @@ vacant-map insertion, `Option::or_else`, and raw strings.
 
 The focused Rust authority test passes, and a fresh debug extension passes all
 four real-binary declaration-authority tests, including deterministic scored
-text and analyst-over-DWARF conflict provenance. The PDB suite passes 10 of 11;
-its existing `record_value` aggregate-typedef defect still renders `void *`
-instead of `Record *` and is not attributed to this ordering-only increment.
-The def-use census fails closed on broad shared-tip drift in both directions;
-no baseline was refreshed and no corpus movement is claimed for this
-output-neutral change.
+text and analyst-over-DWARF conflict provenance. At that snapshot the PDB suite
+passed 10 of 11 because `record_value` still rendered `void *` instead of
+`Record *`; the following increment closes that independently. The def-use
+census fails closed on broad shared-tip drift in both directions; no baseline
+was refreshed and no corpus movement is claimed for this output-neutral
+change.
+
+### Implementation evidence — 2026-09-03 nominal PDB aggregate pointers
+
+The debug-declaration adapter now preserves authoritative `struct` and `union`
+pointer spellings instead of passing them through the inferred library-catalog
+normalizer, whose intentionally conservative fallback is `void *`. The real
+PE32+/PDB fixture consequently emits `typedef struct Record Record;` and
+`int record_value(Record *arg0)` rather than discarding the nominal type. The
+generated translation unit passes strict C11 syntax checking.
+
+The focused Rust regression test and all 11 tests in
+`python/tests/test_pdb_type_recovery.py` pass against a freshly rebuilt debug
+extension. Exact commands and output evidence are recorded in
+`results/wp8-pdb-nominal-pointer.md`. The function body still has a separately
+reported definition-before-use violation; this increment claims declaration
+fidelity, not complete body correctness.
 
 ### Exit criteria
 

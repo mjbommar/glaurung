@@ -119,7 +119,9 @@ aware parameter evidence, exceptional and aggregate call results, non-C source
 to machine-ABI boundaries, and float-valued call rendering all have bounded
 fixture evidence in the review plan. WP8 has authoritative DWARF/PDB/analyst
 declaration slices and now owns their total priority order in the program
-environment; its annotated analyst render mode remains open. WP9 has
+environment; authoritative tagged PDB pointers also retain their nominal type
+instead of degrading to `void *`. Its annotated analyst render mode remains
+open. WP9 has
 target-owned ARM32 register views plus standing
 decoded/effect capability censuses and several silent-writer repairs. WP2,
 WP3, WP6, and WP7B remain open architectural work. No current-tip release gate
