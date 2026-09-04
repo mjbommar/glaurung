@@ -21,11 +21,13 @@ harness manufactures on purpose.
 
 - **Harness:** [`tools/parser_recovery_bench.py`](../../../tools/parser_recovery_bench.py)
 - **Tests:** [`python/tests/test_parser_recovery.py`](../../../python/tests/test_parser_recovery.py)
-  -- 59 tests, all passing, **but currently deselected by default**: one of them
-  reads the DecBench checkout, `tools/gen_test_facets.py` classifies whole files
-  by text match, and `pytest.ini` deselects `-m decbench`. Run it with `-m ""`
-  until that single test is split into its own file. The module docstring
-  carries the detail.
+  (58 tests, `core`) and
+  [`python/tests/test_parser_recovery_decbench.py`](../../../python/tests/test_parser_recovery_decbench.py)
+  (1 test, `decbench`, deselected by default). The split is not cosmetic:
+  `tools/gen_test_facets.py` classifies by whole-file text match, so leaving the
+  one test that reads the DecBench checkout beside the others tagged all 59
+  `decbench` and `pytest.ini` deselected every one of them -- 59 tests that
+  appeared to pass while contributing nothing.
 
 ## 1. What was compared, and what could not be
 
