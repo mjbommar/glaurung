@@ -1004,9 +1004,30 @@ generated translation unit passes strict C11 syntax checking.
 The focused Rust regression test and all 11 tests in
 `python/tests/test_pdb_type_recovery.py` pass against a freshly rebuilt debug
 extension. Exact commands and output evidence are recorded in
-`results/wp8-pdb-nominal-pointer.md`. The function body still has a separately
-reported definition-before-use violation; this increment claims declaration
-fidelity, not complete body correctness.
+`results/wp8-pdb-nominal-pointer.md`.
+
+### Implementation evidence — 2026-09-04 Win64 home-slot dead store
+
+The separately reported `record_value` body violation is now closed. The
+clang-cl prologue `push rax; mov [rsp], rcx` reserves a word and immediately
+homes the first Win64 parameter; stack promotion had rendered the unobserved
+push value as `long local_8 = ret`, manufacturing an undefined source read.
+Dead-store handling now removes only an adjacent, equal-width promoted-slot
+write whose source is non-observable and whose replacement does not read the
+slot. It declines partial writes, effectful expressions, self-dependence, and
+control-flow crossings.
+
+All 36 focused Rust dead-store tests and all 12 real PDB tests pass after a
+fresh extension build. `record_value` has no `local_8`, produces no render-
+verification finding, and compiles under strict C11. The smoke matrix reports
+no scoped regressions. An exact clean-master A/B run proves the 12 failures in
+the broader 85-test definedness/render/emission slice are unchanged current-
+master defects. Commands and output are recorded in
+`results/wp8-win64-home-dead-store.md`; no baseline was changed. The full Rust
+gate is green. The def-use census remains red on its new-finding and
+improvement ratchets because of broad current-tip drift in both directions;
+the PDB fixture is outside that census and no corpus movement is attributed to
+this increment.
 
 ### Exit criteria
 

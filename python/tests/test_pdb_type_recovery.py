@@ -197,6 +197,29 @@ def test_pdb_conflict_metadata_retains_machine_inference() -> None:
     assert conflicts[0]["candidate_source"] == "inferred"
 
 
+def test_overwritten_win64_push_value_does_not_become_an_undefined_local() -> None:
+    """Stack reservation is not a source initializer for the homed parameter."""
+    import glaurung as g
+
+    path = str(DLL)
+    cache = str(FIXTURE_DIR)
+    va = next(
+        address
+        for address, name in g.symbols.pdb_symbol_map(path, cache).items()
+        if name == "record_value"
+    )
+    g.ir.take_render_verification()
+    body = g.ir.decompile_at(path, va, style="decbench", pdb_cache=cache)
+    report = g.ir.take_render_verification()
+
+    assert "local_8" not in body
+    assert not [
+        verdict
+        for verdict in report["unverified"]
+        if verdict["function"] == "record_value"
+    ], report
+
+
 def test_without_a_pdb_cache_machine_recovery_remains_available() -> None:
     """Optional PDB evidence must not become a requirement to decompile PE."""
     import glaurung as g

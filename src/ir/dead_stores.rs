@@ -32,6 +32,122 @@ use crate::ir::types::{BinOp, VReg};
 pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     let ret_regs = return_reg_aliases(cc);
     eliminate_body(&mut f.body, &ret_regs);
+    prune_adjacent_overwritten_promoted_stores(f);
+}
+
+/// Remove a pure promoted-stack write immediately shadowed by an equal-width write.
+///
+/// `push rax; mov [rsp], rcx` is a common clang-cl spelling for reserving one
+/// stack word and then homing the first Win64 parameter. Stack promotion turns
+/// it into `store local_8 = ret; store local_8 = arg0`. The first value is not
+/// source state and no instruction observes it. Keep this proof deliberately
+/// local: comments and nops may separate the writes, but control flow, a size
+/// change, a self-dependent overwrite, or an observable first expression all
+/// decline the deletion.
+fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
+    fn discardable_source(expression: &Expr) -> bool {
+        match expression {
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::StackAddr { .. }
+            | Expr::Named { .. }
+            | Expr::StringLit { .. } => true,
+            Expr::Un { src, .. }
+            | Expr::Cast { expr: src, .. }
+            | Expr::NumericConvert { expr: src, .. } => discardable_source(src),
+            Expr::Lea { .. } | Expr::PdbFieldAddr { .. } => true,
+            Expr::Bin { .. }
+            | Expr::Cmp { .. }
+            | Expr::Select { .. }
+            | Expr::WideArithmetic { .. }
+            | Expr::Deref { .. }
+            | Expr::Call { .. }
+            | Expr::FunctionTableEntry { .. }
+            | Expr::Unknown(_) => false,
+        }
+    }
+
+    fn promoted_store(statement: &Stmt) -> Option<(&VReg, &Expr, u8)> {
+        let Stmt::Store {
+            addr: Expr::Reg(slot),
+            src,
+            size,
+        } = statement
+        else {
+            return None;
+        };
+        matches!(slot, VReg::Phys(name)
+            if name.starts_with("local_") || name.starts_with("stack_"))
+        .then_some((slot, src, *size))
+    }
+
+    fn prune(body: &mut Vec<Stmt>) {
+        for statement in body.iter_mut() {
+            match statement {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    prune(then_body);
+                    if let Some(else_body) = else_body {
+                        prune(else_body);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    prune(body);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case) in cases {
+                        prune(case);
+                    }
+                    if let Some(default) = default {
+                        prune(default);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    prune(try_body);
+                    for catch in catches {
+                        prune(&mut catch.body);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        loop {
+            let mut removed = None;
+            for first in 0..body.len().saturating_sub(1) {
+                let Some((slot, source, width)) = promoted_store(&body[first]) else {
+                    continue;
+                };
+                if !discardable_source(source) {
+                    continue;
+                }
+                let Some(second) = (first + 1..body.len())
+                    .find(|index| !matches!(body[*index], Stmt::Comment(_) | Stmt::Nop))
+                else {
+                    continue;
+                };
+                let Some((next_slot, next_source, next_width)) = promoted_store(&body[second])
+                else {
+                    continue;
+                };
+                if slot == next_slot && width == next_width && !next_source.contains_reg(slot) {
+                    removed = Some(first);
+                    break;
+                }
+            }
+            let Some(index) = removed else {
+                break;
+            };
+            body.remove(index);
+        }
+    }
+
+    prune(&mut function.body);
 }
 
 /// Discard the destination identity of an effectful call when the function
@@ -2009,5 +2125,106 @@ mod tests {
         prune_unobserved_promoted_object_stores(&mut f);
 
         assert_eq!(f.body.len(), 2);
+    }
+
+    #[test]
+    fn adjacent_promoted_store_overwrite_drops_the_unobserved_push_value() {
+        let slot = VReg::phys("local_8");
+        let mut function = Function {
+            name: "record_value".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(VReg::phys("ret")),
+                    size: 8,
+                },
+                Stmt::Comment("instruction boundary".into()),
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(slot),
+                },
+            ],
+        };
+
+        prune_adjacent_overwritten_promoted_stores(&mut function);
+
+        assert_eq!(function.body.len(), 3);
+        assert!(matches!(
+            &function.body[1],
+            Stmt::Store {
+                src: Expr::Reg(source),
+                ..
+            } if source == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn promoted_store_overwrite_keeps_observable_or_self_dependent_values() {
+        let slot = VReg::phys("local_8");
+        let effect = Expr::Call {
+            target: Box::new(Expr::Named {
+                va: 0x2000,
+                name: "effect".into(),
+            }),
+            args: Vec::new(),
+            result_width: Some(8),
+            call_spec: None,
+        };
+        for (first, second) in [
+            (effect, Expr::Reg(VReg::phys("arg0"))),
+            (Expr::Const(0), Expr::Reg(slot.clone())),
+        ] {
+            let mut function = Function {
+                name: "keep".into(),
+                entry_va: 0,
+                body: vec![
+                    Stmt::Store {
+                        addr: Expr::Reg(slot.clone()),
+                        src: first,
+                        size: 8,
+                    },
+                    Stmt::Store {
+                        addr: Expr::Reg(slot.clone()),
+                        src: second,
+                        size: 8,
+                    },
+                ],
+            };
+
+            prune_adjacent_overwritten_promoted_stores(&mut function);
+
+            assert_eq!(function.body.len(), 2);
+        }
+    }
+
+    #[test]
+    fn promoted_store_overwrite_keeps_mismatched_widths() {
+        let slot = VReg::phys("local_8");
+        let mut function = Function {
+            name: "keep_partial_write".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(slot),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 4,
+                },
+            ],
+        };
+
+        prune_adjacent_overwritten_promoted_stores(&mut function);
+
+        assert_eq!(function.body.len(), 2);
     }
 }

@@ -62,9 +62,9 @@ int record_value(Record *arg0)
 ```
 
 No committed fixture baseline was changed. This is narrow WP8 evidence, not a
-green release-profile claim. The same function still reports one
-definition-before-use violation in its body; resolving that independent
-correctness defect remains future work.
+green release-profile claim. The independent definition-before-use violation
+that remained in this function was subsequently closed; see
+`wp8-win64-home-dead-store.md`.
 
 The fail-closed def-use census was also run. Four of six tests passed; the new-
 violation and improvement ratchets failed on broad current-tip drift across the
