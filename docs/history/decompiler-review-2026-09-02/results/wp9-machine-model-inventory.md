@@ -21,7 +21,7 @@ must extend that boundary rather than introduce a competing `MachineModel` in
 | Stack/frame recovery | `src/ir/stack_locals.rs`, `src/ir/*_prologue.rs`, `src/python_bindings/ir/pipeline.rs` | x86, ARM32, AArch64 families | Frame bases, word sizes, saved registers, and cleanup rules are repeated |
 | Flag semantics | `src/ir/lift_x86/flags.rs`, `src/ir/lift_arm32/flags.rs`, `src/ir/lift_arm64/flags.rs` | per lifter | Correctly target-specific implementations, but no shared capability query |
 | Instruction semantics | `src/ir/lift_x86.rs`, `src/ir/lift_arm32.rs`, `src/ir/lift_arm64.rs` and submodules | x86/x86-64, ARM32, AArch64 | No standing per-target decoded-versus-lifted capability contract |
-| Unknown/effect coverage | `src/ir/effect_census.rs`, `src/ir/effect_census_tests.rs`, two reviewed exemption manifests, lane baseline, x86 `SILENT_REGISTER_WRITERS` test | real-binary denominators for i386, x86-64, ARM32 A32/Thumb, and AArch64 | census is not yet wired into a named required repository gate; reviewed opaque semantics and 15 silent-writer mnemonic classes remain |
+| Unknown/effect coverage | `src/ir/effect_census.rs`, `src/ir/effect_census_tests.rs`, two reviewed exemption manifests, lane baseline, x86 `SILENT_REGISTER_WRITERS` test | real-binary denominators for i386, x86-64, ARM32 A32/Thumb, and AArch64 | census is not yet wired into a named required repository gate; reviewed opaque semantics and 13 silent-writer mnemonic classes remain |
 
 `src/target/conformance_tests.rs` independently walks the complete
 `Arch x Format x Endianness x arm_hard_float` product. It proves target
@@ -245,6 +245,19 @@ to the isolated `d14748cf` WP9 overlay, where all 203 x86 tests at that pinned
 base passed. Its complete `cargo test --features python-ext` gate passed 3,080
 library tests with 0 failures and 3 ignored, followed by every integration and
 doc-test target.
+
+The same exact-lane approach now covers the remaining representable measured
+YMM operations `vpand` and `vpbroadcastb`. Three-operand `vpand` preserves both
+sources through eight independent dword ANDs, including an eight-load memory
+form. `vpbroadcastb` reads or extracts exactly one byte, widens and replicates
+it into one dword, then defines all eight destination lanes. Four encoding-
+level RED tests cover register and memory forms. The corpus ratchets removed
+both mnemonic classes and all four observed forms, leaving only `vpcmpeqb` and
+`vpmovmskb` in the watched YMM form map and 13 silent-writer classes overall.
+The live shared tree passed all 208 x86 lifter tests. The isolated `d14748cf`
+overlay passed all 207 tests at its pinned base and the complete Rust gate:
+3,084 library tests passed, 3 were ignored, and every integration and doc-test
+target passed.
 
 The decoded-to-LLIR addition was then copied byte-for-byte into the isolated
 `d14748cf` overlay. `cargo test --features python-ext` passed 3,069 library

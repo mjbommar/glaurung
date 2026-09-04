@@ -105,15 +105,24 @@ R7's Go lanes are wired and **opt-in** behind `GLAURUNG_FIXTURE_GO`
 still open. R8 landed in five parts — see [R8 status](#r8-status) — and the
 never-executed-test pool reached zero (`3fb3184c`).
 
-The 2026-09-02 review implementation lane has additionally completed its
-minimal gate-integrity package, rejected MIR as the production definedness
-consumer after a bounded trial, put the replacement structurer and typed switch
-recovery into shadow/partial production use, and landed its first width-proved
-render idioms. A current uncommitted ABI/call-value increment repairs CFG-aware
-parameter evidence, exceptional and aggregate call results, non-C source to
-machine-ABI boundaries, and float-valued call rendering. It remains
-uncommitted evidence until ownership is reconciled and a revision is pinned;
-its bounded fixture results must not be read as cross-architecture or full-plan
+The 2026-09-02 review implementation lane has completed WP0's gate-integrity
+package and WP7A's width-proved render idioms. Its bounded WP1 trial rejected
+MIR as the production definedness consumer; the replacement final-AST verifier
+is landed, while responsibility-by-responsibility MIR cleanup remains in WP10.
+WP4's replacement structurer and WP5's typed-switch recovery now have verified
+shadow/opt-in vertical slices over real conditionals, reducible and irreducible
+loops, multi-exit loops, and switches as large as 256 cases. They are not the
+production default and do not yet have corpus-wide promotion evidence.
+
+The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
+aware parameter evidence, exceptional and aggregate call results, non-C source
+to machine-ABI boundaries, and float-valued call rendering all have bounded
+fixture evidence in the review plan. WP8 has authoritative DWARF/PDB/analyst
+declaration slices, and WP9 has target-owned ARM32 register views plus standing
+decoded/effect capability censuses and several silent-writer repairs. WP2,
+WP3, WP6, and WP7B remain open architectural work. No current-tip release gate
+is claimed green; isolated overlay results in the review record retain their
+named scope and must not be read as cross-architecture or full-plan
 completion.
 
 ## Pinned evidence

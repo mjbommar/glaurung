@@ -10,6 +10,16 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
+Current-state snapshot: reconciled 2026-09-03 against `941aa3ae`. WP0 and
+WP7A are complete; the bounded WP1 production trial is complete and rejected,
+with selective substrate cleanup still open under WP10. WP4, WP5, WP8, WP9,
+and WP10 have production or shadow vertical slices but have not met their full
+exit criteria. WP2, WP3, WP6, and WP7B remain the principal unstarted or
+dependency-blocked packages. No current-tip `release` run is recorded as
+green: isolated increment gates below prove only their named overlays and
+denominators. The latest shared-tree full gates have exposed known and newly
+visible decompiler failures, so M3 through M6 remain open.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -1042,11 +1052,17 @@ into a standing test.
   memory forms now transport all 256 bits as eight exact dword lanes, removing
   92 measured unmodelled forms and the `vmovdqu` silent-writer class. This does
   not claim general AVX semantics or first-class 256-bit LLIR storage. Fifteen
-  reviewed mnemonic classes remain; exact encoding/count ratchets prove the
-  other watched SIMD occurrences are YMM operations that still decline. The
+  reviewed mnemonic classes remained at that point. Exact eight-lane `vpand`
+  now covers both register and memory sources, and exact `vpbroadcastb` reads a
+  single byte and replicates it across all 32 destination bytes. Those remove
+  four more measured forms and two more silent-writer classes. Thirteen
+  reviewed mnemonic classes remain; the watched YMM form map is now only
+  `vpcmpeqb` and `vpmovmskb`. The
   isolated `d14748cf` WP9 overlay passed the complete Rust gate with 3,080
   library tests passing, 3 ignored, and every integration and doc-test target
-  green.
+  green after `vmovdqu`; after the `vpand`/`vpbroadcastb` increment it passed
+  again with 3,084 library tests passing, 3 ignored, and all integration and
+  doc-test targets green.
 - [x] Ensure `Op::Unknown` and generic intrinsic totals cannot silently grow.
   The per-target/mode/compiler/optimisation lane baseline requires zero
   `Op::Unknown` and caps the combined opaque plus modelled-intrinsic total for
@@ -1444,23 +1460,28 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Reconcile the current ABI/call-value increment with concurrent work, commit
-   only owned coherent hunks, and pin the resulting revision before broader
-   claims or measurements.
-2. Finish WP4 promotion evidence: execution differential, unexplained
+1. Finish WP4 promotion evidence: corpus-wide execution differential,
+   unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted
    runtime/output-size budgets.
-3. Complete WP5's shared typed-case transport so discovery, accounting, both
+2. Complete WP5's shared typed-case transport so discovery, accounting, both
    structurers, and rendering consume one case/default/provenance object; add
-   malformed and truncated-table tests.
-4. Begin WP2/WP3 as an independent architecture lane, using conservative
+   the remaining fixture/compiler/architecture execution cells and classify
+   every residual decline. Malformed, truncated, overlapping, and wrapping
+   table safety tests are already present and must remain green.
+3. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
-5. Start WP6 with the smallest stripped C signedness/width constraint slice;
+4. Start WP6 with the smallest stripped C signedness/width constraint slice;
    keep Rust totals separate and do not wait for the full solver design.
-6. Define WP8 authority once in the session fact layer and expose conflicts
+5. Finish WP8 by defining authority once in the session fact layer and expose conflicts
    through structured results plus an explicitly annotated analyst mode, while
    keeping scored text free of diagnostics.
-7. Implement the first WP9 slice from
-   `results/wp9-machine-model-inventory.md`: extend `TargetSpec` with ARM32 GP
-   and VFP register views, use VFP pairing as the portability stress case, and
-   preserve conservative fallback while the first consumer migrates.
+6. Continue WP9 from the landed ARM32 register-view and capability-census
+   slices: migrate one remaining shared consumer or fact class at a time,
+   reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
+   into a named required architecture profile. Do not canonicalize partial
+   VFP/NEON writes until LLIR can represent the untouched lanes.
+7. Under WP10, triage the current red full-gate failures by exact base/overlay
+   comparison, promote only independently justified health findings to release
+   failures, and remove rejected MIR or compensation code one owned
+   responsibility per commit.
