@@ -34,6 +34,7 @@ directory is not scheduled by being here.
 | [mips-discovery-gap-2026-09-02.md](mips-discovery-gap-2026-09-02.md) | a diagnosis of why MIPS32/MIPS64 function discovery truncates on Cisco Talos Dataset-1 while x86-64 does not, with the reproduction command and the candidate repairs |
 | [static-c-analysis/](static-c-analysis/README.md) | the static/source half of Glaurung, starting with a pure-Rust C front end: what Joern does today (characterized against 800 published CFGs), the lifted requirements, a 45-component inventory, and a seven-stage roadmap whose first scored milestone reproduces 85,645 stored GED values without running Joern once. Stages S0-S2 landed; the parity layer and the L3 gate remain |
 | [source-front-ends/](source-front-ends/README.md) | the language-neutral substrate every source front end sits on — source maps, interning, a struct-of-arrays token buffer and AST, an event-stream parser interface, the never-fails error model, and a language-blind CFG builder — with the per-language cost analysis that argues it is one and a half parsers rather than four, and a four-axis benchmark harness. Landed as `src/syntax/`, with the C front end as its first consumer |
+| [metrics-research/](metrics-research/README.md) | what DecBench's metrics actually measure, what they miss, and what should replace them — audited against the published corpus rather than argued from first principles |
 
 The 2026-09-02 decompiler design review is dated evidence rather than a
 proposal, so it lives in `history/`:
