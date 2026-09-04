@@ -103,6 +103,37 @@ This closes the artificial-fallthrough family exposed by the nested-join
 repair. The 17 remaining regression rows are different shapes and remain a
 promotion blocker.
 
+## Switch suffix-entry rendering follow-up
+
+Commit `9ab097f1` handles a distinct switch shape without changing CFG
+ownership. When a case arm consists only of a `goto` into a labelled suffix
+already owned by another arm, the C renderers place that case label at the
+existing suffix label and omit only the redundant case-entry `goto`. The
+ordinary machine label remains, because branches from within other arms may
+still target it. This is the direct C spelling of both entry mechanisms; it
+does not duplicate effects or infer fallthrough from case order.
+
+The complete 715-row exploratory comparison changed five rows and no shadow
+candidate became worse relative to the preceding report:
+
+- aggregate shadow gotos fell from 1,434 to **1,006** (-428) and rendered bytes
+  fell from 1,429,580 to **1,416,752** (-12,828);
+- the census moved to **222 improved / 30 unchanged / 16 regressed / 447
+  declined / 0 production-missing**;
+- clang-O2 `wide154_dense_effects` fell from 220 to 87 gotos in both debug and
+  stripped objects, while retaining all 256 cases and passing host C syntax;
+- gcc-O0 `wide154_dense_effects` fell from 219 to 63 gotos, changing that row
+  from regressed to improved;
+- both clang-O0 and gcc-O0 `fallthrough_no_default` rows fell from three gotos
+  to zero and changed from unchanged to improved.
+
+The focused synthetic test also retains an ordinary non-case `goto` and its
+label when they share the same suffix target. Both wide real-fixture render
+tests pass, including deterministic output and host `cc -fsyntax-only`.
+The full report took 145.76 seconds with four workers and peaked at 910,120 KiB
+RSS. Its JSON is local at
+`$HOME/.cache/glaurung/tmp/structure-v2-suffix-full.json`.
+
 ## Provenance limitation
 
 The report named committed revision
@@ -126,6 +157,12 @@ C-source improvement that became `master` while the run was active. The WP4
 change itself was still uncommitted and the native extension also contained
 uncommitted parser/metrics work, so this result has the same exploratory-only
 status. A clean build pinned at or after `a6a31eb1` remains required.
+
+The suffix-entry report similarly records `c3877d53` because the measured code
+was not committed until `9ab097f1`, and the native extension still shared
+uncommitted parser sources. Its exact deltas are useful regression evidence,
+but the required promotion run remains a clean native build pinned at or after
+`9ab097f1`.
 
 ## Validation
 

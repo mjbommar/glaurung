@@ -566,6 +566,18 @@ that preserves honest local gotos when required.
   analyst, build-configuration, ARM32, and control-flow tests. Focused v2 tests
   and the no-worse corpus goto comparison are green, but they do not replace
   that broad red result.
+  Switch suffix entries now have a faithful C spelling as stacked case and
+  machine labels: a case whose entire body jumps into another arm's owned
+  suffix no longer needs its entry `goto`, while ordinary branches to that
+  same suffix retain the machine label. The 715-row exploratory census moved
+  to 222 improved / 30 unchanged / 16 regressed / 447 declined, with aggregate
+  shadow gotos falling from 1,434 to 1,006. The worst clang-O2 wide switch fell
+  from 220 to 87 gotos, gcc-O0 fell from 219 to 63, and two defaultless
+  fallthrough fixtures reached zero; all changed real outputs remain
+  parseable. The run still used a shared dirty native build, so it is
+  engineering evidence rather than promotion evidence. The remaining 16
+  regressions, including the still-regressed clang-O2 and gcc-O2 wide-switch
+  rows, remain explicit blockers.
 
 ### RED fixtures
 
@@ -1670,8 +1682,8 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Finish WP4 promotion evidence: corpus-wide execution differential,
-   unexplained
+1. Remove or faithfully structure the remaining 16 WP4 goto regressions, then
+   finish promotion evidence: corpus-wide execution differential, unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted
    runtime/output-size budgets.
 2. Complete WP5's shared typed-case transport so discovery, accounting, both
