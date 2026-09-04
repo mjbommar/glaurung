@@ -1996,6 +1996,62 @@ mod chunk_tests {
         assert_eq!(merged, 0);
         assert_eq!(funcs.len(), 1);
     }
+
+    /// `elf_startup_main_candidate`'s two branches must not disagree.
+    ///
+    /// Every startup test above calls `x86_64_startup_main_candidate` and its
+    /// siblings directly, with a hand-built GOT and an explicit `is_static`, so
+    /// not one of them crosses `elf_startup_main_candidate` itself. Its
+    /// `match image` therefore arrived untested, and the risk is specific: the
+    /// image arm decides `is_static` by looking for `.interp` through
+    /// `ProgramImage::sections()`, which keeps only sections that carry a file
+    /// range. Were `.interp` dropped by that filter, every dynamically linked
+    /// binary would be read as static and the CRT walk would take the wrong arm
+    /// while all 19 tests above stayed green.
+    #[test]
+    fn startup_main_recovery_agrees_between_an_indexed_image_and_a_fresh_parse() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
+        let data = std::fs::read(&path).expect("read the checked-in sample");
+        let image = crate::program::image::ProgramImage::from_bytes(data.clone())
+            .expect("index a real ELF");
+        let (regions, arch, _, _) = parse_exec_regions(&data);
+
+        // The three values the image arm substitutes for a fresh parse, each
+        // checked against the parse it replaced. Comparing only the recovered
+        // address is too weak to see these: on this sample the CRT walk reaches
+        // the same answer either way, so a wrong `is_static` would pass unseen.
+        let object = crate::decompile::profile::parse_object(&data).expect("parse a real ELF");
+        assert_eq!(
+            image.entry_va(),
+            object.entry(),
+            "the indexed entry VA must be the one the container declares"
+        );
+        assert_eq!(
+            matches!(image.endianness(), Endianness::Little),
+            object.is_little_endian(),
+            "the indexed endianness must match the container's"
+        );
+        assert_eq!(
+            !image.sections().any(|section| section.name() == ".interp"),
+            object.section_by_name(".interp").is_none(),
+            "`.interp` must survive ProgramImage's file-range filter, or the \
+             image arm silently misreads every dynamic binary as static"
+        );
+
+        let from_image = elf_startup_main_candidate(Some(&image), &data, arch, &regions);
+        let from_parse = elf_startup_main_candidate(None, &data, arch, &regions);
+        assert_eq!(
+            from_image, from_parse,
+            "reading the session's indexed image instead of re-parsing the \
+             container must not change which address the CRT walk proves"
+        );
+        assert!(
+            from_image.is_some(),
+            "the CRT walk must still recover main on a stock gcc -O2 ELF; a \
+             None on both arms would make the agreement above vacuous"
+        );
+    }
 }
 
 /// Give every discovered function the name the binary itself declares.
