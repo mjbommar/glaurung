@@ -244,6 +244,22 @@ def test_decompile_no_cache_dir_means_no_caching(
     assert len(calls2) == 1
 
 
+def test_decompile_conflict_annotations_bypass_text_cache(
+    fake_binary: Path, tmp_path: Path
+) -> None:
+    """Cached C has no live conflict ledger, so annotated mode must re-render."""
+    cache_dir = tmp_path / "gcache"
+    args = _decompile_args(fake_binary, cache_dir, style="decbench")
+    args.annotate_conflicts = True
+
+    _, _, calls1 = _run_decompile(args)
+    _, _, calls2 = _run_decompile(args)
+
+    assert len(calls1) == 1
+    assert len(calls2) == 1
+    assert not (cache_dir / "decomp").exists()
+
+
 def test_decompile_env_var_enables_cache(
     fake_binary: Path, tmp_path: Path, monkeypatch
 ) -> None:

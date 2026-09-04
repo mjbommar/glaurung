@@ -9,7 +9,9 @@ of that declaration, not cosmetic post-processing.
 from __future__ import annotations
 
 import importlib
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -142,3 +144,115 @@ def test_legacy_three_part_analyst_prototype_remains_supported() -> None:
     assert _signature(body) == (
         "unsigned long tail_dispatch(short arg0, short arg1, short arg2, ...)"
     )
+
+
+def test_cli_annotated_mode_shows_conflict_beside_signature_only_on_request() -> None:
+    """Analysts may inspect provenance without contaminating scored output."""
+    binary = FIXTURES / "build" / "08_indirect_dispatch-gcc-O2.so"
+    va = D.exported_functions(str(binary))["tail_dispatch"]
+    base = [
+        sys.executable,
+        "-m",
+        "glaurung.cli",
+        "decompile",
+        str(binary),
+        "--func",
+        hex(va),
+        "--style",
+        "decbench",
+    ]
+
+    scored = subprocess.run(base, capture_output=True, text=True, check=False)
+    assert scored.returncode == 0, scored.stderr
+    assert "declaration conflict" not in scored.stdout
+
+    annotated = subprocess.run(
+        [*base, "--annotate-conflicts"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert annotated.returncode == 0, annotated.stderr
+    assert annotated.stdout.count("// glaurung: declaration conflict") == 1
+    banner = annotated.stdout.index("// glaurung: tail_dispatch")
+    conflict = annotated.stdout.index("// glaurung: declaration conflict")
+    signature = annotated.stdout.index("int tail_dispatch(int tag, int a, int b)")
+    assert banner < conflict < signature
+    assert "dwarf `int (int, int, int)`" in annotated.stdout
+    assert "inferred `int (unsigned int, unsigned int, int)`" in annotated.stdout
+    assert "differs: parameter_types" in annotated.stdout
+
+    batch = subprocess.run(
+        [
+            *base[:5],
+            "--vas",
+            hex(va),
+            "--style",
+            "decbench",
+            "--annotate-conflicts",
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert batch.returncode == 0, batch.stderr
+    [record] = json.loads(batch.stdout)
+    assert "// glaurung: declaration conflict" in record["pseudocode"]
+
+    ranged = subprocess.run(
+        [
+            *base,
+            "--range-start",
+            hex(va),
+            "--range-end",
+            hex(va + 0x26),
+            "--annotate-conflicts",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ranged.returncode == 0, ranged.stderr
+    assert "// glaurung: declaration conflict" in ranged.stdout
+
+    whole_image = subprocess.run(
+        [
+            *base[:5],
+            "--all",
+            "--limit",
+            "100",
+            "--style",
+            "decbench",
+            "--annotate-conflicts",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert whole_image.returncode == 0, whole_image.stderr
+    assert "// glaurung: tail_dispatch" in whole_image.stdout
+    assert "// glaurung: declaration conflict" in whole_image.stdout
+
+
+def test_cli_conflict_annotations_require_decbench_style() -> None:
+    binary = FIXTURES / "build" / "08_indirect_dispatch-gcc-O2.so"
+    va = D.exported_functions(str(binary))["tail_dispatch"]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "glaurung.cli",
+            "decompile",
+            str(binary),
+            "--func",
+            hex(va),
+            "--annotate-conflicts",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "requires --style decbench" in result.stdout

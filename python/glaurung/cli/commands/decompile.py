@@ -56,6 +56,7 @@ def _decompile_at_cached(
     analyst_prototype: Optional[
         tuple[str, list[str], bool] | tuple[str, list[str], bool, list[str]]
     ] = None,
+    annotate_conflicts: bool = False,
 ) -> str:
     """Run ``g.ir.decompile_at`` with optional persistent caching.
 
@@ -64,7 +65,11 @@ def _decompile_at_cached(
     and falls through to the live decompile, so behaviour is identical to a
     direct ``decompile_at`` call when caching is disabled or unavailable.
     """
-    cache_dir = _cache.resolve_cache_dir(cache_dir_arg)
+    # Conflict metadata is produced by a live render and intentionally is not
+    # part of the scored-text cache artifact. An analyst who explicitly asks
+    # for annotations must therefore run the pipeline rather than receive text
+    # whose corresponding provenance was already drained.
+    cache_dir = None if annotate_conflicts else _cache.resolve_cache_dir(cache_dir_arg)
     paths = None
     if cache_dir is not None:
         try:
@@ -235,6 +240,13 @@ class DecompileCommand(BaseCommand):
             "for external tooling that parses the output as C.",
         )
         parser.add_argument(
+            "--annotate-conflicts",
+            action="store_true",
+            help="With --style decbench, add deterministic declaration/recovery "
+            "conflict comments beside each affected signature. Off by default "
+            "so scored pseudocode remains unchanged.",
+        )
+        parser.add_argument(
             "--pdb-cache",
             default="",
             help="Optional Microsoft-style PDB cache directory used to resolve "
@@ -281,6 +293,12 @@ class DecompileCommand(BaseCommand):
             # Native style token: "" (plain), "c" (register-view), or "decbench"
             # (parseable C). The public --style values map straight through.
             style = "" if args.style == "plain" else args.style
+            annotate_conflicts = bool(getattr(args, "annotate_conflicts", False))
+            if annotate_conflicts and style != "decbench":
+                formatter.output_plain(
+                    "Error: --annotate-conflicts requires --style decbench"
+                )
+                return 2
 
             # Batch-by-VA mode: decompile exactly the requested entry VAs in a
             # single analysis pass. Mirrors the JSON shape of --all.
@@ -302,13 +320,16 @@ class DecompileCommand(BaseCommand):
                     pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                     max_functions=_requested_function_budget(vas),
                 )
+                report = _take_render_verification() if annotate_conflicts else None
+                if report is not None:
+                    results = [_annotate_record(rec, report) for rec in results]
                 if as_json:
                     payload = [_function_record(rec) for rec in results]
                     print(json.dumps(payload, indent=2))
                 else:
                     for rec in results:
                         formatter.output_plain(rec[2])
-                _report_unverified_functions()
+                _report_unverified_functions(report)
                 return _report_unresolved_vas(vas, results)
 
             if args.all:
@@ -319,13 +340,16 @@ class DecompileCommand(BaseCommand):
                     pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                     style=style,
                 )
+                report = _take_render_verification() if annotate_conflicts else None
+                if report is not None:
+                    results = [_annotate_record(rec, report) for rec in results]
                 if as_json:
                     payload = [_function_record(rec) for rec in results]
                     print(json.dumps(payload, indent=2))
                 else:
                     for rec in results:
                         formatter.output_plain(rec[2])
-                _report_unverified_functions()
+                _report_unverified_functions(report)
                 return 0
 
             # Single-function mode.
@@ -428,6 +452,7 @@ class DecompileCommand(BaseCommand):
                                 or (args.func if isinstance(args.func, str) else "")
                             ),
                         ),
+                        annotate_conflicts=annotate_conflicts,
                     )
             except ValueError as e:
                 formatter.output_plain(f"Error: {e}")
@@ -468,6 +493,10 @@ class DecompileCommand(BaseCommand):
                     else:
                         text = header + text
 
+            report = _take_render_verification() if annotate_conflicts else None
+            if report is not None:
+                text = _annotate_conflicts(text, int(func_va), report)
+
             if as_json:
                 # Best-effort name: only resolvable when --func was a name.
                 name = args.func if isinstance(args.func, str) else ""
@@ -490,7 +519,7 @@ class DecompileCommand(BaseCommand):
                 )
             else:
                 formatter.output_plain(text)
-            _report_unverified_functions()
+            _report_unverified_functions(report)
             return 0
         except Exception as e:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: {e}")
@@ -558,7 +587,87 @@ def _function_size(path: str, func_va: int) -> Optional[int]:
     return None
 
 
-def _report_unverified_functions() -> None:
+def _take_render_verification() -> dict:
+    """Drain native render metadata, tolerating an extension from before it existed."""
+    try:
+        return dict(g.ir.take_render_verification())
+    except AttributeError:  # pragma: no cover - extension predates the binding
+        return {}
+
+
+def _comment_text(value: object) -> str:
+    """Make one metadata value safe and stable inside a C line comment."""
+    return " ".join(str(value).replace("*/", "* /").split())
+
+
+def _prototype_text(shape: dict) -> str:
+    """Render a type-only prototype for an analyst conflict annotation."""
+    parameters = [_comment_text(item) for item in shape.get("parameter_types", [])]
+    if shape.get("variadic"):
+        parameters.append("...")
+    return_type = _comment_text(shape.get("return_type", "unknown"))
+    return f"{return_type} ({', '.join(parameters) if parameters else 'void'})"
+
+
+def _annotate_conflicts(text: str, entry_va: int, report: dict) -> str:
+    """Insert deterministic declaration conflicts after a function's banner."""
+    conflicts = []
+    for conflict in report.get("prototype_conflicts", []):
+        try:
+            conflict_va = int(str(conflict.get("entry_va", "")), 0)
+        except ValueError:
+            continue
+        if conflict_va == entry_va:
+            conflicts.append(conflict)
+    conflicts.sort(
+        key=lambda item: (
+            _comment_text(item.get("candidate_source", "")),
+            _prototype_text(item.get("candidate", {})),
+        )
+    )
+    if not conflicts:
+        return text
+
+    lines = []
+    for conflict in conflicts:
+        authoritative_source = _comment_text(
+            conflict.get("authoritative_source", "unknown")
+        )
+        candidate_source = _comment_text(conflict.get("candidate_source", "unknown"))
+        disagreements = ", ".join(
+            _comment_text(item) for item in conflict.get("disagreements", [])
+        )
+        lines.append(
+            "// glaurung: declaration conflict: "
+            f"{authoritative_source} `{_prototype_text(conflict.get('authoritative', {}))}` "
+            f"vs {candidate_source} `{_prototype_text(conflict.get('candidate', {}))}`; "
+            f"differs: {disagreements or 'unspecified'}\n"
+        )
+    annotation = "".join(lines)
+    rendered_lines = text.splitlines(keepends=True)
+    function_names = {
+        _comment_text(conflict.get("function", "")) for conflict in conflicts
+    }
+    for index, line in enumerate(rendered_lines):
+        if line.rstrip().endswith("{") and any(
+            f"{function}(" in line for function in function_names if function
+        ):
+            rendered_lines.insert(index, annotation)
+            return "".join(rendered_lines)
+    if rendered_lines and rendered_lines[0].startswith("// glaurung:"):
+        rendered_lines.insert(1, annotation)
+        return "".join(rendered_lines)
+    return annotation + text
+
+
+def _annotate_record(record: tuple, report: dict) -> tuple:
+    """Return a decompile tuple with only its pseudocode field annotated."""
+    fields = list(record)
+    fields[2] = _annotate_conflicts(str(fields[2]), int(fields[1]), report)
+    return tuple(fields)
+
+
+def _report_unverified_functions(report: Optional[dict] = None) -> None:
     """Name, on stderr, every function whose recovered C failed def-before-use.
 
     The decompiler verifies the exact AST it is about to print
@@ -578,10 +687,8 @@ def _report_unverified_functions() -> None:
     """
     import sys
 
-    try:
-        report: dict = g.ir.take_render_verification()
-    except AttributeError:  # pragma: no cover - extension predates the binding
-        return
+    if report is None:
+        report = _take_render_verification()
     unverified: int = int(report.get("unverified_functions", 0))
     if not unverified:
         return
