@@ -124,6 +124,23 @@ ratchet on 21 current-tip functions, the same broad drift class already
 recorded by the preceding WP8 increment. The new libc fixture is not part of
 that census. No def-use baseline was edited.
 
+The required post-commit whole Python command was started:
+
+```text
+uv run pytest python/tests/ -q --tb=short
+interrupted at 19 percent after the active decompiler child disappeared
+```
+
+The parent stopped in
+`test_decompiler_determinism.py::test_two_renders_in_one_process_are_identical`
+inside `diff_decompile.decompiled_c -> subprocess.run -> communicate`. Process
+inspection showed only pytest's sleeping queue-management threads and the
+multiprocessing forkserver/resource tracker; no worker remained capable of
+producing a result. The partial run was already broadly red on current-master
+expectation and semantic failures, including analyst-local initializers,
+obsolete pointer spacing, build-configuration improvement ratchets, ARM32
+round trips, control-flow cases, and both def-use ratchets. It is not a
+completed or green whole-suite result.
+
 GED, type-match, byte-match, and Union metrics were not evaluated for this
-bounded fixture repair, so no score movement is claimed. The whole Python suite
-is a separate post-commit gate and is reported separately when complete.
+bounded fixture repair, so no score movement is claimed.
