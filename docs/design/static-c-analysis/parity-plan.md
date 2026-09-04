@@ -302,7 +302,7 @@ cross-check of `syntax::ged` on the full corpus, not just the 11,979 pairs
 `tools/ged_cross_check.py` covers.
 
 `uncovered 0` is the structural claim: the front end produced a CFG for every
-stored cell, and 4,333 functions Joern produced none for. What is left is shape
+stored cell. What is left is shape
 agreement on 23,229 cells, of which 1,382 are within one.
 
 
@@ -327,6 +327,50 @@ Two known weaknesses of this gate, both to be stated whenever it is quoted:
 
 **Ratchet.** Commit the pass count as a baseline under `tests/` and fail the
 gate on any decrease, in the style of the existing fixture baselines.
+
+### Coverage and cost, measured
+
+Two claims this stage rests on, measured rather than quoted.
+
+**Coverage.** Comparing, per binary, the function names Joern published against
+those our front end recovers from the stored decompiled C -- 785 binaries,
+90,092 distinct functions:
+
+```
+  both recover        88162   97.86%
+  only we recover      1880    2.09%
+  only Joern recovers    50    0.06%
+```
+
+Of the 1,880, only 64 are TU-resolution artifacts (the name is published
+elsewhere in the same project); **1,816 appear in no published CFG anywhere in
+their project** -- real functions, including bash's `_rl_timeout_handle`,
+`rl_get_char` and `ibuffer_space`.
+
+**Read that as coverage breadth, not as Joern failing.** The two sides parse
+different inputs: Joern the original `.i`, us the decompiled C. A function in
+one set and not the other can be inlining, static merging or decompiler naming.
+Joern produced a CFG for **all 91,548** published functions, none empty and
+2.77% degenerate, so it is not crashing on this corpus. The harness's `gained`
+counter is looser still -- it counts functions with no stored *cell*, which
+conflates "Joern produced nothing" with "the pair was never scored" -- and an
+earlier revision of this file quoted it as the former.
+
+**Cost.** Every function in every stored decompiled file, release build (cp312
+wheel), single process, single thread:
+
+```
+  files      1606
+  functions  188716
+  input      415.1 MB of C
+  wall       17.91 s   (11.2 ms/file, 95 us/function)
+  throughput 23.2 MB/s
+```
+
+Against a JVM per file, and a 56-cell gate at 6:28 wall / 5,078 user
+CPU-seconds on eight workers. That is the argument for the stage: not that
+Joern is wrong, but that 95 us/function runs inside an edit loop and a JVM
+launch per file does not.
 
 ### What the remaining gap would cost
 
