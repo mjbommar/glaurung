@@ -18,6 +18,7 @@ from . import debug as debug
 from . import disasm as disasm
 from . import engine as engine
 from . import ir as ir
+from . import metrics as metrics
 from . import similarity as similarity
 from . import strings as strings
 from . import symbols as symbols

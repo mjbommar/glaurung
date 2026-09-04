@@ -12,6 +12,7 @@ pub mod exec;
 pub mod flirt;
 pub mod identity;
 pub mod ir;
+pub mod metrics;
 pub mod similarity;
 pub mod source_cfg;
 pub mod strings;
@@ -45,6 +46,7 @@ pub fn register_python_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyRe
     debug::register_debug_bindings(py, m)?;
     unpack::register_unpack_bindings(py, m)?;
     winmd::register_winmd_bindings(py, m)?;
+    metrics::register_metrics_bindings(py, m)?;
     source_cfg::register_source_cfg_bindings(py, m)?;
     #[cfg(feature = "exec")]
     exec::register_exec_bindings(py, m)?;
