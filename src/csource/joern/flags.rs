@@ -17,7 +17,7 @@
 //! # What the published corpus says (measured, not assumed)
 //!
 //! Over the 91,548 functions of `~/.cache/glaurung/decbench-full/tree`
-//! (`O0`, `O2`, `O2-noinline`):
+//! (`O0`, `O2`, `O2-noinline`), re-measured 2026-09-04:
 //!
 //! | fact | count |
 //! |---|---|
@@ -26,57 +26,143 @@
 //! | functions with more than one exit-flagged block | 0 |
 //! | functions with no exit-flagged block | 44,832 |
 //! | `exit` set equals "blocks holding `FUNCTION_END`" | 91,548 / 91,548 |
-//! | surviving funcend blocks with out-degree 0 | 46,716 / 46,716 |
-//! | surviving funcend blocks with more than one statement | 46,716 / 46,716 |
+//! | exit-flagged blocks that have a successor | 0 |
 //! | functions with a duplicated edge in the published edge list | 0 |
 //! | functions with at least one self-loop | 3,914 |
+//! | exit-flagged functions whose exit block is the graph's only sink | 46,711 / 46,716 |
+//! | functions with **no** exit flag and yet exactly one sink | 4,773 |
+//! | functions with no exit flag and no sink at all | 3,729 |
 //!
-//! Three of those shape the code below.
+//! Four of those shape the code below.
 //!
 //! *Multi-entry is legal output.* 1,334 functions carry more than one entry
 //! flag, so [`derive_flags`] ORs across a block's members and never collapses
 //! the result to a single block. Normalizing them away is the natural bug.
+//! We do not yet *produce* multi-entry output --- S2 emits one
+//! [`NodeKind::Entry`] node per function --- and the corpus shows that costing
+//! us directly: of the 8 mismatched cells whose degree multiset already
+//! matches the published one, 4 differ only in that the published side carries
+//! two entry flags where we emit one, and 2 of those are stored `0.0`, which
+//! means Joern's CFG of the *decompiled* text carried two as well. Closing
+//! that is upstream of this file, not in it.
 //!
 //! *The exit flag and the funcend block are the same fact.* "No exit flag"
 //! (44,832) and "no block holding `FUNCTION_END`" (44,832) are the same
 //! functions, so F-12's guard is what decides 49.0% of all exit flags.
+//!
+//! *"Kept iff `in_degree(METHOD_RETURN) == 1`" is not the rule.* 4,773
+//! published functions have no exit flag and yet exactly one sink, so "the
+//! funcend was deleted" is not the same claim as "the funcend had several
+//! predecessors". `to_supergraph` contracts `src -> dst` only when
+//! `outdeg(src) == 1` **and** `indeg(dst) == 1`, so a `METHOD_RETURN` whose
+//! single predecessor forks still stays a singleton and is still deleted. The
+//! condition this file tests is the one that survives that: the funcend block
+//! is a singleton, which is a property of the partition it is handed.
 //!
 //! *Block edges are a set.* No published function has a duplicated edge, but
 //! 3,914 have a self-loop, so [`parity_blocks`] deduplicates and keeps
 //! self-loops. `pyjoern` parses DOT into an `nx.DiGraph`, which is exactly
 //! those two behaviours.
 //!
-//! # The position-sensitivity that is easy to get backwards
+//! # What the reference actually does when it merges two blocks
 //!
-//! Joern's `Block.is_entrypoint` is positional --- the block's *first*
-//! statement must be `Nop(FUNC_START)` --- while `cfgutils`'
-//! `GenericBlock.merge_blocks` ORs the already-computed flags of the blocks it
-//! merges. So the predicate is positional inside a pre-coalescing node and
-//! membership across a coalesced block, and neither rule alone reproduces the
-//! corpus: taking the block's first statement matches 91,192 / 91,548
-//! functions and taking membership over statements matches 89,978 / 91,548,
-//! with the truth strictly between them (`first ⊆ published ⊆ membership`
-//! holds for all 91,548).
+//! Not an OR of the two blocks' flags, which is what an earlier revision of
+//! this file asserted. `cfgutils.data.generic_block` is:
+//!
+//! ```text
+//! def copy(self):
+//!     return self.__class__(self.addr, statements=..., idx=self.idx)
+//!
+//! def merge_blocks(cls, block1, block2):
+//!     new_node = block1.copy()             # <-- drops block1's stored flags
+//!     new_node.statements += block2.statements
+//!     new_node.is_entrypoint |= block2.is_entrypoint
+//!     new_node.is_exitpoint |= block2.is_exitpoint
+//! ```
+//!
+//! `copy()` forwards neither flag, so `block1` contributes nothing it had
+//! previously been *told* --- only what `pyjoern`'s `Block` recomputes from the
+//! statement list, and both of those properties are positional:
+//!
+//! * `is_entrypoint` is `statements[0]` being `Nop(FUNC_START)`, and after the
+//!   concatenation `statements[0]` is still `block1`'s first statement. So
+//!   `entry(a then b) = (a's first statement is FUNC_START) OR entry(b)`.
+//! * `is_exitpoint` is `statements[-1]` being `Nop(FUNC_END)`, and after the
+//!   concatenation that is `block2`'s last statement. So
+//!   `exit(a then b) = exit(b)`: the last member decides, alone.
+//!
+//! The entry half is therefore **merge-order dependent** --- fold a chain from
+//! the right and every member is asked, fold it from the left and only the
+//! first and the last are --- and `to_supergraph` folds in `nx` edge order,
+//! which is an insertion order and not a property of the graph. That is
+//! exactly the gap the corpus measures: taking the block's first statement
+//! matches 91,192 / 91,548 functions and taking membership over statements
+//! matches 89,978 / 91,548, with the truth strictly between them
+//! (`first ⊆ published ⊆ membership` holds for all 91,548).
+//!
+//! [`derive_flags`] takes membership, the upper bound. For the graphs this
+//! layer is handed the three rules coincide, and `syntax::cfg`'s validator is
+//! what makes that true rather than luck: it rejects an `Entry` with a
+//! predecessor and an `Exit` with a successor, so
+//!
+//! * the function-start node can have nothing contracted into it and is
+//!   always its chain's **first** member, and
+//! * the function-end node can contract nothing after it and is always its
+//!   chain's **last** member.
 //!
 //! Two published functions pin the two halves, both in
 //! `O0/bash/source_cfgs/bash.json`:
 //!
 //! * `pop_var_context` --- published `entry [4, 5]`, but only block 5 has
 //!   `FUNCTION_START` as its first statement. Block 4 holds it in a later
-//!   position and is still flagged, because one of the pre-coalescing nodes it
-//!   absorbed had it first. Membership across a merged block is required.
+//!   position and is still flagged, because a fold reached it as `block2` and
+//!   asked it for its own flag. Membership across a merged block is required.
 //! * `strvec_sort` --- published `entry [0]`, yet blocks 1 and 2 also *contain*
 //!   a `FUNCTION_START` line. Those lines sit mid-label inside a single
 //!   pre-coalescing node, so the corresponding `Block` was never an entry point
-//!   and the merge had nothing to OR in. Membership over raw statements is not
+//!   and the fold had nothing to ask. Membership over raw statements is not
 //!   enough.
 //!
-//! At S2 granularity the distinction is vacuous in our favour: one
-//! [`crate::syntax::cfg::CfgNode`] is one statement, so "first statement of the
-//! pre-coalescing node" and "is the node" are the same test, and OR-across-
-//! members is then exactly right. It stops being vacuous the moment F-9's node
-//! layer starts packing several statements into one node; the check would then
-//! have to move inside the node, and this note is why.
+//! # Why the off-by-one mismatch bucket is not this file's
+//!
+//! At 79,790 / 85,645 cells exact (93.1636%,
+//! `tools/source_cfg_parity.py --provider glaurung`, 2026-09-04), the 1,527
+//! cells that miss by one split as
+//!
+//! | cause | cells |
+//! |---|---|
+//! | our CFG is role-isomorphic to the *published source* CFG, so we score 0 where the metric's `max(1.0, ...)` floor stores 1 | 42 |
+//! | the >200-node size lower bound, off by one node or one edge | 8 |
+//! | a genuine shape difference: 936 over-counting, 549 under-counting | 1,477 |
+//!
+//! The first class cannot be won without making the front end worse: on those
+//! 42 functions we recover a graph structurally identical to the original
+//! source, and Joern did not. None of the three is a flag defect, and
+//! replacing the rules in this file with each plausible alternative loses far
+//! more corpus-wide than it wins:
+//!
+//! | alternative | gained | lost | net | metric |
+//! |---|---|---|---|---|
+//! | never flag an exit (delete the funcend unconditionally) | 55 | 42,844 | -42,789 | bare |
+//! | flag every sink as an exit | 68 | 20,618 | -20,550 | bare |
+//! | delete the exit-flagged sink as well | 131 | 53,989 | -53,858 | bare |
+//! | never delete the funcend | 176 | 25,151 | -24,975 | bare |
+//! | drop self-loops | 12 | 3,100 | -3,088 | bare |
+//! | flag the unique sink as an exit | 1 | 70 | -69 | **authoritative** |
+//! | keep only the lowest-id entry flag | 0 | 0 | 0 | **authoritative** |
+//!
+//! "bare" rows were scored with bare `vj_ged` against a base of 79,535 rather
+//! than the `GEDMetric` decision procedure against 79,790; the two differ only
+//! by an isomorphism fast path and a `max(1.0, ...)` floor, worth 255 cells in
+//! total, so they cannot move a five-figure margin. The two rows whose margin
+//! was small enough to flip were re-scored under the authoritative metric and
+//! did not.
+//!
+//! Only 8 of the 5,855 mismatched cells corpus-wide have a matching degree
+//! multiset and a differing role multiset, which is the only shape a flag
+//! defect can take at all --- and 4 of those are the multi-entry gap named
+//! above. Before changing a rule here, re-run that table; a rule that wins the
+//! bucket and loses the corpus is not a rule.
 
 use crate::syntax::cfg::{Cfg, NodeKind};
 use crate::syntax::ids::NodeId;
@@ -294,11 +380,16 @@ impl BlockView {
 ///   holds both regimes --- `xstrdup` (two `return`s, funcend stayed a
 ///   singleton, deleted, `exit []`) and `xasprintf` (one `return`, funcend
 ///   merged into it, kept, `exit [0]`).
+/// * (2) counts **statements**, not chain members --- see [`statement_count`].
+///   The two agree on every graph S2 produces today, because the function-end
+///   node is built by `CfgNode::single`; they stop agreeing the moment a node
+///   carries more than one span, and then counting members would delete a
+///   block the reference keeps.
 /// * (1) alone and (4) are **not exercised by the corpus**: Joern gives a
 ///   method one shared `METHOD_RETURN` with no successor, so no published
-///   function has a funcend block with a successor or two funcend candidates.
-///   They are implemented from `REQ-CFG-10` and tested against it, not against
-///   an observation.
+///   function has a funcend block with a successor (0 of 46,716 exit-flagged
+///   blocks have one) or two funcend candidates. They are implemented from
+///   `REQ-CFG-10` and tested against it, not against an observation.
 ///
 /// Returns the block index into `chains`, or `None` when nothing is deleted.
 pub fn singleton_funcend(source: &Cfg, chains: &[Vec<NodeId>]) -> Option<u32> {
@@ -307,17 +398,26 @@ pub fn singleton_funcend(source: &Cfg, chains: &[Vec<NodeId>]) -> Option<u32> {
 }
 
 /// [`singleton_funcend`] over an already-built projection.
+///
+/// Written in the reference's order --- out-degree, then statement count, then
+/// the marker --- so the two can be diffed line by line.
 fn funcend_candidate(source: &Cfg, chains: &[Vec<NodeId>], view: &BlockView) -> Option<u32> {
     let mut found = None;
     let mut candidates = 0u32;
     for (block, chain) in chains.iter().enumerate() {
-        let [only] = chain[..] else {
-            continue;
-        };
-        if kind_of(source, only) != Some(NodeKind::Exit) {
+        if view.out_degree(block as u32) != 0 {
             continue;
         }
-        if view.out_degree(block as u32) != 0 {
+        // Condition (2). A chain of two nodes holds at least two statements,
+        // so this subsumes "the chain is a singleton" rather than adding to
+        // it, and the `any` below is then a test of that one member.
+        if statement_count(source, chain) != 1 {
+            continue;
+        }
+        if !chain
+            .iter()
+            .any(|id| kind_of(source, *id) == Some(NodeKind::Exit))
+        {
             continue;
         }
         candidates = candidates.saturating_add(1);
@@ -329,6 +429,30 @@ fn funcend_candidate(source: &Cfg, chains: &[Vec<NodeId>], view: &BlockView) -> 
     } else {
         None
     }
+}
+
+/// How many statements a block holds, in the reference's sense.
+///
+/// F-12's guard is `len(node.statements) == 1`, and a `pyjoern` `Block`'s
+/// statements are the label lines of one Joern DOT node, concatenated across
+/// everything `to_supergraph` merged into it. The analogue here is the
+/// coalesced span list: [`crate::syntax::cfg::CfgNode::spans`] carries one
+/// entry per source construct a node covers, and a chain concatenates them the
+/// same way. Counting chain *members* instead is the same number only while
+/// every node holds exactly one span --- true of what S2 emits today, and not
+/// something F-9's node layer promises to keep, which is why the count is
+/// taken over spans and not over the chain.
+///
+/// A node with no spans still counts as one statement. A block the reference
+/// can see always has at least one, so treating an empty span list as zero
+/// would let a funcend block fail condition (2) for a reason the reference has
+/// no counterpart to, and silently stop deleting it.
+fn statement_count(source: &Cfg, chain: &[NodeId]) -> usize {
+    chain
+        .iter()
+        .filter_map(|id| source.node(*id))
+        .map(|node| node.spans().len().max(1))
+        .sum()
 }
 
 /// The coalesced blocks of one function after F-11 and F-12, in block ids.
@@ -467,6 +591,31 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, kind)| CfgNode::single(*kind, Span::new(index as u32, index as u32 + 1)))
+            .collect();
+        let edges = edges
+            .iter()
+            .map(|(src, dst)| CfgEdge::new(NodeId::new(*src), NodeId::new(*dst), EdgeKind::Fall))
+            .collect();
+        Cfg::from_parts(nodes, edges, NodeId::new(0), NodeId::new(0))
+    }
+
+    /// [`graph`], with an explicit statement count per node.
+    ///
+    /// F-12's condition (2) counts statements, and a [`CfgNode`] carries them
+    /// as its span list, so a test of that condition needs a node with more
+    /// than one span --- which [`CfgNode::single`], and therefore [`graph`],
+    /// cannot make.
+    fn graph_with_statements(spec: &[(NodeKind, usize)], edges: &[(u32, u32)]) -> Cfg {
+        let nodes = spec
+            .iter()
+            .enumerate()
+            .map(|(index, (kind, statements))| {
+                let base = index as u32 * 16;
+                let spans = (0..*statements as u32)
+                    .map(|offset| Span::new(base + offset, base + offset + 1))
+                    .collect();
+                CfgNode::new(*kind, spans)
+            })
             .collect();
         let edges = edges
             .iter()
@@ -837,5 +986,89 @@ mod tests {
         let flags = derive_flags(&cfg, &chains(&[&[0, 77]]));
         assert_eq!(flags.entry_blocks(), vec![0]);
         assert!(flags.exit_blocks().is_empty());
+    }
+
+    #[test]
+    fn the_funcend_guard_counts_statements_not_chain_members() {
+        // `pyjoern.cfg.normalize_cfg` deletes a funcend block when
+        // `cfg.out_degree(node) == 0 and len(node.statements) == 1`. A chain of
+        // one node whose node carries two statements satisfies the first and
+        // fails the second, so the reference keeps it. Counting chain members
+        // instead --- which is what this file used to do --- deletes it, and
+        // takes the exit flag and the predecessor's out-degree with it.
+        let layout = &[
+            (NodeKind::Entry, 1),
+            (NodeKind::Return, 1),
+            (NodeKind::Exit, 2),
+        ];
+        let partition = chains(&[&[0], &[1], &[2]]);
+        let blocks = parity_blocks(
+            &graph_with_statements(layout, &[(0, 1), (1, 2)]),
+            &partition,
+        );
+        assert_eq!(
+            blocks.removed_funcend, None,
+            "two statements fail `len(node.statements) == 1`, so the block stays"
+        );
+        assert_eq!(blocks.exit, vec![2], "and it keeps its exit flag");
+        assert_eq!(blocks.kept, vec![0, 1, 2]);
+        assert_eq!(blocks.edges, vec![(0, 1), (1, 2)]);
+
+        // The mutation control. Identical in every way but the statement
+        // count, and the deletion fires --- so the assertions above are about
+        // the count and not about the shape they were built on.
+        let one = &[
+            (NodeKind::Entry, 1),
+            (NodeKind::Return, 1),
+            (NodeKind::Exit, 1),
+        ];
+        let blocks = parity_blocks(&graph_with_statements(one, &[(0, 1), (1, 2)]), &partition);
+        assert_eq!(blocks.removed_funcend, Some(2));
+        assert_eq!(blocks.kept, vec![0, 1]);
+        assert!(blocks.exit.is_empty());
+    }
+
+    #[test]
+    fn the_anchors_sit_at_the_ends_of_their_chains_so_membership_is_enough() {
+        // `derive_flags` tests membership; the reference tests position --- the
+        // block's *first* statement for entry, its *last* for exit (see the
+        // module docs). They agree only because `syntax::cfg`'s validator
+        // rejects an `Entry` with a predecessor and an `Exit` with a successor,
+        // so neither anchor can be contracted into the middle of a chain. This
+        // is the invariant that makes `first` and `membership` the same answer
+        // on our graphs; if it ever breaks, the flag test has to move inside
+        // the node and the module docs say what it becomes.
+        for source in [
+            "int f(void){ return 1; }",
+            "int g(int a){ if (a) { return 1; } return 0; }",
+            "int h(int a){ while (a) { a = a - 1; } return a; }",
+            "void e(void){ }",
+            "int s(int a){ switch (a) { case 1: return 1; default: return 0; } }",
+            "int l(int a){ for (;;) { a = a + 1; } }",
+        ] {
+            let tree = crate::csource::parse::parse(source);
+            let functions = crate::csource::cfg::function_cfgs(tree.value(), source);
+            assert!(!functions.value().is_empty(), "{source} yields a function");
+            for function in functions.value() {
+                let cfg = &function.cfg;
+                let partition = crate::csource::joern::chains::parity_chains(cfg);
+                for chain in &partition {
+                    for (offset, id) in chain.iter().enumerate() {
+                        match cfg.node(*id).map(|node| node.kind()) {
+                            Some(NodeKind::Entry) => assert_eq!(
+                                offset, 0,
+                                "{source}: the function start is not its chain's first member"
+                            ),
+                            Some(NodeKind::Exit) => assert_eq!(
+                                offset,
+                                chain.len() - 1,
+                                "{source}: the function end is not its chain's last member"
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
     }
 }
