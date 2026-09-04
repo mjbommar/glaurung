@@ -832,7 +832,7 @@ without concealing inference disagreement.
   `PrototypeConflict` health finding when they disagree.
 - [x] Render the authoritative declaration's types, names, and variadic tail
   when representable.
-- [ ] Keep conflict diagnostics out of scored pseudocode by default. Expose
+- [x] Keep conflict diagnostics out of scored pseudocode by default. Expose
   them through structured Python results and an explicitly annotated analyst
   render mode.
 - [x] Apply the same contract to all four entry points and propagated call
@@ -972,8 +972,6 @@ Known baseline failures in those families remain open; these commands prove
 the bounded increment did not add regressions, not that aggregate, return, or
 Rust recovery is complete.
 
-Still open in WP8: the explicitly annotated analyst render mode.
-
 ### Implementation evidence — 2026-09-03 program-owned declaration authority
 
 `src/program/environment.rs` now owns the single total declaration order:
@@ -1072,11 +1070,28 @@ broadly red on 441 current-tip failures, dominated by the known-decompiler
 recovery ratchet; no broad baseline was refreshed. Exact commands and limits
 are recorded in `results/wp8-pointer-return-boundaries.md`.
 
+### Implementation evidence — 2026-09-04 annotated declaration conflicts
+
+The CLI now exposes the structured `PrototypeConflict` ledger through an
+explicit `decompile --style decbench --annotate-conflicts` analyst mode. Each
+requested annotation is deterministic, C-comment-safe, and placed immediately
+before the affected signature with both prototype shapes, provenance labels,
+and disagreement fields. Default and scored output remain unannotated.
+
+Single, range, `--vas`, and whole-image routes are covered against the real
+`tail_dispatch` fixture. Annotated single-function requests bypass the text
+cache because drained provenance cannot be reconstructed from cached C. The
+focused declaration, cache, generated-reference, and census suite passes all
+36 tests; the existing DecBench-style CLI contracts pass all four selected
+tests. Broader current-master failures remain visible and no baseline was
+refreshed. Exact commands and limitations are recorded in
+`results/wp8-annotated-conflicts.md`.
+
 ### Exit criteria
 
 - [ ] No rendered prototype is worse than an available trusted declaration.
-- [ ] Conflicts are queryable with provenance.
-- [ ] Scored output contains no incidental diagnostic comments.
+- [x] Conflicts are queryable with provenance.
+- [x] Scored output contains no incidental diagnostic comments.
 
 ## 15. WP9 — Shared machine model and capability census
 
@@ -1586,9 +1601,9 @@ relevant ratchet's accepted-regression record.
    invalidate-everything fallback while passes migrate incrementally.
 4. Start WP6 with the smallest stripped C signedness/width constraint slice;
    keep Rust totals separate and do not wait for the full solver design.
-5. Finish WP8 by defining authority once in the session fact layer and expose conflicts
-   through structured results plus an explicitly annotated analyst mode, while
-   keeping scored text free of diagnostics.
+5. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
+   structured conflicts, and the explicitly requested analyst annotation mode
+   are landed; scored text remains free of diagnostics by default.
 6. Continue WP9 from the landed ARM32 register-view and capability-census
    slices: migrate one remaining shared consumer or fact class at a time,
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
