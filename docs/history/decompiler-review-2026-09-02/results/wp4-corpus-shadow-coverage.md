@@ -512,6 +512,62 @@ This result blocks promotion. The next WP4 work is to repair or locally decline
 the eight regression families, rerunning this exact gate until no
 production-pass cell becomes a shadow failure.
 
+## Nested loop back-edge correctness — `0da8744d`
+
+The first corpus execution failures shared a lowering error: a transfer back to
+a loop header was erased whenever it appeared last in its immediate statement
+list. That is valid only for the outermost final statement of the loop body. In
+a nested `if` or switch arm, execution rejoins the enclosing statements; the
+observed functions therefore fell into a cloned return/exit instead of starting
+the next iteration.
+
+`materialize_multi_exit_transfers` now carries the lexical context explicitly.
+It erases only the outermost final back-edge. A nested back-edge remains a
+resolved goto because the current AST has no source-level `continue` statement.
+Focused unit tests cover both a nested conditional and switch arm followed by a
+return. Real-fixture assertions require the retained goto and its label rather
+than allowing an unresolved transfer.
+
+```text
+cargo test --features python-ext
+main library: 3971 passed / 0 failed / 4 ignored
+all integration and doc-test targets: passed
+
+uv run python tools/structure_v2_compare.py --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-0da8744d.json"
+uv run python tools/structure_v2_execution.py \
+  "$HOME/.cache/glaurung/tmp/structure-v2-0da8744d.json" --jobs 4 \
+  --output "$HOME/.cache/glaurung/tmp/structure-v2-execution-0da8744d.json"
+
+revision: 0da8744d885db58a5616e580fc198c44a923196d
+execution: 14 improved / 190 stable pass / 23 stable non-pass /
+           6 regressed / 39 not executable / 0 infrastructure findings
+structure: 220 improved / 35 unchanged / 17 raw regressed / 443 declined
+classification: 4 accepted honest goto / 13 unexplained regression
+comparable gotos: 2303 production / 773 shadow
+comparable bytes: 964207 production / 1491887 shadow
+execution wall: 76.769919 seconds
+```
+
+The repair removes 15 behavioral regressions across five families:
+`two_returning_arms`, `bitset_select`, `bisection_sqrt`,
+`internal_rate_of_return`, and `trie_insert`. The four optimized
+`bisection_sqrt` cells were also rerun directly and all pass. Six regressions
+remain, confined to `hinted_validation`, clang-O2 `flattened_accumulate`, and
+clang-O2 `base64_decode`, including stripped twins.
+
+The semantic fix deliberately worsens the textual goto metric: shadow gotos
+rise by 268, and 13 rows become unexplained raw regressions. Deleting those
+transfers recreated wrong answers. The follow-up must represent the same typed
+back-edge as `continue` or classify it from equivalent proof, never infer
+correctness from the lower goto count.
+
+The required full Python suite was attempted against the release extension. It
+was already broadly red and was stopped at 24% after roughly 14 minutes because
+continuing could not certify this increment. This is a red, incomplete broad
+gate, not a pass; the focused 272-candidate semantic comparison and full Rust
+gate are reported separately.
+
 For the linear-tail increment, focused and scoped validation additionally
 recorded:
 

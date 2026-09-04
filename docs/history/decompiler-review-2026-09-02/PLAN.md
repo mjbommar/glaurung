@@ -665,6 +665,19 @@ that preserves honest local gotos when required.
   Base64, bitset selection, bisection square root, internal rate of return, and
   trie insertion. Seven families improve. This is the first corpus-wide
   execution result and is a promotion blocker, not an accepted trade-off.
+  The first correctness repair at `0da8744d` stops treating a back-edge as an
+  implicit loop continuation merely because it is final inside a nested
+  conditional or switch arm. Only the true outermost final transfer may fall
+  through; nested transfers remain explicit, resolved gotos. This removes 15
+  of the 21 behavioral regressions: the pinned rerun reports **14 improved /
+  190 stable pass / 23 stable non-pass / 6 regressed / 39 not executable**, with
+  zero infrastructure findings. The remaining six cells are three families:
+  clang-O2 branch hints, flattened accumulation, and Base64 (including their
+  stripped twins where present). Correctness exposes a readability debt:
+  shadow gotos rise from 505 to 773 and 13 raw structural rows become
+  unexplained regressions. Source-level `continue` recovery or an equally
+  proved spelling is required before those transfers can be called structurally
+  closed.
 
 ### RED fixtures
 
@@ -729,8 +742,9 @@ that preserves honest local gotos when required.
 ### Promotion criteria
 
 - [~] No execution-differential regressions. The fail-closed corpus route is
-  now implemented and pinned at `6175d67d`; it exposes 21 regressions across
-  eight families that must be repaired or locally declined before promotion.
+  now implemented. The first pinned run at `6175d67d` exposed 21 regressions;
+  `0da8744d` removes 15, leaving six cells across three families that must be
+  repaired or locally declined before promotion.
 - [ ] No unexplained block/edge accounting findings.
 - [ ] GED does not regress on the pinned sample.
 - [ ] The structure axis improves after accepted honest gotos are separated.
@@ -1775,37 +1789,43 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Repair or locally decline the 21 execution regressions now isolated by the
-   pinned `6175d67d` corpus comparison. Start with one repeated family whose
-   structural ownership error explains multiple compiler/stripped cells, then
-   rerun the exact 272-candidate gate; do not promote while any production-pass
-   cell becomes a shadow failure.
-2. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide rows are
-   classified at `ca91dc68` by exact, fail-closed suffix/shared-effect-entry
-   contracts, and the clean pinned full comparison reports zero unexplained
-   regressions without rewriting the four raw regression statuses. Still run
-   the corpus-wide execution differential, unexplained block/edge accounting,
-   pinned GED, structure-axis movement, and accepted runtime/output-size
-   budgets.
-3. Complete WP5's shared typed-case transport so discovery, accounting, both
+1. Repair or locally decline the six execution regressions remaining at
+   `0da8744d`: `hinted_validation` clang O2/debug+stripped,
+   `flattened_accumulate` clang O2/debug+stripped, and `base64_decode` clang
+   O2/debug+stripped. Rerun the exact 272-candidate gate after each ownership
+   repair; do not promote while any production-pass cell becomes a shadow
+   failure.
+2. Replace the newly preserved nested loop-header gotos with a proved
+   source-level `continue` representation, or classify them from typed edge
+   evidence. The `0da8744d` semantic repair deliberately increases shadow
+   gotos from 505 to 773 and leaves 13 structural regressions unexplained;
+   never delete those transfers to improve the count.
+3. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide
+   rows are classified at `ca91dc68` by exact, fail-closed
+   suffix/shared-effect-entry contracts, and the clean pinned full comparison
+   reports zero unexplained regressions without rewriting the four raw
+   regression statuses. The corpus-wide execution route is now live; still
+   complete unexplained block/edge accounting, pinned GED, structure-axis
+   movement, and accepted runtime/output-size budgets.
+4. Complete WP5's shared typed-case transport so discovery, accounting, both
    structurers, and rendering consume one case/default/provenance object; add
    the remaining fixture/compiler/architecture execution cells and classify
    every residual decline. Malformed, truncated, overlapping, and wrapping
    table safety tests are already present and must remain green.
-4. Begin WP2/WP3 as an independent architecture lane, using conservative
+5. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
-5. Continue WP6 from the landed stripped-C per-use signedness slice: add the
+6. Continue WP6 from the landed stripped-C per-use signedness slice: add the
    next independently testable width or confidence constraint without waiting
    for the full solver design, and keep Rust totals separate.
-6. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
+7. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.
-7. Continue WP9 from the landed ARM32 register-view and capability-census
+8. Continue WP9 from the landed ARM32 register-view and capability-census
    slices: migrate one remaining shared consumer or fact class at a time,
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
    into a named required architecture profile. Do not canonicalize partial
    VFP/NEON writes until LLIR can represent the untouched lanes.
-8. Under WP10, triage the current red full-gate failures by exact base/overlay
+9. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned
    responsibility per commit. The metadata-only performance-gate hang is
