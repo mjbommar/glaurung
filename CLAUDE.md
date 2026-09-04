@@ -148,12 +148,13 @@ This is a **real, production** tool used for actual binary analysis.
   reports its own resource problems as cell failures. `pytest.ini` deselects
   `-m decbench`. `docs/development/roadmap/README.md`'s DecBench section holds
   the metric plan and is explicitly not a work queue.
-- **A module split touches SIX side files:** the four fixture baselines
-  (`baseline`, `structural_baseline`, `arch_baseline`, `defuse_baseline`), plus
+- **A module split touches SIX side files:** the five fixture baselines
+  (`baseline`, `structural_baseline`, `arch_baseline`, `defuse_baseline`,
+  `structure_baseline`), plus
   `test_large_module_review.py`'s `REVIEWED_LARGE_MODULES`,
   `test_stranded_doc_comments.py`'s `REVIEWED_DOC_SUMMARIES` and
   `test_src_dependency_boundaries.py`'s env-var allowlist — the last three keyed
-  by file path. Adding a fixture needs the same four baselines.
+  by file path. Adding a fixture needs the same five baselines.
 - **Adding a CLI subcommand drifts a tutorial fixture.** Refresh with
   `uv run python scripts/verify_tutorial.py --chapter 01-install --capture` and
   read the diff; it should be the command list and nothing else.

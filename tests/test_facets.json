@@ -1,11 +1,11 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 319,
+  "core": 321,
   "lfs": 113,
-  "fixtures": 36,
+  "fixtures": 37,
   "toolchain": 36,
-  "docker": 18,
+  "docker": 19,
   "llm": 5,
   "decbench": 4
  },
@@ -459,6 +459,10 @@
   "test_fitness_report.py": [
    "core"
   ],
+  "test_fixture_structure_census.py": [
+   "fixtures",
+   "docker"
+  ],
   "test_flag_predicate_roundtrip.py": [
    "fixtures"
   ],
@@ -820,6 +824,9 @@
   "test_name_verification.py": [
    "lfs"
   ],
+  "test_native_metrics.py": [
+   "core"
+  ],
   "test_native_stub_current.py": [
    "core"
   ],
@@ -1030,6 +1037,9 @@
   ],
   "test_structure_v2_compare.py": [
    "fixtures"
+  ],
+  "test_structure_v2_execution.py": [
+   "core"
   ],
   "test_suggest_function_name.py": [
    "core"
