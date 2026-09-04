@@ -1134,6 +1134,36 @@ mod tests {
     }
 
     #[test]
+    fn real_dispatch_in_loop_o0_materializes_switch_exit_paths() {
+        for binary in [
+            "206_aarch64_wide_dispatch-clang-O0.so",
+            "206_aarch64_wide_dispatch-gcc-O0.so",
+        ] {
+            let Some(lifted) = lift_real_fixture(binary, "dispatch_in_loop") else {
+                continue;
+            };
+            let report = observe(&lifted, &compute_ssa(&lifted));
+
+            assert!(report.verification_errors.is_empty(), "{report:#?}");
+            assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+            assert_prepared_c(&report);
+            let prepared = report
+                .prepared_pseudocode
+                .as_deref()
+                .unwrap_or_else(|| panic!("O0 dispatch loop should render: {report:#?}"));
+            let case_three = prepared
+                .split("case 3:")
+                .nth(1)
+                .unwrap_or_else(|| panic!("fixture must retain case 3:\n{prepared}"))
+                .split("case 4:")
+                .next()
+                .unwrap();
+            assert!(case_three.contains("return "), "{prepared}");
+            assert!(!case_three.contains("goto "), "{prepared}");
+        }
+    }
+
+    #[test]
     fn real_duff_o0_embeds_the_shared_local_region_inside_the_switch() {
         for binary in ["102_duffs_device-clang-O0.so", "102_duffs_device-gcc-O0.so"] {
             let Some(lifted) = lift_real_fixture(binary, "duff_copy") else {

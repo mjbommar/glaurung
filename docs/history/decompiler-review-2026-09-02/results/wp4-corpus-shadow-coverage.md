@@ -299,6 +299,39 @@ still uncommitted, and its release extension likewise contained the concurrent
 parser lane. Its no-worse per-row comparison and execution differentials are
 valid engineering evidence, but the exact corpus totals remain unpinned.
 
+## Switch-arm loop-exit materialization follow-up
+
+Execution differential exposed a semantic defect that structural verification
+could not: in both GCC-O0 and clang-O0 `dispatch_in_loop`, case 3 exits the loop
+through a shared return block. `MultiExitLoop` lowering replaced those exit
+gotos inside `if` statements, but did not recurse into `Stmt::Switch`. The raw
+goto survived, label repair appended its now-unowned destination as an empty
+label after the final function return, and that input returned an uninitialized
+value.
+
+The lowerer now recursively materializes verified exit paths in every switch
+case and its default arm. A real-binary regression covers both O0 compilers and
+requires case 3 to contain a return rather than a goto. After a release rebuild,
+the ordinary execution comparator, locally directed at shadow-v2 output, passed
+all **34 cases** for each binary.
+
+The full 436-object / 715-function comparison then reported **236 improved / 32
+unchanged / 4 regressed / 443 declined / 0 production-missing**. Comparable
+shadow gotos fell from 581 to **571**. The two O0 dispatch-loop rows moved from
+regressed (8 versus 6 production gotos) to unchanged (6 versus 6), and both
+clang-O2 `flattened_accumulate` rows fell from 8 to 5 shadow gotos. No row
+declined or gained a goto. The run exited 0 in 29.51 seconds and recorded
+873,496 KiB peak RSS at:
+
+```text
+$HOME/.cache/glaurung/tmp/structure-v2-switch-exit-final.json
+```
+
+The report names the preceding committed revision `ead42e38` because this fix
+was not committed when measured. The extension also included the concurrent
+uncommitted parser lane, so these exact totals remain exploratory rather than
+clean promotion evidence.
+
 ## Validation
 
 ```text

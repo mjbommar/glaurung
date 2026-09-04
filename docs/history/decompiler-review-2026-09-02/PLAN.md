@@ -619,6 +619,16 @@ that preserves honest local gotos when required.
   improved (208 to 75 versus production's 203). No row declined or gained a
   goto relative to the preceding run. Shared dirty native provenance still
   prevents treating these totals as promotion evidence.
+  Multi-exit materialization now also descends into recovered switch arms.
+  Before this fix, both O0 `dispatch_in_loop` objects left their early-return
+  case as a goto whose label repair placed an empty label after the function's
+  final return; execution returned garbage for that path even though tree
+  verification passed. A real GCC/Clang fixture regression now requires the
+  case to contain its return path, and release execution differentials pass all
+  34 deterministic cases for each compiler. The complete exploratory census
+  is now **236 improved / 32 unchanged / 4 regressed / 443 declined** with 571
+  comparable shadow gotos. Both O0 dispatch rows moved from regressed to
+  unchanged, and no row declined or gained a goto.
 
 ### RED fixtures
 
@@ -760,8 +770,10 @@ one authoritative set of case edges.
   `decompile_many(..., shadow_v2=True)` through the ordinary fixture comparator.
   The clang-O2 `154::wide154_dense_effects` cell passes all 34 deterministic
   cases with zero pre-render undefined reads. The default v1 path remains its
-  committed `fail`, and every other newly recovered switch cell still needs
-  the same explicit execution evidence before WP5 can complete. The pinned
+  committed `fail`. Both GCC-O0 and clang-O0 `206::dispatch_in_loop` cells now
+  also pass all 34 cases after a switch-arm loop-exit materialization regression
+  was found and fixed; every other newly recovered switch cell still needs the
+  same explicit execution evidence before WP5 can complete. The pinned
   clang-14 `statemachine::fsm` default-v1 path now also recompiles and matches
   the original across 64 deterministic fuzz inputs.
 - [~] Structural census assertion that typed cases reach the structurer.
@@ -1725,7 +1737,7 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Remove or faithfully structure the remaining 6 exploratory WP4 goto
+1. Remove or faithfully structure the remaining 4 exploratory WP4 goto
    regressions, then obtain a clean pinned rerun and
    finish promotion evidence: corpus-wide execution differential, unexplained
    block/edge accounting, pinned GED, structure-axis movement, and accepted

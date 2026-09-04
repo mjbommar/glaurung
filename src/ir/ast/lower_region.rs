@@ -87,6 +87,24 @@ fn materialize_multi_exit_transfers(
                 else_body: else_body
                     .map(|body| materialize_multi_exit_transfers(body, header_va, exits)),
             }),
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => out.push(Stmt::Switch {
+                discriminant,
+                cases: cases
+                    .into_iter()
+                    .map(|(value, body)| {
+                        (
+                            value,
+                            materialize_multi_exit_transfers(body, header_va, exits),
+                        )
+                    })
+                    .collect(),
+                default: default
+                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits)),
+            }),
             other => out.push(other),
         }
     }
