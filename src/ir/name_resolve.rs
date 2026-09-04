@@ -93,6 +93,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
             | Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

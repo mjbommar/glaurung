@@ -366,6 +366,10 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             indent(out, level);
             out.push_str("break;\n");
         }
+        Stmt::Continue => {
+            indent(out, level);
+            out.push_str("continue;\n");
+        }
         Stmt::Nop => {
             indent(out, level);
             out.push_str("nop;\n");

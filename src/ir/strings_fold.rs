@@ -234,6 +234,7 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
             | Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

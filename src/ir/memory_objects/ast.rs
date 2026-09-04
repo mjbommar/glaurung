@@ -131,6 +131,7 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
             Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

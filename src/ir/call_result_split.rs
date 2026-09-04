@@ -873,7 +873,7 @@ impl Splitter {
                 state.results.clear();
                 state.reachable = true;
             }
-            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break | Stmt::Continue | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
         Vec::new()
     }

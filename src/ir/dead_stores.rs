@@ -377,7 +377,11 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
         // reg already covered by `stmt_reads`).
         if matches!(
             s,
-            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
+            Stmt::Return { .. }
+                | Stmt::Goto { .. }
+                | Stmt::IndirectGoto { .. }
+                | Stmt::Break
+                | Stmt::Continue
         ) {
             return false;
         }
@@ -870,6 +874,7 @@ fn stmt_reads_direct(statement: &Stmt, register: &VReg) -> bool {
         | Stmt::Label(_)
         | Stmt::Goto { .. }
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => false,
@@ -1013,6 +1018,7 @@ pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => false,
@@ -1051,9 +1057,11 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
 fn contains_nested_exit(statement: &Stmt) -> bool {
     fn body_exits(body: &[Stmt]) -> bool {
         body.iter().any(|statement| match statement {
-            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break => {
-                true
-            }
+            Stmt::Return { .. }
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Break
+            | Stmt::Continue => true,
             Stmt::If {
                 then_body,
                 else_body,

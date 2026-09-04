@@ -541,6 +541,8 @@ pub enum Stmt {
     Goto {
         target: u64,
     },
+    /// Transfer to the next iteration of the lexically enclosing loop.
+    Continue,
     /// A computed transfer the structurer did NOT turn into a `Switch` — an
     /// unresolved jump table, a tail call through a register, a vtable dispatch.
     ///
@@ -1342,7 +1344,12 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
         // comments; none introduce a declared identifier.
-        Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Break | Stmt::Nop | Stmt::Comment(_) => {}
+        Stmt::Push { .. }
+        | Stmt::Pop { .. }
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::Nop
+        | Stmt::Comment(_) => {}
         Stmt::Unknown(_) => {
             ids.unresolved_transfer_count = ids.unresolved_transfer_count.saturating_add(1);
         }

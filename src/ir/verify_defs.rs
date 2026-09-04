@@ -661,6 +661,7 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
             Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}

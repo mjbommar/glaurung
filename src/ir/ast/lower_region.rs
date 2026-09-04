@@ -105,6 +105,11 @@ fn materialize_multi_exit_transfers_inner(
             // statements that the CFG skipped.
             Stmt::Goto { target }
                 if target == header_va && implicit_continue && index + 1 == statement_count => {}
+            // This lowerer descends through conditionals and switches, but
+            // deliberately not through nested loops. A retained edge to this
+            // loop's own header is therefore exactly a source-level continue;
+            // unlike break, that spelling remains correct inside a switch.
+            Stmt::Goto { target } if target == header_va => out.push(Stmt::Continue),
             Stmt::Goto { target } if exits.contains_key(&target) => {
                 let mut materialized = exits[&target].clone();
                 // A C `break` inside a switch exits that switch, not the
@@ -218,10 +223,7 @@ mod multi_exit_transfer_tests {
         let Stmt::If { then_body, .. } = &nested[0] else {
             panic!("expected conditional back edge: {nested:#?}");
         };
-        assert!(matches!(
-            then_body.as_slice(),
-            [Stmt::Goto { target: 0x1000 }]
-        ));
+        assert!(matches!(then_body.as_slice(), [Stmt::Continue]));
         assert!(matches!(nested[1], Stmt::Return { .. }));
     }
 
@@ -245,10 +247,7 @@ mod multi_exit_transfer_tests {
         let Stmt::Switch { cases, .. } = &lowered[0] else {
             panic!("expected switch back edge: {lowered:#?}");
         };
-        assert!(matches!(
-            cases[0].1.as_slice(),
-            [Stmt::Goto { target: 0x2000 }]
-        ));
+        assert!(matches!(cases[0].1.as_slice(), [Stmt::Continue]));
     }
 
     #[test]
@@ -281,7 +280,7 @@ mod multi_exit_transfer_tests {
 
 fn statements_terminate(statements: &[Stmt]) -> bool {
     match statements.last() {
-        Some(Stmt::Return { .. } | Stmt::Break | Stmt::Goto { .. }) => true,
+        Some(Stmt::Return { .. } | Stmt::Break | Stmt::Continue | Stmt::Goto { .. }) => true,
         Some(Stmt::If {
             then_body,
             else_body: Some(else_body),

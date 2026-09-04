@@ -325,6 +325,7 @@ fn statement_contains_goto(statement: &Stmt) -> bool {
         | Stmt::Pop { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => false,
@@ -428,6 +429,7 @@ fn statement_mentions(statement: &Stmt, target: &VReg) -> bool {
         Stmt::Label(_)
         | Stmt::Goto { .. }
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => false,
@@ -540,6 +542,7 @@ fn replace_statement_register(statement: &mut Stmt, target: &VReg, replacement: 
         Stmt::Label(_)
         | Stmt::Goto { .. }
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
@@ -594,6 +597,7 @@ fn fold_body(body: &mut [Stmt]) {
             | Stmt::Goto { .. }
             | Stmt::IndirectGoto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

@@ -610,6 +610,7 @@ fn collect_flag_reads_in_stmt(
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)
@@ -775,6 +776,7 @@ mod tests {
             | Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

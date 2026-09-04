@@ -215,6 +215,7 @@ pub(super) fn collect_label_stack_deltas(
                 | Stmt::Call { .. }
                 | Stmt::Assign { .. }
                 | Stmt::Break
+                | Stmt::Continue
                 | Stmt::Nop
                 | Stmt::Unknown(_)
                 | Stmt::Comment(_)

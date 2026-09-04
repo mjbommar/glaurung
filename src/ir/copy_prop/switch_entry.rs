@@ -91,6 +91,7 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
             | Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Unknown(_) => copies.clear(),
             Stmt::Throw { .. } | Stmt::TryCatch { .. } => copies.clear(),
         }
@@ -170,7 +171,7 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
                 subst(target, &copies);
                 copies.clear();
             }
-            Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
+            Stmt::Label(_) | Stmt::Goto { .. } | Stmt::Continue => copies.clear(),
             Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)

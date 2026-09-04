@@ -461,7 +461,7 @@ fn fold_body(
                     current_guard = None;
                 }
             }
-            Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break => {
+            Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break | Stmt::Continue => {
                 aliases.clear();
                 bounds.clear();
                 nonnegative.clear();

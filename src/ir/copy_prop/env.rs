@@ -299,6 +299,7 @@ fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
             | Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

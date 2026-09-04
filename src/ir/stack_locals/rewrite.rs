@@ -301,7 +301,7 @@ pub(super) fn rewrite_body(
             Stmt::Label(label) => {
                 *sp_delta = label_deltas.get(label).copied().unwrap_or(None);
             }
-            Stmt::Goto { .. } => *sp_delta = None,
+            Stmt::Goto { .. } | Stmt::Continue => *sp_delta = None,
             Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
@@ -700,6 +700,7 @@ pub(super) fn reconcile_late_address_taken_objects(
                 | Stmt::Label(_)
                 | Stmt::Goto { .. }
                 | Stmt::Break
+                | Stmt::Continue
                 | Stmt::Nop
                 | Stmt::Unknown(_)
                 | Stmt::Comment(_)

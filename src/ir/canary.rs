@@ -579,6 +579,7 @@ fn rewrite_body(body: &mut [Stmt]) {
             | Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

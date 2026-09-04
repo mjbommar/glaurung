@@ -195,6 +195,7 @@ pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mu
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
@@ -305,6 +306,7 @@ pub(super) fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)

@@ -336,6 +336,7 @@ fn count_temp_reads_in_stmt(s: &Stmt, out: &mut std::collections::HashMap<VReg, 
         Stmt::Label(_)
         | Stmt::Goto { .. }
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)
@@ -584,6 +585,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)
@@ -830,6 +832,7 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)

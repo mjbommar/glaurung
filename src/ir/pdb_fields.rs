@@ -197,6 +197,7 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)

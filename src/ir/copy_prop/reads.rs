@@ -181,6 +181,7 @@ pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F)
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)

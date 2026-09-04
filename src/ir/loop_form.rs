@@ -67,6 +67,7 @@ fn recover_one_linear_latch(
                         | Stmt::Goto { .. }
                         | Stmt::IndirectGoto { .. }
                         | Stmt::Break
+                        | Stmt::Continue
                         | Stmt::Throw { .. }
                 )
             {
@@ -980,7 +981,7 @@ fn last_assignment<'a>(body: &'a [Stmt], target: &VReg) -> Option<(usize, &'a Ex
 /// breaks leave only that nested loop, so neither is a bypass of this backedge.
 fn bypasses_loop_tail(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break => true,
+        Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break | Stmt::Continue => true,
         Stmt::If {
             then_body,
             else_body,
@@ -1172,7 +1173,7 @@ fn assigned_target(stmt: &Stmt) -> Option<&VReg> {
 
 fn has_iterator_bypass(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Goto { .. } | Stmt::Break => true,
+        Stmt::Goto { .. } | Stmt::Break | Stmt::Continue => true,
         Stmt::If {
             then_body,
             else_body,
@@ -1246,6 +1247,7 @@ fn recover_body(stmts: &mut [Stmt]) {
             | Stmt::Push { .. }
             | Stmt::Pop { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

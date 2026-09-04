@@ -296,6 +296,7 @@ pub(crate) fn prune_unread_promoted_locals(
             | Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => false,
@@ -453,6 +454,7 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
             | Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => false,

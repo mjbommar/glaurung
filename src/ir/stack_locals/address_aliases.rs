@@ -687,6 +687,7 @@ fn walk(
             Stmt::Label(_)
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Throw { .. }
             | Stmt::TryCatch { .. } => {
                 aliases.clear();

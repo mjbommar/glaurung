@@ -273,7 +273,7 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
                 *changed |= subst(target, &copies);
                 copies.clear();
             }
-            Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
+            Stmt::Label(_) | Stmt::Goto { .. } | Stmt::Continue => copies.clear(),
             Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
@@ -409,7 +409,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
                 *changed |= subst(target, &copies);
                 copies.clear();
             }
-            Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
+            Stmt::Label(_) | Stmt::Goto { .. } | Stmt::Continue => copies.clear(),
             Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)

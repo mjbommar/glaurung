@@ -435,6 +435,10 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             indent(out, level);
             out.push_str("break;\n");
         }
+        Stmt::Continue => {
+            indent(out, level);
+            out.push_str("continue;\n");
+        }
         Stmt::Nop => {
             indent(out, level);
             out.push_str("nop;\n");
@@ -700,6 +704,7 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
             | Stmt::Return { .. }
             | Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::If { .. }
             | Stmt::While { .. }
             | Stmt::For { .. }

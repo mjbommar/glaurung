@@ -470,6 +470,7 @@ impl Splitter {
                     Stmt::Goto { .. }
                     | Stmt::Label(_)
                     | Stmt::Break
+                    | Stmt::Continue
                     | Stmt::Nop
                     | Stmt::Unknown(_)
                     | Stmt::Comment(_) => {}

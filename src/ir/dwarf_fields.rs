@@ -255,6 +255,7 @@ fn infer_body(
             | Stmt::IndirectGoto { .. }
             | Stmt::Label(_)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)
@@ -608,6 +609,7 @@ fn annotate_body(
             }
             Stmt::Goto { .. }
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)

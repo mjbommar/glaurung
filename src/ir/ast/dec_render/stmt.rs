@@ -496,6 +496,10 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             indent(out, level);
             out.push_str("break;\n");
         }
+        Stmt::Continue => {
+            indent(out, level);
+            out.push_str("continue;\n");
+        }
         Stmt::Nop | Stmt::Push { .. } | Stmt::Pop { .. } => {}
         Stmt::Unknown(mnemonic) => {
             indent(out, level);
@@ -711,7 +715,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
 fn case_body_has_terminal_transfer(body: &[Stmt]) -> bool {
     matches!(
         body.last(),
-        Some(Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::Break)
+        Some(Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::Break | Stmt::Continue)
     )
 }
 

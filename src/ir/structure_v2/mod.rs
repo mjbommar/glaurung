@@ -813,8 +813,8 @@ mod tests {
             .unwrap_or_else(|| panic!("verified multi-exit loop should render: {report:#?}"));
         assert!(pseudocode.contains("while (1)"), "{pseudocode}");
         assert!(pseudocode.matches("return").count() >= 2, "{pseudocode}");
-        assert_eq!(pseudocode.matches("goto ").count(), 1, "{pseudocode}");
-        assert!(pseudocode.contains("goto L_15ef;"), "{pseudocode}");
+        assert_eq!(pseudocode.matches("goto ").count(), 0, "{pseudocode}");
+        assert!(pseudocode.contains("continue;"), "{pseudocode}");
         assert!(pseudocode.contains("L_15ef:"), "{pseudocode}");
         let repeated = observe(&lifted, &ssa);
         assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
@@ -823,9 +823,12 @@ mod tests {
             .as_deref()
             .unwrap_or_else(|| panic!("verified multi-exit loop should prepare as C: {report:#?}"));
         assert!(prepared.contains("while (1)"), "{prepared}");
-        assert_eq!(prepared.matches("goto ").count(), 1, "{prepared}");
-        assert!(prepared.contains("goto L_15ef;"), "{prepared}");
-        assert!(prepared.contains("L_15ef:"), "{prepared}");
+        assert_eq!(prepared.matches("goto ").count(), 0, "{prepared}");
+        assert!(prepared.contains("continue;"), "{prepared}");
+        assert!(
+            !prepared.contains("L_15ef:"),
+            "the unreferenced loop-header label should be pruned:\n{prepared}"
+        );
         assert_prepared_c(&report);
         assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
@@ -1089,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn real_obfuscated_switch_keeps_its_shared_loop_continuation_outside_arms() {
+    fn real_obfuscated_switch_uses_a_source_level_loop_continue() {
         let Some(lifted) = lift_real_fixture(
             "150_obfuscation_composite-clang-O0.so",
             "obfuscated_transform",
@@ -1109,10 +1112,14 @@ mod tests {
         assert!(!prepared.contains("L_12c8"), "{prepared}");
         assert!(
             prepared.matches("goto ").count() <= 3,
-            "the only remaining gotos are outside the switch, including the required loop back-edge:\n{prepared}"
+            "only unrelated unstructured transfers may remain outside the switch:\n{prepared}"
         );
-        assert!(prepared.contains("goto L_1160;"), "{prepared}");
-        assert!(prepared.contains("L_1160:"), "{prepared}");
+        assert!(prepared.contains("continue;"), "{prepared}");
+        assert!(!prepared.contains("goto L_1160;"), "{prepared}");
+        assert!(
+            !prepared.contains("L_1160:"),
+            "the unreferenced loop-header label should be pruned:\n{prepared}"
+        );
     }
 
     #[test]

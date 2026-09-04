@@ -212,6 +212,7 @@ fn analyze_statement(
         Stmt::Label(_)
         | Stmt::Goto { .. }
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
@@ -354,6 +355,7 @@ fn unstructured_has_both_events(body: &[Stmt], read: &VReg, written: &VReg) -> b
                 Stmt::Label(_)
                 | Stmt::Goto { .. }
                 | Stmt::Break
+                | Stmt::Continue
                 | Stmt::Nop
                 | Stmt::Unknown(_)
                 | Stmt::Comment(_) => {}

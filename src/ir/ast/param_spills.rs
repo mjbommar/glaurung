@@ -739,6 +739,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
             Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
+            | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}

@@ -826,6 +826,7 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Comment(_)
         | Stmt::Throw { .. } => false,
@@ -960,6 +961,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         | Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
+        | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,

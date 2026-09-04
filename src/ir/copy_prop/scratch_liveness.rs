@@ -170,6 +170,7 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                 | Stmt::Label(_)
                 | Stmt::Goto { .. }
                 | Stmt::Break
+                | Stmt::Continue
                 | Stmt::Nop
                 | Stmt::Comment(_) => {}
             }

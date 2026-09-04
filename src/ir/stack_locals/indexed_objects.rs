@@ -248,7 +248,7 @@ pub(super) fn seed_indexed_stack_objects(
                 Stmt::Label(label) => {
                     sp_delta = label_deltas.get(label).copied().unwrap_or(None);
                 }
-                Stmt::Goto { .. } => sp_delta = None,
+                Stmt::Goto { .. } | Stmt::Continue => sp_delta = None,
                 Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
@@ -589,7 +589,7 @@ pub(super) fn collect_read_stack_slots(
                     sp_delta = None;
                 }
                 Stmt::Label(label) => sp_delta = label_deltas.get(label).copied().unwrap_or(None),
-                Stmt::Goto { .. } => sp_delta = None,
+                Stmt::Goto { .. } | Stmt::Continue => sp_delta = None,
                 Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
