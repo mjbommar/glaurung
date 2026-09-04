@@ -622,8 +622,7 @@ def test_a_join_selected_pointer_is_defined_on_every_path_to_its_use(
     pointer_parameters = {
         match.group(1)
         for field in parameter_fields
-        if "*" in field
-        and (match := re.search(r"\b([A-Za-z_]\w*)\s*$", field.strip()))
+        if "*" in field and (match := re.search(r"\b([A-Za-z_]\w*)\s*$", field.strip()))
     }
     pointer_locals = set(
         re.findall(
@@ -638,9 +637,10 @@ def test_a_join_selected_pointer_is_defined_on_every_path_to_its_use(
     dereference_lines = [
         line for line in body.splitlines() if "[" in line or "*(" in line
     ]
-    value_names = set(
-        re.findall(r"\b(?:var\d+|arg\d+|stack_\d+|local_[0-9a-fA-F]+)\b", body)
-    ) | pointer_candidates
+    value_names = (
+        set(re.findall(r"\b(?:var\d+|arg\d+|stack_\d+|local_[0-9a-fA-F]+)\b", body))
+        | pointer_candidates
+    )
     deref = [
         value
         for value in value_names

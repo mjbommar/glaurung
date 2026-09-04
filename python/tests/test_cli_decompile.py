@@ -589,7 +589,9 @@ def test_real_arm_mixed_hard_float_call_round_trip(tmp_path: Path) -> None:
         max_functions=1,
     )
 
-    assert "float arm_hf_mixed_caller(float measured, int negate)" in generated, generated
+    assert "float arm_hf_mixed_caller(float measured, int negate)" in generated, (
+        generated
+    )
     # The callee prototype types every argument, so each one is already the
     # parameter's type and needs no conversion: `7` is an `int` literal and
     # `negate` is a declared `int`. This used to render `(int)(7), arg0,

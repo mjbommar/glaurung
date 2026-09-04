@@ -72,7 +72,9 @@ def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
         shadow_v2=True,
     )
 
-    signature = next(line for line in body.splitlines() if "wide154_dense_effects(" in line)
+    signature = next(
+        line for line in body.splitlines() if "wide154_dense_effects(" in line
+    )
     assert "int32_t" in signature, signature
     assert "int32_t *" in signature, signature
     assert "switch (" in body
@@ -138,9 +140,7 @@ def test_styles_are_not_all_the_same_renderer() -> None:
 
     outputs = {}
     for style in STYLES:
-        rendered = g.ir.decompile_many(
-            str(binary), [va], style=style
-        )
+        rendered = g.ir.decompile_many(str(binary), [va], style=style)
         assert rendered
         outputs[style] = rendered[0][2]
 

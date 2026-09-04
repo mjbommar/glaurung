@@ -276,8 +276,7 @@ def test_inventory_reports_provenance_deduplicated_counts():
     deduplicated_by_language = _summary("deduplicated_counts_by_language")
     for axis, total in deduplicated.items():
         assert (
-            deduplicated_by_language["c"][axis]
-            + deduplicated_by_language["rust"][axis]
+            deduplicated_by_language["c"][axis] + deduplicated_by_language["rust"][axis]
             == total
         )
 
@@ -292,9 +291,7 @@ def test_binary_identity_uses_real_content_not_filename_convention():
     rust_stripped = BUILD / "166_rust_generics-rustc-O2strip.dwarf.so"
     if not all(path.is_file() for path in (c_o2, c_stripped, rust_o2, rust_stripped)):
         pytest.skip("required real O2/stripped fixture pairs are absent")
-    identities = G.binary_content_identities(
-        [c_o2, c_stripped, rust_o2, rust_stripped]
-    )
+    identities = G.binary_content_identities([c_o2, c_stripped, rust_o2, rust_stripped])
     assert identities[c_o2.name] == identities[c_stripped.name]
     assert identities[rust_o2.name] != identities[rust_stripped.name]
 

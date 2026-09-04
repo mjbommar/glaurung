@@ -83,9 +83,7 @@ def test_dynamic_hello_is_canonical(
     compiler = shutil.which(compiler_name)
     if compiler is None:
         pytest.skip(f"{compiler_name} unavailable")
-    _assert_canonical(
-        _build_hello(tmp_path, compiler, optimization, linkage, stripped)
-    )
+    _assert_canonical(_build_hello(tmp_path, compiler, optimization, linkage, stripped))
 
 
 @pytest.fixture(scope="module")

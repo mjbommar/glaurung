@@ -92,9 +92,7 @@ def test_dynamic_hello_is_canonical(
     stripped: bool,
 ) -> None:
     """Both ARM ABIs must converge on one source program."""
-    _assert_canonical(
-        _build_hello(tmp_path, target, optimization, linkage, stripped)
-    )
+    _assert_canonical(_build_hello(tmp_path, target, optimization, linkage, stripped))
 
 
 @pytest.fixture(scope="module", params=TARGETS)
