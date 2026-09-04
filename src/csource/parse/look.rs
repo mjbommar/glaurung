@@ -38,6 +38,7 @@
 
 use super::Parser;
 use crate::csource::lex::TokenKind;
+use crate::syntax::recover::SyncSet;
 use crate::syntax::token::Tokens;
 
 /// The comma operator's precedence level: the lowest, and the only one a
@@ -80,6 +81,14 @@ const MAX_SCAN: u32 = 4096;
 
 /// How many tokens the type-name shape test reads before giving up.
 const MAX_TYPE_SCAN: u32 = 64;
+
+/// How many tokens a `::`-qualified name may span before the shape is not
+/// believed.
+///
+/// `core::ptr::const_ptr::<impl *const T>::as_ref` is 17; 64 leaves room for
+/// the deepest Rust path either decompiler prints while still bounding a `<`
+/// that turns out to be a comparison (`REQ-SYN-4`).
+const MAX_QUALIFIED_NAME: u32 = 64;
 
 /// How many `(T)` groups in a row the cast decision considers.
 ///
@@ -459,6 +468,86 @@ impl Parser<'_> {
         mask & !((1u16 << min_level) - 1) & ALL_LEVELS
     }
 
+    /// How many tokens of `::`-qualified name follow the identifier at `at - 1`.
+    ///
+    /// # The construct
+    ///
+    /// Ghidra and angr both print C++ and Rust *qualified* names into files
+    /// they label `.c`, and angr prints the generic form too:
+    /// `std::thread::ThreadId::new::exhausted`,
+    /// `core::ptr::const_ptr::<impl *const T>::as_ref`,
+    /// `core::slice::<impl [T]>::iter_mut`. `::` is not a C token, so without
+    /// this the name ends at the first colon and everything after it is
+    /// garbage --- which costs the whole definition, and the corpus has 22
+    /// angr cases and 7 Ghidra cases carrying one.
+    ///
+    /// The whole spelling is one name on purpose. Taking only the last
+    /// component would collide every `caseD_0` stub in a file onto one entry,
+    /// and `parity_cfgs` keys its output by name.
+    ///
+    /// # The bound
+    ///
+    /// `REQ-SYN-4`: the scan reads at most [`MAX_QUALIFIED_NAME`] tokens and
+    /// returns what it had before the segment that ran over, so a `<` that is
+    /// really a comparison cannot make this walk the file. Angle nesting is
+    /// counted rather than matched pairwise because `Vec<Vec<T>>` lexes its
+    /// tail as one `>>`.
+    ///
+    /// Returns `0` when the identifier is not qualified, which is the common
+    /// case and costs one token of lookahead.
+    pub(super) fn qualification_len(&self, at: u32) -> u32 {
+        use TokenKind::*;
+        let mut taken = 0u32;
+        loop {
+            let next = at + taken;
+            if self.look(next) != Some(Colon) || self.look(next + 1) != Some(Colon) {
+                return taken;
+            }
+            match self.look(next + 2) {
+                Some(Identifier) => taken += 3,
+                Some(Lt) => {
+                    let Some(after) = self.angle_group_end(next + 2) else {
+                        return taken;
+                    };
+                    taken = after - at;
+                }
+                _ => return taken,
+            }
+            if taken >= MAX_QUALIFIED_NAME {
+                return taken;
+            }
+        }
+    }
+
+    /// The offset just past the `<...>` group starting at `at`, or `None` when
+    /// it does not close within [`MAX_QUALIFIED_NAME`] tokens.
+    ///
+    /// Nesting is a signed count, not a stack, because the lexer folds `>>`
+    /// into one token: a group closes when the count reaches zero, and `Shl`
+    /// and `Shr` move it by two. An unbalanced run returns `None`, which the
+    /// caller reads as "that `<` was a comparison after all".
+    fn angle_group_end(&self, at: u32) -> Option<u32> {
+        use TokenKind::*;
+        let mut depth = 0i32;
+        let mut cursor = at;
+        while cursor < at + MAX_QUALIFIED_NAME {
+            match self.look(cursor)? {
+                Lt => depth += 1,
+                Shl => depth += 2,
+                Gt => depth -= 1,
+                Shr => depth -= 2,
+                // Nothing that ends a declarator may appear inside a name.
+                Semi | LBrace | RBrace => return None,
+                _ => {}
+            }
+            cursor += 1;
+            if depth <= 0 {
+                return if depth == 0 { Some(cursor) } else { None };
+            }
+        }
+        None
+    }
+
     /// Whether a declaration, rather than an expression statement, starts here.
     ///
     /// The rule and its justification are in the module docs. It is consulted
@@ -493,8 +582,15 @@ impl Parser<'_> {
         if self.look(at) != Some(Identifier) {
             return false;
         }
+        // `u64 core::slice::sort::heapsort(...)` is a definition, and at block
+        // scope --- where a dropped `}` puts one --- the qualification is the
+        // only thing between it and being read as an expression. Without this
+        // the follow test lands on the first `:` and fails, so a whole nested
+        // definition is lost; `a_qualified_definition_survives_a_dropped_brace`
+        // is the case that measured it.
+        let at = at + 1 + self.qualification_len(at + 1);
         matches!(
-            self.look(at + 1),
+            self.look(at),
             Some(Semi)
                 | Some(Comma)
                 | Some(Eq)
@@ -513,27 +609,138 @@ impl Parser<'_> {
     /// is open, so `REQ-GEN-2` still holds and a later consumer can re-read
     /// them; what is skipped is writing a grammar for them.
     ///
-    /// Depth counts all three bracket kinds together, which is exactly right
-    /// for well-formed C and merely approximate for input that is not; the work
-    /// budget bounds it either way.
+    /// Equivalent to [`Parser::eat_balanced_until`] with no follow set, which
+    /// is the right call wherever the group's own brackets are the only thing
+    /// that can end it: a `struct` body, a `sizeof` type name, a `typeof`
+    /// operand. A construct that also has a *grammatical* terminator --- a
+    /// parameter list, which a function body's `{` ends whether or not the `)`
+    /// arrived --- must pass that terminator instead, or a single missing
+    /// closer costs the rest of the file.
     pub(super) fn eat_balanced(&mut self) {
+        self.eat_balanced_until(&SyncSet::EMPTY);
+    }
+
+    /// Consume a balanced bracket group, stopping early at `follow`.
+    ///
+    /// # Why the opener kinds are tracked and not merely counted
+    ///
+    /// The previous version added every opener to one untyped counter and
+    /// subtracted every closer from it. On well-formed C that is exactly right
+    /// and much cheaper. On *ill-formed* C --- the only input this function
+    /// exists for --- it is wrong in a way that costs whole files. Walk
+    /// `int a(void { return 1; }` and then two healthy functions with one
+    /// counter: `(` 1, `{` 2, `}` 1, `(` 2, `)` 1, `{` 2, `}` 1 ... the count
+    /// never returns to zero, so the parameter list swallows every later
+    /// definition. A typed stack makes the shape visible --- the `}` closes the
+    /// `{`, not the `(` --- but on its own it does not help, because the `(`
+    /// really is unmatched and a stack that waits for its `)` waits forever.
+    ///
+    /// # Why a follow set is the actual fix
+    ///
+    /// What tree-sitter has here and delimiter arithmetic does not is the
+    /// grammar: `function_definition -> declarator compound_statement` makes
+    /// `{` a valid resume point at declarator level regardless of paren
+    /// nesting, so a dropped `)` costs one function rather than the file.
+    /// `follow` is that knowledge, supplied by the caller that has it: a kind
+    /// which, seen at the group's *own* nesting level, means the group ended
+    /// without its closer. The scan stops **before** such a token so the caller
+    /// resumes on it. [`super::decl::DECLARATOR_FOLLOW`] is the one set that
+    /// exists today and [`SyncSet::EMPTY`] is the honest default, because a
+    /// caller that does not know its follow set must not pretend to.
+    ///
+    /// The check is deliberately confined to depth 1. `int f(int a[]) { }`
+    /// nests a `[` inside the parameter list and `void g(void (*h)(void)) { }`
+    /// nests a `(`; neither is over, and a follow test applied at every depth
+    /// would end the group at the first `{` of a nested `struct` body.
+    ///
+    /// # Mismatched closers
+    ///
+    /// A closer that matches an opener deeper in the stack pops down to it:
+    /// the groups in between were never closed, and `struct { int (*f)(void; }`
+    /// should yield the struct body rather than the rest of the file. A closer
+    /// that matches nothing open is left unconsumed --- it belongs to a
+    /// construct enclosing this one, and eating it would steal the caller's
+    /// terminator.
+    ///
+    /// # Termination
+    ///
+    /// Every iteration either bumps a token or returns, and the work budget
+    /// (`REQ-SYN-4`) bounds the bumps, so the loop cannot spin.
+    pub(super) fn eat_balanced_until(&mut self, follow: &SyncSet) {
+        // The opener stack is borrowed from the parser rather than allocated
+        // here. This runs once per attribute, parameter list, array suffix,
+        // cast and `sizeof` type name --- tens of times per function --- and it
+        // never re-enters itself, so one buffer whose capacity survives the
+        // call is both correct and free. Handing it back on the single exit
+        // path is what keeps that true.
+        let mut open = std::mem::take(&mut self.brackets);
+        open.clear();
+        self.eat_balanced_into(follow, &mut open);
+        self.brackets = open;
+    }
+
+    /// [`Parser::eat_balanced_until`]'s loop, over a caller-owned opener stack.
+    ///
+    /// Split out only so the buffer has one place to be returned from; every
+    /// early exit below is an exit from *this* function.
+    fn eat_balanced_into(&mut self, follow: &SyncSet, open: &mut Vec<TokenKind>) {
         use TokenKind::*;
-        if !matches!(self.peek(), LParen | LBracket | LBrace) || self.at_eof() {
+        if self.at_eof() || !matches!(self.peek(), LParen | LBracket | LBrace) {
             return;
         }
-        let mut depth = 0u32;
+        // `struct`/`union`/`enum` arms a legal `{` at the group's own level:
+        // `void f(struct { int a; } x)` and `int g(enum e { A } x)` are the
+        // only shapes that put one inside a parameter list, and without this
+        // the follow set would cut them in half.
+        let mut brace_is_legal = false;
         loop {
             if self.at_eof() {
                 self.error("unterminated bracket group");
                 return;
             }
-            match self.peek() {
-                LParen | LBracket | LBrace => depth += 1,
-                RParen | RBracket | RBrace => depth = depth.saturating_sub(1),
+            let kind = self.peek();
+            if open.len() == 1
+                && follow.contains(kind.as_u16())
+                && !(kind == LBrace && brace_is_legal)
+            {
+                self.error(format!(
+                    "unterminated bracket group: `{}` ends it without a closer",
+                    kind.name()
+                ));
+                return;
+            }
+            match kind {
+                LParen | LBracket | LBrace => open.push(kind),
+                RParen | RBracket | RBrace => {
+                    let want = match kind {
+                        RParen => LParen,
+                        RBracket => LBracket,
+                        _ => LBrace,
+                    };
+                    match open.iter().rposition(|k| *k == want) {
+                        Some(at) => open.truncate(at),
+                        // A closer with nothing of its kind open belongs to an
+                        // enclosing construct; leaving it is what keeps a stray
+                        // `)` inside a struct body from costing the file.
+                        None => {
+                            self.error(format!(
+                                "unterminated bracket group: `{}` closes nothing it opened",
+                                kind.name()
+                            ));
+                            return;
+                        }
+                    }
+                }
                 _ => {}
             }
+            // Only at the group's own level: a `struct` nested two deep does
+            // not license a brace at level one.
+            if open.len() == 1 {
+                brace_is_legal = matches!(kind, KwStruct | KwUnion | KwEnum)
+                    || (kind == Identifier && brace_is_legal);
+            }
             self.bump();
-            if depth == 0 {
+            if open.is_empty() {
                 return;
             }
             if !self.work.charge(1) {
@@ -753,6 +960,127 @@ mod tests {
         assert!(index.contains(&"expr_stmt"), "{index:?}");
         // The documented misread: harmless, one straight-line item either way.
         assert!(tags("int f(void){ a * b; }").contains(&"decl"));
+    }
+
+    /// Every function definition name `text` yields, in source order.
+    fn definition_names(text: &str) -> Vec<String> {
+        let tree = parse(text).into_parts().0;
+        tree.functions(text).into_iter().map(|f| f.name).collect()
+    }
+
+    #[test]
+    fn a_dropped_parameter_list_closer_costs_one_function_and_not_the_file() {
+        // The defect the follow set exists for. With one untyped depth counter
+        // the walk `( { } ( ) { } ...` never returns to zero, so the missing
+        // `)` swallowed every later definition and the file recovered nothing.
+        let text = "int a(void { return 1; }\nint b(void){return 2;}\nint c(void){return 3;}";
+        assert_eq!(definition_names(text), vec!["a", "b", "c"]);
+        // The same shape one level down. An array suffix cannot contain a `;`
+        // either, so the bound is what is lost and the declaration still ends
+        // where its `;` says it does.
+        let bracket = "int a[3;\nint b(void){return 2;}\nint c(void){return 3;}";
+        assert_eq!(definition_names(bracket), vec!["b", "c"]);
+        // Both are errors, not silent recoveries.
+        assert!(!errors(text).is_empty());
+        assert!(!errors(bracket).is_empty());
+        // A parameter list has the same two terminators.
+        let semi = "int a(void;\nint b(void){return 2;}\nint c(void){return 3;}";
+        assert_eq!(definition_names(semi), vec!["b", "c"]);
+    }
+
+    #[test]
+    fn a_brace_that_opens_a_struct_body_does_not_end_a_parameter_list() {
+        // The follow set says `{` ends a parameter list, which is wrong for the
+        // one construct that may legally open a brace inside one. Every form of
+        // it has to survive, or the fix trades a rare loss for a common one.
+        for text in [
+            "int a(struct {int x;} s) { return 1; }",
+            "int a(struct S {int x;} s) { return 1; }",
+            "int a(union {int x; long y;} s) { return 1; }",
+            "int a(enum E {X,Y} s) { return 1; }",
+            "int a(void) { return sizeof(struct {int x;}); }",
+        ] {
+            assert_eq!(definition_names(text), vec!["a"], "{text}");
+            assert!(errors(text).is_empty(), "{text}: {:?}", errors(text));
+        }
+    }
+
+    #[test]
+    fn a_closer_with_nothing_open_is_left_for_the_caller() {
+        // `}` cannot close a `(`. Popping to the matching opener keeps the
+        // struct body bounded, so the two healthy definitions after it survive
+        // instead of being eaten by a group that can never close.
+        let text = "struct S { int (*f)(void; };\nint b(void){return 2;}\nint c(void){return 3;}";
+        assert_eq!(definition_names(text), vec!["b", "c"]);
+    }
+
+    #[test]
+    fn a_qualified_name_is_measured_whole_including_its_generic_segments() {
+        // The measurement is indirect on purpose: `qualification_len` is only
+        // useful if the name node ends up spanning what it counted.
+        for (text, name) in [
+            (
+                "int std::thread::exhausted(void) { return 1; }",
+                "std::thread::exhausted",
+            ),
+            (
+                "u64 core::ptr::const_ptr::<impl *const T>::as_ref(u64 a) { return a; }",
+                "core::ptr::const_ptr::<impl *const T>::as_ref",
+            ),
+            (
+                "u64 core::slice::<impl [T]>::iter_mut(u64 a) { return a; }",
+                "core::slice::<impl [T]>::iter_mut",
+            ),
+            (
+                "int wrap::<Vec<Vec<T>>>::run(int a) { return a; }",
+                "wrap::<Vec<Vec<T>>>::run",
+            ),
+        ] {
+            assert_eq!(definition_names(text), vec![name.to_string()], "{text}");
+        }
+    }
+
+    /// Every `DeclName`'s text, which is what a qualification either does or
+    /// does not end up inside.
+    fn declared_names(text: &str) -> Vec<String> {
+        let tree = parse(text).into_parts().0;
+        let arena = tree.arena();
+        let spans = tree.token_spans(text);
+        arena
+            .preorder_roots()
+            .filter(|n| {
+                arena.tag(*n) == Some(crate::csource::parse::tag::NodeTag::DeclName.as_u16())
+            })
+            .filter_map(|n| arena.span(n, &spans))
+            .map(|s| text[s.range()].to_string())
+            .collect()
+    }
+
+    #[test]
+    fn an_unclosed_angle_bracket_is_a_comparison_and_not_a_name() {
+        // `<` is an operator far more often than a generic argument list, so a
+        // segment that does not close is rejected rather than swallowed. The
+        // name is the part that was complete, and the file keeps its shape.
+        let text = "int f(void){ int a=1,b=2,c=3; if (a < b) return c; return 0; }";
+        assert_eq!(definition_names(text), vec!["f"]);
+        assert!(errors(text).is_empty(), "{:?}", errors(text));
+        // Two ways a `::<` fails to close, both of which must leave the name at
+        // `ns`. This is asserted on the `DeclName` text and not on the
+        // recovered definitions, because both readings lose the definition ---
+        // only the *span* says whether 64 tokens of garbage were taken into the
+        // name, and a test that cannot see that catches no mutation of the
+        // bound.
+        let long_run = vec!["zz"; 70].join(" ");
+        let overflowing = format!("int ns::<{long_run}> f(void) {{ return 1; }}");
+        assert_eq!(declared_names(&overflowing), vec!["ns".to_string()]);
+        let braced = "int ns::<a b { return 1; }";
+        assert_eq!(declared_names(braced), vec!["ns".to_string()]);
+        // ...and a `::<...>` that *does* close is taken whole, so the assertion
+        // above is about the bound and not about the feature being off.
+        assert_eq!(
+            declared_names("int ns::<impl T>::run(void) { return 1; }"),
+            vec!["ns::<impl T>::run".to_string()]
+        );
     }
 
     #[test]

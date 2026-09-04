@@ -76,6 +76,29 @@ const DECL_SYNC: SyncSet = SyncSet::new(&[
     TokenKind::Semi.as_u16(),
 ]);
 
+/// What ends a declarator-level bracket group even without its closer.
+///
+/// A parameter list, an array suffix and an attribute all sit at declarator
+/// level, and neither a `{` nor a `;` can appear at one's own nesting level in
+/// legal C. A `{` there belongs to the function body the declarator
+/// introduces, a `;` ends the declaration; either one says the `)` or `]` is
+/// missing rather than that the group continues. So
+/// `int a(void { return 1; }` costs one function instead of the file, and
+/// `int a[3; int b(void){...}` costs a bound instead of the file.
+///
+/// This is the grammar knowledge tree-sitter gets for free from
+/// `function_definition -> declarator compound_statement` and delimiter
+/// arithmetic cannot derive; `Parser::eat_balanced_until` explains why it is
+/// checked only at depth one, and how the `struct`/`union`/`enum` body --- the
+/// one construct that may legally open a brace inside a parameter list ---
+/// stays exempt.
+///
+/// The members must be written in discriminant order, for the reason
+/// [`DECL_SYNC`] gives; `the_declarator_follow_set_is_looked_up_not_assumed`
+/// checks rather than trusts it.
+pub(super) const DECLARATOR_FOLLOW: SyncSet =
+    SyncSet::new(&[TokenKind::LBrace.as_u16(), TokenKind::Semi.as_u16()]);
+
 impl Parser<'_> {
     /// Parse one item at file scope.
     ///
@@ -284,12 +307,24 @@ impl Parser<'_> {
         if next == LBracket {
             return self.array_return_ahead();
         }
+        // A calling convention sits *before* the declarator, never after the
+        // name --- `int f __cdecl;` is not C, while `undefined8 __rustcall
+        // __stdcall ns::f(void)` is what a decompiler writes when the middle
+        // word is its own convention name and the next is a real one. Without
+        // this the run ends at `__rustcall`, which then becomes the name and
+        // costs the definition; `a_convention_after_a_middle_word_is_not_the_name`
+        // is the case. It is the one member of the list below that stays true
+        // after a type has been seen, because it is the one that cannot
+        // legally follow a name.
+        if next == KwCallConv {
+            return true;
+        }
         if saw_type {
             return false;
         }
         matches!(
             next,
-            Star | LParen | KwConst | KwVolatile | KwRestrict | KwCallConv | KwDeclspec
+            Star | LParen | KwConst | KwVolatile | KwRestrict | KwDeclspec
         ) || is_type_keyword(next)
     }
 
@@ -356,7 +391,7 @@ impl Parser<'_> {
             let marker = self.open(NodeTag::Attribute);
             self.bump();
             if self.at(LParen) {
-                self.eat_balanced();
+                self.eat_balanced_until(&DECLARATOR_FOLLOW);
             }
             self.close(marker);
         }
@@ -392,7 +427,7 @@ impl Parser<'_> {
                 let marker = self.open(NodeTag::Asm);
                 self.bump();
                 if self.at(TokenKind::LParen) {
-                    self.eat_balanced();
+                    self.eat_balanced_until(&DECLARATOR_FOLLOW);
                 }
                 self.close(marker);
                 continue;
@@ -458,7 +493,7 @@ impl Parser<'_> {
             let marker = self.open(NodeTag::Attribute);
             self.bump();
             if self.at(LParen) {
-                self.eat_balanced();
+                self.eat_balanced_until(&DECLARATOR_FOLLOW);
             }
             self.close(marker);
             ate = true;
@@ -647,19 +682,18 @@ impl Parser<'_> {
                 Identifier if !found_name => {
                     let name = self.open(NodeTag::DeclName);
                     self.bump();
-                    // `switchD_0010101c::caseD_0`, and every C++ method Ghidra
-                    // prints into a `.c` file. `::` is not a C token, so it
-                    // ended the declarator and cost the definition. The whole
-                    // qualified spelling is one name: taking only the left half
-                    // would collide every `caseD_0` stub in the file onto one
-                    // entry, and `parity_cfgs` keys its output by name.
-                    while self.at(Colon) && self.nth(1) == Colon && self.nth(2) == Identifier {
-                        if !self.work.charge(1) {
-                            break;
-                        }
+                    // `switchD_0010101c::caseD_0`, every C++ method Ghidra
+                    // prints into a `.c` file, and angr's generic paths ---
+                    // `core::slice::<impl [T]>::iter_mut`. `::` is not a C
+                    // token, so it ended the declarator and cost the
+                    // definition. `Parser::qualification_len` measures the
+                    // whole run, including the `::<...>` segments the previous
+                    // `Colon Colon Identifier` loop stopped at, and says why
+                    // the spelling is kept whole.
+                    let mut left = self.qualification_len(0);
+                    while left > 0 && self.work.charge(1) {
                         self.bump();
-                        self.bump();
-                        self.bump();
+                        left -= 1;
                     }
                     self.close(name);
                     found_name = true;
@@ -670,7 +704,7 @@ impl Parser<'_> {
                 }
                 LParen => {
                     let params = self.open(NodeTag::ParamList);
-                    self.eat_balanced();
+                    self.eat_balanced_until(&DECLARATOR_FOLLOW);
                     self.close(params);
                 }
                 RParen if depth > 0 => {
@@ -679,7 +713,7 @@ impl Parser<'_> {
                 }
                 LBracket => {
                     let suffix = self.open(NodeTag::ArraySuffix);
-                    self.eat_balanced();
+                    self.eat_balanced_until(&DECLARATOR_FOLLOW);
                     self.close(suffix);
                 }
                 _ => return,
@@ -764,7 +798,8 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::{parse, tag::NodeTag};
-    use super::DECL_SYNC;
+    use super::{DECLARATOR_FOLLOW, DECL_SYNC};
+    use crate::csource::lex::TokenKind;
     use crate::syntax::diag::Severity;
 
     /// Every error diagnostic `text` produces.
@@ -788,6 +823,68 @@ mod tests {
             .filter_map(NodeTag::from_u16)
             .map(NodeTag::name)
             .collect()
+    }
+
+    /// Every function definition name `text` yields, in source order.
+    fn definition_names(text: &str) -> Vec<String> {
+        let tree = parse(text).into_parts().0;
+        tree.functions(text).into_iter().map(|f| f.name).collect()
+    }
+
+    #[test]
+    fn the_declarator_follow_set_is_looked_up_not_assumed() {
+        // `SyncSet::new` binary-searches; an unsorted or mis-typed literal
+        // silently matches nothing, and the failure surfaces as a dropped
+        // closer costing the whole file again.
+        assert!(DECLARATOR_FOLLOW.contains(TokenKind::LBrace.as_u16()));
+        assert!(DECLARATOR_FOLLOW.contains(TokenKind::Semi.as_u16()));
+        assert!(!DECLARATOR_FOLLOW.contains(TokenKind::RBrace.as_u16()));
+        assert!(!DECLARATOR_FOLLOW.contains(TokenKind::Comma.as_u16()));
+    }
+
+    #[test]
+    fn a_qualified_definition_survives_a_dropped_brace() {
+        // A dropped `}` puts the next definition at *block* scope, where
+        // `starts_declaration` decides. `long long ns::f(...)` was already a
+        // declaration because it starts with a type keyword; `u64 ns::g(...)`
+        // was not, because the follow test landed on the first `:` of the
+        // qualification. The two must behave the same, or a dropped brace
+        // costs every later definition whose return type is a decompiler
+        // typedef rather than a C keyword.
+        let text = "int outer(void) {\n\
+                    long long alloc::alloc::handle_alloc_error(unsigned long a0) { return 1; }\n\
+                    u64 core::slice::sort::heapsort(unsigned long a1) { return 2; }\n";
+        let names = definition_names(text);
+        assert!(
+            names.contains(&"core::slice::sort::heapsort".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"alloc::alloc::handle_alloc_error".to_string()),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn a_convention_after_a_middle_word_is_not_the_name() {
+        // Ghidra writes its own convention name and a real one side by side.
+        // With the specifier run stopping at `__rustcall`, that word became the
+        // function's name and the real one was lost. A calling convention
+        // cannot follow a declarator's name in C, so an identifier before one
+        // is always a specifier.
+        for (text, name) in [
+            (
+                "u32 __rustcall __stdcall core::num::NonZeroU32::get(int self) { return self; }",
+                "core::num::NonZeroU32::get",
+            ),
+            (
+                "undefined8 __stdcall FUN_00101169(void) { return 0; }",
+                "FUN_00101169",
+            ),
+            ("int __cdecl f(void) { return 0; }", "f"),
+        ] {
+            assert_eq!(definition_names(text), vec![name.to_string()], "{text}");
+        }
     }
 
     #[test]

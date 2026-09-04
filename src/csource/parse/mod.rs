@@ -209,6 +209,11 @@ struct Parser<'a> {
     /// Set once a budget was exhausted, so the file stops rather than
     /// reporting the same exhaustion at every remaining position.
     stopped: bool,
+    /// Scratch opener stack for [`Parser::eat_balanced_until`], kept here so
+    /// the hottest recovery loop in the parser allocates once per file rather
+    /// than once per bracket group. Empty between calls; the function that
+    /// borrows it is iterative and never re-enters itself.
+    brackets: Vec<TokenKind>,
 }
 
 impl<'a> Parser<'a> {
@@ -225,6 +230,7 @@ impl<'a> Parser<'a> {
             work: WorkBudget::new(budget),
             tasks: Vec::new(),
             stopped: false,
+            brackets: Vec::new(),
         }
     }
 
