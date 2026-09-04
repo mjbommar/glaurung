@@ -21,4 +21,5 @@
 
 pub mod calibrate;
 pub mod tree_distance;
+pub mod type_match;
 pub mod type_name;
