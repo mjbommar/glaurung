@@ -2370,6 +2370,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2411,6 +2412,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2439,6 +2441,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2469,6 +2472,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2500,6 +2504,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2532,6 +2537,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2593,6 +2599,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2685,6 +2692,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2750,6 +2758,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2800,6 +2809,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2890,6 +2900,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,
@@ -2954,6 +2965,7 @@ mod tests {
         let contract = DwarfPrototypeContract {
             function_name: None,
             prototyped: true,
+            variadic: false,
             parameter_types: Vec::new(),
             parameter_names: Vec::new(),
             return_type: DwarfReturnType::Void,

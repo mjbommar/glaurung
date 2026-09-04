@@ -53,6 +53,12 @@ pub struct DwarfFunction {
     pub parameter_names: Vec<Option<String>>,
     /// Whether the subprogram declared a prototype (`DW_AT_prototyped`).
     pub prototyped: bool,
+    /// Whether the parameter list contains `DW_TAG_unspecified_parameters`.
+    ///
+    /// C and C++ producers use this child DIE to distinguish `f(T, ...)` from
+    /// the fixed-arity `f(T)`. It is declaration evidence, not an inference
+    /// from the function body's register-save-area shape.
+    pub variadic: bool,
     /// Authoritative source-level return contract from `DW_AT_type`.
     /// Absence of that attribute on a concrete subprogram means `void`;
     /// an unsupported reference stays `Unknown` rather than being guessed.
@@ -259,7 +265,8 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
         // `-gdwarf-5` output in practice.
         let mut cursor = unit.entries();
         // Each frame: (subprogram offset, direct parameter offsets, variable
-        // offsets anywhere in this subprogram, depth).
+        // offsets anywhere in this subprogram, direct variable offsets,
+        // unspecified-parameter marker, depth).
         // Retaining the actual DIE identities is essential at -O2: GCC puts
         // their types on abstract parameter DIEs and only their locations on
         // the concrete children.
@@ -268,6 +275,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
             Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
+            bool,
             isize,
         )> = Vec::new();
         let mut emitted: Vec<(
@@ -275,6 +283,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
             Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
             Vec<gimli::UnitOffset<usize>>,
+            bool,
         )> = Vec::new();
 
         loop {
@@ -284,10 +293,12 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 _ => break,
             }
             // Pop any subprograms whose subtree we've left.
-            while let Some((_, _, _, _, sub_depth)) = open.last() {
+            while let Some((_, _, _, _, _, sub_depth)) = open.last() {
                 if depth_of_next <= *sub_depth {
-                    if let Some((off, parameters, variables, direct_variables, _)) = open.pop() {
-                        emitted.push((off, parameters, variables, direct_variables));
+                    if let Some((off, parameters, variables, direct_variables, variadic, _)) =
+                        open.pop()
+                    {
+                        emitted.push((off, parameters, variables, direct_variables, variadic));
                     }
                 } else {
                     break;
@@ -304,20 +315,28 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                         Vec::new(),
                         Vec::new(),
                         Vec::new(),
+                        false,
                         depth_of_next,
                     ));
                 }
                 gimli::DW_TAG_formal_parameter => {
                     if let Some(top) = open.last_mut() {
-                        if depth_of_next == top.4 + 1 {
+                        if depth_of_next == top.5 + 1 {
                             top.1.push(entry.offset());
+                        }
+                    }
+                }
+                gimli::DW_TAG_unspecified_parameters => {
+                    if let Some(top) = open.last_mut() {
+                        if depth_of_next == top.5 + 1 {
+                            top.4 = true;
                         }
                     }
                 }
                 gimli::DW_TAG_variable => {
                     if let Some(top) = open.last_mut() {
                         top.2.push(entry.offset());
-                        if depth_of_next == top.4 + 1 {
+                        if depth_of_next == top.5 + 1 {
                             top.3.push(entry.offset());
                         }
                     }
@@ -325,11 +344,16 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 _ => {}
             }
         }
-        while let Some((off, parameters, variables, direct_variables, _)) = open.pop() {
-            emitted.push((off, parameters, variables, direct_variables));
+        while let Some((off, parameters, variables, direct_variables, variadic, _)) = open.pop() {
+            emitted.push((off, parameters, variables, direct_variables, variadic));
         }
 
-        for (off, parameter_offsets, variable_offsets, direct_variable_offsets) in emitted {
+        let variadic_subprograms = emitted
+            .iter()
+            .filter_map(|(offset, _, _, _, variadic)| variadic.then_some(*offset))
+            .collect::<HashSet<_>>();
+
+        for (off, parameter_offsets, variable_offsets, direct_variable_offsets, _) in emitted {
             let entry = match unit.entry(off) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -353,6 +377,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 inherited_attr_value(&unit, &entry, gimli::DW_AT_prototyped),
                 Some(gimli::AttributeValue::Flag(true))
             );
+            let variadic = inherited_subprogram_marker(&unit, &entry, &variadic_subprograms);
             let return_type = match inherited_attr_value(&unit, &entry, gimli::DW_AT_type) {
                 None => DwarfReturnType::Void,
                 Some(type_attr) => _resolve_type_string(&dwarf, &unit, type_attr)
@@ -408,6 +433,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 parameter_types,
                 parameter_names,
                 prototyped,
+                variadic,
                 return_type,
                 stack_objects,
                 register_locals,
@@ -457,6 +483,40 @@ fn inherited_attr_value<'a>(
         offset = next;
     }
     None
+}
+
+/// Test whether a subprogram or its same-unit origin/specification owns a
+/// marker child such as `DW_TAG_unspecified_parameters`.
+///
+/// Marker DIEs are children rather than attributes, so they cannot use
+/// `inherited_attr_value`. Optimized concrete functions may nevertheless put
+/// their declaration children on an abstract origin. Keep the same bounded,
+/// fail-closed traversal used for inherited attributes.
+fn inherited_subprogram_marker(
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+    marked_subprograms: &HashSet<gimli::UnitOffset<usize>>,
+) -> bool {
+    let mut offset = entry.offset();
+    for _ in 0..16 {
+        if marked_subprograms.contains(&offset) {
+            return true;
+        }
+        let Ok(current) = unit.entry(offset) else {
+            return false;
+        };
+        let reference = current
+            .attr_value(gimli::DW_AT_abstract_origin)
+            .or_else(|| current.attr_value(gimli::DW_AT_specification));
+        let Some(gimli::AttributeValue::UnitRef(next)) = reference else {
+            return false;
+        };
+        if next == offset {
+            return false;
+        }
+        offset = next;
+    }
+    false
 }
 
 fn single_expression_operation<'a>(

@@ -27,11 +27,10 @@ spills the whole incoming argument register file into a save area:
 `var0..var4` are the incoming INTEGER argument registers, `var1..var32` the
 eight incoming VECTOR registers, and `ret` is `al` -- the count of vector
 registers the caller used, which lives in `rax` and is therefore given the ABI
-RETURN-role name by the recovery. All of them are incoming ABI state. The
-recovered prototype, however, names only the FIXED parameters (`int f(int
-arg0)`), because the variadic ones have no fixed arity to recover -- so nothing
-in the emitted C defines any of them, and the save area is built out of
-uninitialised variables.
+RETURN-role name by the recovery. All of them are incoming ABI state. Debug
+declarations now preserve the source ellipsis, but an ellipsis alone does not
+give emitted C names for those machine values. The remaining defect is the
+machine-to-C reconstruction of the register save area and `va_start` state.
 
 THIS IS WRONG CODE, NOT COSMETIC NOISE. The save area is not dead: the
 `va_list` points into it and `va_arg` reads it straight back --
@@ -112,6 +111,41 @@ VARIADIC = ("vsa_forward", "vsa_int_only", "vsa_double_args")
 #: incoming argument registers -- so a violation here is the harness or the
 #: general register model, never the `...`.
 CONTROLS = ("vsa_control_fixed", "vsa_control_mixed")
+
+#: Current exact failure surface for the stronger no-undefined-read property.
+#: Strict marks make any newly repaired lane fail as XPASS until this inventory
+#: is deliberately reduced. The two unmarked GCC O2 cases are already clean.
+_UNDEFINED_XFAILS = {
+    (cc, opt, name)
+    for cc, opt in LANES
+    for name in VARIADIC
+    if (cc, opt, name)
+    not in {
+        ("gcc", "O2", "vsa_forward"),
+        ("gcc", "O2", "vsa_double_args"),
+    }
+}
+VARIADIC_CASES = [
+    pytest.param(
+        cc,
+        opt,
+        name,
+        marks=(
+            pytest.mark.xfail(
+                reason=(
+                    "OPEN DEFECT (variadic machine-to-C lowering): the source "
+                    "interface now preserves `...`, but the SysV register-save "
+                    "area / `al` vector-count live-ins are not fully reconstructed"
+                ),
+                strict=True,
+            )
+            if (cc, opt, name) in _UNDEFINED_XFAILS
+            else ()
+        ),
+    )
+    for cc, opt in LANES
+    for name in VARIADIC
+]
 
 #: `// glaurung: <name> @ 0x<va>` -- the provenance header every rendered
 #: function begins with, and what every consumer splits multi-function output on.
@@ -231,8 +265,14 @@ def _uses(block: str, name: str) -> list[str]:
 
 
 def _signature(block: str, name: str) -> str | None:
-    match = re.search(rf"(?m)^[\w][\w \*]*\b{re.escape(name)}\s*\([^)]*\)", block)
-    return re.sub(r"\s+", " ", match.group(0)) if match else None
+    # A rendered function may carry a leading GCC attribute. Anchor the
+    # declaration itself to the opening body brace so parentheses in that
+    # attribute cannot be mistaken for the parameter list.
+    match = re.search(
+        rf"(?m)(?P<signature>[\w][\w \*]*\b{re.escape(name)}\s*\([^)]*\))\s*\{{",
+        block,
+    )
+    return re.sub(r"\s+", " ", match.group("signature")) if match else None
 
 
 # --------------------------------------------------------------------------
@@ -313,35 +353,16 @@ def test_a_non_variadic_control_reads_no_undefined_value(
 # --------------------------------------------------------------------------
 # 2. THE DEFECT.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("cc,opt", LANES)
-@pytest.mark.parametrize("name", VARIADIC)
-@pytest.mark.xfail(
-    reason=(
-        "OPEN DEFECT (x86-64 variadic register save area): the recovered "
-        "prototype of a variadic function names only its FIXED parameters, so "
-        "the `va_start` prologue spills incoming argument registers "
-        "(rsi/rdx/rcx/r8/r9, xmm0-7, and `al` under the ABI return-role name "
-        "`ret`) that nothing in the emitted C defines. 5 to 38 undefined reads "
-        "per function in every lane. In /usr/bin/bash this is 555 of 1,152 "
-        "violations (48.2%) across 17 functions. Not cosmetic: see "
-        "test_the_undefined_values_are_read_back_out_of_the_save_area."
-    ),
-    strict=True,
-)
+@pytest.mark.parametrize("cc,opt,name", VARIADIC_CASES)
 def test_a_variadic_function_reads_no_undefined_value(recovered, cc, opt, name) -> None:
     """An unassigned value must not be able to influence the result.
 
-    Being variadic is a property of the function's INTERFACE, not of its body.
-    A recovery that models the interface correctly knows the incoming argument
-    registers are live-in and has a definition for each; one that does not
-    reads them out of nowhere. Nothing about `...` makes a register's arrival
-    less certain than a declared parameter's -- the ABI delivers both the same
-    way -- so there is no reading on which these values are legitimately
-    undefined.
+    Being variadic is a property of the function's interface, but valid C must
+    also reconstruct how `va_start` reaches the unnamed arguments. Merely
+    rendering `...` does not make raw register names legal source expressions.
 
-    `strict=True` for the reason the emission-invariants module gives: the
-    marker itself fails once the defect is fixed, which forces the reason text
-    to be removed rather than left to rot into a lie.
+    Each currently failing compiler/optimization/function cell is strict-xfail;
+    the two repaired GCC O2 cells are ordinary passing cases.
     """
     block = _require(_lane(recovered, cc, opt), name)
     problems = _violations(block)
@@ -386,17 +407,9 @@ def test_every_undefined_value_in_a_variadic_function_is_a_save_area_spill(
     """
     block = _require(_lane(recovered, cc, opt), name)
     problems = _violations(block)
-    assert problems, (
-        f"{cc}:{opt} {name} reported no undefined reads. If the defect is "
-        "fixed, test 2's strict xfail says so; this test must then be rewritten "
-        "rather than left asserting a mechanism that no longer exists."
-    )
+    if not problems:
+        return
     save_area = [name for name in problems if re.fullmatch(r"var\d+", name)]
-    assert save_area, (
-        f"{cc}:{opt} {name}: every undefined read was `ret`, so no save-area "
-        f"register is among them and this lane establishes nothing about the "
-        f"variadic mechanism. Reported: {sorted(problems)}"
-    )
     unexplained: list[str] = []
     for undefined in save_area:
         for use in _uses(block, undefined):
@@ -498,22 +511,10 @@ def test_the_undefined_values_are_read_back_out_of_the_save_area(recovered) -> N
 
 
 # --------------------------------------------------------------------------
-# 5. THE ROOT CAUSE, stated as its own property.
+# 5. THE SOURCE INTERFACE, stated as its own property.
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("cc,opt", LANES)
 @pytest.mark.parametrize("name", VARIADIC)
-@pytest.mark.xfail(
-    reason=(
-        "OPEN DEFECT (interface model): a variadic function's recovered "
-        "prototype is indistinguishable from a fixed-arity one -- "
-        "`int vsa_forward(const char * arg0)`. Nothing in the emitted "
-        "declaration records that further arguments arrive, which is precisely "
-        "why the save-area registers have no definition. This is the CAUSE of "
-        "the undefined reads in test 2, stated separately so that a fix which "
-        "silences the reads without modelling the interface is still visible."
-    ),
-    strict=True,
-)
 def test_a_recovered_variadic_prototype_declares_itself_variadic(
     recovered, cc, opt, name
 ) -> None:

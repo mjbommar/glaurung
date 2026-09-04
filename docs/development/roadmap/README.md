@@ -126,7 +126,9 @@ the rule is width- and effect-guarded and has clean-master A/B evidence. An
 explicit CLI analyst mode can now place deterministic declaration/recovery
 conflicts beside affected signatures while the default scored text stays
 unchanged; the mode bypasses the text cache because drained provenance cannot
-be reconstructed from a cached artifact. WP9 has
+be reconstructed from a cached artifact. DWARF variadic markers now survive
+into GCC and Clang rendered signatures across O0/O2; generic stripped-binary
+variadic inference and complete SysV `va_start` lowering remain open. WP9 has
 target-owned ARM32 register views plus standing
 decoded/effect capability censuses and several silent-writer repairs. WP2,
 WP3, WP6, and WP7B remain open architectural work. No current-tip release gate

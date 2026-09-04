@@ -10,6 +10,8 @@ pub(super) struct DwarfPrototypeContract {
     /// This distinguishes `f(void)` from an old-style `f()` when both have no
     /// formal-parameter DIEs.
     pub(super) prototyped: bool,
+    /// Whether the authoritative declaration accepts an unspecified tail.
+    pub(super) variadic: bool,
     pub(super) parameter_types: Vec<crate::debug::dwarf::DwarfParameterType>,
     pub(super) parameter_names: Vec<Option<String>>,
     pub(super) return_type: crate::debug::dwarf::DwarfReturnType,
@@ -46,6 +48,7 @@ pub(super) fn dwarf_output_contracts(
                 DwarfPrototypeContract {
                     function_name: function.name.clone(),
                     prototyped: function.prototyped,
+                    variadic: function.variadic,
                     parameter_types: function.parameter_types.clone(),
                     parameter_names: function.parameter_names.clone(),
                     return_type: function.return_type.clone(),
@@ -101,6 +104,7 @@ pub(super) fn pdb_output_contracts(
                 DwarfPrototypeContract {
                     function_name: Some(declaration.name),
                     prototyped: true,
+                    variadic: false,
                     parameter_types,
                     parameter_names,
                     return_type,
@@ -826,7 +830,7 @@ pub(super) fn dwarf_render_prototype(
     Some(CallPrototype {
         return_type,
         parameter_types,
-        variadic: false,
+        variadic: declared.variadic,
         authority: CallPrototypeAuthority::Authoritative,
     })
 }

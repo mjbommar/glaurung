@@ -1087,6 +1087,25 @@ tests. Broader current-master failures remain visible and no baseline was
 refreshed. Exact commands and limitations are recorded in
 `results/wp8-annotated-conflicts.md`.
 
+### Implementation evidence — 2026-09-04 DWARF variadic declarations
+
+The DWARF reader now retains a direct `DW_TAG_unspecified_parameters` child as
+an authoritative variadic fact and follows the same bounded, same-unit
+abstract-origin/specification chain used for inherited attributes. The fact is
+carried through the program-owned debug contract into `CallPrototype`, so GCC
+and Clang declarations render `f(fixed, ...)` instead of the false fixed-arity
+`f(fixed)` claim. PDB contracts remain explicitly non-variadic until their own
+format adapter can prove otherwise.
+
+The real four-lane variadic fixture proves all 12 combinations of GCC/Clang,
+O0/O2, and three functions render the ellipsis. It also keeps the distinct
+machine-to-C limitation visible: two GCC O2 bodies have no undefined reads,
+while ten strict xfails still track incomplete SysV register-save-area and
+`al` vector-count reconstruction. This increment therefore improves trusted
+source declaration fidelity but does not claim generic stripped-binary
+variadic inference or complete `va_start` lowering. Exact commands and results
+are recorded in `results/wp8-dwarf-variadic-declarations.md`.
+
 ### Exit criteria
 
 - [ ] No rendered prototype is worse than an available trusted declaration.
