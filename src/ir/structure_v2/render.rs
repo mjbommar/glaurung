@@ -1,6 +1,6 @@
 //! Conservative shadow-tree adapter into the existing AST and printer.
 
-use super::{LoopKind, StructuredRegion, StructuredTree};
+use super::{LocalLabelRegion, LoopKind, StructuredRegion, StructuredTree};
 use crate::ir::structure::Region;
 use crate::ir::types::LlirFunction;
 
@@ -29,8 +29,14 @@ pub(super) fn render_pseudocode(
 
 /// Adapt an independently verified v2 tree into the production AST boundary.
 pub(crate) fn adapt_tree(tree: &StructuredTree) -> Option<Region> {
-    let mut regions = vec![adapt_region(&tree.root)?];
+    let mut root = adapt_region(&tree.root)?;
+    let mut embedded = std::collections::BTreeSet::new();
+    embed_switch_local_regions(&mut root, &tree.local_regions, &mut embedded)?;
+    let mut regions = vec![root];
     for local in &tree.local_regions {
+        if embedded.contains(&local.region) {
+            continue;
+        }
         regions.push(Region::Unstructured(
             local.blocks.iter().map(|block| block.block).collect(),
         ));
@@ -39,6 +45,131 @@ pub(crate) fn adapt_tree(tree: &StructuredTree) -> Option<Region> {
         }
     }
     Some(Region::Seq(regions))
+}
+
+/// Place a verified multi-entry local region inside a switch when at least two
+/// distinct arms enter it. This is the region relationship required by Duff's
+/// device: case labels belong inside the loop body, even though the loop is
+/// irreducible when viewed without the dispatch. The region remains owned
+/// exactly once; only its lexical placement changes.
+fn embed_switch_local_regions(
+    region: &mut Region,
+    locals: &[LocalLabelRegion],
+    embedded: &mut std::collections::BTreeSet<usize>,
+) -> Option<()> {
+    match region {
+        Region::Seq(parts) => {
+            for part in parts {
+                embed_switch_local_regions(part, locals, embedded)?;
+            }
+        }
+        Region::IfThen { then_r, .. } => {
+            embed_switch_local_regions(then_r, locals, embedded)?;
+        }
+        Region::IfThenElse { then_r, else_r, .. } => {
+            embed_switch_local_regions(then_r, locals, embedded)?;
+            embed_switch_local_regions(else_r, locals, embedded)?;
+        }
+        Region::While { body, .. } | Region::DoWhile { body, .. } => {
+            embed_switch_local_regions(body, locals, embedded)?;
+        }
+        Region::MultiExitLoop { body, exits, .. } => {
+            embed_switch_local_regions(body, locals, embedded)?;
+            for (_, exit) in exits {
+                embed_switch_local_regions(exit, locals, embedded)?;
+            }
+        }
+        Region::Switch {
+            arms,
+            formal_default,
+            ..
+        } => {
+            for arm in arms.iter_mut() {
+                embed_switch_local_regions(arm, locals, embedded)?;
+            }
+            if let Some(default) = formal_default {
+                embed_switch_local_regions(default, locals, embedded)?;
+            }
+
+            let candidates: Vec<_> = locals
+                .iter()
+                .filter(|local| !embedded.contains(&local.region))
+                .filter_map(|local| {
+                    let blocks: std::collections::BTreeSet<_> =
+                        local.blocks.iter().map(|block| block.block).collect();
+                    let entering_arms: Vec<_> = arms
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, arm)| {
+                            region_goto_targets(arm)
+                                .iter()
+                                .any(|target| blocks.contains(target))
+                                .then_some(index)
+                        })
+                        .collect();
+                    (entering_arms.len() >= 2).then_some((local, entering_arms[0]))
+                })
+                .collect();
+            if let [(local, owner)] = candidates.as_slice() {
+                let local_blocks: std::collections::BTreeSet<_> =
+                    local.blocks.iter().map(|block| block.block).collect();
+                let entry = region_goto_targets(&arms[*owner])
+                    .into_iter()
+                    .find(|target| local_blocks.contains(target))?;
+                let mut ordered_blocks: Vec<_> =
+                    local.blocks.iter().map(|block| block.block).collect();
+                let entry_position = ordered_blocks.iter().position(|block| *block == entry)?;
+                // The SCC inventory is block-id ordered, not execution ordered.
+                // Start its lexical spelling at the owning case's real entry.
+                // Any displaced internal fallthrough becomes an explicit goto
+                // in `Region::Unstructured`, so rotating cannot hide an edge.
+                ordered_blocks.rotate_left(entry_position);
+                let mut body = vec![std::mem::replace(
+                    &mut arms[*owner],
+                    Region::Seq(Vec::new()),
+                )];
+                body.push(Region::Unstructured(ordered_blocks));
+                for exit in &local.exits {
+                    body.push(adapt_region(&exit.region)?);
+                }
+                arms[*owner] = Region::Seq(body);
+                embedded.insert(local.region);
+            }
+        }
+        Region::Block(_) | Region::RawLoop { .. } | Region::Goto(_) | Region::Unstructured(_) => {}
+    }
+    Some(())
+}
+
+fn region_goto_targets(region: &Region) -> Vec<usize> {
+    match region {
+        Region::Goto(target) => vec![*target],
+        Region::Seq(parts) => parts.iter().flat_map(region_goto_targets).collect(),
+        Region::IfThen { then_r, .. } => region_goto_targets(then_r),
+        Region::IfThenElse { then_r, else_r, .. } => {
+            let mut targets = region_goto_targets(then_r);
+            targets.extend(region_goto_targets(else_r));
+            targets
+        }
+        Region::While { body, .. } | Region::DoWhile { body, .. } => region_goto_targets(body),
+        Region::MultiExitLoop { body, exits, .. } => {
+            let mut targets = region_goto_targets(body);
+            targets.extend(exits.iter().flat_map(|(_, exit)| region_goto_targets(exit)));
+            targets
+        }
+        Region::Switch {
+            arms,
+            formal_default,
+            ..
+        } => {
+            let mut targets: Vec<_> = arms.iter().flat_map(region_goto_targets).collect();
+            if let Some(default) = formal_default {
+                targets.extend(region_goto_targets(default));
+            }
+            targets
+        }
+        Region::Block(_) | Region::RawLoop { .. } | Region::Unstructured(_) => Vec::new(),
+    }
 }
 
 fn adapt_region(region: &StructuredRegion) -> Option<Region> {

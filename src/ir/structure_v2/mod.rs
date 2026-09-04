@@ -1008,6 +1008,53 @@ mod tests {
     }
 
     #[test]
+    fn real_duff_o0_embeds_the_shared_local_region_inside_the_switch() {
+        for binary in ["102_duffs_device-clang-O0.so", "102_duffs_device-gcc-O0.so"] {
+            let Some(lifted) = lift_real_fixture(binary, "duff_copy") else {
+                continue;
+            };
+            let report = observe(&lifted, &compute_ssa(&lifted));
+            let pseudocode = report
+                .prepared_pseudocode
+                .as_deref()
+                .unwrap_or_else(|| panic!("Duff O0 should render: {report:#?}"));
+
+            assert!(pseudocode.contains("switch ("), "{pseudocode}");
+            assert!(pseudocode.contains("case 0:"), "{pseudocode}");
+            assert!(pseudocode.contains("case 7:"), "{pseudocode}");
+            let lines: Vec<_> = pseudocode.lines().collect();
+            for value in 0..8 {
+                let case = format!("case {value}:");
+                let position = lines
+                    .iter()
+                    .position(|line| line.trim() == case)
+                    .unwrap_or_else(|| panic!("missing {case}: {pseudocode}"));
+                let first_effect = lines[position + 1..]
+                    .iter()
+                    .map(|line| line.trim())
+                    .find(|line| !line.is_empty() && !line.starts_with("L_"))
+                    .unwrap_or_else(|| panic!("empty {case}: {pseudocode}"));
+                assert!(
+                    !first_effect.starts_with("goto "),
+                    "O0 case entry should be a label at its owned local block: {pseudocode}"
+                );
+            }
+            for pair in pseudocode.lines().collect::<Vec<_>>().windows(2) {
+                let Some(label) = pair[0].trim().strip_suffix(": ;") else {
+                    continue;
+                };
+                assert_ne!(
+                    pair[1].trim(),
+                    format!("goto {label};"),
+                    "embedding must not turn a same-address entry stub into a self-loop: {pseudocode}"
+                );
+            }
+            assert_prepared_c(&report);
+            assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        }
+    }
+
+    #[test]
     fn real_wide_effect_switches_reach_shadow_without_losing_cases() {
         for (binary, case_count) in [
             ("154_wide_switch-gcc-O2.so", 208usize),
