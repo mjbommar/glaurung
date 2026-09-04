@@ -132,7 +132,22 @@ extents run into alignment padding (now trimmed). Each of these silently
 produces a wrong or empty library rather than an error, so the harvester
 records per-archive outcomes and never treats an empty result as success.
 
+## Where things stand at the close of 2026-09-03
+
+Published: set `base` version `2026.09.2`, serial 2, on
+`https://assets.glaurung.dev`, 446 libraries and 533,820 signatures as
+`gsig/1` (36.3 MiB), signed by the maintainer's key, fetched and verified
+by a clean client. The full account of the day, including the per-cell
+coverage numbers and the defects found, is
+[`history/sessions/2026-09-03-signature-libraries.md`](../history/sessions/2026-09-03-signature-libraries.md).
+Open items are in that record's last section and in the ledger below.
+
 ## Execution ledger
+
+Open items from this ledger and from the identity ladder are maintained
+together in
+[`development/roadmap/function-identity-and-signatures.md`](../development/roadmap/function-identity-and-signatures.md);
+this table records what happened, that page records what is next.
 
 | # | Item | State | Branch / commit | Notes |
 |---|---|---|---|---|

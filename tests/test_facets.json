@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 316,
+  "core": 317,
   "lfs": 113,
   "toolchain": 35,
   "fixtures": 33,
@@ -778,6 +778,9 @@
    "lfs"
   ],
   "test_max_tokens_defaults.py": [
+   "core"
+  ],
+  "test_measure_signature_coverage.py": [
    "core"
   ],
   "test_minecraft_detect_archive_tool.py": [

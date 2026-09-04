@@ -314,6 +314,9 @@ the thing the representation exists to be blind to. Off by default.
 
 ## What the next slice needs
 
+> The union of every open item, with preconditions, is kept in
+> [`development/roadmap/function-identity-and-signatures.md`](../development/roadmap/function-identity-and-signatures.md).
+
 Stated here rather than discovered later.
 
 1. **Callee-to-caller propagation.** vSim's largest omission from this slice,

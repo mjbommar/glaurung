@@ -338,6 +338,7 @@ underlying work is driven instead by `tools/fitness_report.py`,
 
 | file | date | what it recorded | superseded by / known-false claims |
 |---|---|---|---|
+| [2026-09-03-signature-libraries.md](sessions/2026-09-03-signature-libraries.md) | 2026-09-03 | the day the signature library went from a 16-signature demo to a published, signed database of 533,820 signatures on assets.glaurung.dev: what shipped, the per-cell coverage numbers, what broke, and what is open | a point-in-time record; the live state is in `reference/function-signature-libraries.md`, `reference/signature-sources.md` and `reference/signature-distribution.md` |
 | [2026-04-26-tutorial-and-bug-L-verification.md](sessions/2026-04-26-tutorial-and-bug-L-verification.md) | 2026-04-26 | a tutorial and bug-verification session | internally consistent; the `out/` tree it describes is gitignored build output and is expected to be absent |
 
 ## `triage-2025/`

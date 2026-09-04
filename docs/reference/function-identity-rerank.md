@@ -368,6 +368,9 @@ build profile, the call-edge counts and every per-task number.
 
 ## Known gaps
 
+> The union of every open item, with preconditions, is kept in
+> [`development/roadmap/function-identity-and-signatures.md`](../development/roadmap/function-identity-and-signatures.md).
+
 - **No KB helper.** The plan item asked for one that applies the decode to
   `function_match` rows. When this lane was written that table did not exist;
   it now does, on this same integration line, from the membership-gate lane
