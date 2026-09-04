@@ -107,6 +107,14 @@ jobs:
           lfs: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # This lane sets GLAURUNG_REQUIRE_TOOLCHAINS=1 below, which makes an
+      # absent compiler a failure rather than a skip. Without this step it
+      # demanded a toolchain it had never installed, so `arm-none-eabi-gcc`
+      # failed three tests on every run. The `rust` job installs the same set.
+      - name: Install the fixture compilers these tests demand
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
       - name: Symbolic engine tests
         env:
           GLAURUNG_REQUIRE_TOOLCHAINS: "1"

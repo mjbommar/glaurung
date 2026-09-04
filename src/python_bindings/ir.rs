@@ -2115,6 +2115,10 @@ mod tests {
     fn production_preparation_exposes_the_verified_clang_wide_switch_region() {
         let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/decompiler_fixtures/build/154_wide_switch-clang-O2.so");
+        if !binary.is_file() {
+            crate::testing::missing_fixture("154_wide_switch-clang-O2.so");
+            return;
+        }
         let session = crate::program::session::ProgramSession::from_path(&binary)
             .expect("checked-in wide-switch fixture parses");
         let image = session.image();

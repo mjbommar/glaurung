@@ -1629,7 +1629,10 @@ mod tests {
         let path = "tests/decompiler_fixtures/build/203_string_move_copies-gcc-O0.so";
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
-            Err(_) => return,
+            Err(_) => {
+                crate::testing::missing_fixture("203_string_move_copies-gcc-O0.so");
+                return;
+            }
         };
         let types = extract_dwarf_types(&bytes);
         let narrow = types

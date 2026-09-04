@@ -48,6 +48,7 @@ fn a_text_symbol_name_at_multiple_addresses_is_not_a_unique_identity() {
     let binary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/decompiler_fixtures/build/166_rust_generics-rustc-O0.so");
     if !binary.is_file() {
+        crate::testing::missing_fixture("166_rust_generics-rustc-O0.so");
         return;
     }
     let image = ProgramImage::from_path(&binary).expect("parse real Rust fixture");

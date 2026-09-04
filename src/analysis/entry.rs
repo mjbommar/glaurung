@@ -283,7 +283,8 @@ mod tests {
         let path =
             std::path::Path::new("tests/decompiler_fixtures/build/02_integer_widths-gcc-O0.so");
         if !path.exists() {
-            return; // fixture build is optional for this crate's unit tests
+            crate::testing::missing_fixture("02_integer_widths-gcc-O0.so");
+            return;
         }
         let data = std::fs::read(path).unwrap();
         for va in [0x1000u64, 0x11a3, 0x1351] {

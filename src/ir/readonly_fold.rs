@@ -1074,6 +1074,7 @@ mod tests {
         let path =
             std::path::Path::new("tests/decompiler_fixtures/build/04_switch_shapes-clang-O2.so");
         if !path.exists() {
+            crate::testing::missing_fixture("04_switch_shapes-clang-O2.so");
             return;
         }
         let bytes = std::fs::read(path).expect("read the switch fixture");

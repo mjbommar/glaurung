@@ -481,7 +481,10 @@ mod tests {
 
     #[test]
     fn real_sc_mixed_fixture_runs_in_shadow_mode_with_total_coverage() {
-        let lifted = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "sc_mixed");
+        let Some(lifted) = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "sc_mixed")
+        else {
+            return;
+        };
         let report = observe(&lifted, &compute_ssa(&lifted));
 
         assert_eq!(report.refusal, None, "{report:#?}");
@@ -500,7 +503,10 @@ mod tests {
 
     #[test]
     fn real_early_return_fixture_recovers_a_verified_acyclic_tree() {
-        let lifted = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "early_return");
+        let Some(lifted) = lift_real_fixture("01_conditional_polarity-gcc-O0.so", "early_return")
+        else {
+            return;
+        };
         let report = observe(&lifted, &compute_ssa(&lifted));
 
         assert_eq!(report.refusal, None, "{report:#?}");
@@ -519,10 +525,22 @@ mod tests {
         assert_prepared_c(&report);
     }
 
-    fn lift_real_fixture(binary_name: &str, function_name: &str) -> LlirFunction {
+    /// Lift one function out of a prebuilt fixture, or `None` if it is absent.
+    ///
+    /// `tests/decompiler_fixtures/build/` is gitignored and built by the
+    /// fixture harness, so it does not exist in a plain checkout. Returning
+    /// `None` (rather than panicking) is what lets the `cargo test --features
+    /// python-ext` CI job pass; `GLAURUNG_REQUIRE_FIXTURES=1`, which the
+    /// Decompiler Fixture Gate sets, turns the absence back into a failure so
+    /// the skip cannot go unnoticed where the corpus really is built.
+    fn lift_real_fixture(binary_name: &str, function_name: &str) -> Option<LlirFunction> {
         let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/decompiler_fixtures/build")
             .join(binary_name);
+        if !binary.is_file() {
+            crate::testing::missing_fixture(binary_name);
+            return None;
+        }
         let session = crate::program::session::ProgramSession::from_path(&binary)
             .expect("checked-in decompiler fixture parses");
         let image = session.image();
@@ -543,8 +561,10 @@ mod tests {
             .iter()
             .find(|function| function.entry_point.value == entry)
             .unwrap_or_else(|| panic!("{function_name} is discovered"));
-        crate::ir::lift_function::lift_function_from_image(image, function)
-            .unwrap_or_else(|error| panic!("{function_name} lifts: {error}"))
+        Some(
+            crate::ir::lift_function::lift_function_from_image(image, function)
+                .unwrap_or_else(|error| panic!("{function_name} lifts: {error}")),
+        )
     }
 
     fn assert_prepared_c(report: &ShadowReport) {
@@ -569,7 +589,10 @@ mod tests {
 
     #[test]
     fn real_dowhile_fixture_has_a_post_tested_loop_with_explicit_exits() {
-        let lifted = lift_real_fixture("03_loop_shapes-gcc-O0.so", "dowhile_atleastonce");
+        let Some(lifted) = lift_real_fixture("03_loop_shapes-gcc-O0.so", "dowhile_atleastonce")
+        else {
+            return;
+        };
         let ssa = compute_ssa(&lifted);
         let report = observe(&lifted, &ssa);
 
@@ -624,7 +647,10 @@ mod tests {
 
     #[test]
     fn real_loop_return_fixture_records_loop_exits_without_losing_blocks() {
-        let lifted = lift_real_fixture("03_loop_shapes-gcc-O0.so", "loop_return_on_neg");
+        let Some(lifted) = lift_real_fixture("03_loop_shapes-gcc-O0.so", "loop_return_on_neg")
+        else {
+            return;
+        };
         let ssa = compute_ssa(&lifted);
         let report = observe(&lifted, &ssa);
 
@@ -775,7 +801,10 @@ mod tests {
 
     #[test]
     fn real_two_entry_loop_is_an_accepted_honest_goto() {
-        let lifted = lift_real_fixture("211_irreducible_loops-gcc-O0.so", "two_entry_loop");
+        let Some(lifted) = lift_real_fixture("211_irreducible_loops-gcc-O0.so", "two_entry_loop")
+        else {
+            return;
+        };
         let ssa = compute_ssa(&lifted);
         let report = observe(&lifted, &ssa);
 
@@ -821,10 +850,12 @@ mod tests {
 
     #[test]
     fn real_nested_irreducible_region_does_not_erase_the_outer_loop() {
-        let lifted = lift_real_fixture(
+        let Some(lifted) = lift_real_fixture(
             "211_irreducible_loops-gcc-O0.so",
             "irreducible_inside_reducible",
-        );
+        ) else {
+            return;
+        };
         let report = observe(&lifted, &compute_ssa(&lifted));
 
         assert_eq!(report.refusal, None, "{report:#?}");
@@ -883,7 +914,9 @@ mod tests {
 
     #[test]
     fn real_duff_dispatch_reaches_shadow_as_typed_cases() {
-        let lifted = lift_real_fixture("102_duffs_device-gcc-O2.so", "duff_copy");
+        let Some(lifted) = lift_real_fixture("102_duffs_device-gcc-O2.so", "duff_copy") else {
+            return;
+        };
         let report = observe(&lifted, &compute_ssa(&lifted));
         let candidate = report
             .candidate
@@ -953,7 +986,9 @@ mod tests {
             ("154_wide_switch-gcc-O2.so", 208usize),
             ("154_wide_switch-clang-O2.so", 256usize),
         ] {
-            let lifted = lift_real_fixture(binary, "wide154_dense_effects");
+            let Some(lifted) = lift_real_fixture(binary, "wide154_dense_effects") else {
+                continue;
+            };
             assert!(
                 lifted.blocks.len() > 128,
                 "fixture must remain a scale test"
@@ -1022,7 +1057,11 @@ mod tests {
 
     #[test]
     fn real_dispatch_in_loop_without_a_join_recovers_a_verified_tree() {
-        let lifted = lift_real_fixture("206_aarch64_wide_dispatch-gcc-O2.so", "dispatch_in_loop");
+        let Some(lifted) =
+            lift_real_fixture("206_aarch64_wide_dispatch-gcc-O2.so", "dispatch_in_loop")
+        else {
+            return;
+        };
         let report = observe(&lifted, &compute_ssa(&lifted));
 
         assert_eq!(report.refusal, None, "{report:#?}");

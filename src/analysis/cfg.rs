@@ -1288,6 +1288,10 @@ mod gcc_dispatch_corpus_tests {
     fn clang_o2_real_wide_effect_switch_uses_the_zero_extended_byte_bound() {
         let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/decompiler_fixtures/build/154_wide_switch-clang-O2.so");
+        if !binary.is_file() {
+            crate::testing::missing_fixture("154_wide_switch-clang-O2.so");
+            return;
+        }
         let data = std::fs::read(binary).expect("read checked-in wide-switch fixture");
         let (_functions, _callgraph, stats) =
             analyze_functions_bytes_with_stats(&data, &Budgets::default());

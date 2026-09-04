@@ -95,6 +95,10 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        # The Rust step below opens real sample binaries, which are LFS
+        # objects; without this they are 130-byte pointer files.
+        with:
+          lfs: true
       - name: Build the pinned compile toolchain image
         run: |
           docker build -t glaurung-fixture-toolchain:1 \
@@ -146,6 +150,17 @@ jobs:
         run: |
           python -m pytest -p no:cacheprovider -m fixtures -q \
             python/tests/test_known_decompiler_failures.py
+      # The Rust tests that read prebuilt binaries out of
+      # `tests/decompiler_fixtures/build/`. That directory is gitignored, so on
+      # the test-suite runner they skip and its `cargo test` job cannot cover
+      # them; only this job has the corpus. `GLAURUNG_REQUIRE_FIXTURES=1` turns
+      # each skip back into a failure here -- the twin of
+      # GLAURUNG_REQUIRE_TOOLCHAINS, and the same arrangement as the
+      # known-failure corpus above.
+      - name: Fixture-backed Rust tests (here a skip is a failure)
+        env:
+          GLAURUNG_REQUIRE_FIXTURES: "1"
+        run: cargo test --features python-ext --lib
       - uses: actions/upload-artifact@v4
         if: always()
         with:

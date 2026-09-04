@@ -69,7 +69,39 @@ pub fn missing_tool(tool: &str) {
     eprintln!("SKIP: needs {tool}, which is not installed — this test asserted nothing");
 }
 
-/// Tests skipped so far in this process for want of a tool.
+/// Set `GLAURUNG_REQUIRE_FIXTURES=1` to make an absent fixture binary a failure.
+pub const REQUIRE_FIXTURES_ENV: &str = "GLAURUNG_REQUIRE_FIXTURES";
+
+/// Record that a test could not run because a compiled fixture is not present.
+///
+/// The twin of [`missing_tool`], for the tests that read a prebuilt binary out
+/// of `tests/decompiler_fixtures/build/` rather than compiling one themselves.
+/// That directory is gitignored and is produced by the fixture harness, so a
+/// plain `git clone` does not have it; the tests that read it used to `expect`
+/// and panic with a bare `NotFound`, which is why the `cargo test
+/// --features python-ext` CI job could not pass.
+///
+/// # Panics
+///
+/// When `GLAURUNG_REQUIRE_FIXTURES=1`, which is how the Decompiler Fixture
+/// Gate -- the workflow that actually builds the corpus -- asserts that these
+/// tests really ran there.
+pub fn missing_fixture(fixture: &str) {
+    SKIPPED.fetch_add(1, Ordering::Relaxed);
+    if std::env::var(REQUIRE_FIXTURES_ENV).as_deref() == Ok("1") {
+        panic!(
+            "the fixture `{fixture}` is not present under \
+             tests/decompiler_fixtures/build/, and {REQUIRE_FIXTURES_ENV}=1 \
+             demands it. Build the fixture corpus, or unset \
+             {REQUIRE_FIXTURES_ENV} to allow the skip."
+        );
+    }
+    eprintln!(
+        "SKIP: needs the fixture {fixture}, which is not built \u{2014} this test asserted nothing"
+    );
+}
+
+/// Tests skipped so far in this process for want of a tool or a fixture.
 pub fn skipped_count() -> usize {
     SKIPPED.load(Ordering::Relaxed)
 }
@@ -160,6 +192,66 @@ mod tests {
             undeclared.is_empty(),
             "these tools are invoked by fixture-compiling tests but are not in \
              DECLARED_TOOLS, so {REQUIRE_ENV}=1 would not demand them: {undeclared:?}"
+        );
+    }
+
+    /// No test may read a prebuilt fixture and skip silently when it is absent.
+    ///
+    /// The twin of `no_test_skips_a_missing_toolchain_silently`, and it exists
+    /// because the untracked version of this defect actually shipped: eleven
+    /// tests added on 2026-09-02 read `tests/decompiler_fixtures/build/` with a
+    /// bare `expect`, and since that directory is gitignored and the
+    /// `cargo test --features python-ext` CI job never builds it, that job
+    /// could not pass on any commit. Four older sites had the opposite failure
+    /// -- a silent `return` that asserted nothing and said so to no one.
+    ///
+    /// Scans the whole `src/` tree rather than a fixed list, because these
+    /// reads are scattered and a new one must not be able to appear unnoticed.
+    #[test]
+    fn no_test_reads_a_fixture_and_skips_silently() {
+        const NEEDLE: &str = "decompiler_fixtures/build";
+        let mut offenders = Vec::new();
+        let mut stack = vec![repo_root().join("src")];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // This file defines and documents the helper, so every mention
+                // here is prose or the scanner itself.
+                if path.ends_with("testing.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("read a source file");
+                let lines: Vec<&str> = text.lines().collect();
+                for (n, line) in lines.iter().enumerate() {
+                    // Comments and doc comments merely name the corpus.
+                    if !line.contains(NEEDLE) || line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    let handled = lines[n..(n + WINDOW + 1).min(lines.len())]
+                        .iter()
+                        .any(|l| l.contains("missing_fixture"));
+                    if !handled {
+                        let rel = path.strip_prefix(repo_root()).unwrap_or(&path);
+                        offenders.push(format!("{}:{}", rel.display(), n + 1));
+                    }
+                }
+            }
+        }
+        offenders.sort();
+        assert!(
+            offenders.is_empty(),
+            "these sites read a prebuilt fixture without routing its absence \
+             through `crate::testing::missing_fixture(\"<name>\")`, so on a \
+             checkout that has not built the corpus they either panic with a \
+             bare NotFound or report `ok` having asserted nothing:\n  {}",
+            offenders.join("\n  ")
         );
     }
 
