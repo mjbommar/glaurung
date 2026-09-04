@@ -32,7 +32,6 @@ pub mod resolve;
 use std::collections::BTreeMap;
 
 use crate::syntax::cfg::{Cfg, NodeKind};
-use crate::syntax::ids::NodeId;
 
 /// One function's CFG in the shape DecBench serializes and scores.
 ///
