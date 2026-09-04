@@ -109,7 +109,10 @@ def _condition_reads_a_body_updated_value(text: str) -> bool:
     for condition, body in loops:
         condition_names = set(re.findall(r"\b[A-Za-z_]\w*\b", condition))
         assigned_names = set(
-            re.findall(r"(?m)^\s*([A-Za-z_]\w*)\s*(?:=|\+\+|--)", body)
+            re.findall(
+                r"(?m)^\s*([A-Za-z_]\w*)\s*(?:(?:<<|>>|[+\-*/%&|^])?=|\+\+|--)",
+                body,
+            )
         )
         if condition_names & assigned_names:
             return True
