@@ -106,12 +106,17 @@ pub fn is_scoreable_name(name: &str) -> bool {
 pub fn parity_cfgs(text: &str) -> BTreeMap<String, ParityCfg> {
     let tree = crate::csource::parse::parse(text);
     let functions = crate::csource::cfg::function_cfgs(tree.value(), text);
+    // F-9 first: Joern's node granularity is a property of the graph the rest of
+    // the layer then flags, coalesces and serializes, so applying it afterwards
+    // would be measuring a different graph than the one scored.
+    let granular = nodes::expression_granular_cfgs(tree.value(), text, functions.value());
     let mut out: BTreeMap<String, ParityCfg> = BTreeMap::new();
-    for function in functions.value() {
+    for (index, function) in functions.value().iter().enumerate() {
         if !is_scoreable_name(&function.name) {
             continue;
         }
-        let parity = parity_of(&function.cfg);
+        let cfg = granular.get(index).unwrap_or(&function.cfg);
+        let parity = parity_of(cfg);
         match out.get(&function.name) {
             Some(existing) if existing.nodes.len() >= parity.nodes.len() => {}
             _ => {
