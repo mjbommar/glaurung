@@ -105,7 +105,16 @@ pub fn is_scoreable_name(name: &str) -> bool {
 /// When a name appears more than once, the CFG with more nodes wins (F-15).
 pub fn parity_cfgs(text: &str) -> BTreeMap<String, ParityCfg> {
     let tree = crate::csource::parse::parse(text);
-    let functions = crate::csource::cfg::function_cfgs(tree.value(), text);
+    // `Coverage::Syntactic`, not the default: Joern's CFG construction is
+    // syntax-directed and keeps statements control cannot reach, and 105 of the
+    // 91,548 published source CFGs carry a component with no path from the
+    // entry to prove it. S2 prunes them by design (`REQ-GEN-1`), so the parity
+    // layer has to ask for the other graph rather than rebuild it.
+    let functions = crate::csource::cfg::function_cfgs_with(
+        tree.value(),
+        text,
+        crate::csource::cfg::Coverage::Syntactic,
+    );
     // F-9 first: Joern's node granularity is a property of the graph the rest of
     // the layer then flags, coalesces and serializes, so applying it afterwards
     // would be measuring a different graph than the one scored.

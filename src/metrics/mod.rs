@@ -19,6 +19,7 @@
 //! * **Determinism is a public promise.** Every gate in this programme is a
 //!   diff, so nothing that iterates a `HashMap` may reach output.
 
+pub mod byte_match;
 pub mod calibrate;
 pub mod tree_distance;
 pub mod type_match;

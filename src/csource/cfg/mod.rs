@@ -101,6 +101,7 @@ use crate::syntax::diag::{Diagnostic, Diagnostics, Parsed};
 use crate::syntax::ids::{NodeId, Span, Symbol, TokenId};
 use crate::syntax::intern::SymbolTable;
 
+pub use reach::Coverage;
 use reach::{is_body, Reach};
 
 /// How many task steps one function's walk may take before it stops.
@@ -144,7 +145,7 @@ pub struct FunctionCfg {
 /// number of functions.
 pub fn function_cfg(tree: &Tree, text: &str, func: &FunctionDef) -> Parsed<Cfg> {
     let spans = tree.token_spans(text);
-    let built = build_one(tree, text, &spans, func);
+    let built = build_one(tree, text, &spans, func, Coverage::Reachable);
     let (value, diagnostics) = built.into_parts();
     Parsed::new(value.cfg, diagnostics)
 }
@@ -158,11 +159,29 @@ pub fn function_cfg(tree: &Tree, text: &str, func: &FunctionDef) -> Parsed<Cfg> 
 /// (`REQ-ROB-2`). A declaration without a body yields nothing (`REQ-CFG-2`),
 /// because [`Tree::functions`] already excludes it.
 pub fn function_cfgs(tree: &Tree, text: &str) -> Parsed<Vec<FunctionCfg>> {
+    function_cfgs_with(tree, text, Coverage::Reachable)
+}
+
+/// Build every function definition's graph with the statement coverage the
+/// caller asks for.
+///
+/// [`Coverage::Reachable`] is [`function_cfgs`] and is what every consumer of
+/// the general graph wants; the only caller of [`Coverage::Syntactic`] is
+/// [`crate::csource::joern`], which is reproducing a tool whose CFG
+/// construction is syntax-directed. The option is threaded rather than made a
+/// second emitter for the reason `architecture.md` section 1 gives: the parity
+/// layer must not have its own copy of the statement grammar, because an
+/// unreachable region still contains `goto`s into live code and `break`s bound
+/// to enclosing live constructs, and only the emitter's own control-context
+/// stack resolves those. A graph built with [`Coverage::Syntactic`] does not
+/// satisfy `REQ-GEN-1` and must not be handed to
+/// [`crate::syntax::cfg::Cfg::validate`].
+pub fn function_cfgs_with(tree: &Tree, text: &str, coverage: Coverage) -> Parsed<Vec<FunctionCfg>> {
     let spans = tree.token_spans(text);
     let mut graphs = Vec::new();
     let mut diagnostics = Diagnostics::new();
     for func in tree.functions(text) {
-        let (graph, reported) = build_one(tree, text, &spans, &func).into_parts();
+        let (graph, reported) = build_one(tree, text, &spans, &func, coverage).into_parts();
         for diagnostic in reported.iter() {
             diagnostics.push(diagnostic.clone());
         }
@@ -172,8 +191,14 @@ pub fn function_cfgs(tree: &Tree, text: &str) -> Parsed<Vec<FunctionCfg>> {
 }
 
 /// Build one function's graph with a token span table the caller already has.
-fn build_one(tree: &Tree, text: &str, spans: &[Span], func: &FunctionDef) -> Parsed<FunctionCfg> {
-    let mut emitter = Emitter::new(tree, text, spans, func);
+fn build_one(
+    tree: &Tree,
+    text: &str,
+    spans: &[Span],
+    func: &FunctionDef,
+    coverage: Coverage,
+) -> Parsed<FunctionCfg> {
+    let mut emitter = Emitter::new(tree, text, spans, func, coverage);
     if let Some(body) = func.body {
         emitter.push_all(&[Task::Stmt(body)]);
         emitter.run();
@@ -312,14 +337,20 @@ struct Emitter<'a> {
 impl<'a> Emitter<'a> {
     /// An emitter positioned at the start of `func`, with the entry and
     /// function-end nodes already placed by the builder.
-    fn new(tree: &'a Tree, text: &'a str, spans: &'a [Span], func: &FunctionDef) -> Self {
+    fn new(
+        tree: &'a Tree,
+        text: &'a str,
+        spans: &'a [Span],
+        func: &FunctionDef,
+        coverage: Coverage,
+    ) -> Self {
         let body = func.body.unwrap_or(func.node);
         let nodes = tree.arena().preorder(body).count() as u32;
         Self {
             tree,
             text,
             spans,
-            reach: Reach::new(tree, text, spans, body),
+            reach: Reach::with_coverage(tree, text, spans, body, coverage),
             labels: SymbolTable::new(),
             builder: CfgBuilder::new(func.span),
             tasks: Vec::new(),

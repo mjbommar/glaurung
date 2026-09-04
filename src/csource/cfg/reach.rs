@@ -56,6 +56,30 @@
 //! than assumed, so a tree that violated the invariant would produce
 //! conservative answers rather than wrong ones. The top-down half is an
 //! ordinary explicit-stack walk.
+//!
+//! # The one caller that wants the opposite answer
+//!
+//! [`Coverage`] is the switch. `REQ-GEN-1` is the right rule for every consumer
+//! of the *general* graph, and it stays the default. It is the wrong rule for
+//! exactly one caller: [`crate::csource::joern`], whose whole job is to
+//! reproduce a tool whose CFG construction is syntax-directed and therefore
+//! keeps what control cannot reach. Measured on the published DecBench source
+//! CFGs, 105 of 91,548 functions carry a component with no path from the entry,
+//! so the difference is Joern's, not a defect in its export; on decompiler
+//! output it is very large indeed, because a decompiler that loses a jump-table
+//! dispatch strands every arm. `O0 openssh-portable sshd`
+//! `process_server_config_line_depth` parses clean into 1,133 statements, of
+//! which the fixpoint proves 194 reachable through 13 of its 129 labels ---
+//! a graph of 48 blocks where Joern's is around 435.
+//!
+//! [`Coverage::Syntactic`] is therefore not "turn the analysis off". It is
+//! "answer the emitter's second question with *yes* everywhere": every
+//! statement is a place control can arrive, so the emitter walks into all of
+//! them and their fall-through wiring composes exactly the way a
+//! syntax-directed builder's does. Everything else this pass answers ---
+//! short-circuits, initializers, `case`/`break`/`continue` binding, the
+//! computed-`goto` target set --- is unchanged, because none of it is a
+//! reachability question.
 
 use std::collections::BTreeSet;
 
@@ -76,6 +100,34 @@ use super::{bodies, goto_label, tag_of};
 /// conservatism, not correctness: the fallback is to treat every label as a
 /// target, which is exactly the behaviour of not doing the analysis at all.
 const MAX_LIVE_ROUNDS: usize = 64;
+
+/// Which statements the emitter is asked to place a node for.
+///
+/// This is a property of the *consumer*, not of the C: the same function has
+/// both graphs, and which one is wanted depends on what the caller is going to
+/// do with it. Making it an argument rather than two emitters is what keeps
+/// `docs/design/static-c-analysis/architecture.md` section 1's rule --- the
+/// parity layer's quirks must not leak into the general graph --- true by
+/// construction: the default is the only behaviour any general consumer can
+/// obtain, and the variant is named after what it does rather than after the
+/// tool that wants it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Coverage {
+    /// Only statements control can reach (`REQ-GEN-1`), which is what makes
+    /// [`crate::syntax::cfg::Cfg::validate`] pass and what every consumer of
+    /// the general graph --- the C-to-LLIR lowering, the structural gates ---
+    /// is entitled to assume.
+    #[default]
+    Reachable,
+    /// Every statement in the text, whether control can arrive or not, wired
+    /// the way a syntax-directed builder wires it: an unreachable region
+    /// becomes a component with no path from the entry rather than nothing.
+    ///
+    /// A graph built this way deliberately fails `REQ-GEN-1`, so it is for
+    /// callers that do not validate --- today, only
+    /// [`crate::csource::joern`].
+    Syntactic,
+}
 
 /// Whether `tag` names something the emitter treats as a statement body.
 ///
@@ -117,6 +169,8 @@ fn binds_continue(tag: NodeTag) -> bool {
 /// question --- a few tens of kilobytes for the largest function in either
 /// corpus.
 pub(super) struct Reach {
+    /// Which statements the emitter was asked to place.
+    coverage: Coverage,
     /// The lowest node id these vectors describe: the function body's own id.
     base: u32,
     /// Whether control can continue past this statement.
@@ -157,6 +211,25 @@ impl Reach {
     /// function to get one identifier back would make the whole pass quadratic
     /// in the number of functions.
     pub(super) fn new(tree: &Tree, text: &str, spans: &[Span], body: NodeId) -> Self {
+        Self::with_coverage(tree, text, spans, body, Coverage::Reachable)
+    }
+
+    /// Fold every question over `body`, answering the reachability one the way
+    /// `coverage` asks.
+    ///
+    /// Under [`Coverage::Syntactic`] the fixpoint is skipped outright rather
+    /// than run and discarded: with every statement an entry point there is no
+    /// dead `goto` for it to prove dead, so its answer could only ever be the
+    /// full label set it is handed here. Skipping it also removes the one place
+    /// this pass is superlinear in a goto web's depth, which is why the mode is
+    /// cheaper than the default rather than more expensive.
+    pub(super) fn with_coverage(
+        tree: &Tree,
+        text: &str,
+        spans: &[Span],
+        body: NodeId,
+        coverage: Coverage,
+    ) -> Self {
         let arena = tree.arena();
         let mut order: Vec<NodeId> = arena.preorder(body).collect();
         // Descending id order is post-order; see the module docs. Sorted rather
@@ -191,6 +264,7 @@ impl Reach {
         }
 
         let mut reach = Self {
+            coverage,
             base,
             falls: vec![true; len],
             label_in: vec![false; len],
@@ -202,6 +276,11 @@ impl Reach {
             init_in: vec![false; len],
             address_taken,
         };
+
+        if coverage == Coverage::Syntactic {
+            reach.fold(tree, text, spans, &order, &labels);
+            return reach;
+        }
 
         let mut targeted: BTreeSet<String> = BTreeSet::new();
         for _ in 0..MAX_LIVE_ROUNDS {
@@ -246,7 +325,11 @@ impl Reach {
             let mut init = matches!(tag, NodeTag::Initializer);
             let descend = !is_unevaluated(tree, node, tag);
             for child in arena.children_iter(node) {
-                label |= self.label_in(child);
+                // The raw vector, not [`Reach::label_in`]: this is the fold that
+                // *builds* the honest answer, and reading the mode-applied
+                // accessor here would write `Coverage::Syntactic`'s blanket
+                // `true` back into the data.
+                label |= self.at(&self.label_in, child);
                 init |= self.init_in(child);
                 if descend {
                     sc |= self.sc_in(child);
@@ -281,6 +364,13 @@ impl Reach {
     /// edge out of the construct, so `while (1) {}` followed by code leaves
     /// that code reachable even though no execution reaches it. Reporting it
     /// unreachable here would suppress a node the graph does connect.
+    ///
+    /// Under [`Coverage::Syntactic`] the statement-list rule reads through
+    /// [`Reach::label_in`]'s blanket `true`, so a list falls through iff its
+    /// *last* statement does --- `{ return 1; foo(); }` falls through, because
+    /// `foo()` is emitted and its own successor edge is real. That is the
+    /// sequential composition a syntax-directed builder performs, and it is why
+    /// the mode needs no second rule here.
     fn compute_falls(&self, tree: &Tree, node: NodeId, tag: NodeTag) -> bool {
         match tag {
             NodeTag::ReturnStmt
@@ -421,9 +511,29 @@ impl Reach {
         self.slot(node).is_none_or(|slot| self.falls[slot])
     }
 
-    /// Whether `node`'s subtree defines a label some reachable `goto` names.
+    /// Whether the emitter must walk into `node` even though control cannot
+    /// fall into it.
+    ///
+    /// Under [`Coverage::Reachable`] that is "the subtree defines a label some
+    /// reachable `goto` names", the only way a statement list control has left
+    /// becomes live again. Under [`Coverage::Syntactic`] it is unconditionally
+    /// true, which is the whole of what that mode changes: the emitter's one
+    /// pruning test is `label_in || case_in`, so answering yes here is what
+    /// makes an unreachable region emit as its own component instead of
+    /// vanishing.
+    ///
+    /// The mode is applied on the way out, not folded into the data. That is
+    /// not cosmetic: [`Reach::fold`] propagates a child's bit into its parent,
+    /// so reading this accessor there would write [`Coverage::Syntactic`]'s
+    /// blanket `true` into every node of the tree and destroy the vector. What
+    /// the vector holds under that mode is the honest "this subtree defines a
+    /// label" --- the fold runs once against the complete label set, since with
+    /// no dead statements there is no dead `goto` to exclude.
     pub(super) fn label_in(&self, node: NodeId) -> bool {
-        self.at(&self.label_in, node)
+        match self.coverage {
+            Coverage::Syntactic => true,
+            Coverage::Reachable => self.at(&self.label_in, node),
+        }
     }
 
     /// Whether `node`'s subtree carries a `case` or `default` label bound to a
@@ -506,6 +616,42 @@ mod tests {
         (tree, spans, body)
     }
 
+    /// `text`'s one function under `coverage`, as the graph the emitter built.
+    fn cfg_of(text: &str, coverage: Coverage) -> crate::syntax::cfg::Cfg {
+        let tree = parse(text).into_parts().0;
+        let mut built = super::super::function_cfgs_with(&tree, text, coverage)
+            .into_parts()
+            .0;
+        assert_eq!(built.len(), 1, "expected exactly one function");
+        built.remove(0).cfg
+    }
+
+    /// Every node span of `cfg`, rendered back to source text.
+    fn node_texts<'a>(cfg: &crate::syntax::cfg::Cfg, text: &'a str) -> Vec<&'a str> {
+        cfg.nodes()
+            .iter()
+            .filter_map(|node| text.get(node.span().range()))
+            .collect()
+    }
+
+    /// A reduction of `O0 openssh-portable sshd` `process_server_config_line_depth`
+    /// lines 3307-3323 of `glaurung-229fbb1-clean_sshd.c`: three `goto`s to the
+    /// same forward label, then a block that no label heads.
+    ///
+    /// The shape is what a decompiler emits when it loses a jump-table
+    /// dispatch, and it is why that function reaches 48 of the 663 nodes the
+    /// published CFG has. Joern keeps the stranded block; `REQ-GEN-1` says we
+    /// must not, unless the caller asked for [`Coverage::Syntactic`].
+    const STRANDED_ARM: &str = "int f(int a, int b, char *s) {\
+        if (a) { goto L_20a88; }\
+        if (b) { goto L_20a88; }\
+        a = b;\
+        goto L_20a88;\
+        s = strchr(s, 91);\
+        if (s) { b = 1; }\
+        L_20a88: ;\
+        return b; }";
+
     fn falls_of_body(text: &str) -> bool {
         let (tree, spans, body) = analyse(text);
         Reach::new(&tree, text, &spans, body).falls(body)
@@ -517,6 +663,249 @@ mod tests {
             .preorder(body)
             .find(|n| tag_of(tree, *n) == Some(tag))
             .unwrap_or_else(|| panic!("no {tag:?} node"))
+    }
+
+    #[test]
+    fn the_block_after_an_unconditional_goto_is_pruned_by_default_and_kept_syntactically() {
+        let pruned = cfg_of(STRANDED_ARM, Coverage::Reachable);
+        let kept = cfg_of(STRANDED_ARM, Coverage::Syntactic);
+        assert!(
+            !node_texts(&pruned, STRANDED_ARM)
+                .iter()
+                .any(|t| t.contains("strchr")),
+            "REQ-GEN-1: control cannot arrive at the stranded arm, so it has no \
+             node: {:?}",
+            node_texts(&pruned, STRANDED_ARM)
+        );
+        assert!(
+            node_texts(&kept, STRANDED_ARM)
+                .iter()
+                .any(|t| t.contains("strchr")),
+            "Joern's construction is syntax-directed and keeps it: {:?}",
+            node_texts(&kept, STRANDED_ARM)
+        );
+        assert!(
+            kept.node_count() > pruned.node_count(),
+            "{} kept vs {} pruned",
+            kept.node_count(),
+            pruned.node_count()
+        );
+    }
+
+    #[test]
+    fn what_syntactic_coverage_adds_is_a_component_with_no_path_from_the_entry() {
+        let kept = cfg_of(STRANDED_ARM, Coverage::Syntactic);
+        let reachable = kept.reachable();
+        let stranded: Vec<&str> = kept
+            .nodes()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !reachable[*index])
+            .filter_map(|(_, node)| STRANDED_ARM.get(node.span().range()))
+            .collect();
+        assert!(
+            stranded.iter().any(|t| t.contains("strchr")),
+            "the stranded arm is exactly a node the entry cannot reach: {stranded:?}"
+        );
+        // It is a component, not a dangling node: the arm's own `if` still
+        // wires to the label that follows it, which is what makes the node
+        // count grow by more than one.
+        assert!(
+            stranded.len() > 1,
+            "a whole region, not one statement: {stranded:?}"
+        );
+    }
+
+    #[test]
+    fn only_the_syntactic_graph_gives_up_req_gen_1() {
+        assert!(
+            cfg_of(STRANDED_ARM, Coverage::Reachable)
+                .validate()
+                .iter()
+                .next()
+                .is_none(),
+            "the default graph is the one REQ-GEN-1 is stated of"
+        );
+        assert!(
+            cfg_of(STRANDED_ARM, Coverage::Syntactic)
+                .validate()
+                .iter()
+                .next()
+                .is_some(),
+            "the parity graph deliberately fails it, which is why it is opt-in \
+             and why nothing that validates may ask for it"
+        );
+    }
+
+    #[test]
+    fn the_default_is_what_it_was_before_the_option_existed() {
+        // The layering claim in `syntax::cfg`'s module docs is only true if
+        // asking for the parity graph cannot change the general one. Shapes,
+        // not just counts: a silent edge change would pass a count check.
+        for text in [
+            STRANDED_ARM,
+            "int f(int a) { if (a) return 1; else return 2; }",
+            "int g(int a) { while (a) { a--; if (a == 3) continue; } return a; }",
+            "int h(int a) { switch (a) { case 1: return 1; default: break; } return 0; }",
+        ] {
+            let tree = parse(text).into_parts().0;
+            let plain = super::super::function_cfgs(&tree, text).into_parts().0;
+            let asked = super::super::function_cfgs_with(&tree, text, Coverage::Reachable)
+                .into_parts()
+                .0;
+            assert_eq!(plain.len(), asked.len());
+            for (a, b) in plain.iter().zip(asked.iter()) {
+                let kinds = |c: &crate::syntax::cfg::Cfg| {
+                    c.nodes().iter().map(|n| n.kind()).collect::<Vec<_>>()
+                };
+                let wires = |c: &crate::syntax::cfg::Cfg| {
+                    c.edges()
+                        .iter()
+                        .map(|e| (e.src.raw(), e.dst.raw(), e.kind))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(kinds(&a.cfg), kinds(&b.cfg), "{text}");
+                assert_eq!(wires(&a.cfg), wires(&b.cfg), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_statement_list_falls_through_to_its_last_statement_under_syntactic_coverage() {
+        // `{ return 1; foo(); }` is the shape the module docs use, and the
+        // rule matters: under `Syntactic` the call is emitted, so the list's
+        // own successor edge leaves *it*, which is the sequential composition
+        // Joern performs.
+        let text = "int f(void) { return 1; g(); }";
+        let (tree, spans, body) = analyse(text);
+        assert!(!Reach::new(&tree, text, &spans, body).falls(body));
+        assert!(
+            Reach::with_coverage(&tree, text, &spans, body, Coverage::Syntactic).falls(body),
+            "the emitted `g()` falls through, so the list does"
+        );
+    }
+
+    #[test]
+    fn a_label_only_a_dead_goto_names_still_emits_under_syntactic_coverage() {
+        // The counterpart of `a_label_only_a_dead_goto_names_is_not_a_jump_target`.
+        // `O0 openssh-portable sshd process_server_config_line_depth` has 129
+        // labels of which the fixpoint proves 13 live; `L_1c19d` (line 3346) is
+        // one of the 116 whose only `goto`s are themselves dead, and it heads a
+        // region Joern keeps.
+        let text = "int f(void) { return 0; goto spare; spare: return 1; }";
+        let (tree, spans, body) = analyse(text);
+        let strict = Reach::new(&tree, text, &spans, body);
+        assert!(!strict.label_in(first(&tree, body, NodeTag::LabelStmt)));
+        let loose = Reach::with_coverage(&tree, text, &spans, body, Coverage::Syntactic);
+        assert!(loose.label_in(first(&tree, body, NodeTag::LabelStmt)));
+        assert!(
+            node_texts(&cfg_of(text, Coverage::Syntactic), text)
+                .iter()
+                .any(|t| t.contains("return 1")),
+            "the dead label's own arm is a node too"
+        );
+    }
+
+    #[test]
+    fn syntactic_coverage_is_applied_on_the_way_out_not_folded_into_the_data() {
+        // `Reach::fold` propagates a child's bit into its parent, so it must
+        // read the raw vector: through the accessor, `Coverage::Syntactic`'s
+        // blanket `true` would climb into every node in the function and the
+        // vector would say nothing at all. A statement with no label anywhere
+        // beneath it is the witness.
+        let text = "int f(int a) { if (a) goto here; return 0; here: return 1; }";
+        let (tree, spans, body) = analyse(text);
+        let loose = Reach::with_coverage(&tree, text, &spans, body, Coverage::Syntactic);
+        let plain = tree
+            .arena()
+            .preorder(body)
+            .filter(|n| tag_of(&tree, *n) == Some(NodeTag::ReturnStmt))
+            .collect::<Vec<_>>();
+        assert_eq!(plain.len(), 2, "two returns to look at");
+        for node in plain {
+            assert!(
+                !loose.at(&loose.label_in, node),
+                "a `return` defines no label, whatever the mode answers callers"
+            );
+            assert!(loose.label_in(node), "...but the mode still says `emit it`");
+        }
+        // And the vector is still populated, not merely all-false: the label
+        // statement's own bit is set, because the fold ran against the
+        // complete label set.
+        assert!(loose.at(&loose.label_in, first(&tree, body, NodeTag::LabelStmt)));
+    }
+
+    #[test]
+    fn the_parity_layer_actually_asks_for_syntactic_coverage() {
+        // The option is worth nothing unless its one caller passes it, and the
+        // call site is a single argument that a refactor can quietly drop. The
+        // guard lives here, next to the mode it protects, because
+        // `csource::joern` has no other reason to know this module exists.
+        //
+        // `O0 openssh-portable sshd process_server_config_line_depth`: 663
+        // published nodes against the 48 the pruned build reached.
+        let parity = crate::csource::joern::parity_cfgs(STRANDED_ARM);
+        let f = parity.get("f").expect("f is recovered");
+        let mut seen: BTreeSet<u32> = f.entry.iter().copied().collect();
+        let mut stack: Vec<u32> = f.entry.clone();
+        while let Some(node) = stack.pop() {
+            for (src, dst) in &f.edges {
+                if *src == node && seen.insert(*dst) {
+                    stack.push(*dst);
+                }
+            }
+        }
+        assert!(
+            !f.entry.is_empty(),
+            "the parity graph has an entry to walk from: {f:?}"
+        );
+        assert!(
+            seen.len() < f.nodes.len(),
+            "the stranded arm has to survive into the scored graph as a \
+             component the entry cannot reach: {} of {} nodes reachable",
+            seen.len(),
+            f.nodes.len()
+        );
+    }
+
+    #[test]
+    fn the_two_modes_agree_wherever_nothing_is_dead() {
+        // `Coverage::Syntactic` must *add* the unreachable and change nothing
+        // else. The goto chain is the interesting case: it is deeper than
+        // `MAX_LIVE_ROUNDS`, so the default mode reaches its all-labels
+        // fallback, and the two answers have to meet there exactly.
+        let mut chain = String::from("int f(int a) { goto l0;");
+        let depth = MAX_LIVE_ROUNDS + 8;
+        for index in 0..depth {
+            chain.push_str(&format!(
+                " l{index}: ; a = a + {index}; goto l{};",
+                index + 1
+            ));
+        }
+        chain.push_str(&format!(" l{depth}: ; return a; }}"));
+        for text in [
+            chain.as_str(),
+            "int g(int a) { a = a + 1; return a; }",
+            "int h(int a) { while (a) { a--; if (a == 3) break; } return a; }",
+            "int i(int a) { switch (a) { case 1: return 1; default: return 0; } }",
+        ] {
+            let strict = cfg_of(text, Coverage::Reachable);
+            let loose = cfg_of(text, Coverage::Syntactic);
+            let shape = |c: &crate::syntax::cfg::Cfg| {
+                (
+                    c.nodes().iter().map(|n| n.kind()).collect::<Vec<_>>(),
+                    c.edges()
+                        .iter()
+                        .map(|e| (e.src.raw(), e.dst.raw(), e.kind))
+                        .collect::<Vec<_>>(),
+                )
+            };
+            assert_eq!(
+                shape(&strict),
+                shape(&loose),
+                "nothing here is dead, so the modes must produce one graph"
+            );
+        }
     }
 
     #[test]
