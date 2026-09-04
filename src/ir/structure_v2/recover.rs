@@ -317,10 +317,11 @@ impl TreeBuilder<'_> {
                     (Some(false), Some(true)) => (second, first),
                     _ => return None,
                 };
-                let join = self
-                    .cfg
-                    .immediate_postdominator(block)
-                    .filter(|join| Some(*join) != stop);
+                // An immediate join equal to the enclosing boundary is still
+                // the stop for both arms. Dropping it here lets the first arm
+                // traverse through and own the shared continuation, forcing
+                // sibling arms to reach that now-nested tail with gotos.
+                let join = self.cfg.immediate_postdominator(block);
                 let conditional = StructuredRegion::If {
                     source_block: block,
                     condition: self.conditions.branch_condition(block)?,
@@ -328,7 +329,7 @@ impl TreeBuilder<'_> {
                     else_region: Some(Box::new(self.build_tree_transfer(block, other, join)?)),
                 };
                 let mut regions = vec![leaf, conditional];
-                if let Some(join) = join {
+                if let Some(join) = join.filter(|join| Some(*join) != stop) {
                     regions.push(self.build(join, stop)?);
                 }
                 Some(sequence(regions))
@@ -562,10 +563,10 @@ impl TreeBuilder<'_> {
             _ => return None,
         };
         let condition = self.conditions.branch_condition(block)?;
-        let join = self
-            .cfg
-            .immediate_postdominator(block)
-            .filter(|join| Some(*join) != stop);
+        // Preserve an immediate post-dominator that is also the enclosing
+        // stop: both arms must stop before it even though this conditional
+        // must not emit the shared continuation a second time.
+        let join = self.cfg.immediate_postdominator(block);
         let snapshot = self.owned.clone();
         let then_region = self.build_tree_transfer(block, taken, join);
         let else_region = self.build_tree_transfer(block, other, join);
@@ -581,7 +582,7 @@ impl TreeBuilder<'_> {
                 .then_some(Box::new(else_region)),
         };
         let mut parts = vec![leaf, conditional];
-        if let Some(join) = join.filter(|join| !self.owned[*join]) {
+        if let Some(join) = join.filter(|join| Some(*join) != stop && !self.owned[*join]) {
             parts.push(self.build(join, stop)?);
         }
         Some(sequence(parts))

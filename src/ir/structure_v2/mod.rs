@@ -525,6 +525,33 @@ mod tests {
         assert_prepared_c(&report);
     }
 
+    #[test]
+    fn real_packet_parser_keeps_its_shared_epilogue_as_a_join() {
+        let Some(lifted) = lift_real_fixture("07_packet_parser-gcc-O0.so", "parse_packet") else {
+            return;
+        };
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        assert_eq!(report.refusal, None, "{report:#?}");
+        let raw = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified packet tree should render: {report:#?}"));
+        assert!(raw.contains("\n    L_14dd:"), "raw v2 tree:\n{raw}");
+        assert!(
+            !raw.contains("\n                    L_14dd:"),
+            "raw v2 tree:\n{raw}"
+        );
+        let prepared = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified packet tree should prepare: {report:#?}"));
+        assert!(
+            prepared.contains("\n    L_14dd:"),
+            "prepared v2 tree:\n{prepared}"
+        );
+    }
+
     /// Lift one function out of a prebuilt fixture, or `None` if it is absent.
     ///
     /// `tests/decompiler_fixtures/build/` is gitignored and built by the

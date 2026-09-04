@@ -60,6 +60,7 @@ RENDER_CASES = [
 
 WIDE_CLANG_O2 = FIXTURES / "build" / "154_wide_switch-clang-O2.so"
 LOOPS_GCC_O0 = FIXTURES / "build" / "03_loop_shapes-gcc-O0.so"
+PACKET_GCC_O0 = FIXTURES / "build" / "07_packet_parser-gcc-O0.so"
 
 
 def test_shadow_batch_locally_declines_an_unavailable_function() -> None:
@@ -89,6 +90,24 @@ def test_shadow_batch_rejects_a_non_decbench_style() -> None:
             style="c",
             shadow_v2=True,
         )
+
+
+def test_shadow_keeps_a_shared_epilogue_outside_sibling_branches() -> None:
+    """A common return tail must remain a join, not a nested goto target."""
+    exports = D.exported_functions(str(PACKET_GCC_O0))
+    va = exports["parse_packet"]
+    [(_name, _va, production, *_rest)] = g.ir.decompile_many(
+        str(PACKET_GCC_O0), [va], style="decbench"
+    )
+    [(_name, _va, shadow, *_rest)] = g.ir.decompile_many(
+        str(PACKET_GCC_O0), [va], style="decbench", shadow_v2=True
+    )
+
+    assert "\n    L_14dd: ;" in shadow, shadow
+    assert "\n                        L_14dd: ;" not in shadow, shadow
+    # This slice fixes ownership and placement. Two avoidable transfers to the
+    # now-correctly placed join remain visible to the corpus regression gate.
+    assert shadow.count("goto ") == production.count("goto ") + 2, shadow
 
 
 def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
