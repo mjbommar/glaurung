@@ -64,6 +64,7 @@ fn materialize_multi_exit_transfers(
     statements: Vec<Stmt>,
     header_va: u64,
     exits: &std::collections::HashMap<u64, Vec<Stmt>>,
+    implicit_continue: bool,
 ) -> Vec<Stmt> {
     let mut out = Vec::new();
     let statement_count = statements.len();
@@ -73,7 +74,8 @@ fn materialize_multi_exit_transfers(
             // header transfer when it is terminal in its current structured
             // arm; retaining a non-terminal transfer is safer than executing
             // statements that the CFG skipped.
-            Stmt::Goto { target } if target == header_va && index + 1 == statement_count => {}
+            Stmt::Goto { target }
+                if target == header_va && implicit_continue && index + 1 == statement_count => {}
             Stmt::Goto { target } if exits.contains_key(&target) => {
                 out.extend(exits[&target].clone());
             }
@@ -83,9 +85,9 @@ fn materialize_multi_exit_transfers(
                 else_body,
             } => out.push(Stmt::If {
                 cond,
-                then_body: materialize_multi_exit_transfers(then_body, header_va, exits),
+                then_body: materialize_multi_exit_transfers(then_body, header_va, exits, false),
                 else_body: else_body
-                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits)),
+                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits, false)),
             }),
             Stmt::Switch {
                 discriminant,
@@ -98,17 +100,84 @@ fn materialize_multi_exit_transfers(
                     .map(|(value, body)| {
                         (
                             value,
-                            materialize_multi_exit_transfers(body, header_va, exits),
+                            materialize_multi_exit_transfers(body, header_va, exits, false),
                         )
                     })
                     .collect(),
                 default: default
-                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits)),
+                    .map(|body| materialize_multi_exit_transfers(body, header_va, exits, false)),
             }),
             other => out.push(other),
         }
     }
     out
+}
+
+#[cfg(test)]
+mod multi_exit_transfer_tests {
+    use super::{materialize_multi_exit_transfers, Expr, Stmt};
+
+    #[test]
+    fn only_the_outermost_final_back_edge_is_an_implicit_continue() {
+        let exits = std::collections::HashMap::new();
+        let outer = materialize_multi_exit_transfers(
+            vec![Stmt::Goto { target: 0x1000 }],
+            0x1000,
+            &exits,
+            true,
+        );
+        assert!(outer.is_empty());
+
+        let nested = materialize_multi_exit_transfers(
+            vec![
+                Stmt::If {
+                    cond: Expr::Const(1),
+                    then_body: vec![Stmt::Goto { target: 0x1000 }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+            ],
+            0x1000,
+            &exits,
+            true,
+        );
+        let Stmt::If { then_body, .. } = &nested[0] else {
+            panic!("expected conditional back edge: {nested:#?}");
+        };
+        assert!(matches!(
+            then_body.as_slice(),
+            [Stmt::Goto { target: 0x1000 }]
+        ));
+        assert!(matches!(nested[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn a_switch_arm_back_edge_is_explicit_before_a_following_exit() {
+        let lowered = materialize_multi_exit_transfers(
+            vec![
+                Stmt::Switch {
+                    discriminant: Expr::Const(0),
+                    cases: vec![(Some(0), vec![Stmt::Goto { target: 0x2000 }])],
+                    default: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(9)),
+                },
+            ],
+            0x2000,
+            &std::collections::HashMap::new(),
+            true,
+        );
+        let Stmt::Switch { cases, .. } = &lowered[0] else {
+            panic!("expected switch back edge: {lowered:#?}");
+        };
+        assert!(matches!(
+            cases[0].1.as_slice(),
+            [Stmt::Goto { target: 0x2000 }]
+        ));
+    }
 }
 
 fn statements_terminate(statements: &[Stmt]) -> bool {
@@ -499,6 +568,7 @@ fn lower_region_inner(
                     body,
                     lf.blocks[*header].start_va,
                     &lowered_exits,
+                    true,
                 ),
             }]
         }

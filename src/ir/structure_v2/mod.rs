@@ -816,7 +816,9 @@ mod tests {
             .unwrap_or_else(|| panic!("verified multi-exit loop should render: {report:#?}"));
         assert!(pseudocode.contains("while (1)"), "{pseudocode}");
         assert!(pseudocode.matches("return").count() >= 2, "{pseudocode}");
-        assert!(!pseudocode.contains("goto "), "{pseudocode}");
+        assert_eq!(pseudocode.matches("goto ").count(), 1, "{pseudocode}");
+        assert!(pseudocode.contains("goto L_15ef;"), "{pseudocode}");
+        assert!(pseudocode.contains("L_15ef:"), "{pseudocode}");
         let repeated = observe(&lifted, &ssa);
         assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
         let prepared = report
@@ -824,7 +826,9 @@ mod tests {
             .as_deref()
             .unwrap_or_else(|| panic!("verified multi-exit loop should prepare as C: {report:#?}"));
         assert!(prepared.contains("while (1)"), "{prepared}");
-        assert!(!prepared.contains("goto "), "{prepared}");
+        assert_eq!(prepared.matches("goto ").count(), 1, "{prepared}");
+        assert!(prepared.contains("goto L_15ef;"), "{prepared}");
+        assert!(prepared.contains("L_15ef:"), "{prepared}");
         assert_prepared_c(&report);
         assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
@@ -1107,9 +1111,11 @@ mod tests {
         assert!(prepared.contains("switch ("), "{prepared}");
         assert!(!prepared.contains("L_12c8"), "{prepared}");
         assert!(
-            prepared.matches("goto ").count() <= 2,
-            "the only remaining gotos are outside the switch:\n{prepared}"
+            prepared.matches("goto ").count() <= 3,
+            "the only remaining gotos are outside the switch, including the required loop back-edge:\n{prepared}"
         );
+        assert!(prepared.contains("goto L_1160;"), "{prepared}");
+        assert!(prepared.contains("L_1160:"), "{prepared}");
     }
 
     #[test]
