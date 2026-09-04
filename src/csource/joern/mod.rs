@@ -24,6 +24,7 @@
 //! rest (F-8..F-17); `tools/source_cfg_parity.py --provider glaurung` is the
 //! number that says where we are.
 
+pub mod chains;
 pub mod flags;
 pub mod nodes;
 pub mod resolve;
@@ -132,34 +133,22 @@ pub fn parity_cfgs(text: &str) -> BTreeMap<String, ParityCfg> {
 /// The chain contraction is F-10, reused from [`crate::syntax::cfg`] rather
 /// than reimplemented --- that module was written with this caller in mind.
 fn parity_of(cfg: &Cfg) -> ParityCfg {
-    let blocks = cfg.coalesced();
-    let count = blocks.node_count() as u32;
-    let nodes: Vec<u32> = (0..count).collect();
-
-    let mut edges: Vec<(u32, u32)> = blocks
-        .edges()
-        .iter()
-        .map(|edge| (edge.src.index() as u32, edge.dst.index() as u32))
-        .collect();
-    edges.sort_unstable();
-    edges.dedup();
-
-    let entry = vec![blocks.entry().index() as u32];
-    let exit: Vec<u32> = nodes
-        .iter()
-        .copied()
-        .filter(|id| {
-            let node = NodeId::new(*id);
-            blocks.out_degree(node) == 0 || node == blocks.exit()
-        })
-        .collect();
-
+    // The chain partition is the parity layer's own (`chains`), not
+    // `Cfg::chain_partition`: the general one refuses to contract an anchor, so
+    // the function-end node is always a singleton and F-12 deletes it every
+    // time. Joern's `to_supergraph` has no anchor concept. Measured over the
+    // 85,645 stored cells, using the general partition here scores 0.60% exact
+    // against 72.44% with this one -- and 0.60% is *worse* than deriving the
+    // flags inline, which is why the two must land together.
+    let chains = chains::parity_chains(cfg);
+    let blocks = flags::parity_blocks(cfg, &chains).renumbered();
+    let nodes: Vec<u32> = (0..blocks.kept.len() as u32).collect();
     ParityCfg {
         nodes,
-        edges,
-        entry,
-        exit,
-        degenerate: is_degenerate(&blocks),
+        edges: blocks.edges,
+        entry: blocks.entry,
+        exit: blocks.exit,
+        degenerate: is_degenerate(cfg),
     }
 }
 
@@ -179,16 +168,38 @@ fn is_degenerate(blocks: &Cfg) -> bool {
 mod tests {
     use super::*;
 
+    /// Both funcend regimes, end to end through the serialized shape.
+    ///
+    /// The corpus decides this, not intuition: a funcend block survives iff it
+    /// coalesced with something. `base-passwd`'s `xasprintf` has one `return`,
+    /// so FUNCTION_END has in-degree 1, merges, and stays exit-flagged
+    /// (published `exit [0]`); `xstrdup` has two, so it keeps in-degree 2,
+    /// remains a singleton, and F-12 deletes it (published `exit []`). An
+    /// earlier version of this test asserted every returning function has an
+    /// exit, which is the pre-F-12 assumption and is wrong for half the corpus.
     #[test]
-    fn a_function_reaches_the_serialized_shape() {
-        let cfgs = parity_cfgs("int f(int a) { if (a) { return 1; } return 0; }");
-        let f = cfgs.get("f").expect("f is recovered");
+    fn both_funcend_regimes_reach_the_serialized_shape() {
+        let two_returns = parity_cfgs("int f(int a) { if (a) { return 1; } return 0; }");
+        let f = two_returns.get("f").expect("f is recovered");
         assert!(!f.nodes.is_empty(), "a real function has nodes");
         assert_eq!(f.entry.len(), 1, "exactly one entry block");
-        assert!(!f.exit.is_empty(), "a returning function has an exit");
+        assert!(
+            f.exit.is_empty(),
+            "two returns keep FUNCTION_END at in-degree 2, so it stays a \
+             singleton and F-12 deletes it -- the `xstrdup` regime: {f:?}"
+        );
         assert!(
             !f.degenerate,
             "a function with statements is not degenerate"
+        );
+
+        let one_return = parity_cfgs("int g(int a) { int r = a + 1; return r; }");
+        let g = one_return.get("g").expect("g is recovered");
+        assert_eq!(
+            g.exit.len(),
+            1,
+            "one return lets FUNCTION_END coalesce, so it survives flagged -- \
+             the `xasprintf` regime: {g:?}"
         );
     }
 
