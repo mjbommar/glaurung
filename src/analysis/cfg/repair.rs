@@ -282,8 +282,29 @@ pub(super) fn elf_startup_main_candidate(
     {
         return None;
     }
-    let object = crate::decompile::profile::parse_object(data).ok()?;
-    let entry = code_addr(object.entry(), arch);
+    // Prefer the session's already-indexed image. Re-parsing the container here
+    // cost one object parse per whole-binary discovery, which is what pushed
+    // `discovery_parse_count_does_not_scale_with_the_number_of_functions` over
+    // its budget: the count is per discovery, not per function, so a parse added
+    // on this path is paid by every binary.
+    let (entry_raw, is_static, little_endian) = match image {
+        Some(indexed) => (
+            indexed.entry_va(),
+            !indexed
+                .sections()
+                .any(|section| section.name() == ".interp"),
+            matches!(indexed.endianness(), Endianness::Little),
+        ),
+        None => {
+            let object = crate::decompile::profile::parse_object(data).ok()?;
+            (
+                object.entry(),
+                object.section_by_name(".interp").is_none(),
+                object.is_little_endian(),
+            )
+        }
+    };
+    let entry = code_addr(entry_raw, arch);
     if entry == 0 {
         return None;
     }
@@ -294,7 +315,7 @@ pub(super) fn elf_startup_main_candidate(
             let plt = crate::analysis::elf_plt::elf_plt_map(data)
                 .into_iter()
                 .collect::<std::collections::HashMap<_, _>>();
-            let is_static = object.section_by_name(".interp").is_none();
+
             i386_startup_main_candidate(
                 code,
                 entry,
@@ -309,11 +330,26 @@ pub(super) fn elf_startup_main_candidate(
             .map(|candidate| i386_direct_jump_target(image, data, candidate).unwrap_or(candidate))
         }
         BArch::X86_64 => {
-            let got = crate::analysis::elf_got::elf_got_map(data)
-                .into_iter()
-                .collect::<std::collections::HashMap<_, _>>();
-            let is_static = object.section_by_name(".interp").is_none();
-            x86_64_startup_main_candidate(code, entry, &got, is_static)
+            // `ProgramImage` already caches exactly this map behind a
+            // `get_or_init`, so an indexed session pays for it once per image
+            // rather than once per discovery. Calling `elf_got_map` directly
+            // here is what kept two object parses on this path.
+            let owned;
+            let got = match image {
+                Some(indexed) => {
+                    owned = indexed.relocated_symbol_slots();
+                    owned.as_ref()
+                }
+                None => {
+                    owned = std::sync::Arc::new(
+                        crate::analysis::elf_got::elf_got_map(data)
+                            .into_iter()
+                            .collect::<std::collections::HashMap<_, _>>(),
+                    );
+                    owned.as_ref()
+                }
+            };
+            x86_64_startup_main_candidate(code, entry, got, is_static)
         }
         BArch::AArch64 => {
             let got_targets = crate::analysis::elf_got::elf_got_target_map(data)
@@ -325,17 +361,17 @@ pub(super) fn elf_startup_main_candidate(
             if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
                 eprintln!("[startup-main] entry={entry:#x} got={got_targets:#x?} plt={plt:#x?}");
             }
-            let is_static = object.section_by_name(".interp").is_none();
+
             aarch64_startup_main_candidate(code, entry, &got_targets, &plt, is_static)
         }
-        BArch::ARM if object.is_little_endian() => {
+        BArch::ARM if little_endian => {
             let got_targets = crate::analysis::elf_got::elf_got_target_map(data)
                 .into_iter()
                 .collect::<std::collections::HashMap<_, _>>();
             let plt = crate::analysis::elf_plt::elf_plt_map(data)
                 .into_iter()
                 .collect::<std::collections::HashMap<_, _>>();
-            let is_static = object.section_by_name(".interp").is_none();
+
             arm_thumb_startup_main_candidate(
                 code,
                 entry,

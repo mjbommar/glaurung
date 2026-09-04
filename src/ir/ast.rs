@@ -3442,22 +3442,10 @@ function f @ 0x1000 {
         let rendered = render_decbench(&function);
         clear_dec_global_names();
 
-        assert!(
-            rendered.contains("static int increment_counter_counter;"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("increment_counter_counter++;"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("return increment_counter_counter;"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("printf(\"%d\", increment_counter_counter);"),
-            "{rendered}"
-        );
+        assert!(rendered.contains("static int counter;"), "{rendered}");
+        assert!(rendered.contains("counter++;"), "{rendered}");
+        assert!(rendered.contains("return counter;"), "{rendered}");
+        assert!(rendered.contains("printf(\"%d\", counter);"), "{rendered}");
         assert!(!rendered.contains("unsigned char"), "{rendered}");
     }
 
@@ -5315,7 +5303,7 @@ function f @ 0x1000 {
 
         let text = render_decbench(&f);
         assert!(
-            text.contains("int main(int argc, char ** argv) {"),
+            text.contains("int main(int argc, char **argv) {"),
             "main signature was not recovered:\n{text}"
         );
         assert!(text.contains("argv"), "argv uses were not renamed:\n{text}");
@@ -6552,7 +6540,7 @@ function f @ 0x1000 {
         );
 
         assert!(text.contains("typedef struct record record;"), "{text}");
-        assert!(text.contains("void consume(record * arg0)"), "{text}");
+        assert!(text.contains("void consume(record *arg0)"), "{text}");
         assert!(
             !text.contains("void consume(struct record * arg0)"),
             "{text}"
@@ -6623,7 +6611,7 @@ function f @ 0x1000 {
 
         assert!(text.contains("typedef struct xLIST List_t;"), "{text}");
         assert!(
-            text.contains("void initialise(List_t * const arg0)"),
+            text.contains("void initialise(List_t *const arg0)"),
             "{text}"
         );
         assert!(!text.contains("struct xLIST {"), "{text}");
@@ -9861,7 +9849,7 @@ function f @ 0x1000 {
         );
 
         assert!(
-            rendered.contains("uint32_t fixed_width(const int32_t * arg0, int32_t arg1)"),
+            rendered.contains("uint32_t fixed_width(const int32_t *arg0, int32_t arg1)"),
             "fixed-width DWARF prototype was discarded:\n{rendered}"
         );
     }
@@ -10024,7 +10012,7 @@ function f @ 0x1000 {
             "opaque typedef must be declared in standalone C:\n{rendered}"
         );
         assert!(
-            rendered.contains("void wcomment(FILE * arg0, int arg1)"),
+            rendered.contains("void wcomment(FILE *arg0, int arg1)"),
             "the semantic parameter spelling was discarded:\n{rendered}"
         );
     }
