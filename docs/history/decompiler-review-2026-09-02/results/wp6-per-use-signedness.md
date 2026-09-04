@@ -96,6 +96,15 @@ for separate review rather than refreshed as part of this type change.
 The test census is regenerated at 4,279 declared Rust tests, three more than the
 prior record, with zero tests outside every gate.
 
+A subsequent complete ground-truth inventory refresh, made practical by the
+per-binary batching recorded in `wp0-known-failure-batching.md`, confirms zero
+remaining C parameter-type mismatches across all 1,676 objects. The raw type
+axis moved from C 9 / Rust 298 to C 0 / Rust 82. That is strong current-state
+evidence, but only the directly asserted `tail_dispatch` cells are attributed
+to this commit: several other decompiler increments landed since the preceding
+full inventory, so the larger aggregate delta is deliberately not assigned to
+WP6 signedness alone.
+
 ## Scope and limits
 
 This is not the complete WP6 solver. Equality, width, pointer, pointee,

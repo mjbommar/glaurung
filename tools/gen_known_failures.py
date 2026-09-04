@@ -23,6 +23,9 @@ name-keyed lookup silently resolves to the wrong closure.
 
 from __future__ import annotations
 
+import argparse
+import concurrent.futures
+import fnmatch
 import hashlib
 import json
 import os
@@ -86,11 +89,16 @@ def dwarf_classify(p: dict) -> dict:
     }
 
 
-def recovered_signature(binary: str, va: int) -> str | None:
-    c = D.decompiled_c(binary, va)
-    if not c:
+def recovered_signature(rendered: str | None) -> str | None:
+    """Extract a signature from an already recovered body.
+
+    The inventory loop used to call ``D.decompiled_c`` a second time here,
+    doubling the most expensive operation in the generator.  Signature text
+    is part of the body we already need for every other axis.
+    """
+    if not rendered:
         return None
-    for line in c.splitlines():
+    for line in rendered.splitlines():
         if line.startswith("//") or not line.strip():
             continue
         if "(" in line:
@@ -121,8 +129,15 @@ def split_params(sig: str) -> list[str] | None:
 
 
 def strip_name(decl: str) -> str:
-    parts = decl.split()
-    return " ".join(parts[:-1]) if len(parts) > 1 else decl
+    """Remove a trailing parameter identifier without consuming pointer stars.
+
+    Both ``char *arg0`` and ``char * arg0`` are ordinary C spellings. Splitting
+    on whitespace treats ``*arg0`` as one token and turns the first form into
+    scalar ``char``, fabricating a pointer-loss defect for every declaration
+    rendered with conventional star spacing.
+    """
+    stripped = re.sub(r"[A-Za-z_]\w*\s*$", "", decl).rstrip()
+    return stripped or decl
 
 
 def sources_without_goto() -> set[str]:
@@ -209,110 +224,289 @@ def inventory_summaries(
     return by_language, deduplicated, deduplicated_by_language
 
 
-def main() -> int:
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Measure decompiler failures against the fixture corpus."
+    )
+    parser.add_argument(
+        "--language",
+        choices=("all", "c", "rust"),
+        default="all",
+        help="limit the source-language axis (default: all)",
+    )
+    parser.add_argument(
+        "--fixture",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="limit object basenames by shell-style glob; repeatable",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=min(8, os.cpu_count() or 1),
+        help="number of binaries measured concurrently (default: up to 8)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUT,
+        help=f"output JSON path (default: {OUT.relative_to(ROOT)})",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        help="append each completed object's rows to this JSONL checkpoint",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse completed objects from --checkpoint",
+    )
+    parser.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="print completed-object progress to stderr (default: enabled)",
+    )
+    return parser
+
+
+def _selected_objects(language: str, fixtures: list[str]) -> list[str]:
+    objects = sorted(path.name for path in BUILD.glob("*.so"))
+    if language != "all":
+        objects = [name for name in objects if language_for_object(name) == language]
+    if fixtures:
+        objects = [
+            name
+            for name in objects
+            if any(fnmatch.fnmatchcase(name, pattern) for pattern in fixtures)
+        ]
+    return objects
+
+
+def measure_object(name: str, goto_free: set[str]) -> dict[str, list[dict]]:
+    """Measure one binary after loading and decompiling it exactly once."""
+    rows = {axis: [] for axis in AXES}
+    path = str(BUILD / name)
+    try:
+        sigs = D.signatures(path)
+    except Exception:
+        return rows
+
+    # One ProgramSession-backed native call replaces one CLI process per
+    # function (formerly two because recovered_signature decompiled again).
+    rendered_by_va = D.decompiled_many_c(path, [int(sig["va"]) for sig in sigs])
+    stem = name.split("-")[0]
+    for signature in sigs:
+        va = int(signature["va"])
+        rendered = rendered_by_va.get(va)
+        if not rendered:
+            rows["no_body"].append({"obj": name, "fn": signature["name"], "va": va})
+            continue
+
+        if stem in goto_free:
+            count = len(re.findall(r"\bgoto\s+\w+\s*;", rendered))
+            if count:
+                rows["structure"].append(
+                    {
+                        "obj": name,
+                        "fn": signature["name"],
+                        "va": va,
+                        "gotos": count,
+                    }
+                )
+
+        if "unrecovered" in rendered:
+            rows["unrecovered"].append(
+                {
+                    "obj": name,
+                    "fn": signature["name"],
+                    "va": va,
+                    "n": rendered.count("unrecovered"),
+                }
+            )
+
+        got = recovered_signature(rendered)
+        params = split_params(got) if got else None
+
+        if got:
+            wanted_return = dwarf_classify(signature.get("ret") or {})
+            head = got.split("(")[0]
+            recovered_return = classify(head.rsplit(" ", 1)[0]) if " " in head else None
+            if (
+                recovered_return
+                and wanted_return["w"] is not None
+                and recovered_return["w"] is not None
+            ):
+                if wanted_return["ptr"] and not recovered_return["ptr"]:
+                    rows["returns"].append(
+                        {
+                            "obj": name,
+                            "fn": signature["name"],
+                            "va": va,
+                            "kind": "ptr_lost",
+                            "want": "pointer",
+                            "got": recovered_return["raw"],
+                        }
+                    )
+                elif (
+                    not wanted_return["ptr"]
+                    and wanted_return["w"] != recovered_return["w"]
+                ):
+                    rows["returns"].append(
+                        {
+                            "obj": name,
+                            "fn": signature["name"],
+                            "va": va,
+                            "kind": "width",
+                            "want": wanted_return["w"],
+                            "got": recovered_return["raw"],
+                        }
+                    )
+
+        if params is None or len(params) != len(signature["params"]):
+            continue
+        for index, (wanted, declaration) in enumerate(zip(signature["params"], params)):
+            wanted_type = dwarf_classify(wanted)
+            recovered_type = classify(strip_name(declaration))
+            if recovered_type["w"] is None:
+                continue
+            if wanted_type["ptr"] and not recovered_type["ptr"]:
+                rows["pointers"].append(
+                    {
+                        "obj": name,
+                        "fn": signature["name"],
+                        "va": va,
+                        "arg": index,
+                        "got": recovered_type["raw"],
+                    }
+                )
+                continue
+            if wanted_type["ptr"] or not wanted_type["w"] or not recovered_type["w"]:
+                continue
+            if wanted_type["w"] != recovered_type["w"]:
+                rows["types"].append(
+                    {
+                        "obj": name,
+                        "fn": signature["name"],
+                        "va": va,
+                        "arg": index,
+                        "kind": "width",
+                        "want": wanted_type["w"],
+                        "got": recovered_type["raw"],
+                    }
+                )
+            elif wanted_type["s"] != recovered_type["s"]:
+                rows["types"].append(
+                    {
+                        "obj": name,
+                        "fn": signature["name"],
+                        "va": va,
+                        "arg": index,
+                        "kind": "signedness",
+                        "want": "signed" if wanted_type["s"] else "unsigned",
+                        "got": recovered_type["raw"],
+                    }
+                )
+    return rows
+
+
+def _load_checkpoint(path: Path) -> dict[str, dict[str, list[dict]]]:
+    """Load the last complete record for each object from an append-only file."""
+    completed: dict[str, dict[str, list[dict]]] = {}
+    if not path.is_file():
+        return completed
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+            name = record["object"]
+            rows = record["rows"]
+            if not isinstance(name, str) or not isinstance(rows, dict):
+                raise TypeError
+            if any(not isinstance(rows.get(axis), list) for axis in AXES):
+                raise TypeError
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise ValueError(
+                f"invalid checkpoint record at line {line_number}"
+            ) from error
+        completed[name] = rows
+    return completed
+
+
+def _append_checkpoint(path: Path, name: str, rows: dict[str, list[dict]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        stream.write(json.dumps({"object": name, "rows": rows}, separators=(",", ":")))
+        stream.write("\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     if not BUILD.is_dir():
         print(f"{BUILD} absent; build the fixture matrix first", file=sys.stderr)
         return 2
+    if args.jobs < 1:
+        print("--jobs must be at least 1", file=sys.stderr)
+        return 2
+    if args.resume and args.checkpoint is None:
+        print("--resume requires --checkpoint", file=sys.stderr)
+        return 2
     goto_free = sources_without_goto()
-    objects = sorted(p.name for p in BUILD.glob("*.so"))
-    types, structure = [], []
-    returns, pointers, markers, nobody = [], [], [], []
+    objects = _selected_objects(args.language, args.fixture)
+    if not objects:
+        print("no fixture objects matched the requested filters", file=sys.stderr)
+        return 2
+    rows_by_axis = {axis: [] for axis in AXES}
     t0 = time.time()
+    checkpoint_rows: dict[str, dict[str, list[dict]]] = {}
+    checkpoint = args.checkpoint.resolve() if args.checkpoint else None
+    if checkpoint is not None:
+        if args.resume:
+            try:
+                checkpoint_rows = _load_checkpoint(checkpoint)
+            except ValueError as error:
+                print(str(error), file=sys.stderr)
+                return 2
+        else:
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_text("")
 
     for name in objects:
-        path = str(BUILD / name)
-        try:
-            sigs = D.signatures(path)
-        except Exception:
+        if name not in checkpoint_rows:
             continue
-        stem = name.split("-")[0]
-        for s in sigs:
-            try:
-                rendered = D.decompiled_c(path, s["va"])
-            except Exception:
-                continue
-            if not rendered:
-                nobody.append({"obj": name, "fn": s["name"], "va": s["va"]})
-                continue
+        for axis in AXES:
+            rows_by_axis[axis].extend(checkpoint_rows[name][axis])
+    pending = [name for name in objects if name not in checkpoint_rows]
+    reused = len(objects) - len(pending)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+        futures = {
+            executor.submit(measure_object, name, goto_free): name for name in pending
+        }
+        for completed, future in enumerate(
+            concurrent.futures.as_completed(futures), start=reused + 1
+        ):
+            name = futures[future]
+            measured = future.result()
+            for axis in AXES:
+                rows_by_axis[axis].extend(measured[axis])
+            if checkpoint is not None:
+                _append_checkpoint(checkpoint, name, measured)
+            if args.progress:
+                print(
+                    f"[{completed}/{len(objects)}] {name}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
-            if stem in goto_free:
-                n = len(re.findall(r"\bgoto\s+\w+\s*;", rendered))
-                if n:
-                    structure.append(
-                        {"obj": name, "fn": s["name"], "va": s["va"], "gotos": n}
-                    )
+    for axis in AXES:
+        if axis in ("types", "pointers"):
+            rows_by_axis[axis].sort(key=lambda row: (row["obj"], row["va"], row["arg"]))
+        else:
+            rows_by_axis[axis].sort(key=lambda row: (row["obj"], row["va"]))
 
-            if "unrecovered" in rendered:
-                markers.append({"obj": name, "fn": s["name"], "va": s["va"],
-                                "n": rendered.count("unrecovered")})
-
-            got = recovered_signature(path, s["va"])
-            params = split_params(got) if got else None
-
-            # Return type. Checked separately from parameters because a wrong
-            # return type is the failure that makes a function look `void` --
-            # the shape `-flto` and the AArch64 FMA gap both produce.
-            if got:
-                rw = dwarf_classify(s.get("ret") or {})
-                rg = classify(got.split("(")[0].rsplit(" ", 1)[0]) if " " in got.split("(")[0] else None
-                if rg and rw["w"] is not None and rg["w"] is not None:
-                    if rw["ptr"] and not rg["ptr"]:
-                        returns.append({"obj": name, "fn": s["name"], "va": s["va"],
-                                        "kind": "ptr_lost", "want": "pointer",
-                                        "got": rg["raw"]})
-                    elif not rw["ptr"] and rw["w"] != rg["w"]:
-                        returns.append({"obj": name, "fn": s["name"], "va": s["va"],
-                                        "kind": "width", "want": rw["w"],
-                                        "got": rg["raw"]})
-
-            if params is None or len(params) != len(s["params"]):
-                continue
-            for i, (want, decl) in enumerate(zip(s["params"], params)):
-                w, g = dwarf_classify(want), classify(strip_name(decl))
-                if g["w"] is None:
-                    continue
-                # A DWARF pointer recovered as a scalar loses the fact that the
-                # value is an address, which is what makes recovered C
-                # dereference an integer.
-                if w["ptr"] and not g["ptr"]:
-                    pointers.append({"obj": name, "fn": s["name"], "va": s["va"],
-                                     "arg": i, "got": g["raw"]})
-                    continue
-                if w["ptr"] or not w["w"] or not g["w"]:
-                    continue
-                if w["w"] != g["w"]:
-                    types.append(
-                        {
-                            "obj": name,
-                            "fn": s["name"],
-                            "va": s["va"],
-                            "arg": i,
-                            "kind": "width",
-                            "want": w["w"],
-                            "got": g["raw"],
-                        }
-                    )
-                elif w["s"] != g["s"]:
-                    types.append(
-                        {
-                            "obj": name,
-                            "fn": s["name"],
-                            "va": s["va"],
-                            "arg": i,
-                            "kind": "signedness",
-                            "want": "signed" if w["s"] else "unsigned",
-                            "got": g["raw"],
-                        }
-                    )
-
-    rows_by_axis = {
-        "types": sorted(types, key=lambda r: (r["obj"], r["va"], r["arg"])),
-        "structure": sorted(structure, key=lambda r: (r["obj"], r["va"])),
-        "returns": sorted(returns, key=lambda r: (r["obj"], r["va"])),
-        "pointers": sorted(pointers, key=lambda r: (r["obj"], r["va"], r["arg"])),
-        "unrecovered": sorted(markers, key=lambda r: (r["obj"], r["va"])),
-        "no_body": sorted(nobody, key=lambda r: (r["obj"], r["va"])),
-    }
     by_language, deduplicated, deduplicated_by_language = inventory_summaries(
         rows_by_axis
     )
@@ -321,23 +515,19 @@ def main() -> int:
         "elapsed_seconds": round(time.time() - t0, 1),
         "objects_scanned": len(objects),
         "counts": {
-            "types": len(types),
-            "structure": len(structure),
-            "returns": len(returns),
-            "pointers": len(pointers),
-            "unrecovered": len(markers),
-            "no_body": len(nobody),
-            "goto_statements": sum(r["gotos"] for r in structure),
+            **{axis: len(rows_by_axis[axis]) for axis in AXES},
+            "goto_statements": sum(row["gotos"] for row in rows_by_axis["structure"]),
         },
         "counts_by_language": by_language,
         "deduplicated_counts": deduplicated,
         "deduplicated_counts_by_language": deduplicated_by_language,
         **rows_by_axis,
     }
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(payload, indent=1) + "\n")
+    output = args.output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=1) + "\n")
     print(
-        f"{OUT.relative_to(ROOT)}: "
+        f"{output}: "
         + ", ".join(f"{v} {k}" for k, v in payload["counts"].items())
         + f" in {payload['elapsed_seconds']}s"
     )

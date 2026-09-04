@@ -1,145 +1,73 @@
 {
  "note": "Measured decompiler failures. Regenerate with tools/gen_known_failures.py.",
- "elapsed_seconds": 1429.0,
+ "elapsed_seconds": 203.8,
  "objects_scanned": 1676,
  "counts": {
-  "types": 307,
-  "structure": 717,
-  "returns": 92,
+  "types": 82,
+  "structure": 715,
+  "returns": 41,
   "pointers": 0,
-  "unrecovered": 46,
+  "unrecovered": 42,
   "no_body": 0,
-  "goto_statements": 6843
+  "goto_statements": 6825
  },
  "counts_by_language": {
   "c": {
-   "types": 9,
-   "structure": 623,
-   "returns": 33,
+   "types": 0,
+   "structure": 621,
+   "returns": 15,
    "pointers": 0,
-   "unrecovered": 40,
+   "unrecovered": 38,
    "no_body": 0,
-   "goto_statements": 6277
+   "goto_statements": 6259
   },
   "rust": {
-   "types": 298,
+   "types": 82,
    "structure": 94,
-   "returns": 59,
+   "returns": 26,
    "pointers": 0,
-   "unrecovered": 6,
+   "unrecovered": 4,
    "no_body": 0,
    "goto_statements": 566
   }
  },
  "deduplicated_counts": {
-  "types": 218,
-  "structure": 474,
-  "returns": 67,
+  "types": 65,
+  "structure": 473,
+  "returns": 33,
   "pointers": 0,
-  "unrecovered": 29,
+  "unrecovered": 27,
   "no_body": 0,
-  "goto_statements": 4661
+  "goto_statements": 4652
  },
  "deduplicated_counts_by_language": {
   "c": {
-   "types": 5,
-   "structure": 406,
-   "returns": 18,
+   "types": 0,
+   "structure": 405,
+   "returns": 9,
    "pointers": 0,
-   "unrecovered": 25,
+   "unrecovered": 24,
    "no_body": 0,
-   "goto_statements": 4234
+   "goto_statements": 4225
   },
   "rust": {
-   "types": 213,
+   "types": 65,
    "structure": 68,
-   "returns": 49,
+   "returns": 24,
    "pointers": 0,
-   "unrecovered": 4,
+   "unrecovered": 3,
    "no_body": 0,
    "goto_statements": 427
   }
  },
  "types": [
   {
-   "obj": "02_integer_widths-gcc-O2.so",
-   "fn": "trunc_u8",
-   "va": 4496,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "signed char"
-  },
-  {
-   "obj": "02_integer_widths-gcc-O2strip.dwarf.so",
-   "fn": "trunc_u8",
-   "va": 4496,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "signed char"
-  },
-  {
-   "obj": "08_indirect_dispatch-gcc-O2.so",
-   "fn": "tail_dispatch",
-   "va": 4608,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "08_indirect_dispatch-gcc-O2.so",
-   "fn": "tail_dispatch",
-   "va": 4608,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "08_indirect_dispatch-gcc-O2strip.dwarf.so",
-   "fn": "tail_dispatch",
-   "va": 4608,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "08_indirect_dispatch-gcc-O2strip.dwarf.so",
-   "fn": "tail_dispatch",
-   "va": 4608,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "129_struct_by_value-gcc-O0.so",
-   "fn": "consume_large",
-   "va": 4378,
-   "arg": 0,
-   "kind": "width",
-   "want": 20,
-   "got": "long"
-  },
-  {
    "obj": "166_rust_generics-rustc-O0.so",
    "fn": "{closure#2}",
    "va": 23616,
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "{closure#2}",
-   "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -150,150 +78,6 @@
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "seed",
-   "va": 30208,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "step",
-   "va": 30224,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "seed",
-   "va": 30352,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "step",
-   "va": 30368,
-   "arg": 0,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "step",
-   "va": 30368,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "out",
-   "va": 30416,
-   "arg": 0,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "pick_max",
-   "va": 30432,
-   "arg": 0,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "pick_max",
-   "va": 30432,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "fold_generic<i16>",
-   "va": 30624,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "fold_generic<i8>",
-   "va": 30736,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_i8",
-   "va": 31712,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_i16",
-   "va": 31744,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_dispatch",
-   "va": 31808,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_dispatch",
-   "va": 31808,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_max",
-   "va": 32096,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_fill",
-   "va": 32352,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "int"
   },
   {
    "obj": "166_rust_generics-rustc-O0.so",
@@ -314,183 +98,12 @@
    "got": "long"
   },
   {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "fold_generic<i16>",
-   "va": 4352,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "fold_generic<i8>",
-   "va": 4496,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned char"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "fold_generic<i32>",
-   "va": 4624,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_i8",
-   "va": 5568,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_i16",
-   "va": 5584,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_i32",
-   "va": 5600,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_dispatch",
-   "va": 5616,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_dispatch",
-   "va": 5616,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_mixed",
-   "va": 5680,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned char"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "fold_generic<i16>",
-   "va": 4352,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "fold_generic<i8>",
-   "va": 4496,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned char"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "fold_generic<i32>",
-   "va": 4624,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_i8",
-   "va": 5568,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_i16",
-   "va": 5584,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_i32",
-   "va": 5600,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_dispatch",
-   "va": 5616,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_dispatch",
-   "va": 5616,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_mixed",
-   "va": 5680,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned char"
-  },
-  {
    "obj": "167_rust_trait_objects-rustc-O0.so",
    "fn": "{closure#2}",
    "va": 23616,
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "{closure#2}",
-   "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -509,7 +122,7 @@
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "(no_stack_protector)) char  _ZN5alloc5alloc15exchange_malloc17h45cb24404d666705E(long"
+   "got": "long"
   },
   {
    "obj": "167_rust_trait_objects-rustc-O0.so",
@@ -518,42 +131,6 @@
    "arg": 1,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "rust_dyn_apply",
-   "va": 32752,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "rust_dyn_two_slots",
-   "va": 32800,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "rust_dyn_boxed",
-   "va": 34192,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "rust_dyn_fill",
-   "va": 34384,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
    "got": "long"
   },
   {
@@ -587,64 +164,10 @@
    "obj": "167_rust_trait_objects-rustc-O2.so",
    "fn": "{closure#2}",
    "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "{closure#2}",
-   "va": 23616,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_apply",
-   "va": 28960,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_two_slots",
-   "va": 28992,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_pipeline",
-   "va": 29120,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_pipeline",
-   "va": 29120,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_fill",
-   "va": 29584,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
   },
   {
    "obj": "167_rust_trait_objects-rustc-O2.so",
@@ -677,64 +200,10 @@
    "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
    "fn": "{closure#2}",
    "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "{closure#2}",
-   "va": 23616,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_apply",
-   "va": 28960,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_two_slots",
-   "va": 28992,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_pipeline",
-   "va": 29120,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_pipeline",
-   "va": 29120,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_fill",
-   "va": 29584,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
   },
   {
    "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
@@ -764,417 +233,12 @@
    "got": "int"
   },
   {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "make",
-   "va": 5616,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "make",
-   "va": 5616,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "make",
-   "va": 5616,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_enum_eval",
-   "va": 6192,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_enum_eval",
-   "va": 6192,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "combine",
-   "va": 6240,
-   "arg": 0,
-   "kind": "width",
-   "want": 16,
-   "got": "char"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "combine",
-   "va": 6240,
-   "arg": 1,
-   "kind": "width",
-   "want": 16,
-   "got": "char"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_enum_by_value",
-   "va": 6304,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_enum_by_value",
-   "va": 6304,
-   "arg": 3,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_enum_discriminant",
-   "va": 6400,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_enum_discriminant",
-   "va": 6400,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "rust_option_nested",
-   "va": 7072,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "make",
-   "va": 4352,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "void"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "make",
-   "va": 4352,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "make",
-   "va": 4352,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_enum_eval",
-   "va": 4560,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_enum_eval",
-   "va": 4560,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "combine",
-   "va": 4608,
-   "arg": 0,
-   "kind": "width",
-   "want": 16,
-   "got": "char"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "combine",
-   "va": 4608,
-   "arg": 1,
-   "kind": "width",
-   "want": 16,
-   "got": "char"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_enum_by_value",
-   "va": 4656,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_enum_by_value",
-   "va": 4656,
-   "arg": 3,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_enum_discriminant",
-   "va": 4736,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_enum_discriminant",
-   "va": 4736,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_option_ref_find",
-   "va": 4848,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_option_nonzero",
-   "va": 4912,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_option_nested",
-   "va": 4928,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_option_nested",
-   "va": 4928,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2.so",
-   "fn": "rust_option_niche_fill",
-   "va": 4960,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "make",
-   "va": 4352,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "void"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "make",
-   "va": 4352,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "make",
-   "va": 4352,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_enum_eval",
-   "va": 4560,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_enum_eval",
-   "va": 4560,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "combine",
-   "va": 4608,
-   "arg": 0,
-   "kind": "width",
-   "want": 16,
-   "got": "char"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "combine",
-   "va": 4608,
-   "arg": 1,
-   "kind": "width",
-   "want": 16,
-   "got": "char"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_enum_by_value",
-   "va": 4656,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_enum_by_value",
-   "va": 4656,
-   "arg": 3,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_enum_discriminant",
-   "va": 4736,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_enum_discriminant",
-   "va": 4736,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_option_ref_find",
-   "va": 4848,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_option_nonzero",
-   "va": 4912,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_option_nested",
-   "va": 4928,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_option_nested",
-   "va": 4928,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
-   "fn": "rust_option_niche_fill",
-   "va": 4960,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
    "obj": "169_rust_slices_bounds-rustc-O0.so",
    "fn": "{closure#2}",
    "va": 23616,
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "{closure#2}",
-   "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -1197,150 +261,6 @@
   },
   {
    "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_index",
-   "va": 39824,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_index",
-   "va": 39824,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_index_pair",
-   "va": 40144,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_index_pair",
-   "va": 40144,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_get",
-   "va": 40720,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_get",
-   "va": 40720,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_get_range",
-   "va": 40944,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_get_range",
-   "va": 40944,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_iter_sum",
-   "va": 41264,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_rev_enumerate",
-   "va": 41440,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_windows",
-   "va": 41936,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_chunks",
-   "va": 42448,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_split_zip",
-   "va": 43008,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_split_zip",
-   "va": 43008,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_write",
-   "va": 43744,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
-   "fn": "rust_slice_reverse",
-   "va": 44144,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O0.so",
    "fn": "__rdl_dealloc",
    "va": 158272,
    "arg": 1,
@@ -1370,100 +290,10 @@
    "obj": "169_rust_slices_bounds-rustc-O2.so",
    "fn": "{closure#2}",
    "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "{closure#2}",
-   "va": 23616,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_index",
-   "va": 28656,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_get",
-   "va": 28784,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_get",
-   "va": 28784,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_get_range",
-   "va": 28832,
-   "arg": 3,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_iter_sum",
-   "va": 29040,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_rev_enumerate",
-   "va": 29168,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_windows",
-   "va": 29248,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_chunks",
-   "va": 29472,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2.so",
-   "fn": "rust_slice_write",
-   "va": 29984,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
   },
   {
    "obj": "169_rust_slices_bounds-rustc-O2.so",
@@ -1496,100 +326,10 @@
    "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
    "fn": "{closure#2}",
    "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "{closure#2}",
-   "va": 23616,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_index",
-   "va": 28656,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_get",
-   "va": 28784,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_get",
-   "va": 28784,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_get_range",
-   "va": 28832,
-   "arg": 3,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_iter_sum",
-   "va": 29040,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_rev_enumerate",
-   "va": 29168,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_windows",
-   "va": 29248,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_chunks",
-   "va": 29472,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
-   "fn": "rust_slice_write",
-   "va": 29984,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
   },
   {
    "obj": "169_rust_slices_bounds-rustc-O2strip.dwarf.so",
@@ -1622,28 +362,10 @@
    "obj": "170_rust_panic_unwind-rustc-O0.so",
    "fn": "{closure#2}",
    "va": 23696,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "{closure#2}",
-   "va": 23696,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "black_box<u32>",
-   "va": 30208,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O0.so",
@@ -1656,33 +378,6 @@
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "strict_div",
-   "va": 31104,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_guarded_div",
-   "va": 31200,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_guarded_div",
-   "va": 31200,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
    "fn": "table_lookup",
    "va": 31424,
    "arg": 0,
@@ -1692,60 +387,6 @@
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_expect",
-   "va": 31648,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_bounds",
-   "va": 31776,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_bounds",
-   "va": 31776,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_unreachable",
-   "va": 32272,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_unreachable",
-   "va": 32272,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_multi",
-   "va": 32576,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
    "fn": "__rdl_dealloc",
    "va": 146848,
    "arg": 1,
@@ -1775,28 +416,10 @@
    "obj": "170_rust_panic_unwind-rustc-O2.so",
    "fn": "{closure#2}",
    "va": 23696,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2.so",
-   "fn": "{closure#2}",
-   "va": 23696,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2.so",
-   "fn": "rust_panic_guarded_div",
-   "va": 28880,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O2.so",
@@ -1809,33 +432,6 @@
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O2.so",
-   "fn": "rust_panic_expect",
-   "va": 29200,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2.so",
-   "fn": "rust_panic_multi",
-   "va": 29632,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2.so",
-   "fn": "rust_panic_multi",
-   "va": 29632,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2.so",
    "fn": "__rdl_dealloc",
    "va": 143696,
    "arg": 1,
@@ -1859,15 +455,6 @@
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
-   "fn": "{closure#2}",
-   "va": 23696,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -1878,15 +465,6 @@
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
-   "fn": "rust_panic_guarded_div",
-   "va": 28880,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
@@ -1899,33 +477,6 @@
   },
   {
    "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
-   "fn": "rust_panic_expect",
-   "va": 29200,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
-   "fn": "rust_panic_multi",
-   "va": 29632,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
-   "fn": "rust_panic_multi",
-   "va": 29632,
-   "arg": 2,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
    "fn": "__rdl_dealloc",
    "va": 143696,
    "arg": 1,
@@ -1949,15 +500,6 @@
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "{closure#2}",
-   "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -1968,24 +510,6 @@
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "checked_mul",
-   "va": 28864,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "checked_shl",
-   "va": 29072,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
   },
   {
    "obj": "171_rust_overflow-rustc-O0.so",
@@ -2000,16 +524,16 @@
    "obj": "171_rust_overflow-rustc-O0.so",
    "fn": "checked_shr",
    "va": 29168,
-   "arg": 0,
+   "arg": 1,
    "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
+   "want": "unsigned",
+   "got": "int"
   },
   {
    "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "checked_shr",
-   "va": 29168,
-   "arg": 1,
+   "fn": "checked_sub",
+   "va": 29472,
+   "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
    "got": "int"
@@ -2034,15 +558,6 @@
   },
   {
    "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "unwrap_or<u32>",
-   "va": 29792,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
    "fn": "unwrap_or<i32>",
    "va": 29872,
    "arg": 0,
@@ -2052,114 +567,6 @@
   },
   {
    "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_checked_mul",
-   "va": 30880,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_saturating_sub",
-   "va": 31024,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_saturating_mul",
-   "va": 31072,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_overflowing_mul",
-   "va": 31088,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_u32_sub_family",
-   "va": 31296,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_u32_bits",
-   "va": 31456,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_u32_rotate",
-   "va": 31760,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_shift_family",
-   "va": 31824,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_checked_shift",
-   "va": 32096,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_checked_shift",
-   "va": 32096,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_cast_chain",
-   "va": 32224,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
-   "fn": "rust_overflow_matrix",
-   "va": 32352,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O0.so",
    "fn": "__rdl_dealloc",
    "va": 147360,
    "arg": 1,
@@ -2177,363 +584,12 @@
    "got": "long"
   },
   {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_wrapping_add",
-   "va": 4352,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_wrapping_add",
-   "va": 4352,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_checked_mul",
-   "va": 4432,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_checked_div",
-   "va": 4448,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_checked_rem",
-   "va": 4480,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_saturating_add",
-   "va": 4512,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_saturating_add",
-   "va": 4512,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_saturating_mul",
-   "va": 4576,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_overflowing_mul",
-   "va": 4608,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_u32_sub_family",
-   "va": 4640,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_u32_rotate",
-   "va": 4832,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_shift_family",
-   "va": 4848,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_shift_family",
-   "va": 4848,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_checked_shift",
-   "va": 4880,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_checked_shift",
-   "va": 4880,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_cast_chain",
-   "va": 4912,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_overflow_matrix",
-   "va": 4960,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2.so",
-   "fn": "rust_overflow_matrix",
-   "va": 4960,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_wrapping_add",
-   "va": 4352,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_wrapping_add",
-   "va": 4352,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_checked_mul",
-   "va": 4432,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_checked_div",
-   "va": 4448,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_checked_rem",
-   "va": 4480,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_saturating_add",
-   "va": 4512,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_saturating_add",
-   "va": 4512,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_saturating_mul",
-   "va": 4576,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_overflowing_mul",
-   "va": 4608,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_u32_sub_family",
-   "va": 4640,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_u32_rotate",
-   "va": 4832,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_shift_family",
-   "va": 4848,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_shift_family",
-   "va": 4848,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_checked_shift",
-   "va": 4880,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_checked_shift",
-   "va": 4880,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "unsigned",
-   "got": "int"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_cast_chain",
-   "va": 4912,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_overflow_matrix",
-   "va": 4960,
-   "arg": 1,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "171_rust_overflow-rustc-O2strip.dwarf.so",
-   "fn": "rust_overflow_matrix",
-   "va": 4960,
-   "arg": 2,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "195_by_value_aggregates-clang-O2.so",
-   "fn": "bv195_consume_pair",
-   "va": 4560,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned long"
-  },
-  {
-   "obj": "195_by_value_aggregates-clang-O2strip.dwarf.so",
-   "fn": "bv195_consume_pair",
-   "va": 4560,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned long"
-  },
-  {
    "obj": "219_rust_iterator_chains-rustc-O0.so",
    "fn": "{closure#2}",
    "va": 23632,
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O0.so",
-   "fn": "{closure#2}",
-   "va": 23632,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -2655,15 +711,6 @@
   },
   {
    "obj": "219_rust_iterator_chains-rustc-O0.so",
-   "fn": "iter_capturing_closure",
-   "va": 51296,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "(no_stack_protector)) void  iter_capturing_closure(int"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O0.so",
    "fn": "__rdl_dealloc",
    "va": 165856,
    "arg": 1,
@@ -2687,15 +734,6 @@
    "arg": 0,
    "kind": "signedness",
    "want": "unsigned",
-   "got": "long"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2.so",
-   "fn": "{closure#2}",
-   "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
    "got": "long"
   },
   {
@@ -2706,33 +744,6 @@
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2.so",
-   "fn": "iter_enumerate_fold",
-   "va": 29088,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2.so",
-   "fn": "iter_take_skip",
-   "va": 29184,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2.so",
-   "fn": "iter_capturing_closure",
-   "va": 29392,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
   },
   {
    "obj": "219_rust_iterator_chains-rustc-O2.so",
@@ -2765,46 +776,10 @@
    "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
    "fn": "{closure#2}",
    "va": 23616,
-   "arg": 1,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
-   "fn": "{closure#2}",
-   "va": 23616,
    "arg": 2,
    "kind": "signedness",
    "want": "unsigned",
    "got": "bool"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
-   "fn": "iter_enumerate_fold",
-   "va": 29088,
-   "arg": 0,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
-   "fn": "iter_take_skip",
-   "va": 29184,
-   "arg": 0,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
-   "fn": "iter_capturing_closure",
-   "va": 29392,
-   "arg": 1,
-   "kind": "signedness",
-   "want": "signed",
-   "got": "unsigned int"
   },
   {
    "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
@@ -5095,18 +3070,6 @@
    "gotos": 6
   },
   {
-   "obj": "206_aarch64_wide_dispatch-gcc-O2.so",
-   "fn": "dispatch_in_loop",
-   "va": 4656,
-   "gotos": 9
-  },
-  {
-   "obj": "206_aarch64_wide_dispatch-gcc-O2strip.dwarf.so",
-   "fn": "dispatch_in_loop",
-   "va": 4656,
-   "gotos": 9
-  },
-  {
    "obj": "207_scaled_index_addressing-clang-O2.so",
    "fn": "word_stride_sum",
    "va": 4352,
@@ -7131,252 +5094,12 @@
  ],
  "returns": [
   {
-   "obj": "08_indirect_dispatch-gcc-O2.so",
-   "fn": "tail_dispatch",
-   "va": 4608,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "08_indirect_dispatch-gcc-O2strip.dwarf.so",
-   "fn": "tail_dispatch",
-   "va": 4608,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "seed",
-   "va": 30208,
-   "kind": "width",
-   "want": 1,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "step",
-   "va": 30224,
-   "kind": "width",
-   "want": 1,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "pick_max",
-   "va": 30288,
-   "kind": "width",
-   "want": 1,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "seed",
-   "va": 30352,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "step",
-   "va": 30368,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "pick_max",
-   "va": 30432,
-   "kind": "width",
-   "want": 2,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "seed",
-   "va": 30496,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "out",
-   "va": 30560,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "fold_generic<i32>",
-   "va": 30848,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_i8",
-   "va": 31712,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_i16",
-   "va": 31744,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O0.so",
-   "fn": "rust_generic_i32",
-   "va": 31776,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_i8",
-   "va": 5568,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_i16",
-   "va": 5584,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_i32",
-   "va": 5600,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2.so",
-   "fn": "rust_generic_dispatch",
-   "va": 5616,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_i8",
-   "va": 5568,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_i16",
-   "va": 5584,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_i32",
-   "va": 5600,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "166_rust_generics-rustc-O2strip.dwarf.so",
-   "fn": "rust_generic_dispatch",
-   "va": 5616,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "rust_dyn_apply",
-   "va": 32752,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O0.so",
-   "fn": "rust_dyn_pass_fat",
-   "va": 32976,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_apply",
-   "va": 28960,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_pass_fat",
-   "va": 29088,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_apply",
-   "va": 28960,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_pass_fat",
-   "va": 29088,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "get",
-   "va": 4352,
-   "kind": "width",
-   "want": 4,
-   "got": "unsigned long"
-  },
-  {
-   "obj": "168_rust_enum_niche-rustc-O0.so",
-   "fn": "make",
-   "va": 5616,
-   "kind": "width",
-   "want": 16,
-   "got": "long"
-  },
-  {
    "obj": "168_rust_enum_niche-rustc-O2.so",
    "fn": "make",
    "va": 4352,
    "kind": "width",
    "want": 16,
-   "got": "long"
+   "got": "void"
   },
   {
    "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
@@ -7384,7 +5107,7 @@
    "va": 4352,
    "kind": "width",
    "want": 16,
-   "got": "long"
+   "got": "void"
   },
   {
    "obj": "169_rust_slices_bounds-rustc-O0.so",
@@ -7411,22 +5134,6 @@
    "got": "unsigned int"
   },
   {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "decode_or_die",
-   "va": 31600,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O0.so",
-   "fn": "rust_panic_expect",
-   "va": 31648,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
    "obj": "170_rust_panic_unwind-rustc-O2.so",
    "fn": "decode",
    "va": 29120,
@@ -7435,28 +5142,12 @@
    "got": "unsigned int"
   },
   {
-   "obj": "170_rust_panic_unwind-rustc-O2.so",
-   "fn": "rust_panic_unreachable",
-   "va": 29376,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
-  },
-  {
    "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
    "fn": "decode",
    "va": 29120,
    "kind": "width",
    "want": 8,
    "got": "unsigned int"
-  },
-  {
-   "obj": "170_rust_panic_unwind-rustc-O2strip.dwarf.so",
-   "fn": "rust_panic_unreachable",
-   "va": 29376,
-   "kind": "width",
-   "want": 4,
-   "got": "long"
   },
   {
    "obj": "171_rust_overflow-rustc-O0.so",
@@ -7524,27 +5215,11 @@
   },
   {
    "obj": "195_by_value_aggregates-clang-O2.so",
-   "fn": "bv195_make_mixed",
-   "va": 4480,
-   "kind": "width",
-   "want": 16,
-   "got": "double"
-  },
-  {
-   "obj": "195_by_value_aggregates-clang-O2.so",
    "fn": "bv195_make_big",
    "va": 4496,
    "kind": "width",
    "want": 32,
    "got": "void"
-  },
-  {
-   "obj": "195_by_value_aggregates-clang-O2strip.dwarf.so",
-   "fn": "bv195_make_mixed",
-   "va": 4480,
-   "kind": "width",
-   "want": 16,
-   "got": "double"
   },
   {
    "obj": "195_by_value_aggregates-clang-O2strip.dwarf.so",
@@ -7564,14 +5239,6 @@
   },
   {
    "obj": "195_by_value_aggregates-gcc-O2.so",
-   "fn": "bv195_make_mixed",
-   "va": 4608,
-   "kind": "width",
-   "want": 16,
-   "got": "unsigned int"
-  },
-  {
-   "obj": "195_by_value_aggregates-gcc-O2.so",
    "fn": "bv195_make_big",
    "va": 4640,
    "kind": "width",
@@ -7580,115 +5247,11 @@
   },
   {
    "obj": "195_by_value_aggregates-gcc-O2strip.dwarf.so",
-   "fn": "bv195_make_mixed",
-   "va": 4608,
-   "kind": "width",
-   "want": 16,
-   "got": "unsigned int"
-  },
-  {
-   "obj": "195_by_value_aggregates-gcc-O2strip.dwarf.so",
    "fn": "bv195_make_big",
    "va": 4640,
    "kind": "width",
    "want": 32,
    "got": "long"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-clang-O2.so",
-   "fn": "hfa197_make_pair2d",
-   "va": 4448,
-   "kind": "width",
-   "want": 16,
-   "got": "double"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-clang-O2.so",
-   "fn": "hfa197_make_quad4f",
-   "va": 4464,
-   "kind": "width",
-   "want": 16,
-   "got": "long"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-clang-O2.so",
-   "fn": "hfa197_make_trio3f",
-   "va": 4544,
-   "kind": "width",
-   "want": 12,
-   "got": "unsigned int"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-clang-O2strip.dwarf.so",
-   "fn": "hfa197_make_pair2d",
-   "va": 4448,
-   "kind": "width",
-   "want": 16,
-   "got": "double"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-clang-O2strip.dwarf.so",
-   "fn": "hfa197_make_quad4f",
-   "va": 4464,
-   "kind": "width",
-   "want": 16,
-   "got": "long"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-clang-O2strip.dwarf.so",
-   "fn": "hfa197_make_trio3f",
-   "va": 4544,
-   "kind": "width",
-   "want": 12,
-   "got": "unsigned int"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-gcc-O2.so",
-   "fn": "hfa197_make_pair2d",
-   "va": 4544,
-   "kind": "width",
-   "want": 16,
-   "got": "double"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-gcc-O2.so",
-   "fn": "hfa197_make_quad4f",
-   "va": 4576,
-   "kind": "width",
-   "want": 16,
-   "got": "float"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-gcc-O2.so",
-   "fn": "hfa197_make_trio3f",
-   "va": 4672,
-   "kind": "width",
-   "want": 12,
-   "got": "float"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-gcc-O2strip.dwarf.so",
-   "fn": "hfa197_make_pair2d",
-   "va": 4544,
-   "kind": "width",
-   "want": 16,
-   "got": "double"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-gcc-O2strip.dwarf.so",
-   "fn": "hfa197_make_quad4f",
-   "va": 4576,
-   "kind": "width",
-   "want": 16,
-   "got": "float"
-  },
-  {
-   "obj": "197_homogeneous_float_aggregates-gcc-O2strip.dwarf.so",
-   "fn": "hfa197_make_trio3f",
-   "va": 4672,
-   "kind": "width",
-   "want": 12,
-   "got": "float"
   },
   {
    "obj": "198_aggregate_return_edges-clang-O0.so",
@@ -7788,6 +5351,14 @@
   },
   {
    "obj": "219_rust_iterator_chains-rustc-O0.so",
+   "fn": "size_hint<i64>",
+   "va": 34512,
+   "kind": "width",
+   "want": 24,
+   "got": "char"
+  },
+  {
+   "obj": "219_rust_iterator_chains-rustc-O0.so",
    "fn": "next_back<i64>",
    "va": 34736,
    "kind": "width",
@@ -7849,22 +5420,6 @@
    "kind": "width",
    "want": 16,
    "got": "int"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2.so",
-   "fn": "explicit_loop_control",
-   "va": 29456,
-   "kind": "width",
-   "want": 8,
-   "got": "unsigned int"
-  },
-  {
-   "obj": "219_rust_iterator_chains-rustc-O2strip.dwarf.so",
-   "fn": "explicit_loop_control",
-   "va": 29456,
-   "kind": "width",
-   "want": 8,
-   "got": "unsigned int"
   }
  ],
  "pointers": [],
@@ -8038,18 +5593,6 @@
    "n": 2
   },
   {
-   "obj": "167_rust_trait_objects-rustc-O2.so",
-   "fn": "rust_dyn_apply",
-   "va": 28960,
-   "n": 1
-  },
-  {
-   "obj": "167_rust_trait_objects-rustc-O2strip.dwarf.so",
-   "fn": "rust_dyn_apply",
-   "va": 28960,
-   "n": 1
-  },
-  {
    "obj": "168_rust_enum_niche-rustc-O0.so",
    "fn": "eval",
    "va": 5872,
@@ -8095,18 +5638,6 @@
    "obj": "206_aarch64_wide_dispatch-clang-O2strip.dwarf.so",
    "fn": "dispatch_in_loop",
    "va": 4544,
-   "n": 1
-  },
-  {
-   "obj": "206_aarch64_wide_dispatch-gcc-O2.so",
-   "fn": "dispatch_in_loop",
-   "va": 4656,
-   "n": 1
-  },
-  {
-   "obj": "206_aarch64_wide_dispatch-gcc-O2strip.dwarf.so",
-   "fn": "dispatch_in_loop",
-   "va": 4656,
    "n": 1
   },
   {

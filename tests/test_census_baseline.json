@@ -1,13 +1,13 @@
 {
  "note": "Declared #[test] attributes per module. A declaration count, not an execution count -- see never_executed.",
- "total_declared": 4279,
+ "total_declared": 4326,
  "never_executed_total": 0,
  "never_executed": {},
  "solver_gated_estimate": 92,
  "by_module": {
   "analysis": 290,
   "core": 183,
-  "csource": 170,
+  "csource": 217,
   "debug": 11,
   "decompile": 4,
   "demangle": 1,

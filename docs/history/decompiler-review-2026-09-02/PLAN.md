@@ -149,6 +149,10 @@ Purpose: make subsequent changes comparable without delaying capability work.
 
 - [x] Extend `tools/gen_known_failures.py` to derive a stable binary identity
   from build provenance and content hash.
+- [x] Batch known-failure recovery once per binary, reuse rendered text for
+  signature parsing, and use bounded binary-level workers. Add language and
+  fixture filters, real `--help`, progress control, and resumable per-object
+  checkpoints; keep output deterministically sorted across worker counts.
 - [x] Preserve O2 and stripped-O2 as distinct observations, but count an
   identical pair once in the primary defect total.
 - [x] Add only the generated identity/language fields required to reproduce
@@ -168,6 +172,9 @@ Purpose: make subsequent changes comparable without delaying capability work.
 
 - [x] Extend `python/tests/test_known_decompiler_failures.py` with schema,
   language-total, and deduplication invariants.
+- [x] Batch the strict-xfail consumer once per object and test conventional
+  pointer-star spelling, serial/parallel equivalence, and checkpoint/resume
+  against real fixture binaries.
 - [x] Extend `python/tests/test_defuse_ratchet.py` for language-split totals and
   identical-vs-divergent stripped pairs.
 - [x] Add `python/tests/test_decompiler_gate.py` using print-plan and preflight
@@ -189,6 +196,9 @@ Purpose: make subsequent changes comparable without delaying capability work.
 
 - [x] Raw and deduplicated counts reconcile exactly.
 - [x] C and Rust subtotals sum to every overall total.
+- [x] The complete 1,676-object inventory regenerates in a bounded run: 203.97
+  seconds with eight workers on 2026-09-04, versus the superseded serial run
+  still incomplete after 4,213 seconds.
 - [x] A deliberately missing lane makes `default` or `release` not-evidence.
 - [x] The Duff's-device semantic hole is represented independently of its
   existing `unrecovered` failure.
