@@ -1053,6 +1053,25 @@ this fixture is outside that census and no baseline was refreshed. Exact
 commands and limitations are in
 `results/wp8-declared-call-pointer-boundaries.md`.
 
+### Implementation evidence — 2026-09-04 pointer-return boundaries
+
+Pointer-typed return and assignment boundaries now consume the declaration
+plan's selected source type. When a pointer value retains one pointer-width
+integer transport cast in the AST, the renderer removes only that redundant
+machine representation: it emits a direct value for compatible pointer types
+and preserves an explicit pointer-to-pointer cast for incompatible concrete
+pointee types.
+
+The real optimized linked-list fixture improves from
+`return (node *)((long)var0);` (or the Clang `ret` equivalent) to a direct
+pointer return. Both GCC and Clang variants compile and execute equivalently,
+the adjacent libc pointer fixtures remain green, all 156 Rust pointer tests
+pass, and the four-lane smoke matrix reports no scoped regression. The full
+Rust gate is green. The required whole Python suite completed but remains
+broadly red on 441 current-tip failures, dominated by the known-decompiler
+recovery ratchet; no broad baseline was refreshed. Exact commands and limits
+are recorded in `results/wp8-pointer-return-boundaries.md`.
+
 ### Exit criteria
 
 - [ ] No rendered prototype is worse than an available trusted declaration.
