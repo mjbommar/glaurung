@@ -734,13 +734,23 @@ while keeping machine width as truth.
 - [ ] Key type facts by stable value identity from WP3.
 - [ ] Split generated type/return reports by C vs Rust before judging movement.
 
+The first incremental constraint slice landed in
+`src/ir/types_recover/constraints.rs` on 2026-09-04. It records signed and
+unsigned interpretations against exact operand uses in deterministic order,
+resolves only unanimous evidence, and keeps equality, address indexing, and
+x86's implicit 32-to-64-bit register-write extension neutral. The compatibility
+`TypeHint` adapter now consumes that result only at the ABI live-in boundary;
+the flow-insensitive register map continues to provide class and machine width.
+This starts, but does not complete, the production checkboxes above: pointer,
+aggregate, call, confidence, and general solver constraints remain open.
+
 ### Tests
 
-- [ ] RED `tail_dispatch` signedness and return-width case.
+- [x] RED `tail_dispatch` signedness and return-width case.
 - [ ] Existing `python/tests/test_pdb_type_recovery.py` xfails.
 - [ ] Existing aggregate/return fixtures `195`, `197`, and `198`.
-- [ ] `python/tests/test_decompiler_observable_parameter_width.py`.
-- [ ] Stripped-lane tests to prove improvements do not depend on debug types.
+- [x] `python/tests/test_decompiler_observable_parameter_width.py`.
+- [x] Stripped-lane tests to prove improvements do not depend on debug types.
 - [ ] Solver unit tests for conflicts, ambiguity, and deterministic ordering.
 
 ### Exit criteria
@@ -748,6 +758,14 @@ while keeping machine width as truth.
 - [ ] C parameter and return axes improve without stripped regressions.
 - [ ] Low-confidence signedness is rendered honestly rather than asserted.
 - [ ] Rust numbers remain visible but do not block C milestones.
+
+The checked test slice is bounded evidence, not WP6 completion. Both stripped
+GCC and Clang `tail_dispatch` declarations changed from
+`unsigned int, unsigned int, int` to `int, int, int`; the inferred debug
+prototype now agrees with the authoritative DWARF declaration and no longer
+emits a false conflict. The complete O0/O2 execution corpus remained at 824 of
+838 passing lanes with no scoped regressions and 27 pre-existing baseline
+improvements. See `results/wp6-per-use-signedness.md` for commands and limits.
 
 ## 13. WP7 — Width-proved expression idioms
 
@@ -1618,8 +1636,9 @@ relevant ratchet's accepted-regression record.
    table safety tests are already present and must remain green.
 3. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
-4. Start WP6 with the smallest stripped C signedness/width constraint slice;
-   keep Rust totals separate and do not wait for the full solver design.
+4. Continue WP6 from the landed stripped-C per-use signedness slice: add the
+   next independently testable width or confidence constraint without waiting
+   for the full solver design, and keep Rust totals separate.
 5. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.

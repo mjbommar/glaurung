@@ -31,8 +31,8 @@ def _signature(body: str) -> str:
     return match.group(0)
 
 
-def test_tail_dispatch_renders_its_authoritative_dwarf_declaration() -> None:
-    """DWARF's exact source declaration must beat inferred machine types."""
+def test_tail_dispatch_inference_agrees_with_its_authoritative_declaration() -> None:
+    """Per-use signedness must remove the former machine/declaration conflict."""
     binary = FIXTURES / "build" / "08_indirect_dispatch-gcc-O2.so"
     exports = D.exported_functions(str(binary))
 
@@ -44,22 +44,8 @@ def test_tail_dispatch_renders_its_authoritative_dwarf_declaration() -> None:
     assert _signature(body) == "int tail_dispatch(int tag, int a, int b)", body
 
     report = g.ir.take_render_verification()
-    assert report["prototype_conflict_count"] == 1, report
-    [conflict] = report["prototype_conflicts"]
-    assert conflict["function"] == "tail_dispatch"
-    assert conflict["authoritative_source"] == "dwarf"
-    assert conflict["authoritative"]["return_type"] == "int"
-    assert conflict["authoritative"]["parameter_types"] == ["int", "int", "int"]
-    # Machine prototype recovery already proves the narrow return; the former
-    # `long` was a renderer fallback, not a second prototype fact.
-    assert conflict["candidate_source"] == "inferred"
-    assert conflict["candidate"]["return_type"] == "int"
-    assert conflict["candidate"]["parameter_types"] == [
-        "unsigned int",
-        "unsigned int",
-        "int",
-    ]
-    assert conflict["disagreements"] == ["parameter_types"]
+    assert report["prototype_conflict_count"] == 0, report
+    assert report["prototype_conflicts"] == [], report
 
     # Draining metadata cannot perturb deterministic scored text.
     [(_name, _va, repeated, *_extra)] = g.ir.decompile_many(
@@ -149,7 +135,7 @@ def test_legacy_three_part_analyst_prototype_remains_supported() -> None:
 def test_cli_annotated_mode_shows_conflict_beside_signature_only_on_request() -> None:
     """Analysts may inspect provenance without contaminating scored output."""
     binary = FIXTURES / "build" / "08_indirect_dispatch-gcc-O2.so"
-    va = D.exported_functions(str(binary))["tail_dispatch"]
+    va = D.exported_functions(str(binary))["dispatch_switch"]
     base = [
         sys.executable,
         "-m",
@@ -174,13 +160,13 @@ def test_cli_annotated_mode_shows_conflict_beside_signature_only_on_request() ->
     )
     assert annotated.returncode == 0, annotated.stderr
     assert annotated.stdout.count("// glaurung: declaration conflict") == 1
-    banner = annotated.stdout.index("// glaurung: tail_dispatch")
+    banner = annotated.stdout.index("// glaurung: dispatch_switch")
     conflict = annotated.stdout.index("// glaurung: declaration conflict")
-    signature = annotated.stdout.index("int tail_dispatch(int tag, int a, int b)")
+    signature = annotated.stdout.index("int dispatch_switch(int tag, int a, int b)")
     assert banner < conflict < signature
     assert "dwarf `int (int, int, int)`" in annotated.stdout
-    assert "inferred `int (unsigned int, unsigned int, int)`" in annotated.stdout
-    assert "differs: parameter_types" in annotated.stdout
+    assert "inferred `unsigned int (int, long, long)`" in annotated.stdout
+    assert "differs: return_type, parameter_types" in annotated.stdout
 
     batch = subprocess.run(
         [
@@ -207,7 +193,7 @@ def test_cli_annotated_mode_shows_conflict_beside_signature_only_on_request() ->
             "--range-start",
             hex(va),
             "--range-end",
-            hex(va + 0x26),
+            hex(va + 0x70),
             "--annotate-conflicts",
         ],
         capture_output=True,
@@ -232,7 +218,7 @@ def test_cli_annotated_mode_shows_conflict_beside_signature_only_on_request() ->
         check=False,
     )
     assert whole_image.returncode == 0, whole_image.stderr
-    assert "// glaurung: tail_dispatch" in whole_image.stdout
+    assert "// glaurung: dispatch_switch" in whole_image.stdout
     assert "// glaurung: declaration conflict" in whole_image.stdout
 
 

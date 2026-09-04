@@ -12,6 +12,9 @@ import glaurung as g
 import pytest
 
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+
+
 def _build_shared(compiler: str, source: Path, output: Path) -> None:
     """Compile one optimized shared object or fail with the compiler diagnostic."""
     built = subprocess.run(
@@ -106,7 +109,7 @@ def test_real_stripped_low_byte_parameter_is_not_widened_by_its_abi_copy(
     byte_code = rendered[targets["byte_only"]]
     full_code = rendered[targets["full_word"]]
     assert re.search(
-        r"\bbyte_only\(char \* arg0, char \* arg1, signed char arg2\)",
+        r"\bbyte_only\(char \*arg0, char \*arg1, signed char arg2\)",
         byte_code,
     ), byte_code
     assert re.search(r"\bfull_word\(long arg0\)", full_code), full_code
@@ -135,3 +138,34 @@ def test_real_stripped_low_byte_parameter_is_not_widened_by_its_abi_copy(
         )
     for value in [-0x80000000, -249, 0, 7, 263, 0x7FFFFFFF]:
         assert rebuilt_lib.full_word(value) == original_lib.full_word(value)
+
+
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])
+def test_stripped_tail_dispatch_keeps_per_use_unsignedness_out_of_declaration(
+    compiler: str,
+) -> None:
+    """A range/index use does not make the caller's source parameter unsigned."""
+    binary = (
+        ROOT
+        / "tests"
+        / "decompiler_fixtures"
+        / "build"
+        / f"08_indirect_dispatch-{compiler}-O2strip.so"
+    )
+    if not binary.exists():
+        pytest.skip(f"fixture is unavailable: {binary}")
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=128)
+    [target] = [
+        int(function.entry_point.value)
+        for function in functions
+        if function.name == "tail_dispatch"
+    ]
+    [(_name, _va, body, *_extra)] = g.ir.decompile_many(
+        str(binary), [target], style="decbench", timeout_ms=8000
+    )
+
+    signature = next(
+        line for line in body.splitlines() if line.startswith("int tail_dispatch(")
+    ).removesuffix(" {")
+    assert signature == "int tail_dispatch(int arg0, int arg1, int arg2)", body

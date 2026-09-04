@@ -25,6 +25,7 @@ use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
 
+mod constraints;
 mod copies;
 mod float_bank;
 mod result_hint;
@@ -1189,6 +1190,7 @@ fn live_in_parameter_view_hint(
     // call) are accumulated separately. See `use_is_proven_input`.
     let mut real = (0u8, Vec::new());
     let mut speculative = (0u8, Vec::new());
+    let mut signedness = constraints::SignednessConstraints::default();
     for (block_idx, block) in lf.blocks.iter().enumerate() {
         for (instr_idx, instruction) in block.instrs.iter().enumerate() {
             let addr = InstrAddr {
@@ -1201,6 +1203,7 @@ fn live_in_parameter_view_hint(
                     continue;
                 }
                 let bucket = if use_is_proven_input(&instruction.op, use_index) {
+                    signedness.record(&instruction.op, addr, use_index);
                     &mut real
                 } else {
                     &mut speculative
@@ -1252,8 +1255,12 @@ fn live_in_parameter_view_hint(
             width: widest,
         });
     Some(match hint {
-        TypeHint::Int { signed, .. } => TypeHint::Int {
-            signed,
+        TypeHint::Int { .. } => TypeHint::Int {
+            // Raw-register recovery merges all lifetimes and machine views.
+            // It remains useful for class and width, but signedness is a
+            // property of exact uses. Conflicting or absent use evidence keeps
+            // the conservative C `int` default instead of asserting unsigned.
+            signed: signedness.resolved().unwrap_or(true),
             width: widest,
         },
         other => other,

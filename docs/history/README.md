@@ -127,6 +127,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [PLAN.md](decompiler-review-2026-09-02/PLAN.md) | 2026-09-02 | a file-level execution specification for the recommendations: work packages, tests, sizing, stop conditions | explicitly subordinate to the roadmap; it is not a checkbox authority |
 | [mir-trial-results.md](decompiler-review-2026-09-02/mir-trial-results.md) | 2026-09-02 | the WP1 bounded-MIR definedness trial | **rejected for production use**; the negative result is the durable part |
 | [results/wp8-dwarf-variadic-declarations.md](decompiler-review-2026-09-02/results/wp8-dwarf-variadic-declarations.md) | 2026-09-04 | trusted DWARF variadic markers preserved through authoritative rendered declarations, with the remaining machine-to-C lowering defect separated | bounded GCC/Clang x86-64 fixture evidence; stripped inference, PDB variadic facts, and complete `va_start` lowering remain open |
+| [results/wp6-per-use-signedness.md](decompiler-review-2026-09-02/results/wp6-per-use-signedness.md) | 2026-09-04 | first incremental type-constraint slice: exact-use signedness stops x86 register-write and index semantics from poisoning stripped C declarations | bounded to signedness at ABI live-ins; the general WP6 constraint solver and stripped jump-table body recovery remain open |
 
 ## `design/`
 
