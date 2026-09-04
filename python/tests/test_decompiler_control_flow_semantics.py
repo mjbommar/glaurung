@@ -655,7 +655,7 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     assert "typedef struct node" in code, code
     assert "struct node * next;" in code, code
     assert "int val;" in code, code
-    assert re.search(r"node \* list_find\(node \* h, int v\)", code), code
+    assert re.search(r"node \*\s*list_find\(node \*\s*h, int v\)", code), code
     assert "->val" in code, code
     assert "->next" in code, code
     assert "+ 0x8" not in code, code
@@ -666,6 +666,8 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     assert "goto " not in code, code
     assert not re.search(r"L_[0-9a-f]+:\s*;", code), code
     assert "return (node *)(0);" in code, code
+    assert re.search(r"return (?:var\d+|ret);", code), code
+    assert not re.search(r"return \(node \*\)\(\(long\)(?:var\d+|ret)\);", code), code
     # Once the shared return is explicit, this is the canonical sentinel scan:
     # test the node pointer before dereferencing it, return on a matching field,
     # and advance otherwise.  Keeping the field comparison as the while guard
@@ -674,20 +676,20 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     # value (`ret`); a still-split phi retains a `varN`. Both must keep the same
     # pointer-typed, pre-dereference null guard.
     cursor = r"(?:var\d+|ret)"
-    assert re.search(rf"while \(\({cursor} != 0\)\)", code), code
+    assert re.search(rf"while \({cursor} != 0\)", code), code
     assert not re.search(rf"\(long\){cursor} != 0", code), code
-    assert re.search(rf"node \* {cursor};", code), code
+    assert re.search(rf"node \*\s*{cursor};", code), code
     next_assignment = rf"{cursor} = (?:{cursor}|\(\(struct node \*\){cursor}\))->next;"
     assert re.search(next_assignment, code), code
     # The cursor may stay split at a correctness-preserving phi boundary, but
     # every emitted cursor must retain the recovered node-pointer kind.
-    assert sum_code.count("node * var") >= 1, sum_code
+    assert re.search(r"node \*\s*var\d+;", sum_code), sum_code
     assert re.search(next_assignment, sum_code), sum_code
     # The source loop is entry-guarded.  GCC and Clang rotate that guard into a
     # do/while latch, but the explicit pre-loop null return proves it is safe to
     # recover the source-level while without dereferencing a null node.
     assert "do {" not in sum_code, sum_code
-    assert re.search(r"while \(\(var\d+ != 0\)\)", sum_code), sum_code
+    assert re.search(r"while \(var\d+ != 0\)", sum_code), sum_code
     assert not re.search(r"\(long\)var\d+ != 0", sum_code), sum_code
     # DecBench recompiles all functions from one binary as one translation
     # unit. Shared aggregate declarations therefore need an idempotent prelude,

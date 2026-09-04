@@ -3981,6 +3981,52 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn pointer_return_strips_integer_transport_but_keeps_real_pointer_conversion() {
+        let function = Function {
+            name: "return_pointer".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+        let render_with_return_type = |return_type: &str| {
+            let prototype = CallPrototype {
+                return_type: return_type.into(),
+                parameter_types: vec!["char *".into()],
+                variadic: false,
+                authority: CallPrototypeAuthority::Authoritative,
+            };
+            render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+                &function,
+                Some(&types),
+                None,
+                crate::ir::types_recover::RecoveredOutputKind::Direct,
+                Some(&prototype),
+                &[],
+                8,
+                &std::collections::HashMap::new(),
+            )
+        };
+
+        let same_type = render_with_return_type("char *");
+        assert!(same_type.contains("return arg0;"), "{same_type}");
+        assert!(!same_type.contains("(long)arg0"), "{same_type}");
+
+        let different_type = render_with_return_type("int *");
+        assert!(
+            different_type.contains("return (int *)arg0;"),
+            "{different_type}"
+        );
+        assert!(!different_type.contains("(long)arg0"), "{different_type}");
+    }
+
+    #[test]
     fn decbench_stack_address_is_cast_to_the_recovered_pointer_parameter() {
         let prototype = CallPrototype {
             return_type: "int".into(),

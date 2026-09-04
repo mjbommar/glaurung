@@ -2124,10 +2124,8 @@ fn printf_variadic_parameter_types(target: &Expr, args: &[Expr]) -> Option<Vec<O
 
 fn expression_has_pointer_representation(expr: &Expr) -> bool {
     match expr {
-        Expr::Reg(VReg::Phys(name)) => {
-            dec_ptr_arg_type(name).is_some()
-                || dec_ptr_width(name).is_some()
-                || dec_is_stack_object(name)
+        Expr::Reg(register @ VReg::Phys(name)) => {
+            declared_reg_ctype(register).ends_with('*') || dec_is_stack_object(name)
         }
         Expr::Named { .. }
         | Expr::FunctionTableEntry { .. }
@@ -2165,8 +2163,8 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
         // `(double)p` is not a pointer, whatever `p` was.
         Expr::NumericConvert { .. } => false,
         cast @ Expr::Cast { expr, .. } => {
-            let direct_pointer = matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name))
-                if dec_ptr_arg_type(name).is_some() || dec_struct_ptr_type(name).is_some());
+            let direct_pointer = matches!(expr.as_ref(), Expr::Reg(register @ VReg::Phys(_))
+                if declared_reg_ctype(register).ends_with('*'));
             direct_pointer
                 || redundant_declared_integer_cast(cast).is_some_and(|reg| {
                     matches!(reg, VReg::Phys(name) if dec_ptr_arg_type(name).is_some()
@@ -2408,6 +2406,34 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     }
 
     let destination_is_pointer = destination_type.ends_with('*');
+
+    // A pointer identity may retain the machine's explicit integer transport
+    // cast in the AST even after the declaration plan has selected a concrete
+    // pointer type for the underlying value. At a pointer-typed assignment or
+    // return boundary, strip exactly one pointer-width wrapper. Preserve an
+    // explicit pointer-to-pointer cast when the source and destination pointee
+    // types differ; only the integer round trip is redundant.
+    if destination_is_pointer {
+        if let Expr::Cast { width, expr, .. } = src {
+            let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+            if *width == pointer_width {
+                if let Expr::Reg(reg @ VReg::Phys(_)) = expr.as_ref() {
+                    let source_type = declared_reg_ctype(reg);
+                    if source_type.ends_with('*') {
+                        if source_type != destination_type
+                            && source_type != "void *"
+                            && destination_type != "void *"
+                        {
+                            let _ = write!(out, "({destination_type})");
+                        }
+                        write_reg_lvalue_dec(reg, out);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     let source_is_pointer = expression_has_pointer_representation(src);
     if destination_is_pointer && source_is_pointer {
         if let Expr::Reg(reg @ VReg::Phys(_)) = src {
