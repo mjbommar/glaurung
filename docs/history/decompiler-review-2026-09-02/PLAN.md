@@ -743,8 +743,11 @@ that preserves honest local gotos when required.
 
 - [~] No execution-differential regressions. The fail-closed corpus route is
   now implemented. The first pinned run at `6175d67d` exposed 21 regressions;
-  `0da8744d` removes 15, leaving six cells across three families that must be
-  repaired or locally declined before promotion.
+  `0da8744d` removed 15. `c3bbe2a6` repairs or locally declines the remaining
+  unsafe shapes, and its pinned 250-candidate report records **zero
+  regressions**, 12 improvements, and no infrastructure findings. Thirty-nine
+  candidates remain explicitly non-executable, so broader coverage remains
+  open. See `results/wp4-nested-control-safety.md`.
 - [ ] No unexplained block/edge accounting findings.
 - [ ] GED does not regress on the pinned sample.
 - [ ] The structure axis improves after accepted honest gotos are separated.
@@ -1789,17 +1792,16 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Repair or locally decline the six execution regressions remaining at
-   `0da8744d`: `hinted_validation` clang O2/debug+stripped,
-   `flattened_accumulate` clang O2/debug+stripped, and `base64_decode` clang
-   O2/debug+stripped. Rerun the exact 272-candidate gate after each ownership
-   repair; do not promote while any production-pass cell becomes a shadow
-   failure.
-2. Replace the newly preserved nested loop-header gotos with a proved
+1. Recover nested post-tested rendering without flattening conditional arms.
+   `c3bbe2a6` deliberately retains the verified typed tree but declines C for
+   this shape; a more permissive fallback reintroduced 20 execution regressions
+   in the expanded build inventory and was removed. Any replacement must keep
+   the pinned corpus at zero execution regressions.
+2. Replace the preserved nested loop-header gotos with a proved
    source-level `continue` representation, or classify them from typed edge
-   evidence. The `0da8744d` semantic repair deliberately increases shadow
-   gotos from 505 to 773 and leaves 13 structural regressions unexplained;
-   never delete those transfers to improve the count.
+   evidence. The pinned `c3bbe2a6` report has 584 comparable shadow gotos and
+   nine unexplained structural regressions; never delete required transfers to
+   improve the count.
 3. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide
    rows are classified at `ca91dc68` by exact, fail-closed
    suffix/shared-effect-entry contracts, and the clean pinned full comparison
