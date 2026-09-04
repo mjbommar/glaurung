@@ -921,6 +921,7 @@ def _run_lane(
     fuzz: int,
     env_missing: bool,
     funcs: tuple[str, ...] | None = None,
+    shadow_v2: bool = False,
 ) -> dict:
     """One (fixture, compiler, opt) lane: {func: status} or a `__lane__` error.
 
@@ -958,6 +959,8 @@ def _run_lane(
         # come from the `-g` build of the same compile. See `_strip_if_requested`
         # and `diff_decompile.run`'s `dwarf_so`.
         cmd += ["--dwarf-so", str(dwarf_sibling(so))]
+    if shadow_v2:
+        cmd.append("--shadow-v2")
     for f in funcs or ():
         cmd += ["--function", f]
     r = subprocess.run(
@@ -1029,7 +1032,11 @@ def run_matrix(
 
 
 def run_lanes(
-    lane_specs, fuzz: int, allowed_missing=None, jobs: int | None = None
+    lane_specs,
+    fuzz: int,
+    allowed_missing=None,
+    jobs: int | None = None,
+    shadow_v2: bool = False,
 ) -> dict:
     """`run_matrix` for an explicit list of `(fixture, cc, opt, funcs)`.
 
@@ -1072,11 +1079,22 @@ def run_lanes(
     result: dict = {}
     if jobs == 1:
         for key, src, cc, opt, env_missing, funcs in work:
-            result[key] = _run_lane(src, cc, opt, fuzz, env_missing, funcs)
+            result[key] = _run_lane(
+                src, cc, opt, fuzz, env_missing, funcs, shadow_v2=shadow_v2
+            )
         return result
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = {
-            pool.submit(_run_lane, src, cc, opt, fuzz, env_missing, funcs): key
+            pool.submit(
+                _run_lane,
+                src,
+                cc,
+                opt,
+                fuzz,
+                env_missing,
+                funcs,
+                shadow_v2,
+            ): key
             for key, src, cc, opt, env_missing, funcs in work
         }
         for fut in as_completed(futures):

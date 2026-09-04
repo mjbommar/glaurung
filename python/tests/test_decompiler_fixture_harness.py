@@ -211,6 +211,42 @@ def test_batch_decompile_returns_every_requested_real_function():
     assert "batch_mul(" in recovered[exported["batch_mul"]]
 
 
+def test_batch_decompile_forwards_explicit_shadow_selection(monkeypatch) -> None:
+    """The execution harness must be able to measure v2 without changing default."""
+    calls = []
+
+    def fake_decompile_many(binary, vas, **kwargs):
+        calls.append((binary, vas, kwargs))
+        return [("f", 0x1000, "int f(void) { return 1; }")]
+
+    monkeypatch.setattr(D.g.ir, "decompile_many", fake_decompile_many)
+
+    assert D.decompiled_many_c("fixture.so", [0x1000])
+    assert D.decompiled_many_c("fixture.so", [0x1000], shadow_v2=True)
+    assert calls[0][2]["shadow_v2"] is False
+    assert calls[1][2]["shadow_v2"] is True
+
+
+def test_scoped_fixture_lanes_forward_shadow_selection(monkeypatch) -> None:
+    """A shadow corpus run uses the ordinary lane scheduler and exact functions."""
+    calls = []
+
+    def fake_run_lane(src, cc, opt, fuzz, env_missing, funcs=None, shadow_v2=False):
+        calls.append((src.stem, cc, opt, fuzz, env_missing, funcs, shadow_v2))
+        return {"for_sum": "pass"}
+
+    monkeypatch.setattr(H, "_run_lane", fake_run_lane)
+    result = H.run_lanes(
+        [("03_loop_shapes", "gcc", "O0", ("for_sum",))],
+        fuzz=3,
+        jobs=1,
+        shadow_v2=True,
+    )
+
+    assert result == {"03_loop_shapes:gcc:O0": {"for_sum": "pass"}}
+    assert calls == [("03_loop_shapes", "gcc", "O0", 3, False, ("for_sum",), True)]
+
+
 def test_round_trip_includes_a_referenced_local_static_callee() -> None:
     """A correct caller must not fail merely because its callee is local.
 

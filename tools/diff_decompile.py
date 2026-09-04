@@ -808,19 +808,22 @@ def native_execution_differential(
 # ---------------------------------------------------------------------------
 
 
-def decompiled_c(binary: str, va: int) -> str | None:
+def decompiled_c(binary: str, va: int, shadow_v2: bool = False) -> str | None:
+    command = [
+        _glaurung(),
+        "decompile",
+        binary,
+        "--vas",
+        hex(va),
+        "--style",
+        "decbench",
+        "--format",
+        "json",
+    ]
+    if shadow_v2:
+        command.append("--shadow-v2")
     p = subprocess.run(
-        [
-            _glaurung(),
-            "decompile",
-            binary,
-            "--vas",
-            hex(va),
-            "--style",
-            "decbench",
-            "--format",
-            "json",
-        ],
+        command,
         capture_output=True,
         text=True,
         timeout=120,
@@ -838,7 +841,9 @@ def decompiled_c(binary: str, va: int) -> str | None:
     return "\n".join(l for l in code.splitlines() if not l.strip().startswith("//"))
 
 
-def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
+def decompiled_many_c(
+    binary: str, vas: list[int], shadow_v2: bool = False
+) -> dict[int, str]:
     """Decompile requested entry VAs in one native analysis pass.
 
     Missing rows stay missing in the returned map so the caller reports the
@@ -854,6 +859,7 @@ def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
             binary,
             requested,
             style="decbench",
+            shadow_v2=shadow_v2,
             max_functions=max(1, len(requested)),
         )
     except (OSError, RuntimeError, ValueError):
@@ -929,7 +935,7 @@ _LOCAL_BODY_CACHE: dict[str, dict[int, str]] = {}
 
 
 def _local_helper_bodies(
-    binary: str, local: dict[str, tuple[str, int]]
+    binary: str, local: dict[str, tuple[str, int]], shadow_v2: bool = False
 ) -> dict[int, str]:
     """Decompile every local helper in `binary` once, in a single native pass.
 
@@ -946,14 +952,17 @@ def _local_helper_bodies(
     This warms a cache and decides nothing: `visit` is unchanged, so which
     snippets are included, and in what order, is exactly what it was.
     """
-    cached = _LOCAL_BODY_CACHE.get(binary)
+    cache_key = f"{binary}\0shadow_v2={shadow_v2}"
+    cached = _LOCAL_BODY_CACHE.get(cache_key)
     if cached is not None:
         return cached
     vas = sorted({va for _symbol, va in local.values()})
     bodies = (
-        decompiled_many_c(binary, vas) if 0 < len(vas) <= _MAX_PREFETCH_LOCALS else {}
+        decompiled_many_c(binary, vas, shadow_v2=shadow_v2)
+        if 0 < len(vas) <= _MAX_PREFETCH_LOCALS
+        else {}
     )
-    _LOCAL_BODY_CACHE[binary] = bodies
+    _LOCAL_BODY_CACHE[cache_key] = bodies
     return bodies
 
 
@@ -962,6 +971,7 @@ def include_referenced_local_callees(
     root_c: str,
     decompiled_by_va: dict[int, str] | None = None,
     allow_native_fallback: bool = False,
+    shadow_v2: bool = False,
 ) -> str:
     """Prepend decompiled definitions for local callees named by ``root_c``.
 
@@ -1060,7 +1070,7 @@ def include_referenced_local_callees(
         if not may_fall_back:
             return None
         if native_by_va is None:
-            native_by_va = _local_helper_bodies(binary, local)
+            native_by_va = _local_helper_bodies(binary, local, shadow_v2=shadow_v2)
         return native_by_va.get(va)
 
     def visit(name: str) -> None:
@@ -1079,7 +1089,7 @@ def include_referenced_local_callees(
         helper = helper_body(va)
         if helper is None and may_fall_back:
             # A body the warming pass could not reach (it stops at the cap).
-            helper = decompiled_c(binary, va)
+            helper = decompiled_c(binary, va, shadow_v2=shadow_v2)
         if helper is not None:
             for dependency in references(helper):
                 visit(dependency)
@@ -2361,6 +2371,7 @@ def run_function(
     reference_sig: dict | None = None,
     native_cc: list[str] | None = None,
     native_runner: list[str] | None = None,
+    shadow_v2: bool = False,
 ) -> dict:
     """Run one function's execution differential.
 
@@ -2400,7 +2411,7 @@ def run_function(
     if cls == "structural":
         return {"status": "structural", "detail": why}
     c = (
-        decompiled_c(binary, sig["va"])
+        decompiled_c(binary, sig["va"], shadow_v2=shadow_v2)
         if decompiled_by_va is None
         else decompiled_by_va.get(sig["va"])
     )
@@ -2411,6 +2422,7 @@ def run_function(
         c,
         decompiled_by_va,
         allow_native_fallback=allow_native_helper_fallback,
+        shadow_v2=shadow_v2,
     )
     declarations = dwarf_c_type_declarations(sig, c)
     if declarations:
@@ -2615,6 +2627,7 @@ def run(
     native_cc: list[str] | None = None,
     native_runner: list[str] | None = None,
     dwarf_so: str | None = None,
+    shadow_v2: bool = False,
 ) -> dict:
     """`only` restricts which functions are executed and reported.
 
@@ -2734,7 +2747,9 @@ def run(
     owns_decompilation = decompiled_by_va is None
     if owns_decompilation:
         decompiled_by_va = decompiled_many_c(
-            binary, [sig["va"] for sig in executable_sigs]
+            binary,
+            [sig["va"] for sig in executable_sigs],
+            shadow_v2=shadow_v2,
         )
     with tempfile.TemporaryDirectory(dir=M.tmpdir()) as td:
         wd = Path(td)
@@ -2766,6 +2781,7 @@ def run(
                 reference_sig=reference_sig_by_name.get(name),
                 native_cc=native_cc,
                 native_runner=native_runner,
+                shadow_v2=shadow_v2,
             )
     return results
 
@@ -2817,6 +2833,11 @@ def main() -> int:
         "are rebuilt and differentially executed at the target ABI.",
     )
     ap.add_argument("--worker", default=None)
+    ap.add_argument(
+        "--shadow-v2",
+        action="store_true",
+        help="execute verified structure-v2 output instead of production output",
+    )
     args = ap.parse_args()
 
     if args.worker:
@@ -2837,6 +2858,7 @@ def main() -> int:
         dwarf_so=args.dwarf_so,
         native_cc=json.loads(args.native_cc) if args.native_cc else None,
         native_runner=json.loads(args.native_runner) if args.native_runner else None,
+        shadow_v2=args.shadow_v2,
     )
     if args.json:
         print(json.dumps(results, indent=2))
