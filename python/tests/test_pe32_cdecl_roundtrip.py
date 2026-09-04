@@ -68,9 +68,9 @@ def test_real_mingw32_main_has_bounded_cdecl_arguments() -> None:
         :300
     ]
     assert "arg536870" not in text
-    assert '_printf((const char *)("Hello, World from C!\\n"))' in text
+    assert '_printf("Hello, World from C!\\n")' in text
     assert "strlen(" in text and "strlen()" not in text
-    assert "_print_sum(stack_1)" in text
+    assert "_print_sum(sum)" in text
 
 
 @pytest.mark.slow
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
         timeout_ms=8000,
         style="decbench",
     )
-    assert "cdecl_chain(int arg0, int arg1, int arg2)" in generated, generated
+    assert "cdecl_chain(int a, int b, int c)" in generated, generated
     # The recovered `helper3` prototype types every parameter `int`, and every
     # argument is a register this render already declared `int`, so the
     # call-boundary conversion is the identity and is not written. This used to
@@ -123,8 +123,8 @@ int main(int argc, char **argv) {
     # (5e24383) and the elision is the correct behaviour, not a regression —
     # the round trip below rebuilds and executes this exact text. Same rule,
     # same reason as `arm_hf_mixed_callee(7, arg0, arg1)` in test_cli_decompile.
-    assert "helper3(arg0, arg1, arg2)" in generated, generated
-    assert "(int)(arg" not in generated, generated
+    assert "helper3(a, b, c)" in generated, generated
+    assert not re.search(r"\(int\)\((?:a|b|c)\)", generated), generated
 
     rebuilt_source = tmp_path / "rebuilt.c"
     rebuilt_source.write_text(
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
         timeout_ms=8000,
         style="decbench",
     )
-    assert "cdecl_pair(int arg0, int arg1)" in generated, generated
+    assert "cdecl_pair(int a, int b)" in generated, generated
 
     rebuilt_source = tmp_path / "rebuilt.c"
     rebuilt_source.write_text(
