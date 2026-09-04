@@ -199,8 +199,33 @@ def run(
         from decbench.metrics.vj_ged import vj_ged
     except ImportError:  # pragma: no cover - depends on which checkout is on the path
         from cfgutils.similarity import vj_ged
-    from decbench.metrics.ged import GED_MAX_NODES
+    from decbench.metrics.ged import GED_MAX_NODES, _is_isomorphic
     from decbench.publish.cfg_export import rebuild_cfg
+
+    def scored(source: Any, decompiled: Any) -> float:
+        """The value `GEDMetric` would record, not bare `vj_ged`.
+
+        The stored cells are `decbench.metrics.ged.GEDMetric._compute_uncached`,
+        which is three steps, and this harness used to compare against only the
+        third. The difference is not cosmetic: the clamp means a non-isomorphic
+        pair can never score 0, while bare `vj_ged` returns 0 whenever the degree
+        multisets agree -- which `docs/design/metrics-research/` measures as the
+        common case, not a corner.
+        """
+        if _is_isomorphic(source, decompiled):
+            return 0.0
+        if (
+            source.number_of_nodes() > GED_MAX_NODES
+            or decompiled.number_of_nodes() > GED_MAX_NODES
+        ):
+            return max(
+                1.0,
+                float(
+                    abs(source.number_of_nodes() - decompiled.number_of_nodes())
+                    + abs(source.number_of_edges() - decompiled.number_of_edges())
+                ),
+            )
+        return max(1.0, float(vj_ged(source, decompiled)))
 
     exact = mismatched = uncovered = no_source_cfg = 0
     cells = binaries = 0
@@ -235,7 +260,7 @@ def run(
             if ours is None:
                 uncovered += 1
                 continue
-            got = float(vj_ged(rebuild_cfg(serialized), ours))
+            got = scored(rebuild_cfg(serialized), ours)
             if got == want:
                 exact += 1
             else:
