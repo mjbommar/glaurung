@@ -1,5 +1,7 @@
 # WP8 DWARF variadic declaration evidence — 2026-09-04
 
+> **Kind:** record · **Date:** 2026-09-04
+
 ## Outcome
 
 Glaurung now preserves the DWARF declaration fact that distinguishes

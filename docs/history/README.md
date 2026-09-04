@@ -126,6 +126,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [06-recommendations.md](decompiler-review-2026-09-02/06-recommendations.md) | 2026-09-02 | ten recommendations ordered by leverage, each with its evidence and how it would be judged | proposals only; nothing here is scheduled by being here |
 | [PLAN.md](decompiler-review-2026-09-02/PLAN.md) | 2026-09-02 | a file-level execution specification for the recommendations: work packages, tests, sizing, stop conditions | explicitly subordinate to the roadmap; it is not a checkbox authority |
 | [mir-trial-results.md](decompiler-review-2026-09-02/mir-trial-results.md) | 2026-09-02 | the WP1 bounded-MIR definedness trial | **rejected for production use**; the negative result is the durable part |
+| [results/wp8-dwarf-variadic-declarations.md](decompiler-review-2026-09-02/results/wp8-dwarf-variadic-declarations.md) | 2026-09-04 | trusted DWARF variadic markers preserved through authoritative rendered declarations, with the remaining machine-to-C lowering defect separated | bounded GCC/Clang x86-64 fixture evidence; stripped inference, PDB variadic facts, and complete `va_start` lowering remain open |
 
 ## `design/`
 
