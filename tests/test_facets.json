@@ -3,11 +3,11 @@
  "counts": {
   "core": 317,
   "lfs": 113,
+  "toolchain": 36,
   "fixtures": 35,
-  "toolchain": 35,
   "docker": 18,
   "llm": 5,
-  "decbench": 2
+  "decbench": 3
  },
  "files": {
   "test_abi_argument_recovery.py": [
@@ -783,6 +783,12 @@
   ],
   "test_measure_signature_coverage.py": [
    "core"
+  ],
+  "test_metric_mutation.py": [
+   "toolchain"
+  ],
+  "test_metric_stratify.py": [
+   "decbench"
   ],
   "test_minecraft_detect_archive_tool.py": [
    "core"

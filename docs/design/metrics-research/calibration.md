@@ -46,6 +46,17 @@ not assumed:
 
 Classes to add, each aimed at a defect a real decompiler actually commits:
 
+> **Correction, measured 2026-09-04.** The first two entries below are listed
+> here under sensitivity, whose contract is that each mutant carries a
+> ground-truth label asserting it *changes* behaviour. `goto-ify` and
+> `duplicate-tail` **preserve** behaviour, so they belong to the specificity
+> half, and `tools/metric_mutation.py` implements them there. They turn out to
+> be the two most discriminating classes in it: `goto-ify` is invisible to GED
+> (13/14 quiet on samples, 30/30 on the tree), and `duplicate-tail` is its
+> largest genuine false-alarm class at 60-64%. The label was wrong; the
+> reasoning about what each class is *for* was right.
+
+
 * **`goto-ify`** — replace a `while` with a label and a conditional `goto`. The
   CFG is unchanged, so every CFG metric scores it perfect; the control skeleton
   changes, so the recommended tree metric should catch all of them. This is the
