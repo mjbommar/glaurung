@@ -1880,6 +1880,50 @@ def _pointee_ctype(d, forced_u8):
 _STRUCT_CTYPES: dict[str, type[ctypes.Structure]] = {}
 
 
+def _aggregate_defined_bytes(d, value) -> bytes:
+    """Return only bytes occupied by declared aggregate members.
+
+    C leaves structure padding indeterminate.  Comparing the complete object
+    representation therefore reports a false mismatch when two results have
+    identical fields but different bytes in an internal or trailing hole.  The
+    DWARF descriptor already states every member extent, so use the union of
+    those extents as the comparison mask.  Nested aggregate and array members
+    recurse through the same rule; unions naturally take the union of their
+    overlapping member extents.
+    """
+    raw = bytes(memoryview(value))
+    covered: set[int] = set()
+
+    def mark(desc, base: int) -> None:
+        kind = desc["k"]
+        if kind in ("struct", "union"):
+            for field in desc["fields"]:
+                mark(field["t"], base + field["off"])
+            return
+        if kind == "array":
+            element = desc["e"]
+            element_width = _descriptor_width(element)
+            for index in range(desc["n"]):
+                mark(element, base + index * element_width)
+            return
+        width = _descriptor_width(desc)
+        covered.update(range(base, base + width))
+
+    mark(d, 0)
+    if not covered or max(covered) >= len(raw):
+        raise ValueError("aggregate member extent exceeds returned object")
+    return bytes(raw[index] for index in sorted(covered))
+
+
+def _descriptor_width(d) -> int:
+    """The exact byte extent of one already-validated value descriptor."""
+    if "w" in d:
+        return d["w"]
+    if d["k"] == "array":
+        return d["n"] * _descriptor_width(d["e"])
+    raise ValueError(f"descriptor has no byte width: {d!r}")
+
+
 def _struct_return_declined(d):
     """Why an aggregate return cannot be marshalled back, or `None`.
 
@@ -2268,10 +2312,12 @@ def worker(spec_path: str) -> int:
         # Scalar restype is the exact DWARF width/signedness, so this is a full-
         # width comparison (including high halves and sign extension).
         elif ret["k"] in _AGGREGATE_KINDS:
-            # Compare the aggregate's bytes, not the ctypes objects -- two
-            # Structure instances never compare equal, and the padding a
-            # non-multiple-of-8 return leaves unspecified must not be read.
-            ob, db = bytes(memoryview(ro)), bytes(memoryview(rd))
+            # Compare the bytes occupied by declared members, not ctypes
+            # objects (which never compare equal) or the complete object
+            # representation (whose internal and trailing padding is
+            # indeterminate in C).
+            ob = _aggregate_defined_bytes(ret, ro)
+            db = _aggregate_defined_bytes(ret, rd)
             if ob != db:
                 print(
                     json.dumps(

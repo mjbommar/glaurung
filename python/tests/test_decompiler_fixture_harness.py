@@ -2728,6 +2728,35 @@ def test_float_array_and_union_members_are_describable_contracts() -> None:
         assert D.exec_class(recovered[name], "unit-test")[0] == "exec", name
 
 
+def test_aggregate_return_comparison_ignores_only_dwarf_padding() -> None:
+    """Internal padding is indeterminate, while every member byte is semantic."""
+    descriptor = {
+        "k": "struct",
+        "w": 16,
+        "fields": [
+            {"name": "tag", "off": 0, "t": {"k": "int", "w": 4, "s": True}},
+            {"name": "value", "off": 8, "t": {"k": "float", "w": 8}},
+        ],
+    }
+    aggregate = D._struct_ctype(descriptor)
+    left = aggregate()
+    right = aggregate()
+    left.f0, right.f0 = 7, 7
+    left.f1, right.f1 = 4.0, 4.0
+
+    # The four-byte hole between the members is deliberately different.
+    ctypes.memset(ctypes.addressof(left) + 4, 0x11, 4)
+    ctypes.memset(ctypes.addressof(right) + 4, 0xEE, 4)
+    assert D._aggregate_defined_bytes(descriptor, left) == D._aggregate_defined_bytes(
+        descriptor, right
+    )
+
+    right.f1 = 8.0
+    assert D._aggregate_defined_bytes(descriptor, left) != D._aggregate_defined_bytes(
+        descriptor, right
+    )
+
+
 def test_a_flexible_array_member_still_refuses_the_signature() -> None:
     """An array with no bound has no extent, and inventing one is the failure.
 
