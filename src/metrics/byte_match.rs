@@ -515,7 +515,7 @@ fn split_makes_progress(x: usize, y: usize, n: usize, m: usize) -> bool {
     !((x == 0 && y == 0) || (x == n && y == m))
 }
 
-/// B-8. Score two normalized assembly listings.
+/// Score two normalized assembly listings (component B-8).
 ///
 /// The three degenerate cases are the reference's, and the first of them is
 /// the one worth staring at: **two empty listings score a perfect 1.0.** An
@@ -581,7 +581,7 @@ pub fn score_lines<S: AsRef<str>, T: AsRef<str>>(a: &[S], b: &[T]) -> Option<Byt
     })
 }
 
-/// B-7. Diff two listings line by line and return the hunk list.
+/// Diff two listings line by line and return the hunk list (component B-7).
 ///
 /// # What this reproduces, and what it drops
 ///
@@ -738,7 +738,6 @@ fn push_chunk(out: &mut Vec<DiffChunk>, op: DiffOp, len: usize) {
     out.push(DiffChunk { op, len });
 }
 
-/// The iterative driver: pop tasks, expand subproblems, emit decided runs.
 /// The middle-snake source the driver uses, as a plain function pointer.
 ///
 /// In production this is always [`bisect`]. It is a parameter so that
@@ -753,6 +752,7 @@ fn diff_interned(a: &[u32], b: &[u32]) -> Option<Vec<DiffChunk>> {
     diff_interned_with(a, b, bisect)
 }
 
+/// The iterative driver: pop tasks, expand subproblems, emit decided runs.
 fn diff_interned_with(a: &[u32], b: &[u32], split: SplitFn) -> Option<Vec<DiffChunk>> {
     let mut out: Vec<DiffChunk> = Vec::new();
     let mut stack: Vec<Task> = vec![Task::Diff {
