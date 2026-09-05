@@ -66,7 +66,15 @@ byte-identical for all six improvement rows. The improvements are real relative
 to the committed baseline but predate this increment; several functions retain
 different verifier findings, so this is not a claim that they are generally
 clean. Both aggregate ratchets still require explicit baseline review, and no
-baseline was rewritten by this increment. Full def-use, cross-architecture and
-host matrices, GED, RSS, output-size, and whole Python evidence remain open.
-This increment advances the general partition contract but does not complete
-WP4 promotion or WP5.
+baseline was rewritten by this increment.
+
+The complete exact-tip def-use census passes four of six tests and retains its
+two aggregate ratchet failures. An exact rerun at parent `8c65a78a` produces
+the same 27 new-violation rows, the same resolved rows, and the same lane totals
+as tip `5fc93b15`; the saved logs differ only by two package-install chatter
+lines. The broad def-use baseline is stale in both directions, but none of that
+movement is attributable to this increment.
+
+Cross-architecture and host matrices, GED, RSS, output-size, and whole Python
+evidence remain open. This increment advances the general partition contract
+but does not complete WP4 promotion or WP5.

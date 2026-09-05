@@ -120,7 +120,9 @@ linear prefixes and independently rejects a forged prefix that crosses a
 shared join. The exact-tip structural gate completes 25 of 27 tests: its eight
 regression findings and six improvement findings all reproduce byte-identically
 at the preceding exact commit. They are baseline debt and earlier improvements,
-respectively, rather than changes attributable to this increment. Branching
+respectively, rather than changes attributable to this increment. The complete
+six-test def-use census likewise produces an identical parent/tip report (four
+tests green, the same regression and improvement ratchets red). Branching
 private regions and the remaining promotion gates stay open; see
 `results/wp4-raw-switch-private-prefixes.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
@@ -2276,7 +2278,9 @@ relevant ratchet's accepted-regression record.
    is rejected. Its exact-tip structural run has no attributable regression or
    improvement: exact parent/tip rendering is byte-identical for every row in
    both red aggregate ratchets, which are retained for explicit baseline
-   review. Branching private subgraphs and
+   review. The full def-use census is also parent/tip identical: four of six
+   tests pass and the two aggregate baseline-drift ratchets remain red.
+   Branching private subgraphs and
    general unique-join partitioning remain open; do not widen them without
    equivalent independent proof.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
