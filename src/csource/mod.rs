@@ -9,6 +9,7 @@
 //! `docs/design/static-c-analysis/requirements.md`.
 
 pub mod cfg;
+pub mod export;
 /// `S5` --- bounded equivalence checking between two `LlirFunction`s.
 /// Needs the symbolic engine and its solver seam; see the module docs.
 #[cfg(feature = "symbolic")]

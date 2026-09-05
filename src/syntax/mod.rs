@@ -33,6 +33,7 @@ pub mod cfg;
 pub mod diag;
 pub mod event;
 pub mod ged;
+pub mod graph_export;
 pub mod ids;
 pub mod intern;
 pub mod metrics;

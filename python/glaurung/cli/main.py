@@ -89,6 +89,12 @@ _REGISTRY: dict[str, tuple[str, str, str, str]] = {
         "",
         "TriageFormatter",
     ),
+    "source-graph": (
+        "source_graph",
+        "SourceGraphCommand",
+        "",
+        "TriageFormatter",
+    ),
 }
 
 

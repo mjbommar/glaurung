@@ -321,6 +321,62 @@ passing:
 $ glaurung source-metrics src/ --fail-over cyclomatic=25 --fail-over max_nesting=5
 ```
 
+## Exporting the graphs
+
+The same parse also serializes, which is what replaces `joern-export` for the
+two representations this front end has.
+
+```console
+$ glaurung source-graph PATH... [--repr cfg|ast]
+                                [--graph-format dot|graphml|json|mermaid]
+                                [--func NAME] [-o DIR] [--dialect ...]
+```
+
+```python
+for name, body in glaurung.source.export_graphs(code, repr="cfg", format="json"):
+    graph = networkx.node_link_graph(json.loads(body))
+```
+
+`--repr` takes Joern's spelling of the two graphs we have. Joern also offers
+`cdg`, `ddg` and `pdg`; each needs a data-dependence analysis this front end
+does not do, and each **raises** rather than returning a control-flow graph
+under another name.
+
+**`repr="cfg"` is the general graph, never the Joern-parity one** --- the same
+rule the metrics follow, for the reason
+[static-c-analysis/architecture.md](../design/static-c-analysis/architecture.md)
+section 1 gives. `glaurung.source_cfg.parity_cfgs` is still there when the
+parity shape is what you want.
+
+| format | what it is for |
+|---|---|
+| `dot` | Graphviz. Human-readable, and what `glaurung graph` already emits for binary CFGs |
+| `graphml` | The interchange standard: `networkx`, `igraph`, `JGraphT`, Gephi and yEd all read it, and so does anything built on `joern-export --format graphml` |
+| `json` | Node-link JSON. The edge array is under **`edges`**, which is what `networkx.node_link_graph` reads by default since NetworkX 3.6 removed the `link` keyword deprecated in 3.4 |
+| `mermaid` | Renders in Markdown, on GitHub, and in a chat transcript with no Graphviz install |
+
+GraphSON and Neo4j CSV are deliberately absent: both exist in `joern-export` to
+feed a graph database, which is the code-property-graph path
+[requirements.md](../design/static-c-analysis/requirements.md) section 8
+declines.
+
+Node labels carry the node kind and the source the node covers, because a graph
+whose nodes all read `stmt` tells a reader nothing; every node also carries its
+`span`, so an exported graph is traceable back to the text. A CFG edge carries
+its kind and whether it is a back edge. Mermaid has no attribute channel, so
+only labels survive there.
+
+The CLI writes to stdout by default, one graph after another with a comment
+naming each where the format has comments. `-o DIR` writes one file per
+function instead, the way `joern-export` does; the file stem carries the
+function's index as well as its name, because two definitions in one file can
+carry the same name after recovery.
+
+**`--graph-format`, not `--format`.** Every Glaurung command already has
+`--format` for its own output shape (`plain`, `rich`, `json`, `jsonl`), and
+`json` is a legal value of both. Merging them would make `--format json`
+silently change the graph encoding.
+
 ## Worked example: measuring our own decompiler
 
 The loop this exists to close. Decompile a fixture object, measure the C that

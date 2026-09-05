@@ -36,12 +36,14 @@ from __future__ import annotations
 
 import statistics
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence
 
 from glaurung import _native
 
 __all__ = [
     "COMPARED_METRICS",
+    "EXPORT_FORMATS",
+    "EXPORT_REPRS",
     "Diagnostic",
     "FunctionMetrics",
     "SourceReport",
@@ -49,11 +51,49 @@ __all__ = [
     "analyze_path",
     "compare",
     "control_flow_graphs",
+    "export_graphs",
+    "export_path",
     "feature_names",
     "features",
     "functions",
     "normalize",
 ]
+
+if TYPE_CHECKING:  # pragma: no cover - declarations for the lazy attributes
+    #: Graph representations :func:`export_graphs` can serialize.
+    EXPORT_REPRS: tuple[str, ...]
+    #: Wire formats :func:`export_graphs` can write.
+    EXPORT_FORMATS: tuple[str, ...]
+
+#: Names of the two module attributes served lazily by :func:`__getattr__`,
+#: mapped to the key each reads out of the native choice table.
+_EXPORT_CHOICES = {"EXPORT_REPRS": "repr", "EXPORT_FORMATS": "format"}
+
+
+def __getattr__(name: str) -> tuple[str, ...]:
+    """Serve :data:`EXPORT_REPRS` and :data:`EXPORT_FORMATS` on first use.
+
+    Both read their values from Rust so the two sides cannot drift. Reading
+    them at *import* time would be the wrong trade: ``glaurung/__init__.py``
+    imports this module eagerly, so a native extension built before
+    ``export_choices`` existed would make the **whole package** unimportable
+    rather than making one function fail. `glaurung.source_cfg` defers its
+    `networkx` import for the same reason.
+
+    Args:
+        name: The attribute being looked up.
+
+    Returns:
+        The tuple of accepted names, for the two attributes named above.
+
+    Raises:
+        AttributeError: For any other name, as a module must.
+    """
+    key = _EXPORT_CHOICES.get(name)
+    if key is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return tuple(_native.source.export_choices()[key])
+
 
 #: The metric names :meth:`SourceReport.hotspots` will sort by, mapped to the
 #: attribute that holds each. Restricting the sort key to a known set turns a
@@ -499,6 +539,75 @@ def normalize(code: str, dialect: str) -> str:
         ValueError: If `dialect` is neither of the two names.
     """
     return _native.source.normalize(code, dialect)
+
+
+def export_graphs(
+    code: str, *, repr: str = "cfg", format: str = "dot"
+) -> list[tuple[str, str]]:
+    """Serialize every function's graph in one wire format.
+
+    The replacement for ``joern-export --repr {ast,cfg} --format {dot,graphml,
+    ...}``. Joern also offers ``cdg``, ``ddg`` and ``pdg``; those need a
+    data-dependence analysis this front end does not do, so they raise here
+    rather than returning a control-flow graph under another name.
+
+    ``repr="cfg"`` exports the *general* control-flow graph, never the
+    Joern-parity one -- the graph a person would draw, with real successors,
+    real join points and real loop back edges. Use
+    :func:`glaurung.source_cfg.parity_cfgs` when the parity shape is what you
+    want.
+
+    Args:
+        code: The source text. Any byte sequence is acceptable; a file the
+            parser only partly recovered exports the functions it did build.
+        repr: One of :data:`EXPORT_REPRS`.
+        format: One of :data:`EXPORT_FORMATS`. ``"json"`` is node-link JSON
+            with the edge array under ``"edges"``, which NetworkX 3.6 reads by
+            default; ``"mermaid"`` renders in Markdown without Graphviz.
+
+    Returns:
+        One ``(function name, serialized graph)`` pair per function, in source
+        order. A list rather than a dict, because two definitions in one file
+        can carry the same name after recovery.
+
+    Raises:
+        ValueError: If `repr` or `format` is not a known name.
+    """
+    return [
+        (name, body) for name, body in _native.source.export_graphs(code, repr, format)
+    ]
+
+
+def export_path(
+    path: str | Path,
+    *,
+    repr: str = "cfg",
+    format: str = "dot",
+    dialect: str | None = None,
+) -> list[tuple[str, str]]:
+    """:func:`export_graphs` over a file, read lossily.
+
+    Args:
+        path: The file to read. Decoded with ``errors="replace"``, because a
+            decompiler's output is not always valid UTF-8 and losing the file
+            over one byte would be worse than losing the byte.
+        repr: One of :data:`EXPORT_REPRS`.
+        format: One of :data:`EXPORT_FORMATS`.
+        dialect: Passed to :func:`normalize` first when given. Note that
+            ``"preprocessed"`` empties an ordinary ``.c`` file; it is only for a
+            real ``gcc -E`` unit.
+
+    Returns:
+        One ``(function name, serialized graph)`` pair per function.
+
+    Raises:
+        OSError: If the file cannot be read.
+        ValueError: If `repr`, `format` or `dialect` is not a known name.
+    """
+    code = Path(path).read_text(encoding="utf-8", errors="replace")
+    if dialect is not None:
+        code = normalize(code, dialect)
+    return export_graphs(code, repr=repr, format=format)
 
 
 def analyze(

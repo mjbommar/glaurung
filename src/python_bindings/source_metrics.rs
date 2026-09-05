@@ -456,6 +456,75 @@ pub fn normalize_py(py: Python<'_>, text: &str, dialect: &str) -> PyResult<Strin
     Ok(py.detach(|| dialect.normalize()))
 }
 
+/// Serialize each function's graph in one of four wire formats.
+///
+/// The replacement for `joern-export --repr {ast,cfg} --format {dot,graphml,
+/// ...}`, minus the three representations that need a data-dependence
+/// analysis this front end does not do. `cdg`, `ddg` and `pdg` raise rather
+/// than returning a control-flow graph under another name.
+///
+/// `repr` is `"cfg"` (the general control-flow graph, never the Joern-parity
+/// one) or `"ast"`. `format` is `"dot"`, `"graphml"`, `"json"` or `"mermaid"`.
+///
+/// Returns one `(function name, serialized graph)` pair per function, in
+/// source order. A list rather than a dict, because two definitions in one
+/// file can carry the same name after recovery.
+#[pyfunction]
+#[pyo3(name = "export_graphs")]
+pub fn export_graphs_py<'py>(
+    py: Python<'py>,
+    text: &str,
+    repr: &str,
+    format: &str,
+) -> PyResult<Bound<'py, PyList>> {
+    use crate::csource::export::{export, Repr};
+    use crate::syntax::graph_export::{write, Format};
+
+    let repr_value = Repr::parse(repr).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown repr {repr:?}; expected one of {:?}",
+            Repr::ALL.map(|r| r.name())
+        ))
+    })?;
+    let format_value = Format::parse(format).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown format {format:?}; expected one of {:?}",
+            Format::ALL.map(|f| f.name())
+        ))
+    })?;
+
+    let rendered = py.detach(|| {
+        export(text, repr_value)
+            .into_parts()
+            .0
+            .iter()
+            .map(|view| (view.name.clone(), write(view, format_value)))
+            .collect::<Vec<(String, String)>>()
+    });
+
+    let out = PyList::empty(py);
+    for (name, body) in rendered {
+        out.append((name, body))?;
+    }
+    Ok(out)
+}
+
+/// The `repr` and `format` names [`export_graphs_py`] accepts, as two lists.
+///
+/// A CLI builds its choice lists from these rather than repeating them, so a
+/// format added in Rust cannot be missing from the command that offers it.
+#[pyfunction]
+#[pyo3(name = "export_choices")]
+pub fn export_choices_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
+    use crate::csource::export::Repr;
+    use crate::syntax::graph_export::Format;
+
+    let out = PyDict::new(py);
+    out.set_item("repr", Repr::ALL.map(|r| r.name()).to_vec())?;
+    out.set_item("format", Format::ALL.map(|f| f.name()).to_vec())?;
+    Ok(out)
+}
+
 /// Register the `source` submodule on the extension root.
 pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "source")?;
@@ -465,6 +534,8 @@ pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>
     sub.add_function(wrap_pyfunction!(feature_names_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(features_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(normalize_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(export_graphs_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(export_choices_py, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }
