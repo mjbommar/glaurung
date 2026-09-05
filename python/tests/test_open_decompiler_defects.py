@@ -129,17 +129,8 @@ def _duff_copy_code() -> str:
     return code
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN DEFECT (constant-false live latch): gcc -O2 Duff's device emits "
-        "`if (0) { goto L_1180; }`, deleting the live loop backedge. This is "
-        "a semantic wrong answer distinct from the existing unrecovered "
-        "indirect-jump inventory row."
-    ),
-)
 def test_duff_copy_does_not_delete_its_live_loop_latch():
-    """A live Duff's-device latch must not fold to a constant-false branch."""
+    """The recovered GCC-O2 Duff latch must stay live after switch recovery."""
     code = _duff_copy_code()
     false_latch = re.search(r"if\s*\(0\)\s*\{\s*goto\s+L_1180\s*;", code)
     assert false_latch is None, code
