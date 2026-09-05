@@ -119,6 +119,14 @@ clean-tip retry, while the sole deterministic delta is the six-test census
 increase committed at `88bb8650`. The focused census suite is green and the
 never-executed pool remains zero; this is triaged full-gate evidence, not a
 release-green claim.
+The following i386 slice is landed at behavioral commit `b84233ec`. GCC PIC's
+PC thunk and checked GOT arithmetic now preserve distinct table and target-base
+addresses through bounded relative decode. Eight i386 O2 cells move from
+`fail` to execution-verified `pass`, including a switch nested in a loop. The
+complete 410-lane parent/tip comparison has zero attributable regression and
+the full Rust gate is green. The census increase is recorded at `86d224f5`;
+the whole Python gate remains open. See
+`results/wp5-i386-got-relative-switch.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -976,6 +984,10 @@ one authoritative set of case edges.
   failures pass on immediate focused retry, and the one deterministic delta is
   the expected six-test census increase now recorded at `88bb8650`. Other
   compiler/optimization and named fixture lanes remain.
+  GCC i386 O2's GOT-relative table form is also recovered. Eight cells now
+  pass execution, table address and target base remain distinct typed facts,
+  and all four regressions in the complete 410-lane comparison reproduce at
+  the parent. The whole Python gate for this slice remains open.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
@@ -2158,6 +2170,10 @@ relevant ratchet's accepted-regression record.
    residual decline census remain. The AArch64 slice's full Python gate has run
    and is triaged but remains broadly red; do not call WP5 complete from the
    green Rust gate or focused retry evidence alone.
+   The next i386 slice at `b84233ec` removes eight more O2 failures with zero
+   attributable regression across all 410 i386 lanes. Its full Rust and focused
+   execution gates are green; run and triage the whole Python suite before
+   treating the stacked slice as integration-ready.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

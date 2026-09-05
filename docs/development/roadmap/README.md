@@ -174,6 +174,17 @@ green focused census suite and a zero never-executed pool. This is triaged
 evidence, not a release-green claim. Detailed evidence is in
 [`wp5-aarch64-compact-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-aarch64-compact-byte-switch.md).
 
+The following bounded WP5 slice at `b84233ec` recovers GCC i386 PIC tables
+whose entries are stored at a displacement from the GOT but are relative to the
+GOT base. One target-owned PC-thunk byte contract now serves lifting and CFG
+analysis, and table address remains distinct from target base through bounded
+decode. Eight i386 O2 cells move from `fail` to execution-verified `pass`,
+including a switch inside a loop. A complete 410-lane parent/tip comparison
+shows the exact same four older regressions at both revisions, so none is
+attributable to this slice; the full Rust gate is green. The whole Python gate
+and residual decline census remain open. Detailed evidence is in
+[`wp5-i386-got-relative-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-i386-got-relative-switch.md).
+
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
 to machine-ABI boundaries, and float-valued call rendering all have bounded
