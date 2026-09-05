@@ -320,6 +320,7 @@ fn lower_raw_loop_block(
     block_index: usize,
     lf: &LlirFunction,
     switch: Option<&SwitchEvidence>,
+    fold_switch_guard: bool,
     default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
@@ -334,6 +335,31 @@ fn lower_raw_loop_block(
             _ => None,
         });
     let mut statements = lower_block(block, lower_scalar_float);
+    if fold_switch_guard {
+        let guard_is_exact = switch
+            .filter(|evidence| evidence.complete)
+            .and_then(|evidence| evidence.default.as_ref().map(|default| (evidence, default)))
+            .is_some_and(|(evidence, default)| {
+                default.guard == block_index
+                    && default.dispatch == Some(evidence.dispatch)
+                    && matches!(
+                        block.instrs.last().map(|instr| &instr.op),
+                        Some(Op::CondJump { .. })
+                    )
+                    && block.succs.len() == 2
+                    && lf
+                        .blocks
+                        .get(evidence.dispatch)
+                        .is_some_and(|dispatch| block.succs.contains(&dispatch.start_va))
+                    && lf
+                        .blocks
+                        .get(default.target)
+                        .is_some_and(|target| block.succs.contains(&target.start_va))
+            });
+        if guard_is_exact && matches!(statements.last(), Some(Stmt::If { .. })) {
+            statements.pop();
+        }
+    }
     let Some(discriminant) = explicit_index else {
         return statements;
     };
@@ -701,6 +727,7 @@ fn lower_region_inner(
             blocks,
             exits: _,
             switch,
+            switch_guard,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
@@ -713,6 +740,7 @@ fn lower_region_inner(
                     block_index,
                     lf,
                     switch.as_ref(),
+                    *switch_guard == Some(block_index),
                     default_target,
                     lower_scalar_float,
                 ));

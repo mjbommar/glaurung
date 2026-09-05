@@ -2567,6 +2567,7 @@ function f @ 0x1000 {
                 blocks: vec![0, 1],
                 exits: vec![2, 3],
                 switch: None,
+                switch_guard: None,
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2677,6 +2678,7 @@ function f @ 0x1000 {
                     complete: true,
                     provenance: SwitchEvidenceProvenance::TypedCfgEdges,
                 }),
+                switch_guard: Some(0),
             },
             Region::Block(5),
         ]);
@@ -2704,6 +2706,12 @@ function f @ 0x1000 {
             ]
         );
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::If { .. })),
+            "the proven range guard must be absorbed into the typed switch: {body:#?}"
+        );
     }
 
     #[test]

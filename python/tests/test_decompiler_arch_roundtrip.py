@@ -990,7 +990,10 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
     decompiled = D.decompiled_many_c(str(target), [function_va])
     recovered = decompiled[function_va]
     assert re.search(r"\bvar1\b", recovered) is None, recovered
+    assert re.search(r"\bvar12\b", recovered) is None, recovered
     assert "continue;" in recovered, recovered
+    assert "default:" in recovered, recovered
+    assert recovered.count("goto L_580;") == 1, recovered
 
     results = D.run(
         str(target),

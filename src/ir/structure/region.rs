@@ -83,6 +83,9 @@ pub enum Region {
         /// Keeping this on the owning region prevents AST lowering from
         /// reconstructing switch meaning from successor order and labels.
         switch: Option<SwitchEvidence>,
+        /// Range guard proven safe to absorb into `switch` by the same typed
+        /// unsigned-comparison contract as an ordinary guarded switch.
+        switch_guard: Option<usize>,
     },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-

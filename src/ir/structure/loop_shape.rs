@@ -123,12 +123,22 @@ pub(super) fn detect_raw_dispatch_loop(
         .iter()
         .find_map(|block| cfg.switch_at(*block))
         .cloned();
+    let switch_guard = switch.as_ref().and_then(|evidence| {
+        let default = evidence.default.as_ref()?;
+        (evidence.complete
+            && default.dispatch == Some(evidence.dispatch)
+            && body_contains_guard_and_dispatch(&blocks, default.guard, evidence.dispatch)
+            && cfg.preds[evidence.dispatch] == vec![default.guard]
+            && cfg.branch_depends_on_unsigned_comparison(default.guard))
+        .then_some(default.guard)
+    });
     Some(LoopRegion {
         region: Region::RawLoop {
             header,
             blocks,
             exits,
             switch,
+            switch_guard,
         },
         exit: continuation,
     })
@@ -213,9 +223,14 @@ pub(super) fn detect_raw_multi_latch_loop(
             blocks,
             exits,
             switch: None,
+            switch_guard: None,
         },
         exit: Some(exit),
     })
+}
+
+fn body_contains_guard_and_dispatch(blocks: &[usize], guard: usize, dispatch: usize) -> bool {
+    blocks.contains(&guard) && blocks.contains(&dispatch)
 }
 
 /// Recognise a natural while-loop headed at `header`.
