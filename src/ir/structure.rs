@@ -1003,6 +1003,96 @@ mod tests {
     }
 
     #[test]
+    fn guarded_switch_case_may_borrow_a_return_shared_with_the_default() {
+        // Reduced from fixture 215 Clang O2 `wide_selector_mixed`. Case zero
+        // enters the bare RET after setting its result in the dispatch block;
+        // the out-of-range comparison tree also reaches that RET after setting
+        // -1. The return therefore selects a predecessor-specific SSA value.
+        // It is a valid borrowed presentation tail, not a reason to discard
+        // all six CFG-proven switch arms.
+        let comparison = VReg::Flag(crate::ir::types::Flag::C);
+        let condition = VReg::Flag(crate::ir::types::Flag::Z);
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: comparison.clone(),
+                        op: crate::ir::types::CmpOp::Ule,
+                        lhs: Value::Reg(VReg::phys("index")),
+                        rhs: Value::Const(5),
+                    },
+                    // x86 `ja` consumes a boolean assembled from arithmetic
+                    // flags rather than the comparison result directly.
+                    Op::Assign {
+                        dst: condition.clone(),
+                        src: Value::Reg(comparison),
+                    },
+                    Op::CondJump {
+                        cond: condition,
+                        target: 0x1800,
+                        inverted: true,
+                    },
+                ],
+                vec![0x1100, 0x1800],
+            ),
+            (
+                0x1100,
+                vec![
+                    Op::Assign {
+                        dst: VReg::phys("eax"),
+                        src: Value::Const(30),
+                    },
+                    Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("target")),
+                        index: Some(Value::Reg(VReg::phys("index"))),
+                    },
+                ],
+                vec![0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700],
+            ),
+            (0x1200, vec![Op::Return], vec![]),
+            (0x1300, vec![Op::Return], vec![]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Return], vec![]),
+            (0x1600, vec![Op::Return], vec![]),
+            (0x1700, vec![Op::Return], vec![]),
+            (
+                0x1800,
+                vec![Op::Assign {
+                    dst: VReg::phys("eax"),
+                    src: Value::Const(-1),
+                }],
+                vec![0x1200],
+            ),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover(&lf, &ssa);
+        fn contains_switch(region: &Region) -> bool {
+            match region {
+                Region::Switch { .. } => true,
+                Region::Seq(parts) => parts.iter().any(contains_switch),
+                Region::IfThen { then_r, .. }
+                | Region::While { body: then_r, .. }
+                | Region::DoWhile { body: then_r, .. }
+                | Region::MultiExitLoop { body: then_r, .. }
+                | Region::Borrowed(then_r) => contains_switch(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    contains_switch(then_r) || contains_switch(else_r)
+                }
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => false,
+            }
+        }
+        assert!(
+            contains_switch(&region),
+            "the shared return must not erase typed switch evidence: {region:#?}"
+        );
+    }
+
+    #[test]
     fn guarded_switch_default_shared_by_case_paths_keeps_both_guard_edges() {
         // Reduced from NuttX O2-noinline `nxsig_find_pendingsignal`.  The range
         // guard and jump-table holes enter b3 directly, while every explicit

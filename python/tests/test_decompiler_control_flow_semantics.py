@@ -263,6 +263,64 @@ def test_cross_block_table_base_recovers_clang_o2_switch(tmp_path: Path) -> None
     assert results["fsm"]["status"] == "pass", results
 
 
+def test_wide_selector_switch_borrows_default_shared_return(tmp_path: Path) -> None:
+    """A table case sharing the default's RET must keep all typed case edges."""
+    source = (
+        ROOT
+        / "tests"
+        / "decompiler_fixtures"
+        / "src"
+        / "215_switch_on_wide_selector.c"
+    )
+    binary = tmp_path / "wide-selector-clang-O2.so"
+    compiled = TC.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["wide_selector_mixed"])
+    assert code is not None
+    assert "unrecovered indirect jump" not in code, code
+    assert "switch (op)" in code, code
+    for case in range(6):
+        assert f"case {case}:" in code, code
+    assert "0x100000000" in code, code
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "215_switch_on_wide_selector",
+            "--function",
+            "wide_selector_mixed",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "32",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["wide_selector_mixed"]["status"] == "pass", results
+
+
 def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     """Dead flag artifacts must not strand single-use array temporaries."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "arrays.c"

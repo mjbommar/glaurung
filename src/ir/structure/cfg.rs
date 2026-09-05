@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{CmpOp, LlirFunction, Op, Value, Width};
-use crate::ir::use_def::InstrAddr;
+use crate::ir::use_def::{use_count, InstrAddr};
 
 /// A shared, immutable set of block indices — what the natural-loop memos hand
 /// out. Shared rather than cloned because every consumer only reads it.
@@ -322,24 +322,24 @@ impl Cfg {
         ssa: &SsaInfo,
     ) -> (Vec<Option<BranchPredicate>>, Vec<bool>) {
         let mut comparisons = HashMap::new();
-        let mut comparison_inputs: HashMap<SsaValue, Vec<SsaValue>> = HashMap::new();
+        let mut value_inputs: HashMap<SsaValue, Vec<SsaValue>> = HashMap::new();
         for (block_idx, block) in lf.blocks.iter().enumerate() {
             for (instr_idx, instruction) in block.instrs.iter().enumerate() {
-                let Op::Cmp { op, lhs, rhs, .. } = &instruction.op else {
-                    continue;
-                };
                 let addr = InstrAddr {
                     block_idx,
                     instr_idx,
                 };
-                if let Some(value) = ssa.def_value_ref(lf, addr) {
+                let Some(value) = ssa.def_value_ref(lf, addr) else {
+                    continue;
+                };
+                value_inputs.insert(
+                    value.clone(),
+                    (0..use_count(&instruction.op))
+                        .filter_map(|operand| ssa.use_value_ref(lf, addr, operand).cloned())
+                        .collect(),
+                );
+                if let Op::Cmp { op, lhs, rhs, .. } = &instruction.op {
                     comparisons.insert(value.clone(), (*op, comparison_operand_width(lhs, rhs)));
-                    comparison_inputs.insert(
-                        value.clone(),
-                        (0..2)
-                            .filter_map(|operand| ssa.use_value_ref(lf, addr, operand).cloned())
-                            .collect(),
-                    );
                 }
             }
         }
@@ -366,7 +366,7 @@ impl Cfg {
             fn reaches_unsigned_comparison(
                 value: &SsaValue,
                 comparisons: &HashMap<SsaValue, (CmpOp, Option<Width>)>,
-                comparison_inputs: &HashMap<SsaValue, Vec<SsaValue>>,
+                value_inputs: &HashMap<SsaValue, Vec<SsaValue>>,
                 seen: &mut HashSet<SsaValue>,
             ) -> bool {
                 if !seen.insert(value.clone()) {
@@ -378,19 +378,14 @@ impl Cfg {
                 {
                     return true;
                 }
-                comparison_inputs.get(value).is_some_and(|inputs| {
+                value_inputs.get(value).is_some_and(|inputs| {
                     inputs.iter().any(|input| {
-                        reaches_unsigned_comparison(input, comparisons, comparison_inputs, seen)
+                        reaches_unsigned_comparison(input, comparisons, value_inputs, seen)
                     })
                 })
             }
             unsigned_guard_conditions[block_idx] = condition.is_some_and(|value| {
-                reaches_unsigned_comparison(
-                    value,
-                    &comparisons,
-                    &comparison_inputs,
-                    &mut HashSet::new(),
-                )
+                reaches_unsigned_comparison(value, &comparisons, &value_inputs, &mut HashSet::new())
             });
             predicates[block_idx] = Some(BranchPredicate {
                 op: comparison.map(|(op, _)| *op),

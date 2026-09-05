@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::cfg::{natural_loop_body, Cfg};
 use super::loop_shape::terminal_path_stays_outside_loop;
-use super::path_predicates::can_reach;
+use super::path_predicates::{can_reach, shared_return_chain};
 use super::region::Region;
 use super::{build, BuildState};
 
@@ -100,7 +100,8 @@ pub(super) fn detect_switch_shape(
     // reaches that continuation.  The enclosing boundary is still a proven
     // join and is the correct ownership limit for every case.
     let effective_join = join.or(enclosing_stop);
-    let arm_build_order = switch_arm_build_order(dispatch, &arms, cfg, effective_join)?;
+    let arm_build_order =
+        switch_arm_build_order(dispatch, &arms, cfg, effective_join, &HashSet::new())?;
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
 
     visited.insert(dispatch);
@@ -220,14 +221,41 @@ pub(super) fn detect_guarded_switch_shape(
         Some(default_entry),
     )
     .or(enclosing_stop);
-    let arm_build_order = switch_arm_build_order(dispatch, &arms, cfg, join)?;
+    // Clang may put the value for case zero in the dispatch block itself and
+    // make that table slot enter a bare RET also used by the out-of-range
+    // comparison tree. The return selects a predecessor-specific SSA value,
+    // so it must be rendered at the case site, but the default path remains
+    // its structural owner. Admit only an already-proved bounded shared-return
+    // chain which the typed formal default can actually reach.
+    let borrowed_return_arms: HashMap<usize, Vec<usize>> = arms
+        .iter()
+        .filter_map(|arm| {
+            can_reach(default_entry, *arm, cfg)
+                .then(|| shared_return_chain(*arm, cfg))
+                .flatten()
+                .map(|chain| (*arm, chain))
+        })
+        .collect();
+    let borrowed_return_entries = borrowed_return_arms.keys().copied().collect();
+    let arm_build_order =
+        switch_arm_build_order(dispatch, &arms, cfg, join, &borrowed_return_entries)?;
 
     visited.insert(dispatch);
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
     let mut sub_arms: Vec<Option<Region>> = vec![None; arms.len()];
     for arm_index in arm_build_order {
         let arm = arms[arm_index];
-        let region = if Some(arm) == join {
+        let region = if let Some(chain) = borrowed_return_arms.get(&arm) {
+            let mut parts = chain
+                .iter()
+                .map(|block| Region::Borrowed(Box::new(Region::Block(*block))))
+                .collect::<Vec<_>>();
+            if parts.len() == 1 {
+                parts.pop().expect("the borrowed return chain is non-empty")
+            } else {
+                Region::Seq(parts)
+            }
+        } else if Some(arm) == join {
             // Direct dispatch-to-join is `case ...: break;`. The join is emitted
             // once after the switch instead of being duplicated in the case.
             Region::Seq(Vec::new())
@@ -263,11 +291,17 @@ pub(super) fn detect_guarded_switch_shape(
     // Commit those blocks so `build_full` does not append a second, unreachable
     // copy as leftovers.  Shared suffixes stay borrowed: an explicit case may
     // still need to own their continuation outside the formal default clone.
+    let borrowed_return_blocks = borrowed_return_arms
+        .values()
+        .flatten()
+        .copied()
+        .collect::<HashSet<_>>();
     visited.extend(default_visited.into_iter().filter(|block| {
         *block != guard
             && *block != dispatch
             && Some(*block) != join
-            && arms.iter().all(|arm| !can_reach(*arm, *block, cfg))
+            && (borrowed_return_blocks.contains(block)
+                || arms.iter().all(|arm| !can_reach(*arm, *block, cfg)))
     }));
 
     Some((
@@ -293,6 +327,7 @@ fn switch_arm_build_order(
     arms: &[usize],
     cfg: &Cfg,
     shared_join: Option<usize>,
+    borrowed_return_entries: &HashSet<usize>,
 ) -> Option<Vec<usize>> {
     use std::collections::VecDeque;
 
@@ -310,7 +345,10 @@ fn switch_arm_build_order(
         let borrowed_terminal_exit = enclosing_loop.as_ref().is_some_and(|(_, body)| {
             !body.contains(arm) && terminal_path_stays_outside_loop(*arm, body, cfg)
         });
-        Some(*arm) != shared_join && has_external_predecessor && !borrowed_terminal_exit
+        Some(*arm) != shared_join
+            && has_external_predecessor
+            && !borrowed_terminal_exit
+            && !borrowed_return_entries.contains(arm)
     }) {
         return None;
     }
