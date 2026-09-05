@@ -2262,6 +2262,11 @@ relevant ratchet's accepted-regression record.
    every goto from the real A32 function. Extend it through multi-block private
    prefixes only after proving interior predecessor closure and an exact stop
    at the unique shared join; retain the current refusal rules otherwise.
+   `ca30c62f` completes that bounded straight-line extension with an independent
+   verifier: interiors are exact one-predecessor/one-successor chains, prefixes
+   are disjoint and capped at eight blocks, and a forged shared-join crossing
+   is rejected. Branching private subgraphs and general unique-join partitioning
+   remain open; do not widen them without equivalent independent proof.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
