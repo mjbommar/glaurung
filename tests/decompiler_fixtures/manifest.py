@@ -1444,6 +1444,13 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "ptr_len": 64,
         "len_args": [1],
     },
+    # Targeted ARM A32 production test outside the matrix: a raw dispatch loop
+    # whose case 0 owns a private branch before the duplicated loop latch.
+    ("raw_switch_private_diamond", "raw_switch_private_diamond"): {
+        "ptr_elem": "u8",
+        "ptr_len": 64,
+        "len_args": [1],
+    },
     ("207_scaled_index_addressing", "word_stride_sum"): {"len_args": [1]},
     ("207_scaled_index_addressing", "quad_stride_sum"): {"len_args": [1]},
     ("207_scaled_index_addressing", "word_at_index"): {

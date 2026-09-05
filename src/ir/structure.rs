@@ -71,7 +71,7 @@ use loop_shape::{
     loop_break_shape,
 };
 use path_predicates::private_return_chain;
-pub use region::{entry_block, Region};
+pub use region::{entry_block, RawSwitchInlineRegion, Region};
 use switch_shape::{detect_guarded_switch_shape, detect_switch_shape};
 pub use verify::{verify_region, StructError};
 // `find_switch_join` has no caller outside `switch_shape` itself except `mod
@@ -1740,7 +1740,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_dispatch_partition_extends_only_through_private_linear_prefix() {
+    fn raw_dispatch_partition_owns_a_private_branching_dag_but_not_its_shared_latch() {
         let cond = |target| {
             vec![Op::CondJump {
                 cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
@@ -1760,39 +1760,47 @@ mod tests {
                 }],
                 vec![0x1400, 0x1600, 0x1900],
             ),
-            (0x1400, vec![Op::Nop], vec![0x1500]),
-            (0x1500, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1400, cond(0x1500), vec![0x1500, 0x1a00]),
+            (0x1500, vec![Op::Nop], vec![0x1b00]),
             (0x1600, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
             (0x1700, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
             (0x1800, vec![Op::Return], vec![]),
             (0x1900, vec![Op::Return], vec![]),
+            (0x1a00, vec![Op::Nop], vec![0x1b00]),
+            (0x1b00, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
         ]);
 
-        fn prefixes(region: &Region) -> Option<&[Vec<usize>]> {
+        fn inline_regions(region: &Region) -> Option<&[RawSwitchInlineRegion]> {
             match region {
                 Region::RawLoop {
-                    switch_inline_prefixes,
+                    switch_inline_regions,
                     ..
-                } => Some(switch_inline_prefixes),
-                Region::Seq(parts) => parts.iter().find_map(prefixes),
-                Region::IfThen { then_r, .. } => prefixes(then_r),
+                } => Some(switch_inline_regions),
+                Region::Seq(parts) => parts.iter().find_map(inline_regions),
+                Region::IfThen { then_r, .. } => inline_regions(then_r),
                 Region::IfThenElse { then_r, else_r, .. } => {
-                    prefixes(then_r).or_else(|| prefixes(else_r))
+                    inline_regions(then_r).or_else(|| inline_regions(else_r))
                 }
-                Region::Borrowed(inner) => prefixes(inner),
+                Region::Borrowed(inner) => inline_regions(inner),
                 _ => None,
             }
         }
 
         let region = recover_for(&lf);
-        let prefixes = prefixes(&region).expect("the dispatch loop must retain its partition");
+        let inline_regions =
+            inline_regions(&region).expect("the dispatch loop must retain its partition");
         assert!(
-            prefixes.contains(&vec![4, 5]),
-            "the private two-block case prefix was not recovered: {region:#?}"
+            inline_regions
+                .iter()
+                .any(|region| region.entry == 4 && region.blocks == vec![4, 5, 10, 11]),
+            "the private branching case region was not recovered: {region:#?}"
         );
         assert!(
-            prefixes.iter().flatten().all(|block| *block != 1),
-            "the shared loop header must stop every private prefix: {region:#?}"
+            inline_regions
+                .iter()
+                .flat_map(|region| region.blocks.iter())
+                .all(|block| *block != 1),
+            "the shared loop header must stop every private region: {region:#?}"
         );
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
     }

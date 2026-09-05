@@ -1013,7 +1013,49 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
-def test_a32_multiple_wide_byte_switches_decline_without_crashing(tmp_path: Path) -> None:
+def test_a32_raw_switch_private_diamond_stays_inside_its_case(tmp_path: Path) -> None:
+    """A predecessor-closed branching handler is owned by its typed case."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    source = ROOT / "python" / "tests" / "fixtures" / "raw_switch_private_diamond.c"
+    target = tmp_path / "raw-switch-private-diamond-armv7-a32-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / "raw-switch-private-diamond-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    function = "raw_switch_private_diamond"
+    function_va = D.exported_functions(str(target))[function]
+    decompiled = D.decompiled_many_c(str(target), [function_va])
+    recovered = decompiled[function_va]
+    assert "switch (" in recovered, recovered
+    assert "case 0:" in recovered, recovered
+    assert "if (" in recovered, recovered
+    assert re.search(r"acc\s*(?:<\s*7|<=\s*6)", recovered), recovered
+    assert "goto " not in recovered, recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        "raw_switch_private_diamond",
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_multiple_wide_byte_switches_decline_without_crashing(
+    tmp_path: Path,
+) -> None:
     """Four 48-entry tables may exceed v1's shape budget, never its stack."""
     arch = "armv7_a32"
     if shutil.which(A.TARGETS[arch].cc) is None:

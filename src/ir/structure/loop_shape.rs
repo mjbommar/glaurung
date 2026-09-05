@@ -20,7 +20,7 @@ use std::collections::HashSet;
 
 use super::cfg::{natural_loop_body, Cfg};
 use super::path_predicates::can_reach;
-use super::region::Region;
+use super::region::{RawSwitchInlineRegion, Region};
 use super::{build, BuildState};
 
 pub(super) struct LoopRegion {
@@ -132,10 +132,10 @@ pub(super) fn detect_raw_dispatch_loop(
             && cfg.branch_depends_on_unsigned_comparison(default.guard))
         .then_some(default.guard)
     });
-    let switch_inline_prefixes = switch
+    let switch_inline_regions = switch
         .as_ref()
         .filter(|evidence| evidence.complete)
-        .map(|evidence| exclusive_switch_prefixes(evidence, &blocks, cfg))
+        .map(|evidence| exclusive_switch_regions(evidence, &blocks, cfg))
         .unwrap_or_default();
     Some(LoopRegion {
         region: Region::RawLoop {
@@ -144,7 +144,7 @@ pub(super) fn detect_raw_dispatch_loop(
             exits,
             switch,
             switch_guard,
-            switch_inline_prefixes,
+            switch_inline_regions,
         },
         exit: continuation,
     })
@@ -230,7 +230,7 @@ pub(super) fn detect_raw_multi_latch_loop(
             exits,
             switch: None,
             switch_guard: None,
-            switch_inline_prefixes: Vec::new(),
+            switch_inline_regions: Vec::new(),
         },
         exit: Some(exit),
     })
@@ -240,11 +240,11 @@ fn body_contains_guard_and_dispatch(blocks: &[usize], guard: usize, dispatch: us
     blocks.contains(&guard) && blocks.contains(&dispatch)
 }
 
-fn exclusive_switch_prefixes(
+fn exclusive_switch_regions(
     evidence: &super::cfg::SwitchEvidence,
     blocks: &[usize],
     cfg: &Cfg,
-) -> Vec<Vec<usize>> {
+) -> Vec<RawSwitchInlineRegion> {
     let guard = evidence.default.as_ref().map(|default| default.guard);
     let default_target = evidence.default.as_ref().map(|default| default.target);
     let case_targets = evidence
@@ -277,33 +277,47 @@ fn exclusive_switch_prefixes(
     entries.dedup();
     let entry_set = entries.iter().copied().collect::<HashSet<_>>();
     let mut claimed = HashSet::new();
-    let mut prefixes = Vec::new();
+    let mut regions = Vec::new();
     for entry in entries {
         if claimed.contains(&entry) {
             continue;
         }
-        let mut prefix = vec![entry];
-        claimed.insert(entry);
-        while prefix.len() < 8 {
-            let current = *prefix.last().expect("a prefix always has its entry");
-            let [next] = cfg.succs[current].as_slice() else {
-                break;
-            };
-            if !blocks.contains(next)
-                || *next == evidence.dispatch
-                || Some(*next) == guard
-                || entry_set.contains(next)
-                || claimed.contains(next)
-                || cfg.preds[*next].as_slice() != [current]
-            {
+        let mut ordered = vec![entry];
+        let mut owned = HashSet::from([entry]);
+        while ordered.len() < 16 {
+            let mut frontier = ordered
+                .iter()
+                .flat_map(|block| cfg.succs[*block].iter().copied())
+                .filter(|next| {
+                    blocks.contains(next)
+                        && *next != evidence.dispatch
+                        && Some(*next) != guard
+                        && !entry_set.contains(next)
+                        && !claimed.contains(next)
+                        && !owned.contains(next)
+                        && !cfg.preds[*next].is_empty()
+                        && cfg.preds[*next]
+                            .iter()
+                            .all(|predecessor| owned.contains(predecessor))
+                })
+                .collect::<Vec<_>>();
+            frontier.sort_unstable();
+            frontier.dedup();
+            if frontier.is_empty() {
                 break;
             }
-            prefix.push(*next);
-            claimed.insert(*next);
+            let remaining = 16 - ordered.len();
+            frontier.truncate(remaining);
+            owned.extend(frontier.iter().copied());
+            ordered.extend(frontier);
         }
-        prefixes.push(prefix);
+        claimed.extend(ordered.iter().copied());
+        regions.push(RawSwitchInlineRegion {
+            entry,
+            blocks: ordered,
+        });
     }
-    prefixes
+    regions
 }
 
 /// Recognise a natural while-loop headed at `header`.

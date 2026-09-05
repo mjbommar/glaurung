@@ -321,7 +321,7 @@ fn lower_raw_loop_block(
     lf: &LlirFunction,
     switch: Option<&SwitchEvidence>,
     fold_switch_guard: bool,
-    inline_prefixes: &[Vec<usize>],
+    inline_regions: &[crate::ir::structure::RawSwitchInlineRegion],
     default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
@@ -377,15 +377,19 @@ fn lower_raw_loop_block(
     let typed_switch = switch
         .filter(|evidence| evidence.complete)
         .filter(|evidence| evidence.dispatch == block_index);
-    let lower_inline_prefix = |target: usize| {
-        let prefix = inline_prefixes
+    let lower_inline_region = |target: usize| {
+        let region = inline_regions
             .iter()
-            .find(|prefix| prefix.first() == Some(&target))?;
+            .find(|region| region.entry == target)?;
         let mut body = Vec::new();
-        for (position, block_index) in prefix.iter().copied().enumerate() {
+        for (position, block_index) in region.blocks.iter().copied().enumerate() {
             let block = lf.blocks.get(block_index)?;
+            if position > 0 {
+                body.push(Stmt::Label(block.start_va));
+            }
             let mut statements = lower_block(block, lower_scalar_float);
-            let lexical_next = prefix
+            let lexical_next = region
+                .blocks
                 .get(position + 1)
                 .and_then(|next| lf.blocks.get(*next))
                 .map(|next| next.start_va);
@@ -407,7 +411,7 @@ fn lower_raw_loop_block(
             .iter()
             .flat_map(|case| {
                 let target = lf.blocks.get(case.target).map(|block| block.start_va);
-                let inline_body = lower_inline_prefix(case.target);
+                let inline_body = lower_inline_region(case.target);
                 let last_value = case.values.len().saturating_sub(1);
                 case.values
                     .iter()
@@ -442,7 +446,7 @@ fn lower_raw_loop_block(
         .map(|block| block.start_va);
     let default_body = typed_switch
         .and_then(|evidence| evidence.default.as_ref())
-        .and_then(|default| lower_inline_prefix(default.target));
+        .and_then(|default| lower_inline_region(default.target));
     statements.push(Stmt::Switch {
         discriminant,
         cases,
@@ -773,13 +777,13 @@ fn lower_region_inner(
             exits: _,
             switch,
             switch_guard,
-            switch_inline_prefixes,
+            switch_inline_regions,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
-            let inlined_blocks = switch_inline_prefixes
+            let inlined_blocks = switch_inline_regions
                 .iter()
-                .flatten()
+                .flat_map(|region| region.blocks.iter())
                 .copied()
                 .collect::<std::collections::HashSet<_>>();
             let rendered_blocks = blocks
@@ -797,7 +801,7 @@ fn lower_region_inner(
                     lf,
                     switch.as_ref(),
                     *switch_guard == Some(block_index),
-                    switch_inline_prefixes,
+                    switch_inline_regions,
                     default_target,
                     lower_scalar_float,
                 ));

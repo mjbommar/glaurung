@@ -2568,7 +2568,7 @@ function f @ 0x1000 {
                 exits: vec![2, 3],
                 switch: None,
                 switch_guard: None,
-                switch_inline_prefixes: Vec::new(),
+                switch_inline_regions: Vec::new(),
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2648,15 +2648,25 @@ function f @ 0x1000 {
                 }],
                 vec![0x1020, 0x1030],
             ),
-            (0x1020, vec![Op::Nop], vec![0x1040]),
+            (
+                0x1020,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1040,
+                    inverted: false,
+                }],
+                vec![0x1040, 0x1060],
+            ),
             (0x1030, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
-            (0x1040, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1040, vec![Op::Nop], vec![0x1070]),
             (0x1050, vec![Op::Return], vec![]),
+            (0x1060, vec![Op::Nop], vec![0x1070]),
+            (0x1070, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
         ]);
         let region = Region::Seq(vec![
             Region::RawLoop {
                 header: 0,
-                blocks: vec![0, 1, 2, 3, 4],
+                blocks: vec![0, 1, 2, 3, 4, 6, 7],
                 exits: vec![5],
                 switch: Some(SwitchEvidence {
                     dispatch: 1,
@@ -2680,7 +2690,16 @@ function f @ 0x1000 {
                     provenance: SwitchEvidenceProvenance::TypedCfgEdges,
                 }),
                 switch_guard: Some(0),
-                switch_inline_prefixes: vec![vec![2, 4], vec![3]],
+                switch_inline_regions: vec![
+                    crate::ir::structure::RawSwitchInlineRegion {
+                        entry: 2,
+                        blocks: vec![2, 4, 6, 7],
+                    },
+                    crate::ir::structure::RawSwitchInlineRegion {
+                        entry: 3,
+                        blocks: vec![3],
+                    },
+                ],
             },
             Region::Block(5),
         ]);
@@ -2702,6 +2721,24 @@ function f @ 0x1000 {
         assert_eq!(cases[0], (Some(10), Vec::new()));
         assert_eq!(cases[1].0, Some(12));
         assert_eq!(cases[2].0, Some(42));
+        assert!(
+            cases[1]
+                .1
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::If { .. })),
+            "the private branch must remain inside the case body: {:#?}",
+            cases[1].1
+        );
+        for target in [0x1040, 0x1060, 0x1070] {
+            assert!(
+                cases[1]
+                    .1
+                    .iter()
+                    .any(|stmt| matches!(stmt, Stmt::Label(label) if *label == target)),
+                "private branch target {target:#x} must be defined inside its case: {:#?}",
+                cases[1].1
+            );
+        }
         assert!(cases[1].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
         assert!(cases[2].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
@@ -2713,9 +2750,9 @@ function f @ 0x1000 {
         );
         assert!(
             !body.iter().any(|statement| {
-                matches!(statement, Stmt::Label(target) if matches!(*target, 0x1020 | 0x1030 | 0x1040))
+                matches!(statement, Stmt::Label(target) if matches!(*target, 0x1020 | 0x1030 | 0x1040 | 0x1060 | 0x1070))
             }),
-            "exclusive handler entries must be emitted in their case arms: {body:#?}"
+            "private handler regions must be emitted in their case arms: {body:#?}"
         );
     }
 
