@@ -10,7 +10,9 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-04 through `9c9c607c`. WP0 and
+Current-state snapshot: reconciled 2026-09-04 through implementation commit
+`5fdd0c8f` (validated in clean exact checkout `74f425fe`; documentation tip was
+`5e7d836b`). WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
@@ -18,13 +20,16 @@ with zero unexplained structural regressions, zero execution regressions, and
 nested post-tested branches preserved; it still lacks the remaining promotion
 measurements. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
-slice but not the general solver or the `classify` return-type result. WP2, WP3,
+slice and the O0 `classify` signed-result vertical slice, but not the general
+solver. WP2, WP3,
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
-The full Rust gate is green at `9c9c607c`; the required whole Python gate at
-`80f5d106` terminated red across multiple
-pre-existing repository-wide groups, so this is not a current-tip green
+The full Rust gate is green in clean exact checkout `74f425fe` (4,314 passed,
+0 failed, 17 ignored). Its required whole Python gate completed red: 4,599
+passed, 121 failed, and 975 skipped out of 5,695 collected in 2,610.881
+seconds. Both parameterized `classify` tests passed within that run, but the
+broad failures remain release blockers; this is not a current-tip green
 `release` claim. M3 through M6 remain open.
 
 ## Authority and relationship to the roadmaps
@@ -1953,14 +1958,16 @@ relevant ratchet's accepted-regression record.
    rows from 204 to 220, and reduces nine unexplained regressions to zero. The
    250-candidate execution comparison remains at zero regressions. See
    `results/wp4-source-level-continue.md`.
-3. [~] Complete the required O0 `classify` WP6/WP7 vertical slice above.
+3. [x] Complete the required O0 `classify` WP6/WP7 vertical slice above.
    Commit `9c9c607c` adds real GCC/Clang debug and stripped fixtures and lands
    the width- and signedness-proved `> 100` predicate fusion with proof,
-   refusal, syntax, differential, and scoped-corpus evidence. Next land stripped
-   signed-return evidence and redundant-cast cleanup are now implemented at
-   the SSA result-fact and typed-AST boundaries, with a genuinely unsigned
-   control. Record the clean exact-commit Rust and whole-Python gates before
-   marking this item complete.
+   refusal, syntax, differential, and scoped-corpus evidence. Commit `5fdd0c8f`
+   adds stripped signed-return evidence and redundant-cast cleanup at the SSA
+   result-fact and typed-AST boundaries, with a genuinely unsigned control.
+   The clean exact-checkout Rust gate is green, and both `classify` tests pass
+   within the whole Python run. That whole run remains broadly red (121
+   failures), which is recorded rather than promoted to a release claim; see
+   `results/wp6-classify-signed-return.md`.
    Report O2 separately rather than claiming source-loop recovery after
    strength reduction or unrolling.
 4. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide

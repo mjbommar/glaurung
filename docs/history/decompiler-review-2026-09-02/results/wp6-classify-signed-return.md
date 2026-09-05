@@ -96,10 +96,33 @@ harness reported zero regressions in scope.
 
 ## Repository gates
 
-The first whole Rust run exposed one now-obsolete test expectation: it still
-required a redundant unsigned source-width cast for a signed result. After the
-test was split into signed-removal and unsigned-preservation contracts, the
-pre-final-correction whole Rust run passed all library, integration, and doc
-targets. A clean exact-commit Rust run and the required whole Python gate must
-be recorded here after landing; focused and scoped success is not a substitute
-for either repository-wide result.
+The implementation landed in `5fdd0c8f`; the exact validation checkout was
+`74f425fe`, which also contains the adjacent source-metrics and internal-doc
+commits. In that clean detached worktree, after `uv sync --locked --dev` and
+`uv run maturin develop --release`, the required Rust command was:
+
+```bash
+cargo test --features python-ext
+```
+
+Result: **green** -- 4,314 passed, 0 failed, and 17 ignored across the library,
+integration, and doc-test targets.
+
+The required whole Python command was:
+
+```bash
+uv run pytest python/tests/ -q \
+  --junitxml="$TMPDIR/pytest-74f425fe.xml"
+```
+
+Result: **red** -- 5,695 tests collected; 4,599 passed, 121 failed, and 975
+skipped in 2,610.881 seconds. The two parameterized
+`test_classify_signed_loop.py` tests passed in this full run as well as in the
+focused run. The failures span many independent repository groups, including
+baseline improvement ratchets, architecture fixtures, declaration authority,
+documentation manifests, fitness limits, and existing decompiler invariants.
+They are not silently reclassified as success and no baseline was refreshed.
+
+This evidence completes the focused `classify` behavior and its exact-commit
+Rust gate, but it does **not** establish a repository-wide green release. The
+JUnit report is retained at the command's path above for failure triage.
