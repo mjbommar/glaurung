@@ -739,8 +739,8 @@ def test_recursion_clang_o0_recovers_exhaustive_direct_returns(tmp_path: Path) -
 
     assert outputs["fib"].count("return ") == 2, outputs["fib"]
     assert outputs["ackermann"].count("return ") == 3, outputs["ackermann"]
-    assert "long fib(int arg0)" in outputs["fib"], outputs["fib"]
-    assert "long ackermann(long arg0, long arg1)" in outputs["ackermann"], outputs[
+    assert "long fib(int n)" in outputs["fib"], outputs["fib"]
+    assert "long ackermann(long m, long n)" in outputs["ackermann"], outputs[
         "ackermann"
     ]
 
