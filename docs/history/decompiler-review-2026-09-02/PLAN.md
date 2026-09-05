@@ -101,6 +101,13 @@ remains green. Incomplete evidence declines to the prior lossless labelled
 form. This is prerequisite transport for handler partitioning, not the
 partition itself; labelled handler bodies and their shared join remain open.
 See `results/wp5-raw-loop-switch-evidence.md`.
+Commit `88e6584c` then uses that transport to absorb the real raw-loop range
+guard under the same complete-evidence, single-predecessor, and SSA unsigned
+comparison proof as ordinary guarded switches. Fixture 206 now renders
+`switch ((var11 & 7))` directly: the `var12` temporary, redundant range-check
+`if`, and one goto disappear while the typed default and native execution are
+preserved. See `results/wp4-raw-switch-guard.md`. Handler bodies remain labelled
+until the separate exclusive-entry/shared-join partition is proved.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
@@ -2236,7 +2243,9 @@ relevant ratchet's accepted-regression record.
    source-level `continue`, with no attributable A32 status change. Next
    `460259fa` carries the shared typed case/default evidence into that raw loop;
    the real guard-only default is no longer lost merely because it is not a
-   dispatch successor. Continue with Thumb loop tables, AArch64 adjacent-table
+   dispatch successor. `88e6584c` folds the now-redundant proven range guard
+   into that switch, removing its temporary, conditional, and goto without
+   changing execution. Continue with Thumb loop tables, AArch64 adjacent-table
    variants, and wide-selector forms. For handler inlining, add a verified
    presentation partition over the canonical raw ownership: exclusive arm
    prefixes, optional guard-only default prefix, one unique shared join, and
