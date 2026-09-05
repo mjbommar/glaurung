@@ -211,7 +211,8 @@ comparisons show no attributable status decline; detailed evidence is in
 [`wp4-a32-guard-quality.md`](../../history/decompiler-review-2026-09-02/results/wp4-a32-guard-quality.md).
 Commit `c9483542` further replaces all six exact raw-loop header gotos with
 source-level `continue`; native execution and clean accounting are preserved,
-and the complete A32 matrix has no attributable status movement. See
+the complete A32 matrix has no attributable status movement, and exact host
+parent/tip maps remain identical across 3,346 function verdicts. See
 [`wp4-raw-loop-continue.md`](../../history/decompiler-review-2026-09-02/results/wp4-raw-loop-continue.md).
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-

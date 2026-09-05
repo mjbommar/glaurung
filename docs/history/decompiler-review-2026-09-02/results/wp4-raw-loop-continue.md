@@ -49,6 +49,12 @@ addition to its existing no-undefined-`var1` and native-execution checks.
   change. Its only parent/tip map difference is `tail_countdown`, an unrelated
   row that passed three immediate exact-tip retries and later flipped again on
   the unchanged code.
+- Exact host parent `0e29ffc4` and tip `c9483542` comparisons each cover 824 of
+  838 object lanes and 3,346 function verdicts: 2,913 pass, 312 fail, and 121
+  structural. The normalized status maps and raw status logs are identical, so
+  the change causes zero host execution or structural-category movement. This
+  host gate does not claim identical pseudocode; the asserted output movement
+  is the separately checked A32 function.
 
 This increment removes loop-backedge gotos only. The switch still targets
 separately labelled case-handler bodies. Inlining those handlers requires a

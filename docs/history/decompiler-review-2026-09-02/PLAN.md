@@ -153,7 +153,8 @@ unreachable undefined `var1` select arm and the final outer-guard
 decline; see `results/wp4-a32-guard-quality.md`.
 Commit `c9483542` then lowers every exact raw-loop header backedge to
 source-level `continue`, removing six more gotos and the unused header label
-from the real output without changing its execution status or clean accounting;
+from the real output without changing its execution status or clean accounting.
+The exact 3,346-function host comparison has zero status/category movement;
 see `results/wp4-raw-loop-continue.md`.
 
 ## Authority and relationship to the roadmaps
