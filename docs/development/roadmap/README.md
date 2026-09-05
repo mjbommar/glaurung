@@ -166,8 +166,12 @@ attributable to this slice. The decoder requires an exact edge-local bound and
 instruction encoding and rejects malformed targets. Hardening commit
 `5dbc3fc4` also clears all candidate facts across AArch64 calls so callee-
 clobbered registers cannot manufacture a switch. The remaining AArch64
-encodings, corpus decline census, and post-commit whole Python gate keep WP5
-open. Detailed evidence is in
+encodings and corpus decline census keep WP5 open. The post-source whole Python
+gate completed red at 4,595 passed and 126 failed. Seven of its eight apparent
+new failures pass together on immediate clean-tip retry; the deterministic
+delta is the expected six-test census increase, recorded at `88bb8650` with a
+green focused census suite and a zero never-executed pool. This is triaged
+evidence, not a release-green claim. Detailed evidence is in
 [`wp5-aarch64-compact-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-aarch64-compact-byte-switch.md).
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-

@@ -112,7 +112,13 @@ architecture matrix. See
 Hardening commit `5dbc3fc4` additionally invalidates all AArch64 dispatch facts
 across direct and indirect calls, preventing a callee-clobbered address from
 being reused as false switch evidence; the focused and architecture-wide
-results are unchanged.
+results are unchanged. Its post-source whole Python gate completed red at
+4,595 passed and 126 failed. Exact comparison with the 118-failure parent
+snapshot found eight tip-only node IDs: seven pass together on immediate
+clean-tip retry, while the sole deterministic delta is the six-test census
+increase committed at `88bb8650`. The focused census suite is green and the
+never-executed pool remains zero; this is triaged full-gate evidence, not a
+release-green claim.
 
 ## Authority and relationship to the roadmaps
 
@@ -966,7 +972,10 @@ one authoritative set of case edges.
   regression after the single reviewed baseline movement. The complete
   412-lane AArch64 O0/O2 comparison has no attributable regression: all four
   reported regressions reproduce identically at parent `7c0ba967`.
-  Other compiler/optimization and named fixture lanes remain.
+  Its whole Python gate is complete but red: seven of eight apparent new
+  failures pass on immediate focused retry, and the one deterministic delta is
+  the expected six-test census increase now recorded at `88bb8650`. Other
+  compiler/optimization and named fixture lanes remain.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
@@ -2145,9 +2154,10 @@ relevant ratchet's accepted-regression record.
    evidence now reaches the production structurer, passes all 34 execution
    cases, and has moved its baseline from `fail` to `pass`; the remaining work
    now has clean accounting through explicit borrowed return-tail provenance.
-   The unverified compiler/architecture cells, full Python/matrix gates, and
-   residual decline census remain; do not call WP5 complete from the green Rust
-   gate alone.
+   The unverified compiler/architecture cells, remaining matrix gates, and
+   residual decline census remain. The AArch64 slice's full Python gate has run
+   and is triaged but remains broadly red; do not call WP5 complete from the
+   green Rust gate or focused retry evidence alone.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

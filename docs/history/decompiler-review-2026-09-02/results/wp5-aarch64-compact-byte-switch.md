@@ -99,7 +99,22 @@ The parent evidence commit `7c0ba967` also completed its whole Python suite:
 the worktree remained clean, but another run shared the allowed gitignored
 fixture-build cache, so this is isolated-environment rather than
 exclusive-machine/cache evidence. It remains a red parent snapshot and does
-not substitute for the required post-`310b949e` whole Python gate. This
-increment therefore does not make a release-green claim.
+not substitute for the required post-`310b949e` whole Python gate.
+The hardened tip at `5dbc3fc4` also completed its whole Python suite against a
+fresh release extension: 4,595 passed, 126 failed, 78 skipped, 891 xfailed,
+and 125 deselected in 2,711.36 seconds. An exact node-id comparison against the
+parent found eight tip-only failures and no parent-only failures. Seven of the
+eight (one `decompile_vas_sources` case and six declaration/CLI cases) all
+passed together on an immediate clean-tip retry, classifying them as
+full-suite order or shared-state contamination rather than deterministic WP5
+regressions. The sole reproducible delta was the expected stale test census:
+this increment adds six Rust test declarations. Commit `88bb8650` refreshes
+that generated baseline from 4,611 to 4,617 declarations, leaves the
+never-executed pool at zero, and the focused six-test census suite then passes.
+
+The complete gate is therefore recorded and triaged, but remains red because
+of the repository's broad existing Python failures. The focused retry does not
+turn that red snapshot into a green release claim, and the whole suite was not
+rerun solely for the generated census JSON change.
 
 No DecBench run or upstream interaction was performed.
