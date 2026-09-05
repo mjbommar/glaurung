@@ -93,6 +93,14 @@ The full Rust gate reports 4,351 passed, zero failed, and 17 ignored across 35
 targets. See `results/wp5-shared-switch-evidence.md`. This completes the shared
 transport increment, not WP5: remaining compiler/architecture execution cells,
 decline classification, and the full Python/matrix gates remain open.
+Commit `460259fa` carries that canonical object through a WP4 `RawLoop`, closing
+another place where lowering reconstructed switch facts from successor order.
+The real fixture-206 A32 loop now retains its proven guard-only default even
+though that target is not a dispatch successor, and its native v1 round trip
+remains green. Incomplete evidence declines to the prior lossless labelled
+form. This is prerequisite transport for handler partitioning, not the
+partition itself; labelled handler bodies and their shared join remain open.
+See `results/wp5-raw-loop-switch-evidence.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
@@ -2226,9 +2234,14 @@ relevant ratchet's accepted-regression record.
    attributable decline in the exact host/A32 comparisons. Commit `c9483542`
    then replaces the raw loop's six exact header-backedge gotos with
    source-level `continue`, with no attributable A32 status change. Next
-   continue with Thumb loop tables, AArch64 adjacent-table variants, and
-   wide-selector forms, while proving whether exclusively entered case-handler
-   bodies can be inlined without duplicating shared joins.
+   `460259fa` carries the shared typed case/default evidence into that raw loop;
+   the real guard-only default is no longer lost merely because it is not a
+   dispatch successor. Continue with Thumb loop tables, AArch64 adjacent-table
+   variants, and wide-selector forms. For handler inlining, add a verified
+   presentation partition over the canonical raw ownership: exclusive arm
+   prefixes, optional guard-only default prefix, one unique shared join, and
+   residual blocks. Refuse external handler predecessors, cross-arm edges,
+   cycles, non-unique joins, or any partition that would emit a block twice.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
