@@ -75,7 +75,13 @@ pub mod stmt;
 mod census_tests;
 #[cfg(all(test, feature = "exec"))]
 mod differential_tests;
-#[cfg(test)]
+// Every test in here lowers a function and *runs* it on `crate::exec`'s
+// interpreter -- that is the point of the module, not an implementation
+// detail -- so it needs the same `exec` gate its two neighbours carry.
+// Without it the two lanes that build without `exec` (`triage-core` and
+// `triage-parsers-extra`) fail to compile the test target, which is invisible
+// to every other lane and to `cargo test`.
+#[cfg(all(test, feature = "exec"))]
 mod tests;
 
 pub use ctype::CType;
