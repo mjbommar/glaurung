@@ -146,6 +146,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp4-raw-loop-continue.md](decompiler-review-2026-09-02/results/wp4-raw-loop-continue.md) | 2026-09-05 | Exact raw-loop header backedges become source-level `continue` | six gotos and the unused loop-header label disappear from the real A32 function with execution and accounting preserved |
 | [results/wp5-raw-loop-switch-evidence.md](decompiler-review-2026-09-02/results/wp5-raw-loop-switch-evidence.md) | 2026-09-05 | canonical typed case values and a guard-only default survive the WP4 raw-loop boundary | real A32 execution remains green; handler partitioning, full matrices, GED, RSS, and the broadly red Python gates remain open |
 | [results/wp4-raw-switch-guard.md](decompiler-review-2026-09-02/results/wp4-raw-switch-guard.md) | 2026-09-05 | a CFG/SSA-proven raw-loop range guard is absorbed into its typed switch | real output loses `var12`, the redundant conditional, and one goto with native execution and accounting preserved |
+| [results/wp4-raw-switch-exclusive-entries.md](decompiler-review-2026-09-02/results/wp4-raw-switch-exclusive-entries.md) | 2026-09-05 | CFG-exclusive case/default entry blocks move into typed raw-switch arms while shared suffixes remain single-owned | real A32 output moves from seven gotos to zero with native execution and accounting preserved; multi-block prefixes and full promotion evidence remain open |
 
 ## `design/`
 

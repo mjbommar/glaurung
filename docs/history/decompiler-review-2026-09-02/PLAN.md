@@ -108,6 +108,13 @@ comparison proof as ordinary guarded switches. Fixture 206 now renders
 `if`, and one goto disappear while the typed default and native execution are
 preserved. See `results/wp4-raw-switch-guard.md`. Handler bodies remain labelled
 until the separate exclusive-entry/shared-join partition is proved.
+The first such partition is now production at `13588284`. A case/default entry
+whose only predecessors are its typed dispatch/folded guard is emitted directly
+inside that arm, while every shared successor remains in canonical raw
+ownership and is emitted once. The real A32 loop moves from seven remaining
+gotos to zero with unchanged native execution and silent accounting. This is a
+one-block exclusive-prefix proof, not the general multi-block partition; see
+`results/wp4-raw-switch-exclusive-entries.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
@@ -2251,6 +2258,10 @@ relevant ratchet's accepted-regression record.
    prefixes, optional guard-only default prefix, one unique shared join, and
    residual blocks. Refuse external handler predecessors, cross-arm edges,
    cycles, non-unique joins, or any partition that would emit a block twice.
+   `13588284` completes the first one-block exclusive-entry slice and removes
+   every goto from the real A32 function. Extend it through multi-block private
+   prefixes only after proving interior predecessor closure and an exact stop
+   at the unique shared join; retain the current refusal rules otherwise.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
