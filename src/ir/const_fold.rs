@@ -632,6 +632,80 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         return;
     }
 
+    // ARM predication can spell one hardware condition twice while carrying
+    // the destination's prior value through the unreachable inner arm:
+    // `c ? (c ? yes : prior) : no`.  Once the outer select chose its true arm,
+    // the identical inner condition is necessarily true, so `prior` cannot be
+    // read.  The dual false-arm form follows the same argument.  Require a
+    // repeatable register/arithmetic condition: collapsing a call or load here
+    // could remove an observable second evaluation.
+    fn repeatable_condition(expr: &Expr) -> bool {
+        match expr {
+            Expr::Reg(_) | Expr::Const(_) => true,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                repeatable_condition(lhs) && repeatable_condition(rhs)
+            }
+            Expr::Un { src, .. }
+            | Expr::Cast { expr: src, .. }
+            | Expr::NumericConvert { expr: src, .. } => repeatable_condition(src),
+            Expr::Deref { .. }
+            | Expr::Call { .. }
+            | Expr::Select { .. }
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::StackAddr { .. }
+            | Expr::FunctionTableEntry { .. }
+            | Expr::WideArithmetic { .. }
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => false,
+        }
+    }
+
+    let dominated_select = match e {
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            width,
+        } if repeatable_condition(cond) => match (if_true.as_ref(), if_false.as_ref()) {
+            (
+                Expr::Select {
+                    cond: inner_cond,
+                    if_true: inner_true,
+                    ..
+                },
+                outer_false,
+            ) if inner_cond.as_ref() == cond.as_ref() => Some(Expr::Select {
+                cond: cond.clone(),
+                if_true: inner_true.clone(),
+                if_false: Box::new(outer_false.clone()),
+                width: *width,
+            }),
+            (
+                outer_true,
+                Expr::Select {
+                    cond: inner_cond,
+                    if_false: inner_false,
+                    ..
+                },
+            ) if inner_cond.as_ref() == cond.as_ref() => Some(Expr::Select {
+                cond: cond.clone(),
+                if_true: Box::new(outer_true.clone()),
+                if_false: inner_false.clone(),
+                width: *width,
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = dominated_select {
+        rewrite(e, replacement, changed);
+        return;
+    }
+
     // `castN(castM(x)) == castN(x)` whenever `M >= N`: the outer cast observes
     // only the low N bits, and an inner cast to an equal-or-wider width cannot
     // have altered them. The inner cast's signedness is irrelevant for the same
@@ -1627,6 +1701,93 @@ mod tests {
             panic!("fixture assignment disappeared: {:#?}", function.body);
         };
         assert_eq!(src, &Expr::Reg(reg("selected")));
+    }
+
+    #[test]
+    fn repeated_select_condition_drops_unreachable_prior_values() {
+        let condition = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("count"))),
+            rhs: Box::new(Expr::Const(64)),
+        };
+        let mut function = one_stmt(Expr::Select {
+            cond: Box::new(condition.clone()),
+            if_true: Box::new(Expr::Select {
+                cond: Box::new(condition),
+                if_true: Box::new(Expr::Const(0)),
+                if_false: Box::new(Expr::Reg(reg("undefined_prior"))),
+                width: 4,
+            }),
+            if_false: Box::new(Expr::Const(1)),
+            width: 4,
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert!(
+            matches!(src, Expr::Select { if_true, .. } if if_true.as_ref() == &Expr::Const(0)),
+            "{src:#?}"
+        );
+        assert!(!format!("{src:?}").contains("undefined_prior"));
+    }
+
+    #[test]
+    fn repeated_effectful_select_condition_is_not_collapsed() {
+        let condition = Expr::Call {
+            target: Box::new(Expr::Addr(0x1234)),
+            args: Vec::new(),
+            call_spec: None,
+            result_width: Some(4),
+        };
+        let original = Expr::Select {
+            cond: Box::new(condition.clone()),
+            if_true: Box::new(Expr::Select {
+                cond: Box::new(condition),
+                if_true: Box::new(Expr::Const(0)),
+                if_false: Box::new(Expr::Reg(reg("prior"))),
+                width: 4,
+            }),
+            if_false: Box::new(Expr::Const(1)),
+            width: 4,
+        };
+        let mut function = one_stmt(original.clone());
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert_eq!(src, &original);
+    }
+
+    #[test]
+    fn repeated_false_arm_condition_drops_unreachable_prior_value() {
+        let condition = Expr::Reg(reg("condition"));
+        let mut function = one_stmt(Expr::Select {
+            cond: Box::new(condition.clone()),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Select {
+                cond: Box::new(condition),
+                if_true: Box::new(Expr::Reg(reg("undefined_prior"))),
+                if_false: Box::new(Expr::Const(0)),
+                width: 4,
+            }),
+            width: 4,
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert!(
+            matches!(src, Expr::Select { if_false, .. } if if_false.as_ref() == &Expr::Const(0)),
+            "{src:#?}"
+        );
+        assert!(!format!("{src:?}").contains("undefined_prior"));
     }
 
     #[test]

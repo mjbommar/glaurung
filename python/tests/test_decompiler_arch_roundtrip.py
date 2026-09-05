@@ -986,6 +986,11 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
     ok, error = A._reference_build(source, "O2", reference)
     assert ok, error
 
+    function_va = D.exported_functions(str(target))["dispatch_in_loop"]
+    decompiled = D.decompiled_many_c(str(target), [function_va])
+    recovered = decompiled[function_va]
+    assert re.search(r"\bvar1\b", recovered) is None, recovered
+
     results = D.run(
         str(target),
         str(source),
@@ -997,6 +1002,7 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
         native_cc=A.native_cc(arch),
         native_runner=A.native_runner(arch),
         only={"dispatch_in_loop"},
+        decompiled_by_va=decompiled,
     )
 
     assert results["dispatch_in_loop"]["status"] == "pass", results
