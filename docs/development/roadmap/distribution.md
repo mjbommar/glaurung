@@ -131,6 +131,79 @@ $ python -c "import time,sys; t=time.perf_counter(); import glaurung.cli; \
    `src/pages/llms.txt.ts:39` — plus a `uv run --with 'glaurung @ git+…'`
    example. Keep the git form on the contributor page.
 
+## Follow-ups on the build itself
+
+Noted 2026-09-05 after reading the sibling `~/projects/273v/kaos-graph`, which
+ships wheels today and has already answered several of these. **None of it is
+measured here** unless a command is written next to the number, and none of it
+is a prerequisite for step 1 above --- tagging a release does not wait on any
+of this.
+
+### The release profile is untuned
+
+`Cargo.toml` has **no `[profile.release]` block at all**, so the shipped
+artifact is built with cargo's defaults: `codegen-units = 16`, no LTO, symbols
+retained.
+
+```console
+$ grep -c '\[profile' Cargo.toml .cargo/config.toml    # 0 in both
+$ stat -c%s target/release/libglaurung.so
+50630048
+$ cp target/release/libglaurung.so "$TMPDIR/x.so" && strip "$TMPDIR/x.so" && stat -c%s "$TMPDIR/x.so"
+45282320
+```
+
+Measured at `1f5afd69` on 2026-09-05. So **5.3 MB of the 50 MB we would upload
+is symbol table**, and `strip = "symbols"` in the profile would remove it
+without anyone remembering to run `strip`. `lto = true` and
+`codegen-units = 1` are the other two knobs the sibling sets; both usually cut
+size further and help a compute-bound crate's speed.
+
+**What has to happen before adopting them.** Changing the release profile moves
+every performance number the project has at once --- the eleven criterion
+benches, `python -m glaurung.bench`, and `perf-nightly.yml`'s thresholds. So
+this is a measure-then-decide item, not a one-line edit: build both ways,
+compare on the same host with a quiet machine, and re-baseline deliberately if
+it lands. `lto = true` also lengthens the build, which is the thing
+`## The problem, stated` is complaining about for source installs.
+
+### No supply-chain gate
+
+There is no `deny.toml`, no `cargo audit`, and nothing in `.github/workflows/`
+or `scripts/` that runs either. That matters more at release than it does now:
+publishing a wheel means shipping our dependency closure to other people, and
+the closure is large --- `object`, `goblin`, `pelite`, `capstone`,
+`iced-x86`, `gimli`, `pdb`, `regex`, `encoding_rs` and the rest.
+
+The sibling's `deny.toml` is worth reading for its shape rather than its
+content: advisories, a license allowlist, and ignore entries that each carry a
+justification and the date the advisory cleared. `feature-build-gate.yml` is
+the natural place to hang it, since that job already enumerates configurations.
+
+One thing we already got right, recorded so nobody re-litigates it: that repo
+removed `bincode` 1.x over RUSTSEC-2025-0141 (1.x unmaintained) and left a note
+saying to use 2.x under a reviewed pin if binary serde is ever needed again. We
+are on `bincode = "2.0.1"`.
+
+### The crate has no package metadata
+
+`[package]` carries `name`, `version`, `edition` and `rust-version` and nothing
+else --- no `license`, `description`, `repository`, `keywords`, `categories` or
+`readme`. This costs nothing while we publish only a wheel, and it is a blocker
+the day anyone runs `cargo publish`. It is also a prerequisite for the license
+check in the item above, which needs a `license` field to have an opinion
+about. `[project.urls]` in step 4 is the `pyproject` half of the same gap.
+
+### On step 3 (abi3), from someone who has done it
+
+The sibling ships `abi3-py313` and records the trade in its own manifest: it
+"crosses the Python boundary at API entry and loops Rust-side, so the ~1%
+theoretical abi3 indirection cost is unmeasurable on real workloads." That
+argument transfers --- `triage`, `disasm`, `decompile` and `analyze` all cross
+once and then loop in Rust --- and it is a second data point for step 3 rather
+than a new proposal. Note also that they are on `pyo3` 0.29 against our 0.26,
+so an abi3 attempt may want the upgrade first.
+
 ## Open question
 
 **What a machine with no Rust at all actually does is untested.** An attempt to
