@@ -37,55 +37,89 @@ impl Symbolic {
     /// its interned shape. This is intentionally separate from construction-time
     /// folding so trace/formula identities remain stable.
     fn constant_value(&self, id: ExprId) -> Option<u128> {
-        fn evaluate(pool: &ExprPool, id: ExprId, dom: &mut Concrete) -> Option<u128> {
+        /// Memoized entry point. `compute` is a pure function of `(pool, id)`
+        /// --- [`Concrete`] is a unit struct with no state --- so a node's
+        /// result is cached on first visit, `None` included: a subtree holding
+        /// a symbol is symbolic no matter which parent asks.
+        ///
+        /// Without this, the walk pays the size of the *tree* a node denotes
+        /// rather than the DAG it is stored as. Interning shares structural
+        /// equals aggressively, so those two numbers are not close: 64 shared
+        /// doublings are 65 nodes and 2^64 tree nodes. See
+        /// `a_shared_dag_folds_in_dag_time_not_tree_time`.
+        fn evaluate(
+            pool: &ExprPool,
+            id: ExprId,
+            dom: &mut Concrete,
+            memo: &mut std::collections::HashMap<ExprId, Option<u128>>,
+        ) -> Option<u128> {
+            if let Some(hit) = memo.get(&id) {
+                return *hit;
+            }
+            let out = compute(pool, id, dom, memo);
+            memo.insert(id, out);
+            out
+        }
+
+        fn compute(
+            pool: &ExprPool,
+            id: ExprId,
+            dom: &mut Concrete,
+            memo: &mut std::collections::HashMap<ExprId, Option<u128>>,
+        ) -> Option<u128> {
             Some(match *pool.get(id) {
                 Expr::Const { value, .. } => value,
                 Expr::Sym { .. } => return None,
                 Expr::Bin { op, a, b, width } => {
-                    let a = evaluate(pool, a, dom)?;
-                    let b = evaluate(pool, b, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
+                    let b = evaluate(pool, b, dom, memo)?;
                     dom.binop(op, &a, &b, width)
                 }
                 Expr::Un { op, a, width } => {
-                    let a = evaluate(pool, a, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
                     dom.unop(op, &a, width)
                 }
                 Expr::Cmp { op, a, b, width } => {
-                    let a = evaluate(pool, a, dom)?;
-                    let b = evaluate(pool, b, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
+                    let b = evaluate(pool, b, dom, memo)?;
                     dom.cmp(op, &a, &b, width)
                 }
                 Expr::ZExt { a, from, to } => {
-                    let a = evaluate(pool, a, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
                     dom.zext(&a, from, to)
                 }
                 Expr::SExt { a, from, to } => {
-                    let a = evaluate(pool, a, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
                     dom.sext(&a, from, to)
                 }
                 Expr::Trunc { a, to } => {
-                    let a = evaluate(pool, a, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
                     dom.trunc(&a, to)
                 }
                 Expr::Extract { a, hi, lo } => {
-                    let a = evaluate(pool, a, dom)?;
+                    let a = evaluate(pool, a, dom, memo)?;
                     dom.extract(&a, hi, lo)
                 }
                 Expr::Concat { hi, lo, hi_w, lo_w } => {
-                    let hi = evaluate(pool, hi, dom)?;
-                    let lo = evaluate(pool, lo, dom)?;
+                    let hi = evaluate(pool, hi, dom, memo)?;
+                    let lo = evaluate(pool, lo, dom, memo)?;
                     dom.concat(&hi, &lo, hi_w, lo_w)
                 }
                 Expr::Ite { c, t, e, width } => {
-                    let cond = evaluate(pool, c, dom)?;
+                    let cond = evaluate(pool, c, dom, memo)?;
                     let selected = if cond == 0 { e } else { t };
-                    let value = evaluate(pool, selected, dom)?;
+                    let value = evaluate(pool, selected, dom, memo)?;
                     dom.constant(width, value)
                 }
             })
         }
 
-        evaluate(&self.pool, id, &mut Concrete)
+        evaluate(
+            &self.pool,
+            id,
+            &mut Concrete,
+            &mut std::collections::HashMap::new(),
+        )
     }
 }
 
@@ -198,6 +232,38 @@ mod tests {
             d.render(eq),
             "(ite (= (bvadd sym0_32 (_ bv1 32)) (_ bv256 32)) (_ bv1 1) (_ bv0 1))"
         );
+    }
+
+    /// A DAG whose *tree* is astronomically larger than its node count.
+    ///
+    /// `v[i+1] = v[i] + v[i]` shares both operands, so 64 doublings are 65
+    /// interned nodes and 2^64 tree nodes. `constant_value` walks a hash-consed
+    /// DAG, so it must pay the 65 and not the 2^64 --- the same reason
+    /// [`ExprPool::collect_syms`] memoizes and says so in its doc comment.
+    ///
+    /// This is not a synthetic worry. `src/exec/memory.rs` rebuilds a 4-byte
+    /// frame slot as a `Concat` of four `Extract`s, so a loop counter living in
+    /// a slot multiplies its tree by four per iteration while its DAG grows by
+    /// a handful of nodes; that shape blocked an 1,810-case sweep for over
+    /// forty minutes inside one function.
+    ///
+    /// The `len` assertion is what keeps this test honest: if the pool ever
+    /// starts constant-folding at construction, the DAG would collapse to a
+    /// single node and this test would pass while proving nothing.
+    #[test]
+    fn a_shared_dag_folds_in_dag_time_not_tree_time() {
+        let mut d = Symbolic::new();
+        let mut v = d.constant(Width::W64, 1);
+        for _ in 0..64 {
+            v = d.binop(BinOp::Add, &v, &v, Width::W64);
+        }
+        assert!(
+            d.pool.len() <= 70,
+            "interning must keep this a DAG, not a tree: {} nodes",
+            d.pool.len()
+        );
+        // One doubled 64 times is 2^64, which is 0 in 64 bits.
+        assert_eq!(d.constant_value(v), Some(0));
     }
 
     #[test]

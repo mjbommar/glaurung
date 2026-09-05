@@ -12,6 +12,7 @@ use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::time::{Duration, Instant};
 
+use crate::exec::concrete::{shift_reduction, ShiftReduction, DIVIDE_BY_ZERO_QUOTIENT};
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
@@ -302,6 +303,38 @@ impl<'a> Translator<'a> {
         Ok(term)
     }
 
+    /// The shift distance reduced to `width`, exactly as
+    /// `crate::exec::Concrete` reduces it. The decision is
+    /// [`shift_reduction`]'s; only the rendering is Bitwuzla's.
+    ///
+    /// The non-power-of-two case is spelled `b - (b / w) * w` rather than with
+    /// a `BV_UREM` kind. That is deliberate, and follows the rule this file
+    /// already states for `&&` / `||`: a wrong enum value would not fail to
+    /// build, it would silently construct a different operator. `KIND_BV_UDIV`,
+    /// `KIND_BV_MUL` and `KIND_BV_SUB` are already verified against the pinned
+    /// 0.9.1 C enum, and this identity is exact -- `b` is a `w`-bit value, so
+    /// `(b / w) * w <= b < 2^w` and no intermediate wraps.
+    fn reduce_shift_distance(
+        &mut self,
+        distance: RawTerm,
+        width: Width,
+    ) -> Result<RawTerm, String> {
+        let bits = width.bits();
+        match shift_reduction(width) {
+            ShiftReduction::Mask(mask) => {
+                let m = self.value(bits, mask)?;
+                self.term2(KIND_BV_AND, distance, m)
+            }
+            ShiftReduction::Modulo(modulus) => {
+                let m = self.value(bits, modulus)?;
+                let quotient = self.term2(KIND_BV_UDIV, distance, m)?;
+                let product = self.term2(KIND_BV_MUL, quotient, m)?;
+                self.term2(KIND_BV_SUB, distance, product)
+            }
+            ShiftReduction::Passthrough => Ok(distance),
+        }
+    }
+
     fn term1(&mut self, kind: c_int, argument: RawTerm) -> Result<RawTerm, String> {
         // SAFETY: All inputs are live terms owned by this translator.
         let term = unsafe { bitwuzla_mk_term1(self.term_manager, kind, argument) };
@@ -389,13 +422,40 @@ impl<'a> Translator<'a> {
                     BinOp::Add => self.term2(KIND_BV_ADD, left, right)?,
                     BinOp::Sub => self.term2(KIND_BV_SUB, left, right)?,
                     BinOp::Mul => self.term2(KIND_BV_MUL, left, right)?,
-                    BinOp::Div => self.term2(KIND_BV_UDIV, left, right)?,
+                    // `bvudiv` by zero is all-ones; `crate::exec::Concrete`
+                    // yields `DIVIDE_BY_ZERO_QUOTIENT`. Guard it so the solver
+                    // is asked about the function the executor runs -- an
+                    // `unsat` carries no model, so nothing downstream can
+                    // replay away a miter that was unsatisfiable only because
+                    // the two disagreed. Uses only KIND_BV_UDIV, KIND_EQUAL and
+                    // KIND_ITE, all already verified against the pinned 0.9.1
+                    // C enum.
+                    BinOp::Div => {
+                        let zero = self.value(width.bits(), 0)?;
+                        let fault = self.value(width.bits(), DIVIDE_BY_ZERO_QUOTIENT)?;
+                        let quotient = self.term2(KIND_BV_UDIV, left, right)?;
+                        let divides_by_zero = self.term2(KIND_EQUAL, right, zero)?;
+                        self.term3(KIND_ITE, divides_by_zero, fault, quotient)?
+                    }
                     BinOp::And => self.term2(KIND_BV_AND, left, right)?,
                     BinOp::Or => self.term2(KIND_BV_OR, left, right)?,
                     BinOp::Xor => self.term2(KIND_BV_XOR, left, right)?,
-                    BinOp::Shl => self.term2(KIND_BV_SHL, left, right)?,
-                    BinOp::Shr => self.term2(KIND_BV_SHR, left, right)?,
-                    BinOp::Sar => self.term2(KIND_BV_ASHR, left, right)?,
+                    // SMT-LIB shifts saturate once the distance reaches the
+                    // operand width; x86 and A64 take it modulo the width, and
+                    // so does the executor. `shift_reduction` is the one
+                    // definition of that rule.
+                    BinOp::Shl => {
+                        let distance = self.reduce_shift_distance(right, width)?;
+                        self.term2(KIND_BV_SHL, left, distance)?
+                    }
+                    BinOp::Shr => {
+                        let distance = self.reduce_shift_distance(right, width)?;
+                        self.term2(KIND_BV_SHR, left, distance)?
+                    }
+                    BinOp::Sar => {
+                        let distance = self.reduce_shift_distance(right, width)?;
+                        self.term2(KIND_BV_ASHR, left, distance)?
+                    }
                 }
             }
             Expr::Un { op, a, .. } => {
@@ -1072,6 +1132,44 @@ mod tests {
             BitwuzlaSolver::new().check(pool, &[(equals, true)]),
             SolveResult::Sat(_)
         ));
+    }
+
+    /// The native lowering of every shift and division must denote what
+    /// `crate::exec::Concrete` computes.
+    ///
+    /// Shares the case table with
+    /// `crate::symbolic::expr::smt_concrete_agreement`, which runs the same
+    /// differential against the SMT-LIB text bridge, against native z3 and
+    /// against native Axeyum: shift distances below, at and above the operand
+    /// width, at widths including one that is not a power of two, plus division
+    /// by zero. Bare `BV_SHL`/`BV_UDIV` fail dozens of these rows.
+    ///
+    /// This lane needs libbitwuzla, which the `symbolic` and `solver-z3`
+    /// builds do not provision, so this test compiles under
+    /// `--features solver-bitwuzla` and runs only where the library is present.
+    /// It is also the check that would catch a wrong `KIND_BV_*` value in the
+    /// `b - (b / w) * w` distance reduction, which would build silently.
+    #[test]
+    fn bitwuzla_shifts_and_division_agree_with_the_concrete_domain() {
+        use crate::exec::domain::Domain;
+        use crate::exec::Concrete;
+        use crate::symbolic::expr::smt_concrete_agreement::cases;
+
+        let all = cases();
+        assert!(all.len() > 100, "the shared case table went missing");
+        for (op, a, b, width) in all {
+            let expected = Concrete.binop(op, &a, &b, width);
+            let mut pool = ExprPool::new();
+            let left = pool.constant(width, a);
+            let right = pool.constant(width, b);
+            let expression = pool.intern(Expr::Bin {
+                op,
+                a: left,
+                b: right,
+                width,
+            });
+            assert_constant_expression(&mut pool, expression, expected);
+        }
     }
 
     #[test]

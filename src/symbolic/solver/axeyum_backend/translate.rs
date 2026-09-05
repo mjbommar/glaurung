@@ -13,6 +13,9 @@
 
 use super::*;
 
+use crate::exec::concrete::{shift_reduction, ShiftReduction, DIVIDE_BY_ZERO_QUOTIENT};
+use crate::ir::types::Width;
+
 pub(super) fn translate_query(
     pool: &ExprPool,
     asserts: &[Assert],
@@ -84,6 +87,24 @@ impl<'a> Translator<'a> {
         }
     }
 
+    /// The shift distance reduced to `width`, exactly as
+    /// `crate::exec::Concrete` reduces it. The decision is
+    /// [`shift_reduction`]'s; only the rendering is axeyum's.
+    fn reduce_shift_distance(&mut self, distance: TermId, width: Width) -> Result<TermId, IrError> {
+        let bits = width.bits() as u32;
+        match shift_reduction(width) {
+            ShiftReduction::Mask(mask) => {
+                let m = self.arena.bv_const(bits, mask)?;
+                self.arena.bv_and(distance, m)
+            }
+            ShiftReduction::Modulo(modulus) => {
+                let m = self.arena.bv_const(bits, modulus)?;
+                self.arena.bv_urem(distance, m)
+            }
+            ShiftReduction::Passthrough => Ok(distance),
+        }
+    }
+
     /// Translate a glaurung `ExprId` to an axeyum `BitVec` term.
     fn translate(&mut self, id: ExprId) -> Result<TermId, IrError> {
         if let Some(&t) = self.memo.get(&id) {
@@ -129,13 +150,42 @@ impl<'a> Translator<'a> {
                     BinOp::Add => self.arena.bv_add(ta, tb)?,
                     BinOp::Sub => self.arena.bv_sub(ta, tb)?,
                     BinOp::Mul => self.arena.bv_mul(ta, tb)?,
-                    BinOp::Div => self.arena.bv_udiv(ta, tb)?, // glaurung Div is unsigned
+                    // glaurung Div is unsigned, and `bv_udiv` by zero is
+                    // all-ones while `crate::exec::Concrete` yields
+                    // `DIVIDE_BY_ZERO_QUOTIENT`. Guard it so the solver is
+                    // asked about the function the executor runs: an `unsat`
+                    // carries no model, so nothing downstream can replay away a
+                    // miter that was unsatisfiable only because the two
+                    // disagreed. Term-for-term the same shape as z3_backend and
+                    // `ExprPool::render_bin`.
+                    BinOp::Div => {
+                        let zero = self.arena.bv_const(tw, 0)?;
+                        let fault = self.arena.bv_const(tw, DIVIDE_BY_ZERO_QUOTIENT)?;
+                        let quotient = self.arena.bv_udiv(ta, tb)?;
+                        let divides_by_zero = self.arena.eq(tb, zero)?;
+                        self.arena.ite(divides_by_zero, fault, quotient)?
+                    }
                     BinOp::And => self.arena.bv_and(ta, tb)?,
                     BinOp::Or => self.arena.bv_or(ta, tb)?,
                     BinOp::Xor => self.arena.bv_xor(ta, tb)?,
-                    BinOp::Shl => self.arena.bv_shl(ta, tb)?,
-                    BinOp::Shr => self.arena.bv_lshr(ta, tb)?, // logical
-                    BinOp::Sar => self.arena.bv_ashr(ta, tb)?, // arithmetic
+                    // SMT-LIB shifts saturate once the distance reaches the
+                    // operand width; x86 `shl`/`shr`/`sar` and A64
+                    // `LSLV`/`LSRV`/`ASRV` take it modulo the width, and so
+                    // does the executor. `shift_reduction` is the one
+                    // definition of that rule; this renders its answer in
+                    // axeyum's API.
+                    BinOp::Shl => {
+                        let distance = self.reduce_shift_distance(tb, width)?;
+                        self.arena.bv_shl(ta, distance)?
+                    }
+                    BinOp::Shr => {
+                        let distance = self.reduce_shift_distance(tb, width)?;
+                        self.arena.bv_lshr(ta, distance)? // logical
+                    }
+                    BinOp::Sar => {
+                        let distance = self.reduce_shift_distance(tb, width)?;
+                        self.arena.bv_ashr(ta, distance)? // arithmetic
+                    }
                     // Source-level `&&` / `||` are NOT bitvector ALU ops. They
                     // booleanize both operands and yield 1 or 0 at the node
                     // width. This mirrors `ExprPool::render_smtlib` term for

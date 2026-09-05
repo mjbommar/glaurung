@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use z3::ast::{Ast, Bool, BV};
 use z3::{Config, Context, SatResult, Solver as Z3Native};
 
+use crate::exec::concrete::{shift_reduction, ShiftReduction, DIVIDE_BY_ZERO_QUOTIENT};
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
@@ -464,6 +465,18 @@ fn coerce<'c>(bv: BV<'c>, bits: u32) -> BV<'c> {
     }
 }
 
+/// The shift distance, reduced to `width` exactly as `crate::exec::Concrete`
+/// reduces it. The decision is [`shift_reduction`]'s; only the rendering is
+/// z3's.
+fn reduce_shift_distance<'c>(ctx: &'c Context, distance: &BV<'c>, width: Width) -> BV<'c> {
+    let bits = width.bits() as u32;
+    match shift_reduction(width) {
+        ShiftReduction::Mask(mask) => distance.bvand(&bv_from_u128(ctx, mask, bits)),
+        ShiftReduction::Modulo(modulus) => distance.bvurem(&bv_from_u128(ctx, modulus, bits)),
+        ShiftReduction::Passthrough => distance.clone(),
+    }
+}
+
 /// Translate an `Expr` into a z3 bit-vector, **memoized** over the shared
 /// hash-consed DAG. Without the cache a node reachable by k paths is rebuilt 2^k
 /// times — catastrophic on obfuscated code whose expressions share aggressively.
@@ -489,13 +502,26 @@ fn to_bv<'c>(
                 BinOp::Add => a.bvadd(&b),
                 BinOp::Sub => a.bvsub(&b),
                 BinOp::Mul => a.bvmul(&b),
-                BinOp::Div => a.bvudiv(&b),
+                // `bvudiv` by zero is all-ones; `crate::exec::Concrete` yields
+                // `DIVIDE_BY_ZERO_QUOTIENT`. Guarding keeps the solver
+                // reasoning about the function the executor runs -- an `unsat`
+                // has no model to replay, so nothing downstream can catch a
+                // miter that was unsatisfiable only because the two disagreed.
+                BinOp::Div => {
+                    let zero = bv_from_u128(ctx, 0, tb);
+                    let fault = bv_from_u128(ctx, DIVIDE_BY_ZERO_QUOTIENT, tb);
+                    b._eq(&zero).ite(&fault, &a.bvudiv(&b))
+                }
                 BinOp::And => a.bvand(&b),
                 BinOp::Or => a.bvor(&b),
                 BinOp::Xor => a.bvxor(&b),
-                BinOp::Shl => a.bvshl(&b),
-                BinOp::Shr => a.bvlshr(&b),
-                BinOp::Sar => a.bvashr(&b),
+                // SMT-LIB shifts saturate at the operand width; x86 and A64
+                // take the distance modulo it. `shift_reduction` is the one
+                // definition of that rule (see `crate::exec::concrete`); this
+                // renders its answer in z3's API.
+                BinOp::Shl => a.bvshl(&reduce_shift_distance(ctx, &b, width)),
+                BinOp::Shr => a.bvlshr(&reduce_shift_distance(ctx, &b, width)),
+                BinOp::Sar => a.bvashr(&reduce_shift_distance(ctx, &b, width)),
                 // Source-level `&&` / `||` booleanize both operands and yield
                 // 1 or 0 at the node width -- see the note in
                 // `axeyum_backend::translate`. Kept term-for-term identical to
@@ -811,6 +837,67 @@ mod tests {
                 "(ite (and (distinct (_ bv1 32) (_ bv0 32)) ",
                 "(distinct (_ bv2 32) (_ bv0 32))) (_ bv1 32) (_ bv0 32))"
             ),
+        );
+    }
+
+    /// The native lowering of every shift and division must denote what
+    /// `crate::exec::Concrete` computes.
+    ///
+    /// Shares the case table with
+    /// `crate::symbolic::expr::smt_concrete_agreement`, which runs the same
+    /// differential against the SMT-LIB text bridge: shift distances below, at
+    /// and above the operand width, at widths including one that is not a
+    /// power of two, plus division by zero. Bare `bvshl`/`bvudiv` fail dozens
+    /// of these rows.
+    ///
+    /// This is the direction a witness replay cannot protect. `csource::equiv`
+    /// reads `unsat` as "equivalent", and an `unsat` carries no model, so a
+    /// miter that is unsatisfiable only because this backend and the executor
+    /// disagree becomes a false `Equivalent` that nothing downstream can catch.
+    #[test]
+    fn z3_shifts_and_division_agree_with_the_concrete_domain() {
+        use crate::exec::domain::Domain;
+        use crate::exec::Concrete;
+        use crate::symbolic::expr::smt_concrete_agreement::cases;
+
+        let all = cases();
+        assert!(all.len() > 100, "the shared case table went missing");
+        let mut wrong = Vec::new();
+        for (op, a, b, width) in all {
+            let expected = Concrete.binop(op, &a, &b, width);
+            let mut p = ExprPool::new();
+            let left = p.constant(width, a);
+            let right = p.constant(width, b);
+            let node = p.intern(Expr::Bin {
+                op,
+                a: left,
+                b: right,
+                width,
+            });
+            let want = p.constant(width, expected);
+            let holds = p.intern(Expr::Cmp {
+                op: CmpOp::Eq,
+                a: node,
+                b: want,
+                width,
+            });
+            // "can the lowered term be something other than the concrete
+            // answer?" -- unsat is the only pass.
+            if !matches!(
+                Z3Solver::new().check(&p, &[(holds, false)]),
+                SolveResult::Unsat
+            ) {
+                wrong.push(format!(
+                    "{op:?} a={a:#x} b={b:#x} w={} (concrete {expected:#x})",
+                    width.bits()
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} native z3 lowerings can differ from the concrete domain:\n{}",
+            wrong.len(),
+            wrong.join("\n")
         );
     }
 

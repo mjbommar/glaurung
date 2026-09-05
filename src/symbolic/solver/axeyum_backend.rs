@@ -1626,6 +1626,39 @@ mod tests {
         );
     }
 
+    /// The native lowering of every shift and division must denote what
+    /// `crate::exec::Concrete` computes.
+    ///
+    /// Shares the case table with
+    /// `crate::symbolic::expr::smt_concrete_agreement`, which runs the same
+    /// differential against the SMT-LIB text bridge and against z3: shift
+    /// distances below, at and above the operand width, at widths including one
+    /// that is not a power of two, plus division by zero. Bare
+    /// `bv_shl`/`bv_udiv` fail dozens of these rows.
+    #[test]
+    fn native_shifts_and_division_agree_with_the_concrete_domain() {
+        use crate::exec::domain::Domain;
+        use crate::exec::Concrete;
+        use crate::symbolic::expr::smt_concrete_agreement::cases;
+
+        let all = cases();
+        assert!(all.len() > 100, "the shared case table went missing");
+        for (op, a, b, width) in all {
+            let expected = Concrete.binop(op, &a, &b, width);
+            let mut p = ExprPool::new();
+            let left = c(&mut p, a, width);
+            let right = c(&mut p, b, width);
+            let node = bin(&mut p, op, left, right, width);
+            let want = c(&mut p, expected, width);
+            let holds = cmp(&mut p, CmpOp::Eq, node, want, width);
+            // `expect_pred(.., false)` demands unsat: the lowered term cannot
+            // be anything but the concrete answer.
+            let differs = cmp(&mut p, CmpOp::Ne, node, want, width);
+            expect_pred(&p, holds, true);
+            expect_pred(&p, differs, false);
+        }
+    }
+
     /// Both operands must survive the lowering. A backend that dropped one --
     /// or replaced the pair with a single truthiness test -- would still pass
     /// the constant table above on some rows, but cannot satisfy this.

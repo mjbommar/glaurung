@@ -42,6 +42,73 @@ fn as_signed(bits: u128, width: Width) -> i128 {
     }
 }
 
+/// How a shift distance must be reduced to the operand width before a shift is
+/// applied.
+///
+/// This enum and [`shift_reduction`] are the **single definition** of that
+/// rule. `Concrete` implements it below; every SMT backend
+/// (`crate::symbolic::expr`'s two text renderers plus the native z3, Bitwuzla
+/// and Axeyum translators) asks this function what to do and then renders the
+/// answer in its own API. Only the *decision* is shared, because sharing the
+/// rendering is impossible across five unrelated term-building APIs and
+/// duplicating the decision five ways would drift silently in four of them.
+///
+/// The rule exists because SMT-LIB and the hardware disagree:
+/// `bvshl`/`bvlshr`/`bvashr` saturate to zero (or to the sign) once the
+/// distance reaches the operand width, while x86 `shl`/`shr`/`sar` and A64
+/// `LSLV`/`LSRV`/`ASRV` take the distance modulo the width. The LLIR is lifted
+/// from those CPUs and this domain is what a solver model is replayed in, so
+/// the solver is the side that moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShiftReduction {
+    /// Bitwise-and the distance with this all-ones mask. Emitted when the
+    /// width is a power of two, where masking and `mod width` are the same
+    /// function and masking is far cheaper for a bit-blasting solver.
+    Mask(u128),
+    /// Take the unsigned remainder of the distance modulo this value. Required
+    /// whenever the width is *not* a power of two — `Expr::Extract` and
+    /// `Expr::Concat` mint such widths, so the mask shortcut is not always the
+    /// right function and must never be hardcoded.
+    Modulo(u128),
+    /// Use the distance unchanged. Only a zero width, which no bit-vector sort
+    /// can represent anyway.
+    Passthrough,
+}
+
+/// The reduction a shift at `width` applies to its distance operand.
+pub(crate) fn shift_reduction(width: Width) -> ShiftReduction {
+    let bits = width.bits();
+    if bits == 0 {
+        ShiftReduction::Passthrough
+    } else if bits.is_power_of_two() {
+        ShiftReduction::Mask(u128::from(bits) - 1)
+    } else {
+        ShiftReduction::Modulo(u128::from(bits))
+    }
+}
+
+/// The quotient this domain yields for a division by zero.
+///
+/// SMT-LIB defines `bvudiv` by zero as all-ones; a real x86 `div` raises `#DE`
+/// and produces no value at all. Neither is what this domain does, so every SMT
+/// backend guards its division with `ite(divisor = 0, this, bvudiv(a, b))`
+/// rather than leaving the solver reasoning about a different function than the
+/// executor runs. A genuine divide fault is modelled by a helper, above the
+/// value domain.
+pub(crate) const DIVIDE_BY_ZERO_QUOTIENT: u128 = 0;
+
+/// The shift distance a shift at `width` actually applies: the operand reduced
+/// to `width`, then put through [`shift_reduction`].
+fn shift_distance(raw: u128, width: Width) -> u32 {
+    let reduced = reduce(raw, width);
+    let applied = match shift_reduction(width) {
+        ShiftReduction::Mask(mask) => reduced & mask,
+        ShiftReduction::Modulo(modulus) => reduced % modulus,
+        ShiftReduction::Passthrough => reduced,
+    };
+    applied as u32
+}
+
 /// The concrete domain. Zero-sized; all state lives in the value `u128`s.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Concrete;
@@ -62,10 +129,19 @@ impl Domain for Concrete {
             BinOp::Div => {
                 // Unsigned division; division by zero yields 0 (a real divide
                 // fault is modelled by a helper, not the value domain).
+                //
+                // The zero test is on the *width-reduced* divisor, not the raw
+                // `u128`. Domain values are supposed to arrive reduced, but a
+                // raw operand whose only set bits sit above `w` is nonzero and
+                // reduces to zero, which used to reach `x / 0` and panic. It is
+                // also the value an SMT `(_ BitVec w)` operand can represent, so
+                // reducing first is what keeps this agreeing with
+                // `crate::symbolic::expr`'s rendering of the same node.
+                let (a, b) = (reduce(a, w), reduce(b, w));
                 if b == 0 {
-                    0
+                    DIVIDE_BY_ZERO_QUOTIENT
                 } else {
-                    reduce(a, w) / reduce(b, w)
+                    a / b
                 }
             }
             BinOp::LogicalAnd => u128::from(a != 0 && b != 0),
@@ -73,18 +149,29 @@ impl Domain for Concrete {
             BinOp::And => a & b,
             BinOp::Or => a | b,
             BinOp::Xor => a ^ b,
+            // Shifts take the distance MODULO the operand width, as x86
+            // `shl`/`shr`/`sar` and A64 `LSLV`/`LSRV`/`ASRV` do. SMT-LIB's
+            // `bvshl`/`bvlshr`/`bvashr` instead saturate at the width, so
+            // `crate::symbolic::expr::ExprPool::render_bin` masks the distance
+            // to reproduce *this* function. This side is the reference; see
+            // that function's docs for why.
+            //
+            // The distance is reduced to the operand width before the modulo:
+            // an SMT `(_ BitVec w)` operand cannot carry bits above `w`, and at
+            // a width that is not a power of two `raw % w` and `(raw & mask) %
+            // w` are different functions.
             BinOp::Shl => {
-                let sh = (b % w.bits().max(1) as u128) as u32;
+                let sh = shift_distance(b, w);
                 a.checked_shl(sh).unwrap_or(0)
             }
             BinOp::Shr => {
                 // Logical right shift on the width-reduced value.
-                let sh = (b % w.bits().max(1) as u128) as u32;
+                let sh = shift_distance(b, w);
                 reduce(a, w).checked_shr(sh).unwrap_or(0)
             }
             BinOp::Sar => {
                 // Arithmetic right shift: shift the signed interpretation.
-                let sh = (b % w.bits().max(1) as u128) as u32;
+                let sh = shift_distance(b, w);
                 let s = as_signed(a, w);
                 (s >> sh.min(127)) as u128
             }
