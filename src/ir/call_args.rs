@@ -1025,6 +1025,105 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
     true
 }
 
+/// Fold a recovered layout whose arguments mix adjacent setup assignments with
+/// untouched caller parameters already occupying their ABI slots.
+fn fold_one_recovered_layout_call_with_live_ins(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    arch: CallConv,
+    layout: &[VReg],
+    param_slots: &std::collections::HashSet<usize>,
+    enclosing: &EnclosingSlots,
+) -> bool {
+    if layout.is_empty() {
+        return false;
+    }
+    let mut found: Vec<Option<(usize, Expr, VReg)>> = vec![None; layout.len()];
+    let mut index = call_idx;
+    while index > 0 {
+        index -= 1;
+        match &body[index] {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src,
+            } => {
+                let base = ssa_base(name);
+                let Some(slot) = layout.iter().position(
+                    |storage| matches!(storage, VReg::Phys(storage) if ssa_base(storage) == base),
+                ) else {
+                    continue;
+                };
+                if found[slot].is_none() {
+                    found[slot] = Some((index, src.clone(), VReg::Phys(name.clone())));
+                }
+            }
+            Stmt::Nop | Stmt::Comment(_) => {}
+            _ => break,
+        }
+    }
+    if found.iter().all(Option::is_none) || found.iter().all(Option::is_some) {
+        return false;
+    }
+
+    let mut blocked_live_ins = vec![false; arg_slots(arch).len()];
+    for statement in &body[..call_idx] {
+        mark_arg_writes_in_stmt(statement, arch, &mut blocked_live_ins);
+    }
+    let mut arguments = Vec::with_capacity(layout.len());
+    for (layout_index, storage) in layout.iter().enumerate() {
+        if let Some((_, expression, _)) = &found[layout_index] {
+            arguments.push(expression.clone());
+            continue;
+        }
+        let VReg::Phys(name) = storage else {
+            return false;
+        };
+        let Some(slot) = crate::ir::abi::argument_slot_of(arch, name) else {
+            return false;
+        };
+        if !param_slots.contains(&slot)
+            || blocked_live_ins[slot]
+            || !enclosing.entry_value_reaches(slot)
+        {
+            return false;
+        }
+        arguments.push(
+            enclosing
+                .overrides
+                .get(slot)
+                .and_then(Clone::clone)
+                .unwrap_or_else(|| Expr::Reg(storage.clone())),
+        );
+    }
+
+    let removed: Vec<VReg> = found
+        .iter()
+        .flatten()
+        .map(|(_, _, destination)| destination.clone())
+        .collect();
+    if found.iter().flatten().any(|(_, expression, _)| {
+        removed
+            .iter()
+            .any(|destination| reads_reg_in_expr(expression, destination))
+    }) || found.iter().flatten().any(|(index, expression, _)| {
+        versioned_operand_is_reassigned(expression, body, *index, call_idx)
+    }) {
+        return false;
+    }
+
+    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+        *args = arguments;
+    } else {
+        return false;
+    }
+    let mut used: Vec<usize> = found.iter().flatten().map(|(index, _, _)| *index).collect();
+    used.sort_unstable_by(|left, right| right.cmp(left));
+    for index in used {
+        body.remove(index);
+    }
+    true
+}
+
 fn is_pure_arg_normalisation(expr: &Expr) -> bool {
     match expr {
         Expr::Deref { .. }
@@ -4125,6 +4224,40 @@ mod tests {
             args,
             &[Expr::Reg(reg("x0")), Expr::Reg(reg("x1"))],
             "the locked callee layout must retain every proven caller live-in"
+        );
+    }
+
+    #[test]
+    fn recovered_callee_layout_combines_hidden_result_setup_with_live_in_argument() {
+        let mut function = Function {
+            name: "aggregate_return_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rsp")),
+                },
+                call_to("make_big"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("rdi"), reg("rsi")])]);
+        let mut parameter_slots = [0, 1].into_iter().collect();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        assert_eq!(function.body.len(), 1, "the hidden-pointer setup must fold");
+        let Stmt::Call { args, .. } = &function.body[0] else {
+            panic!("call disappeared: {:#?}", function.body);
+        };
+        assert_eq!(
+            args,
+            &[Expr::Reg(reg("rsp")), Expr::Reg(reg("rsi"))],
+            "the declared argument remains in the caller's untouched second slot"
         );
     }
 

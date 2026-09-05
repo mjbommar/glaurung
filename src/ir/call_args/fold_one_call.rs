@@ -25,8 +25,9 @@ use crate::ir::types::VReg;
 use super::{
     aapcs_core_register_arity, aapcs_integer_stack_suffix, arg_slots, direct_call_target_va,
     fold_one_arm_hard_float_call, fold_one_cdecl32_call, fold_one_recovered_layout_call,
-    fold_one_table_call, incoming_arg_expr, is_frame_coordinate_storage, is_pure_arg_normalisation,
-    is_stable_frame_arg_definition, known_arm_core_register_arity, known_arm_hard_float_layout,
+    fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, incoming_arg_expr,
+    is_frame_coordinate_storage, is_pure_arg_normalisation, is_stable_frame_arg_definition,
+    known_arm_core_register_arity, known_arm_hard_float_layout,
     layout_matches_abi_allocation_order, mark_arg_reads_in_expr, mark_arg_reads_in_stmt,
     mark_arg_writes_in_stmt, outgoing_aapcs_stack_area, outgoing_stack_cleanup,
     outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
@@ -88,6 +89,16 @@ pub(super) fn fold_one_call(
         .flatten();
     if let Some(layout) = recovered_layout.filter(|_| aapcs_stack.is_none()) {
         if fold_one_recovered_layout_call(body, call_idx, layout) {
+            return;
+        }
+        if fold_one_recovered_layout_call_with_live_ins(
+            body,
+            call_idx,
+            arch,
+            layout,
+            param_slots,
+            enclosing,
+        ) {
             return;
         }
         // An optimized call may pass the values already occupying ABI storage,

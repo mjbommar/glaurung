@@ -206,8 +206,11 @@ pub(super) fn run_ast_passes(
     // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
     // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
     // `varN`) the naming pass introduces.
-    // AAPCS64's `x8` result buffer is not described by DWARF at `-O2` -- it is a
-    // compiler temporary with no source name -- so the ABI has to declare it.
+    // Indirect result buffers are not reliably described by DWARF at `-O2` --
+    // they are compiler temporaries with no source name -- so the ABI has to
+    // declare them. This covers AAPCS64's separate `x8` and SysV's hidden first
+    // argument; without the latter, a bare `rsp` call argument renders as an
+    // uninitialised scalar rather than the address of the promoted buffer.
     // Without this the twenty-byte buffer of `agr198_five_roundtrip` promotes as
     // five unrelated four-byte slots and the call has no single destination.
     // Empty on every other convention and on every AArch64 function with no

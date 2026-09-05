@@ -202,7 +202,7 @@ pub(super) fn recovered_call_prototype(
         }
     }
 
-    let parameter_types = prototype
+    let mut parameter_types: Vec<String> = prototype
         .parameters()
         .iter()
         .map(|parameter| {
@@ -218,6 +218,17 @@ pub(super) fn recovered_call_prototype(
                 .to_string()
         })
         .collect();
+    if prototype.return_class() == crate::ir::abi::ReturnClass::Memory {
+        if let Some(crate::ir::types_recover::TypeHint::Pointer { pointee_width }) = prototype
+            .parameters()
+            .first()
+            .and_then(|parameter| parameter.hint)
+        {
+            if pointee_width > 1 {
+                parameter_types[0] = format!("char (*)[{pointee_width}]");
+            }
+        }
+    }
     let scalar_return_type = || {
         prototype
             .result()

@@ -1022,8 +1022,24 @@ fn recover_decbench_prototype_with_inferred(
             declared.parameter_types.len(),
             declared_result_is_non_scalar,
         );
+        let hidden_return_width = if hidden_return_pointer {
+            match &declared.return_type {
+                DwarfReturnType::Type(c_type) => type_env
+                    .and_then(|env| env.aggregate_layout(c_type))
+                    .and_then(|layout| u8::try_from(layout.byte_size).ok())
+                    .filter(|width| *width != 0),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let hidden_return_hint = (hidden_return_pointer || non_c_hidden_result).then_some(Some(
-            crate::ir::types_recover::TypeHint::Pointer { pointee_width: 1 },
+            crate::ir::types_recover::TypeHint::Pointer {
+                // One byte remains the conservative unknown-pointee spelling;
+                // a declared aggregate carries its exact buffer extent through
+                // the recovered prototype for call-site object promotion.
+                pointee_width: hidden_return_width.unwrap_or(1),
+            },
         ));
         let parameter_hints = hidden_return_hint
             .into_iter()

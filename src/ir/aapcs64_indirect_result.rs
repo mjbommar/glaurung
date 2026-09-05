@@ -1,4 +1,4 @@
-//! AAPCS64's indirect result: the buffer a callee writes through `x8`.
+//! Indirect aggregate-result buffers at call sites.
 //!
 //! Every other return class in this crate lands in a register, so recovering it
 //! is a question about WHICH register. This one is in no register at all. The
@@ -8,12 +8,12 @@
 //! the Indirect Result Location Register, which sits OUTSIDE `x0`-`x7` and
 //! shifts no argument.
 //!
-//! That last clause is why this cannot reuse [`crate::ir::abi::ReturnClass::Memory`],
-//! and it is also why System V's version of the same source construct needs no
-//! code at all. On System V the hidden pointer IS argument zero, so ordinary
-//! argument reconstruction sees it, renders `f(&buffer, seed)`, and the
-//! recovered C reproduces the ABI because the register happens to be an argument
-//! register. `x8` is invisible to that machinery: a caller's
+//! That last clause is why this cannot reuse [`crate::ir::abi::ReturnClass::Memory`].
+//! On System V the hidden pointer IS argument zero, so ordinary argument
+//! reconstruction sees it. It still needs to declare the pointed-to stack
+//! extent as one object, however, or a bare `rsp` argument survives promotion
+//! and renders as an uninitialised scalar instead of `&buffer`. `x8` is invisible
+//! to argument reconstruction entirely: a caller's
 //! `add x0, sp, #0x10 ; mov x8, x0` looks like two dead moves, dead-store
 //! elimination removes them, and the call renders as `f(seed)` with the result
 //! buffer never written. The reads that follow are individually correct and read
@@ -48,6 +48,18 @@ fn indirect_result_bytes(
     crate::ir::abi::indirect_return_bytes(&call_spec?.call_prototype.return_type)
 }
 
+fn sysv_hidden_result_bytes(
+    call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+) -> Option<u16> {
+    let spelling = call_spec?.call_prototype.parameter_types.first()?;
+    let width = spelling
+        .strip_prefix("char (*)[")?
+        .strip_suffix(']')?
+        .parse::<u16>()
+        .ok()?;
+    (width != 0).then_some(width)
+}
+
 /// Whether `name` is a frame base this reader will accept a coordinate against.
 ///
 /// Only the two the ABI defines: the stack pointer and the frame pointer. A
@@ -57,6 +69,8 @@ fn frame_base(name: &str) -> Option<&'static str> {
     match crate::ir::abi::ssa_base(name) {
         "sp" => Some("sp"),
         "fp" | "x29" => Some("x29"),
+        "rsp" => Some("rsp"),
+        "rbp" => Some("rbp"),
         _ => None,
     }
 }
@@ -150,10 +164,114 @@ fn nested_bodies(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
 /// a call would be this reader inventing a buffer, and `x8` is caller-saved.
 pub fn indirect_result_buffer_hints(f: &Function, cc: CallConv) -> Vec<StackObjectHint> {
     let mut hints = Vec::new();
-    if matches!(cc, CallConv::Aarch64) {
-        collect_hints(&f.body, &mut hints);
+    match cc {
+        CallConv::Aarch64 => collect_hints(&f.body, &mut hints),
+        CallConv::SysVAmd64 => collect_sysv_hints(&f.body, 0, &mut hints),
+        _ => {}
     }
     hints
+}
+
+/// Record the object named by a SysV memory-return call's hidden first argument.
+/// Argument reconstruction has already folded setup copies, so accept only a
+/// direct frame coordinate in the argument expression and otherwise decline.
+fn sysv_entry_frame_address(expr: &Expr, stack_delta: i64) -> Option<(String, i64)> {
+    match expr {
+        Expr::Reg(VReg::Phys(name)) if crate::ir::abi::ssa_base(name) == "rsp" => {
+            Some(("entry_rsp".to_string(), stack_delta))
+        }
+        Expr::Lea {
+            base: Some(VReg::Phys(name)),
+            index: None,
+            disp,
+            segment: None,
+            ..
+        } if crate::ir::abi::ssa_base(name) == "rsp" => {
+            Some(("entry_rsp".to_string(), stack_delta.saturating_add(*disp)))
+        }
+        _ => None,
+    }
+}
+
+fn sysv_stack_adjustment(statement: &Stmt) -> Option<i64> {
+    let Stmt::Assign {
+        dst: VReg::Phys(dst),
+        src: Expr::Bin { op, lhs, rhs },
+    } = statement
+    else {
+        return None;
+    };
+    if crate::ir::abi::ssa_base(dst) != "rsp"
+        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if crate::ir::abi::ssa_base(src) == "rsp")
+    {
+        return None;
+    }
+    let Expr::Const(width) = rhs.as_ref() else {
+        return None;
+    };
+    match op {
+        BinOp::Add => Some(*width),
+        BinOp::Sub => Some(width.saturating_neg()),
+        _ => None,
+    }
+}
+
+fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<StackObjectHint>) {
+    for statement in body {
+        if let Some(adjustment) = sysv_stack_adjustment(statement) {
+            stack_delta = stack_delta.saturating_add(adjustment);
+        }
+        if let Stmt::Call {
+            args, call_spec, ..
+        } = statement
+        {
+            if let (Some(bytes), Some((base, disp))) = (
+                sysv_hidden_result_bytes(call_spec.as_ref()),
+                args.first()
+                    .and_then(|argument| sysv_entry_frame_address(argument, stack_delta)),
+            ) {
+                hints.push(StackObjectHint {
+                    base,
+                    disp,
+                    size: bytes,
+                    aggregate: true,
+                    source_name: None,
+                    c_type: None,
+                    cfa_relative: false,
+                });
+            }
+        }
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_sysv_hints(then_body, stack_delta, hints);
+                if let Some(else_body) = else_body {
+                    collect_sysv_hints(else_body, stack_delta, hints);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collect_sysv_hints(body, stack_delta, hints);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    collect_sysv_hints(body, stack_delta, hints);
+                }
+                if let Some(default) = default {
+                    collect_sysv_hints(default, stack_delta, hints);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collect_sysv_hints(try_body, stack_delta, hints);
+                for catch in catches {
+                    collect_sysv_hints(&catch.body, stack_delta, hints);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn collect_hints(body: &[Stmt], hints: &mut Vec<StackObjectHint>) {
@@ -331,10 +449,9 @@ mod tests {
         assert_eq!((hints[0].base.as_str(), hints[0].disp), ("sp", 16));
         assert_eq!(hints[0].size, 20);
         assert!(hints[0].aggregate);
-        // Every other convention passes its over-wide result through an
-        // ARGUMENT register, so none of them has an `x8` to follow.
+        // These conventions do not use AAPCS64's x8 and do not infer a buffer
+        // from this ordinary x0 argument.
         for cc in [
-            CallConv::SysVAmd64,
             CallConv::Win64,
             CallConv::Cdecl32,
             CallConv::Arm,
@@ -345,6 +462,28 @@ mod tests {
                 "{cc:?} acquired the AAPCS64 indirect result buffer"
             );
         }
+    }
+
+    #[test]
+    fn sysv_hidden_first_argument_hints_one_aggregate_stack_object() {
+        let mut spec = indirect_spec(32).expect("indirect spec");
+        spec.call_prototype.parameter_types[0] = "char (*)[32]".to_string();
+        let mut hidden_call = call(Some(spec), None);
+        let Stmt::Call { args, .. } = &mut hidden_call else {
+            unreachable!()
+        };
+        *args = vec![Expr::Reg(VReg::phys("rsp")), Expr::Reg(VReg::phys("rsi"))];
+        let f = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![hidden_call],
+        };
+
+        let hints = indirect_result_buffer_hints(&f, CallConv::SysVAmd64);
+        assert_eq!(hints.len(), 1);
+        assert_eq!((hints[0].base.as_str(), hints[0].disp), ("entry_rsp", 0));
+        assert_eq!(hints[0].size, 32);
+        assert!(hints[0].aggregate);
     }
 
     /// `-O2` shape: `mov x8, sp`, and the buffer is the whole frame base.
