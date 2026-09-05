@@ -143,6 +143,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp5-armv7-a32-byte-switch.md](decompiler-review-2026-09-02/results/wp5-armv7-a32-byte-switch.md) | 2026-09-05 | GCC ARMv7 A32 compact unsigned-byte tables become typed switches and native-executed C | nine of 1,604 function verdicts improve with no decline; wide-table speculative recursion now degrades to complete labelled CFG instead of crashing |
 | [results/wp4-a32-multi-latch-dispatch-loop.md](decompiler-review-2026-09-02/results/wp4-a32-multi-latch-dispatch-loop.md) | 2026-09-05 | Production v1 locally owns a real ARMv7 switch loop with six latches | `dispatch_in_loop` moves from fail to pass with no attributable decline; its initial outer-guard goto is closed by the follow-on record below |
 | [results/wp4-a32-guard-quality.md](decompiler-review-2026-09-02/results/wp4-a32-guard-quality.md) | 2026-09-05 | ARM predication drops an unreachable undefined arm and the pre-loop guard owns its private return prefix | real A32 output has no `var1` or accounting goto; exact host and A32 comparisons have no attributable decline |
+| [results/wp4-raw-loop-continue.md](decompiler-review-2026-09-02/results/wp4-raw-loop-continue.md) | 2026-09-05 | Exact raw-loop header backedges become source-level `continue` | six gotos and the unused loop-header label disappear from the real A32 function with execution and accounting preserved |
 
 ## `design/`
 

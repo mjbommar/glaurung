@@ -71,6 +71,8 @@ dispatch shape. No status change is attributed to the structural-quality edit.
 - generated census at `0e29ffc4`: 4,633 declared tests and zero never-executed
   entries.
 
-These commits close the concrete precondition and outer-guard defects. They do
-not make the raw loop source-like: case-specific labels/gotos and the missing
-high-level `for` induction variable remain WP4/WP7 readability work.
+These commits close the concrete precondition and outer-guard defects. Commit
+`c9483542` subsequently replaces all six exact header backedges with
+source-level `continue`; see `wp4-raw-loop-continue.md`. Case-handler entry
+gotos and the missing high-level `for` induction variable remain WP4/WP7
+readability work.

@@ -151,6 +151,10 @@ The follow-on quality increments at `28b3bc5b` and `0e29ffc4` eliminate the
 unreachable undefined `var1` select arm and the final outer-guard
 `EdgeViaGoto`. Exact host and A32 comparisons show no attributable status
 decline; see `results/wp4-a32-guard-quality.md`.
+Commit `c9483542` then lowers every exact raw-loop header backedge to
+source-level `continue`, removing six more gotos and the unused header label
+from the real output without changing its execution status or clean accounting;
+see `results/wp4-raw-loop-continue.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -2218,9 +2222,12 @@ relevant ratchet's accepted-regression record.
    `dispatch_in_loop` fail-to-pass movement with no attributable decline.
    Commits `28b3bc5b` and `0e29ffc4` remove the surviving outer-guard goto and
    undefined-looking temporary as separately proved quality work, with no
-   attributable decline in the exact host/A32 comparisons. Next continue with
-   Thumb loop tables, AArch64 adjacent-table variants, and wide-selector forms,
-   while reducing the raw loop's remaining case-latch gotos.
+   attributable decline in the exact host/A32 comparisons. Commit `c9483542`
+   then replaces the raw loop's six exact header-backedge gotos with
+   source-level `continue`, with no attributable A32 status change. Next
+   continue with Thumb loop tables, AArch64 adjacent-table variants, and
+   wide-selector forms, while proving whether exclusively entered case-handler
+   bodies can be inlined without duplicating shared joins.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
