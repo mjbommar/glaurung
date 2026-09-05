@@ -4,9 +4,9 @@
 
 ## Outcome
 
-The bounded fixture-197 slice is closed at behavioral commit `db750dbc`, with
-its nine exact baseline changes and test-census refresh committed at
-`1bee3fb1`. All non-structural functions in
+The bounded fixture-197 slice is closed at behavioral commits `db750dbc` and
+`197e6383`, with its nine exact baseline changes committed at `1bee3fb1` and
+the final test-census refresh at `a0915220`. All non-structural functions in
 `197_homogeneous_float_aggregates` now pass the GCC/Clang O0/O2 host matrix.
 The two `hfa197_consume_pair2d` cells remain intentionally structural because
 the execution oracle does not synthesize aggregate-by-value inputs.
@@ -29,7 +29,10 @@ concat rewrite is restricted to physical packed-dword lane names; unknown
 operand widths retain the conservative historical form. It also prevents the
 plain-AST role pass from merging integer and SSE scratch registers into one
 `ret` identity after a proved SSE-pair object has already been materialized.
-Ordinary scalar returns retain the existing role mapping.
+Ordinary scalar returns retain the existing role mapping. Follow-up commit
+`197e6383` restricts dead scalar-view bridge deletion to an exact contiguous
+four-lane load/bridge/matching-store transport; computed packed bridges remain
+available to the SSE-pair materializer.
 
 ## Release-built fixture evidence
 
@@ -39,8 +42,8 @@ The extension was rebuilt with:
 uv run maturin develop --release
 ```
 
-The resulting `target/release/libglaurung.so` had SHA-256
-`f8ec19745373ff272330a0bb71a0e09c83413ab80d9bfd7e54b3fc91b5ad43e9`.
+The final resulting `target/release/libglaurung.so` had SHA-256
+`3e32528a4009456253537e3a5e2bd2dc29768747fbbe2eb8f52af3b35fc2d402`.
 Fixture source SHA-256 was
 `d3e802bed2ed9c17af66ef674ae6c7cb3d7bc82936dfb6df7f8eb00f8e503a7f`;
 the recorded compilers are GCC 11.4.0 and Clang 14.0.0.
@@ -76,8 +79,8 @@ pass or intentionally structural.
 
 ## Focused tests and records
 
-The slice adds 16 declared Rust tests, moving the generated census from 4,582
-to 4,598 and the `ir` subtotal from 2,077 to 2,093, with zero declared tests
+The slice adds 17 declared Rust tests, moving the generated census from 4,582
+to 4,599 and the `ir` subtotal from 2,077 to 2,094, with zero declared tests
 outside every gate. Focused checks cover:
 
 - all-or-nothing SSE-pair composition and clobber/branch refusal;
@@ -90,10 +93,20 @@ outside every gate. Focused checks cover:
   control case.
 
 `cargo test --features python-ext packed_ --lib` reports 37 passed, while the
-focused concat and naming filters also pass. The committed census reproduces
-under `python/tests/test_test_census.py` (six passed). Full Rust and whole-Python
-results are reported separately when run; the focused and fixture evidence is
-not a current-tip release-gate claim.
+focused concat, naming, and vector-transport filters also pass. The committed
+census reproduces under `python/tests/test_test_census.py` (six passed).
+
+The full Rust command reached 4,082 passing library tests, zero failing, and
+five ignored after the vector-copy repair. It later failed the independent
+identity-retrieval ratchet: XM AUC measured `0.851668` against a required
+`0.851700` (delta `-0.000032`). The ratchet was not weakened. The whole fixture
+matrix/structural, def-use, and structure-census checks also remain red with a
+mixture of longstanding baseline improvements and regressions outside this
+slice; among them are two semantic fixture regressions (`rust_slice_get` and
+`population_variance`) and existing structural/def-use drift that still needs
+WP10 base/overlay triage. These red results are recorded, not normalized into
+new baselines. The focused and fixture evidence is therefore not a current-tip
+release-gate claim.
 
 ## Scope and limits
 
