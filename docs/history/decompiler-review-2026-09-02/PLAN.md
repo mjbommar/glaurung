@@ -194,6 +194,17 @@ source-level `continue`, removing six more gotos and the unused header label
 from the real output without changing its execution status or clean accounting.
 The exact 3,346-function host comparison has zero status/category movement;
 see `results/wp4-raw-loop-continue.md`.
+The next host-wide-selector slice is landed at `9333881e` and hardened at
+`98a0d2d3`. Clang and GCC O2 fixture-215 `wide_selector_mixed` now retain all
+six typed cases even though case zero borrows a return also reached by the
+formal default. The first complete def-use run caught that unrestricted SSA
+ancestry and cyclic borrowed-return reachability regressed the already-green
+fixture-206 Clang O2 loop switch. That movement was rejected, reduced to a
+unit and real-binary regression, and repaired by distinguishing boolean
+predicate provenance from arbitrary data dependence and by keeping cyclic
+guard ownership on a direct-comparison contract. The hardened result preserves
+both switches and restores all 169 normalized def-use findings byte-for-byte;
+see `results/wp5-wide-selector-shared-return.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -2307,6 +2318,17 @@ relevant ratchet's accepted-regression record.
    not an implementation result. The suite therefore remains broadly red and
    the timing is not a matched performance comparison.
    See `results/wp4-raw-switch-private-branches.md`.
+   The following host wide-selector slice at `9333881e` recovers Clang and GCC
+   O2 fixture-215 `wide_selector_mixed`, including the case-zero return shared
+   with the formal default. Its first full def-use census exposed one real
+   fixture-206 loop-switch regression from over-broad predicate/cyclic
+   ownership. Hardening commit `98a0d2d3` rejects arithmetic ancestry, limits
+   transitive provenance to boolean operations, and refuses transitive dense-
+   guard folding inside cyclic ownership. Fixture 215 and both the host-Clang
+   and ARMv7 fixture-206 controls now pass together; the normalized def-use
+   report is again exactly the preceding 169 findings. Continue the wide-
+   selector matrix only from this hardened boundary. See
+   `results/wp5-wide-selector-shared-return.md`.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
