@@ -90,6 +90,8 @@ score can be compared against it; see
 | `back_edges` | edges the builder marked as returning to an enclosing loop head |
 | `dead_end_nodes` | reachable nodes from which the function end cannot be reached |
 | `node_kinds` | how many CFG nodes carry each kind: `entry`, `exit`, `stmt`, `cond`, `loop_header`, `switch`, `case`, `label`, `goto`, `break`, `continue`, `return`, `diverge` |
+| `gotos` | `goto` transfers, i.e. `node_kinds["goto"]`, surfaced because it is the headline number for judging decompiler output |
+| `is_structured` | whether the function contains no `goto`. A statement about the *text*, not about what is possible: a function that could have been written without one but was not reads `False` |
 | `edge_kinds` | the same census for `fall`, `true`, `false`, `case`, `default`, `fall_through`, `jump` |
 
 **Why `cyclomatic` and `decision_points` are both reported.** The textbook
@@ -207,9 +209,25 @@ Measured on `tests/decbench_corpus/src/statemachine.c`, same tree:
 | `compare(before, after, *, metrics=...)` | per-function movement between two reports |
 
 `SourceReport` carries `.functions`, `.diagnostics`, `.lines`, `.code_lines`,
-`.blank_lines`, `.other_lines`, `.source`, `.to_dict()`, and
-`.hotspots(by=..., limit=...)` — which raises `ValueError` on an unknown metric
-rather than quietly returning source order.
+`.blank_lines`, `.other_lines`, `.source` and `.to_dict()`, plus four methods:
+
+| method | returns |
+|---|---|
+| `.hotspots(by="cognitive", limit=10)` | the functions scoring highest on one metric, descending, name as tie-break. Raises `ValueError` on an unknown metric rather than quietly returning source order |
+| `.summary()` | whole-unit aggregates: line counts, function count, `structured_functions`, total `gotos` and `unreachable_statements`, and `min`/`median`/`mean`/`max` per metric |
+| `.call_graph()` | `{caller: (callee, ...)}` over measured functions |
+| `.defined_names()` | the function names this unit defines |
+
+Two deliberate choices in those last three. **`summary()` on a unit with no
+functions returns the same keys with `distributions` empty rather than zeroed** —
+a mean of zero over no functions reads like a measurement and is not one.
+**`call_graph()` keeps edges to names this unit does not define** (a call to
+`malloc` is a real edge, and dropping it would make the function look like it
+calls nothing) and **contributes no edge for an indirect call**, because there is
+no name to record; intersect with `defined_names()` for the internal-only graph.
+`calls` and the call-graph edge count therefore disagree exactly where a pointer
+or a struct member was called, which is the useful signal rather than a
+discrepancy.
 
 `features` exists for the **stable column vector**, not for speed. Measured over
 `tests/decompiler_fixtures/src` (196 files, 900 functions, 0.78 MB) on a
@@ -268,14 +286,36 @@ no diagnostic. Use it only for a real gcc `.i` unit. Pinned by
 ```console
 $ glaurung source-metrics PATH... [--sort METRIC] [--limit N]
                                   [--dialect preprocessed|decompiled]
-                                  [--json | --csv]
+                                  [--summary] [--json | --csv]
                                   [--fail-over METRIC=N ...]
 ```
 
-Directories are searched recursively for `*.c` and `*.h`. `--csv` writes the
-feature matrix with a `path,function,…` header. `--fail-over` is repeatable,
-lists every violation on stderr, and **exits 1** — a malformed or unknown metric
-exits 2 rather than leaving the gate silently passing.
+Directories are searched recursively for `*.c` and `*.h`. Four output shapes,
+because the use cases want different things:
+
+| flag | shape |
+|---|---|
+| *(default)* | one ranked function table across every file measured |
+| `--summary` | one aggregate line per file, plus a `TOTAL` |
+| `--json` | the full report per file; with `--summary`, the aggregates |
+| `--csv` | the feature matrix, `path,function,…` header, one row per function |
+
+`--summary` is the whole-tree view — which files carry the complexity, and where
+the unstructured control flow is:
+
+```console
+$ glaurung source-metrics tests/decbench_corpus/src --summary
+file                                                  fns  lines maxcyc maxcog  goto  dead
+tests/decbench_corpus/src/arith.c                       3      4      3      2     0     0
+tests/decbench_corpus/src/arrays.c                      3      4      3      3     0     0
+tests/decbench_corpus/src/branches.c                    2      3      3      4     0     0
+...
+TOTAL                                                  30     61                   0     0
+```
+
+`--fail-over` is repeatable, lists every violation on stderr, and **exits 1** —
+a malformed or unknown metric exits 2 rather than leaving the gate silently
+passing:
 
 ```console
 $ glaurung source-metrics src/ --fail-over cyclomatic=25 --fail-over max_nesting=5

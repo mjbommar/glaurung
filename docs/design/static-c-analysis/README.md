@@ -104,6 +104,25 @@ It is computed on `csource::cfg` and never on `csource::joern`, for the reason
 parity graph would reproduce a JVM program's expression granularity rather than
 measure the source.
 
+### What it deliberately does not do yet
+
+Each of these was considered and held, with the reason, so that reviving one is
+a decision rather than a rediscovery.
+
+| held | why |
+|---|---|
+| **Recursion in cognitive complexity** | The specification adds 1 for a recursive call. One function's text cannot tell whether a name resolves back to the enclosing function or to a different declaration with the same spelling. `SourceReport.call_graph()` now makes this decidable *within* a translation unit, which is where it should be picked up |
+| **Maintainability index, Halstead's bug estimate** | Three mutually incompatible formulas are in circulation for MI and the bug estimate is contested. All four raw Halstead counts are reported, so a caller who wants one computes it under a convention they can name |
+| **Constant folding for `unreachable_statements`** | Would turn the figure from a lower bound into a real one — the statement after `for (;;) {}` is currently uncounted. It needs an evaluator the front end does not have, and adding one widens the "smallest C front end" scope this directory exists to bound |
+| **A `--baseline` mode on the CLI** | `compare()` exists in Python only. A CLI that diffs against a stored report is what makes build-over-build gating usable from CI, and is a small amount of work on top of what landed |
+| **A `lang=` parameter** | `src/syntax/` is language-neutral and `REQ-SYN-1` is enforced, but `analyze` takes no language. Add it with the second front end, not before: a parameter with one legal value is a promise the code does not yet keep |
+
+Two limits are properties of the front end rather than of the metrics, and are
+stated in [the reference](../../reference/source-metrics.md) rather than fixed
+here: `unreachable_statements` is a lower bound because nothing folds
+constants, and `dialect="preprocessed"` strips a file with no line markers to
+nothing because the stripper starts inside a system header.
+
 ## Related
 
 * [`development/decompiler-testing.md`](../../development/decompiler-testing.md)

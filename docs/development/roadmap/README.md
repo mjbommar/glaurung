@@ -65,6 +65,7 @@ record, carrying the commit for every landed item.
 | [real-world-malware-assets.md](real-world-malware-assets.md) | R5 — hostile shapes with real oracles |
 | [performance-determinism-ratchet.md](performance-determinism-ratchet.md) | R6 — fail-closed performance and determinism evidence |
 | [real-binary-decompiler.md](real-binary-decompiler.md) | the product-facing ordering, non-goals, and the items carried from the 2026-08-13 roadmap |
+| [distribution.md](distribution.md) | getting Glaurung installable — the never-fired release matrix, the 104-package base install, and what a wheel costs |
 | [../test-estate/README.md](../test-estate/README.md) | R7 — the estate-hygiene layer these sit on top of |
 
 ## Progress
