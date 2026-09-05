@@ -101,6 +101,15 @@ pub(super) fn fold_one_call(
         ) {
             return;
         }
+        if forward_proven_sysv_sse_pair(
+            body,
+            call_idx,
+            arch,
+            layout,
+            callee_layouts.direct_prototypes,
+        ) {
+            return;
+        }
         // An optimized call may pass the values already occupying ABI storage,
         // leaving no adjacent setup assignments to fold. The callee layout
         // proves which storage is read, but it does not prove the reaching
@@ -710,6 +719,102 @@ pub(super) fn fold_one_call(
     used_stmt_indices.sort_by(|a, b| b.cmp(a));
     for idx in used_stmt_indices {
         body.remove(idx);
+    }
+}
+
+/// Preserve an immediately reaching `xmm0:xmm1` aggregate result across a
+/// tail call which consumes those same two System V SSE argument slots.
+///
+/// This is deliberately contract-driven. Register names alone would turn an
+/// arbitrary caller-clobbered pair into arguments. Both direct callees must
+/// have recovered prototypes, the producer must declare the synthesised SSE-
+/// pair result, and the consumer's exact recovered layout and fixed prototype
+/// must agree about both occupied slots. Any write, unknown instruction, call,
+/// or control-flow boundary between them declines the fold.
+fn forward_proven_sysv_sse_pair(
+    body: &mut [Stmt],
+    call_idx: usize,
+    arch: CallConv,
+    layout: &[VReg],
+    prototypes: Option<&std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>>,
+) -> bool {
+    if arch != CallConv::SysVAmd64
+        || layout.len() != 2
+        || !matches!(&layout[0], VReg::Phys(name) if ssa_base(name) == "xmm0")
+        || !matches!(&layout[1], VReg::Phys(name) if ssa_base(name) == "xmm1")
+    {
+        return false;
+    }
+    let Some(prototypes) = prototypes else {
+        return false;
+    };
+    let Some(consumer_va) = direct_call_target_va(&body[call_idx]) else {
+        return false;
+    };
+    let Some(consumer) = prototypes.get(&consumer_va) else {
+        return false;
+    };
+    let parameter_bytes = match consumer.parameter_types.as_slice() {
+        [low, high] if !consumer.variadic => {
+            [float_parameter_bytes(low), float_parameter_bytes(high)]
+        }
+        _ => return false,
+    };
+    let [Some(8), Some(high_bytes @ (4 | 8))] = parameter_bytes else {
+        return false;
+    };
+
+    for statement in body[..call_idx].iter().rev() {
+        match statement {
+            Stmt::Call { .. } => {
+                let Some(producer_va) = direct_call_target_va(statement) else {
+                    return false;
+                };
+                let Some(producer_high) = prototypes.get(&producer_va).and_then(|prototype| {
+                    crate::ir::abi::sse_pair_return_high_bytes(&prototype.return_type)
+                }) else {
+                    return false;
+                };
+                if producer_high < high_bytes {
+                    return false;
+                }
+                if let Stmt::Call { args, .. } = &mut body[call_idx] {
+                    *args = layout.iter().cloned().map(Expr::Reg).collect();
+                    return true;
+                }
+                return false;
+            }
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            } if matches!(ssa_base(name), "xmm0" | "xmm1")
+                || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some() =>
+            {
+                return false;
+            }
+            Stmt::Comment(text) if text.contains("asm:") => return false,
+            Stmt::If { .. }
+            | Stmt::While { .. }
+            | Stmt::DoWhile { .. }
+            | Stmt::For { .. }
+            | Stmt::Switch { .. }
+            | Stmt::TryCatch { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Return { .. }
+            | Stmt::Break => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn float_parameter_bytes(c_type: &str) -> Option<u8> {
+    match c_type.trim() {
+        "float" => Some(4),
+        "double" => Some(8),
+        _ => None,
     }
 }
 

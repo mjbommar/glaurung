@@ -410,6 +410,30 @@ pub fn reconstruct_args_with_layouts_and_strings(
     table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
     string_pool: &std::collections::HashMap<u64, String>,
 ) {
+    reconstruct_args_with_layouts_prototypes_and_strings(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        table_entry_layouts,
+        None,
+        string_pool,
+    );
+}
+
+/// As [`reconstruct_args_with_layouts_and_strings`], with recovered direct-
+/// callee prototypes available for multi-register forwarding proofs.
+pub fn reconstruct_args_with_layouts_prototypes_and_strings(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    direct_prototypes: Option<
+        &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    >,
+    string_pool: &std::collections::HashMap<u64, String>,
+) {
     // The spelling this function uses for each live-in argument register is a
     // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
     // contain the call makes an untouched incoming parameter invisible to every
@@ -424,6 +448,7 @@ pub fn reconstruct_args_with_layouts_and_strings(
         CalleeLayouts {
             direct: callee_layouts,
             table_entry: table_entry_layouts,
+            direct_prototypes,
         },
         &function_live_ins,
         string_pool,
@@ -601,6 +626,8 @@ fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [
 pub struct CalleeLayouts<'facts> {
     direct: &'facts std::collections::HashMap<u64, Vec<VReg>>,
     table_entry: &'facts std::collections::HashMap<u64, Vec<VReg>>,
+    direct_prototypes:
+        Option<&'facts std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>>,
 }
 
 fn fold_body(
@@ -4027,15 +4054,139 @@ mod tests {
     }
 
     fn call_to(name: &str) -> Stmt {
+        call_at(0x2000, name)
+    }
+
+    fn call_at(va: u64, name: &str) -> Stmt {
         Stmt::Call {
             target: Expr::Named {
-                va: 0x2000,
+                va,
                 name: name.into(),
             },
             args: vec![],
             dst: None,
             call_spec: None,
         }
+    }
+
+    fn recovered_prototype(
+        return_type: &str,
+        parameter_types: &[&str],
+    ) -> crate::ir::call_contracts::CallPrototype {
+        crate::ir::call_contracts::CallPrototype {
+            return_type: return_type.into(),
+            parameter_types: parameter_types
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
+            variadic: false,
+            authority: crate::ir::call_contracts::CallPrototypeAuthority::Recovered,
+        }
+    }
+
+    #[test]
+    fn sysv_sse_pair_result_forwards_into_a_proven_pair_parameter_tail_call() {
+        let mut function = Function {
+            name: "pair_roundtrip".into(),
+            entry_va: 0x1000,
+            body: vec![
+                call_at(0x2000, "make_pair"),
+                Stmt::Assign {
+                    dst: reg("eax#1"),
+                    src: Expr::Const(3),
+                },
+                call_at(0x3000, "consume_pair"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([
+            (0x2000, vec![reg("rdi")]),
+            (0x3000, vec![reg("xmm0"), reg("xmm1")]),
+        ]);
+        let prototypes = std::collections::HashMap::from([
+            (
+                0x2000,
+                recovered_prototype("struct __glaurung_sse_pair", &["int"]),
+            ),
+            (0x3000, recovered_prototype("int", &["double", "double"])),
+        ]);
+        let mut parameters = [0].into_iter().collect();
+
+        reconstruct_args_with_layouts_prototypes_and_strings(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut parameters,
+            &layouts,
+            &std::collections::HashMap::new(),
+            Some(&prototypes),
+            &std::collections::HashMap::new(),
+        );
+
+        let args = function
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Call {
+                    target: Expr::Named { va: 0x3000, .. },
+                    args,
+                    ..
+                } => Some(args),
+                _ => None,
+            })
+            .next()
+            .expect("consumer call");
+        assert_eq!(args, &[Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))]);
+    }
+
+    #[test]
+    fn sysv_sse_pair_forwarding_refuses_an_intervening_high_bank_write() {
+        let mut function = Function {
+            name: "clobbered_pair".into(),
+            entry_va: 0x1000,
+            body: vec![
+                call_at(0x2000, "make_pair"),
+                Stmt::Assign {
+                    dst: reg("xmm1"),
+                    src: Expr::Const(0),
+                },
+                call_at(0x3000, "consume_pair"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([
+            (0x2000, vec![reg("rdi")]),
+            (0x3000, vec![reg("xmm0"), reg("xmm1")]),
+        ]);
+        let prototypes = std::collections::HashMap::from([
+            (
+                0x2000,
+                recovered_prototype("struct __glaurung_sse_pair", &["int"]),
+            ),
+            (0x3000, recovered_prototype("int", &["double", "double"])),
+        ]);
+        let mut parameters = [0].into_iter().collect();
+
+        reconstruct_args_with_layouts_prototypes_and_strings(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut parameters,
+            &layouts,
+            &std::collections::HashMap::new(),
+            Some(&prototypes),
+            &std::collections::HashMap::new(),
+        );
+
+        let args = function
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call {
+                    target: Expr::Named { va: 0x3000, .. },
+                    args,
+                    ..
+                } => Some(args),
+                _ => None,
+            })
+            .expect("consumer call");
+        assert!(args.is_empty(), "clobbered pair was forwarded: {args:?}");
     }
 
     #[test]
