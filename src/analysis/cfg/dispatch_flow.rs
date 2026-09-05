@@ -39,6 +39,16 @@ pub(super) fn observe_dispatch_instruction(
     instruction_va: u64,
 ) {
     tracker.observe(instruction);
+    if arch == BArch::ARM && bits == 32 {
+        if let Some((destination, literal_va)) = tracker.arm_pc_literal_load(instruction) {
+            match read_pointer_at_va(image, data, literal_va, 32)
+                .and_then(|value| u32::try_from(value).ok())
+            {
+                Some(offset) => tracker.materialize_arm_pc_relative_offset(destination, offset),
+                None => tracker.kill_register(destination),
+            }
+        }
+    }
     if arch != BArch::X86 || bits != 32 || !instruction.mnemonic.eq_ignore_ascii_case("call") {
         return;
     }
@@ -269,7 +279,9 @@ pub(super) fn replay_dispatch_block(
             let next_va = cur_va.saturating_add(instruction.length as u64);
             if matches!(arch, BArch::ARM) {
                 if let Some(defined) = arm_defined_register(instruction) {
-                    tracker.kill_register(defined);
+                    if !tracker.models_arm_definition(instruction) {
+                        tracker.kill_register(defined);
+                    }
                 }
             }
             observe_dispatch_instruction(
@@ -309,7 +321,9 @@ pub(super) fn replay_dispatch_block(
         // and re-validate a dispatch into existence.
         if matches!(arch, BArch::ARM) {
             if let Some(defined) = arm_defined_register(&instruction) {
-                tracker.kill_register(defined);
+                if !tracker.models_arm_definition(&instruction) {
+                    tracker.kill_register(defined);
+                }
             }
         }
         observe_dispatch_instruction(&mut tracker, image, data, arch, bits, &instruction, cur_va);

@@ -464,7 +464,14 @@ impl Disassembler for CapstoneDisassembler {
                                 match op.op_type {
                                     ArmOperandType::Reg(r) => {
                                         let name = cs.reg_name(r).unwrap_or_default();
-                                        operands.push(Operand::register(name, 0, Access::Read));
+                                        let mut operand = Operand::register(name, 0, Access::Read);
+                                        // ARM applies shifts to ordinary register
+                                        // operands as well as memory indices.  In
+                                        // `add pc, pc, r0, lsl #2` this scale is
+                                        // part of the branch-table encoding, not
+                                        // presentation metadata.
+                                        operand.scale = shift_to_scale(arm_lsl_amount(op.shift));
+                                        operands.push(operand);
                                     }
                                     ArmOperandType::Imm(i) => {
                                         operands.push(Operand::immediate(i as i64, 0))
@@ -685,6 +692,21 @@ mod tests {
             mem.scale.is_none() || mem.scale == Some(1),
             "an unshifted index is scale 1, got {:?}",
             mem.scale
+        );
+    }
+
+    #[test]
+    fn arm_shifted_register_operand_carries_its_scale() {
+        let cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+        // `add pc, pc, r0, lsl #2` from GCC's A32 compact switch terminal.
+        let ins = cs
+            .disassemble_instruction(&va(0x3c8), &[0x00, 0xf1, 0x8f, 0xe0])
+            .expect("decode");
+        assert_eq!(ins.mnemonic, "add");
+        assert_eq!(
+            ins.operands.get(2).and_then(|operand| operand.scale),
+            Some(4)
         );
     }
 

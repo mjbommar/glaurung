@@ -155,6 +155,22 @@ pub(super) fn arm_ldr_pc_table_dispatch(ins: &Instruction) -> bool {
     })
 }
 
+/// A32 compact-table terminal: `add pc, pc, rOffset, lsl #2`.
+pub(super) fn arm_add_pc_table_dispatch(ins: &Instruction) -> bool {
+    if !ins.mnemonic.eq_ignore_ascii_case("add") || ins.operands.len() != 3 {
+        return false;
+    }
+    let named = |index: usize, name: &str| {
+        ins.operands
+            .get(index)
+            .and_then(|operand| operand.register.as_deref())
+            .is_some_and(|register| register.eq_ignore_ascii_case(name))
+    };
+    named(0, "pc")
+        && named(1, "pc")
+        && ins.operands.get(2).and_then(|operand| operand.scale) == Some(4)
+}
+
 /// The register an ARM32 instruction defines, for a caller that must model
 /// definitions itself.
 ///
@@ -537,7 +553,10 @@ mod aarch64_ctrl_flow_tests {
 
 #[cfg(test)]
 mod arm32_ctrl_flow_tests {
-    use super::{arm_pop_writes_pc, classify_ctrl_flow, is_unconditional_branch_mnemonic, BArch};
+    use super::{
+        arm_add_pc_table_dispatch, arm_pop_writes_pc, classify_ctrl_flow,
+        is_unconditional_branch_mnemonic, BArch,
+    };
     use crate::core::address::{Address, AddressKind};
     use crate::core::binary::Endianness;
     use crate::core::disassembler::{Architecture, Disassembler};
@@ -569,5 +588,27 @@ mod arm32_ctrl_flow_tests {
         // for CFG construction.
         assert_eq!(classify_ctrl_flow("bxeq", BArch::ARM), (true, false, false));
         assert!(!is_unconditional_branch_mnemonic("bxeq", BArch::ARM));
+    }
+
+    #[test]
+    fn only_exact_a32_add_pc_scaled_by_four_is_a_compact_table_terminal() {
+        let mut backend =
+            CapstoneDisassembler::new(Architecture::ARM, Endianness::Little).expect("ARM backend");
+        backend.set_thumb_mode(false).expect("A32 mode");
+        let address = Address::new(AddressKind::VA, 0x508, 32, None, None).expect("address");
+        let terminal = backend
+            .disassemble_instruction(&address, &[0x00, 0xf1, 0x8f, 0xe0])
+            .expect("decode add pc, pc, r0, lsl #2");
+        assert!(arm_add_pc_table_dispatch(&terminal), "{terminal:#?}");
+
+        let wrong_scale = backend
+            .disassemble_instruction(&address, &[0x80, 0xf0, 0x8f, 0xe0])
+            .expect("decode add pc, pc, r0, lsl #1");
+        assert!(!arm_add_pc_table_dispatch(&wrong_scale));
+
+        let ordinary_add = backend
+            .disassemble_instruction(&address, &[0x00, 0x11, 0x8f, 0xe0])
+            .expect("decode add r1, pc, r0, lsl #2");
+        assert!(!arm_add_pc_table_dispatch(&ordinary_add));
     }
 }

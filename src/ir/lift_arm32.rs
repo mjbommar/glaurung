@@ -1202,6 +1202,25 @@ fn lift_one_decoded(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
         }];
     }
 
+    // A32 compact switch terminal.  The CFG has already decoded the bounded
+    // byte table behind this exact form; represent it as control flow so the
+    // structurer consumes those successors.  `lift_function` snapshots the
+    // original selector from the preceding indexed byte load before that load
+    // overwrites the same register with the encoded branch offset.
+    if mnem == "add"
+        && ops.len() == 3
+        && operand_reg_name(&ops[0]).as_deref() == Some("pc")
+        && operand_reg_name(&ops[1]).as_deref() == Some("pc")
+        && ops.get(2).and_then(|operand| operand.scale) == Some(4)
+    {
+        if let Some(offset) = ops.get(2).and_then(operand_reg) {
+            return vec![Op::IndirectJump {
+                target: Value::Reg(offset),
+                index: None,
+            }];
+        }
+    }
+
     // --- data processing: <op>{s} Rd, Rn, <reg|imm>  (or 2-operand form) --
     if let Some(op) = bin_for_mnem(mnem) {
         // The `S` suffix means the instruction also writes the condition flags.
@@ -3280,6 +3299,24 @@ mod tests {
             matches!(stored.as_slice(), [Op::Store { addr, .. }] if addr.scale == 4
                 && addr.index == Some(VReg::phys("r2"))),
             "store index scale: {stored:#?}"
+        );
+    }
+
+    #[test]
+    fn a32_compact_table_terminal_is_an_indirect_jump() {
+        let out: Vec<Op> = lift_bytes(&[0x00, 0xf1, 0x8f, 0xe0], 0x3c8, false)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(
+            matches!(
+                out.as_slice(),
+                [Op::IndirectJump {
+                    target: Value::Reg(VReg::Phys(register)),
+                    index: None,
+                }] if register == "r0"
+            ),
+            "A32 compact switch was not lifted as a branch: {out:#?}"
         );
     }
 

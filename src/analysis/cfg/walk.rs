@@ -273,7 +273,9 @@ pub(super) fn discover_function(
             // has to be named here or a stale bound would size the next table.
             if matches!(arch, BArch::ARM) {
                 if let Some(defined) = arm_defined_register(&ins) {
-                    dispatch.kill_register(defined);
+                    if !dispatch.models_arm_definition(&ins) {
+                        dispatch.kill_register(defined);
+                    }
                 }
             }
             observe_dispatch_instruction(
@@ -299,8 +301,9 @@ pub(super) fn discover_function(
             // `ldr pc, [rBase, rIdx, lsl #2]` is an unconditional indirect
             // branch, and the mnemonic alone cannot say so either. Without this
             // the sweep decodes the table it reads as instructions.
-            let arm_table_dispatch =
-                matches!(arch, BArch::ARM) && !is_ret && arm_ldr_pc_table_dispatch(&ins);
+            let arm_table_dispatch = matches!(arch, BArch::ARM)
+                && !is_ret
+                && (arm_ldr_pc_table_dispatch(&ins) || arm_add_pc_table_dispatch(&ins));
             if arm_table_dispatch {
                 is_branch = true;
             }

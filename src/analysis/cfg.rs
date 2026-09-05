@@ -86,9 +86,9 @@ use body_index::{cap_discovered_functions_at_va, va_in_function_body, BodyIndex}
 use budgets::scan_within;
 
 use ctrl_flow::{
-    arm_defined_register, arm_ldr_pc_table_dispatch, arm_pop_writes_pc, classify_ctrl_flow,
-    guard_fallthrough_bound, guard_taken_bound, immediate_target, is_code_padding_terminator,
-    is_unconditional_branch_mnemonic, memory_operand_va,
+    arm_add_pc_table_dispatch, arm_defined_register, arm_ldr_pc_table_dispatch, arm_pop_writes_pc,
+    classify_ctrl_flow, guard_fallthrough_bound, guard_taken_bound, immediate_target,
+    is_code_padding_terminator, is_unconditional_branch_mnemonic, memory_operand_va,
 };
 
 use dispatch_flow::{

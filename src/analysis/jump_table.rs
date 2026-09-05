@@ -383,6 +383,104 @@ where
     Ok(targets)
 }
 
+/// Decode A32 `LDRB; ADD pc, pc, Rm, LSL #2` compact branch tables.
+///
+/// Each table byte is an unsigned instruction-word offset from the A32 value
+/// of `pc` at the terminal `add`.  The exact extent must come from the unsigned
+/// range guard; reading beyond it would reinterpret adjacent data as branches.
+pub fn decode_arm_unsigned_byte_table<F>(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    table_va: u64,
+    target_base: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Result<JumpTable, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    if entry_count == 0 {
+        return Err(TableDecline::ZeroEntries);
+    }
+    if entry_count > MAX_TABLE_ENTRIES {
+        return Err(TableDecline::EntryCountAboveCeiling {
+            requested: entry_count,
+            ceiling: MAX_TABLE_ENTRIES,
+        });
+    }
+    let mut decline = TableDecline::NoSectionCovers {
+        table_va,
+        byte_count: entry_count,
+    };
+    if let Some(image) = image {
+        for section in image.sections() {
+            let Some(entries) =
+                section_entries(section.address(), section.data(), table_va, entry_count)
+            else {
+                continue;
+            };
+            match decode_arm_unsigned_byte_entries(
+                entries,
+                table_va,
+                target_base,
+                &is_executable_va,
+            ) {
+                Ok(targets) => return Ok(JumpTable { table_va, targets }),
+                Err(reason) => decline = reason,
+            }
+        }
+        return Err(decline);
+    }
+    let object = crate::decompile::profile::parse_object(data)
+        .map_err(|_| TableDecline::ObjectParseFailed)?;
+    for span in crate::program::spans::addressable_spans(&object) {
+        let Some(entries) = section_entries(span.address, span.bytes, table_va, entry_count) else {
+            continue;
+        };
+        match decode_arm_unsigned_byte_entries(entries, table_va, target_base, &is_executable_va) {
+            Ok(targets) => return Ok(JumpTable { table_va, targets }),
+            Err(reason) => decline = reason,
+        }
+    }
+    Err(decline)
+}
+
+fn decode_arm_unsigned_byte_entries<F>(
+    entries: &[u8],
+    table_va: u64,
+    target_base: u64,
+    is_executable_va: &F,
+) -> Result<Vec<u64>, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    let table_end = table_va
+        .checked_add(
+            u64::try_from(entries.len()).map_err(|_| TableDecline::ExtentOverflow {
+                entry_count: entries.len(),
+                entry_size: 1,
+            })?,
+        )
+        .ok_or(TableDecline::TargetArithmeticOverflow { index: 0 })?;
+    let mut targets = Vec::with_capacity(entries.len());
+    for (index, byte) in entries.iter().copied().enumerate() {
+        let scaled = u64::from(byte)
+            .checked_mul(4)
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
+        let target = target_base
+            .checked_add(scaled)
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
+        if !is_executable_va(target) {
+            return Err(TableDecline::NonExecutableTarget { index, target });
+        }
+        if (table_va..table_end).contains(&target) {
+            return Err(TableDecline::TargetInsideTable { index, target });
+        }
+        targets.push(target);
+    }
+    Ok(targets)
+}
+
 /// Exactly `byte_count` bytes at `table_va` inside one section, when they fit.
 fn section_entries(
     section_va: u64,
@@ -860,6 +958,32 @@ mod tests {
             Err(TableDecline::TargetInsideTable {
                 index: 0,
                 target: 0x100,
+            })
+        );
+    }
+
+    #[test]
+    fn arm_unsigned_byte_entries_use_a32_pc_base_and_scale_four() {
+        let entries = [0u8, 3, 8, 1];
+        assert_eq!(
+            decode_arm_unsigned_byte_entries(&entries, 0x624, 0x3d0, &|target| {
+                (0x3d0..0x500).contains(&target)
+            }),
+            Ok(vec![0x3d0, 0x3dc, 0x3f0, 0x3d4])
+        );
+    }
+
+    #[test]
+    fn arm_unsigned_byte_entries_decline_overflow_and_non_code() {
+        assert_eq!(
+            decode_arm_unsigned_byte_entries(&[1], 0x200, u64::MAX - 2, &|_| true),
+            Err(TableDecline::TargetArithmeticOverflow { index: 0 })
+        );
+        assert_eq!(
+            decode_arm_unsigned_byte_entries(&[0, 2], 0x200, 0x100, &|target| target == 0x100),
+            Err(TableDecline::NonExecutableTarget {
+                index: 1,
+                target: 0x108,
             })
         );
     }

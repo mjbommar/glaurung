@@ -905,6 +905,108 @@ def test_i386_o2_got_relative_switches_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_o2_pc_relative_byte_switch_round_trips(tmp_path: Path) -> None:
+    """GCC A32 PIC byte offsets are relative to pc at the terminal add."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dense_dispatch"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+    )
+
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> None:
+    """Discovery and typed transport reach the structurer that owns loop latches."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dispatch_in_loop"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2:shadow-v2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+        shadow_v2=True,
+    )
+
+    assert results["dispatch_in_loop"]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.xfail(
+    strict=True,
+    reason="v1 does not yet own all backedges of an A32 switch nested in a loop",
+)
+def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
+    """Keep the production-structurer ownership gap executable and visible."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={"dispatch_in_loop"},
+    )
+
+    assert results["dispatch_in_loop"]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) -> None:
     """A terminating range guard must make the following table load portable."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:

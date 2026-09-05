@@ -112,6 +112,12 @@ enum Val {
         target_base: u64,
         bound: Option<u64>,
     },
+    /// A word loaded from an ARM32 PC-relative literal pool.  GCC uses this as
+    /// the displacement in `add rBase, pc, rOffset` when materialising a PIC
+    /// switch table address.
+    ArmPcRelativeOffset(u64),
+    /// One unsigned byte loaded from an A32 compact branch table.
+    ArmByteOffset { table: u64, bound: Option<u64> },
 }
 
 /// Why an indirect transfer's targets could not be recovered.
@@ -278,6 +284,17 @@ pub struct Aarch64ByteTableBranch {
     pub entry_count: Option<usize>,
 }
 
+/// A32's `LDRB; ADD pc, pc, Rm, LSL #2` compact branch table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArmByteTableBranch {
+    /// Address of the unsigned-byte offset table.
+    pub table_va: u64,
+    /// A32 value of `pc` at the dispatch instruction.
+    pub target_base: u64,
+    /// Exact table extent proved by the dispatch guard.
+    pub entry_count: Option<usize>,
+}
+
 /// The outcome of resolving one indirect transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -426,7 +443,9 @@ impl DispatchTracker {
                 | Val::TableOffset { .. }
                 | Val::TableTarget { .. }
                 | Val::Aarch64ByteOffset { .. }
-                | Val::Aarch64ByteTarget { .. } => None,
+                | Val::Aarch64ByteTarget { .. }
+                | Val::ArmPcRelativeOffset(_)
+                | Val::ArmByteOffset { .. } => None,
             })
             .collect()
     }
@@ -945,6 +964,14 @@ impl DispatchTracker {
         // after the range logic above has consumed comparisons. Every other
         // destination write is killed conservatively.
         if self.observe_aarch64_compact_table(ins, m.as_ref()) {
+            return;
+        }
+
+        // A32's compact PIC switch reads one unsigned byte from a materialised
+        // table and branches with `add pc, pc, byte, lsl #2`.  Capstone does
+        // not expose ARM writes, so handle the exact load before the generic
+        // destination path for the same reason as `arm_adr_target` below.
+        if self.observe_arm_byte_table_load(ins) {
             return;
         }
 
@@ -1761,6 +1788,71 @@ mod tests {
         assert_eq!(branch.entry_count, Some(8));
     }
 
+    #[test]
+    fn the_real_a32_unsigned_byte_dispatch_preserves_extent_and_pc_base() {
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::A32));
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("r0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+
+        // GCC 15 fixture 206: the literal word 0x264 is added to A32 pc at
+        // 0x3b8 (0x3c0), materialising the byte table at 0x624.
+        tracker.materialize_arm_pc_relative_offset("r3", 0x264);
+        tracker.observe(&ins_at(
+            "add",
+            vec![reg_read("r3"), reg_read("pc"), reg_read("r3")],
+            0x3b8,
+            4,
+        ));
+        tracker.observe(&ins_at(
+            "ldrb",
+            vec![reg_read("r0"), mem_op_scale(Some("r3"), 0, Some("r0"), 1)],
+            0x3c4,
+            4,
+        ));
+        let mut offset = reg_read("r0");
+        offset.scale = Some(4);
+        let branch = tracker
+            .arm_byte_table_branch(&ins_at(
+                "add",
+                vec![reg_read("pc"), reg_read("pc"), offset],
+                0x3c8,
+                4,
+            ))
+            .expect("the exact A32 compact table terminal resolves");
+        assert_eq!(branch.table_va, 0x624);
+        assert_eq!(branch.target_base, 0x3d0);
+        assert_eq!(branch.entry_count, Some(16));
+    }
+
+    #[test]
+    fn a32_unsigned_byte_dispatch_refuses_wrong_scale_and_mode() {
+        let make_terminal = |scale| {
+            let mut offset = reg_read("r0");
+            offset.scale = Some(scale);
+            ins_at(
+                "add",
+                vec![reg_read("pc"), reg_read("pc"), offset],
+                0x3c8,
+                4,
+            )
+        };
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::A32));
+        tracker.materialize_address("r3", 0x624);
+        tracker.observe(&ins_at(
+            "ldrb",
+            vec![reg_read("r0"), mem_op_scale(Some("r3"), 0, Some("r0"), 1)],
+            0x3c4,
+            4,
+        ));
+        assert!(tracker.arm_byte_table_branch(&make_terminal(2)).is_none());
+        tracker.set_arm_pc_mode(Some(ArmPcMode::Thumb));
+        assert!(tracker.arm_byte_table_branch(&make_terminal(4)).is_none());
+    }
+
     /// Without a declared execution state the base is never materialised, so
     /// the dispatch declines instead of naming a table four bytes off.
     #[test]
@@ -2042,7 +2134,7 @@ mod tests {
         ];
         let decoder =
             registry::for_arch(Architecture::X86_64, Endianness::Little).expect("x86-64 decoder");
-        let mut replay = |tracker: &mut DispatchTracker, base: u64, bytes: &[u8]| {
+        let replay = |tracker: &mut DispatchTracker, base: u64, bytes: &[u8]| {
             let mut offset = 0usize;
             let mut last = None;
             while offset < bytes.len() {

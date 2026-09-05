@@ -592,14 +592,19 @@ fn switch_index_source_before(
         if let Some(index) = &addr.index {
             components.push((index, u64::from(addr.scale.max(1))));
         }
-        let cross_block_index =
-            if components.len() == 2 && components.iter().any(|(_, scale)| *scale == 1) {
-                components
-                    .iter()
-                    .find_map(|(register, scale)| (*scale == 4).then_some((*register).clone()))
-            } else {
-                None
-            };
+        let cross_block_index = if addr.size == 1 {
+            // Compact ARM tables keep the materialised table in `base` and
+            // the source selector in `index`; both have scale one at the byte
+            // load, so scale alone cannot distinguish them when the base
+            // arrived from a predecessor block.
+            addr.index.clone()
+        } else if components.len() == 2 && components.iter().any(|(_, scale)| *scale == 1) {
+            components
+                .iter()
+                .find_map(|(register, scale)| (*scale == 4).then_some((*register).clone()))
+        } else {
+            None
+        };
         let has_table_base = components.iter().any(|(register, address_scale)| {
             *address_scale == 1
                 && resolves_to_address(instructions, register, load_index, 0).is_some()
@@ -1303,6 +1308,67 @@ mod tests {
                 _ => None,
             })
             .expect("snapshot the compact table's scale-one selector");
+        assert!(matches!(
+            blocks[0].instrs.last().map(|instruction| &instruction.op),
+            Some(Op::IndirectJump {
+                index: Some(Value::Reg(index)),
+                ..
+            }) if index == &snapshot
+        ));
+    }
+
+    #[test]
+    fn resolved_a32_byte_switch_snapshots_an_overwritten_index() {
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x504,
+            end_va: 0x50c,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x504,
+                    op: Op::Load {
+                        dst: VReg::Temp(0),
+                        addr: MemOp::plain(
+                            Some(VReg::phys("r12")),
+                            Some(VReg::phys("r3")),
+                            1,
+                            0,
+                            1,
+                        ),
+                    },
+                },
+                LlirInstr {
+                    va: 0x504,
+                    op: Op::ZExt {
+                        dst: VReg::phys("r3"),
+                        src: Value::Reg(VReg::Temp(0)),
+                        from: Width::W8,
+                        to: Width::W32,
+                    },
+                },
+                LlirInstr {
+                    va: 0x508,
+                    op: Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("r3")),
+                        index: None,
+                    },
+                },
+            ],
+            succs: (0..7).map(|index| 0x518 + index * 0x10).collect(),
+        }];
+
+        annotate_resolved_switch_indices(&mut blocks);
+
+        let snapshot = blocks[0]
+            .instrs
+            .iter()
+            .find_map(|instruction| match &instruction.op {
+                Op::Assign {
+                    dst: snapshot @ VReg::Temp(id),
+                    src: Value::Reg(source),
+                } if *id > 0 && source == &VReg::phys("r3") => Some(snapshot.clone()),
+                _ => None,
+            })
+            .expect("snapshot the A32 selector before ldrb overwrites r3");
         assert!(matches!(
             blocks[0].instrs.last().map(|instruction| &instruction.op),
             Some(Op::IndirectJump {
