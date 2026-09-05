@@ -142,11 +142,24 @@ pub fn apply_role_names_with_parameter_roles(
             role.entry(name).or_insert_with(|| "ret".to_string());
         }
     }
-    for name in return_reg_aliases(cc) {
-        // `ret` only wins if no arg-slot already claimed the name (x0 case
-        // above keeps `arg0`).
-        role.entry(name.to_string())
-            .or_insert_with(|| "ret".to_string());
+    // A materialised SSE-pair result has already captured `xmm0:xmm1` into a
+    // synthetic object. Those registers and the integer aliases (`eax`, etc.)
+    // are now ordinary scratch storage. Renaming every ABI-capable carrier to
+    // one `ret` identity corrupts cross-bank computations: GCC's fixture 197
+    // computes `eax = seed*2`, clears `xmm0`, then converts EAX into XMM0; the
+    // cosmetic collision turned that conversion source into the clear's zero.
+    // The exact object name is produced only by the proven SsePair materializer,
+    // so scalar/unmaterialised returns retain the longstanding role mapping.
+    let materialized_sse_pair = collect_first_appearance_phys(&f.body)
+        .iter()
+        .any(|name| crate::ir::abi::ssa_base(name) == "sse_pair_return_object");
+    if !materialized_sse_pair {
+        for name in return_reg_aliases(cc) {
+            // `ret` only wins if no arg-slot already claimed the name (x0 case
+            // above keeps `arg0`).
+            role.entry(name.to_string())
+                .or_insert_with(|| "ret".to_string());
+        }
     }
 
     // Assign stable `varN` aliases for other physical registers in order of
@@ -931,6 +944,76 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn materialized_sse_pair_keeps_integer_and_sse_scratch_identities_distinct() {
+        let object = reg("sse_pair_return_object");
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1020,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Const(2),
+                },
+                Stmt::Assign {
+                    dst: reg("xmm0"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: reg("xmm1"),
+                    src: Expr::Reg(reg("eax")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::StackAddr { object, size: 12 }),
+                        size: 8,
+                    }),
+                },
+            ],
+        };
+        apply_role_names(&mut f, CallConv::SysVAmd64);
+        let Stmt::Assign { dst: integer, .. } = &f.body[0] else {
+            unreachable!()
+        };
+        let Stmt::Assign { dst: sse, .. } = &f.body[1] else {
+            unreachable!()
+        };
+        let Stmt::Assign {
+            src: Expr::Reg(converted_source),
+            ..
+        } = &f.body[2]
+        else {
+            unreachable!()
+        };
+        assert_ne!(
+            integer, sse,
+            "cross-bank scratches must not collapse to ret"
+        );
+        assert_eq!(
+            converted_source, integer,
+            "the conversion must still read EAX's value"
+        );
+    }
+
+    #[test]
+    fn ordinary_scalar_return_still_gets_ret_role_without_materialized_object() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1030,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("xmm0"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("xmm0"))),
+                },
+            ],
+        };
+        apply_role_names(&mut f, CallConv::SysVAmd64);
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("ret")));
     }
 
     #[test]

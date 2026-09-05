@@ -80,6 +80,22 @@ fn lower_float_value(value: &Value, width: u8) -> Expr {
     }
 }
 
+fn packed_dword_value(value: &Value) -> bool {
+    let Value::Reg(VReg::Phys(name)) = value else {
+        return false;
+    };
+    let name = crate::ir::abi::ssa_base(name);
+    name.rsplit_once("_d").is_some_and(|(register, lane)| {
+        matches!(lane, "0" | "1" | "2" | "3")
+            && (register
+                .strip_prefix("xmm")
+                .is_some_and(|index| index.parse::<u8>().is_ok_and(|index| index < 32))
+                || register
+                    .strip_prefix('v')
+                    .is_some_and(|index| index.parse::<u8>().is_ok_and(|index| index < 32)))
+    })
+}
+
 /// Lower an architecture-neutral repeated scalar memory fill into an exact AST
 /// loop. The lifter supplies private pointer/count scratch values, so mutating
 /// them here cannot overwrite the architectural registers whose post-operation
@@ -841,16 +857,43 @@ pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
                 },
             }
         }
-        // Concatenation: render as `hi | lo` (the shift amount needs operand
-        // widths, refined when widths flow through values — Phase 0.7).
-        Op::Concat { dst, hi, lo } => Stmt::Assign {
-            dst: dst.clone(),
-            src: Expr::Bin {
-                op: BinOp::Or,
-                lhs: Box::new(lower_value(hi)),
-                rhs: Box::new(lower_value(lo)),
-            },
-        },
+        // Concatenation can state its shift only when the low operand carries
+        // a width. Packed `_dN` physical lanes do: reinterpret each lane's
+        // exact 32-bit payload, WIDEN it before shifting, then compose the
+        // qword. Unknown-width temporaries retain the conservative historical
+        // form rather than silently acquiring a guessed width.
+        Op::Concat { dst, hi, lo } => {
+            let src = if packed_dword_value(hi) && packed_dword_value(lo) {
+                let bits = |value: &Value| Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(lower_value(value)),
+                    }),
+                };
+                Expr::Bin {
+                    op: BinOp::Or,
+                    lhs: Box::new(Expr::Bin {
+                        op: BinOp::Shl,
+                        lhs: Box::new(bits(hi)),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                    rhs: Box::new(bits(lo)),
+                }
+            } else {
+                Expr::Bin {
+                    op: BinOp::Or,
+                    lhs: Box::new(lower_value(hi)),
+                    rhs: Box::new(lower_value(lo)),
+                }
+            };
+            Stmt::Assign {
+                dst: dst.clone(),
+                src,
+            }
+        }
         // A pure select is one expression-level assignment, not manufactured
         // control flow. Keeping both arms inside the expression also preserves
         // the three-input use-def semantics of `Op::Ite`.
@@ -1066,5 +1109,52 @@ mod tests {
                 matches!(statement, Stmt::Assign { dst, src: Expr::Unknown(_) } if dst == expected)
             );
         }
+    }
+
+    #[test]
+    fn packed_dword_concat_widens_before_shifting_high_payload() {
+        let statements = lower_op(
+            &Op::Concat {
+                dst: VReg::phys("xmm0"),
+                hi: Value::Reg(VReg::phys("xmm0_d1")),
+                lo: Value::Reg(VReg::phys("xmm0_d0")),
+            },
+            false,
+        );
+        let Stmt::Assign {
+            src:
+                Expr::Bin {
+                    lhs,
+                    rhs,
+                    op: BinOp::Or,
+                },
+            ..
+        } = &statements[0]
+        else {
+            panic!("unexpected lowering: {statements:#?}")
+        };
+        assert!(
+            matches!(lhs.as_ref(), Expr::Bin { op: BinOp::Shl, lhs, rhs }
+            if matches!(lhs.as_ref(), Expr::Cast { width: 8, .. })
+                && matches!(rhs.as_ref(), Expr::Const(32)))
+        );
+        assert!(matches!(rhs.as_ref(), Expr::Cast { width: 8, .. }));
+        assert_eq!(((2_u64) << 32) | 1, 0x0000_0002_0000_0001);
+    }
+
+    #[test]
+    fn unknown_width_concat_retains_conservative_unshifted_form() {
+        let statements = lower_op(
+            &Op::Concat {
+                dst: VReg::Temp(3),
+                hi: Value::Reg(VReg::Temp(1)),
+                lo: Value::Reg(VReg::Temp(2)),
+            },
+            false,
+        );
+        assert!(matches!(&statements[0], Stmt::Assign {
+            src: Expr::Bin { op: BinOp::Or, lhs, rhs }, ..
+        } if matches!(lhs.as_ref(), Expr::Reg(VReg::Temp(1)))
+            && matches!(rhs.as_ref(), Expr::Reg(VReg::Temp(2)))));
     }
 }

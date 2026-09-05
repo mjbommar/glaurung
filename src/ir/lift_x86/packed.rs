@@ -76,6 +76,63 @@ pub(super) fn packed_float_to_dword_trunc_ops(instr: &iced_x86::Instruction) -> 
     ops
 }
 
+/// Convert four signed dwords to packed binary32 lanes.
+pub(super) fn packed_dword_to_float_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "cvtdq2ps".into(),
+        }];
+    }
+    let dst = instr.op_register(0);
+    let mut ops = Vec::with_capacity(12);
+    let sources: Vec<VReg> = match instr.op_kind(1) {
+        OpKind::Register if is_xmm_register(instr.op_register(1)) => (0..4)
+            .map(|lane| {
+                let temporary = VReg::Temp(124 + lane as u32);
+                ops.push(Op::Assign {
+                    dst: temporary.clone(),
+                    src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+                });
+                temporary
+            })
+            .collect(),
+        OpKind::Memory => (0..4)
+            .map(|lane| {
+                let temporary = VReg::Temp(124 + lane as u32);
+                let mut addr = mem_op_of(instr);
+                addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                addr.size = 4;
+                ops.push(Op::Load {
+                    dst: temporary.clone(),
+                    addr,
+                });
+                temporary
+            })
+            .collect(),
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: "cvtdq2ps".into(),
+            }]
+        }
+    };
+    ops.extend(
+        sources
+            .into_iter()
+            .enumerate()
+            .map(|(lane, source)| Op::Intrinsic {
+                name: "cvtsi2ss.l".into(),
+                ins: vec![Value::Reg(source)],
+                outs: vec![(packed_dword_lane(dst, lane), Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            }),
+    );
+    ops
+}
+
 /// One signed/unsigned 32-bit lane of an XMM register.
 ///
 /// Packed integer operations are not scalar 128-bit arithmetic. Representing
@@ -289,22 +346,35 @@ pub(super) fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     match (instr.op_kind(0), instr.op_kind(1)) {
         (OpKind::Register, OpKind::Memory) if is_xmm_register(instr.op_register(0)) => {
             let dst = instr.op_register(0);
-            let mut ops: Vec<_> = (0..2)
-                .map(|lane| {
-                    let mut addr = mem_op_of(instr);
-                    addr.disp = addr.disp.saturating_add((lane * 4) as i64);
-                    addr.size = 4;
-                    Op::Load {
-                        dst: packed_dword_lane(dst, lane),
-                        addr,
-                    }
-                })
-                .collect();
-            ops.extend((2..4).map(|lane| Op::Assign {
-                dst: packed_dword_lane(dst, lane),
-                src: Value::Const(0),
-            }));
-            ops
+            let scalar = VReg::phys(reg_name(dst));
+            let mut addr = mem_op_of(instr);
+            addr.size = 8;
+            vec![
+                Op::Load {
+                    dst: scalar.clone(),
+                    addr,
+                },
+                Op::Trunc {
+                    dst: packed_dword_lane(dst, 0),
+                    src: Value::Reg(scalar.clone()),
+                    from: Width::W64,
+                    to: Width::W32,
+                },
+                Op::Extract {
+                    dst: packed_dword_lane(dst, 1),
+                    src: Value::Reg(scalar),
+                    hi: 64,
+                    lo: 32,
+                },
+                Op::Assign {
+                    dst: packed_dword_lane(dst, 2),
+                    src: Value::Const(0),
+                },
+                Op::Assign {
+                    dst: packed_dword_lane(dst, 3),
+                    src: Value::Const(0),
+                },
+            ]
         }
         (OpKind::Memory, OpKind::Register) if is_xmm_register(instr.op_register(1)) => {
             let src = instr.op_register(1);
@@ -777,6 +847,53 @@ fn packed_low_unpack_ops(
         });
     }
     ops
+}
+
+fn packed_register_unpack_ops(
+    instr: &iced_x86::Instruction,
+    mnemonic: &str,
+    order: [u32; 4],
+) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }];
+    }
+    let (dst, src) = (instr.op_register(0), instr.op_register(1));
+    let mut ops = Vec::with_capacity(12);
+    for lane in 0..4 {
+        ops.push(Op::Assign {
+            dst: VReg::Temp(104 + lane as u32),
+            src: Value::Reg(packed_dword_lane(dst, lane)),
+        });
+        ops.push(Op::Assign {
+            dst: VReg::Temp(108 + lane as u32),
+            src: Value::Reg(packed_dword_lane(src, lane)),
+        });
+    }
+    ops.extend(
+        order
+            .into_iter()
+            .enumerate()
+            .map(|(lane, temporary)| Op::Assign {
+                dst: packed_dword_lane(dst, lane),
+                src: Value::Reg(VReg::Temp(temporary)),
+            }),
+    );
+    ops
+}
+
+pub(super) fn packed_float_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    packed_register_unpack_ops(instr, "unpcklps", [104, 108, 105, 109])
+}
+
+pub(super) fn packed_double_unpack_high_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    packed_register_unpack_ops(instr, "unpckhpd", [106, 107, 110, 111])
 }
 
 /// Interleave the low two dwords: `[dst0, src0, dst1, src1]`.

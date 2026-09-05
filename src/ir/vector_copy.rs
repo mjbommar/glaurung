@@ -456,14 +456,34 @@ mod tests {
     }
 
     /// The lowered form of `synchronise_xmm_views`' scalar-view bridge:
-    /// `Op::Concat { dst, hi, lo }` becomes `dst = hi | lo`.
+    /// `Op::Concat { dst, hi, lo }` becomes a widened `(hi << 32) | lo`.
     fn scalar_view_bridge(register: &str) -> Stmt {
         Stmt::Assign {
             dst: VReg::phys(register),
             src: Expr::Bin {
                 op: crate::ir::types::BinOp::Or,
-                lhs: Box::new(Expr::Reg(VReg::phys(format!("{register}_d1")))),
-                rhs: Box::new(Expr::Reg(VReg::phys(format!("{register}_d0")))),
+                lhs: Box::new(Expr::Bin {
+                    op: crate::ir::types::BinOp::Shl,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys(format!("{register}_d1")))),
+                        }),
+                    }),
+                    rhs: Box::new(Expr::Const(32)),
+                }),
+                rhs: Box::new(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys(format!("{register}_d0")))),
+                    }),
+                }),
             },
         }
     }

@@ -56,14 +56,14 @@ use flags::{
 };
 use mul_flags::{append_imul_overflow_flags, imul_wide_product};
 use packed::{
-    movd_ops, packed_dword_and_not_ops, packed_dword_binary_ops, packed_dword_compare_equal_ops,
-    packed_dword_immediate_arithmetic_shift_right_ops,
+    movd_ops, packed_double_unpack_high_ops, packed_dword_and_not_ops, packed_dword_binary_ops,
+    packed_dword_compare_equal_ops, packed_dword_immediate_arithmetic_shift_right_ops,
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
-    packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
-    packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_float_to_dword_trunc_ops,
-    packed_qword_binary_ops, packed_qword_move_ops, packed_qword_unpack_low_ops,
-    packed_word_extract_ops, vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops,
-    vex_ymm_dword_move_ops, xorps_ops,
+    packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_to_float_ops,
+    packed_dword_unpack_low_ops, packed_float_shuffle_ops, packed_float_sign_mask_ops,
+    packed_float_to_dword_trunc_ops, packed_float_unpack_low_ops, packed_qword_binary_ops,
+    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops,
+    vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops, vex_ymm_dword_move_ops, xorps_ops,
 };
 use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
@@ -1877,6 +1877,9 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // lowering emit the four C casts and keeps subsequent packed shuffles
         // and stores on their existing exact lane representation.
         Mnemonic::Cvttps2dq => packed_float_to_dword_trunc_ops(instr),
+        Mnemonic::Cvtdq2ps => packed_dword_to_float_ops(instr),
+        Mnemonic::Unpcklps => packed_float_unpack_low_ops(instr),
+        Mnemonic::Unpckhpd => packed_double_unpack_high_ops(instr),
         // The SSE string-primitive family; see `packed_string` for which of
         // these are lifted exactly and which declare their register effect
         // only, and why the line falls where it does.
@@ -7213,6 +7216,58 @@ mod tests {
     }
 
     #[test]
+    fn packed_dword_to_float_conversion_snapshots_and_converts_each_lane() {
+        let ops = lift64(&[0x0f, 0x5b, 0xc0]); // cvtdq2ps xmm0,xmm0
+        for lane in 0..4 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Intrinsic { name, ins, outs, reads_mem: false, writes_mem: false }
+                        if name == "cvtsi2ss.l"
+                            && ins == &vec![Value::Reg(VReg::Temp(124 + lane))]
+                            && outs == &vec![(VReg::phys(format!("xmm0_d{lane}")), Width::W32)]
+                )),
+                "missing lane {lane} conversion: {ops:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_float_unpacks_expose_exact_lane_permutations() {
+        for (bytes, expected) in [
+            (&[0x0f, 0x14, 0xc1][..], [104_u32, 108, 105, 109]),
+            (&[0x66, 0x0f, 0x15, 0xc1][..], [106_u32, 107, 110, 111]),
+        ] {
+            let ops = lift64(bytes);
+            for (lane, temporary) in expected.into_iter().enumerate() {
+                assert!(
+                    ops.iter().any(|instruction| matches!(
+                        &instruction.op,
+                        Op::Assign { dst: VReg::Phys(dst), src: Value::Reg(VReg::Temp(src)) }
+                            if dst == &format!("xmm0_d{lane}") && *src == temporary
+                    )),
+                    "missing lane {lane} from temp {temporary}: {ops:#?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packed_conversions_and_unpacks_refuse_non_xmm_shapes() {
+        // The bounded unpack helper accepts only the register form; memory
+        // needs separately proven load/snapshot semantics.
+        let ops = lift64(&[0x0f, 0x14, 0x00]); // unpcklps xmm0,[rax]
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op, Op::Unknown { mnemonic } if mnemonic == "unpcklps"
+        )));
+        // VEX has a distinct operand count and upper-lane effect.
+        let ops = lift64(&[0xc5, 0xf8, 0x5b, 0xc1]); // vcvtdq2ps xmm0,xmm1
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op, Op::Unknown { mnemonic } if mnemonic == "vcvtdq2ps"
+        )));
+    }
+
+    #[test]
     fn packed_dword_scale_by_thirty_one_has_explicit_lane_semantics() {
         // The exact SSE2 pair emitted by clang -O2 for
         // `11_call_shapes:call_accumulate_bytes`: each dword lane computes
@@ -9503,7 +9558,7 @@ mod tests {
     }
 
     #[test]
-    fn movq_xmm_memory_moves_exactly_two_dword_lanes() {
+    fn movq_xmm_memory_load_is_one_qword_access_and_store_is_two_lanes() {
         // movq xmm0,qword ptr [rax]; movq qword ptr [rax],xmm0.  GCC uses
         // this pair to load and conditionally swap adjacent i32 elements.
         // The upper two XMM lanes are cleared on the load and are not stored.
@@ -9515,16 +9570,17 @@ mod tests {
             )),
             "packed qword moves must be explicit: {ops:#?}"
         );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(
+                    &instruction.op,
+                    Op::Load { dst: VReg::Phys(dst), addr } if dst == "xmm0" && addr.size == 8
+                ))
+                .count(),
+            1,
+            "MOVQ load must preserve its one size-8 memory access: {ops:#?}"
+        );
         for lane in 0..2 {
-            assert!(ops.iter().any(|instruction| matches!(
-                &instruction.op,
-                Op::Load {
-                    dst: VReg::Phys(dst),
-                    addr,
-                } if dst == &format!("xmm0_d{lane}")
-                    && addr.disp == (lane * 4) as i64
-                    && addr.size == 4
-            )));
             assert!(ops.iter().any(|instruction| matches!(
                 &instruction.op,
                 Op::Store {
