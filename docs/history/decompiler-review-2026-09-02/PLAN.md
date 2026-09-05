@@ -125,8 +125,22 @@ addresses through bounded relative decode. Eight i386 O2 cells move from
 `fail` to execution-verified `pass`, including a switch nested in a loop. The
 complete 410-lane parent/tip comparison has zero attributable regression and
 the full Rust gate is green. The census increase is recorded at `86d224f5`;
-the whole Python gate remains open. See
+its exact-checkout whole Python gate completed at 4,597 passed, 125 failed, 891
+expected failures, 78 skipped, and 125 deselected. There are no tip-only
+failing node IDs relative to the AArch64 parent; the sole removed failure is
+the census check updated by `86d224f5`. This is triaged broadly-red evidence,
+not a release-green claim. See
 `results/wp5-i386-got-relative-switch.md`.
+The following ARMv7 A32 slice is landed at `76cce5d1` and hardened at
+`5ef0bcb9`. Exact PC-relative literal materialisation, unsigned byte-table
+decode, and `add pc, pc, rOffset, lsl #2` semantics recover nine O2 switch
+functions with zero parent/tip decline across 410 lanes and 1,604 function
+verdicts. Production `dense_dispatch` and shadow-v2 `dispatch_in_loop` pass
+native execution; the latter remains a strict production-v1 WP4 ownership
+xfail. Four valid wide byte switches in `43_base64` exposed a v1 recursive
+stack overflow; the shared graph-sized structure work budget now selects the
+complete labelled CFG in 0.17 seconds instead of crashing. See
+`results/wp5-armv7-a32-byte-switch.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -987,7 +1001,16 @@ one authoritative set of case edges.
   GCC i386 O2's GOT-relative table form is also recovered. Eight cells now
   pass execution, table address and target base remain distinct typed facts,
   and all four regressions in the complete 410-lane comparison reproduce at
-  the parent. The whole Python gate for this slice remains open.
+  the parent. Its exact-checkout whole Python gate has no tip-only failing node
+  IDs and remains broadly red at 4,597 passed and 125 failed.
+  GCC ARMv7 A32 O2's compact unsigned-byte form is now recovered from exact
+  PC-relative literal materialisation through the scaled PC terminal. Nine
+  function verdicts improve and none decline across the complete 410-lane,
+  1,604-function parent/tip comparison. `dense_dispatch` passes production
+  execution; `dispatch_in_loop` passes shadow-v2 execution but remains a strict
+  v1 structurer xfail. A graph-sized recursive work budget also makes four
+  valid 48-entry tables degrade to complete labelled CFG output rather than
+  overflowing the native stack.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
@@ -2172,8 +2195,13 @@ relevant ratchet's accepted-regression record.
    green Rust gate or focused retry evidence alone.
    The next i386 slice at `b84233ec` removes eight more O2 failures with zero
    attributable regression across all 410 i386 lanes. Its full Rust and focused
-   execution gates are green; run and triage the whole Python suite before
-   treating the stacked slice as integration-ready.
+   execution gates are green; its whole Python suite is complete and has zero
+   tip-only failure IDs, while remaining broadly red at 125 failures.
+   The stacked ARMv7 A32 slice at `76cce5d1`/`5ef0bcb9` removes nine more O2
+   failures with zero attributable decline across 1,604 function verdicts.
+   Next fix the now-isolated v1 loop-backedge ownership xfail, then continue
+   with Thumb loop tables, AArch64 adjacent-table variants, and wide-selector
+   forms.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

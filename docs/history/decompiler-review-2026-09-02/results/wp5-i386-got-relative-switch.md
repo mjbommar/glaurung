@@ -87,6 +87,9 @@ file size is unchanged. The growth is accepted for this bounded recovery, but
 the 77-line net growth in `analysis/dispatch.rs` strengthens WP9's case for
 moving the remaining encoding facts behind target-owned queries.
 
-The required whole Python suite has not yet run at this commit, so this record
-makes no release-green claim. No DecBench run or upstream interaction was
-performed.
+The exact-checkout whole Python suite subsequently completed in 45:08: 4,597
+passed, 125 failed, 891 expected failures, 78 skipped, 125 deselected, and two
+subtests passed. Exact failing-node comparison against the preceding AArch64
+snapshot finds no tip-only failures; the one removed failure is the census
+check updated by `86d224f5`. This is triaged broadly-red evidence, not a
+release-green claim. No DecBench run or upstream interaction was performed.

@@ -182,8 +182,23 @@ decode. Eight i386 O2 cells move from `fail` to execution-verified `pass`,
 including a switch inside a loop. A complete 410-lane parent/tip comparison
 shows the exact same four older regressions at both revisions, so none is
 attributable to this slice; the full Rust gate is green. The whole Python gate
-and residual decline census remain open. Detailed evidence is in
+completed broadly red at 4,597 passed and 125 failed, but exact node-ID
+comparison finds no tip-only failure relative to the AArch64 parent; the sole
+removed failure is the refreshed census. The residual decline census remains
+open. Detailed evidence is in
 [`wp5-i386-got-relative-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-i386-got-relative-switch.md).
+
+The next stacked WP5 slice at `76cce5d1`, hardened at `5ef0bcb9`, recovers
+GCC ARMv7 A32's PC-relative unsigned-byte tables ending in exact
+`add pc, pc, rOffset, lsl #2` semantics. Production `dense_dispatch` and
+shadow-v2 `dispatch_in_loop` pass native execution; the loop remains an honest
+strict production-v1 ownership xfail. Across the complete 410-lane ARMv7 A32
+O0/O2 comparison, nine of 1,604 function verdicts move from `fail` to `pass`
+and none becomes worse or disappears. The first clean tip also exposed four
+valid 48-entry switches overflowing v1's native recursion stack. A graph-sized
+shared shape-recovery work budget now declines that function to its complete
+labelled CFG in 0.17 seconds instead of crashing. Detailed evidence is in
+[`wp5-armv7-a32-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-armv7-a32-byte-switch.md).
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
