@@ -752,7 +752,8 @@ mod tests {
                 }
                 Region::While { body, .. }
                 | Region::DoWhile { body, .. }
-                | Region::MultiExitLoop { body, .. } => tally(body, ifs, gotos, loose),
+                | Region::MultiExitLoop { body, .. }
+                | Region::Borrowed(body) => tally(body, ifs, gotos, loose),
                 Region::Switch { arms, .. } => {
                     for arm in arms {
                         tally(arm, ifs, gotos, loose);
@@ -817,7 +818,8 @@ mod tests {
                 }
                 Region::While { body, .. }
                 | Region::DoWhile { body, .. }
-                | Region::MultiExitLoop { body, .. } => find_switch(body),
+                | Region::MultiExitLoop { body, .. }
+                | Region::Borrowed(body) => find_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -1023,7 +1025,8 @@ mod tests {
                 }
                 Region::While { body, .. }
                 | Region::DoWhile { body, .. }
-                | Region::MultiExitLoop { body, .. } => find_switch(body),
+                | Region::MultiExitLoop { body, .. }
+                | Region::Borrowed(body) => find_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -1452,6 +1455,7 @@ mod tests {
                 }
                 Region::While { body, .. } => contains_do_while(body),
                 Region::MultiExitLoop { body, .. } => contains_do_while(body),
+                Region::Borrowed(inner) => contains_do_while(inner),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
                 Region::Block(_)
                 | Region::Goto(_)
@@ -1928,12 +1932,12 @@ mod tests {
     }
 
     #[test]
-    fn a_cloned_shared_epilogue_does_not_erase_an_accounted_loop() {
+    fn a_shared_epilogue_reference_does_not_erase_an_accounted_loop() {
         // Both the initial zero-iteration guard and the bottom latch leave
-        // through B3 -> B4. Shared-return recovery deliberately clones B4 in
-        // the guard but retains one canonical B4 as a leftover label. That is
-        // a quality diagnostic (BlockDuplicated), not a reason to replace the
-        // fully accounted loop with whole-function Unstructured fallback.
+        // through B3 -> B4. Shared-return recovery references B4 from the guard
+        // and retains one canonical B4 as a leftover label. Region ownership
+        // remains exact even though AST preparation can later inline the
+        // proven terminal tail for readable source output.
         let conditional = |target| {
             vec![Op::CondJump {
                 cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
@@ -1960,15 +1964,19 @@ mod tests {
             "accounted loop was erased: {rendered}"
         );
         assert!(
-            accounting.iter().any(|error| matches!(
+            !accounting.iter().any(|error| matches!(
                 error,
                 crate::ir::structure_accounting::AccountError::BlockDuplicated { block: 4, .. }
             )),
-            "the fixture must exercise deliberate epilogue cloning: {accounting:#?}"
+            "the shared epilogue must have one structural owner: {accounting:#?}"
+        );
+        assert!(
+            rendered.contains("Borrowed("),
+            "the early exit must retain explicit borrowed provenance: {rendered}"
         );
         assert!(
             !structure_accounting_is_unsound(&accounting),
-            "the cloned epilogue must not hide a real edge defect: {accounting:#?}"
+            "the referenced epilogue must not hide a real edge defect: {accounting:#?}"
         );
     }
 
@@ -2134,6 +2142,7 @@ mod tests {
                 }
                 Region::While { body, .. } => contains_do_while(body),
                 Region::MultiExitLoop { body, .. } => contains_do_while(body),
+                Region::Borrowed(inner) => contains_do_while(inner),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
                 Region::Block(_)
                 | Region::Goto(_)
@@ -2334,8 +2343,8 @@ mod tests {
         //   B1: cond → B2, L (goto L on true)
         //   B2: → L  (fall-through)
         //   L:  return
-        // Expected: the structurer wraps each `if cond` around `Block(L)`
-        // and emits L itself as the function tail. Crucially, no
+        // Expected: the structurer wraps each `if cond` around a reference to
+        // L and emits L itself exactly once as the function tail. Crucially, no
         // Unstructured nodes — every block participates in a structured
         // shape.
         let lf = mk_cfg(vec![
@@ -2346,8 +2355,8 @@ mod tests {
         ]);
         let r = recover_for(&lf);
         // Walk the tree and confirm no Unstructured leaves and that the
-        // shared exit (block 3) is referenced more than once (the
-        // clone-inline behaviour).
+        // shared exit (block 3) is referenced more than once without acquiring
+        // more than one structural owner.
         fn count_block(r: &Region, target: usize) -> (usize, bool) {
             match r {
                 Region::Block(b) => ((*b == target) as usize, false),
@@ -2384,7 +2393,8 @@ mod tests {
                     }
                     (count, bad)
                 }
-                Region::Goto(_) => (0, false),
+                Region::Goto(block) => ((*block == target) as usize, false),
+                Region::Borrowed(inner) => count_block(inner, target),
                 Region::Unstructured(_) => (0, true),
             }
         }
@@ -2512,7 +2522,7 @@ mod tests {
                 Region::RawLoop { blocks, .. } | Region::Unstructured(blocks) => {
                     blocks.contains(&target)
                 }
-                Region::Goto(_) => false,
+                Region::Goto(_) | Region::Borrowed(_) => false,
             }
         }
         fn loop_is_followed_by_block(region: &Region, target: usize) -> bool {
@@ -2550,6 +2560,7 @@ mod tests {
                 }
                 Region::Block(_)
                 | Region::Goto(_)
+                | Region::Borrowed(_)
                 | Region::RawLoop { .. }
                 | Region::Unstructured(_) => false,
             }
@@ -2592,6 +2603,7 @@ mod tests {
                     arms.iter().for_each(assert_no_unstructured);
                 }
                 Region::Goto(_) => {}
+                Region::Borrowed(inner) => assert_no_unstructured(inner),
                 Region::Unstructured(bs) => panic!("found Unstructured: {:?}", bs),
             }
         }
@@ -2689,7 +2701,8 @@ mod tests {
                 }
                 Region::While { body, .. }
                 | Region::DoWhile { body, .. }
-                | Region::MultiExitLoop { body, .. } => find_switch(body),
+                | Region::MultiExitLoop { body, .. }
+                | Region::Borrowed(body) => find_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -2966,7 +2979,8 @@ mod tests {
                 }
                 Region::While { body, .. }
                 | Region::DoWhile { body, .. }
-                | Region::MultiExitLoop { body, .. } => has_goto(body, target),
+                | Region::MultiExitLoop { body, .. }
+                | Region::Borrowed(body) => has_goto(body, target),
                 Region::Switch { arms, .. } => arms.iter().any(|arm| has_goto(arm, target)),
                 Region::Block(_) | Region::RawLoop { .. } | Region::Unstructured(_) => false,
             }

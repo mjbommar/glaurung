@@ -6,14 +6,14 @@
 //! structuring. [`every_path_reaches_join`] and
 //! [`every_path_reaches_join_or_terminates`] decide whether a diamond really
 //! closes; [`cyclic_body_exits_only_to_join`] is the one deliberate cyclic
-//! exception to the first of those. [`shared_return_chain`] and
-//! [`is_natural_loop_distinguished_exit`] bound what a cloned return arm may
-//! consume. [`can_reach`] and [`contains_multiway_before`] are the raw walks
+//! exception to the first of those. [`shared_return_chain`] bounds which tails
+//! a borrowed return view may render. [`can_reach`] and
+//! [`contains_multiway_before`] are the raw walks
 //! the rest are built from.
 
 use std::collections::{HashMap, HashSet};
 
-use super::cfg::{natural_loop_body, Cfg};
+use super::cfg::Cfg;
 
 /// Return the exact acyclic block chain from a shared entry through a machine
 /// return.  Interior blocks must be private to the chain; only its terminal may
@@ -47,30 +47,6 @@ pub(super) fn shared_return_chain(entry: usize, cfg: &Cfg) -> Option<Vec<usize>>
         }
     }
     None
-}
-
-/// Whether `entry` is a natural loop's distinguished continuation.
-///
-/// A pre-tested loop leaves through its header; a rotated/bottom-tested loop
-/// leaves through its conditional latch. Either block is an enclosing
-/// continuation, even when another guard also branches to it, and therefore
-/// cannot be globally consumed solely by a cloned return arm.
-pub(super) fn is_natural_loop_distinguished_exit(entry: usize, cfg: &Cfg) -> bool {
-    (0..cfg.succs.len()).any(|header| {
-        cfg.preds[header]
-            .iter()
-            .copied()
-            .filter(|&tail| cfg.dominates(header, tail))
-            .any(|tail| {
-                let loop_body = natural_loop_body(header, tail, cfg);
-                let header_exit = cfg.succs[header].contains(&entry) && !loop_body.contains(&entry);
-                let bottom_latch_exit = cfg.succs[tail].len() == 2
-                    && cfg.succs[tail].contains(&header)
-                    && cfg.succs[tail].contains(&entry)
-                    && !loop_body.contains(&entry);
-                header_exit || bottom_latch_exit
-            })
-    })
 }
 
 /// True when every path starting at `start` either reaches `join` or ends at a

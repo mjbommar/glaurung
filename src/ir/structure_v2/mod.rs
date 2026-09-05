@@ -1100,7 +1100,8 @@ mod tests {
                 }
                 Region::While { body, .. }
                 | Region::DoWhile { body, .. }
-                | Region::MultiExitLoop { body, .. } => production_switch(body),
+                | Region::MultiExitLoop { body, .. }
+                | Region::Borrowed(body) => production_switch(body),
                 Region::Block(_)
                 | Region::Goto(_)
                 | Region::RawLoop { .. }
@@ -1114,6 +1115,45 @@ mod tests {
             &(0..7).map(|case| vec![case]).collect::<Vec<_>>()
         );
         assert!(production_default.is_some(), "{production:#?}");
+        fn owned_block_count(region: &crate::ir::structure::Region, target: usize) -> usize {
+            use crate::ir::structure::Region;
+            match region {
+                Region::Block(block) => usize::from(*block == target),
+                Region::Seq(parts) => parts
+                    .iter()
+                    .map(|part| owned_block_count(part, target))
+                    .sum(),
+                Region::IfThen { then_r, .. } => owned_block_count(then_r, target),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    owned_block_count(then_r, target) + owned_block_count(else_r, target)
+                }
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => owned_block_count(body, target),
+                Region::Switch {
+                    arms,
+                    formal_default,
+                    ..
+                } => {
+                    arms.iter()
+                        .map(|arm| owned_block_count(arm, target))
+                        .sum::<usize>()
+                        + formal_default
+                            .as_deref()
+                            .map_or(0, |default| owned_block_count(default, target))
+                }
+                Region::RawLoop { blocks, .. } | Region::Unstructured(blocks) => {
+                    blocks.iter().filter(|&&block| block == target).count()
+                }
+                Region::Borrowed(_) => 0,
+                Region::Goto(_) => 0,
+            }
+        }
+        assert_eq!(
+            owned_block_count(&production, 12),
+            1,
+            "the shared return block must have exactly one structural owner: {production:#?}"
+        );
 
         let report = observe(&lifted, &ssa);
         let candidate = report

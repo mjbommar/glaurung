@@ -53,10 +53,20 @@ positive that a successor-shape-only rule would introduce.
   the full comparison is attributable to the dense-switch repair.
 
 These results establish the production repair for this host fixture. They do
-not establish clean structural ownership. The earlier `EdgeUnaccounted`
-diagnostic is gone, but the real fixture still reports the non-fatal
-`BlockDuplicated { block: 12, count: 2 }`. The output is execution-correct;
-the remaining diagnostic must still be repaired rather than suppressed.
+now establish clean structural ownership for its shared return tail as well.
+`Region::Borrowed` records that a proven return tail is rendered with the
+predecessor-specific SSA value at an early-exit site without becoming a second
+owner of the machine block. The cell reports neither `EdgeUnaccounted` nor
+`BlockDuplicated`, and its rendered C remains unchanged.
+
+The first attempted repair used a plain `Goto`. The full matrix correctly
+rejected it: `152_deep_nesting:clang:O2:deep152_while_tower` began returning an
+undefined normal-path value from its early error guards. The borrowed-region
+form preserves that function's existing passing execution result. The final
+838-lane rerun therefore returns to the prior evidence boundary: 34 older
+unrecorded improvements and only the independently proven pre-existing
+`rust_slice_get` baseline mismatch, with no regression attributable to this
+repair.
 
 WP5 is therefore not complete: discovery, accounting, both structurers, and
 rendering still need one shared case/default/provenance object, and the

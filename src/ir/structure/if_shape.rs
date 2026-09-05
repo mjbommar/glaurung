@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use super::cfg::Cfg;
 use super::path_predicates::{
     can_reach, contains_multiway_before, cyclic_body_exits_only_to_join, every_path_reaches_join,
-    every_path_reaches_join_or_terminates, is_natural_loop_distinguished_exit, shared_return_chain,
+    every_path_reaches_join_or_terminates, shared_return_chain,
 };
 use super::region::Region;
 use super::{build, build_arm};
@@ -169,7 +169,12 @@ pub(super) fn detect_if_shape(
     // direct successor itself to be terminal leaves a cross-region goto even
     // though the entire successor chain is a source-level early return.
     //
-    // Clone-inline the proven linear return chain into this if-then's body.
+    // Clone-inline the proven linear return chain into this if-then's body, but
+    // mark the clone as borrowed. A shared return block can select a different
+    // predecessor-specific SSA value on each incoming edge, so replacing the
+    // clone with a plain goto is not source-correct. Keeping ownership and
+    // presentation separate prevents the region tree from claiming the same
+    // machine block twice merely to obtain readable C.
     // A prefix which is a natural loop header's designated exit remains
     // unvisited because the normal loop continuation must emit it.  Clang
     // `fib` shares an `add` block between an early base case and precisely that
@@ -178,7 +183,7 @@ pub(super) fn detect_if_shape(
     // no such continuation owner and must be marked represented or structural
     // accounting correctly rejects the orphan.
     //
-    // The duplicated block references cause the AST lowerer to render the
+    // The borrowed block references cause the AST lowerer to render the
     // epilogue once per branch site, which is the right source semantics: each
     // machine edge is conceptually `if (cond) { return value; }`.
     for &(body, cont) in &[(t, e), (e, t)] {
@@ -198,16 +203,18 @@ pub(super) fn detect_if_shape(
             // cannot distinguish a switch tree from validation or loop exits.
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            let prefix_is_owned_by_guards = cfg.preds[body]
-                .iter()
-                .all(|predecessor| cfg.succs[*predecessor].len() == 2);
-            if prefix_is_owned_by_guards && !is_natural_loop_distinguished_exit(body, cfg) {
-                visited.extend(chain[..chain.len() - 1].iter().copied());
-            }
-            let then_r = if let [only] = chain.as_slice() {
-                Region::Block(*only)
+            // None of the cloned chain consumes global ownership. The normal
+            // continuation or `build_full` leftovers emit each machine block
+            // once; every predecessor-specific early-return spelling remains
+            // an explicitly borrowed view.
+            let mut borrowed: Vec<_> = chain
+                .into_iter()
+                .map(|block| Region::Borrowed(Box::new(Region::Block(block))))
+                .collect();
+            let then_r = if borrowed.len() == 1 {
+                borrowed.pop().expect("the borrowed return exists")
             } else {
-                Region::Seq(chain.into_iter().map(Region::Block).collect())
+                Region::Seq(borrowed)
             };
             return Some((
                 Region::IfThen {

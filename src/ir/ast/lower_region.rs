@@ -428,6 +428,7 @@ fn lower_region_inner(
 ) -> Vec<Stmt> {
     match r {
         Region::Block(bi) => lower_block(&lf.blocks[*bi], lower_scalar_float),
+        Region::Borrowed(inner) => lower_region(inner, lf, targets, lower_scalar_float),
         Region::Goto(bi) => vec![Stmt::Goto {
             target: lf.blocks[*bi].start_va,
         }],
@@ -869,6 +870,7 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
                 collect_goto_targets(default, lf, out);
             }
         }
+        Region::Borrowed(inner) => collect_goto_targets(inner, lf, out),
         Region::Unstructured(blocks) => {
             let owned: std::collections::HashSet<_> = blocks.iter().copied().collect();
             for block in blocks {

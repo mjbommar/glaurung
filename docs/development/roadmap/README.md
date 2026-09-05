@@ -137,9 +137,12 @@ isolated `55ab688b` A/B proves predates this increment; no regression is
 attributable to this change. This closes the production gap
 for that cell, not WP5's shared evidence-object or architecture-wide exit
 criteria. Its former unaccounted-edge diagnostic is gone, but structure
-accounting still reports the non-fatal
-`BlockDuplicated { block: 12, count: 2 }`; that ownership defect remains open
-even though the emitted program is execution-correct.
+accounting is now clean as well. Shared return tails carry explicit borrowed
+provenance: predecessor-specific SSA renderings may be cloned for readable C,
+while the underlying machine block has exactly one structural owner. A full
+838-lane rerun preserves the same 34 older improvements and sole pre-existing
+`rust_slice_get` baseline mismatch, with no regression attributable to the
+ownership repair.
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source

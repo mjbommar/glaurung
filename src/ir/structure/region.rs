@@ -107,6 +107,12 @@ pub enum Region {
     /// so control still reaches it. The block's statements render exactly once at
     /// their natural position; every other incoming edge is a `Goto` to its label.
     Goto(usize),
+    /// A proven acyclic return tail rendered at this control-flow site but
+    /// structurally owned elsewhere. Compilers share return epilogues across
+    /// predecessor-specific values; cloning their statements is necessary for
+    /// readable and SSA-correct source, while counting the clone as a second
+    /// owner is not. Only `shared_return_chain` constructs this wrapper.
+    Borrowed(Box<Region>),
     /// Fallback — a set of blocks that didn't fit any recognised pattern.
     Unstructured(Vec<usize>),
 }
@@ -192,6 +198,7 @@ impl Region {
                     }
                 }
                 Region::Goto(b) => out.push(*b),
+                Region::Borrowed(inner) => walk(inner, out),
                 Region::Unstructured(bs) => out.extend(bs.iter().copied()),
             }
         }
@@ -217,6 +224,7 @@ pub fn entry_block(r: &Region) -> Option<usize> {
             guard, dispatch, ..
         } => guard.or(Some(*dispatch)),
         Region::Goto(b) => Some(*b),
+        Region::Borrowed(inner) => entry_block(inner),
         Region::Unstructured(bs) => bs.first().copied(),
     }
 }

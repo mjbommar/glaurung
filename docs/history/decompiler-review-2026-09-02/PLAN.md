@@ -66,9 +66,13 @@ failure with identical output, proving it predates this increment. The fixture
 `pass`. See `results/wp5-production-dense-guarded-switch.md`; the
 earlier shadow-only boundary in `results/wp5-chained-strict-guard.md` is now
 superseded for this cell. WP5 is not complete: the real fixture's remaining
-non-fatal accounting diagnostic is `BlockDuplicated { block: 12, count: 2 }`.
-The former `EdgeUnaccounted` diagnostic is gone and execution is correct, but
-the duplicate ownership still needs repair rather than suppression.
+duplicate-owner diagnostic is now closed. `Region::Borrowed` distinguishes a
+predecessor-specific rendered return tail from its single structural owner;
+both `EdgeUnaccounted` and `BlockDuplicated` are absent for the cell while its
+execution-correct output remains unchanged. A rejected plain-`Goto` prototype
+exposed a real `152_deep_nesting` return-value regression; the typed borrowed
+form preserves that canary, and the complete 838-lane rerun has no regression
+attributable to the repair.
 
 ## Authority and relationship to the roadmaps
 
@@ -895,9 +899,11 @@ one authoritative set of case edges.
   has no regression attributable to this increment; its one reported
   `rust_slice_get` regression reproduces identically at clean `55ab688b`, and
   the remaining 34 movements are older unrecorded improvements.
-  Structure accounting no longer reports an unaccounted edge, but still emits
-  `BlockDuplicated { block: 12, count: 2 }` for this real fixture. That
-  non-fatal ownership defect remains open despite execution-correct output.
+  Structure accounting is now clean for this real fixture. The shared return
+  tail is an explicit borrowed rendering with one underlying structural owner,
+  so neither `EdgeUnaccounted` nor `BlockDuplicated` remains. The full-matrix
+  `152_deep_nesting` canary proves predecessor-specific return values were not
+  traded away for cleaner accounting.
   Other compiler/optimization and named fixture lanes remain.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
@@ -2074,9 +2080,9 @@ relevant ratchet's accepted-regression record.
    already present and must remain green. Fixture 204's Clang O2 seven-case
    evidence now reaches the production structurer, passes all 34 execution
    cases, and has moved its baseline from `fail` to `pass`; the remaining work
-   includes removing its remaining `BlockDuplicated { block: 12, count: 2 }`
-   accounting diagnostic, building the shared evidence object, and closing the
-   unverified compiler/architecture cells.
+   now has clean accounting through explicit borrowed return-tail provenance;
+   remaining work is the shared case/default evidence object and the unverified
+   compiler/architecture cells.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

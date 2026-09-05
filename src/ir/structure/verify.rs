@@ -134,6 +134,7 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
                     walk(default, succs, out);
                 }
             }
+            Region::Borrowed(inner) => walk(inner, succs, out),
             Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
         }
     }

@@ -154,8 +154,9 @@ fn owned(r: &Region, out: &mut Vec<usize>) {
                 }
             }
         }
-        // A `Goto` REFERENCES a block; it does not emit it.
-        Region::Goto(_) => {}
+        // A `Goto` references a block. A `Borrowed` region deliberately emits
+        // a predecessor-specific view of blocks structurally owned elsewhere.
+        Region::Goto(_) | Region::Borrowed(_) => {}
         Region::Unstructured(bs) => out.extend(bs.iter().copied()),
     }
 }
@@ -163,6 +164,39 @@ fn owned(r: &Region, out: &mut Vec<usize>) {
 fn block_set(r: &Region) -> HashSet<usize> {
     let mut v = Vec::new();
     owned(r, &mut v);
+    fn borrowed_blocks(region: &Region, out: &mut Vec<usize>) {
+        match region {
+            Region::Borrowed(inner) => out.extend(inner.blocks()),
+            Region::Seq(parts) => parts.iter().for_each(|part| borrowed_blocks(part, out)),
+            Region::IfThen { then_r, .. } => borrowed_blocks(then_r, out),
+            Region::IfThenElse { then_r, else_r, .. } => {
+                borrowed_blocks(then_r, out);
+                borrowed_blocks(else_r, out);
+            }
+            Region::While { body, .. } | Region::DoWhile { body, .. } => borrowed_blocks(body, out),
+            Region::MultiExitLoop { body, exits, .. } => {
+                borrowed_blocks(body, out);
+                exits
+                    .iter()
+                    .for_each(|(_, exit)| borrowed_blocks(exit, out));
+            }
+            Region::Switch {
+                arms,
+                formal_default,
+                ..
+            } => {
+                arms.iter().for_each(|arm| borrowed_blocks(arm, out));
+                if let Some(default) = formal_default {
+                    borrowed_blocks(default, out);
+                }
+            }
+            Region::Block(_)
+            | Region::Goto(_)
+            | Region::RawLoop { .. }
+            | Region::Unstructured(_) => {}
+        }
+    }
+    borrowed_blocks(r, &mut v);
     v.into_iter().collect()
 }
 
@@ -190,6 +224,7 @@ fn escaping(r: &Region, edges: &[Vec<Edge>]) -> Vec<(usize, usize)> {
 fn structural_entry(r: &Region) -> Option<usize> {
     match r {
         Region::Goto(_) => None,
+        Region::Borrowed(inner) => entry_block(inner),
         other => entry_block(other),
     }
 }
@@ -278,6 +313,7 @@ fn goto_edges(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>
                 }
             }
         }
+        Region::Borrowed(inner) => goto_edges(inner, edges, out),
         Region::Goto(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {}
     }
 }
@@ -296,6 +332,7 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
     match r {
         Region::Block(_) => {}
         Region::Goto(_) => {}
+        Region::Borrowed(inner) => implied(inner, edges, out),
         Region::RawLoop { blocks, .. } | Region::Unstructured(blocks) => {
             // Lossless labelled-CFG regions emit every machine transfer
             // explicitly when source-order fallthrough is displaced, so their
@@ -551,6 +588,9 @@ fn loops_and_switches(
             loops_and_switches(then_r, enclosing, headers, raw_loop_blocks, switch_owner);
             loops_and_switches(else_r, enclosing, headers, raw_loop_blocks, switch_owner);
         }
+        Region::Borrowed(inner) => {
+            loops_and_switches(inner, enclosing, headers, raw_loop_blocks, switch_owner)
+        }
         Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
     }
 }
@@ -647,6 +687,7 @@ pub fn account(
                     gotos(default, out);
                 }
             }
+            Region::Borrowed(inner) => gotos(inner, out),
             Region::Block(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {}
         }
     }

@@ -57,7 +57,8 @@ pub(super) fn contains_switch(region: &Region) -> bool {
         Region::IfThen { then_r, .. }
         | Region::While { body: then_r, .. }
         | Region::DoWhile { body: then_r, .. }
-        | Region::MultiExitLoop { body: then_r, .. } => contains_switch(then_r),
+        | Region::MultiExitLoop { body: then_r, .. }
+        | Region::Borrowed(then_r) => contains_switch(then_r),
         Region::IfThenElse { then_r, else_r, .. } => {
             contains_switch(then_r) || contains_switch(else_r)
         }
@@ -72,6 +73,7 @@ pub(super) fn contains_structured_loop(region: &Region) -> bool {
         Region::While { .. } | Region::DoWhile { .. } | Region::MultiExitLoop { .. } => true,
         Region::Seq(parts) => parts.iter().any(contains_structured_loop),
         Region::IfThen { then_r, .. } => contains_structured_loop(then_r),
+        Region::Borrowed(inner) => contains_structured_loop(inner),
         Region::IfThenElse { then_r, else_r, .. } => {
             contains_structured_loop(then_r) || contains_structured_loop(else_r)
         }

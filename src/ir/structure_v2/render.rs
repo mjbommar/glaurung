@@ -100,6 +100,7 @@ fn materialized_post_tested_exits_are_terminal(region: &Region, lf: &LlirFunctio
                     .as_deref()
                     .is_none_or(|default| materialized_post_tested_exits_are_terminal(default, lf))
         }
+        Region::Borrowed(inner) => materialized_post_tested_exits_are_terminal(inner, lf),
         Region::Block(_) | Region::RawLoop { .. } | Region::Goto(_) | Region::Unstructured(_) => {
             true
         }
@@ -138,6 +139,7 @@ fn embed_switch_local_regions(
                 embed_switch_local_regions(exit, locals, embedded)?;
             }
         }
+        Region::Borrowed(inner) => embed_switch_local_regions(inner, locals, embedded)?,
         Region::Switch {
             arms,
             formal_default,
@@ -216,6 +218,7 @@ fn region_goto_targets(region: &Region) -> Vec<usize> {
             targets.extend(exits.iter().flat_map(|(_, exit)| region_goto_targets(exit)));
             targets
         }
+        Region::Borrowed(inner) => region_goto_targets(inner),
         Region::Switch {
             arms,
             formal_default,
