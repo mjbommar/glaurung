@@ -195,6 +195,15 @@ pub(super) fn detect_guarded_switch_shape(
     // owns its out-of-range edge. Both are the same source-level switch. Remove
     // the default-labelled table destination when present, but do not require
     // one merely to prove the guarded shape.
+    let dispatch_is_in_loop = innermost_natural_loop_containing(dispatch, cfg).is_some();
+    let dense_guard_is_proven = if dispatch_is_in_loop {
+        // Folding a cyclic guard changes ownership of backedges and shared
+        // latches. Keep that path on the direct comparison contract until the
+        // raw-loop verifier can validate general predicate DAG provenance.
+        cfg.branch_is_direct_unsigned_comparison(guard)
+    } else {
+        cfg.branch_depends_on_unsigned_comparison(guard)
+    };
     match arms.iter().position(|arm| *arm == default_entry) {
         Some(default_position) => {
             arms.remove(default_position);
@@ -205,7 +214,7 @@ pub(super) fn detect_guarded_switch_shape(
         // already prove the guard relationship in `is_guarded_switch_default`;
         // requiring the destination to occur in the table as well rejects the
         // canonical dense shape at function scope.
-        None if cfg.branch_depends_on_unsigned_comparison(guard) => {}
+        None if dense_guard_is_proven => {}
         None => return None,
     }
     if arms.is_empty() {
@@ -227,21 +236,28 @@ pub(super) fn detect_guarded_switch_shape(
     // so it must be rendered at the case site, but the default path remains
     // its structural owner. Admit only an already-proved bounded shared-return
     // chain which the typed formal default can actually reach.
-    let borrowed_return_arms: HashMap<usize, Vec<usize>> = arms
-        .iter()
-        .filter_map(|arm| {
-            can_reach(default_entry, *arm, cfg)
-                .then(|| shared_return_chain(*arm, cfg))
-                .flatten()
-                .map(|chain| (*arm, chain))
-        })
-        .collect();
+    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
+    let borrowed_return_arms: HashMap<usize, Vec<usize>> = if enclosing_loop.is_none() {
+        arms.iter()
+            .filter_map(|arm| {
+                can_reach(default_entry, *arm, cfg)
+                    .then(|| shared_return_chain(*arm, cfg))
+                    .flatten()
+                    .map(|chain| (*arm, chain))
+            })
+            .collect()
+    } else {
+        // In a loop, the default can reach a case through the next iteration.
+        // That cyclic reachability is not shared-return ownership and must not
+        // bypass the arm's external-predecessor rejection. RawLoop owns these
+        // cases and already has explicit terminal-exit handling.
+        HashMap::new()
+    };
     let borrowed_return_entries = borrowed_return_arms.keys().copied().collect();
     let arm_build_order =
         switch_arm_build_order(dispatch, &arms, cfg, join, &borrowed_return_entries)?;
 
     visited.insert(dispatch);
-    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
     let mut sub_arms: Vec<Option<Region>> = vec![None; arms.len()];
     for arm_index in arm_build_order {
         let arm = arms[arm_index];

@@ -1093,6 +1093,59 @@ mod tests {
     }
 
     #[test]
+    fn arithmetic_value_flow_does_not_prove_an_unsigned_switch_guard() {
+        // A branch predicate may depend on a value that was computed from an
+        // earlier unsigned comparison without being that comparison's boolean
+        // result.  Following arbitrary def-use edges made the ARM fixture-206
+        // loop latch look like a switch range guard and destroyed its already
+        // recovered inner switch.  Only predicate-preserving operations may
+        // carry unsigned-comparison evidence to a conditional branch.
+        let comparison = VReg::Temp(70);
+        let arithmetic = VReg::Temp(71);
+        let condition = VReg::Temp(72);
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: comparison.clone(),
+                        op: crate::ir::types::CmpOp::Ult,
+                        lhs: Value::Reg(VReg::phys("index")),
+                        rhs: Value::Const(6),
+                    },
+                    Op::Bin {
+                        dst: arithmetic.clone(),
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Value::Reg(comparison),
+                        rhs: Value::Const(1),
+                    },
+                    Op::Cmp {
+                        dst: condition.clone(),
+                        op: crate::ir::types::CmpOp::Eq,
+                        lhs: Value::Reg(arithmetic),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: condition,
+                        target: 0x1100,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1100, 0x1200],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+            (0x1200, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        assert!(
+            !cfg.branch_depends_on_unsigned_comparison(0),
+            "arithmetic ancestry is not boolean range-proof provenance"
+        );
+    }
+
+    #[test]
     fn guarded_switch_default_shared_by_case_paths_keeps_both_guard_edges() {
         // Reduced from NuttX O2-noinline `nxsig_find_pendingsignal`.  The range
         // guard and jump-table holes enter b3 directly, while every explicit

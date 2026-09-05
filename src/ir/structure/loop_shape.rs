@@ -129,7 +129,7 @@ pub(super) fn detect_raw_dispatch_loop(
             && default.dispatch == Some(evidence.dispatch)
             && body_contains_guard_and_dispatch(&blocks, default.guard, evidence.dispatch)
             && cfg.preds[evidence.dispatch] == vec![default.guard]
-            && cfg.branch_depends_on_unsigned_comparison(default.guard))
+            && cfg.branch_is_direct_unsigned_comparison(default.guard))
         .then_some(default.guard)
     });
     let switch_inline_regions = switch

@@ -321,6 +321,57 @@ def test_wide_selector_switch_borrows_default_shared_return(tmp_path: Path) -> N
     assert results["wide_selector_mixed"]["status"] == "pass", results
 
 
+def test_transitive_wide_guard_does_not_steal_a_loop_switch(tmp_path: Path) -> None:
+    """Predicate-DAG proof for fixture 215 must preserve fixture 206's loop."""
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    binary = tmp_path / "dispatch-loop-clang-O2.so"
+    compiled = TC.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["dispatch_in_loop"])
+    assert code is not None
+    assert "switch (" in code, code
+    assert "unrecovered indirect jump" not in code, code
+    assert re.search(r"\bvar10\b", code) is None, code
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            fixture,
+            "--function",
+            "dispatch_in_loop",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "32",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["dispatch_in_loop"]["status"] == "pass", results
+
+
 def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     """Dead flag artifacts must not strand single-use array temporaries."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "arrays.c"

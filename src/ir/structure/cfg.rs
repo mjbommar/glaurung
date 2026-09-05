@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
-use crate::ir::types::{CmpOp, LlirFunction, Op, Value, Width};
+use crate::ir::types::{BinOp, CmpOp, LlirFunction, Op, UnOp, Value, Width};
 use crate::ir::use_def::{use_count, InstrAddr};
 
 /// A shared, immutable set of block indices — what the natural-loop memos hand
@@ -316,6 +316,19 @@ impl Cfg {
             .unwrap_or(false)
     }
 
+    /// Whether the conditional consumes an unsigned comparison result without
+    /// an intervening boolean-expression graph.
+    ///
+    /// Raw-loop guard absorption intentionally uses this narrower contract:
+    /// cyclic reachability gives its lowerer stronger ownership obligations
+    /// than a one-shot guarded switch. The broader transitive predicate proof
+    /// remains available to ordinary guarded-switch recovery.
+    pub(super) fn branch_is_direct_unsigned_comparison(&self, block: usize) -> bool {
+        self.branch_predicates.get(block).is_some_and(|predicate| {
+            predicate.is_some_and(|predicate| matches!(predicate.op, Some(CmpOp::Ult | CmpOp::Ule)))
+        })
+    }
+
     fn derive_branch_predicates(
         &self,
         lf: &LlirFunction,
@@ -332,12 +345,45 @@ impl Cfg {
                 let Some(value) = ssa.def_value_ref(lf, addr) else {
                     continue;
                 };
-                value_inputs.insert(
-                    value.clone(),
-                    (0..use_count(&instruction.op))
-                        .filter_map(|operand| ssa.use_value_ref(lf, addr, operand).cloned())
-                        .collect(),
+                // This is predicate provenance, not general data dependence.
+                // Copies and boolean compositions preserve the meaning of a
+                // comparison; arithmetic, loads, extensions and the operands
+                // *being compared* do not. Following every SSA input let an
+                // unrelated earlier unsigned comparison leak through ordinary
+                // arithmetic into a later branch and misclassify loop control
+                // as a switch range guard.
+                let preserves_predicate = matches!(
+                    &instruction.op,
+                    Op::Assign { .. }
+                        | Op::Bin {
+                            op: BinOp::LogicalAnd
+                                | BinOp::LogicalOr
+                                | BinOp::And
+                                | BinOp::Or
+                                | BinOp::Xor,
+                            ..
+                        }
+                        | Op::Un { op: UnOp::Not, .. }
+                ) || matches!(
+                    &instruction.op,
+                    Op::Cmp {
+                        op: CmpOp::Eq | CmpOp::Ne,
+                        lhs: Value::Const(0 | 1),
+                        ..
+                    } | Op::Cmp {
+                        op: CmpOp::Eq | CmpOp::Ne,
+                        rhs: Value::Const(0 | 1),
+                        ..
+                    }
                 );
+                if preserves_predicate {
+                    value_inputs.insert(
+                        value.clone(),
+                        (0..use_count(&instruction.op))
+                            .filter_map(|operand| ssa.use_value_ref(lf, addr, operand).cloned())
+                            .collect(),
+                    );
+                }
                 if let Op::Cmp { op, lhs, rhs, .. } = &instruction.op {
                     comparisons.insert(value.clone(), (*op, comparison_operand_width(lhs, rhs)));
                 }
