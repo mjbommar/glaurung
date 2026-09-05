@@ -972,12 +972,8 @@ def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> Non
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.xfail(
-    strict=True,
-    reason="v1 does not yet own all backedges of an A32 switch nested in a loop",
-)
 def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
-    """Keep the production-structurer ownership gap executable and visible."""
+    """Production locally owns every switch-case backedge inside the loop."""
     arch = "armv7_a32"
     if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
         pytest.skip("ARM hard-float cross compiler and qemu-arm are required")

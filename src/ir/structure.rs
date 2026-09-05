@@ -67,7 +67,8 @@ use fallback::{
 use if_shape::detect_if_shape;
 use loop_shape::{
     detect_bottom_tested_loop, detect_natural_loop, detect_raw_dispatch_loop,
-    detect_raw_multi_latch_loop, has_dispatch_natural_loop, loop_break_shape,
+    detect_raw_multi_latch_loop, has_dispatch_natural_loop, linear_path_reaches_raw_dispatch_loop,
+    loop_break_shape,
 };
 pub use region::{entry_block, Region};
 use switch_shape::{detect_guarded_switch_shape, detect_switch_shape};
@@ -467,6 +468,34 @@ fn build_inner(
                         continue;
                     }
                     None => break,
+                }
+            }
+
+            // An out-of-loop guard may have a bypass arm and a straight-line
+            // continuation into a multi-exit dispatch loop. No ordinary
+            // diamond owns the two paths because they never rejoin. Preserve
+            // the bypass as an explicit conditional goto and keep walking the
+            // other arm so the local RawLoop recogniser can own every latch.
+            if let Some(taken) = cfg.cond_taken[cur] {
+                let other = cfg.succs[cur].iter().copied().find(|succ| *succ != taken);
+                if let Some(other) = other {
+                    let taken_reaches = linear_path_reaches_raw_dispatch_loop(taken, cfg);
+                    let other_reaches = linear_path_reaches_raw_dispatch_loop(other, cfg);
+                    let guarded_continuation = match (taken_reaches, other_reaches) {
+                        (true, false) => Some((taken, other, true)),
+                        (false, true) => Some((other, taken, false)),
+                        _ => None,
+                    };
+                    if let Some((continuation, bypass, invert)) = guarded_continuation {
+                        parts.push(Region::IfThen {
+                            cond: cur,
+                            then_r: Box::new(Region::Goto(bypass)),
+                            join: None,
+                            invert,
+                        });
+                        cur = continuation;
+                        continue;
+                    }
                 }
             }
         }
@@ -1629,6 +1658,90 @@ mod tests {
             "loop blocks must not escape to function-level leftovers: {rendered}"
         );
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn two_exit_multi_latch_switch_loop_has_local_raw_ownership() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // Reduced fixture-206 A32 shape. The loop header has a normal exit;
+        // the guarded switch has three distinct latches plus one early-return
+        // case. No ordinary single-latch While/DoWhile can own all backedges.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1200), vec![0x1200, 0x1700]), // header / normal exit
+            (0x1200, cond(0x1300), vec![0x1300, 0x1500]), // table guard/default
+            (
+                0x1300,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1400, 0x1600, 0x1800],
+            ),
+            (0x1400, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1500, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1600, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1700, vec![Op::Return], vec![]),
+            (0x1800, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let (region, health) = recover_verified_with_health(&lf, &ssa);
+        let rendered = format!("{region:#?}");
+        assert!(
+            rendered.contains("RawLoop"),
+            "loop ownership was lost: {rendered}"
+        );
+        assert_ne!(
+            region,
+            Region::Unstructured((0..lf.blocks.len()).collect()),
+            "only the loop should degrade, not the whole function"
+        );
+        assert_eq!(health.structure_fallbacks, 0, "{region:#?}");
+        let cfg = Cfg::from(&lf, &ssa);
+        assert_eq!(
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region),
+            Vec::new(),
+            "the local RawLoop must own every latch and both real exits: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn two_exit_single_latch_switch_loop_does_not_force_raw_ownership() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, cond(0x1100), vec![0x1100, 0x1500]),
+            (
+                0x1100,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1200, 0x1400],
+            ),
+            (0x1200, vec![Op::Nop], vec![0x1300]),
+            (0x1300, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Return], vec![]),
+        ]);
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        assert!(
+            detect_raw_dispatch_loop(0, &cfg, &mut HashSet::new()).is_none(),
+            "a single-latch two-exit loop remains eligible for ordinary structure"
+        );
     }
 
     #[test]

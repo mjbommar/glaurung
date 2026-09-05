@@ -39,7 +39,10 @@ pub(super) fn has_dispatch_natural_loop(header: usize, cfg: &Cfg) -> bool {
     dispatch_natural_loop_parts(header, cfg).is_some()
 }
 
-fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usize>, Vec<usize>)> {
+fn dispatch_natural_loop_parts(
+    header: usize,
+    cfg: &Cfg,
+) -> Option<(HashSet<usize>, Vec<usize>, usize)> {
     let tails: Vec<usize> = cfg.preds[header]
         .iter()
         .copied()
@@ -50,7 +53,7 @@ fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usiz
     }
 
     let mut body = HashSet::new();
-    for tail in tails {
+    for &tail in &tails {
         body.extend(natural_loop_body(header, tail, cfg).iter().copied());
     }
     if body
@@ -77,7 +80,7 @@ fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usiz
         .into_iter()
         .collect();
     exits.sort_unstable();
-    Some((body, exits))
+    Some((body, exits, tails.len()))
 }
 
 /// Recognise a natural loop that contains exactly one resolved indirect dispatch.
@@ -94,12 +97,13 @@ pub(super) fn detect_raw_dispatch_loop(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
 ) -> Option<LoopRegion> {
-    let (body, exits) = dispatch_natural_loop_parts(header, cfg)?;
+    let (body, exits, latch_count) = dispatch_natural_loop_parts(header, cfg)?;
     // One normal-exhaustion path plus one terminal case is representable by
-    // the ordinary structured loop/switch builder. Raw labelled CFG is needed
-    // only once the dispatch has additional distinct exits that the current
-    // region algebra cannot own without dropping or inventing an edge.
-    if exits.len() < 3 {
+    // the ordinary structured loop/switch builder only when there is a single
+    // latch. With multiple dominated latches, no ordinary While/DoWhile shape
+    // owns all case-to-header edges; retaining the local RawLoop is strictly
+    // better than forcing the entire function into labelled fallback.
+    if exits.len() < 3 && !(exits.len() == 2 && latch_count > 1) {
         return None;
     }
 
@@ -123,6 +127,28 @@ pub(super) fn detect_raw_dispatch_loop(
         },
         exit: continuation,
     })
+}
+
+/// Whether a straight-line continuation reaches a dispatch loop that must be
+/// represented as a local [`Region::RawLoop`].
+///
+/// This is used only when an otherwise-unstructured guard has one bypass arm
+/// and one linear path into the loop. It lets the caller preserve the bypass
+/// as an explicit conditional goto and continue into the owned loop instead
+/// of abandoning the entire suffix as function-level leftovers.
+pub(super) fn linear_path_reaches_raw_dispatch_loop(start: usize, cfg: &Cfg) -> bool {
+    let mut current = start;
+    let mut seen = HashSet::new();
+    while seen.insert(current) {
+        if detect_raw_dispatch_loop(current, cfg, &mut HashSet::new()).is_some() {
+            return true;
+        }
+        let [next] = cfg.succs[current].as_slice() else {
+            return false;
+        };
+        current = *next;
+    }
+    false
 }
 
 /// Recognise a reducible multi-latch loop whose only exits all reach the same
