@@ -56,6 +56,9 @@ mod switch_shape;
 mod verify;
 
 pub(crate) use cfg::{BranchPredicate, Cfg};
+pub use cfg::{
+    SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+};
 use fallback::{
     contains_structured_loop, contains_switch, has_inner_loop_exit_that_reenters_via_outer_cycle,
     has_loop_conditional_with_join_beyond_loop, has_multi_latch_loop_with_distinct_exits,

@@ -377,14 +377,18 @@ fn visit_tree<'a>(
                     dispatch: *dispatch,
                 });
             }
-            if default.as_ref().is_some_and(|actual| {
-                candidate.switch_defaults().iter().all(|expected| {
-                    expected.guard != guard.unwrap_or(*dispatch)
-                        || expected.dispatch != Some(*dispatch)
-                        || expected.target != actual.target
-                        || expected.taken != actual.taken
-                })
-            }) {
+            let expected_default = evidence.and_then(|evidence| evidence.default.as_ref());
+            let default_matches = match (expected_default, default.as_ref()) {
+                (None, None) => true,
+                (Some(expected), Some(actual)) => {
+                    *guard == Some(expected.guard)
+                        && expected.dispatch == Some(*dispatch)
+                        && expected.target == actual.target
+                        && expected.taken == actual.taken
+                }
+                (None, Some(_)) | (Some(_), None) => false,
+            };
+            if !default_matches {
                 errors.push(TreeError::SwitchInvalid {
                     dispatch: *dispatch,
                 });
@@ -624,74 +628,97 @@ fn verify_switch_evidence(
     candidate: &RegionCandidate,
     errors: &mut Vec<CandidateError>,
 ) {
-    let expected_switches = cfg
+    // Check the candidate relationally against raw typed edges. Do not call
+    // the producer or construct a second authoritative SwitchEvidence object:
+    // malformed labels must become a mismatch, never a verifier panic.
+    let raw_dispatches = cfg
         .edges
         .iter()
         .enumerate()
-        .filter_map(|(dispatch, edges)| {
-            let cases = edges
+        .filter(|(_, edges)| {
+            edges
                 .iter()
-                .enumerate()
-                .filter(|(_, edge)| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
-                .map(|(position, edge)| super::SwitchCaseEvidence {
-                    target: edge.to,
-                    values: cfg.case_labels[dispatch][position].clone(),
-                })
-                .collect::<Vec<_>>();
-            (!cases.is_empty()).then_some(super::SwitchEvidence { dispatch, cases })
+                .any(|edge| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
         })
-        .collect::<Vec<_>>();
-    if candidate.switches != expected_switches {
-        let dispatches = candidate
-            .switches
-            .iter()
-            .map(|switch| switch.dispatch)
-            .chain(expected_switches.iter().map(|switch| switch.dispatch))
-            .collect::<BTreeSet<_>>();
-        errors.extend(
-            dispatches
-                .into_iter()
-                .map(|dispatch| CandidateError::SwitchEvidenceMismatch { dispatch }),
-        );
-    }
-
-    let expected_defaults = cfg
-        .edges
+        .map(|(dispatch, _)| dispatch)
+        .collect::<BTreeSet<_>>();
+    let dispatches = raw_dispatches
         .iter()
-        .enumerate()
-        .flat_map(|(guard, edges)| {
-            edges.iter().filter_map(move |edge| {
-                (edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault).then(|| {
-                    let dispatch = cfg.succs[guard].iter().copied().find(|successor| {
-                        *successor != edge.to
-                            && cfg.edges[*successor].iter().any(|candidate| {
-                                candidate.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase
-                            })
-                    });
-                    super::SwitchDefaultEvidence {
+        .copied()
+        .chain(candidate.switches.iter().map(|switch| switch.dispatch))
+        .collect::<BTreeSet<_>>();
+
+    for dispatch in dispatches {
+        let raw_cases = cfg
+            .edges
+            .get(dispatch)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, edge)| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+            .collect::<Vec<_>>();
+        let labels = cfg.case_labels.get(dispatch);
+        let defaults = cfg
+            .edges
+            .iter()
+            .enumerate()
+            .flat_map(|(guard, guard_edges)| {
+                guard_edges.iter().filter_map(move |edge| {
+                    (edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault
+                        && cfg.succs.get(guard).is_some_and(|successors| {
+                            successors
+                                .iter()
+                                .any(|successor| *successor == dispatch && *successor != edge.to)
+                        }))
+                    .then_some(super::SwitchDefaultEvidence {
                         guard,
                         target: edge.to,
-                        dispatch,
-                        taken: cfg.cond_taken[guard] == Some(edge.to),
-                    }
+                        dispatch: Some(dispatch),
+                        taken: cfg.cond_taken.get(guard).copied().flatten() == Some(edge.to),
+                    })
                 })
             })
-        })
-        .collect::<Vec<_>>();
-    if candidate.switch_defaults != expected_defaults {
-        let defaults = candidate
-            .switch_defaults
+            .collect::<Vec<_>>();
+        let expected_complete = !raw_cases.is_empty()
+            && labels.is_some_and(|labels| {
+                labels.len() == raw_cases.len() && labels.iter().all(|values| !values.is_empty())
+            })
+            && defaults.len() <= 1;
+        let actual = candidate
+            .switches
             .iter()
-            .map(|default| (default.guard, default.target))
-            .chain(
-                expected_defaults
-                    .iter()
-                    .map(|default| (default.guard, default.target)),
-            )
-            .collect::<BTreeSet<_>>();
-        errors.extend(defaults.into_iter().map(|(guard, target)| {
-            CandidateError::SwitchDefaultEvidenceMismatch { guard, target }
-        }));
+            .find(|switch| switch.dispatch == dispatch);
+        let cases_match = actual.is_some_and(|actual| {
+            raw_dispatches.contains(&dispatch)
+                && actual.provenance == super::SwitchEvidenceProvenance::TypedCfgEdges
+                && actual.complete == expected_complete
+                && actual.cases.len() == raw_cases.len()
+                && raw_cases.iter().enumerate().all(|(case_index, (_, edge))| {
+                    labels
+                        .and_then(|labels| labels.get(case_index))
+                        .is_some_and(|values| {
+                            !values.is_empty()
+                                && actual.cases[case_index].target == edge.to
+                                && actual.cases[case_index].values == *values
+                        })
+                })
+        });
+        if !cases_match {
+            errors.push(CandidateError::SwitchEvidenceMismatch { dispatch });
+        }
+
+        let expected_default = (defaults.len() == 1).then(|| &defaults[0]);
+        let actual_default = actual.and_then(|switch| switch.default.as_ref());
+        if actual_default != expected_default {
+            let differing = actual_default
+                .map(|default| (default.guard, default.target))
+                .into_iter()
+                .chain(expected_default.map(|default| (default.guard, default.target)))
+                .collect::<BTreeSet<_>>();
+            errors.extend(differing.into_iter().map(|(guard, target)| {
+                CandidateError::SwitchDefaultEvidenceMismatch { guard, target }
+            }));
+        }
     }
 }
 
@@ -850,7 +877,6 @@ mod tests {
             &RegionCandidate {
                 blocks: vec![],
                 switches: vec![],
-                switch_defaults: vec![],
             },
         );
         assert!(errors.contains(&CandidateError::BlockMissing { block: 0 }));
@@ -904,7 +930,7 @@ mod tests {
                 },
             ],
         };
-        let cfg = Cfg::from(&function, &compute_ssa(&function));
+        let mut cfg = Cfg::from(&function, &compute_ssa(&function));
         let loops = LoopForest::from_cfg(&cfg);
         let locals = LocalRegions::from_cfg(&cfg, &loops);
         let mut candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
@@ -912,6 +938,38 @@ mod tests {
 
         let errors = verify_candidate(&cfg, &loops, &locals, &[], &candidate);
         assert!(errors.contains(&CandidateError::SwitchEvidenceMismatch { dispatch: 0 }));
+
+        candidate.switches[0].cases[0].values = vec![0];
+        candidate.switches[0].default = Some(crate::ir::structure::SwitchDefaultEvidence {
+            guard: 1,
+            target: 2,
+            dispatch: Some(0),
+            taken: false,
+        });
+        let errors = verify_candidate(&cfg, &loops, &locals, &[], &candidate);
+        assert!(
+            errors.contains(&CandidateError::SwitchDefaultEvidenceMismatch {
+                guard: 1,
+                target: 2,
+            })
+        );
+
+        candidate.switches[0].default = None;
+        let original_labels = cfg.case_labels[0].clone();
+        cfg.case_labels[0].pop();
+        let short = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_candidate(&cfg, &loops, &locals, &[], &candidate)
+        }))
+        .expect("short labels must be rejected, not panic");
+        assert!(short.contains(&CandidateError::SwitchEvidenceMismatch { dispatch: 0 }));
+
+        cfg.case_labels[0] = original_labels;
+        cfg.case_labels[0][1].clear();
+        let empty = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_candidate(&cfg, &loops, &locals, &[], &candidate)
+        }))
+        .expect("empty labels must be rejected, not panic");
+        assert!(empty.contains(&CandidateError::SwitchEvidenceMismatch { dispatch: 0 }));
     }
 
     #[test]

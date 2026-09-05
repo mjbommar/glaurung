@@ -64,19 +64,32 @@ pub(super) fn detect_switch_shape(
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
 ) -> Option<(Region, Option<usize>)> {
+    let evidence = cfg.switch_at(dispatch)?;
+    if !evidence.complete {
+        return None;
+    }
     let all_arms = cfg.succs[dispatch].clone();
-    let mut arms = all_arms.clone();
-    let mut case_labels = cfg.case_labels[dispatch].clone();
+    let mut arms = evidence
+        .cases
+        .iter()
+        .map(|case| case.target)
+        .collect::<Vec<_>>();
+    let mut case_labels = evidence
+        .cases
+        .iter()
+        .map(|case| case.values.clone())
+        .collect::<Vec<_>>();
     if arms.len() < 2 || !cfg.is_switch_dispatch(dispatch) {
         return None;
     }
-    let formal_default_entry = arms
-        .iter()
-        .position(|arm| is_guarded_switch_default(dispatch, *arm, cfg))
-        .map(|position| {
-            case_labels.remove(position);
-            arms.remove(position)
-        });
+    let formal_default_entry = evidence.default.as_ref().and_then(|default| {
+        arms.iter()
+            .position(|arm| *arm == default.target)
+            .map(|position| {
+                case_labels.remove(position);
+                arms.remove(position)
+            })
+    });
     if arms.is_empty() {
         return None;
     }
@@ -153,21 +166,27 @@ pub(super) fn detect_guarded_switch_shape(
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
 ) -> Option<(Region, Option<usize>)> {
-    let [first, second] = cfg.succs[guard].as_slice() else {
+    let evidence = cfg.switch_guarded_by(guard)?;
+    if !evidence.complete {
         return None;
-    };
-    let (dispatch, default_entry) =
-        [(*first, *second), (*second, *first)]
-            .into_iter()
-            .find(|(dispatch, default_entry)| {
-                cfg.is_switch_dispatch(*dispatch)
-                    && cfg.preds[*dispatch] == vec![guard]
-                    && is_guarded_switch_default(*dispatch, *default_entry, cfg)
-            })?;
+    }
+    let dispatch = evidence.dispatch;
+    let default_entry = evidence.default.as_ref()?.target;
+    if cfg.preds[dispatch] != vec![guard] || !cfg.is_switch_dispatch(dispatch) {
+        return None;
+    }
 
     let all_arms = cfg.succs[dispatch].clone();
-    let mut arms = all_arms.clone();
-    let mut case_labels = cfg.case_labels[dispatch].clone();
+    let mut arms = evidence
+        .cases
+        .iter()
+        .map(|case| case.target)
+        .collect::<Vec<_>>();
+    let mut case_labels = evidence
+        .cases
+        .iter()
+        .map(|case| case.values.clone())
+        .collect::<Vec<_>>();
     // A sparse table can encode holes by pointing table slots at the range
     // guard's default target. A dense table has no such slot: the guard alone
     // owns its out-of-range edge. Both are the same source-level switch. Remove
@@ -330,14 +349,6 @@ fn switch_arm_build_order(
 
 /// Return true when `candidate` is both a table destination and the proven
 /// out-of-range target of the conditional guarding `dispatch`.
-fn is_guarded_switch_default(dispatch: usize, candidate: usize, cfg: &Cfg) -> bool {
-    cfg.preds[candidate].iter().any(|guard| {
-        cfg.edges[*guard].iter().any(|edge| {
-            edge.to == candidate && edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault
-        }) && cfg.edges[*guard].iter().any(|edge| edge.to == dispatch)
-    })
-}
-
 /// Walk reachable blocks from each arm and return the block reached from the
 /// greatest number of DISTINCT arms that also has >1 predecessors and is
 /// dominated by `dispatch`. Address order breaks ties only after arm coverage;
