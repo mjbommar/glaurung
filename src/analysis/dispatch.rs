@@ -1041,6 +1041,13 @@ impl DispatchTracker {
             .first()
             .and_then(|operand| operand.register.as_deref());
         match mnemonic {
+            // An arbitrary callee may overwrite every volatile register and
+            // the condition flags. Keeping any table/address proof across it
+            // would turn a stale pre-call sequence into a false dispatch.
+            "bl" | "blr" | "blraa" | "blraaz" | "blrab" | "blrabz" => {
+                self.reset();
+                true
+            }
             "adr" | "adrp" => {
                 let Some((destination, address)) = destination.zip(
                     ins.operands
@@ -1510,6 +1517,30 @@ mod tests {
         bic.arch = "arm64".to_string();
         overwritten.observe(&bic);
         assert!(overwritten.export_addresses().is_empty());
+
+        // A call between the exact table calculation and the branch may
+        // clobber every participating register. It must invalidate the whole
+        // candidate even when the disassembler exposes the call target as a
+        // read operand rather than a destination.
+        let mut called = DispatchTracker::new();
+        called.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("x0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+        for (va, word) in [
+            (0x5f0, 0x9000_0003),
+            (0x5f4, 0x911e_9063),
+            (0x5f8, 0x3860_4863),
+            (0x5fc, 0x1000_0060),
+            (0x600, 0x8b23_8803),
+        ] {
+            called.observe(&decode(va, word));
+        }
+        called.observe(&decode(0x604, 0x9400_0000)); // bl 0x604
+        assert_eq!(
+            called.aarch64_byte_table_branch(&decode(0x608, 0xd61f_0060)),
+            None
+        );
     }
 
     /// An `Instruction` at a chosen address and length — ARM `pc` arithmetic
