@@ -17,7 +17,7 @@
 //!   `is_arm_cond_bx`) resolve the cases the mnemonic alone cannot: a `pop`
 //!   that writes `pc` is a return, and Capstone marks every ARM operand as a
 //!   read, so definitions must be modelled here.
-//! - [`guard_bound_reaches_fallthrough`] and [`is_code_padding_terminator`]
+//! - [`guard_fallthrough_bound`] and [`is_code_padding_terminator`]
 //!   are the two smaller opcode questions the sweep and the jump-table sizer
 //!   ask: does this conditional branch's fallthrough carry the compare's range
 //!   bound, and is this opcode inter-function padding.
@@ -35,6 +35,7 @@
 //! `super::scan::prologue_gate_tests`, where they gate the byte-level scans
 //! that call them; they reach these functions through the parent's `use`.
 
+use crate::analysis::dispatch::GuardFallthroughBound;
 use crate::core::binary::Arch as BArch;
 use crate::core::instruction::Instruction;
 
@@ -198,22 +199,56 @@ pub(super) fn arm_defined_register(ins: &Instruction) -> Option<&str> {
 /// away when idx > N" leaves `idx <= N` on the fallthrough, which is exactly the
 /// jump table's entry count minus one. A signed test is a different construct
 /// and proves nothing about an unsigned table index.
-pub(super) fn guard_bound_reaches_fallthrough(mnemonic: &str, arch: BArch) -> bool {
+pub(super) fn guard_fallthrough_bound(
+    mnemonic: &str,
+    arch: BArch,
+) -> Option<GuardFallthroughBound> {
     let lower = mnemonic.to_ascii_lowercase();
     match arch {
-        BArch::X86 | BArch::X86_64 => matches!(lower.as_str(), "ja" | "jae" | "jnbe" | "jnb"),
+        BArch::X86 | BArch::X86_64 => match lower.as_str() {
+            "ja" | "jnbe" => Some(GuardFallthroughBound::Inclusive),
+            "jae" | "jnb" => Some(GuardFallthroughBound::Exclusive),
+            _ => None,
+        },
         // Thumb-2's `cmp idx, #N; bhi.w default; tbb/tbh [pc, idx]`. `bhi` alone,
         // because it is the only form whose in-range edge admits exactly `[0, N]`
         // — and it is what GCC and Clang emit for every table branch measured
         // here (three sites in `tests/decompiler_fixtures`, two in betaflight).
-        BArch::ARM => {
-            lower
-                .strip_suffix(".w")
-                .or_else(|| lower.strip_suffix(".n"))
-                .unwrap_or(&lower)
-                == "bhi"
+        BArch::ARM => (lower
+            .strip_suffix(".w")
+            .or_else(|| lower.strip_suffix(".n"))
+            .unwrap_or(&lower)
+            == "bhi")
+            .then_some(GuardFallthroughBound::Inclusive),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod guard_bound_tests {
+    use super::{guard_fallthrough_bound, BArch};
+    use crate::analysis::dispatch::GuardFallthroughBound;
+
+    #[test]
+    fn unsigned_above_guards_distinguish_inclusive_and_strict_fallthroughs() {
+        for mnemonic in ["ja", "jnbe"] {
+            assert_eq!(
+                guard_fallthrough_bound(mnemonic, BArch::X86_64),
+                Some(GuardFallthroughBound::Inclusive)
+            );
         }
-        _ => false,
+        for mnemonic in ["jae", "jnb"] {
+            assert_eq!(
+                guard_fallthrough_bound(mnemonic, BArch::X86_64),
+                Some(GuardFallthroughBound::Exclusive)
+            );
+        }
+        assert_eq!(
+            guard_fallthrough_bound("bhi.w", BArch::ARM),
+            Some(GuardFallthroughBound::Inclusive)
+        );
+        assert_eq!(guard_fallthrough_bound("jg", BArch::X86_64), None);
+        assert_eq!(guard_fallthrough_bound("bhs", BArch::ARM), None);
     }
 }
 

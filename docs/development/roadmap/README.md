@@ -123,6 +123,15 @@ The current exploratory corpus has 6 rather than 14 goto regressions. The run
 shared uncommitted parser sources, so the review plan keeps a clean pinned rerun
 as a promotion prerequisite.
 
+WP5 also now carries exact chained unsigned-guard semantics: `ja`/`jnbe`
+fallthroughs are inclusive and `jae`/`jnb` fallthroughs are exclusive. The
+Clang O2 fixture-204 adjacent-table case reaches discovery and the verified
+shadow tree with exactly seven targets and passes all 34 deterministic
+execution cases. Its legacy default remains red, so no behavioral baseline was
+rewritten; the immediate follow-on is to trace that already-typed evidence
+through the default structurer while retaining the shadow result as evidence,
+not promotion.
+
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
 to machine-ABI boundaries, and float-valued call rendering all have bounded

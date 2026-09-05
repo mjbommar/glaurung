@@ -47,6 +47,14 @@ the accompanying documentation commit, while behavioral baselines are not
 blindly rewritten. This is not a current-tip green `release` claim. M3 through
 M6 remain open.
 
+The latest bounded WP5 slice closes chained strict unsigned guard transport.
+`ja`/`jnbe` preserve the inclusive maximum, while `jae`/`jnb` preserve the
+exclusive maximum. Clang O2 fixture 204 now discovers exactly seven typed
+targets after its one-instruction second guard, and shadow v2 passes all 34
+deterministic execution cases. The default legacy structurer remains red, so
+the behavioral baseline is intentionally unchanged. See
+`results/wp5-chained-strict-guard.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -813,8 +821,12 @@ one authoritative set of case edges.
   `src/ir/indirect_targets.rs`. It carries comparison, stack/memory, mask, and
   rebased bounds into bounded PIC-relative and absolute decoders. The live
   gcc-O2 Duff fixture proves that `arg2 & 7` resolves exactly eight ordered
-  targets. The remaining encodings and measured declines still need a fresh
-  census.
+  targets. Chained x86 unsigned guards now retain their exact edge-local
+  strictness: `ja`/`jnbe` admit equality, while `jae`/`jnb` reduce the
+  fallthrough maximum by one. The real Clang O2 fixture-204 guard therefore
+  resolves its exact seven-entry adjacent table rather than over-reading an
+  eighth slot. The remaining encodings and measured declines still need a
+  fresh census.
 - [~] Add target-specific decoding for ARM `tbb`/`tbh` and
   `ldr pc, [pc, r0, lsl #2]` through the relevant lifter/machine-model layer.
   Both forms already decode through `dispatch_resolution.rs`; the remaining
@@ -873,7 +885,10 @@ one authoritative set of case edges.
   was found and fixed; every other newly recovered switch cell still needs the
   same explicit execution evidence before WP5 can complete. The pinned
   clang-14 `statemachine::fsm` default-v1 path now also recompiles and matches
-  the original across 64 deterministic fuzz inputs.
+  the original across 64 deterministic fuzz inputs. The Clang O2
+  `204::adt204_guarded_control` shadow-v2 path now likewise passes all 34
+  deterministic cases after exact strict-guard transport. Its default-v1 cell
+  remains `fail`, and its baseline is deliberately unchanged.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
@@ -2027,7 +2042,11 @@ relevant ratchet's accepted-regression record.
    structurers, and rendering consume one case/default/provenance object; add
    the remaining fixture/compiler/architecture execution cells and classify
    every residual decline. Malformed, truncated, overlapping, and wrapping
-   table safety tests are already present and must remain green.
+   table safety tests and the new chained inclusive/exclusive guard tests are
+   already present and must remain green. Fixture 204's Clang O2 discovery and
+   shadow execution are closed; next isolate why its exact seven-case evidence
+   still disappears in the default legacy structurer, without changing the
+   baseline until that default path passes execution.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

@@ -1067,6 +1067,58 @@ mod tests {
     }
 
     #[test]
+    fn chained_strict_guard_keeps_exact_adjacent_table_extent() {
+        let Some(lifted) = lift_real_fixture(
+            "204_adjacent_dispatch_tables-clang-O2.so",
+            "adt204_guarded_control",
+        ) else {
+            return;
+        };
+        let dispatch_block = lifted
+            .blocks
+            .iter()
+            .find(|block| block.start_va == 0x123c)
+            .expect("fixture retains the table-dispatch block");
+        assert_eq!(
+            dispatch_block.succs.len(),
+            7,
+            "jae fallthrough is selector < 7, so the adjacent table has seven entries"
+        );
+
+        let report = observe(&lifted, &compute_ssa(&lifted));
+        let candidate = report
+            .candidate
+            .as_ref()
+            .unwrap_or_else(|| panic!("typed adjacent-table switch: {report:#?}"));
+        let dispatch = candidate
+            .switches()
+            .iter()
+            .find(|switch| lifted.blocks[switch.dispatch].start_va == 0x123c)
+            .unwrap_or_else(|| panic!("0x123c is a typed dispatch: {candidate:#?}"));
+        assert_eq!(
+            dispatch
+                .cases
+                .iter()
+                .flat_map(|case| case.values.iter().copied())
+                .collect::<Vec<_>>(),
+            (0..7).collect::<Vec<_>>()
+        );
+        let pseudocode = report
+            .raw_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("verified adjacent-table switch renders: {report:#?}"));
+        assert!(pseudocode.contains("switch ("), "{pseudocode}");
+        assert!(pseudocode.contains("case 6:"), "{pseudocode}");
+        assert!(!pseudocode.contains("case 7:"), "{pseudocode}");
+        assert!(
+            !pseudocode.contains("unrecovered indirect jump"),
+            "{pseudocode}"
+        );
+        assert_prepared_c(&report);
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+    }
+
+    #[test]
     fn real_hybrid_switch_clones_short_return_tails_without_goto_growth() {
         let Some(lifted) =
             lift_real_fixture("106_switch_shapes_dense_sparse-gcc-O0.so", "hybrid_switch")

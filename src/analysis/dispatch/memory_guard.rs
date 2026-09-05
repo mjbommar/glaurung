@@ -121,6 +121,13 @@ impl MemoryBounds {
         mems
     }
 
+    pub(super) fn export_pending_with_maximum(&self, maximum: u64) -> HashMap<MemKey, u64> {
+        self.pending
+            .as_ref()
+            .map(|(key, _)| HashMap::from([(key.clone(), maximum)]))
+            .unwrap_or_default()
+    }
+
     /// The limit this block's comparison established, for the walker to decide
     /// whether the guard's in-range edge carries anything at all.
     pub(super) fn pending_limit(&self) -> Option<u64> {

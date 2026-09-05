@@ -125,6 +125,10 @@ pub(super) fn discover_function(
     // block ends in a range check, read when its in-range successor is walked.
     // BFS reaches the guard before the dispatch, so the fact is always available.
     let mut index_bounds: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
+    // The subset of each bound that came from the guard comparison itself.
+    // Kept separately so a chained branch using the same still-live flags can
+    // tighten that value without changing unrelated stable bounds.
+    let mut guard_edge_bounds: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
     // Concrete register addresses that reach a block on every predecessor seen
     // so far. Unlike range bounds, these flow across ordinary branches too: a
     // loop preheader commonly materialises the jump-table base once and a later
@@ -478,13 +482,26 @@ pub(super) fn discover_function(
                     // the jump table's entry count. Restricted to the unsigned
                     // forms because a switch index is unsigned after the
                     // compiler's rebase; a signed test is a different construct.
-                    if guard_bound_reaches_fallthrough(&ins.mnemonic, arch)
-                        && dispatch.pending_bound().is_some()
-                    {
+                    if let Some(kind) = guard_fallthrough_bound(&ins.mnemonic, arch) {
                         // Carry the register bounds AND the slot bounds: clang -O0
                         // spills the switch value before the check and reloads it
                         // into a different register in the dispatch block.
-                        index_bounds.insert(end_va, dispatch.export_bounds());
+                        let proof = dispatch.export_guard_bounds(kind).or_else(|| {
+                            // `cmp idx,N; ja out; jae caseN` uses the same flags
+                            // in a one-instruction successor block. The second
+                            // fallthrough is strict even though the comparison
+                            // itself lives in the predecessor.
+                            (instrs == 1)
+                                .then(|| guard_edge_bounds.get(&start_va).cloned())
+                                .flatten()
+                                .and_then(|bounds| bounds.adjusted_for(kind))
+                        });
+                        if let Some(proof) = proof {
+                            let mut bounds = dispatch.export_bounds();
+                            bounds.tighten_with(&proof);
+                            index_bounds.insert(end_va, bounds);
+                            guard_edge_bounds.insert(end_va, proof);
+                        }
                     }
                 }
                 // Block ends after branch

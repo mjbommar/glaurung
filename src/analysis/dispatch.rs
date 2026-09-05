@@ -174,6 +174,61 @@ pub struct Bounds {
     pub mems: HashMap<MemKey, u64>,
 }
 
+impl Bounds {
+    pub(crate) fn adjusted_for(self, kind: GuardFallthroughBound) -> Option<Self> {
+        let adjust = |value: u64| match kind {
+            GuardFallthroughBound::Inclusive => Some(value),
+            GuardFallthroughBound::Exclusive => value.checked_sub(1),
+        };
+        let regs = self
+            .regs
+            .into_iter()
+            .map(|(key, value)| Some((key, adjust(value)?)))
+            .collect::<Option<HashMap<_, _>>>()?;
+        let slots = self
+            .slots
+            .into_iter()
+            .map(|(key, value)| Some((key, adjust(value)?)))
+            .collect::<Option<HashMap<_, _>>>()?;
+        let mems = self
+            .mems
+            .into_iter()
+            .map(|(key, value)| Some((key, adjust(value)?)))
+            .collect::<Option<HashMap<_, _>>>()?;
+        Some(Self { regs, slots, mems })
+    }
+
+    pub(crate) fn tighten_with(&mut self, tighter: &Self) {
+        for (key, value) in &tighter.regs {
+            self.regs
+                .entry(key.clone())
+                .and_modify(|old| *old = (*old).min(*value))
+                .or_insert(*value);
+        }
+        for (key, value) in &tighter.slots {
+            self.slots
+                .entry(key.clone())
+                .and_modify(|old| *old = (*old).min(*value))
+                .or_insert(*value);
+        }
+        for (key, value) in &tighter.mems {
+            self.mems
+                .entry(key.clone())
+                .and_modify(|old| *old = (*old).min(*value))
+                .or_insert(*value);
+        }
+    }
+}
+
+/// How an unsigned guard treats its comparison immediate on the fallthrough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GuardFallthroughBound {
+    /// The fallthrough admits `[0, immediate]` (`ja` / ARM `bhi`).
+    Inclusive,
+    /// The fallthrough admits `[0, immediate - 1]` (`jae`).
+    Exclusive,
+}
+
 /// A Thumb-2 `tbb`/`tbh` table branch, and the extent its guard proves.
 ///
 /// Kept separate from [`Resolution`] because a table branch names its table in
@@ -513,6 +568,66 @@ impl DispatchTracker {
             slots: self.bounded_slots.clone(),
             mems: self.memory.export(),
         }
+    }
+
+    /// Export the exact range fact established on a guard's fallthrough edge.
+    ///
+    /// `ja` admits equality, but `jae` does not: after `cmp idx, 7`, their
+    /// fallthrough maxima are 7 and 6 respectively. Only aliases of the value
+    /// compared in this block are tightened; unrelated inherited facts keep
+    /// their original bounds. An exclusive comparison against zero has an empty
+    /// fallthrough range and therefore exports no table-sizing fact.
+    pub(crate) fn export_guard_bounds(&self, kind: GuardFallthroughBound) -> Option<Bounds> {
+        let pending = self.pending_bound()?;
+        let maximum = match kind {
+            GuardFallthroughBound::Inclusive => pending,
+            GuardFallthroughBound::Exclusive => pending.checked_sub(1)?,
+        };
+        let mut bounds = Bounds::default();
+        if let Some((register, _)) = &self.last_cmp {
+            if let Some(value) = self.reg_values.get(register) {
+                for (candidate, candidate_value) in &self.reg_values {
+                    if candidate_value == value {
+                        bounds
+                            .regs
+                            .entry(candidate.clone())
+                            .and_modify(|old| *old = (*old).min(maximum))
+                            .or_insert(maximum);
+                    }
+                }
+                for (slot, slot_value) in &self.slot_values {
+                    if slot_value == value {
+                        bounds
+                            .slots
+                            .entry(slot.clone())
+                            .and_modify(|old| *old = (*old).min(maximum))
+                            .or_insert(maximum);
+                    }
+                }
+            } else {
+                bounds.regs.insert(register.clone(), maximum);
+            }
+        }
+        if let Some((slot, _)) = &self.last_slot_cmp {
+            if let Some(value) = self.slot_values.get(slot) {
+                for (candidate, candidate_value) in &self.reg_values {
+                    if candidate_value == value {
+                        bounds.regs.insert(candidate.clone(), maximum);
+                    }
+                }
+                for (candidate, candidate_value) in &self.slot_values {
+                    if candidate_value == value {
+                        bounds.slots.insert(candidate.clone(), maximum);
+                    }
+                }
+            } else {
+                bounds.slots.insert(slot.clone(), maximum);
+            }
+        }
+        if self.memory.pending_limit().is_some() {
+            bounds.mems = self.memory.export_pending_with_maximum(maximum);
+        }
+        Some(bounds)
     }
 
     /// Bounds established by value-producing instructions, excluding the
@@ -1102,6 +1217,40 @@ mod tests {
         instruction.length = length;
         instruction.arch = "arm".to_string();
         instruction
+    }
+
+    #[test]
+    fn strict_guard_export_tightens_only_the_compared_value() {
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("rax".to_string(), 3)]),
+            slots: HashMap::new(),
+            mems: HashMap::new(),
+        }));
+        tracker.observe(&ins("cmp", vec![reg_read("rdi"), imm_op(7)]));
+
+        let inclusive = tracker
+            .export_guard_bounds(GuardFallthroughBound::Inclusive)
+            .expect("ja fallthrough has a range");
+        assert_eq!(inclusive.regs.get("rdi"), Some(&7));
+        assert_eq!(inclusive.regs.get("rax"), None);
+
+        let exclusive = tracker
+            .export_guard_bounds(GuardFallthroughBound::Exclusive)
+            .expect("jae fallthrough has a non-empty range");
+        assert_eq!(exclusive.regs.get("rdi"), Some(&6));
+        let mut all = tracker.export_bounds();
+        all.tighten_with(&exclusive);
+        assert_eq!(all.regs.get("rdi"), Some(&6));
+        assert_eq!(all.regs.get("rax"), Some(&3));
+
+        let mut zero = DispatchTracker::new();
+        zero.observe(&ins("cmp", vec![reg_read("rdi"), imm_op(0)]));
+        assert_eq!(
+            zero.export_guard_bounds(GuardFallthroughBound::Exclusive),
+            None,
+            "unsigned idx < 0 is empty and must not size a table"
+        );
     }
 
     /// The ARM table dispatch every one of the 321 sites in the frozen
