@@ -48,8 +48,12 @@ entered loop header.
   useful handler prefixes were already one block: zero gotos, six continues,
   cases `0..6`, one default, and one shared latch.
 
-The exact clean structural gate at `8c65a78a` was still running when this
-increment was recorded. Current-tip full structural/def-use, cross-architecture
-and host matrices, GED, RSS, output-size, and whole Python evidence remain open.
-This increment advances the general partition contract but does not complete
-WP4 promotion or WP5.
+The exact clean structural gate at `8c65a78a`, the immediately preceding
+one-block partition increment, completed 26 of 27 tests green in 568.91 seconds.
+Its final aggregate ratchet failure consists of pre-existing findings: exact
+parent/tip output is byte-identical for both reported switch rows and for all
+three reported memory-store rows in both `plain` and `c` styles. That gate does
+not cover this commit's new multi-block-prefix behavior. Current-tip full
+structural/def-use, cross-architecture and host matrices, GED, RSS, output-size,
+and whole Python evidence therefore remain open. This increment advances the
+general partition contract but does not complete WP4 promotion or WP5.

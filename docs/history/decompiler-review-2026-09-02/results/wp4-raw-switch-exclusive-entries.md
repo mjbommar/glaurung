@@ -59,10 +59,19 @@ guard.
 - `GLAURUNG_ACCOUNT_STRUCTURE=1` emits zero bytes for the real function.
 - `cargo test --features python-ext`: 4,116 library tests passed, zero failed,
   five ignored; every integration and documentation target passed.
-- The exact clean structural gate at `a1bcdaf0` reached 18 of 27 tests before a
-  stale declared-name assertion (`fib(arg0)` versus the improved `fib(n)`).
-  Commit `16947a6f` corrects both recursion signatures and its focused test is
-  green. A complete current-tip rerun remains open.
+- The exact clean structural gate at `8c65a78a` completed all 27 tests in
+  568.91 seconds. It passed 26 and stopped only at the final aggregate
+  `test_no_structural_regression` ratchet. The reported changes were three
+  `memory_store` rows (`reset_counter`, `tick`, and `tick_n`), two `switch`
+  rows (`sparse_dispatch` and `fsm_returns_from_arm`), and the older def-use
+  mismatches for `cpp_exception`, `cpp_destruction_order`, and
+  `complex_float_multiply`.
+- Exact parent/tip rendering disproves attribution of the five structural rows
+  to this increment. At parent `16947a6f` and tip `8c65a78a`, the C output is
+  byte-identical for both switch rows. The `plain` and `c` output is also
+  byte-identical for all three memory-store rows, and the parent output visibly
+  contains each global store. These are pre-existing ratchet/baseline findings,
+  not regressions introduced by `13588284`.
 - Full def-use, architecture/host matrices, GED, RSS, output-size comparison,
   and whole Python remain open. This is not WP4 promotion or WP5 completion.
 
