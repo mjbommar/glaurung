@@ -135,8 +135,17 @@ structure tests pass. The complete 838-lane baseline-aware comparison reports
 34 older unrecorded improvements and one `rust_slice_get` regression which an
 isolated `55ab688b` A/B proves predates this increment; no regression is
 attributable to this change. This closes the production gap
-for that cell, not WP5's shared evidence-object or architecture-wide exit
-criteria. Its former unaccounted-edge diagnostic is gone, but structure
+for that cell, not WP5's architecture-wide exit criteria. The next bounded
+increment at `9ad9414d` gives production and shadow-v2 one immutable, ordered
+case/default/provenance object built from typed CFG edges and labels. Missing
+or empty labels, ambiguous defaults, and incomplete candidates fail closed;
+the independent verifier rejects relational disagreement, including removal
+of a proven default. The complete Rust gate reports 4,351 passed, zero failed,
+and 17 ignored across 35 targets. Fitness records `+104` product LOC with only
+the mean worsening, while shadow-v2 shrinks by 33 product lines to 3,284 of its
+approved 4,400-line, nine-file cap. Remaining compiler/architecture execution,
+decline classification, and full Python/matrix validation keep WP5 open. Its
+former unaccounted-edge diagnostic is gone, but structure
 accounting is now clean as well. Shared return tails carry explicit borrowed
 provenance: predecessor-specific SSA renderings may be cloned for readable C,
 while the underlying machine block has exactly one structural owner. A full

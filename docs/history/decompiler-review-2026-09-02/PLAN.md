@@ -82,8 +82,17 @@ and unrecovered functions from 27 to 25. Deduplicated emitted gotos move from
 focused inventory suite passes. An isolated parent/tip fitness A/B records
 the final borrowed-provenance slice's exact cost as 61 product lines with no file
 threshold crossing, maximum-size growth, or IR-count growth. The next WP5
-slice is the shared immutable case/default/provenance object named in immediate
-action 5, not another fixture-specific switch recognizer.
+slice is now landed at `9ad9414d`: `Cfg` builds one immutable, ordered
+case/default/provenance object from typed edges and labels, and both production
+and shadow-v2 consume it. Completeness fails closed when any typed case lacks a
+non-empty label, when default evidence is ambiguous, or when evidence is
+otherwise truncated. The independent v2 verifier checks relational invariants
+rather than trusting or duplicating the producer. Forged missing-label,
+missing-default, and incomplete-evidence tests prove those refusal boundaries.
+The full Rust gate reports 4,351 passed, zero failed, and 17 ignored across 35
+targets. See `results/wp5-shared-switch-evidence.md`. This completes the shared
+transport increment, not WP5: remaining compiler/architecture execution cells,
+decline classification, and the full Python/matrix gates remain open.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
@@ -867,8 +876,9 @@ one authoritative set of case edges.
   Both forms already decode through `dispatch_resolution.rs`; the remaining
   work is to complete the architecture lanes and consolidate the evidence
   contract.
-- [~] Represent resolved case values, targets, default edge, provenance,
-  bounds, and completeness as typed evidence attached to `Op::IndirectJump`.
+- [x] Represent resolved case values, targets, default edge, provenance,
+  bounds, and completeness as typed evidence derived from `Op::IndirectJump`
+  and its typed CFG edges.
   `Op::IndirectJump.index`, typed CFG `SwitchCase`/`SwitchDefault` edges, and
   ordered `Cfg::case_labels` already carry the first production facts. WP4's
   independently verified `RegionCandidate` now receives explicit
@@ -876,10 +886,20 @@ one authoritative set of case edges.
   the real `102_duffs_device-gcc-O2.so::duff_copy` fixture records one dispatch,
   eight ordered values `0..7`, and its linked bypass edge. The verified WP4
   tree now consumes that same evidence and renders an eight-arm switch with
-  honest labelled transfers into the suffix-entry region. A forged-label test
-  proves that block/edge coverage alone cannot validate this metadata.
-- [ ] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
-  rendering consume the same evidence object.
+  honest labelled transfers into the suffix-entry region. At `9ad9414d`, the
+  shared immutable `SwitchEvidence` is built once by `Cfg` from typed
+  `SwitchCase`/`SwitchDefault` edges plus ordered labels, and production and v2
+  consume it. Completeness fails closed on missing or empty labels, ambiguous
+  defaults, and incomplete evidence; v2 declines before recovery or rendering.
+  The verifier remains independent and checks edge/label/default relationships,
+  including rejection of forged missing labels and deletion of a proven
+  default.
+- [~] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
+  rendering consume the same evidence object. Both structurers now share the
+  immutable typed object and rendering receives their structured result.
+  Structure accounting and the independent verifier intentionally retain
+  separate relational checks rather than accepting producer assertions. The
+  remaining corpus-wide accounting and decline evidence is still open.
 - [ ] Add `Op::Switch` only if it becomes the sole semantic owner of those
   targets and receives execution semantics.
 
@@ -2088,17 +2108,20 @@ relevant ratchet's accepted-regression record.
    regression statuses. The corpus-wide execution route is now live; still
    complete unexplained block/edge accounting, pinned GED, structure-axis
    movement, and accepted runtime/output-size budgets.
-5. Complete WP5's shared typed-case transport so discovery, accounting, both
-   structurers, and rendering consume one case/default/provenance object; add
-   the remaining fixture/compiler/architecture execution cells and classify
-   every residual decline. Malformed, truncated, overlapping, and wrapping
-   table safety tests and the new chained inclusive/exclusive guard tests are
+5. Extend the landed WP5 shared typed-case transport across the remaining
+   fixture/compiler/architecture execution cells and classify every residual
+   decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
+   case/default/provenance evidence consumed by production and v2; incomplete
+   or inconsistent evidence declines before recovery, and the verifier checks
+   the relationships independently. Malformed, truncated, overlapping, and
+   wrapping table safety tests and the new chained inclusive/exclusive guard tests are
    already present and must remain green. Fixture 204's Clang O2 seven-case
    evidence now reaches the production structurer, passes all 34 execution
    cases, and has moved its baseline from `fail` to `pass`; the remaining work
-   now has clean accounting through explicit borrowed return-tail provenance;
-   remaining work is the shared case/default evidence object and the unverified
-   compiler/architecture cells.
+   now has clean accounting through explicit borrowed return-tail provenance.
+   The unverified compiler/architecture cells, full Python/matrix gates, and
+   residual decline census remain; do not call WP5 complete from the green Rust
+   gate alone.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
