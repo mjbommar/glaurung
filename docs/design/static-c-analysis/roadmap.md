@@ -452,7 +452,7 @@ scheduled by appearing here.
 | Source-side identity and similarity | S1 | feeds `src/identity` and `src/similarity` with token- and structure-level source features |
 | Source facts into the knowledge base | S1 | real names, prototypes and types with a `set_by` provenance, when source is available |
 | Path feasibility in the source CFG | S4 | prunes infeasible paths using the existing solver seam |
-| Recovered-source validation for the agent loop | S2, S5 | [`agentic-source-recovery/`](../agentic-source-recovery/README.md) currently has no way to check its own output beyond compiling it |
+| Recovered-source validation for the agent loop | S2, S5 | **available since `6df1c627`** — [`agentic-source-recovery/`](../agentic-source-recovery/README.md) had no way to check its own output beyond compiling it; `src/csource/equiv/` now answers whether the recovered C computes the same result within a bound, with a counterexample when it does not. Not yet wired in, and bounded by what `src/csource/lower` accepts (scalar integer C, no `goto`) — see that directory's `PLAN.md`, Phase 1 |
 
 ## 9. The degenerate cases
 

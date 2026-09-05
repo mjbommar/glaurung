@@ -119,6 +119,27 @@ Ordered checklist:
 Phase exit: the validator accepts valid real-fixture C and rejects every
 required negative without model or network access.
 
+> **V06's ceiling has moved.** "Bounded syntax-only compiler validation that
+> never links or executes" was the strongest check available when this was
+> written, and
+> [`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §8 still
+> lists "recovered-source validation for the agent loop" as having no way to
+> check its own output beyond compiling it. Stage S5 landed at `6df1c627`:
+> `src/csource/equiv/` decides whether two lowered C functions compute the same
+> result for all inputs within a stated bound, and returns a counterexample
+> input when they do not. On the mutation corpus it has **zero false alarms**
+> across all fourteen semantics-preserving classes.
+>
+> That makes a stronger validator available to this loop than V06 describes —
+> "does the model's C mean the same thing as the decompiler's" rather than
+> "does it parse". Two limits to design around before adopting it: the checker
+> needs both sides lowered by `src/csource/lower`, which covers scalar integer C
+> only, and it declines every function containing `goto`. So it is an additional
+> gate for the functions it accepts, never a replacement for V06, and its
+> `Unknown` must stay a first-class outcome rather than collapsing to pass or
+> fail. Not yet wired in; recorded here so the phase is planned against what
+> exists rather than against what existed.
+
 ## Phase 2: Bounded deterministic tool surface
 
 Primary reference:

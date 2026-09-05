@@ -97,6 +97,7 @@ uv run python tools/gen_native_stub.py --check    # exit 1 if stale
 |---|---|---|---|
 | Rust + bindings | `cargo test --features python-ext` | `src/` and `src/python_bindings/`, the real pipeline entry point | yes — `test-suite.yml` job `rust` |
 | Symbolic | `cargo test --features symbolic` | `src/symbolic/`, which the other Rust builds never compile | yes — job `symbolic` |
+| S5 equivalence scorecard | `( ulimit -v 12000000; cargo test --release --features symbolic --lib -- --test-threads=1 csource::equiv )` | `src/csource/equiv/` — the one oracle here that is not a proxy. Its corpus is **generated and gitignored**: run `uv run python tools/equiv_mutants.py` first or it skips | **no** — by hand |
 | Python suite | `uv run pytest python/tests/` | everything Python-visible, incl. the structural gates | yes, tiered — jobs `python-core` (`-m core`) and `python-extended` |
 | Lint / format | `uvx ruff format --check python/`, `uvx ruff check python/` | Python style | yes — job `lint` |
 | Types | `uvx ty check python/` | Python types, incl. a lying `.pyi` | **no** — developer-only |
@@ -141,7 +142,26 @@ This is a **real, production** tool used for actual binary analysis.
   so. Don't claim "done" without running the gates above.
 - **A number in a document is not a measurement; write the command next to the
   number.** Say which build it came from: `maturin develop` is DEBUG, and its
-  profile shares are not the ones you ship.
+  profile shares are not the ones you ship. A number that lives in two documents
+  will disagree with itself; cite the one that owns it.
+- **To decide what C *means*, compile it.** `src/csource/lower` and
+  `src/exec/concrete.rs` are both our reading of C, so agreement between them is
+  one mistake translated twice — that is how a shift bug survived a cell marked
+  "confirmed concretely". Write the C, run it under `gcc` at `-O0` and `-O1`,
+  and pass a variable count through a `volatile` so the compiler emits a real
+  instruction instead of folding a constant. A divergence between `-O0` and
+  `-O1` means the expression is undefined and no answer is "correct" until we
+  pick one. [traps.md](docs/development/traps.md), "Our own emulator is not an
+  oracle".
+- **A rate measured on one corpus does not transfer to another**, and neither
+  does its ratio. Compare matched functions or do not compare. Report the median
+  when a handful of functions carry the mean — both errors inverted a published
+  conclusion here on 2026-09-04.
+- **This machine runs several agents at once**, in this same checkout and
+  sometimes on a different toolchain. Read the full command line of every PID
+  before killing it (`pkill -f` also matches its own shell), never `git
+  checkout`/`stash` a file you did not dirty, and re-check `git status`
+  immediately before you commit rather than trusting an earlier look.
 - **Never run DecBench or Joern unless explicitly asked.**
   `tests/decompiler_fixtures/` is the corpus that proves a decompiler change
   sound; DecBench is an evaluation harness that costs tens of minutes and
