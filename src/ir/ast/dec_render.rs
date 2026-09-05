@@ -1026,14 +1026,24 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 out.push_str("))");
             } else {
                 out.push('(');
-                if !matches!(op, CmpOp::Eq | CmpOp::Ne)
+                if matches!(op, CmpOp::Slt | CmpOp::Sle)
+                    && write_value_preserving_signed_comparison_operand(lhs, rhs, out)
+                {
+                    // The declaration already expresses the narrow signed
+                    // value, and the literal fits that type. C's usual
+                    // conversions therefore preserve the comparison.
+                } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
                     || !matches!(rhs.as_ref(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(lhs, out)
                 {
                     write_expr_dec(lhs, out);
                 }
                 let _ = write!(out, " {} ", cmpop_sym_c(*op));
-                if !matches!(op, CmpOp::Eq | CmpOp::Ne)
+                if matches!(op, CmpOp::Slt | CmpOp::Sle)
+                    && write_value_preserving_signed_comparison_operand(rhs, lhs, out)
+                {
+                    // Symmetric constant-on-the-left form.
+                } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
                     || !matches!(lhs.as_ref(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(rhs, out)
                 {
@@ -1334,6 +1344,71 @@ fn redundant_declared_integer_cast(expr: &Expr) -> Option<&VReg> {
         && *inner_width < 4
         && dec_int_type(name) == Some((*inner_signed, *inner_width)))
     .then_some(reg)
+}
+
+/// Write a declared signed integer directly when an explicit widening around
+/// it cannot affect this signed comparison. This is deliberately local to
+/// relational comparisons: dropping the same cast from arithmetic can change
+/// overflow semantics, and dropping it against a wider literal can change the
+/// usual arithmetic conversions on a target whose `long` width differs.
+fn write_value_preserving_signed_comparison_operand(
+    expression: &Expr,
+    other: &Expr,
+    out: &mut String,
+) -> bool {
+    let Expr::Const(constant) = other else {
+        return false;
+    };
+    let Expr::Cast {
+        signed: true,
+        width: widened_width,
+        expr,
+    } = expression
+    else {
+        return false;
+    };
+    let (register, declared_signed, declared_width) = match expr.as_ref() {
+        Expr::Reg(register @ VReg::Phys(name)) => {
+            let Some((declared_signed, declared_width)) = dec_int_type(name) else {
+                return false;
+            };
+            (register, declared_signed, declared_width)
+        }
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => {
+            let Expr::Reg(register @ VReg::Phys(name)) = expr.as_ref() else {
+                return false;
+            };
+            if dec_int_type(name) != Some((*signed, *width)) {
+                return false;
+            }
+            (register, *signed, *width)
+        }
+        _ => return false,
+    };
+    if !declared_signed
+        || declared_width >= *widened_width
+        || !signed_constant_fits(*constant, declared_width)
+    {
+        return false;
+    }
+    write_reg_dec(register, out);
+    true
+}
+
+fn signed_constant_fits(constant: i64, width: u8) -> bool {
+    let bits = u32::from(width) * 8;
+    if bits == 0 {
+        return false;
+    }
+    if bits >= i64::BITS {
+        return true;
+    }
+    let limit = 1_i64 << (bits - 1);
+    (-limit..limit).contains(&constant)
 }
 
 /// Shared C-string quoting for the DecBench renderer.

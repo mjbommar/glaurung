@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -66,9 +67,13 @@ def test_signed_loop_recovers_a_relational_predicate_and_executes(
 
     for binary in (debug, stripped):
         text = _decompile(binary, "classify")
-        assert "int classify(" in text, text
+        signature = re.search(r"\bint classify\(int ([A-Za-z_]\w*)\)", text)
+        assert signature is not None, text
+        parameter = signature.group(1)
         assert "unsigned int classify(" not in text, text
-        assert "while (100 < (long)(" in text, text
+        assert f"if (0 <= {parameter})" in text, text
+        assert f"while (100 < {parameter})" in text, text
+        assert f"(long)({parameter})" not in text, text
         assert "== 100) |" not in text, text
         assert "return -1;" in text, text
         assert "return (unsigned int)(" not in text, text

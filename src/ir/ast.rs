@@ -5825,6 +5825,58 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn signed_comparison_drops_only_a_value_preserving_declared_widening() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let arg = VReg::phys("arg0");
+        let comparison = |constant| Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Cast {
+                signed: true,
+                width: 8,
+                expr: Box::new(Expr::Cast {
+                    signed: true,
+                    width: 4,
+                    expr: Box::new(Expr::Reg(arg.clone())),
+                }),
+            }),
+            rhs: Box::new(Expr::Const(constant)),
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            arg.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let ordinary = Function {
+            name: "ordinary".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(comparison(100)),
+            }],
+        };
+        let ordinary_text = render_decbench_typed(&ordinary, Some(&types), Some(&types));
+        assert!(ordinary_text.contains("arg0 < 100"), "{ordinary_text}");
+        assert!(!ordinary_text.contains("(long)(arg0)"), "{ordinary_text}");
+
+        let wide_constant = Function {
+            name: "wide_constant".to_string(),
+            entry_va: 0x2000,
+            body: vec![Stmt::Return {
+                value: Some(comparison(i64::from(i32::MAX) + 1)),
+            }],
+        };
+        let wide_text = render_decbench_typed(&wide_constant, Some(&types), Some(&types));
+        assert!(
+            wide_text.contains("(long)(arg0) < 0x80000000"),
+            "a constant outside the declaration's range needs the widening:\n{wide_text}"
+        );
+    }
+
+    #[test]
     fn decbench_abi_widths_keep_x86_zero_extended_int_return_narrow() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 

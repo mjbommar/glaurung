@@ -78,6 +78,8 @@ pub(super) struct DeclarationInputs<'a> {
     /// Signature arity, which is an ABI property and may exceed the arguments
     /// still referenced by the body.
     pub(super) arg_count: usize,
+    /// Target pointer width, needed to interpret an authoritative `long`.
+    pub(super) pointer_width: u8,
     /// Aggregate names with a standalone typedef alias in this translation unit.
     pub(super) source_type_aliases: &'a BTreeSet<String>,
     /// DWARF type environment used to test prototype renderability.
@@ -158,6 +160,7 @@ impl DeclarationPlan {
             declared_prototype,
             declared_parameter_names,
             arg_count,
+            pointer_width,
             source_type_aliases,
             dwarf_type_env,
             struct_pointer_types,
@@ -251,6 +254,9 @@ impl DeclarationPlan {
             }
             if let Some(width) = aggregate_value_widths.get(&c_type).copied() {
                 aggregate_parameters.insert(name.clone(), (c_type.clone(), width));
+            }
+            if let Some(integer_type) = selected_integer_type(&c_type, pointer_width) {
+                integer_types.insert(name.clone(), integer_type);
             }
             declared_ctypes.insert(name, c_type.clone());
             parameters.push(c_type);
@@ -412,7 +418,13 @@ impl DeclarationPlan {
 
     /// The declared signedness and width of `name`.
     pub(super) fn integer_type(&self, name: &str) -> Option<(bool, u8)> {
-        self.integer_types.get(name).copied()
+        self.integer_types.get(name).copied().or_else(|| {
+            self.parameter_names
+                .iter()
+                .position(|displayed| displayed == name)
+                .and_then(|index| self.integer_types.get(&format!("arg{index}")))
+                .copied()
+        })
     }
 
     /// Whether `displayed` was declared as a complete byte array because its
@@ -438,4 +450,45 @@ impl DeclarationPlan {
     pub(super) fn locals(&self) -> &[(String, LocalDeclaration)] {
         &self.locals
     }
+}
+
+fn selected_integer_type(c_type: &str, pointer_width: u8) -> Option<(bool, u8)> {
+    let signed = match c_type.trim() {
+        "signed char"
+        | "int8_t"
+        | "short"
+        | "signed short"
+        | "short int"
+        | "signed short int"
+        | "int16_t"
+        | "int"
+        | "signed"
+        | "signed int"
+        | "int32_t"
+        | "long"
+        | "signed long"
+        | "long int"
+        | "signed long int"
+        | "long long"
+        | "signed long long"
+        | "long long int"
+        | "signed long long int"
+        | "int64_t" => true,
+        "unsigned char"
+        | "uint8_t"
+        | "unsigned short"
+        | "unsigned short int"
+        | "uint16_t"
+        | "unsigned"
+        | "unsigned int"
+        | "uint32_t"
+        | "unsigned long"
+        | "unsigned long int"
+        | "unsigned long long"
+        | "unsigned long long int"
+        | "uint64_t" => false,
+        _ => return None,
+    };
+    crate::ir::call_contracts::integer_c_type_width(c_type, pointer_width)
+        .map(|width| (signed, width))
 }

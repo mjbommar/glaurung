@@ -705,6 +705,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         declared_prototype,
         declared_parameter_names,
         arg_count,
+        pointer_width,
         source_type_aliases: &source_type_aliases,
         dwarf_type_env: &dwarf_type_env,
         struct_pointer_types: &struct_pointer_types,
