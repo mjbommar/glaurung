@@ -321,6 +321,61 @@ def test_wide_selector_switch_borrows_default_shared_return(tmp_path: Path) -> N
     assert results["wide_selector_mixed"]["status"] == "pass", results
 
 
+def test_signed_tree_edge_preserves_unsigned_wide_selector_boundary(tmp_path: Path) -> None:
+    """A signed compare in Clang's tree must not reinterpret uint64_t in C."""
+    source = (
+        ROOT
+        / "tests"
+        / "decompiler_fixtures"
+        / "src"
+        / "215_switch_on_wide_selector.c"
+    )
+    binary = tmp_path / "wide-selector-high-labels-clang-O2.so"
+    compiled = TC.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["wide_selector_high_labels"])
+    assert code is not None
+    assert "unsigned long long op" in code, code
+    assert "(long)(op)" in code, code
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "215_switch_on_wide_selector",
+            "--function",
+            "wide_selector_high_labels",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "32",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["wide_selector_high_labels"]["status"] == "pass", results
+
+
 def test_transitive_wide_guard_does_not_steal_a_loop_switch(tmp_path: Path) -> None:
     """Predicate-DAG proof for fixture 215 must preserve fixture 206's loop."""
     fixture = "206_aarch64_wide_dispatch"

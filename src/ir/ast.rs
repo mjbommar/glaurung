@@ -10228,6 +10228,44 @@ function f @ 0x1000 {
         );
     }
 
+    #[test]
+    fn signed_machine_comparison_casts_an_authoritative_unsigned_parameter_per_use() {
+        let function = Function {
+            name: "signed_edge".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0x1_0000_0000)),
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "int32_t".into(),
+            parameter_types: vec!["uint64_t".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        );
+
+        assert!(
+            rendered.contains("int32_t signed_edge(uint64_t arg0)"),
+            "the authoritative boundary type changed:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("(long)(arg0) < 0x100000000"),
+            "the signed machine edge lost its per-use interpretation:\n{rendered}"
+        );
+    }
+
     /// One `_Bool`-returning function, rendered against a declared prototype.
     fn render_bool_return(value: Expr) -> String {
         let function = Function {
