@@ -795,7 +795,7 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
         timeout=300,
         check=True,
     ).stdout
-    assert "long fib(int arg0)" in fib or "long int fib(int arg0)" in fib, fib
+    assert "long fib(int n)" in fib or "long int fib(int n)" in fib, fib
 
     ackermann = subprocess.run(
         [
@@ -814,8 +814,8 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
         check=True,
     ).stdout
     assert (
-        "long ackermann(long arg0, long arg1)" in ackermann
-        or "long int ackermann(long int arg0, long int arg1)" in ackermann
+        "long ackermann(long m, long n)" in ackermann
+        or "long int ackermann(long int m, long int n)" in ackermann
     ), ackermann
     assert "arg2" not in ackermann, ackermann
 
@@ -869,8 +869,8 @@ def test_bst_clang_o2_recovers_anonymous_struct_typedef(tmp_path: Path) -> None:
             timeout=300,
             check=True,
         ).stdout
-        assert "BstNode * arg0" in outputs[function], outputs[function]
-        assert "((struct BstNode *)arg0)" not in outputs[function], outputs[function]
+        assert "const BstNode *nodes" in outputs[function], outputs[function]
+        assert "((struct BstNode *)" not in outputs[function], outputs[function]
         assert ".key" in outputs[function], outputs[function]
     assert ".left" in outputs["bst_inorder_checksum"], outputs["bst_inorder_checksum"]
     assert ".right" in outputs["bst_inorder_checksum"], outputs["bst_inorder_checksum"]
