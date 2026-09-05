@@ -25,6 +25,13 @@ solver. WP2, WP3,
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
+The first fixture-217 follow-on is a bounded WP9 instruction-semantics
+increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
+typed binary32 lanes. This removes Clang O2's opaque packed arithmetic but
+deliberately does not mark either complex-multiply cell green. Both expose the
+next general boundary: compiler complex helpers require four source-ordered
+SSE arguments and a multi-location complex result, while `CallEffects` can
+express only one result. See `results/wp9-packed-float-arithmetic.md`.
 The full Rust gate is green at `41af392d`: its library target reports 4,065
 passed, 0 failed, and 5 ignored, and every integration and documentation target
 also passed. Its required whole Python gate completed red: 4,613 passed, 116
@@ -1521,6 +1528,12 @@ into a standing test.
   instruction-mode, compiler, and optimisation keys now have committed
   per-lane denominator and opaque-count ratchets.
 
+The legacy packed binary32 arithmetic family is now explicit as well.
+`ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` lower to four existing typed scalar
+intrinsics, with exact register/memory lane tests and no adjacent vector/HFA
+regression. This improves fixture 217's Clang O2 output but does not close its
+complex-helper call boundary. See `results/wp9-packed-float-arithmetic.md`.
+
 ### Tests
 
 - [ ] Byte-identical fixture sweep for each architecture-only migration.
@@ -2021,6 +2034,12 @@ relevant ratchet's accepted-regression record.
    value constraints rather than extending fixture-specific ABI adapters.
    Keep Rust totals separate and do not generalize the SysV/x86 evidence to
    unsupported architectures, vector forms, or language ABIs.
+   The first fixture-217 prerequisite now models legacy packed binary32
+   arithmetic. Next, represent direct calls with exact source-ordered SSE
+   layouts and multi-location results before repairing `__mulsc3`/`__muldc3`;
+   passing four arguments without representing both result components is
+   explicitly insufficient. Require finite and exceptional-input execution
+   evidence plus scalar, integer-pair, HFA, and vector-call refusal controls.
 8. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.

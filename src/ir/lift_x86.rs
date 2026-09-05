@@ -60,10 +60,11 @@ use packed::{
     packed_dword_compare_equal_ops, packed_dword_immediate_arithmetic_shift_right_ops,
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_to_float_ops,
-    packed_dword_unpack_low_ops, packed_float_shuffle_ops, packed_float_sign_mask_ops,
-    packed_float_to_dword_trunc_ops, packed_float_unpack_low_ops, packed_qword_binary_ops,
-    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops,
-    vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops, vex_ymm_dword_move_ops, xorps_ops,
+    packed_dword_unpack_low_ops, packed_float_binary_ops, packed_float_shuffle_ops,
+    packed_float_sign_mask_ops, packed_float_to_dword_trunc_ops, packed_float_unpack_low_ops,
+    packed_qword_binary_ops, packed_qword_move_ops, packed_qword_unpack_low_ops,
+    packed_word_extract_ops, vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops,
+    vex_ymm_dword_move_ops, xorps_ops,
 };
 use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
@@ -1878,6 +1879,13 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // and stores on their existing exact lane representation.
         Mnemonic::Cvttps2dq => packed_float_to_dword_trunc_ops(instr),
         Mnemonic::Cvtdq2ps => packed_dword_to_float_ops(instr),
+        // Legacy packed binary32 arithmetic is four independent scalar IEEE
+        // operations.  The lane-wise intrinsics preserve exact XMM dataflow
+        // without pretending integer `Bin` has floating-point semantics.
+        Mnemonic::Addps => packed_float_binary_ops(instr, "addss"),
+        Mnemonic::Subps => packed_float_binary_ops(instr, "subss"),
+        Mnemonic::Mulps => packed_float_binary_ops(instr, "mulss"),
+        Mnemonic::Divps => packed_float_binary_ops(instr, "divss"),
         Mnemonic::Unpcklps => packed_float_unpack_low_ops(instr),
         Mnemonic::Unpckhpd => packed_double_unpack_high_ops(instr),
         // The SSE string-primitive family; see `packed_string` for which of
@@ -7212,6 +7220,57 @@ mod tests {
                 Op::Unknown { mnemonic } if mnemonic == "cvttps2dq"
             )),
             "the packed conversion must not remain opaque: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn legacy_packed_float_arithmetic_is_four_typed_scalar_lanes() {
+        for (name, bytes, scalar) in [
+            ("addps", &[0x0f, 0x58, 0xc1][..], "addss"),
+            ("subps", &[0x0f, 0x5c, 0xc1][..], "subss"),
+            ("mulps", &[0x0f, 0x59, 0xc1][..], "mulss"),
+            ("divps", &[0x0f, 0x5e, 0xc1][..], "divss"),
+        ] {
+            let ops = lift64(bytes);
+            for lane in 0..4 {
+                let dst = VReg::phys(format!("xmm0_d{lane}"));
+                let rhs = VReg::phys(format!("xmm1_d{lane}"));
+                assert!(
+                    ops.iter().any(|instruction| matches!(
+                        &instruction.op,
+                        Op::Intrinsic { name, ins, outs, reads_mem: false, writes_mem: false }
+                            if name == scalar
+                                && ins == &vec![Value::Reg(dst.clone()), Value::Reg(rhs.clone())]
+                                && outs == &vec![(dst.clone(), Width::W32)]
+                    )),
+                    "{name} lane {lane} is not a typed scalar operation: {ops:#?}"
+                );
+            }
+            assert_eq!(lanes_defined(&ops, "xmm0"), vec![0, 1, 2, 3], "{ops:#?}");
+        }
+    }
+
+    #[test]
+    fn packed_float_memory_arithmetic_reads_four_exact_dwords() {
+        let ops = lift64(&[0x0f, 0x59, 0x00]); // mulps (%rax),%xmm0
+        let loads: Vec<_> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Load { addr, .. } => Some((addr.disp, addr.size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, vec![(0, 4), (4, 4), (8, 4), (12, 4)], "{ops:#?}");
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(
+                    &instruction.op,
+                    Op::Intrinsic { name, outs, .. }
+                        if name == "mulss" && outs.len() == 1
+                ))
+                .count(),
+            4,
+            "{ops:#?}"
         );
     }
 

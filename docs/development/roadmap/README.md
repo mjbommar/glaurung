@@ -131,7 +131,14 @@ slice is also closed: all non-structural rows in fixture 197 pass across
 GCC/Clang O0/O2 after exact SSE-pair return materialization, contract-proved
 tail forwarding, and the required legacy packed-XMM semantics. This does not
 complete WP6's general constraint solver or establish other architecture,
-vector, or language-ABI support. WP8 has authoritative DWARF/PDB/analyst
+vector, or language-ABI support. The first optimized-complex follow-on now
+models all four legacy packed binary32 arithmetic mnemonics as typed XMM lanes,
+removing opaque `mulps`/`addps` output without changing the still-red execution
+verdict. Its remaining blocker is a general call-model gap: four SSE arguments
+and a multi-location complex result cannot be represented by the current
+single-result `CallEffects`. The review record requires that model to be
+extended rather than accepting a compile-only helper-arity patch. WP8 has
+authoritative DWARF/PDB/analyst
 declaration slices and now owns their total priority order in the program
 environment; authoritative tagged PDB pointers also retain their nominal type
 instead of degrading to `void *`. The same real PDB fixture no longer turns

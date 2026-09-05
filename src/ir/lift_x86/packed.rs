@@ -486,6 +486,44 @@ pub(super) fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) 
     ops
 }
 
+/// Lift legacy packed binary32 arithmetic as four independent scalar operations.
+///
+/// The scalar LLIR has no native IEEE-754 binary operator, so each lane uses
+/// the same typed intrinsic as its scalar SSE sibling.  Keeping four distinct
+/// outputs preserves the architectural lane identity consumed by later
+/// shuffles, conversions, and complex-number lowering.  This helper is
+/// deliberately limited to the two-operand legacy XMM form; VEX/EVEX forms
+/// have explicit source operands and different upper-lane effects.
+pub(super) fn packed_float_binary_ops(
+    instr: &iced_x86::Instruction,
+    scalar_mnemonic: &str,
+) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }];
+    }
+    let Some((mut ops, sources)) = packed_dword_sources(instr, 148) else {
+        return vec![Op::Unknown {
+            mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }];
+    };
+    for (lane, source) in sources.into_iter().enumerate() {
+        let dst = packed_dword_lane(instr.op_register(0), lane);
+        ops.push(Op::Intrinsic {
+            name: scalar_mnemonic.into(),
+            ins: vec![Value::Reg(dst.clone()), source],
+            outs: vec![(dst, Width::W32)],
+            reads_mem: false,
+            writes_mem: false,
+        });
+    }
+    ops
+}
+
 /// Lift a fixed-width three-operand VEX packed-dword operation.
 ///
 /// VEX makes the old destination an explicit first source: `dst = lhs op rhs`.
