@@ -299,3 +299,48 @@ fn a_deeply_nested_expression_lowers_without_touching_the_native_stack() {
     let f = lower(&text, "deep");
     assert_eq!(call(&f, &[7]), 7);
 }
+
+/// A shift count at or above the promoted operand width.
+///
+/// C leaves this undefined, so unlike every other test here there is no "C's
+/// value" to work out by hand. Every machine this lowering targets defines it
+/// the same way --- x86 and ARM both take the count modulo the operand width
+/// --- and the numbers below are what a gcc 15.2.0 binary prints for these
+/// exact calls, identically at `-O0` and `-O1`, with the count passed through a
+/// `volatile` so the shift is a real runtime instruction and not a folded
+/// constant.
+///
+/// This is the one place where evaluating on 64-bit temporaries stops being
+/// transparent. `Builder::binop` emits width-less ops and `Builder::normalize`
+/// truncates afterwards, which is exactly right for add, sub and mul because
+/// their low bits do not depend on the evaluation width. A shift's do: the
+/// count is masked against the width the shift executes at. Unmasked, `1u << 32`
+/// is 2^32 evaluated at 64 bits and truncates to 0, where the hardware masks the
+/// count to 0 and yields 1.
+#[test]
+fn a_shift_count_at_the_operand_width_wraps_the_way_the_hardware_does() {
+    let shl = lower(
+        "unsigned int shl(unsigned int v, int c) { return v << c; }",
+        "shl",
+    );
+    assert_eq!(call(&shl, &[1, 32]), 1, "1u << 32 masks the count to 0");
+    assert_eq!(call(&shl, &[1, 33]), 2, "1u << 33 masks the count to 1");
+
+    let shr = lower(
+        "unsigned int shr(unsigned int v, int c) { return v >> c; }",
+        "shr",
+    );
+    assert_eq!(call(&shr, &[0xdead_beef, 32]), 0xdead_beef);
+
+    let sar = lower("int sar(int v, int c) { return v >> c; }", "sar");
+    // -8 >> 0 is -8, whose masked 32-bit result is 0xfffffff8.
+    assert_eq!(call(&sar, &[(-8i64) as u64, 32]), 0xffff_fff8);
+
+    // The 64-bit control: a `long` shift already evaluates at its own width, so
+    // this case passes with or without the mask and pins that it stays correct.
+    let wide = lower(
+        "unsigned long wide(unsigned long v, int c) { return v << c; }",
+        "wide",
+    );
+    assert_eq!(call(&wide, &[1, 64]), 1);
+}

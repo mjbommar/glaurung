@@ -701,13 +701,33 @@ fn binary(
         let ty = lhs.ty.promote();
         let a = convert(low, &lhs, ty);
         let count = convert(low, &rhs, rhs.ty.promote());
+        // A count at or above the promoted operand width is undefined in C, and
+        // defined identically by every machine this lowering targets: the count
+        // is taken modulo the width the shift executes at. That width is not
+        // ours to pick implicitly. `Builder::binop` emits width-less ops that
+        // evaluate on 64-bit temporaries and `Builder::normalize` truncates
+        // afterwards, which is transparent for add, sub and mul because their
+        // low bits do not depend on the evaluation width --- but a shift's do.
+        // Unmasked, `1u << 32` is 2^32 evaluated at 64 bits and truncates to 0,
+        // where a 32-bit shift masks the count to 0 and yields 1 (gcc 15.2.0,
+        // -O0 and -O1). `promote` floors at `int`, so this is 31 or 63, exactly
+        // the mask x86 and ARM apply.
+        let count = if ty.width.bits() < 64 {
+            let mask = low.b.temp();
+            low.b.assign_const(&mask, i64::from(ty.width.bits()) - 1);
+            let masked = low.b.temp();
+            low.b.binop(&masked, BinOp::And, &count.reg, &mask);
+            masked
+        } else {
+            count.reg
+        };
         let raw = low.b.temp();
         let kind = match (op, ty.signed) {
             (Shl, _) => BinOp::Shl,
             (_, true) => BinOp::Sar,
             (_, false) => BinOp::Shr,
         };
-        low.b.binop(&raw, kind, &a.reg, &count.reg);
+        low.b.binop(&raw, kind, &a.reg, &count);
         let out = low.b.temp();
         low.b.normalize(&out, &raw, ty.width, ty.signed);
         return Ok(Val { reg: out, ty });

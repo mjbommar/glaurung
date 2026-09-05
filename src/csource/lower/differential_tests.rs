@@ -157,15 +157,31 @@ fn sweep(lanes: &[&str], only: Option<&str>) -> Option<(Tally, Vec<String>, Vec<
 /// Fixture functions whose lowering and binary legitimately disagree, with the
 /// reason.
 ///
-/// One entry, and it is not a defect on either side. `rotate_right` is
-/// `(value >> amount) | (value << (32u - amount))`; every probe with
-/// `amount >= 32` shifts by at least the operand's width, which C17 6.5.7p3
-/// leaves **undefined**. x86 `shl`/`shr` reduce the count modulo 32 and the
-/// lowering computes at 64 bits and truncates, so the two pick different
-/// answers to a question C does not answer. Making them agree would mean
-/// writing x86's count masking into the C lowering --- committing the front end
-/// to one target's undefined behaviour, which is worse than recording it here.
-const KNOWN_UB_DIVERGENCES: &[(&str, &str)] = &[("54_sha256_block", "rotate_right")];
+/// Empty --- and kept rather than deleted, because the mechanism is what caught
+/// the change that emptied it.
+///
+/// It held one entry: `54_sha256_block::rotate_right`, which is
+/// `(value >> amount) | (value << (32u - amount))`, so every probe with
+/// `amount >= 32` shifts by at least the operand width, undefined per C17
+/// 6.5.7p3. The note here argued that making the two agree would mean writing
+/// x86's count masking into the C lowering --- "committing the front end to one
+/// target's undefined behaviour" --- and recorded the divergence instead.
+///
+/// That reasoning had a hole: declining to mask is not neutrality. Evaluating
+/// on 64-bit temporaries and truncating afterwards is itself a choice, and it
+/// is a *third* answer that no machine gives. x86 and AArch64 take the count
+/// modulo the operand width; ARM32's register `LSL` saturates to zero instead;
+/// the unmasked lowering agreed with neither consistently. The cost was not
+/// theoretical --- it made `src/csource/equiv` prove two functions equivalent
+/// that gcc 15.2.0 compiles into programs with different output, and a false
+/// `Equivalent` is the one verdict that checker must never emit.
+///
+/// So `src/csource/lower/expr.rs` masks the count to the promoted operand width
+/// and this list is empty. The honest caveat is the one the old note was
+/// protecting: that mask is x86's and AArch64's, not ARM32's, and on a program
+/// C leaves undefined a target-independent front end cannot be right for both.
+/// These lanes are x86, so x86 is the answer that matters here.
+const KNOWN_UB_DIVERGENCES: &[(&str, &str)] = &[];
 
 /// Whether a divergence line names a known undefined-behaviour case.
 fn is_known_ub(line: &str) -> bool {
@@ -276,11 +292,22 @@ fn s4_differential_on_the_gcc_o0_lane() {
         "only {} cells agreed; the sweep is not covering the corpus",
         tally.matched
     );
-    // A stale allow-list is worse than none: if the undefined-behaviour case
-    // stops diverging, the entry must be removed rather than left to excuse a
-    // future defect.
+    // A stale allow-list is worse than none: an entry that stops diverging must
+    // be removed rather than left behind to excuse a future defect. Checked per
+    // entry so it stays meaningful as the list shrinks, and vacuous when the
+    // list is empty --- which is the state that says the lowering and the
+    // binaries now agree everywhere the sweep can decide.
+    let stale: Vec<String> = KNOWN_UB_DIVERGENCES
+        .iter()
+        .filter(|(fixture, function)| {
+            !divergences
+                .iter()
+                .any(|d| d.starts_with(fixture) && d.contains(function))
+        })
+        .map(|(fixture, function)| format!("{fixture}::{function}"))
+        .collect();
     assert!(
-        divergences.iter().any(|d| is_known_ub(d)),
-        "KNOWN_UB_DIVERGENCES is stale: nothing diverged for it"
+        stale.is_empty(),
+        "KNOWN_UB_DIVERGENCES is stale, these no longer diverge: {stale:?}"
     );
 }
