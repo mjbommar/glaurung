@@ -1427,7 +1427,7 @@ fn write_declared_unsigned_as_signed_comparison_operand(
     let Expr::Reg(register @ VReg::Phys(name)) = expression else {
         return false;
     };
-    let Some((false, width)) = dec_int_type(name) else {
+    let Some((false, width)) = dec_plan(|plan| plan.authoritative_integer_parameter(name)) else {
         return false;
     };
     let _ = write!(out, "({})(", target_int_ctype(true, width));

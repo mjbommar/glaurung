@@ -10264,6 +10264,23 @@ function f @ 0x1000 {
             rendered.contains("(long)(arg0) < 0x100000000"),
             "the signed machine edge lost its per-use interpretation:\n{rendered}"
         );
+
+        let recovered = CallPrototype {
+            authority: CallPrototypeAuthority::Recovered,
+            ..prototype
+        };
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&recovered),
+        );
+        assert!(
+            !rendered.contains("(long)(arg0)"),
+            "an inferred declaration must not trigger the authoritative-source exception:\n\
+             {rendered}"
+        );
     }
 
     /// One `_Bool`-returning function, rendered against a declared prototype.

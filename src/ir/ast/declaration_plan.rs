@@ -112,6 +112,7 @@ pub(super) struct DeclarationPlan {
     pointee_widths: HashMap<String, u8>,
     integer_widths: HashMap<String, u8>,
     integer_types: HashMap<String, (bool, u8)>,
+    authoritative_integer_parameters: HashMap<String, (bool, u8)>,
     stack_objects: BTreeSet<String>,
     aggregate_value_widths: HashMap<String, u8>,
     aggregate_parameters: HashMap<String, (String, u8)>,
@@ -137,6 +138,7 @@ impl Default for DeclarationPlan {
             pointee_widths: HashMap::new(),
             integer_widths: HashMap::new(),
             integer_types: HashMap::new(),
+            authoritative_integer_parameters: HashMap::new(),
             stack_objects: BTreeSet::new(),
             aggregate_value_widths: HashMap::new(),
             aggregate_parameters: HashMap::new(),
@@ -237,6 +239,7 @@ impl DeclarationPlan {
         let mut declared_ctypes = HashMap::new();
         let mut pointer_parameters = HashMap::new();
         let mut aggregate_parameters = HashMap::new();
+        let mut authoritative_integer_parameters = HashMap::new();
         let mut parameters = Vec::with_capacity(arg_count);
         let mut parameter_names = Vec::with_capacity(arg_count);
         let mut used_parameter_names = HashSet::new();
@@ -257,6 +260,22 @@ impl DeclarationPlan {
             }
             if let Some(integer_type) = selected_integer_type(&c_type, pointer_width) {
                 integer_types.insert(name.clone(), integer_type);
+                if declared_prototype.is_some_and(|prototype| {
+                    prototype.authority
+                        == crate::ir::call_contracts::CallPrototypeAuthority::Authoritative
+                        && prototype
+                            .parameter_types
+                            .get(index)
+                            .is_some_and(|source_type| {
+                                dwarf_prototype_type_is_renderable(
+                                    source_type,
+                                    false,
+                                    dwarf_type_env,
+                                )
+                            })
+                }) {
+                    authoritative_integer_parameters.insert(name.clone(), integer_type);
+                }
             }
             declared_ctypes.insert(name, c_type.clone());
             parameters.push(c_type);
@@ -330,6 +349,7 @@ impl DeclarationPlan {
             pointee_widths,
             integer_widths,
             integer_types,
+            authoritative_integer_parameters,
             stack_objects: ids.stack_objects.keys().cloned().collect(),
             aggregate_value_widths: aggregate_value_widths.clone(),
             aggregate_parameters,
@@ -425,6 +445,12 @@ impl DeclarationPlan {
                 .and_then(|index| self.integer_types.get(&format!("arg{index}")))
                 .copied()
         })
+    }
+
+    /// Signedness and width of an integer parameter selected from an
+    /// authoritative source declaration rather than inferred from the body.
+    pub(super) fn authoritative_integer_parameter(&self, name: &str) -> Option<(bool, u8)> {
+        self.authoritative_integer_parameters.get(name).copied()
     }
 
     /// Whether `displayed` was declared as a complete byte array because its
