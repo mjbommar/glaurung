@@ -1102,6 +1102,27 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             return;
         }
 
+        // A terminal x86 `jg` predicate commonly arrives as
+        // `((u64)(u32)x == K | (i64)(i32)x < K) == 0`.  The unsigned and
+        // signed extension spellings prevent the general inclusive-relation
+        // fold above (correctly: an unobserved eager flag tree may belong to
+        // switch recovery).  Under this exact terminal negation, however,
+        // equality has the same truth value through either extension when K
+        // is representable at the shared signed source width.  Fuse the whole
+        // predicate at once; never expose an intermediate mixed-view `<=`.
+        if *op == CmpOp::Eq {
+            let candidate = match (lhs.as_ref(), rhs.as_ref()) {
+                (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
+                    invert_mixed_view_equal_or_signed_less(candidate)
+                }
+                _ => None,
+            };
+            if let Some(replacement) = candidate {
+                rewrite(e, replacement, changed);
+                return;
+            }
+        }
+
         // Clang sometimes lowers a source-level short-circuit guard into a
         // byte-valued SETcc tree, combines it eagerly, then widens and tests the
         // result. The byte view is the crucial provenance: a bare `cmp | cmp`
@@ -1432,6 +1453,71 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
     })
 }
 
+/// Prove and invert `(unsigned(x) == K) | (signed(x) < K)` as `K < signed(x)`.
+///
+/// Both views must be strict widenings of the same expression from the same
+/// source width, and K must be non-negative and signed-representable there.
+/// This deliberately recognizes only the terminal-negation use above.
+fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
+    let Expr::Bin {
+        op: BinOp::Or,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return None;
+    };
+    let (equality, less) = match (lhs.as_ref(), rhs.as_ref()) {
+        (equality @ Expr::Cmp { op: CmpOp::Eq, .. }, less) => (equality, less),
+        (less, equality @ Expr::Cmp { op: CmpOp::Eq, .. }) => (equality, less),
+        _ => return None,
+    };
+    let Expr::Cmp {
+        lhs: equality_lhs,
+        rhs: equality_rhs,
+        ..
+    } = equality
+    else {
+        return None;
+    };
+    let Expr::Cmp {
+        op: CmpOp::Slt,
+        lhs: less_lhs,
+        rhs: less_rhs,
+    } = less
+    else {
+        return None;
+    };
+    let Expr::Const(equality_constant) = equality_rhs.as_ref() else {
+        return None;
+    };
+    let Expr::Const(less_constant) = less_rhs.as_ref() else {
+        return None;
+    };
+    if equality_constant != less_constant {
+        return None;
+    }
+    let (equality_signed, equality_outer, equality_inner, equality_value) =
+        common_extended_operand(equality_lhs, CmpOp::Eq)?;
+    let (less_signed, less_outer, less_inner, less_value) =
+        common_extended_operand(less_lhs, CmpOp::Slt)?;
+    if equality_signed
+        || !less_signed
+        || equality_outer != less_outer
+        || equality_inner != less_inner
+        || equality_value != less_value
+        || *equality_constant < 0
+        || !cast_preserves_constant(*equality_constant, true, equality_inner)
+    {
+        return None;
+    }
+    Some(Expr::Cmp {
+        op: CmpOp::Slt,
+        lhs: less_rhs.clone(),
+        rhs: less_lhs.clone(),
+    })
+}
+
 fn invert_comparison(op: CmpOp, lhs: &Expr, rhs: &Expr) -> Expr {
     let (op, lhs, rhs) = match op {
         CmpOp::Eq => (CmpOp::Ne, lhs, rhs),
@@ -1474,6 +1560,52 @@ mod tests {
                 src,
             }],
         }
+    }
+
+    fn extended_view(value: Expr, signed: bool, outer_width: u8, inner_width: u8) -> Expr {
+        Expr::Cast {
+            signed,
+            width: outer_width,
+            expr: Box::new(Expr::Cast {
+                signed,
+                width: inner_width,
+                expr: Box::new(value),
+            }),
+        }
+    }
+
+    fn mixed_view_relation(
+        equality_value: Expr,
+        equality_constant: i64,
+        less_value: Expr,
+        less_constant: i64,
+        less_op: CmpOp,
+        equality_widths: (u8, u8),
+        less_widths: (u8, u8),
+    ) -> Expr {
+        bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(extended_view(
+                    equality_value,
+                    false,
+                    equality_widths.0,
+                    equality_widths.1,
+                )),
+                rhs: Box::new(Expr::Const(equality_constant)),
+            },
+            Expr::Cmp {
+                op: less_op,
+                lhs: Box::new(extended_view(
+                    less_value,
+                    true,
+                    less_widths.0,
+                    less_widths.1,
+                )),
+                rhs: Box::new(Expr::Const(less_constant)),
+            },
+        )
     }
 
     #[test]
@@ -1758,6 +1890,243 @@ mod tests {
             panic!("fixture assignment disappeared: {:#?}", function.body);
         };
         assert_eq!(src, &expression);
+    }
+
+    #[test]
+    fn terminal_mixed_view_equal_or_signed_less_recovers_greater_than() {
+        let value = Expr::Reg(reg("arg0"));
+        let view = |signed: bool, value: Expr| Expr::Cast {
+            signed,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed,
+                width: 4,
+                expr: Box::new(value),
+            }),
+        };
+        let signed_value = view(true, value.clone());
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(bin(
+                BinOp::Or,
+                Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(view(false, value)),
+                    rhs: Box::new(Expr::Const(100)),
+                },
+                Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(signed_value.clone()),
+                    rhs: Box::new(Expr::Const(100)),
+                },
+            )),
+            rhs: Box::new(Expr::Const(0)),
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(
+            *src,
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(Expr::Const(100)),
+                rhs: Box::new(signed_value),
+            }
+        );
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_refuses_an_unsigned_only_constant() {
+        let value = Expr::Reg(reg("arg0"));
+        let view = |signed: bool, value: Expr| Expr::Cast {
+            signed,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed,
+                width: 4,
+                expr: Box::new(value),
+            }),
+        };
+        let original = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(bin(
+                BinOp::Or,
+                Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(view(false, value.clone())),
+                    rhs: Box::new(Expr::Const(-1)),
+                },
+                Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(view(true, value)),
+                    rhs: Box::new(Expr::Const(-1)),
+                },
+            )),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let mut function = one_stmt(original.clone());
+
+        fold_constants(&mut function);
+
+        assert_eq!(function.body[0], one_stmt(original).body[0]);
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_refuses_different_values() {
+        let relation = mixed_view_relation(
+            Expr::Reg(reg("lhs")),
+            100,
+            Expr::Reg(reg("rhs")),
+            100,
+            CmpOp::Slt,
+            (8, 4),
+            (8, 4),
+        );
+
+        assert!(invert_mixed_view_equal_or_signed_less(&relation).is_none());
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_refuses_different_constants() {
+        let value = Expr::Reg(reg("arg0"));
+        let relation =
+            mixed_view_relation(value.clone(), 100, value, 101, CmpOp::Slt, (8, 4), (8, 4));
+
+        assert!(invert_mixed_view_equal_or_signed_less(&relation).is_none());
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_refuses_unsigned_less() {
+        let value = Expr::Reg(reg("arg0"));
+        let relation =
+            mixed_view_relation(value.clone(), 100, value, 100, CmpOp::Ult, (8, 4), (8, 4));
+
+        assert!(invert_mixed_view_equal_or_signed_less(&relation).is_none());
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_refuses_mixed_widths() {
+        let value = Expr::Reg(reg("arg0"));
+        let relation =
+            mixed_view_relation(value.clone(), 100, value, 100, CmpOp::Slt, (8, 4), (8, 2));
+
+        assert!(invert_mixed_view_equal_or_signed_less(&relation).is_none());
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_requires_terminal_equality_to_zero() {
+        let value = Expr::Reg(reg("arg0"));
+        let relation =
+            mixed_view_relation(value.clone(), 100, value, 100, CmpOp::Slt, (8, 4), (8, 4));
+        let original = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(relation),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let mut function = one_stmt(original.clone());
+
+        fold_constants(&mut function);
+
+        assert_eq!(function.body[0], one_stmt(original).body[0]);
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_requires_extension_provenance() {
+        let value = Expr::Reg(reg("arg0"));
+        let relation = bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(value.clone()),
+                rhs: Box::new(Expr::Const(100)),
+            },
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(value),
+                rhs: Box::new(Expr::Const(100)),
+            },
+        );
+
+        assert!(invert_mixed_view_equal_or_signed_less(&relation).is_none());
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_is_exhaustively_equivalent_at_8_and_16_bits() {
+        for width in [1_u8, 2_u8] {
+            let bits = u32::from(width) * 8;
+            let modulus = 1_u64 << bits;
+            let sign_bit = 1_u64 << (bits - 1);
+            let signed_max = sign_bit - 1;
+            for constant in [0_u64, 1, signed_max / 2, signed_max] {
+                for raw in 0..modulus {
+                    let signed_value = if raw & sign_bit == 0 {
+                        i64::try_from(raw).unwrap()
+                    } else {
+                        i64::try_from(raw).unwrap() - i64::try_from(modulus).unwrap()
+                    };
+                    let constant = i64::try_from(constant).unwrap();
+                    let original =
+                        !(raw == u64::try_from(constant).unwrap() || signed_value < constant);
+                    let fused = constant < signed_value;
+                    assert_eq!(
+                        original, fused,
+                        "width={width} raw={raw:#x} signed={signed_value} constant={constant}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_mixed_view_relation_wide_boundaries_and_seeded_values_are_equivalent() {
+        for width in [4_u8, 8_u8] {
+            let bits = u32::from(width) * 8;
+            let sign_bit = 1_u64 << (bits - 1);
+            let mask = if width == 8 {
+                u64::MAX
+            } else {
+                (1_u64 << bits) - 1
+            };
+            let signed_max = sign_bit - 1;
+            for constant in [0_u64, 1, 100, signed_max] {
+                let mut values = vec![
+                    0,
+                    constant.saturating_sub(1),
+                    constant,
+                    constant.saturating_add(1) & mask,
+                    signed_max,
+                    sign_bit,
+                    mask,
+                ];
+                let mut seed = 0x4a47_5eed_c1a5_51f1_u64;
+                for _ in 0..4096 {
+                    seed = seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    values.push(seed & mask);
+                }
+                for raw in values {
+                    let signed_value = if width == 8 {
+                        raw as i64
+                    } else if raw & sign_bit == 0 {
+                        i64::try_from(raw).unwrap()
+                    } else {
+                        i64::try_from(raw).unwrap() - (1_i64 << bits)
+                    };
+                    let constant = i64::try_from(constant).unwrap();
+                    let original =
+                        !(raw == u64::try_from(constant).unwrap() || signed_value < constant);
+                    let fused = constant < signed_value;
+                    assert_eq!(
+                        original, fused,
+                        "width={width} raw={raw:#x} signed={signed_value} constant={constant}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

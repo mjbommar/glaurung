@@ -4,8 +4,8 @@
   "core": 321,
   "lfs": 113,
   "fixtures": 37,
-  "toolchain": 36,
-  "docker": 19,
+  "toolchain": 37,
+  "docker": 20,
   "llm": 5,
   "decbench": 4
  },
@@ -121,6 +121,10 @@
   ],
   "test_classfile.py": [
    "lfs"
+  ],
+  "test_classify_signed_loop.py": [
+   "toolchain",
+   "docker"
   ],
   "test_cli_annotate.py": [
    "docker"
