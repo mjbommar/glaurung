@@ -10,15 +10,18 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-03 against `941aa3ae`. WP0 and
+Current-state snapshot: reconciled 2026-09-04 through `80f5d106`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
-with selective substrate cleanup still open under WP10. WP4, WP5, WP8, WP9,
-and WP10 have production or shadow vertical slices but have not met their full
-exit criteria. WP2, WP3, WP6, and WP7B remain the principal unstarted or
-dependency-blocked packages. No current-tip `release` run is recorded as
-green: isolated increment gates below prove only their named overlays and
-denominators. The latest shared-tree full gates have exposed known and newly
-visible decompiler failures, so M3 through M6 remain open.
+with selective substrate cleanup still open under WP10. WP4 now has a pinned
+715-function structural comparison and a 334-candidate execution comparison
+with zero unexplained structural regressions, zero execution regressions, and
+nested post-tested branches preserved; it still lacks the remaining promotion
+measurements. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
+but have not met their full exit criteria. WP2, WP3, WP6, and WP7B remain the
+principal unstarted or dependency-blocked packages. The full Rust gate is green
+at `80f5d106`; the required whole Python gate terminated red across multiple
+pre-existing repository-wide groups, so this is not a current-tip green
+`release` claim. M3 through M6 remain open.
 
 ## Authority and relationship to the roadmaps
 
@@ -678,6 +681,19 @@ that preserves honest local gotos when required.
   unexplained regressions. Source-level `continue` recovery or an equally
   proved spelling is required before those transfers can be called structurally
   closed.
+  Source-level continuation recovery at `85a61693` removed those unexplained
+  structural regressions while retaining zero execution regressions. The
+  follow-up at `80f5d106` now preserves ordinary nested conditionals inside
+  post-tested loops rather than flattening or declining them. Its release-built
+  pinned comparison covers 715 functions: 262 improve, 68 tie, four exact
+  reviewed honest-goto rows remain raw regressions, 381 decline, and no
+  regression is unexplained. The corresponding 334-candidate execution
+  comparison reports 14 improvements, 246 stable passes, 29 stable non-passes,
+  45 explicitly non-executable candidates, zero regressions, and zero
+  infrastructure findings. The complete Rust gate is green and the global
+  Python gate terminated red. Exact commands, timing, RSS, denominator limits,
+  and validation boundaries are in
+  `results/wp4-nested-post-tested-rendering.md`.
 
 ### RED fixtures
 
@@ -747,7 +763,10 @@ that preserves honest local gotos when required.
   unsafe shapes, and its pinned 250-candidate report records **zero
   regressions**, 12 improvements, and no infrastructure findings. Thirty-nine
   candidates remain explicitly non-executable, so broader coverage remains
-  open. See `results/wp4-nested-control-safety.md`.
+  open. The expanded pinned `80f5d106` report remains at zero regressions over
+  334 candidates after enabling nested post-tested branches; 45 candidates are
+  explicitly non-executable. See `results/wp4-nested-control-safety.md` and
+  `results/wp4-nested-post-tested-rendering.md`.
 - [ ] No unexplained block/edge accounting findings.
 - [ ] GED does not regress on the pinned sample.
 - [ ] The structure axis improves after accepted honest gotos are separated.
@@ -911,6 +930,44 @@ the flow-insensitive register map continues to provide class and machine width.
 This starts, but does not complete, the production checkboxes above: pointer,
 aggregate, call, confidence, and general solver constraints remain open.
 
+### Required `classify` signed-loop vertical slice
+
+The exact source shape below is a required WP6/WP7 cross-package regression,
+not an illustrative snippet:
+
+```c
+int classify(int n) {
+    if (n < 0) return -1;
+    while (n > 100) { n -= 100; }
+    return n;
+}
+```
+
+It was compiled locally at `80f5d106` with GCC and Clang at O0 and O2. The
+release decompiler recovers balanced, parseable `if`/`else` plus `while`
+control at O0. With DWARF it now renders the authoritative
+`int classify(int n)` declaration, but the body still leaks unsigned casts.
+After `strip --strip-debug`, both O0 compilers regress the return declaration to
+`unsigned int`, and the negative result renders as `0xffffffff` or an explicit
+unsigned cast. This is a missing stripped-inference capability, not a WP8
+declaration-authority defect.
+
+Required WP6 features:
+
+- [ ] Record negative return constants and signed relational uses as exact,
+  per-use return/value constraints without making signedness sticky globally.
+- [ ] Resolve a stripped 32-bit return as signed only when all width-bearing
+  ABI evidence agrees and the signed evidence is unopposed; retain ambiguity
+  when signed and unsigned uses conflict.
+- [ ] Propagate the selected return interpretation to return expressions so an
+  authoritative signed declaration does not retain redundant unsigned casts.
+- [ ] Keep genuinely unsigned functions unchanged and preserve C/Rust-separated
+  measurement totals.
+- [ ] Add the fixture as GCC/Clang O0 debug and stripped cells. Keep O2 as a
+  separately reported observation: compiler strength reduction or unrolling
+  may erase the source loop, so exact loop reconstruction is not an O2
+  correctness requirement.
+
 ### Tests
 
 - [x] RED `tail_dispatch` signedness and return-width case.
@@ -961,14 +1018,20 @@ name-parsing convention was introduced.
 - [ ] Add an SSA-expression idiom module, preferably `src/ir/ssa_idioms/`,
   after WP3 establishes the owning SSA boundary.
 - [ ] Land one rule per increment:
-  1. strength-reduced constant multiplication;
-  2. signed division/modulo by a power of two;
-  3. compiler magic-number division;
-  4. compound boolean-mask normalization;
+  1. flag-derived relational normalization, beginning with the exact typed
+     equivalence `!((x == k) || (x <s k)) == (x >s k)` seen in `classify`;
+  2. strength-reduced constant multiplication;
+  3. signed division/modulo by a power of two;
+  4. compiler magic-number division;
+  5. compound boolean-mask normalization;
 - [ ] Each rule must declare operand width, signed interpretation,
   preconditions, output type, and origin composition.
 - [ ] Never peel or narrow casts unless equivalence is proved at the original
   width.
+- [ ] Permit the first relational rule at the existing typed comparison-fusion
+  boundary before WP3 only if both comparisons already carry the same exact
+  SSA value, constant, width, and signed relation. Otherwise decline until WP3
+  supplies stable identity; do not compare display names.
 
 ### Tests
 
@@ -977,6 +1040,15 @@ name-parsing convention was introduced.
 - [x] Regression test for the earlier `cmp_fusion` 64-to-32 narrowing bug.
 - [x] End-to-end fixtures from `03_loop_shapes` and `102_duffs_device`.
 - [x] Execution differential and pinned byte/readability measurements.
+- [ ] Exhaustively prove the `classify` relational rule at 8 and 16 bits and
+  use boundary-complete plus seeded randomized checks at 32 and 64 bits.
+- [ ] Require exact refusal for mixed widths, unsigned `<`, different values or
+  constants, inverted polarity mismatch, and a comparison with missing
+  producer evidence.
+- [ ] End-to-end `classify` tests must require `while (n > 100)` (allowing
+  equivalent operand order), reject the expanded `ZF | (SF ^ OF)` spelling,
+  compile the emitted C, and pass execution differentials on negative, 0, 100,
+  101, repeated-subtraction, and integer-boundary inputs.
 
 At `81ffe9ab`, `cargo test --features python-ext` passes, including 15 focused
 comparison-fusion tests and 191 AST/render tests; the six def-use census tests
@@ -1792,11 +1864,12 @@ relevant ratchet's accepted-regression record.
 
 ## 20. Immediate next actions
 
-1. Recover nested post-tested rendering without flattening conditional arms.
-   `c3bbe2a6` deliberately retains the verified typed tree but declines C for
-   this shape; a more permissive fallback reintroduced 20 execution regressions
-   in the expanded build inventory and was removed. Any replacement must keep
-   the pinned corpus at zero execution regressions.
+1. [x] Recover nested post-tested rendering without flattening conditional
+   arms. Commit `80f5d106` preserves ordinary internal conditionals and absorbs
+   only the exact typed latch. A missing lexical continuation is materialized
+   only when its LLIR block is an unconditional-return tail. The release-built
+   pinned corpus reports zero regressions across 334 executable candidates;
+   see `results/wp4-nested-post-tested-rendering.md`.
 2. [x] Replace the preserved nested loop-header gotos with a proved
    source-level `continue` representation. Commit `85a61693` introduces an AST
    `Continue` only while lowering transfers to the current multi-exit loop
@@ -1805,32 +1878,39 @@ relevant ratchet's accepted-regression record.
    rows from 204 to 220, and reduces nine unexplained regressions to zero. The
    250-candidate execution comparison remains at zero regressions. See
    `results/wp4-source-level-continue.md`.
-3. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide
+3. Implement the required O0 `classify` WP6/WP7 vertical slice above. First
+   add real GCC/Clang debug and stripped fixtures, then land the width- and
+   signedness-proved `> 100` predicate fusion, stripped signed-return evidence,
+   and redundant-cast cleanup as independently revertible increments. Require
+   parseable C, boundary tests, execution differentials, and no regression in
+   genuinely unsigned functions. Report O2 separately rather than claiming
+   source-loop recovery after strength reduction or unrolling.
+4. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide
    rows are classified at `ca91dc68` by exact, fail-closed
    suffix/shared-effect-entry contracts, and the clean pinned full comparison
    reports zero unexplained regressions without rewriting the four raw
    regression statuses. The corpus-wide execution route is now live; still
    complete unexplained block/edge accounting, pinned GED, structure-axis
    movement, and accepted runtime/output-size budgets.
-4. Complete WP5's shared typed-case transport so discovery, accounting, both
+5. Complete WP5's shared typed-case transport so discovery, accounting, both
    structurers, and rendering consume one case/default/provenance object; add
    the remaining fixture/compiler/architecture execution cells and classify
    every residual decline. Malformed, truncated, overlapping, and wrapping
    table safety tests are already present and must remain green.
-5. Begin WP2/WP3 as an independent architecture lane, using conservative
+6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
-6. Continue WP6 from the landed stripped-C per-use signedness slice: add the
+7. Continue WP6 from the landed stripped-C per-use signedness slice: add the
    next independently testable width or confidence constraint without waiting
    for the full solver design, and keep Rust totals separate.
-7. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
+8. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.
-8. Continue WP9 from the landed ARM32 register-view and capability-census
+9. Continue WP9 from the landed ARM32 register-view and capability-census
    slices: migrate one remaining shared consumer or fact class at a time,
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
    into a named required architecture profile. Do not canonicalize partial
    VFP/NEON writes until LLIR can represent the untouched lanes.
-9. Under WP10, triage the current red full-gate failures by exact base/overlay
+10. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned
    responsibility per commit. The metadata-only performance-gate hang is
