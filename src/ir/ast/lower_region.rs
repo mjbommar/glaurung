@@ -321,7 +321,7 @@ fn lower_raw_loop_block(
     lf: &LlirFunction,
     switch: Option<&SwitchEvidence>,
     fold_switch_guard: bool,
-    inline_entries: &[usize],
+    inline_prefixes: &[Vec<usize>],
     default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
@@ -377,14 +377,27 @@ fn lower_raw_loop_block(
     let typed_switch = switch
         .filter(|evidence| evidence.complete)
         .filter(|evidence| evidence.dispatch == block_index);
-    let lower_inline_entry = |target: usize| {
-        if !inline_entries.contains(&target) {
-            return None;
-        }
-        let block = lf.blocks.get(target)?;
-        let mut body = lower_block(block, lower_scalar_float);
-        if let Some(successor) = implicit_successor(block) {
-            body.push(Stmt::Goto { target: successor });
+    let lower_inline_prefix = |target: usize| {
+        let prefix = inline_prefixes
+            .iter()
+            .find(|prefix| prefix.first() == Some(&target))?;
+        let mut body = Vec::new();
+        for (position, block_index) in prefix.iter().copied().enumerate() {
+            let block = lf.blocks.get(block_index)?;
+            let mut statements = lower_block(block, lower_scalar_float);
+            let lexical_next = prefix
+                .get(position + 1)
+                .and_then(|next| lf.blocks.get(*next))
+                .map(|next| next.start_va);
+            if let Some(next) = lexical_next {
+                strip_trailing_goto(&mut statements, next);
+            }
+            body.extend(statements);
+            if let Some(successor) = implicit_successor(block) {
+                if Some(successor) != lexical_next {
+                    body.push(Stmt::Goto { target: successor });
+                }
+            }
         }
         Some(body)
     };
@@ -394,7 +407,7 @@ fn lower_raw_loop_block(
             .iter()
             .flat_map(|case| {
                 let target = lf.blocks.get(case.target).map(|block| block.start_va);
-                let inline_body = lower_inline_entry(case.target);
+                let inline_body = lower_inline_prefix(case.target);
                 let last_value = case.values.len().saturating_sub(1);
                 case.values
                     .iter()
@@ -429,7 +442,7 @@ fn lower_raw_loop_block(
         .map(|block| block.start_va);
     let default_body = typed_switch
         .and_then(|evidence| evidence.default.as_ref())
-        .and_then(|default| lower_inline_entry(default.target));
+        .and_then(|default| lower_inline_prefix(default.target));
     statements.push(Stmt::Switch {
         discriminant,
         cases,
@@ -760,14 +773,19 @@ fn lower_region_inner(
             exits: _,
             switch,
             switch_guard,
-            switch_inline_entries,
+            switch_inline_prefixes,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
+            let inlined_blocks = switch_inline_prefixes
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
             let rendered_blocks = blocks
                 .iter()
                 .copied()
-                .filter(|block| !switch_inline_entries.contains(block))
+                .filter(|block| !inlined_blocks.contains(block))
                 .collect::<Vec<_>>();
             for (position, block_index) in rendered_blocks.iter().copied().enumerate() {
                 let block = &lf.blocks[block_index];
@@ -779,7 +797,7 @@ fn lower_region_inner(
                     lf,
                     switch.as_ref(),
                     *switch_guard == Some(block_index),
-                    switch_inline_entries,
+                    switch_inline_prefixes,
                     default_target,
                     lower_scalar_float,
                 ));

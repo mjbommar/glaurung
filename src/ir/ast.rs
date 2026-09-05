@@ -2568,7 +2568,7 @@ function f @ 0x1000 {
                 exits: vec![2, 3],
                 switch: None,
                 switch_guard: None,
-                switch_inline_entries: Vec::new(),
+                switch_inline_prefixes: Vec::new(),
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2648,15 +2648,15 @@ function f @ 0x1000 {
                 }],
                 vec![0x1020, 0x1030],
             ),
-            (0x1020, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1020, vec![Op::Nop], vec![0x1040]),
             (0x1030, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
-            (0x1040, vec![Op::Return], vec![]),
+            (0x1040, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
             (0x1050, vec![Op::Return], vec![]),
         ]);
         let region = Region::Seq(vec![
             Region::RawLoop {
                 header: 0,
-                blocks: vec![0, 1, 2, 3],
+                blocks: vec![0, 1, 2, 3, 4],
                 exits: vec![5],
                 switch: Some(SwitchEvidence {
                     dispatch: 1,
@@ -2680,7 +2680,7 @@ function f @ 0x1000 {
                     provenance: SwitchEvidenceProvenance::TypedCfgEdges,
                 }),
                 switch_guard: Some(0),
-                switch_inline_entries: vec![2, 3],
+                switch_inline_prefixes: vec![vec![2, 4], vec![3]],
             },
             Region::Block(5),
         ]);
@@ -2713,7 +2713,7 @@ function f @ 0x1000 {
         );
         assert!(
             !body.iter().any(|statement| {
-                matches!(statement, Stmt::Label(target) if *target == 0x1020 || *target == 0x1030)
+                matches!(statement, Stmt::Label(target) if matches!(*target, 0x1020 | 0x1030 | 0x1040))
             }),
             "exclusive handler entries must be emitted in their case arms: {body:#?}"
         );

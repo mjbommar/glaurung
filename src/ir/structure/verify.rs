@@ -28,6 +28,9 @@ pub enum StructError {
     /// A conditional block's CFG successor edge is represented by neither an arm
     /// nor the join — the branch to it is silently dropped (empty arm).
     CondEdgeUncovered { cond: usize, missing_succ: usize },
+    /// A raw-switch presentation prefix is not a bounded, disjoint,
+    /// predecessor-closed path owned by its typed case/default entry.
+    RawLoopPrefixInvalid { entry: Option<usize> },
 }
 
 /// Verify a region tree against the CFG successor relation. Pure over `succs`
@@ -111,7 +114,64 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
                 walk(body, succs, out);
                 exits.iter().for_each(|(_, exit)| walk(exit, succs, out));
             }
-            Region::RawLoop { .. } => {}
+            Region::RawLoop {
+                blocks,
+                switch,
+                switch_inline_prefixes,
+                ..
+            } => {
+                if switch_inline_prefixes.is_empty() {
+                    return;
+                }
+                let Some(evidence) = switch.as_ref().filter(|evidence| evidence.complete) else {
+                    out.push(StructError::RawLoopPrefixInvalid { entry: None });
+                    return;
+                };
+                let case_targets = evidence
+                    .cases
+                    .iter()
+                    .map(|case| case.target)
+                    .collect::<HashSet<_>>();
+                let default = evidence.default.as_ref();
+                let mut claimed = HashSet::new();
+                for prefix in switch_inline_prefixes {
+                    let entry = prefix.first().copied();
+                    let valid_entry = entry.is_some_and(|entry| {
+                        let is_case = case_targets.contains(&entry);
+                        let is_default = default.is_some_and(|default| default.target == entry);
+                        if is_case == is_default || !blocks.contains(&entry) {
+                            return false;
+                        }
+                        let predecessors = (0..succs.len())
+                            .filter(|predecessor| succs[*predecessor].contains(&entry))
+                            .collect::<Vec<_>>();
+                        !predecessors.is_empty()
+                            && predecessors.iter().all(|predecessor| {
+                                *predecessor == evidence.dispatch
+                                    || (is_default
+                                        && default
+                                            .is_some_and(|default| *predecessor == default.guard))
+                            })
+                    });
+                    let valid_chain = !prefix.is_empty()
+                        && prefix.len() <= 8
+                        && prefix
+                            .iter()
+                            .all(|block| blocks.contains(block) && claimed.insert(*block))
+                        && prefix.windows(2).all(|pair| {
+                            let [from, to] = pair else { return false };
+                            succs
+                                .get(*from)
+                                .is_some_and(|next| next.as_slice() == [*to])
+                                && (0..succs.len())
+                                    .filter(|predecessor| succs[*predecessor].contains(to))
+                                    .eq(std::iter::once(*from))
+                        });
+                    if !valid_entry || !valid_chain {
+                        out.push(StructError::RawLoopPrefixInvalid { entry });
+                    }
+                }
+            }
             Region::Switch {
                 guard,
                 dispatch,
@@ -163,6 +223,9 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::structure::{
+        SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+    };
 
     // --- structure verifier (§5) -------------------------------------------
 
@@ -230,5 +293,37 @@ mod tests {
             Region::Block(3),
         ]);
         assert!(verify_region(&succs, 0, &region).is_empty());
+    }
+
+    #[test]
+    fn verify_region_rejects_a_prefix_that_crosses_a_shared_join() {
+        let succs = vec![vec![1, 3], vec![2], vec![4], vec![4], vec![]];
+        let region = Region::RawLoop {
+            header: 0,
+            blocks: vec![0, 1, 2, 3, 4],
+            exits: Vec::new(),
+            switch: Some(SwitchEvidence {
+                dispatch: 1,
+                cases: vec![SwitchCaseEvidence {
+                    target: 2,
+                    values: vec![0],
+                }],
+                default: Some(SwitchDefaultEvidence {
+                    guard: 0,
+                    target: 3,
+                    dispatch: Some(1),
+                    taken: false,
+                }),
+                complete: true,
+                provenance: SwitchEvidenceProvenance::TypedCfgEdges,
+            }),
+            switch_guard: Some(0),
+            // Block 4 is reached by both the case and default. It is a shared
+            // join, not part of either private prefix.
+            switch_inline_prefixes: vec![vec![2, 4]],
+        };
+
+        assert!(verify_region(&succs, 0, &region)
+            .contains(&StructError::RawLoopPrefixInvalid { entry: Some(2) }));
     }
 }

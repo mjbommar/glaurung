@@ -132,10 +132,10 @@ pub(super) fn detect_raw_dispatch_loop(
             && cfg.branch_depends_on_unsigned_comparison(default.guard))
         .then_some(default.guard)
     });
-    let switch_inline_entries = switch
+    let switch_inline_prefixes = switch
         .as_ref()
         .filter(|evidence| evidence.complete)
-        .map(|evidence| exclusive_switch_entries(evidence, &blocks, cfg))
+        .map(|evidence| exclusive_switch_prefixes(evidence, &blocks, cfg))
         .unwrap_or_default();
     Some(LoopRegion {
         region: Region::RawLoop {
@@ -144,7 +144,7 @@ pub(super) fn detect_raw_dispatch_loop(
             exits,
             switch,
             switch_guard,
-            switch_inline_entries,
+            switch_inline_prefixes,
         },
         exit: continuation,
     })
@@ -230,7 +230,7 @@ pub(super) fn detect_raw_multi_latch_loop(
             exits,
             switch: None,
             switch_guard: None,
-            switch_inline_entries: Vec::new(),
+            switch_inline_prefixes: Vec::new(),
         },
         exit: Some(exit),
     })
@@ -240,11 +240,11 @@ fn body_contains_guard_and_dispatch(blocks: &[usize], guard: usize, dispatch: us
     blocks.contains(&guard) && blocks.contains(&dispatch)
 }
 
-fn exclusive_switch_entries(
+fn exclusive_switch_prefixes(
     evidence: &super::cfg::SwitchEvidence,
     blocks: &[usize],
     cfg: &Cfg,
-) -> Vec<usize> {
+) -> Vec<Vec<usize>> {
     let guard = evidence.default.as_ref().map(|default| default.guard);
     let default_target = evidence.default.as_ref().map(|default| default.target);
     let case_targets = evidence
@@ -275,7 +275,35 @@ fn exclusive_switch_entries(
     }
     entries.sort_unstable();
     entries.dedup();
-    entries
+    let entry_set = entries.iter().copied().collect::<HashSet<_>>();
+    let mut claimed = HashSet::new();
+    let mut prefixes = Vec::new();
+    for entry in entries {
+        if claimed.contains(&entry) {
+            continue;
+        }
+        let mut prefix = vec![entry];
+        claimed.insert(entry);
+        while prefix.len() < 8 {
+            let current = *prefix.last().expect("a prefix always has its entry");
+            let [next] = cfg.succs[current].as_slice() else {
+                break;
+            };
+            if !blocks.contains(next)
+                || *next == evidence.dispatch
+                || Some(*next) == guard
+                || entry_set.contains(next)
+                || claimed.contains(next)
+                || cfg.preds[*next].as_slice() != [current]
+            {
+                break;
+            }
+            prefix.push(*next);
+            claimed.insert(*next);
+        }
+        prefixes.push(prefix);
+    }
+    prefixes
 }
 
 /// Recognise a natural while-loop headed at `header`.

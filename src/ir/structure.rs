@@ -1740,6 +1740,64 @@ mod tests {
     }
 
     #[test]
+    fn raw_dispatch_partition_extends_only_through_private_linear_prefix() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1200), vec![0x1200, 0x1800]),
+            (0x1200, cond(0x1300), vec![0x1300, 0x1700]),
+            (
+                0x1300,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1400, 0x1600, 0x1900],
+            ),
+            (0x1400, vec![Op::Nop], vec![0x1500]),
+            (0x1500, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1600, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1700, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1800, vec![Op::Return], vec![]),
+            (0x1900, vec![Op::Return], vec![]),
+        ]);
+
+        fn prefixes(region: &Region) -> Option<&[Vec<usize>]> {
+            match region {
+                Region::RawLoop {
+                    switch_inline_prefixes,
+                    ..
+                } => Some(switch_inline_prefixes),
+                Region::Seq(parts) => parts.iter().find_map(prefixes),
+                Region::IfThen { then_r, .. } => prefixes(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    prefixes(then_r).or_else(|| prefixes(else_r))
+                }
+                Region::Borrowed(inner) => prefixes(inner),
+                _ => None,
+            }
+        }
+
+        let region = recover_for(&lf);
+        let prefixes = prefixes(&region).expect("the dispatch loop must retain its partition");
+        assert!(
+            prefixes.contains(&vec![4, 5]),
+            "the private two-block case prefix was not recovered: {region:#?}"
+        );
+        assert!(
+            prefixes.iter().flatten().all(|block| *block != 1),
+            "the shared loop header must stop every private prefix: {region:#?}"
+        );
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
     fn preloop_guard_owns_a_private_return_chain_before_raw_dispatch_loop() {
         let cond = |target| {
             vec![Op::CondJump {
