@@ -36,7 +36,9 @@ At exact commit `56503e53`, after a clean-worktree release extension build:
 - structural accounting has no hard unowned block or edge finding;
 - the result contains a real `switch` inside `while (1)` and retains explicit
   case-latch transfers;
-- one `EdgeViaGoto` on the outer guard remains an honest readability finding.
+- one `EdgeViaGoto` on the outer guard remained an honest readability finding
+  at this revision. It is closed by the bounded private-prefix/shared-terminal
+  repair at `0e29ffc4`; see `wp4-a32-guard-quality.md`.
 
 The complete ARMv7 A32 O0/O2 matrix covers 410 compiler/optimisation lanes and
 1,604 function verdicts. Relative to the exact pre-repair map, the only
@@ -68,7 +70,7 @@ matrix results.
 
 ## Next boundary
 
-Improve the surviving outer-guard `goto` and undefined-looking temporary as
-separate, measured readability/definedness increments. WP4 promotion still
+Commits `28b3bc5b` and `0e29ffc4` close the outer-guard `goto` and
+undefined-looking temporary as separate, measured increments. WP4 promotion still
 requires corpus-wide accounting, GED/structure movement, execution, runtime,
 and output-size evidence; this vertical slice does not claim promotion.

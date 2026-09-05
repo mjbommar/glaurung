@@ -101,7 +101,6 @@ AArch64 parent finds no tip-only failing node IDs.
 ## Next boundary
 
 The production-v1 loop ownership defect exposed by this slice is closed at
-`6f0ba701`. The remaining quality boundary is to replace the explicit guard
-transfer with a structured source-level construct when that transformation is
-proved, and to improve the undefined-looking precondition expression without
-weakening fail-closed definedness checks.
+`6f0ba701`. Commits `28b3bc5b` and `0e29ffc4` then remove the undefined-looking
+precondition arm and the explicit outer-guard transfer under separate
+fail-closed contracts; see `wp4-a32-guard-quality.md`.

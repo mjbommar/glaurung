@@ -147,6 +147,10 @@ The exact 410-lane post-repair comparison has one attributable movement,
 `dispatch_in_loop` from `fail` to `pass`; two unrelated alternating rows are
 recorded as same-revision harness instability rather than code regressions.
 See `results/wp4-a32-multi-latch-dispatch-loop.md`.
+The follow-on quality increments at `28b3bc5b` and `0e29ffc4` eliminate the
+unreachable undefined `var1` select arm and the final outer-guard
+`EdgeViaGoto`. Exact host and A32 comparisons show no attributable status
+decline; see `results/wp4-a32-guard-quality.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -1015,8 +1019,10 @@ one authoritative set of case edges.
   1,604-function parent/tip comparison. `dense_dispatch` passes production
   execution; `dispatch_in_loop` passes both shadow-v2 and, after `6f0ba701`,
   production-v1 execution. Its multi-latch raw loop owns every backedge and
-  leaves one explicit outer-guard transfer as a quality-only accounting
-  finding. A graph-sized recursive work budget also makes four
+  initially left one explicit outer-guard transfer as a quality-only accounting
+  finding. The bounded private-prefix/shared-terminal repair at `0e29ffc4`
+  closes that finding, while `28b3bc5b` removes the adjacent unreachable
+  undefined select arm. A graph-sized recursive work budget also makes four
   valid 48-entry tables degrade to complete labelled CFG output rather than
   overflowing the native stack.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
@@ -2210,9 +2216,11 @@ relevant ratchet's accepted-regression record.
    Commit `6f0ba701` then closes the isolated production-v1 loop-backedge
    ownership failure; its exact full A32 comparison adds the intended
    `dispatch_in_loop` fail-to-pass movement with no attributable decline.
-   Next remove the surviving outer-guard goto/undefined-looking temporary as
-   separately proved quality work, then continue with Thumb loop tables,
-   AArch64 adjacent-table variants, and wide-selector forms.
+   Commits `28b3bc5b` and `0e29ffc4` remove the surviving outer-guard goto and
+   undefined-looking temporary as separately proved quality work, with no
+   attributable decline in the exact host/A32 comparisons. Next continue with
+   Thumb loop tables, AArch64 adjacent-table variants, and wide-selector forms,
+   while reducing the raw loop's remaining case-latch gotos.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

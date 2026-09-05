@@ -205,6 +205,10 @@ The exact post-repair comparison adds one attributable fail-to-pass movement
 and no attributable decline; same-revision instability in two unrelated rows
 is recorded separately in
 [`wp4-a32-multi-latch-dispatch-loop.md`](../../history/decompiler-review-2026-09-02/results/wp4-a32-multi-latch-dispatch-loop.md).
+The follow-on commits `28b3bc5b` and `0e29ffc4` remove the unreachable
+undefined select arm and final outer-guard accounting goto. Exact host and A32
+comparisons show no attributable status decline; detailed evidence is in
+[`wp4-a32-guard-quality.md`](../../history/decompiler-review-2026-09-02/results/wp4-a32-guard-quality.md).
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
