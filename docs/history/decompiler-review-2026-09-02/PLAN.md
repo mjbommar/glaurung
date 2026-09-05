@@ -11,8 +11,8 @@ Review basis: `README.md` and `01` through `06` in this directory
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
 Current-state snapshot: reconciled 2026-09-05 through homogeneous-float
-behavioral commits `db750dbc` and `197e6383`, baseline commit `1bee3fb1`, and
-census commit `a0915220`. WP0 and
+behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
+`1bee3fb1`, and census commit `a0915220`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison

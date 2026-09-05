@@ -4,8 +4,8 @@
 
 ## Outcome
 
-The bounded fixture-197 slice is closed at behavioral commits `db750dbc` and
-`197e6383`, with its nine exact baseline changes committed at `1bee3fb1` and
+The bounded fixture-197 slice is closed at behavioral commits `db750dbc`,
+`197e6383`, and `64181d02`, with its nine exact baseline changes at `1bee3fb1` and
 the final test-census refresh at `a0915220`. All non-structural functions in
 `197_homogeneous_float_aggregates` now pass the GCC/Clang O0/O2 host matrix.
 The two `hfa197_consume_pair2d` cells remain intentionally structural because
@@ -23,7 +23,7 @@ not completion of WP6's general type-constraint solver.
 | Clang O2 `quad4f_roundtrip` | `3f4f12fe` lowers legacy `CVTTPS2DQ` into four typed scalar truncations | legacy 128-bit XMM forms only; AVX remains unsupported; NaN/out-of-range behavior inherits the existing scalar conversion limitation |
 
 `db750dbc` additionally models legacy `CVTDQ2PS`, register-form `UNPCKLPS`
-and `UNPCKHPD`, preserves `MOVQ xmm,m64` as one eight-byte memory access, and
+and `UNPCKHPD`, and
 renders concatenated packed dword payloads as widened bit composition. The
 concat rewrite is restricted to physical packed-dword lane names; unknown
 operand widths retain the conservative historical form. It also prevents the
@@ -32,7 +32,16 @@ plain-AST role pass from merging integer and SSE scratch registers into one
 Ordinary scalar returns retain the existing role mapping. Follow-up commit
 `197e6383` restricts dead scalar-view bridge deletion to an exact contiguous
 four-lane load/bridge/matching-store transport; computed packed bridges remain
-available to the SSE-pair materializer.
+available to the SSE-pair materializer. Base/tip isolation then proved that
+the slice's attempted scalar-qword representation for `MOVQ xmm,m64` regressed
+the pre-existing Clang O2 `population_variance` execution cell. Commit
+`64181d02` restores the established explicit two-dword lane loads; that cell
+passes again while all nine HFA improvements remain. The separate Rust
+`rust_slice_get` baseline regression reproduces at pre-slice commit `6f82dc61`
+and is therefore retained as earlier drift rather than attributed here.
+This keeps the current lane-provenance model but does not encode MOVQ's one
+architectural eight-byte access; preserving both facts requires a future wide
+load representation with typed lane projections rather than a scalar collapse.
 
 ## Release-built fixture evidence
 
@@ -43,7 +52,7 @@ uv run maturin develop --release
 ```
 
 The final resulting `target/release/libglaurung.so` had SHA-256
-`3e32528a4009456253537e3a5e2bd2dc29768747fbbe2eb8f52af3b35fc2d402`.
+`482943ec65fae9b1151960254552901084592864d3a50d66c8f53920a1bd9d9d`.
 Fixture source SHA-256 was
 `d3e802bed2ed9c17af66ef674ae6c7cb3d7bc82936dfb6df7f8eb00f8e503a7f`;
 the recorded compilers are GCC 11.4.0 and Clang 14.0.0.
@@ -102,11 +111,12 @@ identity-retrieval ratchet: XM AUC measured `0.851668` against a required
 `0.851700` (delta `-0.000032`). The ratchet was not weakened. The whole fixture
 matrix/structural, def-use, and structure-census checks also remain red with a
 mixture of longstanding baseline improvements and regressions outside this
-slice; among them are two semantic fixture regressions (`rust_slice_get` and
-`population_variance`) and existing structural/def-use drift that still needs
-WP10 base/overlay triage. These red results are recorded, not normalized into
-new baselines. The focused and fixture evidence is therefore not a current-tip
-release-gate claim.
+slice, plus existing structural/def-use drift that still needs WP10
+base/overlay triage. The two semantic cells reported by that run were isolated:
+`population_variance` was repaired by `64181d02`, while `rust_slice_get` also
+fails at the pre-slice base and remains historical drift. These red results are
+recorded, not normalized into new baselines. The focused and fixture evidence
+is therefore not a current-tip release-gate claim.
 
 ## Scope and limits
 
