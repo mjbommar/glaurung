@@ -50,6 +50,7 @@ DecBench tree. **No Joern process and no DecBench pipeline was run**, per
 | [calibration.md](calibration.md) | how a replacement earns the right to be quoted: the mutation harness with both its halves, the confusion table against the incumbent, the null baseline as a permanent gate, and which knobs are principled |
 | [roadmap.md](roadmap.md) | **the plan** — six increments with gates and stop conditions, ordered by value per unit of work |
 | [evidence.md](evidence.md) | the eight scratch scripts behind every number, verbatim, with their command lines and output |
+| [cross-decompiler-structure.md](cross-decompiler-structure.md) | **the external baseline** — Ghidra 12.1.3 and angr 9.2.213 over our own gcc-O0 fixture lane, scored with our own skeleton distance on 709 shared functions: where we lead, the one place we do not, and why the same comparison read across corpora gives the opposite answer |
 
 ## The three recommendations, in priority order
 
