@@ -9654,7 +9654,7 @@
     "sparse_dispatch": "pass"
   },
   "206_aarch64_wide_dispatch:aarch64:O2": {
-    "dense_dispatch": "fail",
+    "dense_dispatch": "pass",
     "dispatch_in_loop": "pass",
     "sparse_dispatch": "pass"
   },

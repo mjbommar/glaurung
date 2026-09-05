@@ -367,6 +367,14 @@ pub(super) fn discover_function(
                             tgt,
                             dispatch.export_addresses(),
                         );
+                        if let Some(kind) = guard_taken_bound(&ins.mnemonic, arch) {
+                            if let Some(proof) = dispatch.export_guard_bounds(kind) {
+                                let mut bounds = dispatch.export_bounds();
+                                bounds.tighten_with(&proof);
+                                index_bounds.insert(tgt, bounds);
+                                guard_edge_bounds.insert(tgt, proof);
+                            }
+                        }
                     }
                 } else if unconditional {
                     if let Some(tgt) = indirect_memory_target(facts.image, data, &ins, bits) {

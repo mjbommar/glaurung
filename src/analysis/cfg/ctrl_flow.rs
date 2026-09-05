@@ -224,9 +224,20 @@ pub(super) fn guard_fallthrough_bound(
     }
 }
 
+/// Range proof carried by the branch target rather than the fallthrough.
+pub(super) fn guard_taken_bound(mnemonic: &str, arch: BArch) -> Option<GuardFallthroughBound> {
+    let lower = mnemonic.to_ascii_lowercase();
+    match arch {
+        // `cmp Wn,#N; b.ls dispatch` admits exactly unsigned Wn <= N on the
+        // taken edge. This is GCC's AArch64 compact-table guard.
+        BArch::AArch64 if lower == "b.ls" => Some(GuardFallthroughBound::Inclusive),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod guard_bound_tests {
-    use super::{guard_fallthrough_bound, BArch};
+    use super::{guard_fallthrough_bound, guard_taken_bound, BArch};
     use crate::analysis::dispatch::GuardFallthroughBound;
 
     #[test]
@@ -249,6 +260,11 @@ mod guard_bound_tests {
         );
         assert_eq!(guard_fallthrough_bound("jg", BArch::X86_64), None);
         assert_eq!(guard_fallthrough_bound("bhs", BArch::ARM), None);
+        assert_eq!(
+            guard_taken_bound("b.ls", BArch::AArch64),
+            Some(GuardFallthroughBound::Inclusive)
+        );
+        assert_eq!(guard_taken_bound("b.hi", BArch::AArch64), None);
     }
 }
 

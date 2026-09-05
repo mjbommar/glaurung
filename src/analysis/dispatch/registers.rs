@@ -43,6 +43,20 @@ pub(super) fn canon_ref(reg: &str) -> Cow<'_, str> {
     if let Some(parent) = gp_parent(stripped) {
         return Cow::Borrowed(parent);
     }
+    // AArch64's Wn and Xn spell two width views of the same architectural
+    // location. Dispatch guards commonly compare W0 while ADR/LDR/ADD stage
+    // the table target through X registers.
+    if let Some(digits) = stripped
+        .strip_prefix('w')
+        .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    {
+        if digits.parse::<u8>().is_ok_and(|number| number <= 30) {
+            return Cow::Owned(format!("x{digits}"));
+        }
+    }
+    if stripped == "wzr" {
+        return Cow::Borrowed("xzr");
+    }
     // r0..r15 and their d/w/b views, on x86-64 and ARM alike: the canonical name
     // is the `r` plus the leading digit run, which is a prefix of the input.
     if stripped.starts_with('r') {
@@ -94,6 +108,17 @@ mod tests {
     /// result, so a divergence would silently repartition the maps.
     fn canon_original(reg: &str) -> String {
         let r = reg.trim_start_matches('%').to_ascii_lowercase();
+        if let Some(digits) = r
+            .strip_prefix('w')
+            .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        {
+            if digits.parse::<u8>().is_ok_and(|number| number <= 30) {
+                return format!("x{digits}");
+            }
+        }
+        if r == "wzr" {
+            return "xzr".to_string();
+        }
         let full = match r.as_str() {
             "rax" | "eax" | "ax" | "al" | "ah" => "rax",
             "rbx" | "ebx" | "bx" | "bl" | "bh" => "rbx",
@@ -127,7 +152,7 @@ mod tests {
             "cl", "ch", "rdx", "edx", "dx", "dl", "dh", "rsi", "esi", "si", "sil", "rdi", "edi",
             "di", "dil", "rbp", "ebp", "bp", "bpl", "rsp", "esp", "sp", "spl", "rip", "pc", "lr",
             "xmm0", "xmm15", "ymm3", "zmm7", "st0", "es", "ds", "cs", "", "r", "rz", "x0", "w0",
-            "v31", "q7", "s3", "d12", "fp",
+            "v31", "q7", "s3", "d12", "fp", "wzr", "xzr",
         ] {
             names.push(stem.to_string());
         }
@@ -135,6 +160,10 @@ mod tests {
             for suffix in ["", "d", "w", "b"] {
                 names.push(format!("r{i}{suffix}"));
             }
+        }
+        for i in 0..=30u32 {
+            names.push(format!("w{i}"));
+            names.push(format!("x{i}"));
         }
         let mut variants: Vec<String> = Vec::new();
         for name in &names {
@@ -157,6 +186,9 @@ mod tests {
             );
         }
         assert!(variants.len() > 400, "grid shrank: {}", variants.len());
+        for i in 0..=30u32 {
+            assert_eq!(canon_ref(&format!("w{i}")).as_ref(), format!("x{i}"));
+        }
     }
 
     #[test]

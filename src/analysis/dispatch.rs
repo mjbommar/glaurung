@@ -96,6 +96,14 @@ enum Val {
     /// `table + (i32)*(table + idx*4)` — a dispatch target. Jumping through this
     /// register reaches exactly the table's entries.
     TableTarget { table: u64, bound: Option<u64> },
+    /// One signed byte loaded from an AArch64 compact branch table.
+    Aarch64ByteOffset { table: u64, bound: Option<u64> },
+    /// `target_base + sign_extend(table[index]) * 4` immediately before `br`.
+    Aarch64ByteTarget {
+        table: u64,
+        target_base: u64,
+        bound: Option<u64>,
+    },
 }
 
 /// Why an indirect transfer's targets could not be recovered.
@@ -251,6 +259,17 @@ pub struct ThumbTableBranch {
     pub entry_count: Option<usize>,
 }
 
+/// AArch64's compact signed-byte table dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aarch64ByteTableBranch {
+    /// Address of the signed-byte offset table.
+    pub table_va: u64,
+    /// Address to which each sign-extended, scaled entry is added.
+    pub target_base: u64,
+    /// Exact table extent proved by the dispatch guard.
+    pub entry_count: Option<usize>,
+}
+
 /// The outcome of resolving one indirect transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -395,7 +414,11 @@ impl DispatchTracker {
             .iter()
             .filter_map(|(register, value)| match value {
                 Val::Addr(address) => Some((register.clone(), *address)),
-                Val::ScaledIndex { .. } | Val::TableOffset { .. } | Val::TableTarget { .. } => None,
+                Val::ScaledIndex { .. }
+                | Val::TableOffset { .. }
+                | Val::TableTarget { .. }
+                | Val::Aarch64ByteOffset { .. }
+                | Val::Aarch64ByteTarget { .. } => None,
             })
             .collect()
     }
@@ -893,6 +916,15 @@ impl DispatchTracker {
             }
         }
 
+        // Capstone 5 reports every AArch64 operand as a read in our portable
+        // Instruction model, so the generic destination-access path below
+        // cannot see these definitions. Model the exact compiler sequence only
+        // after the range logic above has consumed comparisons. Every other
+        // destination write is killed conservatively.
+        if self.observe_aarch64_compact_table(ins, m.as_ref()) {
+            return;
+        }
+
         // ARM `add rD, pc, #imm` — the assembler's `adr`, and the only way a
         // jump table's base reaches a register on 32-bit ARM.
         //
@@ -998,6 +1030,142 @@ impl DispatchTracker {
             // safe direction: it costs a resolution, never invents one.
             _ => self.clear(dest),
         }
+    }
+
+    fn observe_aarch64_compact_table(&mut self, ins: &Instruction, mnemonic: &str) -> bool {
+        if !ins.arch.eq_ignore_ascii_case("arm64") && !ins.arch.eq_ignore_ascii_case("aarch64") {
+            return false;
+        }
+        let destination = ins
+            .operands
+            .first()
+            .and_then(|operand| operand.register.as_deref());
+        match mnemonic {
+            "adr" | "adrp" => {
+                let Some((destination, address)) = destination.zip(
+                    ins.operands
+                        .get(1)
+                        .and_then(|operand| operand.immediate)
+                        .and_then(|value| u64::try_from(value).ok()),
+                ) else {
+                    if let Some(destination) = destination {
+                        self.clear(destination);
+                    }
+                    return true;
+                };
+                self.set(destination, Val::Addr(address));
+                true
+            }
+            "add" if ins.operands.len() == 3 => {
+                let Some(destination) = destination else {
+                    return false;
+                };
+                let source = ins
+                    .operands
+                    .get(1)
+                    .and_then(|operand| operand.register.as_deref());
+                if let Some(immediate) = ins
+                    .operands
+                    .get(2)
+                    .and_then(|operand| operand.immediate)
+                    .and_then(|value| u64::try_from(value).ok())
+                {
+                    let Some(Val::Addr(base)) = source.and_then(|register| self.get(register))
+                    else {
+                        self.clear(destination);
+                        return true;
+                    };
+                    match base.checked_add(immediate) {
+                        Some(address) => self.set(destination, Val::Addr(address)),
+                        None => self.clear(destination),
+                    }
+                    return true;
+                }
+                let offset = ins
+                    .operands
+                    .get(2)
+                    .and_then(|operand| operand.register.as_deref());
+                let base_value = source.and_then(|register| self.get(register));
+                let offset_value = offset.and_then(|register| self.get(register));
+                if aarch64_add_sxtb_shift_two(ins) {
+                    if let (
+                        Some(Val::Addr(target_base)),
+                        Some(Val::Aarch64ByteOffset { table, bound }),
+                    ) = (base_value, offset_value)
+                    {
+                        self.set(
+                            destination,
+                            Val::Aarch64ByteTarget {
+                                table,
+                                target_base,
+                                bound,
+                            },
+                        );
+                        return true;
+                    }
+                }
+                self.clear(destination);
+                true
+            }
+            "ldrb" => {
+                let Some(destination) = destination else {
+                    return true;
+                };
+                let Some(memory) = ins.operands.iter().find(|operand| {
+                    matches!(operand.kind, crate::core::instruction::OperandKind::Memory)
+                }) else {
+                    self.clear(destination);
+                    return true;
+                };
+                if memory.displacement.unwrap_or(0) != 0 {
+                    self.clear(destination);
+                    return true;
+                }
+                let Some(Val::Addr(table)) = memory.base.as_deref().and_then(|base| self.get(base))
+                else {
+                    self.clear(destination);
+                    return true;
+                };
+                let bound = memory
+                    .index
+                    .as_deref()
+                    .and_then(|index| self.bounded.get(canon_ref(index).as_ref()).copied());
+                self.set(destination, Val::Aarch64ByteOffset { table, bound });
+                true
+            }
+            _ => {
+                if aarch64_defines_operand_zero(mnemonic) {
+                    if let Some(destination) = destination {
+                        self.clear(destination);
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// Resolve the compact AArch64 table target held by a `br` register.
+    pub fn aarch64_byte_table_branch(&self, ins: &Instruction) -> Option<Aarch64ByteTableBranch> {
+        if !ins.mnemonic.eq_ignore_ascii_case("br") {
+            return None;
+        }
+        let register = ins.operands.first()?.register.as_deref()?;
+        let Val::Aarch64ByteTarget {
+            table,
+            target_base,
+            bound,
+        } = self.get(register)?
+        else {
+            return None;
+        };
+        let entry_count = bound
+            .and_then(|maximum| usize::try_from(maximum).ok())
+            .and_then(|maximum| maximum.checked_add(1));
+        Some(Aarch64ByteTableBranch {
+            table_va: table,
+            target_base,
+            entry_count,
+        })
     }
 
     /// Forget everything known about `register`, for a caller that must model
@@ -1108,6 +1276,43 @@ impl DispatchTracker {
     }
 }
 
+/// Validate AArch64 `ADD Xd, Xn, Wm, SXTB #2` from its fixed-width encoding.
+fn aarch64_add_sxtb_shift_two(ins: &Instruction) -> bool {
+    let Ok(bytes) = <[u8; 4]>::try_from(ins.bytes.as_slice()) else {
+        return false;
+    };
+    let word = u32::from_le_bytes(bytes);
+    // 64-bit ADD (extended register), no flags, option=SXTB, imm3=2.
+    ((word >> 21) & 0x7ff) == 0b10001011001
+        && ((word >> 13) & 0x7) == 0b100
+        && ((word >> 10) & 0x7) == 2
+}
+
+fn aarch64_defines_operand_zero(mnemonic: &str) -> bool {
+    let control_flow = mnemonic == "b"
+        || mnemonic.starts_with("b.")
+        || matches!(
+            mnemonic,
+            "bl" | "blr"
+                | "br"
+                | "braa"
+                | "braaz"
+                | "brab"
+                | "brabz"
+                | "cbz"
+                | "cbnz"
+                | "tbz"
+                | "tbnz"
+        );
+    !(control_flow
+        || mnemonic.starts_with("ret")
+        || mnemonic.starts_with("cmp")
+        || mnemonic.starts_with("cmn")
+        || mnemonic.starts_with("tst")
+        || mnemonic.starts_with("str")
+        || mnemonic.starts_with("stp"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1200,6 +1405,111 @@ mod tests {
 
     fn tables() -> BTreeMap<u64, Vec<u64>> {
         BTreeMap::from([(0x2000, vec![0x112e, 0x113a, 0x1146, 0x1152])])
+    }
+
+    #[test]
+    fn real_aarch64_signed_byte_dispatch_preserves_table_extent_and_target_base() {
+        use crate::core::binary::Endianness;
+        use crate::core::disassembler::{Architecture, Disassembler};
+        use crate::disasm::capstone::CapstoneDisassembler;
+
+        let decoder = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("AArch64 decoder");
+        let words = [
+            (0x5f0, 0x9000_0003u32), // adrp x3, 0
+            (0x5f4, 0x911e_9063),    // add x3, x3, #0x7a4
+            (0x5f8, 0x3860_4863),    // ldrb w3, [x3, w0, uxtw]
+            (0x5fc, 0x1000_0060),    // adr x0, 0x608
+            (0x600, 0x8b23_8803),    // add x3, x0, w3, sxtb #2
+        ];
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("x0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+        for (va, word) in words {
+            let address = crate::core::address::Address::new(
+                crate::core::address::AddressKind::VA,
+                va,
+                64,
+                None,
+                None,
+            )
+            .expect("instruction address");
+            let instruction = decoder
+                .disassemble_instruction(&address, &word.to_le_bytes())
+                .expect("decode real compiler instruction");
+            tracker.observe(&instruction);
+        }
+        let branch_address = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x604,
+            64,
+            None,
+            None,
+        )
+        .expect("branch address");
+        let branch = decoder
+            .disassemble_instruction(&branch_address, &0xd61f_0060u32.to_le_bytes())
+            .expect("decode br x3");
+        assert_eq!(
+            tracker.aarch64_byte_table_branch(&branch),
+            Some(Aarch64ByteTableBranch {
+                table_va: 0x7a4,
+                target_base: 0x608,
+                entry_count: Some(16),
+            })
+        );
+    }
+
+    #[test]
+    fn aarch64_wrong_scale_and_unmodelled_write_fail_closed() {
+        use crate::core::binary::Endianness;
+        use crate::core::disassembler::{Architecture, Disassembler};
+        use crate::disasm::capstone::CapstoneDisassembler;
+
+        let decoder = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("AArch64 decoder");
+        let decode = |va, word: u32| {
+            let address = crate::core::address::Address::new(
+                crate::core::address::AddressKind::VA,
+                va,
+                64,
+                None,
+                None,
+            )
+            .expect("instruction address");
+            decoder
+                .disassemble_instruction(&address, &word.to_le_bytes())
+                .expect("decode test instruction")
+        };
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("x0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+        for (va, word) in [
+            (0x5f0, 0x9000_0003),
+            (0x5f4, 0x911e_9063),
+            (0x5f8, 0x3860_4863),
+            (0x5fc, 0x1000_0060),
+            // Same ADD-extended-register form, but SXTB #1, not the table's
+            // proved #2 scale.
+            (0x600, 0x8b23_8403),
+        ] {
+            tracker.observe(&decode(va, word));
+        }
+        let branch = decode(0x604, 0xd61f_0060);
+        assert_eq!(tracker.aarch64_byte_table_branch(&branch), None);
+
+        // A generic AArch64 definition must also kill a previously tracked
+        // address even though Capstone labels its destination operand Read.
+        let mut overwritten = DispatchTracker::new();
+        overwritten.observe(&decode(0x5fc, 0x1000_0060));
+        let mut bic = ins("bic", vec![reg_read("x0"), reg_read("x0"), reg_read("x1")]);
+        bic.arch = "arm64".to_string();
+        overwritten.observe(&bic);
+        assert!(overwritten.export_addresses().is_empty());
     }
 
     /// An `Instruction` at a chosen address and length — ARM `pc` arithmetic

@@ -844,6 +844,35 @@ def test_aarch64_optimized_indirect_tail_dispatch_round_trips(tmp_path: Path) ->
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_o2_compact_signed_byte_switch_round_trips(tmp_path: Path) -> None:
+    """GCC's LDRB/SXTB branch table must contribute every dense switch arm."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only={"dense_dispatch"},
+    )
+
+    assert results["dense_dispatch"]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) -> None:
     """A terminating range guard must make the following table load portable."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
