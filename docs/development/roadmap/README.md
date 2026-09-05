@@ -125,12 +125,21 @@ as a promotion prerequisite.
 
 WP5 also now carries exact chained unsigned-guard semantics: `ja`/`jnbe`
 fallthroughs are inclusive and `jae`/`jnb` fallthroughs are exclusive. The
-Clang O2 fixture-204 adjacent-table case reaches discovery and the verified
-shadow tree with exactly seven targets and passes all 34 deterministic
-execution cases. Its legacy default remains red, so no behavioral baseline was
-rewritten; the immediate follow-on is to trace that already-typed evidence
-through the default structurer while retaining the shadow result as evidence,
-not promotion.
+Clang O2 fixture-204 adjacent-table case now reaches both the verified shadow
+tree and the production structurer with cases `0..6` plus its out-of-table
+default, no indirect placeholder, and 34/34 deterministic executions. The
+production recognizer requires SSA-transitive dependence on an unsigned
+comparison, preventing arbitrary two-way conditionals from being promoted as
+dense switch guards. All 20 fixture-204 cells and the 55 focused production
+structure tests pass. The complete 838-lane baseline-aware comparison reports
+34 older unrecorded improvements and one `rust_slice_get` regression which an
+isolated `55ab688b` A/B proves predates this increment; no regression is
+attributable to this change. This closes the production gap
+for that cell, not WP5's shared evidence-object or architecture-wide exit
+criteria. Its former unaccounted-edge diagnostic is gone, but structure
+accounting still reports the non-fatal
+`BlockDuplicated { block: 12, count: 2 }`; that ownership defect remains open
+even though the emitted program is execution-correct.
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source

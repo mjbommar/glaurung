@@ -144,7 +144,7 @@ pub fn recover_verified_with_health_and_destinations(
     let cfg = Cfg::from(lf, ssa);
     #[cfg(feature = "structure-v2-shadow")]
     {
-        let shadow = crate::ir::structure_v2::observe_cfg(&cfg, lf, ssa);
+        let shadow = crate::ir::structure_v2::observe_cfg(&cfg, lf);
         tracing::debug!(
             entry_va = format_args!("{:#x}", lf.entry_va),
             blocks = shadow.block_count,
@@ -831,6 +831,66 @@ mod tests {
         assert!(
             formal_default.is_some_and(|default| default.blocks().contains(&4)),
             "the guard/table shared target must be the formal default: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn a_dense_guarded_switch_keeps_its_out_of_table_default() {
+        // Canonical dense-table shape: the range guard's out-of-range target
+        // is not itself a table entry.  Its typed SwitchDefault edge is still
+        // part of the switch and must not be lost at function scope.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(crate::ir::types::Flag::C),
+                        op: crate::ir::types::CmpOp::Ule,
+                        lhs: Value::Reg(VReg::phys("index")),
+                        rhs: Value::Const(1),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(crate::ir::types::Flag::C),
+                        target: 0x1400,
+                        inverted: true,
+                    },
+                ],
+                vec![0x1100, 0x1400],
+            ),
+            (
+                0x1100,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1200, 0x1300],
+            ),
+            (0x1200, vec![Op::Return], vec![]),
+            (0x1300, vec![Op::Return], vec![]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover_verified(&lf, &ssa);
+        let Region::Switch {
+            guard: Some(0),
+            case_labels,
+            formal_default: Some(default),
+            ..
+        } = &region
+        else {
+            panic!("expected a dense guarded switch, got {region:#?}");
+        };
+        assert_eq!(case_labels, &[vec![0], vec![1]]);
+        assert!(default.blocks().contains(&4), "{region:#?}");
+        assert!(
+            verify_structure(&lf, &ssa).is_empty(),
+            "dense guard/default edge must remain represented: {region:#?}"
+        );
+        let cfg = Cfg::from(&lf, &ssa);
+        assert!(
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region).is_empty(),
+            "dense guarded switch must account for every typed edge: {region:#?}"
         );
     }
 

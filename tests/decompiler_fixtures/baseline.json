@@ -3359,7 +3359,7 @@
   },
   "204_adjacent_dispatch_tables:clang:O2": {
     "adt204_chained": "pass",
-    "adt204_guarded_control": "fail",
+    "adt204_guarded_control": "pass",
     "adt204_switch_a": "pass",
     "adt204_switch_b": "pass",
     "adt204_switch_c": "pass"

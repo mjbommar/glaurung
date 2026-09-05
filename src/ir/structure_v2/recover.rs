@@ -699,7 +699,7 @@ mod tests {
         let cfg = Cfg::from(&function, &ssa);
         let loops = LoopForest::from_cfg(&cfg);
         let locals = LocalRegions::from_cfg(&cfg, &loops);
-        let predicates = cfg.branch_predicates(&function, &ssa);
+        let predicates = cfg.branch_predicates();
         let conditions = ConditionDag::from_cfg(&cfg, &loops, &locals, &predicates)
             .expect("diamond condition DAG");
         let candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");

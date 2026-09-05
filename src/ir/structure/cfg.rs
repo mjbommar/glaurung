@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::ir::ssa::SsaInfo;
+use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{CmpOp, LlirFunction, Op, Value, Width};
 use crate::ir::use_def::InstrAddr;
 
@@ -61,6 +61,10 @@ pub(crate) struct Cfg {
     /// the taken arm in the `then` slot so the rendered condition polarity is
     /// correct regardless of block address ordering.
     pub(crate) cond_taken: Vec<Option<usize>>,
+    /// SSA-backed comparison semantics for each conditional block.
+    branch_predicates: Vec<Option<BranchPredicate>>,
+    /// Whether the branch condition transitively consumes an unsigned compare.
+    unsigned_guard_conditions: Vec<bool>,
     /// Whether a block ends in an explicit machine return.
     ///
     /// A successor-free block can instead end in a non-returning call, trap, or
@@ -222,13 +226,15 @@ impl Cfg {
                 |a: usize, b: usize| dom.get(a).and_then(|r| r.get(b)).copied().unwrap_or(false);
             crate::ir::cfg_edges::classify(lf, &succs, d)
         };
-        Cfg {
+        let mut cfg = Cfg {
             succs,
             case_labels,
             preds,
             dom,
             ipostdom,
             cond_taken,
+            branch_predicates: Vec::new(),
+            unsigned_guard_conditions: Vec::new(),
             ends_in_return,
             block_instruction_counts,
             explicit_dispatch,
@@ -236,16 +242,31 @@ impl Cfg {
             reaches: std::cell::OnceCell::new(),
             loop_bodies: std::cell::RefCell::new(HashMap::new()),
             header_loop_bodies: std::cell::RefCell::new(HashMap::new()),
-        }
+        };
+        (cfg.branch_predicates, cfg.unsigned_guard_conditions) =
+            cfg.derive_branch_predicates(lf, ssa);
+        cfg
     }
 
-    /// Derive exact predicate facts only when the shadow structurer asks.
-    pub(crate) fn branch_predicates(
+    /// Return the exact predicate facts derived once with the shared CFG.
+    pub(crate) fn branch_predicates(&self) -> Vec<Option<BranchPredicate>> {
+        self.branch_predicates.clone()
+    }
+
+    pub(super) fn branch_depends_on_unsigned_comparison(&self, block: usize) -> bool {
+        self.unsigned_guard_conditions
+            .get(block)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    fn derive_branch_predicates(
         &self,
         lf: &LlirFunction,
         ssa: &SsaInfo,
-    ) -> Vec<Option<BranchPredicate>> {
+    ) -> (Vec<Option<BranchPredicate>>, Vec<bool>) {
         let mut comparisons = HashMap::new();
+        let mut comparison_inputs: HashMap<SsaValue, Vec<SsaValue>> = HashMap::new();
         for (block_idx, block) in lf.blocks.iter().enumerate() {
             for (instr_idx, instruction) in block.instrs.iter().enumerate() {
                 let Op::Cmp { op, lhs, rhs, .. } = &instruction.op else {
@@ -257,11 +278,18 @@ impl Cfg {
                 };
                 if let Some(value) = ssa.def_value_ref(lf, addr) {
                     comparisons.insert(value.clone(), (*op, comparison_operand_width(lhs, rhs)));
+                    comparison_inputs.insert(
+                        value.clone(),
+                        (0..2)
+                            .filter_map(|operand| ssa.use_value_ref(lf, addr, operand).cloned())
+                            .collect(),
+                    );
                 }
             }
         }
 
         let mut predicates = vec![None; self.succs.len()];
+        let mut unsigned_guard_conditions = vec![false; self.succs.len()];
         for (block_idx, block) in lf.blocks.iter().enumerate() {
             let Some((
                 instr_idx,
@@ -277,16 +305,44 @@ impl Cfg {
                 block_idx,
                 instr_idx,
             };
-            let comparison = ssa
-                .use_value_ref(lf, addr, 0)
-                .and_then(|value| comparisons.get(value));
+            let condition = ssa.use_value_ref(lf, addr, 0);
+            let comparison = condition.and_then(|value| comparisons.get(value));
+            fn reaches_unsigned_comparison(
+                value: &SsaValue,
+                comparisons: &HashMap<SsaValue, (CmpOp, Option<Width>)>,
+                comparison_inputs: &HashMap<SsaValue, Vec<SsaValue>>,
+                seen: &mut HashSet<SsaValue>,
+            ) -> bool {
+                if !seen.insert(value.clone()) {
+                    return false;
+                }
+                if comparisons
+                    .get(value)
+                    .is_some_and(|(op, _)| matches!(op, CmpOp::Ult | CmpOp::Ule))
+                {
+                    return true;
+                }
+                comparison_inputs.get(value).is_some_and(|inputs| {
+                    inputs.iter().any(|input| {
+                        reaches_unsigned_comparison(input, comparisons, comparison_inputs, seen)
+                    })
+                })
+            }
+            unsigned_guard_conditions[block_idx] = condition.is_some_and(|value| {
+                reaches_unsigned_comparison(
+                    value,
+                    &comparisons,
+                    &comparison_inputs,
+                    &mut HashSet::new(),
+                )
+            });
             predicates[block_idx] = Some(BranchPredicate {
                 op: comparison.map(|(op, _)| *op),
                 operand_width: comparison.and_then(|(_, width)| *width),
                 inverted: *inverted,
             });
         }
-        predicates
+        (predicates, unsigned_guard_conditions)
     }
 
     /// Nearest post-dominator, exposed to the shadow tree recoverer without

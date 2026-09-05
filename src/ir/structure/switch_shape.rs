@@ -178,11 +178,12 @@ pub(super) fn detect_guarded_switch_shape(
             arms.remove(default_position);
             case_labels.remove(default_position);
         }
-        // A dense dispatch nested in a loop can bypass directly to the
-        // enclosing latch. That boundary is already proven by the loop
-        // detector; without it, accepting an arbitrary non-table default
-        // mistakes ordinary nested conditionals for range guards.
-        None if Some(default_entry) == enclosing_stop => {}
+        // A dense table has no slot for its out-of-range destination.  The
+        // typed SwitchDefault sibling and the edge to this explicit dispatch
+        // already prove the guard relationship in `is_guarded_switch_default`;
+        // requiring the destination to occur in the table as well rejects the
+        // canonical dense shape at function scope.
+        None if cfg.branch_depends_on_unsigned_comparison(guard) => {}
         None => return None,
     }
     if arms.is_empty() {
@@ -237,6 +238,16 @@ pub(super) fn detect_guarded_switch_shape(
     // shared suffix is preferable to dropping the guard's executable edge.
     let mut default_visited = HashSet::from([guard, dispatch]);
     let formal_default = Box::new(build(default_entry, cfg, &mut default_visited, join));
+    // A dense default that no explicit case can reach is owned by this switch.
+    // Commit those blocks so `build_full` does not append a second, unreachable
+    // copy as leftovers.  Shared suffixes stay borrowed: an explicit case may
+    // still need to own their continuation outside the formal default clone.
+    visited.extend(default_visited.into_iter().filter(|block| {
+        *block != guard
+            && *block != dispatch
+            && Some(*block) != join
+            && arms.iter().all(|arm| !can_reach(*arm, *block, cfg))
+    }));
 
     Some((
         Region::Switch {

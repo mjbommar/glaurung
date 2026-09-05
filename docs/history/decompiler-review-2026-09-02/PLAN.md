@@ -47,13 +47,28 @@ the accompanying documentation commit, while behavioral baselines are not
 blindly rewritten. This is not a current-tip green `release` claim. M3 through
 M6 remain open.
 
-The latest bounded WP5 slice closes chained strict unsigned guard transport.
-`ja`/`jnbe` preserve the inclusive maximum, while `jae`/`jnb` preserve the
-exclusive maximum. Clang O2 fixture 204 now discovers exactly seven typed
-targets after its one-instruction second guard, and shadow v2 passes all 34
-deterministic execution cases. The default legacy structurer remains red, so
-the behavioral baseline is intentionally unchanged. See
-`results/wp5-chained-strict-guard.md`.
+The latest bounded WP5 slice carries that exact seven-case evidence through
+the production structurer. Clang O2 fixture 204 now renders cases `0..6` plus
+the out-of-table default with no indirect-jump placeholder and passes all 34
+deterministic execution cases. Production accepts that dense shape only when
+SSA proves that the guard condition transitively consumes an unsigned
+comparison; this excludes lookalike conditionals that lack range-proof
+semantics. All 20 fixture-204 cells and the 55 production-structurer tests
+pass. The required full Rust gate is green at this increment's exact source:
+its library target reports 4,091 passed, 0 failed, and 5 ignored, and every
+integration and documentation target also passed. The complete 838-lane
+harness emits 2,950 pass, 378 known fail, 121
+structural, zero missing, zero no-case, and zero infrastructure lanes. Its
+baseline-aware comparison reports 34 older unrecorded improvements and one
+`rust_slice_get` regression; an isolated clean-`55ab688b` A/B reproduces that
+failure with identical output, proving it predates this increment. The fixture
+204 improvement is recorded by changing this cell's baseline from `fail` to
+`pass`. See `results/wp5-production-dense-guarded-switch.md`; the
+earlier shadow-only boundary in `results/wp5-chained-strict-guard.md` is now
+superseded for this cell. WP5 is not complete: the real fixture's remaining
+non-fatal accounting diagnostic is `BlockDuplicated { block: 12, count: 2 }`.
+The former `EdgeUnaccounted` diagnostic is gone and execution is correct, but
+the duplicate ownership still needs repair rather than suppression.
 
 ## Authority and relationship to the roadmaps
 
@@ -872,6 +887,17 @@ one authoritative set of case edges.
   its terminating case borrows the shared return epilogue without taking global
   ownership. The former strict xfail is green with no goto or indirect-jump
   placeholder.
+  The Clang O2 `204::adt204_guarded_control` lane now also reaches the ordinary
+  production structurer as cases `0..6` plus the out-of-table default, with no
+  indirect-jump placeholder. Acceptance requires SSA-transitive dependence on
+  an unsigned comparison, rather than treating every nearby conditional as a
+  range guard. All 20 fixture-204 cells pass. The complete 838-lane comparison
+  has no regression attributable to this increment; its one reported
+  `rust_slice_get` regression reproduces identically at clean `55ab688b`, and
+  the remaining 34 movements are older unrecorded improvements.
+  Structure accounting no longer reports an unaccounted edge, but still emits
+  `BlockDuplicated { block: 12, count: 2 }` for this real fixture. That
+  non-fatal ownership defect remains open despite execution-correct output.
   Other compiler/optimization and named fixture lanes remain.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
@@ -886,9 +912,11 @@ one authoritative set of case edges.
   same explicit execution evidence before WP5 can complete. The pinned
   clang-14 `statemachine::fsm` default-v1 path now also recompiles and matches
   the original across 64 deterministic fuzz inputs. The Clang O2
-  `204::adt204_guarded_control` shadow-v2 path now likewise passes all 34
-  deterministic cases after exact strict-guard transport. Its default-v1 cell
-  remains `fail`, and its baseline is deliberately unchanged.
+  `204::adt204_guarded_control` now passes all 34 deterministic cases through
+  both the independently verified shadow-v2 path and the production default
+  path. Its production baseline is updated from `fail` to `pass` after the full
+  838-lane comparison and an isolated old-tip A/B proved its sole reported
+  regression predates this increment.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
@@ -2043,10 +2071,12 @@ relevant ratchet's accepted-regression record.
    the remaining fixture/compiler/architecture execution cells and classify
    every residual decline. Malformed, truncated, overlapping, and wrapping
    table safety tests and the new chained inclusive/exclusive guard tests are
-   already present and must remain green. Fixture 204's Clang O2 discovery and
-   shadow execution are closed; next isolate why its exact seven-case evidence
-   still disappears in the default legacy structurer, without changing the
-   baseline until that default path passes execution.
+   already present and must remain green. Fixture 204's Clang O2 seven-case
+   evidence now reaches the production structurer, passes all 34 execution
+   cases, and has moved its baseline from `fail` to `pass`; the remaining work
+   includes removing its remaining `BlockDuplicated { block: 12, count: 2 }`
+   accounting diagnostic, building the shared evidence object, and closing the
+   unverified compiler/architecture cells.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

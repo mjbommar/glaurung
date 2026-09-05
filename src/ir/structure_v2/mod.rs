@@ -68,21 +68,17 @@ pub struct ShadowReport {
 /// Analyze one function beside v1 without influencing its selected region.
 pub fn observe(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
     let cfg = crate::ir::structure::Cfg::from(lf, ssa);
-    observe_cfg(&cfg, lf, ssa)
+    observe_cfg(&cfg, lf)
 }
 
 /// Observe the exact typed graph already built for production v1.
-pub(crate) fn observe_cfg(
-    cfg: &crate::ir::structure::Cfg,
-    lf: &LlirFunction,
-    ssa: &SsaInfo,
-) -> ShadowReport {
+pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg, lf: &LlirFunction) -> ShadowReport {
     let block_count = cfg.succs.len();
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
     let loops = LoopForest::from_cfg(cfg);
     let local_regions = LocalRegions::from_cfg(cfg, &loops);
     let duplicated_tails = cleanup::plan_tail_duplication(cfg, &local_regions);
-    let branch_predicates = cfg.branch_predicates(lf, ssa);
+    let branch_predicates = cfg.branch_predicates();
     match ConditionDag::from_cfg(cfg, &loops, &local_regions, &branch_predicates) {
         Ok(conditions) => {
             let candidate = RegionCandidate::from_cfg(cfg, &loops, &local_regions);
@@ -1085,7 +1081,41 @@ mod tests {
             "jae fallthrough is selector < 7, so the adjacent table has seven entries"
         );
 
-        let report = observe(&lifted, &compute_ssa(&lifted));
+        let ssa = compute_ssa(&lifted);
+        let production = crate::ir::structure::recover_verified(&lifted, &ssa);
+        fn production_switch(
+            region: &crate::ir::structure::Region,
+        ) -> Option<(&[Vec<i64>], Option<&crate::ir::structure::Region>)> {
+            use crate::ir::structure::Region;
+            match region {
+                Region::Switch {
+                    case_labels,
+                    formal_default,
+                    ..
+                } => Some((case_labels, formal_default.as_deref())),
+                Region::Seq(parts) => parts.iter().find_map(production_switch),
+                Region::IfThen { then_r, .. } => production_switch(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    production_switch(then_r).or_else(|| production_switch(else_r))
+                }
+                Region::While { body, .. }
+                | Region::DoWhile { body, .. }
+                | Region::MultiExitLoop { body, .. } => production_switch(body),
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => None,
+            }
+        }
+        let (production_labels, production_default) = production_switch(&production)
+            .unwrap_or_else(|| panic!("production must retain the dense switch: {production:#?}"));
+        assert_eq!(
+            production_labels,
+            &(0..7).map(|case| vec![case]).collect::<Vec<_>>()
+        );
+        assert!(production_default.is_some(), "{production:#?}");
+
+        let report = observe(&lifted, &ssa);
         let candidate = report
             .candidate
             .as_ref()
