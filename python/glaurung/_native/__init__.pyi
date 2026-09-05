@@ -20,6 +20,7 @@ from . import engine as engine
 from . import ir as ir
 from . import metrics as metrics
 from . import similarity as similarity
+from . import source as source
 from . import strings as strings
 from . import symbols as symbols
 from . import triage as triage

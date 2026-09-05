@@ -16,5 +16,6 @@ pub mod equiv;
 pub mod joern;
 pub mod lex;
 pub mod lower;
+pub mod metrics;
 pub mod normalize;
 pub mod parse;

@@ -35,6 +35,7 @@ pub mod event;
 pub mod ged;
 pub mod ids;
 pub mod intern;
+pub mod metrics;
 pub mod recover;
 pub mod scan;
 pub mod source;

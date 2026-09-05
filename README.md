@@ -23,6 +23,11 @@ behavior.
 - C-like pseudocode through a developing LLIR/SSA/AST pipeline.
 - Persistent `.glaurung` project databases for names, comments, labels, types,
   prototypes, xrefs, stack variables, bookmarks, and journal entries.
+- A pure-Rust C source front end, with per-function complexity, nesting, size
+  and Halstead metrics through `glaurung.source` and `glaurung source-metrics`.
+  No JVM and no subprocess, and no input raises: a file that only partly parses
+  reports the functions it did recover. See
+  [source metrics](docs/reference/source-metrics.md).
 - A CLI and Python API for scripting, plus optional PydanticAI agents for
   question answering, naming, vulnerability review, and source recovery.
 

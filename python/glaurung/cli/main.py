@@ -83,6 +83,12 @@ _REGISTRY: dict[str, tuple[str, str, str, str]] = {
     "locks": ("locks", "LocksCommand", "", "TriageFormatter"),
     "group": ("group", "GroupCommand", "", "TriageFormatter"),
     "sigs": ("sigs", "SigsCommand", "", "TriageFormatter"),
+    "source-metrics": (
+        "source_metrics",
+        "SourceMetricsCommand",
+        "",
+        "TriageFormatter",
+    ),
 }
 
 

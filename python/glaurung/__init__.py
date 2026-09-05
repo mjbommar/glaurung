@@ -407,6 +407,14 @@ __all__ += [
 # unimported submodule is indistinguishable there from a missing front end.
 from . import source_cfg as source_cfg
 
+# The C source metrics. Imported eagerly so that `import glaurung` alone makes
+# `glaurung.source.analyze(code)` work, which is the shape the API is
+# documented in. It costs one module that imports `pathlib` and the extension
+# and nothing else -- measured in `test_cli_startup_is_lazy.py`'s terms, it
+# loads no third-party package at all.
+from . import source as source
+
 __all__ += [
+    "source",
     "source_cfg",
 ]

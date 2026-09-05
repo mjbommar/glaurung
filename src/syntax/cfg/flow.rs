@@ -207,6 +207,30 @@ impl NodeKind {
     pub fn is_anchor(self) -> bool {
         matches!(self, NodeKind::Entry | NodeKind::Exit)
     }
+
+    /// This kind's stable name, for a census a caller reads or serializes.
+    ///
+    /// Stable is the operative word: these strings are keys in
+    /// [`crate::syntax::metrics::GraphMetrics::node_kinds`], which reaches
+    /// Python and JSON, so renaming one is a breaking change to a consumer
+    /// rather than a cosmetic edit.
+    pub const fn name(self) -> &'static str {
+        match self {
+            NodeKind::Entry => "entry",
+            NodeKind::Exit => "exit",
+            NodeKind::Stmt => "stmt",
+            NodeKind::Cond => "cond",
+            NodeKind::LoopHeader => "loop_header",
+            NodeKind::Switch => "switch",
+            NodeKind::Case => "case",
+            NodeKind::Label => "label",
+            NodeKind::Goto => "goto",
+            NodeKind::Break => "break",
+            NodeKind::Continue => "continue",
+            NodeKind::Return => "return",
+            NodeKind::Diverge => "diverge",
+        }
+    }
 }
 
 /// Why control moves along a [`CfgEdge`].
@@ -232,6 +256,22 @@ pub enum EdgeKind {
     FallThrough,
     /// An explicit transfer: `goto`, `break`, `continue`, `return`.
     Jump,
+}
+
+impl EdgeKind {
+    /// This kind's stable name, under the same contract as
+    /// [`NodeKind::name`]: it is a serialized census key, not a display label.
+    pub const fn name(self) -> &'static str {
+        match self {
+            EdgeKind::Fall => "fall",
+            EdgeKind::True => "true",
+            EdgeKind::False => "false",
+            EdgeKind::Case => "case",
+            EdgeKind::Default => "default",
+            EdgeKind::FallThrough => "fall_through",
+            EdgeKind::Jump => "jump",
+        }
+    }
 }
 
 /// One node of a [`Cfg`], carrying every span that was coalesced into it.

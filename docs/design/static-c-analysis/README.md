@@ -85,6 +85,25 @@ anything that would make Glaurung a compiler. The layering in
 end could be added later without touching the CFG or lowering layers, but no
 second language is planned.
 
+## What the front end already carries beyond the metric
+
+Point 5 above — "the payoff is not the metric" — has a first instalment that
+does not wait for stage S5. The same parse, the same CFG and the same token
+buffer answer questions about a *single* piece of C, which none of the four
+comparison metrics can: cyclomatic and cognitive complexity, nesting, loop
+depth, Halstead, statement and node censuses, dead-statement detection, a call
+graph, and a fixed-width feature vector. That surface is
+[`docs/reference/source-metrics.md`](../../reference/source-metrics.md),
+implemented in [`src/csource/metrics/`](../../../src/csource/metrics/mod.rs)
+over the language-neutral half in
+[`src/syntax/metrics.rs`](../../../src/syntax/metrics.rs), and exposed as
+`glaurung.source` and `glaurung source-metrics`.
+
+It is computed on `csource::cfg` and never on `csource::joern`, for the reason
+[architecture.md](architecture.md) §1 gives: a cyclomatic number taken from the
+parity graph would reproduce a JVM program's expression granularity rather than
+measure the source.
+
 ## Related
 
 * [`development/decompiler-testing.md`](../../development/decompiler-testing.md)
