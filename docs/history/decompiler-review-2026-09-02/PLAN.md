@@ -10,8 +10,8 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-05 through implementation commit
-`9fed7199` and oracle commit `41af392d`. WP0 and
+Current-state snapshot: reconciled 2026-09-05 through homogeneous-float
+behavioral commit `db750dbc` and baseline/census commit `1bee3fb1`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
@@ -1057,9 +1057,17 @@ Required regression coverage is equally part of completion:
   `41af392d` then preserve register-resident INTEGER+SSE results and stop the
   differential oracle from comparing indeterminate aggregate padding. Fixtures
   `195` and `198` are now entirely pass or intentionally structural across the
-  scoped host matrix; the O2 HFA cases in `197` remain open. See
+  scoped host matrix. Commits `cf9160ba`, `fe50a360`, `3f4f12fe`, and
+  `db750dbc` close all nine former O2 HFA failures in `197`: declared
+  `xmm0:xmm1` results are materialized all-or-nothing, exact direct-call
+  contracts permit clobber-free pair forwarding, bounded legacy packed-XMM
+  instructions retain their lane semantics, packed dword concatenation widens
+  before shifting, and proved aggregate materialization prevents cross-bank
+  scratch identities from collapsing into one cosmetic return name. The full
+  four-lane fixture now has every non-structural row passing. See
   `results/wp6-sysv-hidden-return-buffers.md` and
-  `results/wp6-sysv-split-bank-returns.md`.
+  `results/wp6-sysv-split-bank-returns.md` and
+  `results/wp6-sysv-sse-pair-returns.md`.
 - [x] `python/tests/test_decompiler_observable_parameter_width.py`.
 - [x] Stripped-lane tests to prove improvements do not depend on debug types.
 - [ ] Solver unit tests for conflicts, ambiguity, and deterministic ordering.
@@ -2004,11 +2012,14 @@ relevant ratchet's accepted-regression record.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
-   result-buffer, and split INTEGER+SSE return slices. Next, recover the O2
-   homogeneous-float aggregate helpers and wrappers in fixture `197` as
-   independently tested ABI constraints without waiting for the full solver.
-   Keep Rust totals separate and do not generalize the SysV evidence to
-   unsupported architectures or language ABIs.
+   result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
+   Fixture `197` is now closed across its four host lanes: all non-structural
+   helpers and wrappers pass, with nine former O2 failures removed and no
+   adjacent aggregate regression in fixtures `195` or `198`. Next, add the
+   general equality, pointer, pointee, aggregate, call, confidence, and stable-
+   value constraints rather than extending fixture-specific ABI adapters.
+   Keep Rust totals separate and do not generalize the SysV/x86 evidence to
+   unsupported architectures, vector forms, or language ABIs.
 8. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.

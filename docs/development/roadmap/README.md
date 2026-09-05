@@ -126,7 +126,12 @@ as a promotion prerequisite.
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
 to machine-ABI boundaries, and float-valued call rendering all have bounded
-fixture evidence in the review plan. WP8 has authoritative DWARF/PDB/analyst
+fixture evidence in the review plan. The bounded SysV AMD64 homogeneous-float
+slice is also closed: all non-structural rows in fixture 197 pass across
+GCC/Clang O0/O2 after exact SSE-pair return materialization, contract-proved
+tail forwarding, and the required legacy packed-XMM semantics. This does not
+complete WP6's general constraint solver or establish other architecture,
+vector, or language-ABI support. WP8 has authoritative DWARF/PDB/analyst
 declaration slices and now owns their total priority order in the program
 environment; authoritative tagged PDB pointers also retain their nominal type
 instead of degrading to `void *`. The same real PDB fixture no longer turns
