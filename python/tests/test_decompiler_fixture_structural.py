@@ -694,7 +694,7 @@ def test_classify_clang_o2_recovers_signed_relations_without_flag_locals(
 
     assert "sf_" not in result.stdout, result.stdout
     assert "of_" not in result.stdout, result.stdout
-    assert "arg0 < arg1" in result.stdout, result.stdout
+    assert "a < b" in result.stdout, result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
