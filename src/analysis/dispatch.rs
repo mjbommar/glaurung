@@ -92,10 +92,18 @@ enum Val {
     /// It is per-value rather than per-register for the same reason the whole
     /// `bounded` map exists: `sub $0x8,%rsp` in a prologue must never supply an
     /// extent to the next dispatch it happens to precede.
-    TableOffset { table: u64, bound: Option<u64> },
+    TableOffset {
+        table: u64,
+        target_base: u64,
+        bound: Option<u64>,
+    },
     /// `table + (i32)*(table + idx*4)` — a dispatch target. Jumping through this
     /// register reaches exactly the table's entries.
-    TableTarget { table: u64, bound: Option<u64> },
+    TableTarget {
+        table: u64,
+        target_base: u64,
+        bound: Option<u64>,
+    },
     /// One signed byte loaded from an AArch64 compact branch table.
     Aarch64ByteOffset { table: u64, bound: Option<u64> },
     /// `target_base + sign_extend(table[index]) * 4` immediately before `br`.
@@ -443,6 +451,15 @@ impl DispatchTracker {
         self.regs.insert(canon(reg), v);
     }
 
+    /// Record an address materialised by an externally proved machine idiom.
+    ///
+    /// The CFG owns image access, so it recognizes i386 PC-thunk bodies and
+    /// supplies the exact return address here instead of teaching this
+    /// instruction-only interpreter to parse object files.
+    pub(crate) fn materialize_address(&mut self, reg: &str, address: u64) {
+        self.set(reg, Val::Addr(address));
+    }
+
     fn clear(&mut self, reg: &str) {
         self.regs.remove(canon_ref(reg).as_ref());
     }
@@ -480,19 +497,23 @@ impl DispatchTracker {
     /// * GCC -O0: `[scaled_index + table_base]`, after
     ///   `scaled_index = bounded_index*4`
     ///
-    /// The displacement must be zero and the total index scale exactly four;
-    /// broader address arithmetic is not enough evidence for a relative-offset
-    /// jump table.
-    fn table_load_on_entry(&self, ins: &Instruction) -> Option<(u64, Option<u64>)> {
+    /// The total index scale must be exactly four. A displacement is accepted
+    /// only as the checked difference between the tracked target base and the
+    /// table address; this is GCC i386 PIC's GOT-relative table spelling.
+    fn table_load_on_entry(&self, ins: &Instruction) -> Option<(u64, u64, Option<u64>)> {
         let memory = ins
             .operands
             .iter()
             .find(|operand| operand.displacement.is_some())?;
-        if memory.displacement != Some(0) {
-            return None;
-        }
-
-        let mut table = None;
+        let displacement = memory.displacement?;
+        let displacement = if ins.arch.eq_ignore_ascii_case("x86")
+            && (0..=i64::from(u32::MAX)).contains(&displacement)
+        {
+            i64::from(displacement as u32 as i32)
+        } else {
+            displacement
+        };
+        let mut target_base = None;
         let mut index_bound = None;
         let mut components = Vec::with_capacity(2);
         if let Some(base) = memory.base.as_deref().filter(|base| *base != "rip") {
@@ -503,8 +524,8 @@ impl DispatchTracker {
         }
         for (register, address_scale) in components {
             match self.get(register) {
-                Some(Val::Addr(address)) if address_scale == 1 && table.is_none() => {
-                    table = Some(address);
+                Some(Val::Addr(address)) if address_scale == 1 && target_base.is_none() => {
+                    target_base = Some(address);
                 }
                 Some(Val::ScaledIndex { bound, scale })
                     if address_scale.checked_mul(scale) == Some(4) && index_bound.is_none() =>
@@ -517,7 +538,9 @@ impl DispatchTracker {
                 _ => {}
             }
         }
-        Some((table?, index_bound?))
+        let target_base = target_base?;
+        let table = target_base.checked_add_signed(displacement)?;
+        Some((table, target_base, index_bound?))
     }
 
     fn fresh_value(&mut self) -> u64 {
@@ -985,21 +1008,64 @@ impl DispatchTracker {
             // read. The index is deliberately not tracked: every entry is a
             // possible outcome, which is exactly the successor set we want.
             "movslq" | "movsxd" | "movsx" => match table_load_on_entry {
-                Some((table, bound)) => self.set(dest, Val::TableOffset { table, bound }),
+                Some((table, target_base, bound)) => self.set(
+                    dest,
+                    Val::TableOffset {
+                        table,
+                        target_base,
+                        bound,
+                    },
+                ),
                 _ => self.clear(dest),
             },
             // offset + base == target. Either operand order.
             "add" => {
+                if let Some((table, target_base, bound)) = table_load_on_entry {
+                    if self.get(dest) == Some(Val::Addr(target_base)) {
+                        self.set(
+                            dest,
+                            Val::TableTarget {
+                                table,
+                                target_base,
+                                bound,
+                            },
+                        );
+                        return;
+                    }
+                }
                 let src = ins.operands.get(1).and_then(|o| o.register.as_deref());
                 let dv = self.get(dest);
                 let sv = src.and_then(|s| self.get(s));
-                match (dv, sv) {
-                    (Some(Val::TableOffset { table: a, bound }), Some(Val::Addr(b)))
-                    | (Some(Val::Addr(b)), Some(Val::TableOffset { table: a, bound }))
-                        if a == b =>
-                    {
-                        self.set(dest, Val::TableTarget { table: a, bound })
+                if let (Some(Val::Addr(address)), Some(delta)) = (dv.clone(), imm1) {
+                    if let Some(materialized) = address.checked_add_signed(delta) {
+                        self.set(dest, Val::Addr(materialized));
+                        return;
                     }
+                }
+                match (dv, sv) {
+                    (
+                        Some(Val::TableOffset {
+                            table,
+                            target_base,
+                            bound,
+                        }),
+                        Some(Val::Addr(base)),
+                    )
+                    | (
+                        Some(Val::Addr(base)),
+                        Some(Val::TableOffset {
+                            table,
+                            target_base,
+                            bound,
+                        }),
+                    ) if target_base == base => self.set(
+                        dest,
+                        Val::TableTarget {
+                            table,
+                            target_base,
+                            bound,
+                        },
+                    ),
                     _ => self.clear(dest),
                 }
             }
@@ -1009,8 +1075,15 @@ impl DispatchTracker {
                 // immediate is kept as a candidate address so non-PIC tables,
                 // which name the table with a plain `mov`, still resolve.
                 let src = ins.operands.get(1);
-                if let Some((table, bound)) = table_load_on_entry {
-                    self.set(dest, Val::TableOffset { table, bound });
+                if let Some((table, target_base, bound)) = table_load_on_entry {
+                    self.set(
+                        dest,
+                        Val::TableOffset {
+                            table,
+                            target_base,
+                            bound,
+                        },
+                    );
                 } else if let Some(v) = src
                     .and_then(|o| o.register.as_deref())
                     .and_then(|r| self.get(r))
@@ -1203,7 +1276,7 @@ impl DispatchTracker {
         ins: &Instruction,
         tables: &BTreeMap<u64, Vec<u64>>,
     ) -> Option<Resolution> {
-        self.resolve_with(ins, tables, |_table, _entry_count| {
+        self.resolve_with(ins, tables, |_table, _target_base, _entry_count| {
             Err(crate::analysis::jump_table::TableDecline::DecodeNotAttempted)
         })
     }
@@ -1221,11 +1294,15 @@ impl DispatchTracker {
         decode_bounded: F,
     ) -> Option<Resolution>
     where
-        F: FnOnce(u64, usize) -> Result<Vec<u64>, crate::analysis::jump_table::TableDecline>,
+        F: FnOnce(u64, u64, usize) -> Result<Vec<u64>, crate::analysis::jump_table::TableDecline>,
     {
         let reg = ins.operands.first()?.register.as_deref()?;
         Some(match self.get(reg) {
-            Some(Val::TableTarget { table, bound }) => match bound {
+            Some(Val::TableTarget {
+                table,
+                target_base,
+                bound,
+            }) => match bound {
                 // The scan cannot see where a table ends; the guard can. Without a
                 // guard there is NO safe entry count, so this fails closed.
                 //
@@ -1259,7 +1336,7 @@ impl DispatchTracker {
                         .map(<[u64]>::to_vec);
                     match scanned
                         .ok_or(())
-                        .or_else(|()| decode_bounded(table, entry_count))
+                        .or_else(|()| decode_bounded(table, target_base, entry_count))
                     {
                         Ok(targets) => Resolution::Table {
                             table_va: table,
@@ -2477,6 +2554,43 @@ mod tests {
                 targets: vec![0x112e, 0x113a, 0x1146, 0x1152],
             })
         );
+    }
+
+    /// GCC i386 PIC keeps one GOT base distinct from the displaced table
+    /// address and folds the load-plus-add into one instruction.
+    #[test]
+    fn the_i386_got_relative_add_memory_dispatch_preserves_both_bases() {
+        let mut t = DispatchTracker::new();
+        t.materialize_address("eax", 0x1155);
+        t.observe(&ins("add", vec![reg_op("eax"), imm_op(0x2e9f)]));
+        t.observe(&ins("cmp", vec![reg_op("edx"), imm_op(15)]));
+        let mut table_add = ins(
+            "add",
+            vec![
+                reg_op("eax"),
+                // iced exposes the encoded negative i386 disp32 as unsigned.
+                mem_op(Some("eax"), 0xffff_e00c, Some("edx")),
+            ],
+        );
+        table_add.arch = "x86".to_string();
+        t.observe(&table_add);
+        let result = t.resolve_with(
+            &ins("jmp", vec![reg_read("eax")]),
+            &BTreeMap::new(),
+            |table, target_base, count| {
+                assert_eq!(table, 0x2000);
+                assert_eq!(target_base, 0x3ff4);
+                assert_eq!(count, 16);
+                Ok(vec![0x1100; count])
+            },
+        );
+        assert!(matches!(
+            result,
+            Some(Resolution::Table {
+                table_va: 0x2000,
+                targets,
+            }) if targets.len() == 16
+        ));
     }
 
     /// The block walker observes every decoded instruction *including the

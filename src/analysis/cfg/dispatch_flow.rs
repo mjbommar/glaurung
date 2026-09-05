@@ -23,6 +23,41 @@
 
 use super::*;
 
+/// Observe one instruction plus the image-backed i386 PC-thunk fact it may
+/// materialise.
+///
+/// The abstract interpreter intentionally has no object-file access. The CFG
+/// already owns the indexed image, so it proves the exact four-byte thunk body
+/// here and supplies only the resulting `register = return_address` fact.
+pub(super) fn observe_dispatch_instruction(
+    tracker: &mut crate::analysis::dispatch::DispatchTracker,
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+    bits: u8,
+    instruction: &Instruction,
+    instruction_va: u64,
+) {
+    tracker.observe(instruction);
+    if arch != BArch::X86 || bits != 32 || !instruction.mnemonic.eq_ignore_ascii_case("call") {
+        return;
+    }
+    let Some(target) = immediate_target(instruction) else {
+        return;
+    };
+    let Some(offset) = indexed_code_offset(image, data, target) else {
+        return;
+    };
+    let Some(body) = data.get(offset..offset.saturating_add(4)) else {
+        return;
+    };
+    let Some(register) = crate::target::x86_pc_thunk_register(body) else {
+        return;
+    };
+    let return_address = instruction_va.saturating_add(u64::from(instruction.length));
+    tracker.materialize_address(register, return_address);
+}
+
 /// Merge one predecessor's concrete address facts into a block input.
 ///
 /// The first predecessor establishes the candidate map; later predecessors can
@@ -237,7 +272,15 @@ pub(super) fn replay_dispatch_block(
                     tracker.kill_register(defined);
                 }
             }
-            tracker.observe(instruction);
+            observe_dispatch_instruction(
+                &mut tracker,
+                image,
+                data,
+                arch,
+                bits,
+                instruction,
+                cur_va,
+            );
             if stop_at == Some(cur_va) {
                 return Some((tracker, Some(instruction.clone())));
             }
@@ -269,7 +312,7 @@ pub(super) fn replay_dispatch_block(
                 tracker.kill_register(defined);
             }
         }
-        tracker.observe(&instruction);
+        observe_dispatch_instruction(&mut tracker, image, data, arch, bits, &instruction, cur_va);
         if stop_at == Some(cur_va) {
             return Some((tracker, Some(instruction)));
         }

@@ -181,6 +181,32 @@ pub fn decode_bounded_relative_jump_table<F>(
 where
     F: Fn(u64) -> bool,
 {
+    decode_bounded_relative_jump_table_from_base(
+        image,
+        data,
+        table_va,
+        table_va,
+        entry_count,
+        is_executable_va,
+    )
+}
+
+/// Decode a relative-offset table whose entries are relative to `target_base`.
+///
+/// Most 64-bit tables use the table itself as the base. GCC i386 PIC instead
+/// keeps the GOT base in a register, reads the table at a negative displacement
+/// from it, and adds every stored offset back to that GOT base.
+pub fn decode_bounded_relative_jump_table_from_base<F>(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    table_va: u64,
+    target_base: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Result<JumpTable, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
     if entry_count == 0 {
         return Err(TableDecline::ZeroEntries);
     }
@@ -214,9 +240,10 @@ where
             else {
                 continue;
             };
-            match decode_relative_entries(
+            match decode_relative_entries_from_base(
                 entries,
                 table_va,
+                target_base,
                 entry_count,
                 little_endian,
                 &is_executable_va,
@@ -243,9 +270,10 @@ where
         let Some(entries) = section_entries(span.address, span.bytes, table_va, byte_count) else {
             continue;
         };
-        match decode_relative_entries(
+        match decode_relative_entries_from_base(
             entries,
             table_va,
+            target_base,
             entry_count,
             little_endian,
             &is_executable_va,
@@ -635,9 +663,31 @@ where
     Ok(targets)
 }
 
+#[cfg(test)]
 fn decode_relative_entries<F>(
     bytes: &[u8],
     table_va: u64,
+    entry_count: usize,
+    little_endian: bool,
+    is_executable_va: &F,
+) -> Result<Vec<u64>, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    decode_relative_entries_from_base(
+        bytes,
+        table_va,
+        table_va,
+        entry_count,
+        little_endian,
+        is_executable_va,
+    )
+}
+
+fn decode_relative_entries_from_base<F>(
+    bytes: &[u8],
+    table_va: u64,
+    target_base: u64,
     entry_count: usize,
     little_endian: bool,
     is_executable_va: &F,
@@ -665,7 +715,7 @@ where
         } else {
             i32::from_be_bytes(bytes)
         };
-        let target = table_va
+        let target = target_base
             .checked_add_signed(i64::from(raw))
             .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
         if !is_executable_va(target) {
@@ -961,6 +1011,28 @@ mod tests {
             }),
             Err(TableDecline::TargetArithmeticOverflow { index: 0 }),
             "a malformed negative offset must not wrap above the address space"
+        );
+    }
+
+    #[test]
+    fn relative_entries_can_use_a_distinct_checked_target_base() {
+        let table_va = 0x2000;
+        let target_base = 0x3ff4;
+        let targets = [0x1150u64, 0x1180];
+        let entries: Vec<u8> = targets
+            .into_iter()
+            .flat_map(|target| ((target as i64 - target_base as i64) as i32).to_le_bytes())
+            .collect();
+        assert_eq!(
+            decode_relative_entries_from_base(
+                &entries,
+                table_va,
+                target_base,
+                targets.len(),
+                true,
+                &|target| (0x1000..0x1400).contains(&target),
+            ),
+            Ok(targets.to_vec())
         );
     }
 

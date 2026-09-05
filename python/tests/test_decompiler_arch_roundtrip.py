@@ -873,6 +873,38 @@ def test_aarch64_o2_compact_signed_byte_switch_round_trips(tmp_path: Path) -> No
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_i386_o2_got_relative_switches_round_trip(tmp_path: Path) -> None:
+    """GCC i386 PIC offsets are relative to the GOT base, not their table."""
+    if shutil.which(A.TARGETS["i386"].cc) is None or shutil.which("qemu-i386") is None:
+        pytest.skip("32-bit gcc multilib and qemu-i386 are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-i386-O2.so"
+    ok, error = A._cross_build("i386", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dense_dispatch", "dispatch_in_loop"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="i386:O2",
+        native_cc=A.native_cc("i386"),
+        only=functions,
+    )
+
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) -> None:
     """A terminating range guard must make the following table load portable."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:

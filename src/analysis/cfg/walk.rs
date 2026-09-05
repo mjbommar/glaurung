@@ -276,7 +276,15 @@ pub(super) fn discover_function(
                     dispatch.kill_register(defined);
                 }
             }
-            dispatch.observe(&ins);
+            observe_dispatch_instruction(
+                &mut dispatch,
+                facts.image,
+                data,
+                arch,
+                bits,
+                &ins,
+                cur_va,
+            );
             let end_va = cur_va.saturating_add(ins.length as u64);
             if is_code_padding_terminator(&ins.mnemonic, arch) {
                 blocks.insert(start_va, (end_va, instrs));

@@ -2,6 +2,30 @@
 
 use super::TargetId;
 
+/// Register filled by a 32-bit x86 PIC PC-thunk body.
+///
+/// GCC emits `mov reg, [esp]; ret` helpers because i386 has no PC-relative
+/// addressing mode. Match the bytes rather than a symbol so stripped binaries
+/// retain the same machine fact. Writing `esp` is deliberately rejected.
+pub fn x86_pc_thunk_register(body: &[u8]) -> Option<&'static str> {
+    let [0x8b, modrm, 0x24, 0xc3, ..] = body else {
+        return None;
+    };
+    if modrm & 0xc7 != 0x04 {
+        return None;
+    }
+    match (modrm >> 3) & 7 {
+        0 => Some("eax"),
+        1 => Some("ecx"),
+        2 => Some("edx"),
+        3 => Some("ebx"),
+        4 => None,
+        5 => Some("ebp"),
+        6 => Some("esi"),
+        _ => Some("edi"),
+    }
+}
+
 /// Register spellings that implement architectural roles for one target.
 ///
 /// Lists include accepted aliases in canonical-first order. They are target

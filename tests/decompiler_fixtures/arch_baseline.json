@@ -733,7 +733,7 @@
   },
   "04_switch_shapes:i386:O2": {
     "default_dominant": "pass",
-    "dense_compute": "fail",
+    "dense_compute": "pass",
     "dense_jumptable": "pass",
     "explicit_fallthrough": "pass",
     "fallthrough_chain": "pass",
@@ -1190,7 +1190,7 @@
   "08_indirect_dispatch:i386:O2": {
     "apply": "structural",
     "dispatch": "fail",
-    "dispatch_switch": "fail",
+    "dispatch_switch": "pass",
     "tail_dispatch": "fail"
   },
   "08_indirect_dispatch:x86_64:O0": {
@@ -3401,7 +3401,7 @@
     "total_weight": "pass"
   },
   "126_x_macros:i386:O2": {
-    "apply_opcode": "fail",
+    "apply_opcode": "pass",
     "opcode_weight": "fail",
     "total_weight": "pass"
   },
@@ -5393,7 +5393,7 @@
     "big151_flat_cascade": "pass"
   },
   "151_wide_branch_ladder:i386:O2": {
-    "big151_branch_ladder": "fail",
+    "big151_branch_ladder": "pass",
     "big151_flat_cascade": "pass"
   },
   "151_wide_branch_ladder:x86_64:O0": {
@@ -7539,7 +7539,7 @@
   },
   "186_defaultless_guarded_switch:i386:O2": {
     "dense_no_default": "pass",
-    "fallthrough_no_default": "fail",
+    "fallthrough_no_default": "pass",
     "loop_switch_no_default": "pass",
     "returning_arms_no_default": "pass",
     "sparse_no_default": "pass"
@@ -9531,7 +9531,7 @@
   },
   "204_adjacent_dispatch_tables:i386:O2": {
     "adt204_chained": "pass",
-    "adt204_guarded_control": "fail",
+    "adt204_guarded_control": "pass",
     "adt204_switch_a": "fail",
     "adt204_switch_b": "fail",
     "adt204_switch_c": "fail"
@@ -9684,8 +9684,8 @@
     "sparse_dispatch": "pass"
   },
   "206_aarch64_wide_dispatch:i386:O2": {
-    "dense_dispatch": "fail",
-    "dispatch_in_loop": "fail",
+    "dense_dispatch": "pass",
+    "dispatch_in_loop": "pass",
     "sparse_dispatch": "pass"
   },
   "206_aarch64_wide_dispatch:x86_64:O0": {

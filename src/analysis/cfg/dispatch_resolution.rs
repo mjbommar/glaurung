@@ -130,10 +130,15 @@ pub(super) fn resolve_dispatch(
             },
         );
     }
-    tracker.resolve_with(instruction, tables, |table_va, entry_count| {
-        decode_bounded_relative_jump_table(image, data, table_va, entry_count, |target| {
-            in_exec_regions(regions, target).is_some()
-        })
+    tracker.resolve_with(instruction, tables, |table_va, target_base, entry_count| {
+        decode_bounded_relative_jump_table_from_base(
+            image,
+            data,
+            table_va,
+            target_base,
+            entry_count,
+            |target| in_exec_regions(regions, target).is_some(),
+        )
         .map(|table| table.targets)
     })
 }
