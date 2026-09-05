@@ -203,8 +203,12 @@ fixture-206 Clang O2 loop switch. That movement was rejected, reduced to a
 unit and real-binary regression, and repaired by distinguishing boolean
 predicate provenance from arbitrary data dependence and by keeping cyclic
 guard ownership on a direct-comparison contract. The hardened result preserves
-both switches and restores all 169 normalized def-use findings byte-for-byte;
-see `results/wp5-wide-selector-shared-return.md`.
+both switches and restores all 169 normalized def-use findings byte-for-byte.
+The exact whole-Python comparison has no ordinary tip-only regression, and the
+1,676-object inventory moves from 38 to 30 unrecovered observations and from
+6,823 to 6,502 emitted gotos. Commit `0466a2e0` ratchets those repairs and
+promotes the Duff latch to a positive test; see
+`results/wp5-wide-selector-shared-return.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -2327,7 +2331,11 @@ relevant ratchet's accepted-regression record.
    guard folding inside cyclic ownership. Fixture 215 and both the host-Clang
    and ARMv7 fixture-206 controls now pass together; the normalized def-use
    report is again exactly the preceding 169 findings. Continue the wide-
-   selector matrix only from this hardened boundary. See
+   selector matrix only from this hardened boundary. Its exact whole-Python
+   comparison attributes all nine new failure IDs to strict-XPASS
+   improvements, with no ordinary regression, and `0466a2e0` refreshes the
+   full 1,676-object defect inventory (38 to 30 unrecovered observations;
+   6,823 to 6,502 gotos). See
    `results/wp5-wide-selector-shared-return.md`.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.

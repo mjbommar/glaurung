@@ -128,13 +128,26 @@ uv run --no-sync pytest \
   accepted as a misleading improvement.
 - The exact clean def-use replay finishes four of six tests in 53.49 seconds
   and reproduces the same 169 normalized findings described above.
+- The exact whole-Python run reaches 100% in approximately 45 minutes 40
+  seconds. Comparing its 124 unique failure IDs with the preceding exact
+  run's 115 finds nine additions and zero removals. All nine additions are
+  strict-XPASS improvement signals: the eight inventory rows repaired by this
+  switch work and the repaired Duff-latch test. Targeted reruns confirm that
+  none is an ordinary regression. The log omitted pytest's aggregate summary,
+  so no inferred pass/skip totals are claimed here.
+- Regenerating the known-failure inventory over the complete 1,676-object
+  matrix takes 43.6 seconds. Unrecovered observations fall from 38 to 30,
+  structure observations from 713 to 711, and emitted gotos from 6,823 to
+  6,502. After content-identity deduplication the corresponding movements are
+  25 to 21, 472 to 471, and 4,655 to 4,490. Exact-checkout validation at
+  `0466a2e0` keeps every remaining observation as an expected failure and
+  passes the new positive Duff-latch check.
 
 The complete 838-lane fixture harness exposed 38 older unrecorded movements,
 including the independently known `rust_slice_get` regression. That wholesale
 rewrite was rejected. Only the two attributable `wide_selector_mixed` O2 rows
 were changed in `tests/decompiler_fixtures/baseline.json`.
 
-The exact clean-checkout whole-Python result for the hardened tip must still be
-recorded before this increment can support a release claim. Cross-architecture
-wide-selector cells, GED, structure-axis movement, RSS, and output-size budgets
-remain open WP5/WP4 obligations.
+The whole-Python attribution and known-failure ratchet are therefore closed for
+this increment. Cross-architecture wide-selector cells, GED, structure-axis
+movement, RSS, and output-size budgets remain open WP5/WP4 obligations.
