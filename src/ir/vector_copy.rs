@@ -139,7 +139,8 @@ fn store_batch_at(body: &[Stmt], start: usize, wide: &VReg) -> Option<Expr> {
 /// wrote lanes but not the whole-register name, so a later scalar read still
 /// sees a defined value. It runs per instruction and therefore cannot know
 /// whether that view is ever read; a plain 128-bit `movups` load gets one
-/// unconditionally. Lowered, the concat is `dst = hi | lo`.
+/// unconditionally. Lowered, a proved packed-dword concat is the exact widened
+/// bit composition `dst = ((u64)(u32)hi << 32) | (u64)(u32)lo`.
 fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
@@ -156,11 +157,49 @@ fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
     if !dst.starts_with("xmm") {
         return None;
     }
-    let (Expr::Reg(hi), Expr::Reg(lo)) = (lhs.as_ref(), rhs.as_ref()) else {
+    let Expr::Bin {
+        op: crate::ir::types::BinOp::Shl,
+        lhs: hi,
+        rhs: shift,
+    } = lhs.as_ref()
+    else {
+        return None;
+    };
+    if !matches!(shift.as_ref(), Expr::Const(32)) {
+        return None;
+    }
+    let (Some(hi), Some(lo)) = (
+        widened_dword_lane(hi.as_ref()),
+        widened_dword_lane(rhs.as_ref()),
+    ) else {
         return None;
     };
     (lane_name(hi) == Some((dst.clone(), 1)) && lane_name(lo) == Some((dst.clone(), 0)))
         .then(|| dst.clone())
+}
+
+/// Peel only the width-exact casts emitted by packed-dword concat lowering.
+fn widened_dword_lane(expression: &Expr) -> Option<&VReg> {
+    let Expr::Cast {
+        signed: false,
+        width: 8,
+        expr,
+    } = expression
+    else {
+        return None;
+    };
+    let Expr::Cast {
+        signed: false,
+        width: 4,
+        expr,
+    } = expr.as_ref()
+    else {
+        return None;
+    };
+    let Expr::Reg(register) = expr.as_ref() else {
+        return None;
+    };
+    Some(register)
 }
 
 /// Whether `register` is read anywhere in `body`, at any nesting depth.
@@ -239,13 +278,14 @@ fn child_bodies(statement: &Stmt) -> Vec<&Vec<Stmt>> {
     }
 }
 
-/// Delete every provably-dead scalar-view bridge, at any nesting depth.
+/// Delete a provably-dead scalar-view bridge only inside an exact transport.
 ///
-/// Done as a pre-pass so the batch matcher below never has to reason about
-/// bridges at all. Removing a definition nothing reads is correct on its own
-/// terms; it also happens to be required, because rejoining the lanes stops
-/// defining `xmmN_d0`/`xmmN_d1` and a surviving bridge would then overwrite the
-/// recovered value with undefined operands.
+/// Done as a pre-pass so the batch matcher below never has to reason about the
+/// bridge itself. The locality is load-bearing: `dead` is keyed by whole
+/// register name, and deleting every bridge for a dead `xmm0` also removes
+/// computed packed-result bridges that a later ABI materializer consumes. Only
+/// the bridge directly between the four-lane load and its matching four-lane
+/// store is redundant with the 16-byte transport this pass is about to create.
 fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet<String>) {
     for statement in body.iter_mut() {
         match statement {
@@ -279,9 +319,30 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
             _ => {}
         }
     }
-    body.retain(|statement| {
-        !scalar_view_bridge_target(statement).is_some_and(|target| dead.contains(&target))
-    });
+    let removable: std::collections::HashSet<usize> = body
+        .iter()
+        .enumerate()
+        .filter_map(|(index, statement)| {
+            let target = scalar_view_bridge_target(statement)?;
+            if !dead.contains(&target) || index < 4 {
+                return None;
+            }
+            let load = load_batch_at(body, index - 4)?;
+            if load.wide != VReg::phys(&target) {
+                return None;
+            }
+            store_batch_at(body, index + 1, &load.wide)?;
+            Some(index)
+        })
+        .collect();
+    if !removable.is_empty() {
+        let mut index = 0usize;
+        body.retain(|_| {
+            let keep = !removable.contains(&index);
+            index += 1;
+            keep
+        });
+    }
 }
 
 /// How many statements anywhere in `body` read `register`.
@@ -602,6 +663,34 @@ mod tests {
         assert!(
             !function.body.iter().any(is_scalar_view_bridge),
             "the dead bridge must be removed with the lanes it read: {:#?}",
+            function.body
+        );
+    }
+
+    #[test]
+    fn a_dead_computed_scalar_bridge_is_not_mistaken_for_transport_noise() {
+        let mut function = Function {
+            name: "computed_result".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0_d0"),
+                    src: Expr::Reg(VReg::phys("eax")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0_d1"),
+                    src: Expr::Reg(VReg::phys("edx")),
+                },
+                scalar_view_bridge("xmm0"),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recover_wide_copies(&mut function);
+
+        assert!(
+            function.body.iter().any(is_scalar_view_bridge),
+            "a computed packed value is not a load/store transport bridge: {:#?}",
             function.body
         );
     }
