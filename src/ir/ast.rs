@@ -5908,7 +5908,7 @@ function f @ 0x1000 {
     }
 
     #[test]
-    fn typed_return_conversion_removes_only_the_abi_zero_extension() {
+    fn typed_signed_return_conversion_removes_redundant_abi_casts() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
         let mut f = Function {
@@ -5947,13 +5947,59 @@ function f @ 0x1000 {
         assert_eq!(
             f.body,
             vec![Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_4"))),
+            }],
+            "the ABI wrapper and its unsigned transport view are redundant for a proved signed result"
+        );
+    }
+
+    #[test]
+    fn typed_unsigned_return_conversion_preserves_the_source_width_cast() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let mut f = Function {
+            name: "unsigned_value".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                    }),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("local_4"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        tm.upsert_public(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        fold_typed_return_abi_extensions(&mut f, &tm);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
                 value: Some(Expr::Cast {
                     signed: false,
                     width: 4,
                     expr: Box::new(Expr::Reg(VReg::phys("local_4"))),
                 }),
             }],
-            "only the ABI-wide wrapper is redundant; the source-width cast remains"
+            "an unsigned source-width interpretation is not an ABI-only cast"
         );
     }
 

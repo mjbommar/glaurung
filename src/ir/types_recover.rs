@@ -1428,14 +1428,25 @@ pub fn recover_prototype_with_arm_vfp_args(
                 if !is_direct {
                     continue;
                 }
-                let hint = qualified_result_hint(&ins.op, &valued, &value, cc, storage_class)
-                    .or_else(|| {
-                        (guarded_call_result && storage_class == ResultHintClass::Integer)
-                            .then_some(TypeHint::Int {
-                                signed: true,
-                                width: abi_pointer_width(cc),
-                            })
-                    });
+                let forwarded_source_hint = ssa
+                    .use_value(lf, addr, 0)
+                    .and_then(|source| valued.get(&source));
+                let hint = qualified_result_hint(
+                    &ins.op,
+                    &valued,
+                    &value,
+                    forwarded_source_hint,
+                    cc,
+                    storage_class,
+                )
+                .or_else(|| {
+                    (guarded_call_result && storage_class == ResultHintClass::Integer).then_some(
+                        TypeHint::Int {
+                            signed: true,
+                            width: abi_pointer_width(cc),
+                        },
+                    )
+                });
                 if storage_class == ResultHintClass::Float && hint.is_none() {
                     // PXOR self-zeroing defines both the whole XMM name and
                     // its four scalar-LLIR lanes at one machine VA. The whole
@@ -1474,7 +1485,17 @@ pub fn recover_prototype_with_arm_vfp_args(
                             ..
                         }
                     );
-                    direct_facts.push((hint, is_literal_null));
+                    let is_literal_all_ones = match (&ins.op, hint) {
+                        (
+                            Op::Assign {
+                                src: Value::Const(constant),
+                                ..
+                            },
+                            TypeHint::Int { width, .. },
+                        ) => result_hint::literal_is_all_ones(*constant, width),
+                        _ => false,
+                    };
+                    direct_facts.push((hint, is_literal_null, is_literal_all_ones));
                     direct_storage_classes.insert(storage_class);
                     if !qualified_values.contains(&value) {
                         qualified_values.push(value.clone());
@@ -5365,12 +5386,14 @@ int never_returns(void) { for (;;) {} }
                         width: 4,
                     },
                     false,
+                    false,
                 ),
                 (
                     TypeHint::Int {
                         signed: false,
                         width: 4,
                     },
+                    false,
                     false,
                 ),
             ]),

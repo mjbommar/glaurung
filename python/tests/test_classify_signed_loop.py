@@ -26,14 +26,14 @@ def _build(compiler: str, output: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def _decompile(binary: Path) -> str:
+def _decompile(binary: Path, function: str) -> str:
     result = subprocess.run(
         [
             "glaurung",
             "decompile",
             str(binary),
             "--func",
-            "classify",
+            function,
             "--style",
             "decbench",
             "--no-color",
@@ -65,9 +65,13 @@ def test_signed_loop_recovers_a_relational_predicate_and_executes(
     assert strip.returncode == 0, strip.stderr
 
     for binary in (debug, stripped):
-        text = _decompile(binary)
+        text = _decompile(binary, "classify")
+        assert "int classify(" in text, text
+        assert "unsigned int classify(" not in text, text
         assert "while (100 < (long)(" in text, text
         assert "== 100) |" not in text, text
+        assert "return -1;" in text, text
+        assert "return (unsigned int)(" not in text, text
         assert "glaurung-verify" not in text, text
         syntax = subprocess.run(
             ["cc", "-fsyntax-only", "-x", "c", "-"],
@@ -100,3 +104,40 @@ def test_signed_loop_recovers_a_relational_predicate_and_executes(
         verdict = json.loads(differential.stdout)["classify"]
         assert verdict["status"] == "pass", verdict
         assert verdict["detail"] == "34 cases", verdict
+
+        unsigned_text = _decompile(binary, "classify_unsigned")
+        assert "unsigned int classify_unsigned(" in unsigned_text, unsigned_text
+        assert "return -1;" not in unsigned_text, unsigned_text
+        unsigned_syntax = subprocess.run(
+            ["cc", "-fsyntax-only", "-x", "c", "-"],
+            input=unsigned_text,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert unsigned_syntax.returncode == 0, unsigned_syntax.stderr
+
+        unsigned_command = [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(SOURCE),
+            "--function",
+            "classify_unsigned",
+            "--json",
+        ]
+        if binary == stripped:
+            unsigned_command.extend(
+                ["--reference-so", str(debug), "--dwarf-so", str(debug)]
+            )
+        unsigned_differential = subprocess.run(
+            unsigned_command,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        )
+        unsigned_verdict = json.loads(unsigned_differential.stdout)["classify_unsigned"]
+        assert unsigned_verdict["status"] == "pass", unsigned_verdict
+        assert unsigned_verdict["detail"] == "31 cases", unsigned_verdict

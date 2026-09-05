@@ -10,16 +10,20 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-04 through `80f5d106`. WP0 and
+Current-state snapshot: reconciled 2026-09-04 through `9c9c607c`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
 with zero unexplained structural regressions, zero execution regressions, and
 nested post-tested branches preserved; it still lacks the remaining promotion
 measurements. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
-but have not met their full exit criteria. WP2, WP3, WP6, and WP7B remain the
-principal unstarted or dependency-blocked packages. The full Rust gate is green
-at `80f5d106`; the required whole Python gate terminated red across multiple
+but have not met their full exit criteria. WP6 has its first per-use signedness
+slice but not the general solver or the `classify` return-type result. WP2, WP3,
+and the general WP7B idiom framework remain the principal unstarted or
+dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
+landed and proved at `9c9c607c`; it does not establish the general framework.
+The full Rust gate is green at `9c9c607c`; the required whole Python gate at
+`80f5d106` terminated red across multiple
 pre-existing repository-wide groups, so this is not a current-tip green
 `release` claim. M3 through M6 remain open.
 
@@ -954,19 +958,79 @@ declaration-authority defect.
 
 Required WP6 features:
 
-- [ ] Record negative return constants and signed relational uses as exact,
+- [~] Record negative return constants and signed relational uses as exact,
   per-use return/value constraints without making signedness sticky globally.
-- [ ] Resolve a stripped 32-bit return as signed only when all width-bearing
+- [x] Resolve a stripped 32-bit return as signed only when all width-bearing
   ABI evidence agrees and the signed evidence is unopposed; retain ambiguity
   when signed and unsigned uses conflict.
-- [ ] Propagate the selected return interpretation to return expressions so an
+- [x] Propagate the selected return interpretation to return expressions so an
   authoritative signed declaration does not retain redundant unsigned casts.
-- [ ] Keep genuinely unsigned functions unchanged and preserve C/Rust-separated
+- [~] Keep genuinely unsigned functions unchanged and preserve C/Rust-separated
   measurement totals.
-- [ ] Add the fixture as GCC/Clang O0 debug and stripped cells. Keep O2 as a
+- [x] Add the fixture as GCC/Clang O0 debug and stripped cells. Keep O2 as a
   separately reported observation: compiler strength reduction or unrolling
   may erase the source loop, so exact loop reconstruction is not an O2
   correctness requirement.
+
+Implementation boundaries for the remaining return-type work:
+
+- Extend `src/ir/types_recover/result_hint.rs` (and the incremental constraint
+  layer under `src/ir/types_recover/`) to collect return-width, signed-use, and
+  negative-constant evidence. ABI-mandated x86-64 zero-extension of a 32-bit
+  result is transport evidence, not proof that the C result is unsigned.
+- Make `src/ir/ast/return_ctype.rs` consume the resolved result interpretation
+  when choosing the declaration and simplifying each return expression. It may
+  remove an unsigned cast only when that cast is an ABI transport shell over a
+  value proved signed at the same source width.
+- Keep `src/ir/const_fold.rs` responsible only for the already-landed terminal
+  predicate equivalence. Do not infer a function return type from the visual
+  shape of that folded predicate or from rendered variable names.
+- On conflicting or incomplete evidence, preserve the current unsigned or
+  ambiguous spelling rather than guessing. This vertical slice must remain an
+  incremental consumer of the future WP6 solver, not establish a second type
+  system in the AST renderer.
+
+#### `classify` issue-to-feature contract
+
+This table is the authoritative scope for the reported example. It keeps the
+visible defects tied to production capabilities and prevents a prettier single
+render from being mistaken for completion.
+
+| observed behavior | classification | required production feature | acceptance evidence |
+|---|---|---|---|
+| The recovered `if`/`else` and `while` match the source control shape. | Existing strength to preserve. | Keep the WP4 structured loop and branch result unchanged while expression and type passes improve it. | Structural fixture remains an `if` with a nested `while`; execution differential remains green. |
+| `n > 100` renders as the expanded `((x == 100) \| (x <s 100)) == 0` flag formula. | Glaurung expression-normalization defect. | Add a width- and signedness-proved terminal comparison fusion for the exact shared value and constant; carry its signed result type and decline every ambiguous variant. | O0 GCC and Clang, debug and stripped, render `n > 100` or `100 < n`; expanded flag spelling is absent; proof and refusal tests below pass. |
+| A stripped build renders `unsigned int classify(...)`. | Glaurung stripped type-inference limitation. | Combine negative return constants, signed relational uses, ABI width, and per-use constraints; select signed only with unopposed evidence. | Both stripped O0 compiler cells render a signed 32-bit return, while genuinely unsigned counterexamples remain unsigned. |
+| The negative return renders as `0xffffffff` and signed bodies retain unsigned casts. | Consequence of missing signed return propagation and destination-typed cleanup. | Propagate the chosen signed return interpretation into return-expression rendering and remove only provably redundant casts. | Render `return -1;`; emitted C compiles and boundary execution agrees with the reference. |
+| A pasted output appeared to contain an unmatched brace. | Not reproduced in the pinned local rendering; likely transcript truncation, not a confirmed product defect. | Do not create a speculative brace-repair pass. Retain parseability and delimiter balance as gates on every affected cell. | Host C syntax check succeeds for debug and stripped outputs from both compilers. |
+
+Completion means all four GCC/Clang O0 debug/stripped cells satisfy the table
+in one pinned release build. An isolated constant-fold unit test or one
+debug-assisted signature is necessary evidence, but is not completion.
+
+The bounded return-result implementation is now green in all four required
+signed cells and all four genuinely unsigned control cells. It joins exact SSA
+result definitions before rendering, treats all-ones as ambiguous without
+independent evidence, and removes only declaration-consistent ABI transport
+casts. This closes the concrete `classify` return issue, but not WP6's general
+constraint solver or corpus-wide C/Rust measurement exit criteria. See
+`results/wp6-classify-signed-return.md`.
+
+Required regression coverage is equally part of completion:
+
+- `python/tests/test_classify_signed_loop.py` must assert the signed declaration,
+  simplified relational condition, `return -1;`, absence of the redundant
+  unsigned return cast, balanced/parseable output, and boundary execution for
+  every O0 compiler/debug cell.
+- `tests/fixtures/classify_signed_loop.c` must include a genuinely unsigned
+  control (unsigned parameter/result and unsigned relational use). Its stripped
+  GCC and Clang outputs must remain unsigned.
+- Focused `src/ir/ast/return_ctype.rs` tests must cover signed resolution,
+  unsigned preservation, conflicting evidence, and same-width ABI-cast removal;
+  mismatched widths and non-transport casts must be refusal cases.
+- The scoped loops/polarity/switch/width corpus and the full required Rust and
+  Python gates must be reported separately. Syntax success alone does not prove
+  the return-type inference or execution behavior correct.
 
 ### Tests
 
@@ -1017,13 +1081,13 @@ name-parsing convention was introduced.
 
 - [ ] Add an SSA-expression idiom module, preferably `src/ir/ssa_idioms/`,
   after WP3 establishes the owning SSA boundary.
-- [ ] Land one rule per increment:
-  1. flag-derived relational normalization, beginning with the exact typed
+- [~] Land one rule per increment:
+  1. [x] flag-derived relational normalization, beginning with the exact typed
      equivalence `!((x == k) || (x <s k)) == (x >s k)` seen in `classify`;
-  2. strength-reduced constant multiplication;
-  3. signed division/modulo by a power of two;
-  4. compiler magic-number division;
-  5. compound boolean-mask normalization;
+  2. [ ] strength-reduced constant multiplication;
+  3. [ ] signed division/modulo by a power of two;
+  4. [ ] compiler magic-number division;
+  5. [ ] compound boolean-mask normalization;
 - [ ] Each rule must declare operand width, signed interpretation,
   preconditions, output type, and origin composition.
 - [ ] Never peel or narrow casts unless equivalence is proved at the original
@@ -1040,15 +1104,26 @@ name-parsing convention was introduced.
 - [x] Regression test for the earlier `cmp_fusion` 64-to-32 narrowing bug.
 - [x] End-to-end fixtures from `03_loop_shapes` and `102_duffs_device`.
 - [x] Execution differential and pinned byte/readability measurements.
-- [ ] Exhaustively prove the `classify` relational rule at 8 and 16 bits and
+- [x] Exhaustively prove the `classify` relational rule at 8 and 16 bits and
   use boundary-complete plus seeded randomized checks at 32 and 64 bits.
-- [ ] Require exact refusal for mixed widths, unsigned `<`, different values or
+- [x] Require exact refusal for mixed widths, unsigned `<`, different values or
   constants, inverted polarity mismatch, and a comparison with missing
   producer evidence.
-- [ ] End-to-end `classify` tests must require `while (n > 100)` (allowing
+- [x] End-to-end `classify` tests must require `while (n > 100)` (allowing
   equivalent operand order), reject the expanded `ZF | (SF ^ OF)` spelling,
   compile the emitted C, and pass execution differentials on negative, 0, 100,
   101, repeated-subtraction, and integer-boundary inputs.
+
+The first relational rule landed at `9c9c607c` in the existing terminal
+constant-fold boundary under the pre-WP3 exception above. It requires the same
+expression, constant, source width, outer width, signed `<`, unsigned equality
+view, non-negative signed-representable constant, and equality-to-zero terminal
+use. Ten focused proof/refusal tests pass. The release-built GCC/Clang O0 debug
+and stripped fixture cells all emit `100 < n` through the preserved signed
+view, compile as C, and pass 34 differential cases each. The 24-lane loops,
+polarity, switch, and width corpus reports zero scoped regressions. This closes
+the predicate subproblem only; stripped return inference and redundant return
+casts remain WP6 work. See `results/wp7b-classify-signed-predicate.md`.
 
 At `81ffe9ab`, `cargo test --features python-ext` passes, including 15 focused
 comparison-fusion tests and 191 AST/render tests; the six def-use census tests
@@ -1878,13 +1953,16 @@ relevant ratchet's accepted-regression record.
    rows from 204 to 220, and reduces nine unexplained regressions to zero. The
    250-candidate execution comparison remains at zero regressions. See
    `results/wp4-source-level-continue.md`.
-3. Implement the required O0 `classify` WP6/WP7 vertical slice above. First
-   add real GCC/Clang debug and stripped fixtures, then land the width- and
-   signedness-proved `> 100` predicate fusion, stripped signed-return evidence,
-   and redundant-cast cleanup as independently revertible increments. Require
-   parseable C, boundary tests, execution differentials, and no regression in
-   genuinely unsigned functions. Report O2 separately rather than claiming
-   source-loop recovery after strength reduction or unrolling.
+3. [~] Complete the required O0 `classify` WP6/WP7 vertical slice above.
+   Commit `9c9c607c` adds real GCC/Clang debug and stripped fixtures and lands
+   the width- and signedness-proved `> 100` predicate fusion with proof,
+   refusal, syntax, differential, and scoped-corpus evidence. Next land stripped
+   signed-return evidence and redundant-cast cleanup are now implemented at
+   the SSA result-fact and typed-AST boundaries, with a genuinely unsigned
+   control. Record the clean exact-commit Rust and whole-Python gates before
+   marking this item complete.
+   Report O2 separately rather than claiming source-loop recovery after
+   strength reduction or unrolling.
 4. Finish the other WP4 promotion evidence. The remaining Duff and clang-wide
    rows are classified at `ca91dc68` by exact, fail-closed
    suffix/shared-effect-entry contracts, and the clean pinned full comparison

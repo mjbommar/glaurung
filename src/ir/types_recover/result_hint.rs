@@ -77,6 +77,7 @@ pub(super) fn qualified_result_hint(
     op: &Op,
     valued: &TypeMapV,
     value: &SsaValue,
+    forwarded_source_hint: Option<TypeHint>,
     cc: crate::ir::call_args::CallConv,
     storage_class: ResultHintClass,
 ) -> Option<TypeHint> {
@@ -107,13 +108,23 @@ pub(super) fn qualified_result_hint(
             })
         }
         Op::Assign {
-            src: Value::Reg(_) | Value::Const(_),
+            src: Value::Const(_),
             ..
+        } => valued
+            .get(value)
+            .map(|hint| normalize_value_hint_for_abi(hint, cc)),
+        Op::ZExt { from, .. } => forwarded_zext_result_hint(
+            valued.get(value),
+            forwarded_source_hint,
+            from.bytes() as u8,
+            cc,
+        ),
+        Op::Assign {
+            src: Value::Reg(_), ..
         }
         | Op::Bin { .. }
         | Op::Un { .. }
         | Op::Cmp { .. }
-        | Op::ZExt { .. }
         | Op::SExt { .. }
         | Op::Trunc { .. } => valued
             .get(value)
@@ -123,6 +134,30 @@ pub(super) fn qualified_result_hint(
         // they can safely decide pointer-vs-scalar class.
         _ => None,
     }
+}
+
+pub(super) fn literal_is_all_ones(value: i64, width: u8) -> bool {
+    let bits = u32::from(width) * 8;
+    if bits == 0 || bits >= 64 {
+        return value == -1;
+    }
+    value == -1 || u64::try_from(value).ok() == Some((1_u64 << bits) - 1)
+}
+
+fn forwarded_zext_result_hint(
+    recovered: Option<TypeHint>,
+    source: Option<TypeHint>,
+    source_width: u8,
+    cc: crate::ir::call_args::CallConv,
+) -> Option<TypeHint> {
+    source
+        .and_then(|hint| match normalize_value_hint_for_abi(hint, cc) {
+            TypeHint::Int { signed, width } if width == source_width => {
+                Some(TypeHint::Int { signed, width })
+            }
+            _ => None,
+        })
+        .or_else(|| recovered.map(|hint| normalize_value_hint_for_abi(hint, cc)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -148,13 +183,18 @@ fn result_hint_class(hint: TypeHint) -> ResultHintClass {
 /// same constraint. Our smaller lattice has no union type, so pointer/scalar
 /// conflicts fail closed except for C's one compatible scalar value: a literal
 /// zero used as a null pointer constant.
-pub(super) fn join_result_hints(facts: &[(TypeHint, bool)]) -> Option<TypeHint> {
+pub(super) fn join_result_hints(facts: &[(TypeHint, bool, bool)]) -> Option<TypeHint> {
     let mut joined = None;
     let mut joined_class = None;
     let mut saw_nonnull_scalar = false;
+    let mut ambiguous_all_ones = Vec::new();
 
-    for (hint, is_literal_null) in facts {
+    for (hint, is_literal_null, is_literal_all_ones) in facts {
         let class = result_hint_class(*hint);
+        if *is_literal_all_ones && class == ResultHintClass::Integer {
+            ambiguous_all_ones.push(*hint);
+            continue;
+        }
         if class == ResultHintClass::Integer && !is_literal_null {
             saw_nonnull_scalar = true;
         }
@@ -181,6 +221,21 @@ pub(super) fn join_result_hints(facts: &[(TypeHint, bool)]) -> Option<TypeHint> 
                 }
             }
             Some(_) => return None,
+        }
+    }
+    for hint in ambiguous_all_ones {
+        let TypeHint::Int { width, .. } = hint else {
+            unreachable!("only integer all-ones facts are deferred")
+        };
+        match joined {
+            Some(TypeHint::Int {
+                width: joined_width,
+                ..
+            }) if joined_width == width => {}
+            None => {
+                joined = Some(hint);
+            }
+            _ => return None,
         }
     }
     joined
@@ -422,4 +477,73 @@ pub(super) fn non_return_live_values(lf: &LlirFunction, ssa: &SsaInfo) -> HashSe
         }
     }
     live
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::call_args::CallConv;
+
+    fn int(signed: bool, width: u8) -> TypeHint {
+        TypeHint::Int { signed, width }
+    }
+
+    #[test]
+    fn all_ones_adopts_an_independent_same_width_interpretation() {
+        assert_eq!(
+            join_result_hints(&[(int(false, 4), false, true), (int(true, 4), false, false)]),
+            Some(int(true, 4))
+        );
+        assert_eq!(
+            join_result_hints(&[(int(false, 4), false, true), (int(false, 4), false, false)]),
+            Some(int(false, 4))
+        );
+    }
+
+    #[test]
+    fn all_ones_does_not_invent_signedness_without_other_evidence() {
+        assert_eq!(
+            join_result_hints(&[(int(false, 4), false, true)]),
+            Some(int(false, 4))
+        );
+        assert_eq!(
+            join_result_hints(&[(int(false, 4), false, true), (int(true, 2), false, false)]),
+            None
+        );
+    }
+
+    #[test]
+    fn zext_preserves_the_exact_forwarded_source_interpretation() {
+        assert_eq!(
+            forwarded_zext_result_hint(
+                Some(int(false, 8)),
+                Some(int(true, 4)),
+                4,
+                CallConv::SysVAmd64,
+            ),
+            Some(int(true, 4))
+        );
+        assert_eq!(
+            forwarded_zext_result_hint(
+                Some(int(false, 8)),
+                Some(int(false, 4)),
+                4,
+                CallConv::SysVAmd64,
+            ),
+            Some(int(false, 4))
+        );
+    }
+
+    #[test]
+    fn zext_declines_a_mismatched_forwarded_width() {
+        assert_eq!(
+            forwarded_zext_result_hint(
+                Some(int(false, 8)),
+                Some(int(true, 2)),
+                4,
+                CallConv::SysVAmd64,
+            ),
+            Some(int(false, 8))
+        );
+    }
 }

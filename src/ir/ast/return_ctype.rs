@@ -141,6 +141,20 @@ pub(crate) fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'stati
         .unwrap_or_else(|| ctype_for("ret", tm))
 }
 
+fn integer_ctype_signedness(ctype: &str) -> Option<(bool, u8)> {
+    match ctype {
+        "signed char" | "char" => Some((true, 1)),
+        "unsigned char" => Some((false, 1)),
+        "short" => Some((true, 2)),
+        "unsigned short" => Some((false, 2)),
+        "int" => Some((true, 4)),
+        "unsigned int" => Some((false, 4)),
+        "long" => Some((true, 8)),
+        "unsigned long" => Some((false, 8)),
+        _ => None,
+    }
+}
+
 /// Whether `return 0;` may decide the function's return type.
 ///
 /// `0` is the one integer literal that is also C's NULL POINTER CONSTANT, so a
@@ -192,11 +206,18 @@ pub(crate) fn inferred_return_width(body: &[Stmt], tm: Option<&TypeMap>) -> u8 {
 /// cast remains because it may carry a real truncation or signedness conversion;
 /// arbitrary casts and wide-return signatures remain untouched.
 pub(crate) fn fold_typed_return_abi_extensions(f: &mut Function, tm: &TypeMap) {
-    let return_width = inferred_return_width(&f.body, Some(tm));
-    fold_return_abi_extensions_body(&mut f.body, return_width);
+    let return_ctype = infer_return_ctype(&f.body, Some(tm));
+    let return_width = integer_ctype_width(return_ctype).unwrap_or(8);
+    let signed_return = integer_ctype_signedness(return_ctype).is_some_and(|(signed, _)| signed);
+    fold_return_abi_extensions_body(&mut f.body, tm, return_width, signed_return);
 }
 
-fn fold_return_abi_extensions_body(body: &mut [Stmt], return_width: u8) {
+fn fold_return_abi_extensions_body(
+    body: &mut [Stmt],
+    tm: &TypeMap,
+    return_width: u8,
+    signed_return: bool,
+) {
     for statement in body {
         match statement {
             Stmt::Return { value: Some(value) } => {
@@ -206,8 +227,19 @@ fn fold_return_abi_extensions_body(body: &mut [Stmt], return_width: u8) {
                         width: 8,
                         expr: inner,
                     } => match inner.as_ref() {
-                        Expr::Cast { width, .. } if *width <= 4 && *width == return_width => {
-                            Some(inner.as_ref().clone())
+                        Expr::Cast {
+                            signed: false,
+                            width,
+                            expr,
+                        } if *width <= 4 && *width == return_width => {
+                            let transported_signed = signed_return
+                                && expr_ctype(expr, Some(tm)).and_then(integer_ctype_signedness)
+                                    == Some((true, *width));
+                            Some(if transported_signed {
+                                expr.as_ref().clone()
+                            } else {
+                                inner.as_ref().clone()
+                            })
                         }
                         _ => None,
                     },
@@ -222,20 +254,20 @@ fn fold_return_abi_extensions_body(body: &mut [Stmt], return_width: u8) {
                 else_body,
                 ..
             } => {
-                fold_return_abi_extensions_body(then_body, return_width);
+                fold_return_abi_extensions_body(then_body, tm, return_width, signed_return);
                 if let Some(else_body) = else_body {
-                    fold_return_abi_extensions_body(else_body, return_width);
+                    fold_return_abi_extensions_body(else_body, tm, return_width, signed_return);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                fold_return_abi_extensions_body(body, return_width);
+                fold_return_abi_extensions_body(body, tm, return_width, signed_return);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    fold_return_abi_extensions_body(case_body, return_width);
+                    fold_return_abi_extensions_body(case_body, tm, return_width, signed_return);
                 }
                 if let Some(default) = default {
-                    fold_return_abi_extensions_body(default, return_width);
+                    fold_return_abi_extensions_body(default, tm, return_width, signed_return);
                 }
             }
             _ => {}
