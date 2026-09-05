@@ -131,6 +131,298 @@ pub fn compose_bank_returns(
     true
 }
 
+/// Materialise a register-resident System V split-bank result as one object.
+///
+/// Optimised callees commonly never allocate the source aggregate: the INTEGER
+/// half reaches `return` in `rax` while the SSE half is left in `xmm0`.  This
+/// must run before role naming aliases both registers to `ret` and before dead
+/// store elimination removes the otherwise-unread SSE definition.
+///
+/// ALL OR NOTHING.  Every return must be reached after an exact `xmm0`
+/// definition which has not been clobbered by a call or a control-flow join.
+/// The transformation is applied to a clone so declining cannot leave a
+/// partially materialised object in the function.
+pub fn materialize_register_split_returns(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+) -> bool {
+    let Some(prototype) = prototype else {
+        return false;
+    };
+    let ReturnClass::SplitBanks { integer_first } = prototype.return_class() else {
+        return false;
+    };
+    if cc != CallConv::SysVAmd64 {
+        return false;
+    }
+
+    let object = VReg::phys("split_return_object");
+    let mut body = function.body.clone();
+    let Some(_) =
+        materialize_register_body(&mut body, &object, integer_first, RegisterBanks::default())
+    else {
+        return false;
+    };
+    function.body = body;
+    true
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RegisterBanks {
+    integer: bool,
+    sse: bool,
+}
+
+impl RegisterBanks {
+    fn complete(self) -> bool {
+        self.integer && self.sse
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        Self {
+            integer: self.integer && other.integer,
+            sse: self.sse && other.sse,
+        }
+    }
+}
+
+/// Rewrite one structured body and return which captured banks are guaranteed
+/// on its fallthrough path. `None` means at least one return was not provable.
+fn materialize_register_body(
+    body: &mut Vec<Stmt>,
+    object: &VReg,
+    integer_first: bool,
+    incoming: RegisterBanks,
+) -> Option<RegisterBanks> {
+    let mut reaching = incoming;
+    let mut output = Vec::with_capacity(body.len() + 3);
+    for mut statement in std::mem::take(body) {
+        match &mut statement {
+            Stmt::Assign { dst, .. } if result_bank(dst).is_some() => {
+                let captured = dst.clone();
+                let bank = result_bank(dst).expect("checked above");
+                output.push(statement);
+                output.push(bank_store(
+                    object,
+                    bank_offset(bank, integer_first),
+                    Expr::Reg(captured),
+                ));
+                set_bank(&mut reaching, bank, true);
+                continue;
+            }
+            Stmt::Call { dst, .. } => {
+                // Every call clobbers both result banks. Its attributed
+                // destination can immediately define one new bank.
+                reaching = RegisterBanks::default();
+                if let Some(bank) = dst.as_ref().and_then(result_bank) {
+                    let captured = dst.clone().expect("checked above");
+                    output.push(statement);
+                    output.push(bank_store(
+                        object,
+                        bank_offset(bank, integer_first),
+                        Expr::Reg(captured),
+                    ));
+                    set_bank(&mut reaching, bank, true);
+                    continue;
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                let then_out =
+                    materialize_register_body(then_body, object, integer_first, reaching)?;
+                let else_out = match else_body {
+                    Some(else_body) => {
+                        materialize_register_body(else_body, object, integer_first, reaching)?
+                    }
+                    None => reaching,
+                };
+                reaching = then_out.intersect(else_out);
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                // A loop may execute zero times, so only the incoming capture
+                // is guaranteed after it. Returns inside the loop are checked
+                // against their own path while traversing the body.
+                let _ = materialize_register_body(body, object, integer_first, reaching)?;
+            }
+            Stmt::Switch { cases, default, .. } => {
+                let mut exits = Vec::with_capacity(cases.len() + 1);
+                for (_, case) in cases {
+                    exits.push(materialize_register_body(
+                        case,
+                        object,
+                        integer_first,
+                        reaching,
+                    )?);
+                }
+                exits.push(match default {
+                    Some(default) => {
+                        materialize_register_body(default, object, integer_first, reaching)?
+                    }
+                    None => reaching,
+                });
+                reaching = exits
+                    .into_iter()
+                    .reduce(RegisterBanks::intersect)
+                    .unwrap_or(reaching);
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                let mut exits = vec![materialize_register_body(
+                    try_body,
+                    object,
+                    integer_first,
+                    reaching,
+                )?];
+                for catch in catches {
+                    exits.push(materialize_register_body(
+                        &mut catch.body,
+                        object,
+                        integer_first,
+                        reaching,
+                    )?);
+                }
+                reaching = exits
+                    .into_iter()
+                    .reduce(RegisterBanks::intersect)
+                    .unwrap_or(reaching);
+            }
+            Stmt::Return { value } => {
+                // `direct_output` may project either physical carrier into the
+                // single generic Return expression. When its scalar family is
+                // exact, let that final expression overwrite the earlier
+                // capture for its bank. This is what distinguishes GCC's last
+                // integer `lea` from an earlier scratch EAX definition, while
+                // also accepting Clang's SSE-selected projection.
+                if let Some((bank, projected)) = value
+                    .as_ref()
+                    .and_then(|value| expression_bank(value).map(|bank| (bank, value.clone())))
+                {
+                    output.push(bank_store(
+                        object,
+                        bank_offset(bank, integer_first),
+                        projected,
+                    ));
+                    set_bank(&mut reaching, bank, true);
+                }
+                if !reaching.complete() {
+                    return None;
+                }
+                output.push(Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::StackAddr {
+                            object: object.clone(),
+                            size: 16,
+                        }),
+                        size: 8,
+                    }),
+                });
+                continue;
+            }
+            Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => {
+                reaching = RegisterBanks::default();
+            }
+            Stmt::Pop { target } => {
+                if let Some(bank) = result_bank(target) {
+                    set_bank(&mut reaching, bank, false);
+                }
+            }
+            _ => {}
+        }
+        output.push(statement);
+    }
+    *body = output;
+    Some(reaching)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ResultBank {
+    Integer,
+    Sse,
+}
+
+fn result_bank(register: &VReg) -> Option<ResultBank> {
+    let VReg::Phys(name) = register else {
+        return None;
+    };
+    let name = crate::ir::abi::ssa_base(name);
+    if crate::ir::abi::integer_return_registers(CallConv::SysVAmd64).contains(&name) {
+        Some(ResultBank::Integer)
+    } else if crate::ir::abi::float_return_registers(CallConv::SysVAmd64).contains(&name) {
+        Some(ResultBank::Sse)
+    } else {
+        None
+    }
+}
+
+/// The exact scalar result bank an expression's outer operation belongs to.
+/// Unknown/pointer-like shapes are deliberately refused rather than guessed.
+fn expression_bank(expression: &Expr) -> Option<ResultBank> {
+    use crate::ir::ast::ScalarType;
+
+    match expression {
+        Expr::Reg(register) => result_bank(register),
+        Expr::FloatConst { .. } => Some(ResultBank::Sse),
+        Expr::NumericConvert { to, .. } => Some(match to {
+            ScalarType::Float(_) => ResultBank::Sse,
+            ScalarType::SignedInt(_) => ResultBank::Integer,
+        }),
+        Expr::Const(_)
+        | Expr::Bin { .. }
+        | Expr::Un { .. }
+        | Expr::Cmp { .. }
+        | Expr::Cast { .. }
+        | Expr::WideArithmetic { .. } => Some(ResultBank::Integer),
+        Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Deref { .. }
+        | Expr::Call { .. }
+        | Expr::Select { .. }
+        | Expr::FunctionTableEntry { .. }
+        | Expr::Unknown(_) => None,
+    }
+}
+
+fn bank_offset(bank: ResultBank, integer_first: bool) -> i64 {
+    match (bank, integer_first) {
+        (ResultBank::Integer, true) | (ResultBank::Sse, false) => 0,
+        (ResultBank::Integer, false) | (ResultBank::Sse, true) => 8,
+    }
+}
+
+fn set_bank(state: &mut RegisterBanks, bank: ResultBank, value: bool) {
+    match bank {
+        ResultBank::Integer => state.integer = value,
+        ResultBank::Sse => state.sse = value,
+    }
+}
+
+fn bank_store(object: &VReg, offset: i64, src: Expr) -> Stmt {
+    let base = Expr::StackAddr {
+        object: object.clone(),
+        size: 16,
+    };
+    Stmt::Store {
+        addr: if offset == 0 {
+            base
+        } else {
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(base),
+                rhs: Box::new(Expr::Const(offset)),
+            }
+        },
+        src,
+        size: 8,
+    }
+}
+
 /// The synthesised tag a body composed by [`compose_bank_returns`] may be
 /// DECLARED at, or `None` for every other body.
 ///
@@ -642,5 +934,164 @@ mod tests {
                 second_bank: 4,
             })
         );
+    }
+
+    fn register_assignment(name: &str, value: i64) -> Stmt {
+        Stmt::Assign {
+            dst: VReg::phys(name),
+            src: Expr::Const(value),
+        }
+    }
+
+    fn bare_return(value: Expr) -> Stmt {
+        Stmt::Return { value: Some(value) }
+    }
+
+    fn split_prototype(integer_first: bool) -> RecoveredPrototype {
+        prototype(ReturnClass::SplitBanks { integer_first })
+    }
+
+    fn materialized_offsets(body: &[Stmt]) -> Vec<i64> {
+        body.iter()
+            .filter_map(|statement| match statement {
+                Stmt::Store { addr, .. } => match addr {
+                    Expr::StackAddr { object, size: 16 }
+                        if object == &VReg::phys("split_return_object") =>
+                    {
+                        Some(0)
+                    }
+                    Expr::Bin {
+                        op: BinOp::Add,
+                        lhs,
+                        rhs,
+                    } if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 16 }
+                        if object == &VReg::phys("split_return_object")) =>
+                    {
+                        match rhs.as_ref() {
+                            Expr::Const(offset) => Some(*offset),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn register_resident_split_return_materializes_gcc_integer_first_order() {
+        // GCC O2 defines xmm0 before eax for `bv195_make_mixed`.
+        let mut f = function(vec![
+            register_assignment("xmm0#4", 40),
+            register_assignment("eax#5", 17),
+            bare_return(Expr::Reg(VReg::phys("eax#5"))),
+        ]);
+        let declared = split_prototype(true);
+
+        assert!(materialize_register_split_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(materialized_offsets(&f.body), vec![8, 0, 0]);
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Return {
+                value: Some(Expr::Deref { addr, .. })
+            }) if matches!(addr.as_ref(), Expr::StackAddr { size: 16, .. })
+        ));
+    }
+
+    #[test]
+    fn register_resident_split_return_materializes_reverse_source_order() {
+        // The physical carriers do not swap: source order changes their object
+        // offsets, with xmm0 first and rax second.
+        let mut f = function(vec![
+            register_assignment("eax#2", 9),
+            register_assignment("xmm0#3", 80),
+            // Clang may project the SSE carrier onto the generic Return node.
+            // The declared class, not that arbitrary projection, owns both.
+            bare_return(Expr::Reg(VReg::phys("xmm0#3"))),
+        ]);
+        let declared = split_prototype(false);
+
+        assert!(materialize_register_split_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(materialized_offsets(&f.body), vec![8, 0, 0]);
+    }
+
+    #[test]
+    fn register_resident_split_return_refuses_a_missing_or_clobbered_sse_half() {
+        let declared = split_prototype(true);
+        for body in [
+            vec![bare_return(Expr::Reg(VReg::phys("eax#1")))],
+            vec![
+                register_assignment("xmm0#1", 40),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "clobber".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(VReg::phys("rax#2")),
+                    call_spec: None,
+                },
+                bare_return(Expr::Reg(VReg::phys("eax#3"))),
+            ],
+        ] {
+            let mut f = function(body.clone());
+            assert!(!materialize_register_split_returns(
+                &mut f,
+                CallConv::SysVAmd64,
+                Some(&declared)
+            ));
+            assert_eq!(f.body, body, "a refusal must not partially rewrite");
+        }
+    }
+
+    #[test]
+    fn register_resident_split_return_refuses_an_unproven_join_path() {
+        let original = vec![
+            register_assignment("eax#0", 17),
+            Stmt::If {
+                cond: Expr::Reg(VReg::phys("flag")),
+                then_body: vec![register_assignment("xmm0#1", 40)],
+                else_body: Some(Vec::new()),
+            },
+            bare_return(Expr::Reg(VReg::phys("eax#2"))),
+        ];
+        let mut f = function(original.clone());
+        let declared = split_prototype(true);
+
+        assert!(!materialize_register_split_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(f.body, original);
+    }
+
+    #[test]
+    fn register_resident_split_return_does_not_capture_scalar_or_other_abi_results() {
+        let body = vec![
+            register_assignment("xmm0#1", 40),
+            bare_return(Expr::Reg(VReg::phys("eax#2"))),
+        ];
+        for (cc, declared) in [
+            (CallConv::SysVAmd64, prototype(ReturnClass::Single)),
+            (CallConv::Win64, split_prototype(true)),
+        ] {
+            let mut f = function(body.clone());
+            assert!(!materialize_register_split_returns(
+                &mut f,
+                cc,
+                Some(&declared)
+            ));
+            assert_eq!(f.body, body);
+        }
     }
 }

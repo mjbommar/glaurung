@@ -259,6 +259,12 @@ pub(super) fn run_ast_passes(
     // return use together, rather than orphaning the result as scratch.
     pass!("materialize_direct_output", {
         if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
+            // Preserve every bank before generic direct-output projection
+            // chooses one and folds its final assignment into the return.
+            // After that fold the expression no longer identifies whether it
+            // came from RAX or XMM0; GCC and Clang choose opposite banks for
+            // the same mixed aggregate.
+            crate::ir::callee_return_bank::materialize_register_split_returns(f, cc, prototype);
             crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
             // The result register now carries the LOW eightbyte of a proven
             // two-register aggregate result. State the whole contract here,
