@@ -81,6 +81,24 @@ integration target passed, and both doc tests passed with one ignored. The
 identity-retrieval integration tail took 522.21 seconds but completed with 44
 passed and ten ignored.
 
+The required whole Python command was also allowed to finish:
+
+```text
+uv run pytest python/tests/
+```
+
+It remained broadly red after 2,685.31 seconds: 4,611 passed, 119 failed, 68
+skipped, 896 expected-failed, and 125 deselected. The failures span the already
+recorded fixture, architecture, structural, def-use, documentation, fitness,
+and generated-reference drift; the semantic baselines were not rewritten.
+The focused fixture command above is the regression evidence for this slice,
+not the red repository-wide total. Two bookkeeping facts are relevant to
+interpreting the broad result: `packed.rs` was already 1,174 lines and above
+the large-module threshold before this increment, and the documentation index
+already omitted nineteen other review-result records. This record is now
+listed explicitly in `docs/history/README.md`; the unrelated historical/index,
+fitness, and generated-pass-reference failures remain visible.
+
 ## Next production increment
 
 Do not repair the remaining cells by merely spelling four helper arguments.
