@@ -22,8 +22,8 @@ fixture now has the same essential output:
 
 ```c
 int classify(int arg0) {
-    if (0 <= (long)(arg0)) {
-        while (100 < (long)(arg0)) {
+    if (0 <= arg0) {
+        while (100 < arg0) {
             arg0 -= 100;
         }
         return arg0;
@@ -33,9 +33,12 @@ int classify(int arg0) {
 }
 ```
 
-The remaining `0 <= (long)(arg0)` spelling is semantically correct but still
-more cast-heavy than the source's `n >= 0`; it is outside this return-result
-increment and remains expression/type cleanup work.
+Commit `2be036eb` completed the adjacent expression/type cleanup. The typed
+comparison renderer now removes a signed widening only when the operand's
+selected declaration is a narrower signed integer and the other operand is a
+literal representable at that narrower width. The same cast is retained for a
+wider literal, unsigned declaration, unsigned relation, or non-register
+expression. This is a destination-declaration rule, not a spelling rewrite.
 
 ## Production boundaries
 
@@ -126,3 +129,25 @@ They are not silently reclassified as success and no baseline was refreshed.
 This evidence completes the focused `classify` behavior and its exact-commit
 Rust gate, but it does **not** establish a repository-wide green release. The
 JUnit report is retained at the command's path above for failure triage.
+
+## Follow-on cast-cleanup evidence
+
+At source commit `2be036eb`, after a release extension rebuild:
+
+- the focused GCC/Clang test passed both parameterized cases, covering all
+  eight signed/unsigned debug/stripped function cells and their 34/31-case
+  execution differentials;
+- all 216 `ir::ast::tests` passed;
+- `tools/dectest.py @loops @polarity @switch @widths --jobs 8 --full`
+  selected 24 of 838 lanes and reported zero scoped regressions;
+- `cargo test --features python-ext` passed 4,315 tests with 0 failures and 17
+  ignored.
+
+The whole Python suite at that exact source commit collected 5,695 tests:
+4,615 passed, 115 failed, and 965 skipped in 2,732.810 seconds. Compared with
+the preceding exact run at `74f425fe`, seven failure identities disappeared
+and one appeared. The one addition was the expected stale generated test
+census after adding the Rust refusal test; commit `8e3fb83d` refreshes only
+that census (4,574 to 4,575 total declarations; `ir` 2,069 to 2,070), and all
+six census tests then pass. The remaining broad Python failures are still not
+a green release claim.

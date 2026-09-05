@@ -10,9 +10,8 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-04 through implementation commit
-`5fdd0c8f` (validated in clean exact checkout `74f425fe`; documentation tip was
-`5e7d836b`). WP0 and
+Current-state snapshot: reconciled 2026-09-05 through implementation commit
+`2be036eb` and census refresh `8e3fb83d`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
@@ -25,12 +24,14 @@ solver. WP2, WP3,
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
-The full Rust gate is green in clean exact checkout `74f425fe` (4,314 passed,
-0 failed, 17 ignored). Its required whole Python gate completed red: 4,599
-passed, 121 failed, and 975 skipped out of 5,695 collected in 2,610.881
-seconds. Both parameterized `classify` tests passed within that run, but the
-broad failures remain release blockers; this is not a current-tip green
-`release` claim. M3 through M6 remain open.
+The full Rust gate is green at `2be036eb` (4,315 passed, 0 failed, 17 ignored).
+Its required whole Python gate completed red: 4,615 passed, 115 failed, and 965
+skipped out of 5,695 collected in 2,732.810 seconds. Both parameterized
+`classify` tests passed within that run. The sole failure identity newly added
+relative to `74f425fe` was its stale one-test census; `8e3fb83d` refreshed that
+generated baseline and all six focused census tests pass. The broad failures
+remain release blockers; this is not a current-tip green `release` claim. M3
+through M6 remain open.
 
 ## Authority and relationship to the roadmaps
 
@@ -1021,6 +1022,13 @@ casts. This closes the concrete `classify` return issue, but not WP6's general
 constraint solver or corpus-wide C/Rust measurement exit criteria. See
 `results/wp6-classify-signed-return.md`.
 
+The follow-on `2be036eb` typed-render increment removes the remaining
+`(long)(n)` shells from both signed `classify` predicates. It consults the
+selected declaration, accepts only value-preserving signed widening against a
+representable literal, and retains wider-literal and unsigned cases. This
+closes the concrete example's cast-heavy predicate spelling without claiming
+the general WP6 constraint solver is complete.
+
 Required regression coverage is equally part of completion:
 
 - `python/tests/test_classify_signed_loop.py` must assert the signed declaration,
@@ -1966,7 +1974,8 @@ relevant ratchet's accepted-regression record.
    result-fact and typed-AST boundaries, with a genuinely unsigned control.
    The clean exact-checkout Rust gate is green, and both `classify` tests pass
    within the whole Python run. That whole run remains broadly red (121
-   failures), which is recorded rather than promoted to a release claim; see
+   failures at the prior slice, 115 at `2be036eb` before its mechanical census
+   refresh), which is recorded rather than promoted to a release claim; see
    `results/wp6-classify-signed-return.md`.
    Report O2 separately rather than claiming source-loop recovery after
    strength reduction or unrolling.
