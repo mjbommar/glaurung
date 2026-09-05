@@ -123,8 +123,14 @@ at the preceding exact commit. They are baseline debt and earlier improvements,
 respectively, rather than changes attributable to this increment. The complete
 six-test def-use census likewise produces an identical parent/tip report (four
 tests green, the same regression and improvement ratchets red). Branching
-private regions and the remaining promotion gates stay open; see
-`results/wp4-raw-switch-private-prefixes.md`.
+private regions are now covered by the follow-on `1ce1a80b`: bounded,
+predecessor-closed private DAGs retain their conditional inside the typed arm,
+while an independent verifier rejects a forged shared-join crossing. A real
+GCC ARMv7 A32 case loses two out-of-line gotos, preserves native execution, and
+keeps accounting silent. Cyclic, cross-arm, and shared-join ownership and the
+remaining promotion gates stay open; see
+`results/wp4-raw-switch-private-prefixes.md` and
+`results/wp4-raw-switch-private-branches.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
@@ -2280,9 +2286,19 @@ relevant ratchet's accepted-regression record.
    both red aggregate ratchets, which are retained for explicit baseline
    review. The full def-use census is also parent/tip identical: four of six
    tests pass and the two aggregate baseline-drift ratchets remain red.
-   Branching private subgraphs and
-   general unique-join partitioning remain open; do not widen them without
-   equivalent independent proof.
+   Commit `1ce1a80b` completes the next bounded branching slice: a typed arm
+   may own a deterministic, predecessor-closed private DAG of at most 16
+   blocks. Its independent verifier accepts a private diamond and rejects a
+   forged region crossing a case/default shared join. On a real GCC ARMv7 A32
+   byte-table loop, case 0 moves from two out-of-line gotos to an inline
+   `if (acc <= 6)` with native execution preserved. Cyclic regions, cross-arm
+   ownership, shared-join ownership, and general unique-join partitioning
+   remain refused; do not widen them without equivalent independent proof.
+   Its exact structural and def-use reports reproduce every preceding
+   regression/improvement finding without adding a row: 25 of 27 structural
+   tests and four of six def-use tests pass, with both two-sided baseline-debt
+   ratchets intentionally still red.
+   See `results/wp4-raw-switch-private-branches.md`.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
