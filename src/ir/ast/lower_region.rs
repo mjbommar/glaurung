@@ -702,6 +702,18 @@ fn lower_region_inner(
                     }
                 }
             }
+            // Every transfer from an owned raw-loop block back to this exact
+            // header is a source-level continue. Apply the same recursive,
+            // nested-loop-safe conversion used by MultiExitLoop: this reaches
+            // conditional latches and switch arms without crossing a nested
+            // loop boundary. Exit transfers and case-to-handler gotos remain
+            // explicit.
+            let loop_body = materialize_multi_exit_transfers(
+                loop_body,
+                header_va,
+                &std::collections::HashMap::new(),
+                true,
+            );
             vec![Stmt::While {
                 cond: Expr::Const(1),
                 body: loop_body,

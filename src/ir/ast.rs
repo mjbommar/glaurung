@@ -2547,7 +2547,15 @@ function f @ 0x1000 {
                 }],
                 vec![0x1010, 0x1020, 0x1030],
             ),
-            (0x1010, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (
+                0x1010,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1000,
+                    inverted: false,
+                }],
+                vec![0x1020, 0x1000],
+            ),
             (0x1020, vec![Op::Return], vec![]),
             (0x1030, vec![Op::Return], vec![]),
         ]);
@@ -2583,11 +2591,26 @@ function f @ 0x1000 {
             cases,
             &vec![
                 (Some(0), vec![Stmt::Goto { target: 0x1010 }]),
-                (Some(1), vec![Stmt::Goto { target: 0x1020 }]),
                 (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
             ]
         );
-        assert!(default.is_none());
+        assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1020 }]));
+        let latch_has_continue = body.iter().any(|statement| {
+            matches!(
+                statement,
+                Stmt::If { then_body, .. } if then_body.iter().any(|inner| matches!(inner, Stmt::Continue))
+            )
+        });
+        assert!(
+            latch_has_continue,
+            "the owned latch-to-header edge must become continue: {body:#?}"
+        );
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::Goto { target } if *target == 0x1000)),
+            "no explicit raw-loop header goto may survive: {body:#?}"
+        );
         assert!(
             !body
                 .iter()
