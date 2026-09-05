@@ -11,7 +11,7 @@ Review basis: `README.md` and `01` through `06` in this directory
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
 Current-state snapshot: reconciled 2026-09-05 through implementation commit
-`ede20fb0`. WP0 and
+`9fed7199` and oracle commit `41af392d`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
@@ -24,7 +24,7 @@ solver. WP2, WP3,
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
-The full Rust gate is green at `ede20fb0`: its library target reports 4,060
+The full Rust gate is green at `41af392d`: its library target reports 4,065
 passed, 0 failed, and 5 ignored, and every integration and documentation target
 also passed. Its required whole Python gate completed red: 4,613 passed, 116
 failed, 68 skipped, 896 xfailed, and 125 deselected in 2,493.96 seconds. That
@@ -1053,9 +1053,13 @@ Required regression coverage is equally part of completion:
 - [~] Existing aggregate/return fixtures `195`, `197`, and `198`. Commit
   `ede20fb0` repairs three SysV AMD64 memory-class return lanes by combining
   adjacent hidden-result setup with proved caller live-ins and promoting the
-  declared result extent as one stack aggregate. Fixture `198` is green across
-  the scoped host matrix; split-bank mixed returns in `195` and O2 HFA cases in
-  `197` remain open. See `results/wp6-sysv-hidden-return-buffers.md`.
+  declared result extent as one stack aggregate. Commits `9fed7199` and
+  `41af392d` then preserve register-resident INTEGER+SSE results and stop the
+  differential oracle from comparing indeterminate aggregate padding. Fixtures
+  `195` and `198` are now entirely pass or intentionally structural across the
+  scoped host matrix; the O2 HFA cases in `197` remain open. See
+  `results/wp6-sysv-hidden-return-buffers.md` and
+  `results/wp6-sysv-split-bank-returns.md`.
 - [x] `python/tests/test_decompiler_observable_parameter_width.py`.
 - [x] Stripped-lane tests to prove improvements do not depend on debug types.
 - [ ] Solver unit tests for conflicts, ambiguity, and deterministic ordering.
@@ -1999,12 +2003,12 @@ relevant ratchet's accepted-regression record.
    table safety tests are already present and must remain green.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
-7. Continue WP6 from the landed stripped-C per-use signedness and SysV hidden
-   result-buffer slices. Next, recover the split integer/SSE mixed return in
-   fixture `195`, then the O2 homogeneous-float aggregate cases in `197`, as
+7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
+   result-buffer, and split INTEGER+SSE return slices. Next, recover the O2
+   homogeneous-float aggregate helpers and wrappers in fixture `197` as
    independently tested ABI constraints without waiting for the full solver.
-   Keep Rust totals separate and do not generalize the SysV result-buffer
-   evidence to unsupported architectures or language ABIs.
+   Keep Rust totals separate and do not generalize the SysV evidence to
+   unsupported architectures or language ABIs.
 8. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.
