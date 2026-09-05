@@ -22,7 +22,7 @@ use super::lower_conds::{
 };
 use super::lower_ops::{lower_value, switch_index_of};
 use super::{Expr, Function, Stmt};
-use crate::ir::structure::Region;
+use crate::ir::structure::{Region, SwitchEvidence};
 use crate::ir::types::{LlirFunction, Op, VReg};
 
 /// Drop a trailing `goto <target_va>` from a lowered arm — control already
@@ -317,6 +317,9 @@ fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
 /// bodies jump to the original block labels.
 fn lower_raw_loop_block(
     block: &crate::ir::types::LlirBlock,
+    block_index: usize,
+    lf: &LlirFunction,
+    switch: Option<&SwitchEvidence>,
     default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
@@ -344,17 +347,39 @@ fn lower_raw_loop_block(
         return statements;
     };
     statements.remove(indirect_position);
-    let cases = block
-        .succs
-        .iter()
-        .enumerate()
-        .filter(|(_, target)| default_target != Some(**target))
-        .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
-        .collect();
+    let typed_switch = switch
+        .filter(|evidence| evidence.complete)
+        .filter(|evidence| evidence.dispatch == block_index);
+    let cases = if let Some(evidence) = typed_switch {
+        evidence
+            .cases
+            .iter()
+            .flat_map(|case| {
+                let target = lf.blocks.get(case.target).map(|block| block.start_va);
+                case.values.iter().copied().filter_map(move |value| {
+                    target.map(|target| (Some(value), vec![Stmt::Goto { target }]))
+                })
+            })
+            .collect()
+    } else {
+        block
+            .succs
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| default_target != Some(**target))
+            .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
+            .collect()
+    };
+    let typed_default = typed_switch
+        .and_then(|evidence| evidence.default.as_ref())
+        .and_then(|default| lf.blocks.get(default.target))
+        .map(|block| block.start_va);
     statements.push(Stmt::Switch {
         discriminant,
         cases,
-        default: default_target.map(|target| vec![Stmt::Goto { target }]),
+        default: typed_default
+            .or(default_target)
+            .map(|target| vec![Stmt::Goto { target }]),
     });
     statements
 }
@@ -675,6 +700,7 @@ fn lower_region_inner(
             header,
             blocks,
             exits: _,
+            switch,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
@@ -684,6 +710,9 @@ fn lower_region_inner(
                 loop_body.push(Stmt::Label(block.start_va));
                 loop_body.extend(lower_raw_loop_block(
                     block,
+                    block_index,
+                    lf,
+                    switch.as_ref(),
                     default_target,
                     lower_scalar_float,
                 ));

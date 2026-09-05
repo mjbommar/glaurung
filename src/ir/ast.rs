@@ -28,7 +28,9 @@ use crate::ir::types_recover::{TypeHint, TypeMap};
 #[cfg(test)]
 use crate::ir::call_contracts::{CallPrototypeAuthority, CallSiteSpec};
 #[cfg(test)]
-use crate::ir::structure::Region;
+use crate::ir::structure::{
+    Region, SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+};
 #[cfg(test)]
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, Value};
 
@@ -2564,6 +2566,7 @@ function f @ 0x1000 {
                 header: 0,
                 blocks: vec![0, 1],
                 exits: vec![2, 3],
+                switch: None,
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2620,12 +2623,11 @@ function f @ 0x1000 {
     }
 
     #[test]
-    fn a_raw_dispatch_loop_coalesces_guard_default_table_slots() {
-        // PIC switch tables commonly point every unused in-range slot at the
-        // same block as the preceding bounds guard. Rendering each hole as a
-        // separate C case preserves execution but invents source CFG nodes.
-        // Once the guard proves the shared default target, those slots can be
-        // represented exactly by one `default` arm.
+    fn a_raw_dispatch_loop_uses_typed_case_values_and_guard_only_default() {
+        // The CFG evidence, not successor position, owns source-level case
+        // values. The bounds guard's default need not also appear among the
+        // dispatch successors; retaining SwitchEvidence on RawLoop is what
+        // makes both facts available to AST lowering.
         let lf = mk_cfg(vec![
             (
                 0x1000,
@@ -2642,7 +2644,7 @@ function f @ 0x1000 {
                     target: Value::Reg(VReg::phys("target")),
                     index: Some(Value::Reg(VReg::phys("state"))),
                 }],
-                vec![0x1020, 0x1050, 0x1030, 0x1050],
+                vec![0x1020, 0x1030],
             ),
             (0x1020, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
             (0x1030, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
@@ -2654,6 +2656,27 @@ function f @ 0x1000 {
                 header: 0,
                 blocks: vec![0, 1, 2, 3],
                 exits: vec![5],
+                switch: Some(SwitchEvidence {
+                    dispatch: 1,
+                    cases: vec![
+                        SwitchCaseEvidence {
+                            target: 2,
+                            values: vec![10, 12],
+                        },
+                        SwitchCaseEvidence {
+                            target: 3,
+                            values: vec![42],
+                        },
+                    ],
+                    default: Some(SwitchDefaultEvidence {
+                        guard: 0,
+                        target: 5,
+                        dispatch: Some(1),
+                        taken: true,
+                    }),
+                    complete: true,
+                    provenance: SwitchEvidenceProvenance::TypedCfgEdges,
+                }),
             },
             Region::Block(5),
         ]);
@@ -2675,8 +2698,9 @@ function f @ 0x1000 {
         assert_eq!(
             cases,
             &vec![
-                (Some(0), vec![Stmt::Goto { target: 0x1020 }]),
-                (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
+                (Some(10), vec![Stmt::Goto { target: 0x1020 }]),
+                (Some(12), vec![Stmt::Goto { target: 0x1020 }]),
+                (Some(42), vec![Stmt::Goto { target: 0x1030 }]),
             ]
         );
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));

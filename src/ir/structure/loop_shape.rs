@@ -119,11 +119,16 @@ pub(super) fn detect_raw_dispatch_loop(
         [exit] => Some(*exit),
         _ => None,
     };
+    let switch = blocks
+        .iter()
+        .find_map(|block| cfg.switch_at(*block))
+        .cloned();
     Some(LoopRegion {
         region: Region::RawLoop {
             header,
             blocks,
             exits,
+            switch,
         },
         exit: continuation,
     })
@@ -207,6 +212,7 @@ pub(super) fn detect_raw_multi_latch_loop(
             header,
             blocks,
             exits,
+            switch: None,
         },
         exit: Some(exit),
     })

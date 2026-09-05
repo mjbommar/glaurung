@@ -1350,6 +1350,7 @@ mod tests {
             header: 0,
             blocks: vec![0, 1, 2],
             exits: Vec::new(),
+            switch: None,
         };
 
         let errors = account(&edges, &preds, 0, &region);

@@ -11,6 +11,8 @@
 //! from the tree alone, with no CFG in hand; every predicate that needs a
 //! [`super::cfg::Cfg`] lives with the pass that asks it.
 
+use super::cfg::SwitchEvidence;
+
 /// One structured region in the recovered tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Region {
@@ -76,6 +78,11 @@ pub enum Region {
         /// dispatch loops can terminate through more than one case, so a
         /// single distinguished exit would lose executable control flow.
         exits: Vec<usize>,
+        /// Canonical typed case/default facts for the one resolved dispatch in
+        /// this loop. `None` distinguishes an ordinary multi-latch raw loop.
+        /// Keeping this on the owning region prevents AST lowering from
+        /// reconstructing switch meaning from successor order and labels.
+        switch: Option<SwitchEvidence>,
     },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-
