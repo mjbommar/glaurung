@@ -47,13 +47,13 @@ At hardened exact commit `5ef0bcb9`, after a clean-worktree
 
 - `dense_dispatch` passes all 22 native ARMv7 execution cases in production
   v1 output.
-- `dispatch_in_loop` passes native ARMv7 execution through the independently
-  selected `shadow_v2=True` output.
-- Production v1 still fails `dispatch_in_loop`. Discovery resolves seven
-  ordered targets and leaves no unresolved indirect site, but structural
-  accounting reports six unowned case-to-header backedges plus the guard edge.
-  The strict xfail remains an executable WP4 defect; it is not counted as a
-  WP5 recovery failure or silently promoted.
+- `dispatch_in_loop` first passed native ARMv7 execution through the
+  independently selected `shadow_v2=True` output. The subsequent WP4 repair at
+  `6f0ba701` makes production v1 pass as well: the local raw loop owns all six
+  case-to-header backedges and retains the recovered switch. One explicit
+  guard transfer remains as an `EdgeViaGoto` readability finding; there are no
+  hard unowned-edge findings. See
+  `wp4-a32-multi-latch-dispatch-loop.md` for the independently measured repair.
 
 Focused command:
 
@@ -62,7 +62,9 @@ TMPDIR=$HOME/.cache/glaurung/tmp uv run pytest -q \
   python/tests/test_decompiler_arch_roundtrip.py -k a32_o2 -rxX
 ```
 
-Result: two passed and one strict expected failure.
+At `5ef0bcb9`, the result was two passed and one strict expected failure. At
+`56503e53`, after the WP4 repair and census refresh, all seven focused A32
+architecture tests pass and the expected-failure marker has been removed.
 
 ## Safety and gate evidence
 
@@ -98,9 +100,8 @@ AArch64 parent finds no tip-only failing node IDs.
 
 ## Next boundary
 
-The next quality defect exposed by this slice belongs to WP4: production v1 must own
-all backedges of a switch nested in a natural loop and account for the guard
-edge without falling back to a whole-function labelled CFG. Shadow v2 already
-provides executable evidence for the intended structure, so the repair can be
-tested against a concrete production/shadow differential rather than inferred
-from rendered text.
+The production-v1 loop ownership defect exposed by this slice is closed at
+`6f0ba701`. The remaining quality boundary is to replace the explicit guard
+transfer with a structured source-level construct when that transformation is
+proved, and to improve the undefined-looking precondition expression without
+weakening fail-closed definedness checks.

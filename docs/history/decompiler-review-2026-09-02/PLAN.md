@@ -136,11 +136,17 @@ The following ARMv7 A32 slice is landed at `76cce5d1` and hardened at
 decode, and `add pc, pc, rOffset, lsl #2` semantics recover nine O2 switch
 functions with zero parent/tip decline across 410 lanes and 1,604 function
 verdicts. Production `dense_dispatch` and shadow-v2 `dispatch_in_loop` pass
-native execution; the latter remains a strict production-v1 WP4 ownership
-xfail. Four valid wide byte switches in `43_base64` exposed a v1 recursive
+native execution. Commit `6f0ba701` closes the latter's production-v1 WP4
+ownership defect: all six latch backedges are locally owned and production now
+passes with a real switch inside the loop. Four valid wide byte switches in
+`43_base64` exposed a v1 recursive
 stack overflow; the shared graph-sized structure work budget now selects the
 complete labelled CFG in 0.17 seconds instead of crashing. See
 `results/wp5-armv7-a32-byte-switch.md`.
+The exact 410-lane post-repair comparison has one attributable movement,
+`dispatch_in_loop` from `fail` to `pass`; two unrelated alternating rows are
+recorded as same-revision harness instability rather than code regressions.
+See `results/wp4-a32-multi-latch-dispatch-loop.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -1007,8 +1013,10 @@ one authoritative set of case edges.
   PC-relative literal materialisation through the scaled PC terminal. Nine
   function verdicts improve and none decline across the complete 410-lane,
   1,604-function parent/tip comparison. `dense_dispatch` passes production
-  execution; `dispatch_in_loop` passes shadow-v2 execution but remains a strict
-  v1 structurer xfail. A graph-sized recursive work budget also makes four
+  execution; `dispatch_in_loop` passes both shadow-v2 and, after `6f0ba701`,
+  production-v1 execution. Its multi-latch raw loop owns every backedge and
+  leaves one explicit outer-guard transfer as a quality-only accounting
+  finding. A graph-sized recursive work budget also makes four
   valid 48-entry tables degrade to complete labelled CFG output rather than
   overflowing the native stack.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
@@ -2199,9 +2207,12 @@ relevant ratchet's accepted-regression record.
    tip-only failure IDs, while remaining broadly red at 125 failures.
    The stacked ARMv7 A32 slice at `76cce5d1`/`5ef0bcb9` removes nine more O2
    failures with zero attributable decline across 1,604 function verdicts.
-   Next fix the now-isolated v1 loop-backedge ownership xfail, then continue
-   with Thumb loop tables, AArch64 adjacent-table variants, and wide-selector
-   forms.
+   Commit `6f0ba701` then closes the isolated production-v1 loop-backedge
+   ownership failure; its exact full A32 comparison adds the intended
+   `dispatch_in_loop` fail-to-pass movement with no attributable decline.
+   Next remove the surviving outer-guard goto/undefined-looking temporary as
+   separately proved quality work, then continue with Thumb loop tables,
+   AArch64 adjacent-table variants, and wide-selector forms.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden

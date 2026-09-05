@@ -191,14 +191,20 @@ open. Detailed evidence is in
 The next stacked WP5 slice at `76cce5d1`, hardened at `5ef0bcb9`, recovers
 GCC ARMv7 A32's PC-relative unsigned-byte tables ending in exact
 `add pc, pc, rOffset, lsl #2` semantics. Production `dense_dispatch` and
-shadow-v2 `dispatch_in_loop` pass native execution; the loop remains an honest
-strict production-v1 ownership xfail. Across the complete 410-lane ARMv7 A32
+shadow-v2 `dispatch_in_loop` pass native execution. Commit `6f0ba701` also
+closes the production-v1 multi-latch loop ownership defect: the same function
+now passes with a real switch inside its locally owned loop. Across the
+complete 410-lane ARMv7 A32
 O0/O2 comparison, nine of 1,604 function verdicts move from `fail` to `pass`
 and none becomes worse or disappears. The first clean tip also exposed four
 valid 48-entry switches overflowing v1's native recursion stack. A graph-sized
 shared shape-recovery work budget now declines that function to its complete
 labelled CFG in 0.17 seconds instead of crashing. Detailed evidence is in
 [`wp5-armv7-a32-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-armv7-a32-byte-switch.md).
+The exact post-repair comparison adds one attributable fail-to-pass movement
+and no attributable decline; same-revision instability in two unrelated rows
+is recorded separately in
+[`wp4-a32-multi-latch-dispatch-loop.md`](../../history/decompiler-review-2026-09-02/results/wp4-a32-multi-latch-dispatch-loop.md).
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
