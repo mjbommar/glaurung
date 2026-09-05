@@ -1352,6 +1352,7 @@ mod tests {
             exits: Vec::new(),
             switch: None,
             switch_guard: None,
+            switch_inline_entries: Vec::new(),
         };
 
         let errors = account(&edges, &preds, 0, &region);

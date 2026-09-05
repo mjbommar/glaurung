@@ -993,7 +993,7 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
     assert re.search(r"\bvar12\b", recovered) is None, recovered
     assert "continue;" in recovered, recovered
     assert "default:" in recovered, recovered
-    assert recovered.count("goto L_580;") == 1, recovered
+    assert "goto " not in recovered, recovered
 
     results = D.run(
         str(target),

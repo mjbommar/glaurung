@@ -132,6 +132,11 @@ pub(super) fn detect_raw_dispatch_loop(
             && cfg.branch_depends_on_unsigned_comparison(default.guard))
         .then_some(default.guard)
     });
+    let switch_inline_entries = switch
+        .as_ref()
+        .filter(|evidence| evidence.complete)
+        .map(|evidence| exclusive_switch_entries(evidence, &blocks, cfg))
+        .unwrap_or_default();
     Some(LoopRegion {
         region: Region::RawLoop {
             header,
@@ -139,6 +144,7 @@ pub(super) fn detect_raw_dispatch_loop(
             exits,
             switch,
             switch_guard,
+            switch_inline_entries,
         },
         exit: continuation,
     })
@@ -224,6 +230,7 @@ pub(super) fn detect_raw_multi_latch_loop(
             exits,
             switch: None,
             switch_guard: None,
+            switch_inline_entries: Vec::new(),
         },
         exit: Some(exit),
     })
@@ -231,6 +238,44 @@ pub(super) fn detect_raw_multi_latch_loop(
 
 fn body_contains_guard_and_dispatch(blocks: &[usize], guard: usize, dispatch: usize) -> bool {
     blocks.contains(&guard) && blocks.contains(&dispatch)
+}
+
+fn exclusive_switch_entries(
+    evidence: &super::cfg::SwitchEvidence,
+    blocks: &[usize],
+    cfg: &Cfg,
+) -> Vec<usize> {
+    let guard = evidence.default.as_ref().map(|default| default.guard);
+    let default_target = evidence.default.as_ref().map(|default| default.target);
+    let case_targets = evidence
+        .cases
+        .iter()
+        .map(|case| case.target)
+        .collect::<HashSet<_>>();
+    let mut entries = case_targets
+        .iter()
+        .copied()
+        .filter(|target| {
+            blocks.contains(target)
+                && !cfg.preds[*target].is_empty()
+                && cfg.preds[*target]
+                    .iter()
+                    .all(|predecessor| *predecessor == evidence.dispatch)
+        })
+        .collect::<Vec<_>>();
+    if let Some(target) = default_target.filter(|target| !case_targets.contains(target)) {
+        if blocks.contains(&target)
+            && !cfg.preds[target].is_empty()
+            && cfg.preds[target]
+                .iter()
+                .all(|predecessor| *predecessor == evidence.dispatch || Some(*predecessor) == guard)
+        {
+            entries.push(target);
+        }
+    }
+    entries.sort_unstable();
+    entries.dedup();
+    entries
 }
 
 /// Recognise a natural while-loop headed at `header`.

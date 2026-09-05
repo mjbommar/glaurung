@@ -2568,6 +2568,7 @@ function f @ 0x1000 {
                 exits: vec![2, 3],
                 switch: None,
                 switch_guard: None,
+                switch_inline_entries: Vec::new(),
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2679,6 +2680,7 @@ function f @ 0x1000 {
                     provenance: SwitchEvidenceProvenance::TypedCfgEdges,
                 }),
                 switch_guard: Some(0),
+                switch_inline_entries: vec![2, 3],
             },
             Region::Block(5),
         ]);
@@ -2697,20 +2699,23 @@ function f @ 0x1000 {
         else {
             panic!("expected typed switch inside raw loop: {body:#?}");
         };
-        assert_eq!(
-            cases,
-            &vec![
-                (Some(10), vec![Stmt::Goto { target: 0x1020 }]),
-                (Some(12), vec![Stmt::Goto { target: 0x1020 }]),
-                (Some(42), vec![Stmt::Goto { target: 0x1030 }]),
-            ]
-        );
+        assert_eq!(cases[0], (Some(10), Vec::new()));
+        assert_eq!(cases[1].0, Some(12));
+        assert_eq!(cases[2].0, Some(42));
+        assert!(cases[1].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
+        assert!(cases[2].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
         assert!(
             !body
                 .iter()
                 .any(|statement| matches!(statement, Stmt::If { .. })),
             "the proven range guard must be absorbed into the typed switch: {body:#?}"
+        );
+        assert!(
+            !body.iter().any(|statement| {
+                matches!(statement, Stmt::Label(target) if *target == 0x1020 || *target == 0x1030)
+            }),
+            "exclusive handler entries must be emitted in their case arms: {body:#?}"
         );
     }
 

@@ -86,6 +86,10 @@ pub enum Region {
         /// Range guard proven safe to absorb into `switch` by the same typed
         /// unsigned-comparison contract as an ordinary guarded switch.
         switch_guard: Option<usize>,
+        /// One-block case/default prefixes with no incoming owner except the
+        /// typed dispatch or folded guard. Shared suffixes remain labelled and
+        /// are emitted once.
+        switch_inline_entries: Vec<usize>,
     },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-

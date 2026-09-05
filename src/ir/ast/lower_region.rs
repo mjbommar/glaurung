@@ -321,6 +321,7 @@ fn lower_raw_loop_block(
     lf: &LlirFunction,
     switch: Option<&SwitchEvidence>,
     fold_switch_guard: bool,
+    inline_entries: &[usize],
     default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
@@ -376,15 +377,41 @@ fn lower_raw_loop_block(
     let typed_switch = switch
         .filter(|evidence| evidence.complete)
         .filter(|evidence| evidence.dispatch == block_index);
+    let lower_inline_entry = |target: usize| {
+        if !inline_entries.contains(&target) {
+            return None;
+        }
+        let block = lf.blocks.get(target)?;
+        let mut body = lower_block(block, lower_scalar_float);
+        if let Some(successor) = implicit_successor(block) {
+            body.push(Stmt::Goto { target: successor });
+        }
+        Some(body)
+    };
     let cases = if let Some(evidence) = typed_switch {
         evidence
             .cases
             .iter()
             .flat_map(|case| {
                 let target = lf.blocks.get(case.target).map(|block| block.start_va);
-                case.values.iter().copied().filter_map(move |value| {
-                    target.map(|target| (Some(value), vec![Stmt::Goto { target }]))
-                })
+                let inline_body = lower_inline_entry(case.target);
+                let last_value = case.values.len().saturating_sub(1);
+                case.values
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(move |(position, value)| {
+                        target.map(|target| {
+                            let body = if position == last_value {
+                                inline_body
+                                    .clone()
+                                    .unwrap_or_else(|| vec![Stmt::Goto { target }])
+                            } else {
+                                Vec::new()
+                            };
+                            (Some(value), body)
+                        })
+                    })
             })
             .collect()
     } else {
@@ -400,12 +427,17 @@ fn lower_raw_loop_block(
         .and_then(|evidence| evidence.default.as_ref())
         .and_then(|default| lf.blocks.get(default.target))
         .map(|block| block.start_va);
+    let default_body = typed_switch
+        .and_then(|evidence| evidence.default.as_ref())
+        .and_then(|default| lower_inline_entry(default.target));
     statements.push(Stmt::Switch {
         discriminant,
         cases,
-        default: typed_default
-            .or(default_target)
-            .map(|target| vec![Stmt::Goto { target }]),
+        default: default_body.or_else(|| {
+            typed_default
+                .or(default_target)
+                .map(|target| vec![Stmt::Goto { target }])
+        }),
     });
     statements
 }
@@ -728,10 +760,16 @@ fn lower_region_inner(
             exits: _,
             switch,
             switch_guard,
+            switch_inline_entries,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
-            for (position, block_index) in blocks.iter().copied().enumerate() {
+            let rendered_blocks = blocks
+                .iter()
+                .copied()
+                .filter(|block| !switch_inline_entries.contains(block))
+                .collect::<Vec<_>>();
+            for (position, block_index) in rendered_blocks.iter().copied().enumerate() {
                 let block = &lf.blocks[block_index];
                 let default_target = raw_dispatch_default_target(lf, blocks, block_index);
                 loop_body.push(Stmt::Label(block.start_va));
@@ -741,6 +779,7 @@ fn lower_region_inner(
                     lf,
                     switch.as_ref(),
                     *switch_guard == Some(block_index),
+                    switch_inline_entries,
                     default_target,
                     lower_scalar_float,
                 ));
@@ -749,7 +788,7 @@ fn lower_region_inner(
                 // loop owns a non-contiguous subset and starts at its header, so
                 // make every displaced fallthrough explicit. Falling off the
                 // final block naturally starts the next `while (1)` iteration.
-                let lexical_next = blocks
+                let lexical_next = rendered_blocks
                     .get(position + 1)
                     .map(|next| lf.blocks[*next].start_va)
                     .unwrap_or(header_va);
