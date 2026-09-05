@@ -346,35 +346,22 @@ pub(super) fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     match (instr.op_kind(0), instr.op_kind(1)) {
         (OpKind::Register, OpKind::Memory) if is_xmm_register(instr.op_register(0)) => {
             let dst = instr.op_register(0);
-            let scalar = VReg::phys(reg_name(dst));
-            let mut addr = mem_op_of(instr);
-            addr.size = 8;
-            vec![
-                Op::Load {
-                    dst: scalar.clone(),
-                    addr,
-                },
-                Op::Trunc {
-                    dst: packed_dword_lane(dst, 0),
-                    src: Value::Reg(scalar.clone()),
-                    from: Width::W64,
-                    to: Width::W32,
-                },
-                Op::Extract {
-                    dst: packed_dword_lane(dst, 1),
-                    src: Value::Reg(scalar),
-                    hi: 64,
-                    lo: 32,
-                },
-                Op::Assign {
-                    dst: packed_dword_lane(dst, 2),
-                    src: Value::Const(0),
-                },
-                Op::Assign {
-                    dst: packed_dword_lane(dst, 3),
-                    src: Value::Const(0),
-                },
-            ]
+            let mut ops: Vec<_> = (0..2)
+                .map(|lane| {
+                    let mut addr = mem_op_of(instr);
+                    addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                    addr.size = 4;
+                    Op::Load {
+                        dst: packed_dword_lane(dst, lane),
+                        addr,
+                    }
+                })
+                .collect();
+            ops.extend((2..4).map(|lane| Op::Assign {
+                dst: packed_dword_lane(dst, lane),
+                src: Value::Const(0),
+            }));
+            ops
         }
         (OpKind::Memory, OpKind::Register) if is_xmm_register(instr.op_register(1)) => {
             let src = instr.op_register(1);

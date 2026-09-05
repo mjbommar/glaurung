@@ -9558,7 +9558,7 @@ mod tests {
     }
 
     #[test]
-    fn movq_xmm_memory_load_is_one_qword_access_and_store_is_two_lanes() {
+    fn movq_xmm_memory_moves_exactly_two_dword_lanes() {
         // movq xmm0,qword ptr [rax]; movq qword ptr [rax],xmm0.  GCC uses
         // this pair to load and conditionally swap adjacent i32 elements.
         // The upper two XMM lanes are cleared on the load and are not stored.
@@ -9570,17 +9570,16 @@ mod tests {
             )),
             "packed qword moves must be explicit: {ops:#?}"
         );
-        assert_eq!(
-            ops.iter()
-                .filter(|instruction| matches!(
-                    &instruction.op,
-                    Op::Load { dst: VReg::Phys(dst), addr } if dst == "xmm0" && addr.size == 8
-                ))
-                .count(),
-            1,
-            "MOVQ load must preserve its one size-8 memory access: {ops:#?}"
-        );
         for lane in 0..2 {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Load {
+                    dst: VReg::Phys(dst),
+                    addr,
+                } if dst == &format!("xmm0_d{lane}")
+                    && addr.disp == (lane * 4) as i64
+                    && addr.size == 4
+            )));
             assert!(ops.iter().any(|instruction| matches!(
                 &instruction.op,
                 Op::Store {
