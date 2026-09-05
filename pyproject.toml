@@ -45,6 +45,9 @@ tests = [
     "pytest",
     "pytest-benchmark",
 ]
+graphs = [
+    "networkx>=3.0",
+]
 [tool.maturin]
 python-source = "python"
 features = ["pyo3/extension-module", "python-ext"]

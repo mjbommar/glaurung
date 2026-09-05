@@ -482,6 +482,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+graphs = [
+    { name = "networkx" },
+]
 tests = [
     { name = "pytest" },
     { name = "pytest-benchmark" },
@@ -499,6 +502,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "networkx", marker = "extra == 'graphs'", specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pydantic-ai", specifier = ">=1.86.0" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "google", "openai"], specifier = ">=1.86.0" },
@@ -509,7 +513,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.1.0" },
     { name = "structlog", specifier = ">=25.4.0" },
 ]
-provides-extras = ["tests"]
+provides-extras = ["graphs", "tests"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -946,6 +950,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/de/1d/f4da6f02cdffe04d6362210b807146a26044c88d839208aec273bb0d9184/more_itertools-11.1.0.tar.gz", hash = "sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d", size = 145772, upload-time = "2026-05-22T14:14:29.909Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/3d/1087453384dbde46a8c7f9356eead2c58be8a7bf156bca40243377c85715/more_itertools-11.1.0-py3-none-any.whl", hash = "sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192", size = 72226, upload-time = "2026-05-22T14:14:28.824Z" },
+]
+
+[[package]]
+name = "networkx"
+version = "3.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
 ]
 
 [[package]]

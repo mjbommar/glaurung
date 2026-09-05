@@ -91,6 +91,7 @@ commands are executed and byte-compared against `_fixtures/` by
 [decompiler output format](reference/decompiler-output-format.md),
 [disassembly](reference/disassembly.md),
 [source metrics for C](reference/source-metrics.md),
+[C source files and graphs from Python](reference/source-python.md),
 [language detection](reference/language-detection.md),
 [packer configuration](reference/packer-config.md),
 [similarity](reference/similarity.md),

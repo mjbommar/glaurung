@@ -707,3 +707,23 @@ def compare(
         "removed": sorted(set(left) - set(right)),
         "totals": totals,
     }
+
+
+# File-based graph and function APIs. The implementation keeps NetworkX lazy.
+from glaurung._source_files import (
+    Function as Function,
+    SourceParseError as SourceParseError,
+    SourceParseWarning as SourceParseWarning,
+    fast_cfgs_from_source as fast_cfgs_from_source,
+    parse_callgraph as parse_callgraph,
+    parse_source as parse_source,
+)
+
+__all__ += [
+    "Function",
+    "SourceParseError",
+    "SourceParseWarning",
+    "fast_cfgs_from_source",
+    "parse_callgraph",
+    "parse_source",
+]
