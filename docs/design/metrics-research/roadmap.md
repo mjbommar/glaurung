@@ -45,7 +45,7 @@ M1 mutation harness ────────────────┘         
 | M2 | control-skeleton tree edit distance | S1, S2 (landed), M1 | beats GED on the structural classes; 100% specificity on rename/whitespace; null baseline under 5% | no |
 | M3 | adjacency-aware graded CFG distance | M1 | separates the 4-cycle from two 2-cycles; monotone under progressive corruption | no |
 | M4 | behavioural agreement (Tier 1) | **S4**, M1 | detects all six semantics-only classes | **the point** |
-| M5 | bounded equivalence (Tier 2) | **S5**, M4 | separates known-good from known-bad with a witness; `unknown` rate published | yes |
+| M5 | bounded equivalence (Tier 2) | **S5**, M4 | separates known-good from known-bad with a witness; `unknown` rate published | yes — **landed**, §7 |
 | R1 | human-agreement study | M2 | none — it is a check, not a gate | no |
 | R2 | the type-layout problem for semantic scoring | M4 | none | no |
 
@@ -193,7 +193,26 @@ oracle and must not be quoted as one. Bank M0–M3 and stop.
 
 ## 7. M5 — Bounded equivalence
 
-**Blocked on stage S5**, whose gate is already written in
+> **Landed** at `6df1c627` (2026-09-04). Numbers, the sixteen audited
+> equivalent mutants, and the three defects building it exposed are in
+> [`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §7 and
+> not restated here. The headline for this directory: **specificity 513/513
+> (100.0%)** against GED's 95.3% on the same instrument, with zero false alarms
+> across all fourteen semantics-preserving classes — which is the claim
+> [`semantic-metrics.md`](semantic-metrics.md) made for Tier 2 and the reason
+> this increment was worth its cost.
+>
+> Both additions below were honoured. The `unknown` rate is published beside
+> every score and never folded into either ratio (31 abstentions at the recorded
+> bound). The bound is quoted with every verdict, carried in `Bounds` — and the
+> wall-clock caveat in [`calibration.md`](calibration.md) §5 turned out to be
+> exactly right: after `src/symbolic/solver/pipe.rs` gained a real 250 ms wall,
+> two runs of identical code differed by three cells, all of them
+> `solver unknown (wall-timeout)`. So the wall is a budget for *terminating*,
+> not a metric-grade bound, and the scorecard's gate deliberately does not
+> assert on cells that move between `Equivalent` and `Unknown`.
+
+**Was blocked on stage S5**, whose gate is written in
 [`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §7 and is
 not restated here. Two additions from this directory:
 

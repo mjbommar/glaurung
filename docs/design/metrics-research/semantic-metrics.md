@@ -152,6 +152,26 @@ Anyone quoting a cost number here must have run it. Until then this section says
 
 ## 3. Tier 2, and the discipline it needs
 
+> **Built**, at `6df1c627` — `src/csource/equiv/`. The design below is what
+> landed, with one change forced by measurement: the enumerator never forks and
+> instead re-executes once per path replaying a decision prefix, because
+> `src/symbolic/explore.rs` clones the pool per fork and a miter needs every
+> `ExprId` from both sides in **one** pool. Results and the audited shortfalls
+> are in [`roadmap.md`](roadmap.md) §7; the headline is specificity 513/513
+> (100.0%) against GED's 95.3% on the same instrument.
+>
+> Two claims in this section were tested rather than assumed. "`unsat` means
+> equivalent under the bound" is only true if the solver denotes what the
+> executor computes — it did not, and an `unsat` obtained under SMT semantics
+> our own `src/exec/concrete.rs` contradicts produced a false `Equivalent`
+> (fixed in `9c8c1e67`). And the guard is asymmetric in a way worth stating
+> here: a `sat` model is replayed concretely before it becomes a verdict, so
+> `Different` is protected; an `unsat` carries no model, so nothing protects
+> `Equivalent`. The structural fix — one extra query for a reachable
+> out-of-range shift count or zero divisor — is specified in
+> [`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §7 and
+> **not built**.
+
 Bounded equivalence: lower both sides to LLIR, execute both under
 `Machine<Symbolic>` over a shared `ExprPool`, assert that the observables differ
 under equal inputs, and discharge the query with `symbolic::solve`. `unsat` means

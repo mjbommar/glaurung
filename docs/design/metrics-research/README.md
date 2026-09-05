@@ -3,11 +3,31 @@
 > **Kind:** design · **Status:** proposed
 
 Glaurung is replacing Joern as the CFG provider for DecBench's structural
-metric. `src/csource/joern/` reproduces 62,416 of 85,645 stored GED cells exactly
-with zero coverage loss
-([`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §5), so the
-JVM is on its way out of the loop. **This directory asks what should replace the
-number, not just the tool that computes it.**
+metric. `src/csource/joern/` reproduces **79,790 of 85,645** stored GED cells
+exactly (93.1636%, 2026-09-04) with zero coverage loss — the figure and the
+command that produced it are in
+[`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §5, which is
+where it should be read from rather than copied — so the JVM is on its way out of
+the loop. **This directory asks what should replace the number, not just the tool
+that computes it.**
+
+## State
+
+| increment | state |
+|---|---|
+| M2 control-skeleton tree edit distance | landed — `src/metrics/tree_distance.rs`, and the structural gate over our own fixture corpus |
+| M5 bounded equivalence (Tier 2) | **landed** — `src/csource/equiv/`, specificity 513/513 (100.0%) against GED's 95.3%; [roadmap.md](roadmap.md) §7 |
+| external baseline | **landed** — Ghidra and angr scored on our own corpus with our own instrument; [cross-decompiler-structure.md](cross-decompiler-structure.md) |
+| M0, M1, M3, M4 | as described below |
+
+Two contradictions in this directory are open and known:
+[`calibration.md`](calibration.md) reads `goto-ify` at 100% as a false alarm
+while [`structural-metrics.md`](structural-metrics.md) reads it as the headline
+win, and the tree metric's 83.2% specificity is quoted here against GED's 95.3%
+without the two being reconciled. Neither is resolved by the M5 result, because
+M5 declines every `goto-ify` pair — S4 has no `goto`, so the one
+semantics-preserving class that destroys control-flow structure is invisible to
+the semantic oracle as well.
 
 The answer starts with an audit of the incumbent, and the audit is worse than
 expected.

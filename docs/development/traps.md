@@ -196,6 +196,65 @@ pre-existing 0.083% non-determinism — which turned out to be `HashMap`
 iteration order in `merge_exact_definition_widths`, not the time-based budget
 first suspected (2026-08-16 diary, Entry 52).
 
+### Our own emulator is not an oracle for our own lowering
+
+To decide what a piece of C *means*, compile it and run it. `src/csource/lower`
+and `src/exec/concrete.rs` are both our reading of C, so agreement between them
+is one mistake translated twice.
+
+`src/csource/lower` evaluated shifts on 64-bit temporaries and normalized
+afterwards, which is exact for add, sub and mul — their low bits do not depend
+on the evaluation width — and wrong for a shift, whose count is masked against
+the width it executes at. `1u << 32` became 2^32 truncated to 0 where the
+hardware masks the count to 0 and yields 1. The cell was marked "confirmed
+concretely, not only symbolically" — against our own interpreter, which shared
+the defect — and the coordinator then misattributed the cause to the
+`bvshl`-versus-concrete SMT mismatch by checking two of the three available
+answers. Three columns settle it and two do not:
+
+    1u << 32 at width 32     gcc 15.2.0   src/exec/concrete.rs   our SMT
+    before the fixes              1               0                 0
+
+Thirty seconds of `gcc -O1 && ./a.out` would have caught it at either step. Pass
+a variable count through a `volatile` so the compiler emits a real instruction
+instead of folding a constant it is entitled to fold any way it likes, and check
+`-O0` against `-O1`: a divergence between them tells you the expression is
+undefined and that no answer is "correct" until the project picks one.
+`src/csource/lower/tests.rs` states the rule in its own header — "never computed
+by a second Rust translation of the same expression" — without saying that the
+emulator is a second translation too. The S4 differential in
+`lower/differential_tests.rs` is the pattern that works: it scores lowered C
+against the binary the compiler built from the same source, and it confirmed the
+fix independently by dropping to `diverged: 0`
+(2026-09-04, `828becda`).
+
+### A rate measured on one corpus does not transfer to another
+
+DecBench's samples show Ghidra emitting **8.53 `goto` per function** against
+source's 0.81. Read next to our fixture corpus's 0.875 that says goto inflation
+is industry-normal and we are unremarkable. Run Ghidra over *our* binaries and
+it emits **0.065** — thirteen times fewer than us on the same functions. The
+DecBench figure is high because those functions are real-world code and far more
+complex, not because Ghidra structures them badly.
+
+The inflation ratio does not rescue the comparison either, because `goto` count
+tracks control-flow complexity and so does the source's own `goto` count. Only
+matched functions answer the question. This is the denominator error
+[`../design/metrics-research/interpreting-results.md`](../design/metrics-research/interpreting-results.md)
+records for DecBench's scoreboard, reached from the opposite direction, and it
+inverted a published conclusion before it was caught
+([`cross-decompiler-structure.md`](../design/metrics-research/cross-decompiler-structure.md),
+2026-09-04).
+
+### Report medians when a few functions carry the mean
+
+In the same comparison, dropping four functions from a 713-function set moved
+Ghidra's mean tree distance from 12.97 to 8.86 — three of the four had source
+skeletons of 1,678, 517 and 406 nodes with distances in the thousands. The
+medians barely moved. A claim that closing our `goto` gap would put our mean
+"ahead of Ghidra outright" was built on those means and did not survive medians;
+it was withdrawn. Quote the median, or quote both.
+
 ---
 
 ## Performance work

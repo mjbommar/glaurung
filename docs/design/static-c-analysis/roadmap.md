@@ -62,7 +62,7 @@ independent of everything and can be done whenever.
 | S2 | general source CFG | structural invariants and per-construct fixtures | no |
 | S3 | Joern-parity layer + GED | 85,645 reproducible GED cells matched exactly — **93.1636% (79,790) as of 2026-09-04, 0 uncovered** | no |
 | S4 | C → LLIR lowering | the existing interpreter runs a lowered C function | no |
-| S5 | bounded equivalence checking | a known-good and a known-bad decompilation are separated | **the point** |
+| S5 | bounded equivalence checking | a known-good and a known-bad decompilation are separated | **the point** — landed `6df1c627`, §7 |
 | S6 | native `type_match` | per-function `(tp, fp, fn)` equality with the reference | no |
 | S7 | the static analysis surface | per-capability, see §8 | varies |
 
@@ -315,6 +315,60 @@ cannot be driven down on the single-construct fixtures, S5 is not reachable and
 the programme ends at S3 with the metric win banked.
 
 ## 7. S5 — Bounded equivalence checking
+
+> **Landed** at `6df1c627` (2026-09-04). `src/csource/equiv/`, scored by
+> `csource::equiv::scorecard_tests` over 1,810 labelled mutants from
+> `tools/metric_mutation.py`'s own catalogue across 207 fixture functions:
+>
+> ```
+> sensitivity  429/443 decided (96.8%)     GED on the same instrument: 21.8%
+> specificity  513/513 decided (100.0%)    GED: 95.3%
+> unknown      31 abstentions, never folded into either ratio
+> ```
+>
+> Specificity is the number that stands unqualified: zero false alarms across
+> all fourteen semantics-preserving classes, including `demorgan`,
+> `if-else-swap` and `duplicate-tail` — the population every structural metric
+> in this programme is blind on.
+>
+> Sensitivity is a floor rather than a score. The catalogue labels a *class*,
+> and whether a rewrite changes behaviour depends on the function it lands in.
+> Of seventeen cells labelled behaviour-changing that came back `Equivalent`,
+> sixteen were read and are genuine equivalences — two of them for reasons no
+> reading of the diff gives you (`INT_MIN * 100` being exactly 0 modulo 2^32;
+> `median(a, a, c) == a` either way). The seventeenth was a real unsoundness and
+> is the subsection below. So the gate is a named list, `VERIFIED_EQUIVALENT`,
+> not a percentage: anything else proved equivalent fails, a listed cell that
+> turns `Different` fails, and one that turns `Unknown` is reported rather than
+> asserted because the solver wall is wall-clock and would otherwise make the
+> test flaky on a loaded machine.
+>
+> **What building it found.** Three defects in shipped code that no existing
+> gate could see, each fixed and each proved against something outside our own
+> code:
+>
+> * `src/csource/lower` evaluated shifts on 64-bit temporaries, so `1u << 32`
+>   gave 0 where hardware gives 1 (`828becda`). This produced the false
+>   `Equivalent` above. Confirmed against gcc, and independently by the S4
+>   differential dropping to `diverged: 0`.
+> * The SMT lowering disagreed with `src/exec/concrete.rs` on shift distance and
+>   divide-by-zero, so an `unsat` — read as "equivalent" — was computed under
+>   semantics our own executor contradicts (`9c8c1e67`). Note the guard that
+>   existed was asymmetric: `WitnessUnconfirmed` replays a model and so protects
+>   `Different`; an `unsat` carries no model.
+> * `Symbolic::constant_value` walked a hash-consed DAG as a tree; a 65-node DAG
+>   timed out past 90 s in release and now folds in 0.03 s (`9c8c1e67`).
+> * Adjacent: `src/symbolic/solver/pipe.rs` had no wall and a stdin deadlock
+>   (`84cf6766`).
+>
+> **Outstanding.** The unsat coverage guard described below is specified and not
+> built: before accepting an `unsat`, ask whether an input can reach a shift
+> whose count is not provably below the operand width, or a divisor not provably
+> non-zero, and downgrade to `Unknown` when that is satisfiable. Its value
+> dropped once the SMT and concrete domains were aligned, but it is the
+> structural fix rather than the instance fix. Also: `goto-ify` declines all ten
+> of its pairs because S4 has no `goto`, so the one semantics-preserving class
+> that destroys control-flow structure is invisible to this checker.
 
 **Deliverable.** Given a source function and a decompiled function, lower both
 to LLIR, execute both symbolically over the same `Domain`, assert equality of
