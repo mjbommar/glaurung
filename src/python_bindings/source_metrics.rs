@@ -581,6 +581,126 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
     Ok(out)
 }
 
+/// Control dependence and post-dominance, per function.
+///
+/// Which branch decides each statement, and how deeply each is nested in
+/// decisions. The depth is computed on the graph rather than from the syntax,
+/// so a `goto` out of a block or a decompiler's flattened dispatch cannot fool
+/// it the way counting braces can.
+#[pyfunction]
+#[pyo3(name = "control_dependence")]
+pub fn control_dependence_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
+    use crate::csource::cfg::function_cfgs;
+    use crate::syntax::dominance::ControlDependence;
+
+    let built = py.detach(|| {
+        let tree = parse(text).into_parts().0;
+        let cfgs = function_cfgs(&tree, text).into_parts().0;
+        cfgs.iter()
+            .map(|function| {
+                let cdg = ControlDependence::of(&function.cfg);
+                let nodes: Vec<(u32, String, u32, Option<u32>)> = (0..function.cfg.node_count()
+                    as u32)
+                    .map(|id| {
+                        let kind = function
+                            .cfg
+                            .node(crate::syntax::ids::NodeId::new(id))
+                            .map(|node| node.kind().name().to_string())
+                            .unwrap_or_default();
+                        (
+                            id,
+                            kind,
+                            cdg.depth(id),
+                            cdg.post_dominators().immediate(id),
+                        )
+                    })
+                    .collect();
+                let edges: Vec<(u32, u32, &'static str)> = cdg
+                    .edges()
+                    .iter()
+                    .map(|edge| (edge.on, edge.node, edge.kind.name()))
+                    .collect();
+                let stuck: Vec<u32> = cdg.post_dominators().dead_ends().to_vec();
+                (function.name.clone(), nodes, edges, stuck)
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let out = PyList::empty(py);
+    for (name, nodes, edges, stuck) in built {
+        let entry = PyDict::new(py);
+        entry.set_item("name", name)?;
+        let node_list = PyList::empty(py);
+        for (id, kind, depth, ipdom) in nodes {
+            let item = PyDict::new(py);
+            item.set_item("id", id)?;
+            item.set_item("kind", kind)?;
+            item.set_item("depth", depth)?;
+            item.set_item("ipdom", ipdom)?;
+            node_list.append(item)?;
+        }
+        entry.set_item("nodes", node_list)?;
+        let edge_list = PyList::empty(py);
+        for (on, node, kind) in edges {
+            let item = PyDict::new(py);
+            item.set_item("on", on)?;
+            item.set_item("node", node)?;
+            item.set_item("kind", kind)?;
+            edge_list.append(item)?;
+        }
+        entry.set_item("edges", edge_list)?;
+        entry.set_item("unreachable_exit", stuck)?;
+        out.append(entry)?;
+    }
+    Ok(out)
+}
+
+/// The backward slice of one function's CFG node, over the program-dependence
+/// graph.
+///
+/// Every node whose execution or value can affect `node`, found by walking
+/// control and data dependence backwards to a fixed point.
+#[pyfunction]
+#[pyo3(name = "backward_slice")]
+#[pyo3(signature = (text, function, node))]
+pub fn backward_slice_py(
+    py: Python<'_>,
+    text: &str,
+    function: &str,
+    node: u32,
+) -> PyResult<Vec<u32>> {
+    use crate::csource::cfg::function_cfgs;
+    use crate::csource::dataflow::analyze_function;
+    use crate::syntax::dominance::{backward_slice, ControlDependence};
+
+    let sliced = py.detach(|| {
+        let tree = parse(text).into_parts().0;
+        let spans = tree.token_spans(text);
+        let cfgs = function_cfgs(&tree, text).into_parts().0;
+        cfgs.iter()
+            .find(|candidate| candidate.name == function)
+            .map(|candidate| {
+                let cdg = ControlDependence::of(&candidate.cfg);
+                let flow = analyze_function(&tree, text, &spans, candidate);
+                let data: Vec<(u32, u32)> = flow
+                    .edges
+                    .iter()
+                    .filter_map(|edge| {
+                        Some((
+                            flow.definitions.get(edge.def as usize)?.node,
+                            flow.uses.get(edge.use_ as usize)?.node,
+                        ))
+                    })
+                    .collect();
+                backward_slice(&cdg, &data, node)
+            })
+    });
+
+    sliced.ok_or_else(|| {
+        pyo3::exceptions::PyKeyError::new_err(format!("no function named {function:?}"))
+    })
+}
+
 /// Register the `source` submodule on the extension root.
 pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "source")?;
@@ -593,6 +713,8 @@ pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>
     sub.add_function(wrap_pyfunction!(export_graphs_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(export_choices_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(data_flow_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(control_dependence_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(backward_slice_py, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }

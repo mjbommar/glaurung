@@ -51,6 +51,8 @@ __all__ = [
     "analyze_path",
     "compare",
     "control_flow_graphs",
+    "backward_slice",
+    "control_dependence",
     "data_flow",
     "export_graphs",
     "export_path",
@@ -568,6 +570,72 @@ def data_flow(code: str) -> list[dict[str, Any]]:
         read of uninitialized storage.
     """
     return [dict(entry) for entry in _native.source.data_flow(code)]
+
+
+def control_dependence(code: str) -> list[dict[str, Any]]:
+    """Which branch decides each statement, per function.
+
+    .. warning::
+
+       Every offset this module reports is a **byte** offset, and Python
+       slices ``str`` by character. On a file containing any non-ASCII byte --
+       an em-dash in a comment, a UTF-8 string literal -- ``code[start:end]``
+       silently returns the wrong text, shifted by the byte-minus-character
+       difference. Slice ``code.encode()`` instead, or decode the result::
+
+           raw = code.encode()
+           text = raw[node["start"]:node["end"]].decode(errors="replace")
+
+       This is not hypothetical: it read as a span-attribution bug in the CFG
+       builder for an hour before the offsets turned out to be right and the
+       verification wrong.
+
+    Ferrante-Ottenstein-Warren control dependence over the general CFG, built
+    on a post-dominator tree with a virtual exit so a function containing
+    ``while (1) {}`` still has one.
+
+    Args:
+        code: The source text. Any byte sequence is acceptable.
+
+    Returns:
+        One dict per function with ``name``, ``nodes``, ``edges`` and
+        ``unreachable_exit``. Each node carries its CFG ``id``, its ``kind``,
+        its ``depth`` -- the longest chain of decisions above it -- and its
+        immediate post-dominator ``ipdom``. Each edge carries ``on`` (the
+        branch), ``node`` (what it decides) and ``kind`` (which arm).
+
+        ``depth`` is a structural nesting measure computed on the graph, so
+        unlike a brace count it is not fooled by a ``goto`` that leaves a block
+        or by a decompiler's flattened dispatch.
+
+        ``unreachable_exit`` lists nodes from which the function end cannot be
+        reached: an infinite loop, a ``noreturn`` call, or a transfer the
+        builder could not resolve.
+    """
+    return [dict(entry) for entry in _native.source.control_dependence(code)]
+
+
+def backward_slice(code: str, function: str, node: int) -> list[int]:
+    """Every CFG node that can affect `node`, over the program-dependence graph.
+
+    Walks control and data dependence backwards to a fixed point. This is the
+    question a program-dependence graph exists to answer, and it needs both
+    relations over one node set: following only one would silently omit the
+    other's reasons.
+
+    Args:
+        code: The source text.
+        function: The function to slice, by name.
+        node: The CFG node id to slice on, as ``control_dependence`` numbers
+            them.
+
+    Returns:
+        The node ids in the slice, sorted, including the seed.
+
+    Raises:
+        KeyError: If no function of that name was recovered.
+    """
+    return list(_native.source.backward_slice(code, function, node))
 
 
 def export_graphs(

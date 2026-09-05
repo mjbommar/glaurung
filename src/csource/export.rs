@@ -6,17 +6,23 @@
 //!
 //! # What this replaces
 //!
-//! `joern-export --repr {ast,cfg,ddg} --format {dot,graphml,...}` is the shape
-//! a caller already knows, so [`Repr`] uses Joern's spelling. The two it also
-//! offers --- `cdg` and `pdg` --- need control dependence, which is a
-//! post-dominator computation this front end has not built yet, and they stay
-//! absent rather than stubbed: a `--repr pdg` that returned something else
-//! would be worse than an error.
+//! `joern-export --repr {ast,cfg,cdg,ddg,pdg} --format {dot,graphml,...}` is
+//! the shape a caller already knows, so [`Repr`] uses Joern's spelling and now
+//! covers every representation it offers except `cpg14`, which is a code
+//! property graph and is the one thing
+//! `docs/design/static-c-analysis/requirements.md` section 8 declines.
 //!
-//! [`Repr::Ddg`] is deliberately *not* a copy of Joern's. Its edges carry the
-//! variable each dependence is about; pyjoern's `Function.ddg` hands back
-//! edges with an empty attribute dict, so a consumer there cannot tell which
-//! value an edge is for. See [`crate::csource::dataflow`].
+//! None of the three dependence graphs is a copy of Joern's.
+//!
+//! * [`Repr::Ddg`] labels every edge with the variable the dependence is
+//!   about. `joern-export --repr ddg` does too, in its DOT; pyjoern's
+//!   `Function.ddg` does not, so a Python caller of that API cannot tell which
+//!   value an edge is for.
+//! * [`Repr::Cdg`] labels every edge with the *arm* of the branch that decides
+//!   it, so "runs when the guard holds" and "runs when it does not" are
+//!   distinguishable rather than both being a bare pair.
+//! * [`Repr::Pdg`] is the union, with each edge tagged `control` or `data`, on
+//!   one node set --- which is what makes a slice computable from it.
 //!
 //! # Which control-flow graph
 //!
@@ -42,6 +48,7 @@ use crate::csource::cfg::function_cfgs;
 use crate::csource::parse::tag::NodeTag;
 use crate::csource::parse::{parse, Tree};
 use crate::syntax::cfg::Cfg;
+use crate::syntax::dominance::ControlDependence;
 use crate::syntax::diag::Parsed;
 use crate::syntax::graph_export::{ExportEdge, ExportNode, GraphView};
 use crate::syntax::ids::{NodeId, Span};
@@ -62,11 +69,16 @@ pub enum Repr {
     /// The data-dependence graph: definitions, uses, and the reaching edges
     /// between them.
     Ddg,
+    /// The control-dependence graph: which branch decides each statement.
+    Cdg,
+    /// The program-dependence graph: control and data dependence on one node
+    /// set, which is the graph a slice is taken from.
+    Pdg,
 }
 
 impl Repr {
     /// Every representation, in declaration order, for a CLI choice list.
-    pub const ALL: [Repr; 3] = [Repr::Cfg, Repr::Ast, Repr::Ddg];
+    pub const ALL: [Repr; 5] = [Repr::Cfg, Repr::Ast, Repr::Ddg, Repr::Cdg, Repr::Pdg];
 
     /// This representation's stable lowercase name, as a CLI accepts it.
     pub const fn name(self) -> &'static str {
@@ -74,6 +86,8 @@ impl Repr {
             Repr::Cfg => "cfg",
             Repr::Ast => "ast",
             Repr::Ddg => "ddg",
+            Repr::Cdg => "cdg",
+            Repr::Pdg => "pdg",
         }
     }
 
@@ -83,6 +97,8 @@ impl Repr {
             "cfg" | "control-flow" | "control_flow" => Some(Repr::Cfg),
             "ast" | "tree" | "syntax" => Some(Repr::Ast),
             "ddg" | "dataflow" | "data-flow" => Some(Repr::Ddg),
+            "cdg" | "control" | "control-dependence" => Some(Repr::Cdg),
+            "pdg" | "program-dependence" => Some(Repr::Pdg),
             _ => None,
         }
     }
@@ -116,7 +132,7 @@ pub fn export(text: &str, repr: Repr) -> Parsed<Vec<GraphView>> {
                 .map(|function| ast_view(&function.name, &tree, function.node, &spans, text))
                 .collect()
         }
-        Repr::Ddg => {
+        Repr::Ddg | Repr::Cdg | Repr::Pdg => {
             let built = function_cfgs(&tree, text);
             let (cfgs, cfg_diags) = built.into_parts();
             for diagnostic in cfg_diags.iter() {
@@ -124,11 +140,20 @@ pub fn export(text: &str, repr: Repr) -> Parsed<Vec<GraphView>> {
             }
             let spans = tree.token_spans(text);
             cfgs.iter()
-                .map(|function| {
-                    let flow = crate::csource::dataflow::analyze_function(
-                        &tree, text, &spans, function,
-                    );
-                    ddg_view(&flow, text)
+                .map(|function| match repr {
+                    Repr::Cdg => cdg_view(&function.name, &function.cfg, text),
+                    Repr::Pdg => {
+                        let flow = crate::csource::dataflow::analyze_function(
+                            &tree, text, &spans, function,
+                        );
+                        pdg_view(&function.name, &function.cfg, &flow, text)
+                    }
+                    _ => {
+                        let flow = crate::csource::dataflow::analyze_function(
+                            &tree, text, &spans, function,
+                        );
+                        ddg_view(&flow, text)
+                    }
                 })
                 .collect()
         }
@@ -296,6 +321,99 @@ pub fn ddg_view(flow: &crate::csource::dataflow::DataFlow, text: &str) -> GraphV
     view
 }
 
+/// One function's control-dependence graph as a view.
+///
+/// Nodes are the CFG's own nodes, so a reader can line this up against
+/// `--repr cfg` node for node. Each edge carries the arm of the branch that
+/// decides it, and each node carries its control-dependence depth --- the
+/// length of the longest chain of decisions above it, computed on the graph
+/// rather than from the syntax, so a `goto` out of a block or a decompiler's
+/// flattened dispatch cannot fool it the way a brace count can.
+pub fn cdg_view(name: &str, cfg: &Cfg, text: &str) -> GraphView {
+    let cdg = ControlDependence::of(cfg);
+    let post = cdg.post_dominators();
+    let mut view = GraphView::new(name);
+
+    for (index, node) in cfg.nodes().iter().enumerate() {
+        let id = index as u32;
+        let kind = node.kind().name();
+        let span = node.span();
+        let source = snippet(text, span);
+        let label = if source.is_empty() {
+            kind.to_string()
+        } else {
+            format!("{kind}\n{source}")
+        };
+        let mut export = ExportNode::new(id, label)
+            .with("kind", kind)
+            .with("depth", cdg.depth(id).to_string())
+            .with("span", format!("{}:{}", span.lo, span.hi));
+        if let Some(parent) = post.immediate(id) {
+            export = export.with("ipdom", parent.to_string());
+        }
+        if post.dead_ends().contains(&id) {
+            // The function end is unreachable from here: an infinite loop, a
+            // `noreturn` call, or a transfer the builder could not resolve.
+            export = export.with("reaches_exit", "false");
+        }
+        view.nodes.push(export);
+    }
+    for edge in cdg.edges() {
+        view.edges.push(
+            ExportEdge::new(edge.on, edge.node, edge.kind.name()).with("kind", edge.kind.name()),
+        );
+    }
+    view
+}
+
+/// One function's program-dependence graph: control and data on one node set.
+///
+/// The union is the point. A control-dependence graph says which branch
+/// decides a statement; a data-dependence graph says which write a read sees;
+/// a slice needs both at once, and it needs them over the *same* nodes. So the
+/// nodes here are the CFG's, the control edges are as in [`cdg_view`], and
+/// each data edge is lifted from its (definition, use) pair to the pair of CFG
+/// nodes those sit on. Every edge is tagged `control` or `data`.
+///
+/// Lifting loses the within-node ordering the data-dependence graph has, which
+/// is why [`Repr::Ddg`] still exists separately: for reading dependences it is
+/// the more precise graph, and this one is for slicing.
+pub fn pdg_view(
+    name: &str,
+    cfg: &Cfg,
+    flow: &crate::csource::dataflow::DataFlow,
+    text: &str,
+) -> GraphView {
+    let mut view = cdg_view(name, cfg, text);
+    for edge in view.edges.iter_mut() {
+        *edge = edge.clone().with("dependence", "control");
+    }
+
+    // Data edges, lifted to the CFG nodes their endpoints sit on. A dependence
+    // wholly inside one node adds a self-edge, which is real --- `x = x + 1`
+    // on one straight-line node does depend on itself.
+    let mut seen: Vec<(u32, u32, String)> = Vec::new();
+    for edge in &flow.edges {
+        let (Some(definition), Some(use_)) = (
+            flow.definitions.get(edge.def as usize),
+            flow.uses.get(edge.use_ as usize),
+        ) else {
+            continue;
+        };
+        let key = (definition.node, use_.node, edge.name.clone());
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        view.edges.push(
+            ExportEdge::new(definition.node, use_.node, edge.name.clone())
+                .with("dependence", "data")
+                .with("variable", edge.name.clone()),
+        );
+    }
+    view
+}
+
 /// The source `span` covers, collapsed to one line and cut to [`LABEL_CHARS`].
 ///
 /// Returns an empty string rather than panicking when the span is empty, is out
@@ -443,10 +561,12 @@ int greet(const char *name, int times)
             assert_eq!(Repr::parse(repr.name()), Some(repr));
         }
         assert_eq!(Repr::parse("ddg"), Some(Repr::Ddg));
-        // Control dependence needs post-dominators, which are not built. The
-        // two representations that need them stay refused rather than faked.
-        assert_eq!(Repr::parse("pdg"), None, "not offered rather than faked");
-        assert_eq!(Repr::parse("cdg"), None, "not offered rather than faked");
+        assert_eq!(Repr::parse("cdg"), Some(Repr::Cdg));
+        assert_eq!(Repr::parse("pdg"), Some(Repr::Pdg));
+        // `cpg14` is a code property graph, which `requirements.md` section 8
+        // declines. It stays refused rather than faked.
+        assert_eq!(Repr::parse("cpg14"), None, "not offered rather than faked");
+        assert_eq!(Repr::parse("cpg"), None, "not offered rather than faked");
     }
 }
 
@@ -506,5 +626,175 @@ mod ddg_tests {
             let body = write(&views[0], format);
             assert!(body.contains('s') && !body.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod dependence_tests {
+    use super::*;
+    use crate::syntax::graph_export::{write, Format};
+
+    /// A branch, a nested branch, a loop, and a value that flows through all
+    /// three -- enough shape that every claim below is about something.
+    const SHAPES: &str = r#"
+int classify(int a, int b, int n)
+{
+    int total = 0;
+    if (a > b) {
+        if (n > 0) {
+            total = a - b;
+        }
+    } else {
+        total = b - a;
+    }
+    for (int i = 0; i < n; i++) {
+        total = total + i;
+    }
+    return total;
+}
+"#;
+
+    fn attr<'a>(node: &'a ExportNode, key: &str) -> Option<&'a str> {
+        node.attrs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn a_cdg_shares_the_cfg_node_set() {
+        // Lining the two up node for node is what makes the export readable
+        // beside `--repr cfg`, so it is a promise worth pinning.
+        let cfg = export(SHAPES, Repr::Cfg).into_parts().0;
+        let cdg = export(SHAPES, Repr::Cdg).into_parts().0;
+        assert_eq!(cdg.len(), cfg.len());
+        assert_eq!(cdg[0].nodes.len(), cfg[0].nodes.len());
+        for (a, b) in cdg[0].nodes.iter().zip(cfg[0].nodes.iter()) {
+            assert_eq!(a.id, b.id);
+        }
+    }
+
+    #[test]
+    fn every_cdg_edge_names_the_arm_that_decides_it() {
+        let views = export(SHAPES, Repr::Cdg).into_parts().0;
+        assert!(!views[0].edges.is_empty(), "no control dependence found");
+        for edge in &views[0].edges {
+            assert!(!edge.label.is_empty(), "unlabelled: {edge:?}");
+            // The label is an edge kind, not a variable name.
+            assert!(
+                ["true", "false", "case", "default", "fall", "fall_through", "jump"]
+                    .contains(&edge.label.as_str()),
+                "{edge:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn control_depth_grows_with_nesting() {
+        let views = export(SHAPES, Repr::Cdg).into_parts().0;
+        let depths: Vec<u32> = views[0]
+            .nodes
+            .iter()
+            .filter_map(|node| attr(node, "depth"))
+            .filter_map(|value| value.parse().ok())
+            .collect();
+        // The entry is unconditional; the doubly nested assignment is not.
+        assert!(depths.contains(&0), "{depths:?}");
+        assert!(
+            depths.iter().any(|depth| *depth >= 2),
+            "no doubly nested node found: {depths:?}"
+        );
+    }
+
+    #[test]
+    fn the_entry_depends_on_nothing() {
+        let views = export(SHAPES, Repr::Cdg).into_parts().0;
+        let entry = views[0]
+            .nodes
+            .iter()
+            .find(|node| attr(node, "kind") == Some("entry"))
+            .expect("an entry node");
+        assert_eq!(attr(entry, "depth"), Some("0"));
+        assert!(
+            !views[0].edges.iter().any(|edge| edge.dst == entry.id),
+            "the entry is control dependent on something"
+        );
+    }
+
+    #[test]
+    fn a_pdg_carries_both_kinds_of_edge_and_tags_each() {
+        let views = export(SHAPES, Repr::Pdg).into_parts().0;
+        let view = &views[0];
+        let mut control = 0;
+        let mut data = 0;
+        for edge in &view.edges {
+            match attr_edge(edge, "dependence") {
+                Some("control") => control += 1,
+                Some("data") => data += 1,
+                other => panic!("untagged edge {edge:?}: {other:?}"),
+            }
+        }
+        assert!(control > 0, "no control edges");
+        assert!(data > 0, "no data edges");
+        // Every data edge also names its variable.
+        for edge in &view.edges {
+            if attr_edge(edge, "dependence") == Some("data") {
+                assert!(attr_edge(edge, "variable").is_some(), "{edge:?}");
+            }
+        }
+    }
+
+    fn attr_edge<'a>(edge: &'a ExportEdge, key: &str) -> Option<&'a str> {
+        edge.attrs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn a_pdg_edge_never_names_a_node_it_does_not_have() {
+        let views = export(SHAPES, Repr::Pdg).into_parts().0;
+        for view in &views {
+            let ids: Vec<u32> = view.nodes.iter().map(|node| node.id).collect();
+            for edge in &view.edges {
+                assert!(ids.contains(&edge.src), "{edge:?}");
+                assert!(ids.contains(&edge.dst), "{edge:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_dependence_graph_serializes_in_every_format() {
+        for repr in [Repr::Ddg, Repr::Cdg, Repr::Pdg] {
+            let views = export(SHAPES, repr).into_parts().0;
+            assert!(!views.is_empty(), "{repr:?} produced nothing");
+            for format in Format::ALL {
+                assert!(!write(&views[0], format).is_empty(), "{repr:?}/{format:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_representation_is_total_on_junk() {
+        for junk in ["", "\u{0}\u{1}", "int f(", "}}}", "while(1){}", "\u{4e2d}\u{6587}"] {
+            for repr in Repr::ALL {
+                let views = export(junk, repr).into_parts().0;
+                for view in &views {
+                    for format in Format::ALL {
+                        assert!(!write(view, format).is_empty());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_infinite_loop_still_exports_a_cdg() {
+        // The shape that has no post-dominator tree without a virtual exit.
+        let views = export("int f(void) { while (1) { } return 0; }", Repr::Cdg)
+            .into_parts()
+            .0;
+        assert_eq!(views.len(), 1);
+        assert!(!views[0].nodes.is_empty());
     }
 }

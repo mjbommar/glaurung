@@ -111,3 +111,107 @@ def test_hand_written_c_has_almost_no_dead_stores():
             dead += len(flow["dead_stores"])
     assert functions > 500, functions
     assert dead * 20 < functions, f"{dead} dead stores over {functions} functions"
+
+
+@pytest.mark.core
+def test_control_dependence_reports_nodes_edges_and_depth():
+    flows = glaurung.source.control_dependence(SUM)
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow["name"] == "f"
+    assert flow["nodes"] and flow["edges"]
+    for node in flow["nodes"]:
+        for key in ("id", "kind", "depth", "ipdom"):
+            assert key in node, key
+    for edge in flow["edges"]:
+        assert edge["kind"] in {
+            "true",
+            "false",
+            "case",
+            "default",
+            "fall",
+            "fall_through",
+            "jump",
+        }, edge
+
+
+@pytest.mark.core
+def test_the_entry_is_control_dependent_on_nothing():
+    flow = glaurung.source.control_dependence(SUM)[0]
+    entry = next(node for node in flow["nodes"] if node["kind"] == "entry")
+    assert entry["depth"] == 0
+    assert not any(edge["node"] == entry["id"] for edge in flow["edges"])
+
+
+@pytest.mark.core
+def test_a_loop_body_is_deeper_than_the_function_entry():
+    flow = glaurung.source.control_dependence(SUM)[0]
+    depths = [node["depth"] for node in flow["nodes"]]
+    assert min(depths) == 0
+    assert max(depths) >= 1, depths
+
+
+@pytest.mark.core
+def test_a_region_that_cannot_reach_the_exit_is_reported_not_dropped():
+    """The shape with no post-dominator tree unless a virtual exit is added.
+
+    `goto` to its own label, rather than `while (1)`: the front end folds no
+    constants, so a `while (1)` header still carries a false arm to whatever
+    follows it and the graph is not stuck. An unconditional `goto` genuinely
+    is, which is the case the virtual exit exists for.
+    """
+    flows = glaurung.source.control_dependence("int f(void) { L: goto L; }")
+    assert len(flows) == 1
+    assert flows[0]["nodes"]
+    assert flows[0]["unreachable_exit"], "the stuck region was dropped silently"
+
+
+@pytest.mark.core
+def test_an_unfoldable_infinite_loop_still_exports():
+    """`while (1)` is not stuck to a front end that folds no constants."""
+    flows = glaurung.source.control_dependence(
+        "int f(void) { while (1) { } return 0; }"
+    )
+    assert len(flows) == 1 and flows[0]["nodes"]
+    assert flows[0]["unreachable_exit"] == []
+
+
+@pytest.mark.core
+def test_a_backward_slice_includes_its_seed_and_is_sorted():
+    flow = glaurung.source.control_dependence(SUM)[0]
+    last = flow["nodes"][-1]["id"]
+    sliced = glaurung.source.backward_slice(SUM, "f", last)
+    assert last in sliced
+    assert sliced == sorted(sliced)
+    assert len(sliced) <= len(flow["nodes"])
+
+
+@pytest.mark.core
+def test_slicing_an_unknown_function_raises():
+    with pytest.raises(KeyError):
+        glaurung.source.backward_slice(SUM, "nosuchfunction", 0)
+
+
+@pytest.mark.core
+def test_the_pdg_tags_every_edge_as_control_or_data():
+    body = dict(glaurung.source.export_graphs(SUM, repr="pdg", format="json"))["f"]
+    graph = json.loads(body)
+    kinds = {edge.get("dependence") for edge in graph["edges"]}
+    assert kinds == {"control", "data"}, kinds
+
+
+@pytest.mark.core
+def test_spans_are_byte_offsets_not_character_offsets():
+    """The trap documented on `control_dependence`, pinned.
+
+    A file with a non-ASCII byte before the code shifts every character index,
+    so slicing `str` gives the wrong text while slicing bytes gives the right
+    one. This caught a real hour of chasing a CFG bug that did not exist.
+    """
+    text = "/* a — b */\nint f(void) { int x = 1; return x; }"
+    raw = text.encode()
+    flow = glaurung.source.data_flow(text)[0]
+    definition = flow["definitions"][0]
+    assert raw[definition["start"] : definition["end"]].decode() == "x"
+    # And the naive character slice is wrong, which is why the warning exists.
+    assert text[definition["start"] : definition["end"]] != "x"

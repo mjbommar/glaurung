@@ -47,7 +47,7 @@ int greet(const char *name, int times)
 @pytest.mark.core
 def test_the_choice_lists_come_from_rust():
     """A format added in Rust must appear here without a second edit."""
-    assert set(glaurung.source.EXPORT_REPRS) == {"cfg", "ast", "ddg"}
+    assert set(glaurung.source.EXPORT_REPRS) == {"cfg", "ast", "ddg", "cdg", "pdg"}
     assert set(glaurung.source.EXPORT_FORMATS) == {
         "dot",
         "graphml",
@@ -69,16 +69,14 @@ def test_every_representation_and_format_produces_a_named_graph(repr_name, forma
 
 @pytest.mark.core
 def test_an_unknown_repr_or_format_raises_rather_than_guessing():
-    """`pdg` and `cdg` need post-dominators, which are not built.
+    """`cpg14` is a code property graph, which requirements.md section 8 declines.
 
-    Returning some other graph under one of those names would be worse than an
-    error, so the boundary refuses them. `ddg` was in this list until the
-    data-dependence analysis landed; it is now served.
+    Returning some other graph under that name would be worse than an error, so
+    the boundary refuses it. `ddg`, `cdg` and `pdg` were all in this list until
+    the dependence analyses landed; they are now served.
     """
-    with pytest.raises(ValueError, match="pdg"):
-        glaurung.source.export_graphs(GREET, repr="pdg", format="dot")
-    with pytest.raises(ValueError, match="cdg"):
-        glaurung.source.export_graphs(GREET, repr="cdg", format="dot")
+    with pytest.raises(ValueError, match="cpg14"):
+        glaurung.source.export_graphs(GREET, repr="cpg14", format="dot")
     with pytest.raises(ValueError, match="graphson"):
         glaurung.source.export_graphs(GREET, repr="cfg", format="graphson")
 

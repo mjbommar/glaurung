@@ -31,6 +31,7 @@
 
 pub mod cfg;
 pub mod diag;
+pub mod dominance;
 pub mod event;
 pub mod ged;
 pub mod graph_export;

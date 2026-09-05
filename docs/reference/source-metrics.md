@@ -391,8 +391,10 @@ for flow in glaurung.source.data_flow(code):
     dead = [flow["definitions"][i]["name"] for i in flow["dead_stores"]]
 ```
 
-`--repr ddg` completes the set `joern-export` offers minus `cdg` and `pdg`,
-which need post-dominators this front end has not built.
+`--repr` now covers every representation `joern-export` offers except `cpg14`,
+which is a code property graph and the one thing
+[requirements.md](../design/static-c-analysis/requirements.md) section 8
+declines: `cfg`, `ast`, `ddg`, `cdg` and `pdg`.
 
 ### Measured against Joern
 
@@ -457,6 +459,87 @@ and a Rust test fails if that ratio moves by more than an order of magnitude.
 Each round of over-reporting during development tripped exactly that assertion:
 897 when a bare `int x;` counted as a store, 460 when a write to a global
 counted, 27 when `++a[i]` counted as a write to `a`.
+
+## Control dependence and slicing
+
+`--repr cdg` answers which branch decides each statement;
+`--repr pdg` is that plus data dependence on one node set, which is the graph a
+slice is taken from.
+
+```python
+for flow in glaurung.source.control_dependence(code):
+    for node in flow["nodes"]:
+        print(node["id"], node["kind"], node["depth"], node["ipdom"])
+
+sliced = glaurung.source.backward_slice(code, "parse_header", 12)
+```
+
+Ferrante-Ottenstein-Warren control dependence, over a post-dominator tree built
+with a **virtual exit** so a region that cannot reach the function end still has
+one. Without that, a function whose body is `L: goto L;` has no post-dominator
+tree at all and its control-dependence graph would come back empty rather than
+wrong — a silent hole exactly where the interesting control flow is. Nodes that
+reached the exit only through the synthetic edge are listed in
+`unreachable_exit` rather than hidden.
+
+**Every CDG edge names the arm that decides it** — `true`, `false`, `case`,
+`default`. `joern-export --repr cdg` writes its edges with no label at all, so
+"runs when the guard holds" and "runs when it does not" are indistinguishable
+there.
+
+Each node also carries `depth`: the longest chain of decisions above it. That is
+a nesting measure computed on the graph, so unlike counting braces it is not
+fooled by a `goto` that leaves a block or by a decompiler's flattened dispatch.
+
+### Checked against Joern
+
+`joern-export --repr cdg` on the same fixtures, compared on the pairs of source
+lines each control dependence connects — Joern's nodes are expression-granular
+and ours are CFG nodes, so the line pair is what the two can be judged on
+identically:
+
+| fixture | Joern's pairs | ours | agreed |
+|---|---:|---:|---:|
+| `03_loop_shapes.c` | 60 | 63 | **60** |
+| `01_conditional_polarity.c` | 36 | 37 | **36** |
+| `13_loop_early_exit.c` | 30 | 32 | **30** |
+| `152_deep_nesting.c` | 176 | 177 | 174 |
+
+We find every control dependence Joern finds on the first three. The two misses
+on the fourth are one statement split across two lines, which Joern attributes
+to the continuation and we attribute to the start — a granularity artifact of
+the line comparison, not a missing edge.
+
+`python/tests/test_source_dependence_joern.py` runs this. It is `decbench`-marked
+and deselected by default, because it needs a JVM per file.
+
+### What control depth is for
+
+The same measurement against our own decompiler's output, matched by function
+name over ten fixtures at engine commit `b1a03020`:
+
+| | value |
+|---|---|
+| matched functions | 84 |
+| deeper after decompilation | **26** |
+| same | 55 |
+| shallower | 3 |
+| median depth, source → decompiled | **1 → 2** |
+
+The worst cases are `trie_insert` 7 → 13 and `switch_in_loop` 2 → 7. The median
+is quoted rather than the mean because a handful of functions carry it.
+
+Nesting depth is a readability defect the execution differential cannot see:
+the recovered code returns the right value at depth 13 exactly as it does at
+depth 7. It is the control-flow companion to the dead-store count above.
+
+### Slicing
+
+`backward_slice` walks control and data dependence backwards to a fixed point,
+returning every node whose execution or value can affect the seed. This is the
+question a program-dependence graph exists to answer, and it needs both
+relations over one node set — following only one silently omits the other's
+reasons.
 
 ## Worked example: measuring our own decompiler
 

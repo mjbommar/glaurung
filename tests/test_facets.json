@@ -7,7 +7,7 @@
   "toolchain": 37,
   "docker": 20,
   "llm": 5,
-  "decbench": 4
+  "decbench": 5
  },
  "files": {
   "test_abi_argument_recovery.py": [
@@ -1002,6 +1002,9 @@
   ],
   "test_source_dataflow.py": [
    "core"
+  ],
+  "test_source_dependence_joern.py": [
+   "decbench"
   ],
   "test_source_files.py": [
    "core"

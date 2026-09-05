@@ -31,9 +31,15 @@
 //! Two differences, and neither is a shortfall.
 //!
 //! **Ours are labelled.** pyjoern's `Function.ddg` returns every edge with an
-//! empty attribute dict, so a consumer cannot tell which value an edge is
-//! about. Every edge here names its variable, and both endpoints carry the
-//! spelling, the kind of write and the byte range.
+//! empty attribute dict, so a consumer of *that* API cannot tell which value
+//! an edge is about. Every edge here names its variable, and both endpoints
+//! carry the spelling, the kind of write and the byte range.
+//!
+//! To be exact about the comparison: `joern-export --repr ddg` writes DOT that
+//! *does* carry a `DDG: <name>` label, so the information exists upstream and
+//! it is pyjoern's lifted view that drops it. The claim is about the library
+//! API a Python caller actually uses, not about Joern being unable to compute
+//! it.
 //!
 //! **Ours are variable dependences, not block adjacency.** Joern's graph is
 //! over CFG blocks: of its 23 edges, 9 leave `FUNCTION_START` and 5 enter
