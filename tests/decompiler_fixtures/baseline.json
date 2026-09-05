@@ -3665,7 +3665,7 @@
     "narrow_selector_control": "pass",
     "signed_wide_selector": "pass",
     "wide_selector_dense": "pass",
-    "wide_selector_high_labels": "fail",
+    "wide_selector_high_labels": "pass",
     "wide_selector_mixed": "pass"
   },
   "215_switch_on_wide_selector:gcc:O0": {
