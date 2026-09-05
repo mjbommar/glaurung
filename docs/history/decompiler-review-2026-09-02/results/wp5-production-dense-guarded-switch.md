@@ -68,6 +68,38 @@ unrecorded improvements and only the independently proven pre-existing
 `rust_slice_get` baseline mismatch, with no regression attributable to this
 repair.
 
+The required whole Python gate was also run after commit `b0af590c`. It remains
+repository-wide red: 4,612 passed, 128 failed, 68 skipped, 887 xfailed, 125
+deselected, and two subtests passed in 2,646.24 seconds. This is not a green
+release claim. The run did prove that the two fixture-204 strict known-failure
+entries were stale, so the measured inventory was regenerated. An independent
+second generation matched it exactly apart from elapsed time: 1,676 objects,
+82 type failures, 713 structural failures, 41 return failures, 38 unrecovered
+functions, and 6,823 emitted gotos. The focused known-failure test now passes.
+The deduplicated structural count moves 473 to 472 and unrecovered count 27 to
+25; deduplicated goto count moves 4,652 to 4,655 because an older stale row now
+records nine additional gotos. Those are current-corpus measurements, not a
+claim that every changed row was caused by this increment.
+
+An isolated fitness A/B compared `b0af590c` with parent `febb78a6`, followed by
+an exact measurement after the readability repair. Parent and tip fail the same
+three real-tree assertions against the older committed baseline, so this slice
+did not create that broad stale-baseline state. The final incremental cost is
+61 measured product lines: mean product LOC moves 413.0576 to 413.1949 and LOC
+within files already above 1,000 lines moves 52,008 to 52,010. No file crosses
+either size threshold, maximum file size and IR counts are unchanged, and
+large-file concentration improves from 21.3406% to 21.3344%. This is accepted
+typed-provenance growth to be removed or absorbed at the WP4 promotion
+decision, not an unmeasured ratchet exception.
+
+The first inventory refresh also exposed a tip-local readability regression:
+`weak_fold` rose from two to four gotos because both loop exits targeted the
+shared terminal owner. Restoring ownership of a guard-only value-setup prefix
+while borrowing only the shared terminal returns it to two gotos without
+reopening fixture 204's accounting finding or the deep-loop correctness canary.
+The other two suspicious movements reproduce on the parent and are stale
+inventory, not changes caused by this slice.
+
 WP5 is therefore not complete: discovery, accounting, both structurers, and
 rendering still need one shared case/default/provenance object, and the
 remaining compiler and architecture lanes still require explicit execution

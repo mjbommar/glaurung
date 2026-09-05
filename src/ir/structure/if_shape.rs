@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use super::cfg::Cfg;
 use super::path_predicates::{
     can_reach, contains_multiway_before, cyclic_body_exits_only_to_join, every_path_reaches_join,
-    every_path_reaches_join_or_terminates, shared_return_chain,
+    every_path_reaches_join_or_terminates, is_natural_loop_distinguished_exit, shared_return_chain,
 };
 use super::region::Region;
 use super::{build, build_arm};
@@ -203,13 +203,30 @@ pub(super) fn detect_if_shape(
             // cannot distinguish a switch tree from validation or loop exits.
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            // None of the cloned chain consumes global ownership. The normal
-            // continuation or `build_full` leftovers emit each machine block
-            // once; every predecessor-specific early-return spelling remains
-            // an explicitly borrowed view.
+            // A guard-only value-setup prefix has no later continuation owner,
+            // so retain the former ownership rule for that prefix. The shared
+            // terminal remains borrowed: it is owned by the normal function
+            // continuation and may carry a predecessor-specific SSA value.
+            // Keeping this distinction also avoids turning readable loop-exit
+            // returns into extra gotos merely to reach the terminal owner.
+            let owned_prefix = cfg.preds[body]
+                .iter()
+                .all(|predecessor| cfg.succs[*predecessor].len() == 2)
+                && !is_natural_loop_distinguished_exit(body, cfg);
+            if owned_prefix {
+                visited.extend(chain[..chain.len() - 1].iter().copied());
+            }
+            let last = chain.len() - 1;
             let mut borrowed: Vec<_> = chain
                 .into_iter()
-                .map(|block| Region::Borrowed(Box::new(Region::Block(block))))
+                .enumerate()
+                .map(|(index, block)| {
+                    if owned_prefix && index < last {
+                        Region::Block(block)
+                    } else {
+                        Region::Borrowed(Box::new(Region::Block(block)))
+                    }
+                })
                 .collect();
             let then_r = if borrowed.len() == 1 {
                 borrowed.pop().expect("the borrowed return exists")

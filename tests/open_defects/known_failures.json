@@ -1,25 +1,25 @@
 {
  "note": "Measured decompiler failures. Regenerate with tools/gen_known_failures.py.",
- "elapsed_seconds": 203.8,
+ "elapsed_seconds": 44.6,
  "objects_scanned": 1676,
  "counts": {
   "types": 82,
-  "structure": 715,
+  "structure": 713,
   "returns": 41,
   "pointers": 0,
-  "unrecovered": 42,
+  "unrecovered": 38,
   "no_body": 0,
-  "goto_statements": 6825
+  "goto_statements": 6823
  },
  "counts_by_language": {
   "c": {
    "types": 0,
-   "structure": 621,
+   "structure": 619,
    "returns": 15,
    "pointers": 0,
-   "unrecovered": 38,
+   "unrecovered": 34,
    "no_body": 0,
-   "goto_statements": 6259
+   "goto_statements": 6257
   },
   "rust": {
    "types": 82,
@@ -33,22 +33,22 @@
  },
  "deduplicated_counts": {
   "types": 65,
-  "structure": 473,
+  "structure": 472,
   "returns": 33,
   "pointers": 0,
-  "unrecovered": 27,
+  "unrecovered": 25,
   "no_body": 0,
-  "goto_statements": 4652
+  "goto_statements": 4655
  },
  "deduplicated_counts_by_language": {
   "c": {
    "types": 0,
-   "structure": 405,
+   "structure": 404,
    "returns": 9,
    "pointers": 0,
-   "unrecovered": 24,
+   "unrecovered": 22,
    "no_body": 0,
-   "goto_statements": 4225
+   "goto_statements": 4228
   },
   "rust": {
    "types": 65,
@@ -1477,7 +1477,7 @@
    "obj": "145_control_flow_flattening-clang-O2.so",
    "fn": "flattened_accumulate",
    "va": 4352,
-   "gotos": 11
+   "gotos": 10
   },
   {
    "obj": "145_control_flow_flattening-clang-O2.so",
@@ -1495,7 +1495,7 @@
    "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
    "fn": "flattened_accumulate",
    "va": 4352,
-   "gotos": 11
+   "gotos": 10
   },
   {
    "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
@@ -1543,7 +1543,7 @@
    "obj": "150_obfuscation_composite-clang-O2.so",
    "fn": "obfuscated_transform",
    "va": 4352,
-   "gotos": 15
+   "gotos": 14
   },
   {
    "obj": "150_obfuscation_composite-clang-O2.so",
@@ -1555,7 +1555,7 @@
    "obj": "150_obfuscation_composite-clang-O2strip.dwarf.so",
    "fn": "obfuscated_transform",
    "va": 4352,
-   "gotos": 15
+   "gotos": 14
   },
   {
    "obj": "150_obfuscation_composite-clang-O2strip.dwarf.so",
@@ -3052,18 +3052,6 @@
    "gotos": 6
   },
   {
-   "obj": "206_aarch64_wide_dispatch-clang-O2.so",
-   "fn": "dispatch_in_loop",
-   "va": 4544,
-   "gotos": 2
-  },
-  {
-   "obj": "206_aarch64_wide_dispatch-clang-O2strip.dwarf.so",
-   "fn": "dispatch_in_loop",
-   "va": 4544,
-   "gotos": 2
-  },
-  {
    "obj": "206_aarch64_wide_dispatch-gcc-O0.so",
    "fn": "dispatch_in_loop",
    "va": 4712,
@@ -3193,7 +3181,7 @@
    "obj": "212_loop_with_returning_arm-gcc-O0.so",
    "fn": "fsm_returns_from_arm",
    "va": 4345,
-   "gotos": 5
+   "gotos": 14
   },
   {
    "obj": "212_loop_with_returning_arm-gcc-O0.so",
@@ -3925,19 +3913,19 @@
    "obj": "42_rpn_evaluator-clang-O0.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 17
+   "gotos": 16
   },
   {
    "obj": "42_rpn_evaluator-clang-O2.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 12
+   "gotos": 11
   },
   {
    "obj": "42_rpn_evaluator-clang-O2strip.dwarf.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 12
+   "gotos": 11
   },
   {
    "obj": "42_rpn_evaluator-gcc-O0.so",
@@ -5235,7 +5223,7 @@
    "va": 4711,
    "kind": "width",
    "want": 32,
-   "got": "char"
+   "got": "void"
   },
   {
    "obj": "195_by_value_aggregates-gcc-O2.so",
@@ -5614,30 +5602,6 @@
    "obj": "168_rust_enum_niche-rustc-O2strip.dwarf.so",
    "fn": "eval",
    "va": 4464,
-   "n": 1
-  },
-  {
-   "obj": "204_adjacent_dispatch_tables-clang-O2.so",
-   "fn": "adt204_guarded_control",
-   "va": 4656,
-   "n": 1
-  },
-  {
-   "obj": "204_adjacent_dispatch_tables-clang-O2strip.dwarf.so",
-   "fn": "adt204_guarded_control",
-   "va": 4656,
-   "n": 1
-  },
-  {
-   "obj": "206_aarch64_wide_dispatch-clang-O2.so",
-   "fn": "dispatch_in_loop",
-   "va": 4544,
-   "n": 1
-  },
-  {
-   "obj": "206_aarch64_wide_dispatch-clang-O2strip.dwarf.so",
-   "fn": "dispatch_in_loop",
-   "va": 4544,
    "n": 1
   },
   {

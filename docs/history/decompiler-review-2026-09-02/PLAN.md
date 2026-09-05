@@ -73,6 +73,22 @@ execution-correct output remains unchanged. A rejected plain-`Goto` prototype
 exposed a real `152_deep_nesting` return-value regression; the typed borrowed
 form preserves that canary, and the complete 838-lane rerun has no regression
 attributable to the repair.
+The post-commit whole Python gate remains red at 4,612 passed and 128 failed;
+it is recorded in the result rather than promoted to a release claim. Its
+fixture-204 strict-xfail findings were stale. The independently reproduced
+inventory refresh reduces the deduplicated structural count from 473 to 472
+and unrecovered functions from 27 to 25. Deduplicated emitted gotos move from
+4,652 to 4,655 because one older stale row now records nine more gotos; the
+focused inventory suite passes. An isolated parent/tip fitness A/B records
+the final borrowed-provenance slice's exact cost as 61 product lines with no file
+threshold crossing, maximum-size growth, or IR-count growth. The next WP5
+slice is the shared immutable case/default/provenance object named in immediate
+action 5, not another fixture-specific switch recognizer.
+The refresh also caught and rejected a local `weak_fold` readability regression
+before baseline acceptance. Guard-only return-value prefixes retain ownership
+while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
+fixture 204 remains account-clean, and the `deep152_while_tower` correctness
+canary remains green.
 
 ## Authority and relationship to the roadmaps
 
