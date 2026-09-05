@@ -98,6 +98,17 @@ before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
 fixture 204 remains account-clean, and the `deep152_while_tower` correctness
 canary remains green.
+The next architecture slice is now landed separately at behavioral commit
+`310b949e`: GCC AArch64 O2's guarded `LDRB`/`SXTB #2` compact byte table
+becomes an execution-correct 16-case production switch for
+`206::dense_dispatch`. The exact fixture moves from `fail` to `pass`; a
+ten-lane adjacent AArch64 switch slice has no regressions, and the full Rust
+gate is green. An isolated full 412-lane AArch64 parent/tip comparison produces
+the same four older regressions and fourteen stale improvements at both
+revisions, proving no architecture-wide regression is attributable to the
+slice. This is one fail-closed compiler encoding, not completion of WP5's
+architecture matrix. See
+`results/wp5-aarch64-compact-byte-switch.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -875,7 +886,12 @@ one authoritative set of case edges.
   `ldr pc, [pc, r0, lsl #2]` through the relevant lifter/machine-model layer.
   Both forms already decode through `dispatch_resolution.rs`; the remaining
   work is to complete the architecture lanes and consolidate the evidence
-  contract.
+  contract. AArch64's GCC O2 compact signed-byte form is now also decoded:
+  W/X register identity and the taken-edge `b.ls` bound prove the selector and
+  extent, while exact `LDRB` plus encoded `ADD ..., SXTB #2` evidence proves
+  the table and target base. Checked decoding rejects malformed,
+  non-executable, overlapping, or wrongly scaled candidates. This is the
+  bounded `310b949e` slice, not general AArch64 dispatch completion.
 - [x] Represent resolved case values, targets, default edge, provenance,
   bounds, and completeness as typed evidence derived from `Op::IndirectJump`
   and its typed CFG edges.
@@ -940,6 +956,12 @@ one authoritative set of case edges.
   so neither `EdgeUnaccounted` nor `BlockDuplicated` remains. The full-matrix
   `152_deep_nesting` canary proves predecessor-specific return values were not
   traded away for cleaner accounting.
+  The AArch64 GCC O2 `206::dense_dispatch` lane now recovers its compact
+  signed-byte branch table as cases `0..15` plus default and passes all 22
+  deterministic execution cases. Ten adjacent AArch64 switch lanes report no
+  regression after the single reviewed baseline movement. The complete
+  412-lane AArch64 O0/O2 comparison has no attributable regression: all four
+  reported regressions reproduce identically at parent `7c0ba967`.
   Other compiler/optimization and named fixture lanes remain.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.

@@ -153,6 +153,21 @@ while the underlying machine block has exactly one structural owner. A full
 `rust_slice_get` baseline mismatch, with no regression attributable to the
 ownership repair.
 
+The next bounded WP5 architecture slice is behavioral commit `310b949e`.
+GCC AArch64 O2's guarded `LDRB` plus `ADD ..., SXTB #2` compact table now
+produces cases `0..15` and the out-of-range default for the real
+`206::dense_dispatch` fixture, rather than an unrecovered indirect branch. All
+22 deterministic executions pass, the reviewed architecture baseline moves
+only that cell from `fail` to `pass`, ten adjacent AArch64 switch lanes have no
+regression, and the full Rust gate is green. A complete 412-lane AArch64 O0/O2
+parent/tip comparison reports the same four older regressions and fourteen
+stale improvements at both revisions, proving no broad regression is
+attributable to this slice. The decoder requires an exact edge-local bound and
+instruction encoding and rejects malformed targets. The remaining AArch64
+encodings, corpus decline census, and post-commit whole Python gate keep WP5
+open. Detailed evidence is in
+[`wp5-aarch64-compact-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-aarch64-compact-byte-switch.md).
+
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
 to machine-ABI boundaries, and float-valued call rendering all have bounded
