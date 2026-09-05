@@ -2297,7 +2297,15 @@ relevant ratchet's accepted-regression record.
    Its exact structural and def-use reports reproduce every preceding
    regression/improvement finding without adding a row: 25 of 27 structural
    tests and four of six def-use tests pass, with both two-sided baseline-debt
-   ratchets intentionally still red.
+   ratchets intentionally still red. Its required release-built whole-Python
+   parent/tip replay also finds zero tip-only failure IDs: parent `33aed1ae`
+   has 116 failures and tip `146bd4c8` has 115, with the sole removed failure
+   being the intentionally refreshed test census. Both runs have 4,621 passes
+   and 889 expected failures. Parent has 69 skips versus tip's 71 because two
+   stripped fixture-08 objects were absent from the tip run's externally
+   selected fixture directory; this is recorded as an environment mismatch,
+   not an implementation result. The suite therefore remains broadly red and
+   the timing is not a matched performance comparison.
    See `results/wp4-raw-switch-private-branches.md`.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.

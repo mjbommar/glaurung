@@ -66,7 +66,34 @@ are byte-identical to the preceding exact `5fc93b15` report. Neither baseline
 is rewritten here: both remain stale in both directions and require their own
 review.
 
-The whole-Python, cross-architecture, GED, RSS, and output-size gates remain
+## Whole-Python parent/tip attribution
+
+The required whole-Python gate was replayed with a release extension rebuilt
+at each exact source revision:
+
+```bash
+uv run maturin develop --release
+uv run --no-sync pytest -q
+```
+
+Collection found 5,695 tests at parent `33aed1ae` and 5,696 at documentation
+tip `146bd4c8`; the added test is the real A32 private-diamond differential.
+The parent produced 4,621 passes, 116 failures, 889 expected failures, and 69
+skips in approximately 42 minutes 48 seconds. The tip produced 4,621 passes,
+115 failures, 889 expected failures, and 71 skips in approximately 46 minutes
+41 seconds.
+
+The sorted failure-ID comparison contains no tip-only failure. Its sole delta
+is the removal of
+`test_test_census.py::test_the_generator_reproduces_the_committed_baseline`,
+which is the intended effect of census commit `b2ef5cb2`. The two additional
+tip skips are not attributed to the implementation: its externally selected
+fixture directory lacked the GCC and Clang O2 stripped fixture-08 objects,
+whereas the parent run had subsequently built them. Therefore this A/B proves
+zero attributable new Python failure IDs, but it is not a matched performance
+comparison and does not make the broadly red suite green.
+
+The cross-architecture aggregate, pinned GED, RSS, and output-size gates remain
 separate evidence obligations. This increment proves one bounded acyclic arm
 shape; it does not admit cyclic, cross-arm, or shared-join ownership and does
 not complete WP4 promotion.
