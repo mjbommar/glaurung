@@ -50,10 +50,21 @@ entered loop header.
 
 The exact clean structural gate at `8c65a78a`, the immediately preceding
 one-block partition increment, completed 26 of 27 tests green in 568.91 seconds.
-Its final aggregate ratchet failure consists of pre-existing findings: exact
-parent/tip output is byte-identical for both reported switch rows and for all
-three reported memory-store rows in both `plain` and `c` styles. That gate does
-not cover this commit's new multi-block-prefix behavior. Current-tip full
-structural/def-use, cross-architecture and host matrices, GED, RSS, output-size,
-and whole Python evidence therefore remain open. This increment advances the
-general partition contract but does not complete WP4 promotion or WP5.
+The exact-tip run at `8c8cdfba` then completed 25 of 27 tests green. Its first
+red aggregate ratchet contains exactly the same five structural-effect and
+three def-use findings as the preceding run: this increment adds no reported
+regression. Its second red aggregate ratchet records six improvements: two
+violations resolved in `cpp_destruction_order`, plus one resolved violation in
+each of `x87_accumulate`, `x87_compare_classify`, `x87_many_live_values`,
+`x87_mixed_widths`, and `x87_product_chain` (six affected x87 variables across
+five functions).
+
+Exact parent/tip output is byte-identical for both reported switch rows and for
+all three reported memory-store rows in both `plain` and `c` styles. Those five
+structural-effect findings are pre-existing baseline debt rather than a reason
+to reject the partition. The six improved definedness rows still require
+output inspection and an explicit ratchet decision; no baseline was rewritten
+by this increment. Full def-use, cross-architecture and host matrices, GED,
+RSS, output-size, and whole Python evidence remain open. This increment
+advances the general partition contract but does not complete WP4 promotion or
+WP5.

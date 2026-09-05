@@ -113,8 +113,17 @@ whose only predecessors are its typed dispatch/folded guard is emitted directly
 inside that arm, while every shared successor remains in canonical raw
 ownership and is emitted once. The real A32 loop moves from seven remaining
 gotos to zero with unchanged native execution and silent accounting. This is a
-one-block exclusive-prefix proof, not the general multi-block partition; see
+one-block exclusive-prefix proof; see
 `results/wp4-raw-switch-exclusive-entries.md`.
+Commit `ca30c62f` extends that ownership through bounded, disjoint private
+linear prefixes and independently rejects a forged prefix that crosses a
+shared join. The exact-tip structural gate completes 25 of 27 tests: its eight
+regression findings are unchanged from the preceding exact run, while six
+used-before-definition findings are newly resolved and therefore trip the
+separate improvement ratchet. Exact parent/tip rendering also proves the five
+reported structural-effect rows byte-identical. Branching private regions and
+the remaining promotion gates stay open; see
+`results/wp4-raw-switch-private-prefixes.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
@@ -2265,8 +2274,11 @@ relevant ratchet's accepted-regression record.
    `ca30c62f` completes that bounded straight-line extension with an independent
    verifier: interiors are exact one-predecessor/one-successor chains, prefixes
    are disjoint and capped at eight blocks, and a forged shared-join crossing
-   is rejected. Branching private subgraphs and general unique-join partitioning
-   remain open; do not widen them without equivalent independent proof.
+   is rejected. Its exact-tip structural run has no new regression finding and
+   resolves six prior definedness findings; the two red aggregate ratchets are
+   retained for explicit baseline review. Branching private subgraphs and
+   general unique-join partitioning remain open; do not widen them without
+   equivalent independent proof.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
