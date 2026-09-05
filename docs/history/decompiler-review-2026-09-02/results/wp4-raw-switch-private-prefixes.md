@@ -53,18 +53,20 @@ one-block partition increment, completed 26 of 27 tests green in 568.91 seconds.
 The exact-tip run at `8c8cdfba` then completed 25 of 27 tests green. Its first
 red aggregate ratchet contains exactly the same five structural-effect and
 three def-use findings as the preceding run: this increment adds no reported
-regression. Its second red aggregate ratchet records six improvements: two
-violations resolved in `cpp_destruction_order`, plus one resolved violation in
-each of `x87_accumulate`, `x87_compare_classify`, `x87_many_live_values`,
-`x87_mixed_widths`, and `x87_product_chain` (six affected x87 variables across
-five functions).
+regression. Its second red aggregate ratchet exposes six older improvements:
+two violations resolved in `cpp_destruction_order`, plus one improvement row
+in each of `x87_accumulate`, `x87_compare_classify`, `x87_many_live_values`,
+`x87_mixed_widths`, and `x87_product_chain`.
 
 Exact parent/tip output is byte-identical for both reported switch rows and for
 all three reported memory-store rows in both `plain` and `c` styles. Those five
 structural-effect findings are pre-existing baseline debt rather than a reason
-to reject the partition. The six improved definedness rows still require
-output inspection and an explicit ratchet decision; no baseline was rewritten
-by this increment. Full def-use, cross-architecture and host matrices, GED,
-RSS, output-size, and whole Python evidence remain open. This increment
-advances the general partition contract but does not complete WP4 promotion or
-WP5.
+to reject the partition. Exact parent/tip `decbench` output is also
+byte-identical for all six improvement rows. The improvements are real relative
+to the committed baseline but predate this increment; several functions retain
+different verifier findings, so this is not a claim that they are generally
+clean. Both aggregate ratchets still require explicit baseline review, and no
+baseline was rewritten by this increment. Full def-use, cross-architecture and
+host matrices, GED, RSS, output-size, and whole Python evidence remain open.
+This increment advances the general partition contract but does not complete
+WP4 promotion or WP5.
