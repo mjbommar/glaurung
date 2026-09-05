@@ -496,3 +496,32 @@ fn scalar_float_semantics_proof(lf: &LlirFunction) -> bool {
     }
     saw_scalar_float
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ast::ScalarFloatOperation;
+    use crate::ir::types::Width;
+
+    /// Packed conversion lowering deliberately reuses the scalar intrinsic one
+    /// lane at a time.  Pin the AST boundary: a lane name does not make that
+    /// intrinsic opaque or change its arithmetic conversion into a bit cast.
+    #[test]
+    fn packed_lane_float_to_integer_intrinsic_is_an_ast_numeric_conversion() {
+        let converted = scalar_float_intrinsic(
+            "cvttss2si",
+            &[Value::Reg(VReg::phys("xmm1_d2"))],
+            &[(VReg::phys("xmm0_d2"), Width::W32)],
+        );
+        assert!(matches!(
+            converted,
+            Some((
+                ScalarFloatOperation::Convert {
+                    from: ScalarType::Float(4),
+                    to: ScalarType::SignedInt(4),
+                },
+                4,
+            ))
+        ));
+    }
+}

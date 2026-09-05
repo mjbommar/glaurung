@@ -60,9 +60,10 @@ use packed::{
     packed_dword_immediate_arithmetic_shift_right_ops,
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
-    packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_qword_binary_ops,
-    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops,
-    vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops, vex_ymm_dword_move_ops, xorps_ops,
+    packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_float_to_dword_trunc_ops,
+    packed_qword_binary_ops, packed_qword_move_ops, packed_qword_unpack_low_ops,
+    packed_word_extract_ops, vex_packed_dword_binary_ops, vex_ymm_byte_broadcast_ops,
+    vex_ymm_dword_move_ops, xorps_ops,
 };
 use packed_halves::{packed_qword_half_move_ops, packed_qword_half_swap_ops, XmmHalf};
 use packed_string::{
@@ -1871,6 +1872,11 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
+        // Four independent binary32-to-signed-dword truncations.  Keeping one
+        // typed intrinsic per lane lets the ordinary scalar AST conversion
+        // lowering emit the four C casts and keeps subsequent packed shuffles
+        // and stores on their existing exact lane representation.
+        Mnemonic::Cvttps2dq => packed_float_to_dword_trunc_ops(instr),
         // The SSE string-primitive family; see `packed_string` for which of
         // these are lifted exactly and which declare their register effect
         // only, and why the line falls where it does.
@@ -7157,6 +7163,52 @@ mod tests {
                 .count(),
             4,
             "PCMPGTD must produce four all-ones/zero masks: {ops:#?}"
+        );
+    }
+
+    /// Clang vectorises four float-to-int casts in
+    /// `hfa197_quad4f_roundtrip` into one `cvttps2dq xmm0,xmm0`.  An opaque op
+    /// left all four old float bit patterns live, so the recovered caller wrote
+    /// those bits as integers and returned -8388608 instead of 7 for seed zero.
+    #[test]
+    fn packed_float_to_dword_truncation_converts_each_lane() {
+        let ops = lift64(&[0xF3, 0x0F, 0x5B, 0xC1]); // cvttps2dq xmm0,xmm1
+        let conversions: Vec<_> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Intrinsic {
+                    name,
+                    ins,
+                    outs,
+                    reads_mem: false,
+                    writes_mem: false,
+                } if name == "cvttss2si" => match (ins.as_slice(), outs.as_slice()) {
+                    ([Value::Reg(source)], [(destination, Width::W32)]) => {
+                        Some((source.clone(), destination.clone()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            conversions,
+            (0..4)
+                .map(|lane| {
+                    (
+                        VReg::phys(format!("xmm1_d{lane}")),
+                        VReg::phys(format!("xmm0_d{lane}")),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            "every source lane is converted into the corresponding destination lane: {ops:#?}"
+        );
+        assert!(
+            ops.iter().all(|instruction| !matches!(
+                &instruction.op,
+                Op::Unknown { mnemonic } if mnemonic == "cvttps2dq"
+            )),
+            "the packed conversion must not remain opaque: {ops:#?}"
         );
     }
 

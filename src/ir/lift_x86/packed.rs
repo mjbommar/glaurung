@@ -16,6 +16,66 @@ pub(super) fn xorps_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     packed_dword_binary_ops(instr, BinOp::Xor)
 }
 
+/// Convert four packed binary32 lanes to signed dwords, truncating toward zero.
+///
+/// `CVTTPS2DQ` is exactly four independent `CVTTSS2SI` operations.  Reusing
+/// that already-modelled scalar intrinsic keeps the float-to-integer meaning
+/// explicit through SSA and AST lowering while retaining the packed lane
+/// identities consumed by `movdqu`/`pshufd` afterwards.
+///
+/// This is deliberately limited to the legacy 128-bit XMM form.  AVX forms
+/// have a distinct operand count and upper-lane effect and must not acquire
+/// plausible-but-incomplete SSE semantics through this helper.
+pub(super) fn packed_float_to_dword_trunc_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "cvttps2dq".into(),
+        }];
+    }
+
+    let dst = instr.op_register(0);
+    let mut ops = Vec::with_capacity(8);
+    let sources: Vec<Value> = match instr.op_kind(1) {
+        OpKind::Register if is_xmm_register(instr.op_register(1)) => (0..4)
+            .map(|lane| Value::Reg(packed_dword_lane(instr.op_register(1), lane)))
+            .collect(),
+        OpKind::Memory => (0..4)
+            .map(|lane| {
+                let temporary = VReg::Temp(120 + lane as u32);
+                let mut addr = mem_op_of(instr);
+                addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                addr.size = 4;
+                ops.push(Op::Load {
+                    dst: temporary.clone(),
+                    addr,
+                });
+                Value::Reg(temporary)
+            })
+            .collect(),
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: "cvttps2dq".into(),
+            }];
+        }
+    };
+
+    ops.extend(sources.into_iter().enumerate().map(|(lane, source)| {
+        Op::Intrinsic {
+            // The scalar operation has precisely the same per-lane semantics,
+            // including truncation rather than MXCSR rounding.
+            name: "cvttss2si".into(),
+            ins: vec![source],
+            outs: vec![(packed_dword_lane(dst, lane), Width::W32)],
+            reads_mem: false,
+            writes_mem: false,
+        }
+    }));
+    ops
+}
+
 /// One signed/unsigned 32-bit lane of an XMM register.
 ///
 /// Packed integer operations are not scalar 128-bit arithmetic. Representing
