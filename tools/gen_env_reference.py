@@ -380,6 +380,7 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_CONCRETIZATION_POLICY": "Select the symbolic-address concretization policy.",
     "GLAURUNG_CANONICAL_MODEL_CHOICE": "Legacy name for selecting the canonical solver model choice.",
     "GLAURUNG_ENGINE_CONSTRAINT_CACHE": "Toggle/configure the symbolic engine's constraint cache.",
+    "GLAURUNG_REQUIRE_SOLVER": "Turn a missing solver binary into a test failure instead of a skip. The solver differential in `src/symbolic/expr.rs` skips loudly when no z3/bitwuzla/cvc5 is on PATH, because CI's `symbolic` lane provisions none; set this to 1 so a silently-skipped test cannot be mistaken for a passing one.",
     "GLAURUNG_SMT_SOLVER": "Force the `PipeSolver` to use a specific solver binary on PATH.",
     "GLAURUNG_CHECK_TIMEOUT_MS": "Per-query solver timeout in milliseconds.",
     "GLAURUNG_Z3_RLIMIT": "Z3 `rlimit` resource bound override.",
