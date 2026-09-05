@@ -70,6 +70,7 @@ use loop_shape::{
     detect_raw_multi_latch_loop, has_dispatch_natural_loop, linear_path_reaches_raw_dispatch_loop,
     loop_break_shape,
 };
+use path_predicates::private_return_chain;
 pub use region::{entry_block, Region};
 use switch_shape::{detect_guarded_switch_shape, detect_switch_shape};
 pub use verify::{verify_region, StructError};
@@ -474,8 +475,11 @@ fn build_inner(
             // An out-of-loop guard may have a bypass arm and a straight-line
             // continuation into a multi-exit dispatch loop. No ordinary
             // diamond owns the two paths because they never rejoin. Preserve
-            // the bypass as an explicit conditional goto and keep walking the
-            // other arm so the local RawLoop recogniser can own every latch.
+            // the bypass and keep walking the other arm so the local RawLoop
+            // recogniser can own every latch. An exclusively-owned bounded
+            // chain ending in a machine return can be owned directly by the
+            // guard; shared, branching, cyclic, or non-returning bypasses stay
+            // explicit gotos.
             if let Some(taken) = cfg.cond_taken[cur] {
                 let other = cfg.succs[cur].iter().copied().find(|succ| *succ != taken);
                 if let Some(other) = other {
@@ -487,9 +491,32 @@ fn build_inner(
                         _ => None,
                     };
                     if let Some((continuation, bypass, invert)) = guarded_continuation {
+                        let bypass_region =
+                            if let Some(chain) = private_return_chain(bypass, cur, cfg) {
+                                let last = chain.len() - 1;
+                                let mut blocks: Vec<_> = chain
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, block)| {
+                                        if index == last && cfg.preds[block].len() > 1 {
+                                            Region::Borrowed(Box::new(Region::Block(block)))
+                                        } else {
+                                            visited.insert(block);
+                                            Region::Block(block)
+                                        }
+                                    })
+                                    .collect();
+                                if blocks.len() == 1 {
+                                    blocks.pop().expect("the private return chain is nonempty")
+                                } else {
+                                    Region::Seq(blocks)
+                                }
+                            } else {
+                                Region::Goto(bypass)
+                            };
                         parts.push(Region::IfThen {
                             cond: cur,
-                            then_r: Box::new(Region::Goto(bypass)),
+                            then_r: Box::new(bypass_region),
                             join: None,
                             invert,
                         });
@@ -1709,6 +1736,53 @@ mod tests {
             crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region),
             Vec::new(),
             "the local RawLoop must own every latch and both real exits: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn preloop_guard_owns_a_private_return_chain_before_raw_dispatch_loop() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // B0 has one private two-block return arm and one linear continuation
+        // into a two-latch dispatch loop. This is the reduced fixture-206 A32
+        // pre-loop guard: the return chain belongs to the guard and must not be
+        // represented as a cross-region goto.
+        let lf = mk_cfg(vec![
+            (0x1000, cond(0x1100), vec![0x1200, 0x1100]),
+            (0x1100, vec![Op::Nop], vec![0x1180]),
+            (0x1200, vec![Op::Nop], vec![0x1300]),
+            (0x1180, vec![Op::Return], vec![]),
+            (
+                0x1300,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1400, 0x1500, 0x1180, 0x1700],
+            ),
+            (0x1400, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1500, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1700, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover_for(&lf);
+        let rendered = format!("{region:#?}");
+        assert!(rendered.contains("RawLoop"), "loop was lost: {rendered}");
+        assert!(
+            !rendered.contains("Goto(1)"),
+            "private return stayed a goto: {rendered}"
+        );
+        let cfg = Cfg::from(&lf, &ssa);
+        assert_eq!(
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region),
+            Vec::new(),
+            "the guard, private return, and loop must all be owned: {region:#?}"
         );
     }
 
