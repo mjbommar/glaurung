@@ -109,6 +109,10 @@ revisions, proving no architecture-wide regression is attributable to the
 slice. This is one fail-closed compiler encoding, not completion of WP5's
 architecture matrix. See
 `results/wp5-aarch64-compact-byte-switch.md`.
+Hardening commit `5dbc3fc4` additionally invalidates all AArch64 dispatch facts
+across direct and indirect calls, preventing a callee-clobbered address from
+being reused as false switch evidence; the focused and architecture-wide
+results are unchanged.
 
 ## Authority and relationship to the roadmaps
 

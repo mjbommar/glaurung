@@ -163,7 +163,9 @@ regression, and the full Rust gate is green. A complete 412-lane AArch64 O0/O2
 parent/tip comparison reports the same four older regressions and fourteen
 stale improvements at both revisions, proving no broad regression is
 attributable to this slice. The decoder requires an exact edge-local bound and
-instruction encoding and rejects malformed targets. The remaining AArch64
+instruction encoding and rejects malformed targets. Hardening commit
+`5dbc3fc4` also clears all candidate facts across AArch64 calls so callee-
+clobbered registers cannot manufacture a switch. The remaining AArch64
 encodings, corpus decline census, and post-commit whole Python gate keep WP5
 open. Detailed evidence is in
 [`wp5-aarch64-compact-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-aarch64-compact-byte-switch.md).

@@ -43,12 +43,20 @@ This is deliberately one exact compiler encoding, not a general AArch64 value
 set engine. Missing bounds, malformed extents, wrong scale, arithmetic overflow,
 non-executable targets, and table overlap all decline safely.
 
+Hardening commit `5dbc3fc4` closes one additional stale-evidence path found in
+pre-merge review: an intervening AArch64 direct or indirect call now clears the
+tracker because an arbitrary callee may overwrite the volatile registers and
+flags that proved the candidate. A real-encoding unit sequence requires the
+post-call `br` to remain unresolved. The target fixture, ten-lane switch slice,
+412-lane architecture result, and full Rust gate are unchanged after hardening.
+
 ## Validation
 
 All commands used `TMPDIR=$HOME/.cache/glaurung/tmp` in the isolated worktree
 based on `7c0ba967`.
 
-- `cargo test --features python-ext`: 4,100 library tests passed, zero failed,
+- `cargo test --features python-ext` at hardened tip `5dbc3fc4`: 4,100 library
+  tests passed, zero failed,
   and five were ignored; every integration and documentation target passed.
 - `uv run maturin develop --release`: fresh release extension built from the
   committed source.
