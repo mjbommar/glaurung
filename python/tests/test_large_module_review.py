@@ -316,6 +316,20 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     "triage/api.rs": "accepted: the triage entry surface; adapters over one pipeline.",
     "triage/config.rs": "accepted: triage configuration and its defaults/validation.",
     # -- symbolic-execution engine (out of decompiler scope, still in src/) --
+    "symbolic/solver/bitwuzla_backend.rs": (
+        "accepted: one FFI surface for one library. The bulk is the pinned "
+        "libbitwuzla 0.9.1 C ABI -- extern declarations, the kind-constant "
+        "block, and the term builders that use them -- and those cannot be "
+        "separated without exporting raw enum values across a module boundary, "
+        "which is the one thing the file argues against: it warns that a wrong "
+        "kind value builds fine and silently constructs a different operator. "
+        "It crossed 1,000 LOC when the shift-distance and divide-by-zero "
+        "reduction was added so the solver denotes what src/exec/concrete.rs "
+        "computes. Splitting was rejected on evidence rather than taste: "
+        "libbitwuzla is not installed here, so this backend compiles but has "
+        "never executed, and restructuring code no test on this machine can run "
+        "trades a documented size for an undetectable regression."
+    ),
     "symbolic/solver/mod.rs": "accepted: the solver facade and its shared query plumbing.",
     "symbolic/ordered_trace.rs": "accepted: the ordered trace format and its writer.",
     "symbolic/ordered_replay.rs": "accepted: ordered replay against a pinned configuration.",
