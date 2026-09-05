@@ -265,6 +265,7 @@ pub(super) fn run_ast_passes(
             // came from RAX or XMM0; GCC and Clang choose opposite banks for
             // the same mixed aggregate.
             crate::ir::callee_return_bank::materialize_register_split_returns(f, cc, prototype);
+            crate::ir::callee_return_bank::materialize_register_sse_pair_returns(f, cc, prototype);
             crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
             // The result register now carries the LOW eightbyte of a proven
             // two-register aggregate result. State the whole contract here,
