@@ -15,6 +15,16 @@ use crate::ir::types::VReg;
 
 use super::{arg_slots, mark_arg_writes_in_stmt, slot_of, CallConv};
 
+fn storage_slot_count(arch: CallConv) -> usize {
+    arg_slots(arch).len() + crate::ir::abi::sse_argument_registers(arch).len()
+}
+
+fn storage_slot_of(arch: CallConv, name: &str) -> Option<usize> {
+    slot_of(arch, name).or_else(|| {
+        crate::ir::abi::sse_argument_slot_of(arch, name).map(|slot| arg_slots(arch).len() + slot)
+    })
+}
+
 /// What the statements OUTSIDE the body being folded already prove about each
 /// ABI argument slot.
 ///
@@ -54,7 +64,7 @@ impl EnclosingSlots {
         live_ins: &[Option<Expr>],
         entry_constant: Vec<bool>,
     ) -> Self {
-        let slots = arg_slots(arch).len();
+        let slots = storage_slot_count(arch);
         Self {
             overrides: vec![None; slots],
             blocked: vec![false; slots],
@@ -143,10 +153,31 @@ impl EnclosingSlots {
             ..
         } = statement
         {
-            if let Some(slot) = slot_of(arch, name.as_str()) {
-                reaching[slot] = name.contains('#').then(|| Expr::Reg(dst.clone()));
+            // A scalar lane is not a definition of the complete SSE argument
+            // carrier. Recording `xmm1_d1` as the reaching value for an exact
+            // `xmm1` parameter would pass four bytes of unrelated upper-lane
+            // residue as a double. Lane writes still block the carrier below;
+            // they simply cannot prove its complete value.
+            let complete_storage = !crate::ir::abi::ssa_base(name).contains("_d");
+            if let Some(slot) = complete_storage
+                .then(|| storage_slot_of(arch, name.as_str()))
+                .flatten()
+            {
+                if let Some(reaching) = reaching.get_mut(slot) {
+                    *reaching = name.contains('#').then(|| Expr::Reg(dst.clone()));
+                }
                 return;
             }
+            if crate::ir::abi::sse_argument_slot_of(arch, name).is_some() {
+                // Packed-view decomposition defines lane identities from the
+                // complete carrier; it does not overwrite that carrier. Keep
+                // the last whole-register proof and ignore these derived defs.
+                return;
+            }
+        }
+        if matches!(statement, Stmt::Call { .. }) {
+            reaching.iter_mut().for_each(|slot| *slot = None);
+            return;
         }
         let mut written = vec![false; reaching.len()];
         mark_arg_writes_in_stmt(statement, arch, &mut written);
@@ -187,6 +218,24 @@ impl EnclosingSlots {
         (param_slots.contains(&slot) && self.entry_value_reaches(slot))
             .then(|| self.live_ins.get(slot).and_then(Clone::clone))
             .flatten()
+    }
+
+    /// The exact enclosing definition for either ABI argument bank.
+    ///
+    /// This deliberately has no function-entry fallback: only an explicit
+    /// value-numbered definition in the enclosing prefix proves an SSE value
+    /// at a nested call. Integer live-in recovery remains in `reaching_value`.
+    pub(super) fn reaching_storage_value(
+        &self,
+        arch: CallConv,
+        storage: &str,
+        blocked_here: &[bool],
+    ) -> Option<Expr> {
+        let slot = storage_slot_of(arch, storage)?;
+        if blocked_here.get(slot).copied().unwrap_or(true) {
+            return None;
+        }
+        self.reaching.get(slot).and_then(Clone::clone)
     }
 
     /// Does this function's ENTRY value for `slot` still reach a call in the

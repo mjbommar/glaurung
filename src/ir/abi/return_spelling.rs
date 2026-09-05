@@ -175,6 +175,27 @@ pub fn sse_pair_return_high_bytes(return_type: &str) -> Option<u8> {
         .find(|high_bytes| sse_pair_return_tag(*high_bytes) == Some(return_type))
 }
 
+/// The synthetic spelling for an eight-byte all-SSE value returned in one
+/// register but consumed through two independent binary32 lanes.
+///
+/// System V classifies `{float,float}` as one SSE eightbyte, so this is not an
+/// [`sse_pair_return_tag`] and must not claim `xmm1`.  A scalar `double` has the
+/// same storage width but the wrong source representation; the aggregate tag
+/// makes the two lane values explicit without inventing a second result bank.
+pub fn sse_packed_return_tag(bytes: u8) -> Option<&'static str> {
+    (bytes == 8).then_some("struct __glaurung_sse_packed_2f")
+}
+
+/// The self-contained definition for [`sse_packed_return_tag`].
+pub fn sse_packed_return_definition(bytes: u8) -> Option<&'static str> {
+    (bytes == 8).then_some("struct __glaurung_sse_packed_2f { float __sse0; float __sse1; };")
+}
+
+/// The occupied byte count encoded by [`sse_packed_return_tag`].
+pub fn sse_packed_return_bytes(return_type: &str) -> Option<u8> {
+    (sse_packed_return_tag(8) == Some(return_type)).then_some(8)
+}
+
 /// Every self-contained definition a synthesised aggregate return spelling
 /// needs in scope, or `None` when the type is not one of them.
 ///
@@ -195,8 +216,31 @@ pub fn synthesised_return_definition(return_type: &str) -> Option<String> {
     {
         return Some(definition.to_string());
     }
+    if let Some(definition) =
+        sse_packed_return_bytes(return_type).and_then(sse_packed_return_definition)
+    {
+        return Some(definition.to_string());
+    }
     if let Some((member_bytes, members)) = hfa_return_members(return_type) {
         return hfa_return_definition(member_bytes, members).map(str::to_string);
     }
     indirect_return_bytes(return_type).and_then(indirect_return_definition)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_sse_spelling_is_one_eightbyte_with_two_float_members() {
+        let tag = sse_packed_return_tag(8).expect("supported packed result");
+        assert_eq!(sse_packed_return_bytes(tag), Some(8));
+        assert_eq!(
+            synthesised_return_definition(tag).as_deref(),
+            sse_packed_return_definition(8)
+        );
+        assert_eq!(sse_packed_return_tag(4), None);
+        assert_eq!(sse_packed_return_bytes("double"), None);
+        assert_ne!(sse_pair_return_tag(8), Some(tag));
+    }
 }

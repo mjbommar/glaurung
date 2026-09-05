@@ -27,11 +27,16 @@ dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first fixture-217 follow-on is a bounded WP9 instruction-semantics
 increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
-typed binary32 lanes. This removes Clang O2's opaque packed arithmetic but
-deliberately does not mark either complex-multiply cell green. Both expose the
-next general boundary: compiler complex helpers require four source-ordered
-SSE arguments and a multi-location complex result, while `CallEffects` can
-express only one result. See `results/wp9-packed-float-arithmetic.md`.
+typed binary32 lanes. The following WP6/WP9 call-boundary increment is also
+landed. It gives `__mulsc3` and `__muldc3` exact source-ordered
+`xmm0`..`xmm3` inputs and keeps their two distinct result contracts honest:
+`__mulsc3` returns two binary32 lanes packed into `xmm0`, while `__muldc3`
+returns one binary64 component in each of `xmm0:xmm1`. GCC and Clang O2
+`complex_float_multiply` and `complex_multiply` now pass, four fixture
+improvements with no regression in the scoped adjacent controls. This is a
+bounded SysV compiler-runtime contract, not completion of the general call or
+constraint model. See `results/wp9-packed-float-arithmetic.md` and
+`results/wp6-compiler-complex-helper-boundary.md`.
 The full Rust gate is green at `41af392d`: its library target reports 4,065
 passed, 0 failed, and 5 ignored, and every integration and documentation target
 also passed. Its required whole Python gate completed red: 4,613 passed, 116
@@ -2034,12 +2039,18 @@ relevant ratchet's accepted-regression record.
    value constraints rather than extending fixture-specific ABI adapters.
    Keep Rust totals separate and do not generalize the SysV/x86 evidence to
    unsupported architectures, vector forms, or language ABIs.
-   The first fixture-217 prerequisite now models legacy packed binary32
-   arithmetic. Next, represent direct calls with exact source-ordered SSE
-   layouts and multi-location results before repairing `__mulsc3`/`__muldc3`;
-   passing four arguments without representing both result components is
-   explicitly insufficient. Require finite and exceptional-input execution
-   evidence plus scalar, integer-pair, HFA, and vector-call refusal controls.
+   The first fixture-217 prerequisite models legacy packed binary32 arithmetic,
+   and the following bounded compiler-runtime boundary is landed. Direct SysV
+   calls to `__mulsc3`/`__muldc3` now carry exact source-ordered
+   `xmm0`..`xmm3` layouts. The result model distinguishes the packed two-float
+   `xmm0` carrier used by `__mulsc3` from the two-register `xmm0:xmm1` result
+   used by `__muldc3`; it does not incorrectly describe both helpers as
+   multi-register returns. The four GCC/Clang O2 complex-multiply cells pass,
+   with scalar, integer-pair, HFA, vector-transport, and incomplete-layout
+   controls retained. Next, generalize the exact boundary fact beyond the two
+   catalogued compiler helpers and complete exceptional-input execution
+   evidence without weakening the fail-closed layout rules. See
+   `results/wp6-compiler-complex-helper-boundary.md`.
 8. Close WP8's remaining corpus-wide exit evidence. Declaration authority,
    structured conflicts, and the explicitly requested analyst annotation mode
    are landed; scored text remains free of diagnostics by default.

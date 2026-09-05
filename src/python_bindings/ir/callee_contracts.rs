@@ -94,6 +94,25 @@ fn itanium_runtime_layout(
     )
 }
 
+/// Fixed compiler-runtime layouts whose imported helpers have no source body
+/// from which parameter liveness or source order can be recovered.
+fn compiler_runtime_layout(
+    name: &str,
+    cc: crate::ir::call_args::CallConv,
+) -> Option<Vec<crate::ir::types::VReg>> {
+    if cc != crate::ir::call_args::CallConv::SysVAmd64 {
+        return None;
+    }
+    match imported_symbol_base(name) {
+        "__mulsc3" | "__muldc3" => Some(
+            ["xmm0", "xmm1", "xmm2", "xmm3"]
+                .map(crate::ir::types::VReg::phys)
+                .to_vec(),
+        ),
+        _ => None,
+    }
+}
+
 /// Choose the strongest callee-owned record available for `name`.
 fn callee_record(
     name: &str,
@@ -836,6 +855,24 @@ pub(super) fn recover_direct_callee_layouts(
         eprintln!("\n===== direct callee candidates =====\n{callees:#x?}");
     }
     for callee_va in callees {
+        if let Some((name, layout, prototype)) = address_names.get(&callee_va).and_then(|name| {
+            let layout = compiler_runtime_layout(name, cc)?;
+            let prototype = crate::ir::call_contracts::lookup(name)?.standalone_prototype()?;
+            Some((name.clone(), layout, prototype))
+        }) {
+            let key = crate::ir::ast::sanitize_c_ident(crate::ir::ast::callee_display_name(&name));
+            facts.layouts.insert(callee_va, layout);
+            facts.prototypes.insert(callee_va, prototype.clone());
+            facts.env.insert(
+                key,
+                crate::ir::symbol_env::SymbolRecord::new(
+                    prototype,
+                    crate::ir::symbol_env::RecordSource::Catalog,
+                    false,
+                ),
+            );
+            continue;
+        }
         if let Some(layout) = address_names
             .get(&callee_va)
             .and_then(|name| itanium_runtime_layout(name, cc))

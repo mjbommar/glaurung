@@ -269,6 +269,22 @@ impl Splitter {
         crate::ir::abi::sse_pair_return_high_bytes(&call_spec?.call_prototype.return_type)
     }
 
+    /// The occupied bytes of a one-register packed SSE aggregate result.
+    ///
+    /// Unlike `SsePair`, this class defines only `xmm0`; its logical members
+    /// are independent lane reads from that one carrier.  The synthetic return
+    /// spelling is the proof, so an ordinary scalar float/double call never
+    /// enters this path.
+    fn sse_packed_bytes(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> Option<u8> {
+        if self.cc != CallConv::SysVAmd64 {
+            return None;
+        }
+        crate::ir::abi::sse_packed_return_bytes(&call_spec?.call_prototype.return_type)
+    }
+
     /// The member width and count of a call whose callee returns an AAPCS64
     /// HOMOGENEOUS FLOAT AGGREGATE in `v0`..`v3`.
     ///
@@ -384,6 +400,7 @@ impl Splitter {
         &mut self,
         high_bytes: u8,
         buffer: &VReg,
+        primary: &VReg,
         state: &mut FlowState,
     ) -> Vec<Stmt> {
         let object_bytes = high_bytes.saturating_add(8);
@@ -422,6 +439,70 @@ impl Splitter {
                 dst: VReg::phys(register),
                 src: Expr::Reg(fresh.clone()),
             });
+            if primary != &VReg::phys(register)
+                && self.result_storage(primary) == self.result_storage(&VReg::phys(register))
+            {
+                compatibility.push(Stmt::Assign {
+                    dst: primary.clone(),
+                    src: Expr::Reg(fresh.clone()),
+                });
+            }
+            if state.reachable {
+                if let Some(storage) = self.result_storage(&VReg::phys(register)) {
+                    state.results.insert(storage, fresh);
+                }
+            }
+        }
+        compatibility
+    }
+
+    /// Decompose the low binary32 lanes of a one-register packed SSE result.
+    fn sse_packed_results(
+        &mut self,
+        bytes: u8,
+        buffer: &VReg,
+        primary: &VReg,
+        state: &mut FlowState,
+    ) -> Vec<Stmt> {
+        let mut compatibility = Vec::with_capacity(4);
+        for (offset, register) in [(0i64, "xmm0_d0"), (4, "xmm0_d1")]
+            .into_iter()
+            .filter(|(offset, _)| *offset + 4 <= i64::from(bytes))
+        {
+            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            self.next_result += 1;
+            let object = Expr::StackAddr {
+                object: buffer.clone(),
+                size: u16::from(bytes),
+            };
+            let address = if offset == 0 {
+                object
+            } else {
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(object),
+                    rhs: Box::new(Expr::Const(offset)),
+                }
+            };
+            compatibility.push(Stmt::Assign {
+                dst: fresh.clone(),
+                src: Expr::Deref {
+                    addr: Box::new(address),
+                    size: 4,
+                },
+            });
+            compatibility.push(Stmt::Assign {
+                dst: VReg::phys(register),
+                src: Expr::Reg(fresh.clone()),
+            });
+            if primary != &VReg::phys(register)
+                && self.result_storage(primary) == self.result_storage(&VReg::phys(register))
+            {
+                compatibility.push(Stmt::Assign {
+                    dst: primary.clone(),
+                    src: Expr::Reg(fresh.clone()),
+                });
+            }
             if state.reachable {
                 if let Some(storage) = self.result_storage(&VReg::phys(register)) {
                     state.results.insert(storage, fresh);
@@ -677,7 +758,13 @@ impl Splitter {
                     let buffer = VReg::phys(format!("split_result_{}", self.next_result));
                     self.next_result += 1;
                     *dst = Some(buffer.clone());
-                    return self.sse_pair_results(high_bytes, &buffer, state);
+                    return self.sse_pair_results(high_bytes, &buffer, &original, state);
+                }
+                if let Some(bytes) = self.sse_packed_bytes(call_spec.as_ref()) {
+                    let buffer = VReg::phys(format!("split_result_{}", self.next_result));
+                    self.next_result += 1;
+                    *dst = Some(buffer.clone());
+                    return self.sse_packed_results(bytes, &buffer, &original, state);
                 }
                 // AAPCS64's HFA, checked here for the same reason and with the
                 // same effect: one value in up to four SIMD registers is not a

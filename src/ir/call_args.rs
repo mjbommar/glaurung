@@ -656,9 +656,10 @@ fn fold_body_with_context(
     // one forward walk rather than rescanned per statement. `reaching` is the
     // matching per-slot definition, accumulated by the same walk.
     let mut running = enclosing.blocked.clone();
-    running.resize(arg_slots(arch).len(), false);
+    let storage_slots = arg_slots(arch).len() + crate::ir::abi::sse_argument_registers(arch).len();
+    running.resize(storage_slots, false);
     let mut reaching = enclosing.reaching.clone();
-    reaching.resize(arg_slots(arch).len(), None);
+    reaching.resize(storage_slots, None);
     for index in 0..body.len() {
         let (prefix, suffix) = body.split_at_mut(index);
         let s = &mut suffix[0];
@@ -1092,9 +1093,22 @@ fn fold_one_recovered_layout_call_with_live_ins(
         return false;
     }
 
-    let mut blocked_live_ins = vec![false; arg_slots(arch).len()];
+    let storage_slots = arg_slots(arch).len() + crate::ir::abi::sse_argument_registers(arch).len();
+    let mut blocked_storage = vec![false; storage_slots];
     for statement in &body[..call_idx] {
-        mark_arg_writes_in_stmt(statement, arch, &mut blocked_live_ins);
+        mark_arg_writes_in_stmt(statement, arch, &mut blocked_storage);
+        match statement {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            } => {
+                if let Some(slot) = crate::ir::abi::sse_argument_slot_of(arch, name) {
+                    blocked_storage[arg_slots(arch).len() + slot] = true;
+                }
+            }
+            Stmt::Call { .. } => blocked_storage.fill(true),
+            _ => {}
+        }
     }
     let mut arguments = Vec::with_capacity(layout.len());
     for (layout_index, storage) in layout.iter().enumerate() {
@@ -1105,11 +1119,15 @@ fn fold_one_recovered_layout_call_with_live_ins(
         let VReg::Phys(name) = storage else {
             return false;
         };
+        if let Some(value) = enclosing.reaching_storage_value(arch, name, &blocked_storage) {
+            arguments.push(value);
+            continue;
+        }
         let Some(slot) = crate::ir::abi::argument_slot_of(arch, name) else {
             return false;
         };
         if !param_slots.contains(&slot)
-            || blocked_live_ins[slot]
+            || blocked_storage[slot]
             || !enclosing.entry_value_reaches(slot)
         {
             return false;
@@ -2049,6 +2067,68 @@ mod tests {
         assert!(
             arm_args(&clobbered).is_empty(),
             "a clobbered slot zero was still backfilled from function entry: {clobbered:#?}"
+        );
+    }
+
+    #[test]
+    fn exact_sse_layout_uses_enclosing_whole_register_definitions() {
+        let mut function = Function {
+            name: "complex_helper_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("xmm1#1"),
+                    src: Expr::Reg(reg("ai_value")),
+                },
+                Stmt::Assign {
+                    dst: reg("xmm1_d1#1"),
+                    src: Expr::Reg(reg("xmm1#1")),
+                },
+                Stmt::Assign {
+                    dst: reg("xmm2#1"),
+                    src: Expr::Reg(reg("br_value")),
+                },
+                Stmt::Assign {
+                    dst: reg("xmm3#1"),
+                    src: Expr::Reg(reg("bi_value")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("needs_helper")),
+                    then_body: vec![
+                        Stmt::Assign {
+                            dst: reg("xmm0#2"),
+                            src: Expr::Reg(reg("ar_value")),
+                        },
+                        call_to("__muldc3"),
+                    ],
+                    else_body: None,
+                },
+            ],
+        };
+        let layouts = std::collections::HashMap::from([(
+            0x2000,
+            ["xmm0", "xmm1", "xmm2", "xmm3"].map(reg).to_vec(),
+        )]);
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut Default::default(),
+            &layouts,
+        );
+        let Stmt::If { then_body, .. } = &function.body[4] else {
+            panic!("branch disappeared: {function:#?}")
+        };
+        let Stmt::Call { args, .. } = &then_body[0] else {
+            panic!("setup did not fold: {then_body:#?}")
+        };
+        assert_eq!(
+            args,
+            &[
+                Expr::Reg(reg("ar_value")),
+                Expr::Reg(reg("xmm1#1")),
+                Expr::Reg(reg("xmm2#1")),
+                Expr::Reg(reg("xmm3#1")),
+            ]
         );
     }
 

@@ -35,7 +35,8 @@ mod return_spelling;
 pub use return_spelling::{
     hfa_return_definition, hfa_return_members, hfa_return_tag, indirect_return_bytes,
     indirect_return_definition, indirect_return_tag, split_bank_return_definition,
-    split_bank_return_order, split_bank_return_tag, sse_pair_return_definition,
+    split_bank_return_order, split_bank_return_tag, sse_packed_return_bytes,
+    sse_packed_return_definition, sse_packed_return_tag, sse_pair_return_definition,
     sse_pair_return_high_bytes, sse_pair_return_tag, synthesised_return_definition,
 };
 

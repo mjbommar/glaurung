@@ -3721,8 +3721,8 @@
   "217_complex_arithmetic:clang:O2": {
     "complex_add_conj": "pass",
     "complex_array_sum": "pass",
-    "complex_float_multiply": "fail",
-    "complex_multiply": "fail",
+    "complex_float_multiply": "pass",
+    "complex_multiply": "pass",
     "complex_through_call": "pass",
     "struct_pair_control": "pass"
   },
@@ -3737,8 +3737,8 @@
   "217_complex_arithmetic:gcc:O2": {
     "complex_add_conj": "pass",
     "complex_array_sum": "pass",
-    "complex_float_multiply": "fail",
-    "complex_multiply": "fail",
+    "complex_float_multiply": "pass",
+    "complex_multiply": "pass",
     "complex_through_call": "pass",
     "struct_pair_control": "pass"
   },

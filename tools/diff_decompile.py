@@ -927,6 +927,13 @@ _ADDRESS_ENCODED_NAME = re.compile(r"sub_(?P<va>[0-9a-f]+)")
 #: the bound exists so this stays sane on a real binary.
 _MAX_PREFETCH_LOCALS = 64
 
+# Compiler support routines are part of the target toolchain ABI, even when a
+# fixture's static link leaves a local implementation in `.text`. Rebuilding a
+# caller should resolve these through the compiler driver exactly as source C
+# does; recursively decompiling the implementation changes the unit under test
+# from "this caller" into an unrelated runtime-library recovery exercise.
+_TOOLCHAIN_RUNTIME_EXTERNALS = frozenset({"__mulsc3", "__muldc3"})
+
 #: Decompiled local-helper bodies per binary. `include_referenced_local_callees`
 #: is called once per function under test, and every one of those calls walks
 #: into the SAME pool of local helpers, so without this the pool is re-derived
@@ -1037,6 +1044,8 @@ def include_referenced_local_callees(
         return None if va in export_vas else (name, va)
 
     def resolve(name: str) -> tuple[str, int] | None:
+        if name in _TOOLCHAIN_RUNTIME_EXTERNALS:
+            return None
         return local.get(name) or address_encoded(name)
 
     snippets: dict[str, str] = {}

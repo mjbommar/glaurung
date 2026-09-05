@@ -101,15 +101,18 @@ fitness, and generated-pass-reference failures remain visible.
 
 ## Next production increment
 
-Do not repair the remaining cells by merely spelling four helper arguments.
-`__mulsc3` and `__muldc3` return complex values across more than one SSE
-location, while `CallEffects` currently has a single optional result. A
-compile-only arity patch would therefore leave stale post-call values.
+The two helpers do not share one result shape. System V `__mulsc3` returns two
+binary32 components packed into the low 64 bits of `xmm0`; `__muldc3` returns
+one binary64 component in each of `xmm0:xmm1`. Treating both as a
+multi-register result would be as wrong as retaining the former single-scalar
+model. The follow-on work is recorded in
+`wp6-compiler-complex-helper-boundary.md`.
 
-The next WP6/WP9 slice must add a multi-location call-result fact keyed to the
-call's SSA identities, carry an exact source-ordered SSE parameter layout, and
-materialize the helper result as one complex value or two proved projections.
-Tests must cover ordinary and exceptional floating inputs, refuse incomplete
-layouts, and preserve scalar, integer-pair, HFA, and vector-call controls.
+The landed WP6/WP9 slice carries an exact source-ordered SSE parameter layout
+and materializes each helper through its proven carrier shape. Generalizing
+that exact fact beyond these two compiler-runtime contracts and completing the
+exceptional-input execution matrix remain open. Incomplete layouts must still
+be refused, and scalar, integer-pair, HFA, and vector-call controls must remain
+green.
 
 No DecBench run or upstream interaction was performed.

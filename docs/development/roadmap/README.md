@@ -132,12 +132,16 @@ GCC/Clang O0/O2 after exact SSE-pair return materialization, contract-proved
 tail forwarding, and the required legacy packed-XMM semantics. This does not
 complete WP6's general constraint solver or establish other architecture,
 vector, or language-ABI support. The first optimized-complex follow-on now
-models all four legacy packed binary32 arithmetic mnemonics as typed XMM lanes,
-removing opaque `mulps`/`addps` output without changing the still-red execution
-verdict. Its remaining blocker is a general call-model gap: four SSE arguments
-and a multi-location complex result cannot be represented by the current
-single-result `CallEffects`. The review record requires that model to be
-extended rather than accepting a compile-only helper-arity patch. WP8 has
+models all four legacy packed binary32 arithmetic mnemonics as typed XMM lanes.
+The next bounded call-boundary slice is landed too: `__mulsc3` and `__muldc3`
+receive four exact source-ordered SysV SSE arguments, while the returned value
+is represented according to its real carrier. `__mulsc3` packs two binary32
+lanes into `xmm0`; only `__muldc3` uses the `xmm0:xmm1` pair. The GCC and Clang
+O2 float and double complex-multiply cells all move to pass, four improvements
+with no scoped adjacent regression. General exact call-boundary facts and
+exceptional-input coverage remain WP6 work; this two-helper catalogued contract
+does not establish other ABIs, arbitrary aggregate calls, or vector support.
+WP8 has
 authoritative DWARF/PDB/analyst
 declaration slices and now owns their total priority order in the program
 environment; authoritative tagged PDB pointers also retain their nominal type

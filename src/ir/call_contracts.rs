@@ -162,6 +162,9 @@ impl CallContract {
 /// machine word would be worse than omitting its prototype.
 pub fn standalone_c_type(c_type: &str) -> Option<String> {
     let c_type = c_type.trim();
+    if crate::ir::abi::synthesised_return_definition(c_type).is_some() {
+        return Some(c_type.to_string());
+    }
     let exact = match c_type {
         "void" | "char" | "signed char" | "unsigned char" | "short" | "unsigned short" | "int"
         | "unsigned int" | "long" | "unsigned long" | "long long" | "unsigned long long"
@@ -274,8 +277,36 @@ fn libc_prototypes() -> &'static HashMap<String, CallContract> {
     })
 }
 
+/// ABI contracts for compiler support routines that are normally reached
+/// through body-less PLT stubs. These are implementation ABI, not libc API,
+/// but their resolved names are authoritative enough to prevent treating the
+/// integer argument bank as their source signature.
+fn compiler_runtime_contract(name: &str) -> Option<CallContract> {
+    let clean = clean_symbol_name(name);
+    let (return_type, scalar) = match clean.as_str() {
+        "__mulsc3" => (crate::ir::abi::sse_packed_return_tag(8)?, "float"),
+        "__muldc3" => (crate::ir::abi::sse_pair_return_tag(8)?, "double"),
+        _ => return None,
+    };
+    Some(CallContract {
+        name: clean,
+        return_type: return_type.to_string(),
+        params: ["a", "b", "c", "d"]
+            .into_iter()
+            .map(|name| CallParameter {
+                name: name.to_string(),
+                c_type: scalar.to_string(),
+            })
+            .collect(),
+        is_variadic: false,
+    })
+}
+
 /// Resolve a decorated import name against the native libc and WinAPI catalogs.
 pub fn lookup(name: &str) -> Option<CallContract> {
+    if let Some(contract) = compiler_runtime_contract(name) {
+        return Some(contract);
+    }
     let clean = clean_symbol_name(name);
     let key = clean.to_ascii_lowercase();
     if let Some(prototype) = libc_prototypes().get(&key) {
@@ -376,6 +407,17 @@ pub fn apply_known_llir_call_contracts(
             effects.args = args;
             effects.args_are_exact = true;
         }
+        let standalone_return = standalone_c_type(&contract.return_type);
+        let returns_in_sse = standalone_return.as_deref().is_some_and(|return_type| {
+            matches!(return_type, "float" | "double")
+                || crate::ir::abi::sse_pair_return_high_bytes(return_type).is_some()
+                || crate::ir::abi::sse_packed_return_bytes(return_type).is_some()
+        });
+        if returns_in_sse {
+            effects.result = crate::ir::abi::float_return_registers(cc)
+                .first()
+                .map(|register| VReg::phys(*register));
+        }
         if contract.return_type.trim().eq_ignore_ascii_case("void") {
             effects.result_is_source_value = false;
         }
@@ -391,25 +433,34 @@ fn fixed_scalar_argument_registers(contract: &CallContract, cc: CallConv) -> Opt
     if contract.is_variadic {
         return None;
     }
-    let registers = crate::ir::abi::argument_registers(cc);
-    if contract.params.len() > registers.len() {
-        return None;
-    }
     let word_bytes = crate::ir::abi::machine_word_bytes(cc);
+    let integer_bank = crate::ir::abi::argument_registers(cc);
+    let sse_bank = crate::ir::abi::sse_argument_registers(cc);
+    let mut integer_slot = 0usize;
+    let mut sse_slot = 0usize;
+    let mut result = Vec::with_capacity(contract.params.len());
     for parameter in &contract.params {
         let c_type = standalone_c_type(&parameter.c_type)?;
-        let fits_one_integer_register = c_type.ends_with('*')
-            || integer_c_type_width(&c_type, word_bytes).is_some_and(|width| width <= word_bytes);
-        if !fits_one_integer_register {
-            return None;
+        if matches!(c_type.as_str(), "float" | "double") {
+            // Only SysV's independent SSE bank is modelled here. Win64 uses
+            // source-positioned integer/SSE slots and cdecl32 uses the stack.
+            if cc != CallConv::SysVAmd64 {
+                return None;
+            }
+            result.push(VReg::phys(*sse_bank.get(sse_slot)?));
+            sse_slot += 1;
+        } else {
+            let fits_one_integer_register = c_type.ends_with('*')
+                || integer_c_type_width(&c_type, word_bytes)
+                    .is_some_and(|width| width <= word_bytes);
+            if !fits_one_integer_register {
+                return None;
+            }
+            result.push(VReg::phys(*integer_bank.get(integer_slot)?));
+            integer_slot += 1;
         }
     }
-    Some(
-        registers[..contract.params.len()]
-            .iter()
-            .map(|name| VReg::phys(*name))
-            .collect(),
-    )
+    Some(result)
 }
 
 /// Refine nominal pointer spellings on the current function from compatible
@@ -1161,6 +1212,64 @@ mod tests {
         assert_eq!(effects.args, [VReg::phys("rdi")]);
         assert_eq!(effects.result, Some(VReg::phys("rax")));
         assert!(!effects.result_is_source_value);
+    }
+
+    #[test]
+    fn compiler_complex_helpers_have_exact_sysv_sse_boundaries() {
+        for (name, scalar, return_type) in [
+            (
+                "__mulsc3@plt",
+                "float",
+                crate::ir::abi::sse_packed_return_tag(8).unwrap(),
+            ),
+            (
+                "__muldc3@plt",
+                "double",
+                crate::ir::abi::sse_pair_return_tag(8).unwrap(),
+            ),
+        ] {
+            let contract = lookup(name).expect("compiler helper contract");
+            let prototype = contract
+                .standalone_prototype()
+                .expect("standalone contract");
+            assert_eq!(prototype.return_type, return_type);
+            assert_eq!(prototype.parameter_types, [scalar; 4]);
+
+            let mut function = LlirFunction {
+                entry_va: 0x1000,
+                blocks: vec![LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![LlirInstr {
+                        va: 0x1000,
+                        op: Op::Call {
+                            target: CallTarget::Direct(0x2000),
+                            effects: None,
+                        },
+                    }],
+                    succs: vec![],
+                }],
+            };
+            crate::ir::abi::annotate_calls(&mut function, CallConv::SysVAmd64);
+            apply_known_llir_call_contracts(
+                &mut function,
+                CallConv::SysVAmd64,
+                &HashMap::from([(0x2000, name.to_string())]),
+            );
+            let Op::Call {
+                effects: Some(effects),
+                ..
+            } = &function.blocks[0].instrs[0].op
+            else {
+                panic!("expected annotated call")
+            };
+            assert_eq!(
+                effects.args,
+                ["xmm0", "xmm1", "xmm2", "xmm3"].map(VReg::phys)
+            );
+            assert!(effects.args_are_exact);
+            assert_eq!(effects.result, Some(VReg::phys("xmm0")));
+        }
     }
 
     #[test]

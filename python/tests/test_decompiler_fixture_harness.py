@@ -392,6 +392,24 @@ def test_recompiled_cpp_throwing_callee_loads_its_runtime(tmp_path: Path) -> Non
     ctypes.CDLL(str(rebuilt))
 
 
+def test_compiler_complex_runtime_stays_an_external_boundary() -> None:
+    binary = _compile_so(
+        "static double __muldc3(double a, double b, double c, double d) {"
+        " return a + b + c + d; }"
+        " double caller(double x) { return __muldc3(x, x, x, x); }",
+        "compiler_runtime_boundary",
+    )
+    local = D.defined_functions(binary)
+    helper = next(name for name in local if name == "__muldc3")
+    assert helper
+    closed = D.include_referenced_local_callees(
+        binary,
+        "extern double __muldc3(double, double, double, double);\n"
+        "double caller(double x) { return __muldc3(x, x, x, x); }",
+    )
+    assert closed.count("__muldc3(") == 2
+
+
 def test_recompiled_typed_try_catch_uses_cpp_and_preserves_c_abi(
     tmp_path: Path,
 ) -> None:
