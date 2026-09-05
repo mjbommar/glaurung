@@ -239,7 +239,11 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
         return Region::Unstructured((0..lf.blocks.len()).collect());
     }
     let mut visited: HashSet<usize> = HashSet::new();
-    let region = build(0, cfg, &mut visited, None);
+    let mut state = BuildState::default();
+    let region = build(0, cfg, &mut visited, None, &mut state);
+    if state.exhausted {
+        return Region::Unstructured((0..lf.blocks.len()).collect());
+    }
     let leftover: Vec<usize> = (0..lf.blocks.len())
         .filter(|b| !visited.contains(b))
         .collect();
@@ -273,7 +277,47 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
 
 /// Recursively build a Region starting at `start`, stopping at `stop_at`
 /// (exclusive). `visited` tracks blocks consumed into the output.
-fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<usize>) -> Region {
+#[derive(Default)]
+struct BuildState {
+    depth: usize,
+    calls: usize,
+    exhausted: bool,
+}
+
+/// Bound speculative recursive shape recovery by the graph it is recovering.
+///
+/// A valid descent must consume or stop at a CFG block. More nested calls than
+/// there are blocks, or more than a small constant number of speculative calls
+/// per block, proves that recognisers are revisiting shapes through cloned
+/// ownership state. Mark the attempt exhausted so `build_full` selects the
+/// complete labelled CFG instead of overflowing the native stack or spending
+/// unbounded time exploring the same graph.
+fn build(
+    start: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+    stop_at: Option<usize>,
+    state: &mut BuildState,
+) -> Region {
+    let call_budget = cfg.succs.len().saturating_mul(8).max(64);
+    if state.depth > cfg.succs.len() || state.calls >= call_budget {
+        state.exhausted = true;
+        return Region::Seq(Vec::new());
+    }
+    state.calls += 1;
+    state.depth += 1;
+    let region = build_inner(start, cfg, visited, stop_at, state);
+    state.depth -= 1;
+    region
+}
+
+fn build_inner(
+    start: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+    stop_at: Option<usize>,
+    state: &mut BuildState,
+) -> Region {
     let mut parts: Vec<Region> = Vec::new();
     let mut cur = start;
 
@@ -307,7 +351,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // Detect this before inserting `cur` into `visited`: the recovered body
         // begins at `cur` and must be structured recursively up to (but not
         // including) the conditional latch.
-        if let Some(loop_r) = detect_bottom_tested_loop(cur, cfg, visited) {
+        if let Some(loop_r) = detect_bottom_tested_loop(cur, cfg, visited, state) {
             parts.push(loop_r.region);
             match loop_r.exit {
                 Some(next) => {
@@ -343,7 +387,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // natural loop with that block as header. We only structure this when
         // `cur` itself is the loop header (single-block loop) or when we are
         // already sitting at the header.
-        if let Some(loop_r) = detect_natural_loop(cur, cfg, visited) {
+        if let Some(loop_r) = detect_natural_loop(cur, cfg, visited, state) {
             parts.push(loop_r.region);
             match loop_r.exit {
                 Some(next) => {
@@ -360,7 +404,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // destination blocks; treating that graph as an if/else loses the
         // switch expression and half its labels.
         if cfg.is_switch_dispatch(cur) {
-            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at) {
+            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at, state) {
                 parts.push(sw);
                 match after {
                     Some(next) => {
@@ -386,7 +430,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
                     let break_region = if break_entry == exit {
                         Region::Goto(exit)
                     } else {
-                        build(break_entry, cfg, visited, Some(exit))
+                        build(break_entry, cfg, visited, Some(exit), state)
                     };
                     parts.push(Region::IfThen {
                         cond: cur,
@@ -403,7 +447,9 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             // required when the default path shares a terminal tail with one
             // explicit case: ordinary if/else ownership cannot represent that
             // overlap without either duplicating or dropping the tail.
-            if let Some((sw, after)) = detect_guarded_switch_shape(cur, cfg, visited, stop_at) {
+            if let Some((sw, after)) =
+                detect_guarded_switch_shape(cur, cfg, visited, stop_at, state)
+            {
                 parts.push(sw);
                 match after {
                     Some(next) => {
@@ -413,7 +459,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
                     None => break,
                 }
             }
-            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at) {
+            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at, state) {
                 parts.push(ite);
                 match after {
                     Some(next) => {
@@ -497,11 +543,12 @@ fn build_arm(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     stop_at: Option<usize>,
+    state: &mut BuildState,
 ) -> Region {
     if Some(entry) != stop_at && visited.contains(&entry) {
         return Region::Goto(entry);
     }
-    build(entry, cfg, visited, stop_at)
+    build(entry, cfg, visited, stop_at, state)
 }
 
 #[cfg(test)]
@@ -1926,7 +1973,13 @@ mod tests {
 
         let ssa = compute_ssa(&lf);
         let cfg = Cfg::from(&lf, &ssa);
-        let region = build(0, &cfg, &mut HashSet::new(), Some(3));
+        let region = build(
+            0,
+            &cfg,
+            &mut HashSet::new(),
+            Some(3),
+            &mut BuildState::default(),
+        );
 
         assert!(
             format!("{region:#?}").contains("Goto(\n            2"),

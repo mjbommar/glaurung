@@ -18,10 +18,10 @@
 
 use std::collections::HashSet;
 
-use super::build;
 use super::cfg::{natural_loop_body, Cfg};
 use super::path_predicates::can_reach;
 use super::region::Region;
+use super::{build, BuildState};
 
 pub(super) struct LoopRegion {
     pub(super) region: Region,
@@ -197,6 +197,7 @@ pub(super) fn detect_natural_loop(
     header: usize,
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
+    state: &mut BuildState,
 ) -> Option<LoopRegion> {
     if cfg.succs[header].len() != 2 {
         return None;
@@ -229,7 +230,7 @@ pub(super) fn detect_natural_loop(
     visited.insert(header);
     let exit_was_visited = visited.contains(&exit);
     visited.insert(exit);
-    let body = build(body_head, cfg, visited, Some(header));
+    let body = build(body_head, cfg, visited, Some(header), state);
     if !exit_was_visited {
         visited.remove(&exit);
     }
@@ -253,6 +254,7 @@ pub(super) fn detect_bottom_tested_loop(
     header: usize,
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
+    state: &mut BuildState,
 ) -> Option<LoopRegion> {
     // A genuine single-latch do-while has exactly one dominated predecessor of
     // its header. A pre-tested loop with `continue` or an early-exit arm may
@@ -339,7 +341,7 @@ pub(super) fn detect_bottom_tested_loop(
     // cannot absorb control outside the loop.
     visited.insert(cond);
     let exit_was_visited = !visited.insert(exit);
-    let body = build(header, cfg, visited, Some(cond));
+    let body = build(header, cfg, visited, Some(cond), state);
     if !exit_was_visited {
         visited.remove(&exit);
     }

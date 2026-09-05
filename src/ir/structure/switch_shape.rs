@@ -18,11 +18,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::build;
 use super::cfg::{natural_loop_body, Cfg};
 use super::loop_shape::terminal_path_stays_outside_loop;
 use super::path_predicates::can_reach;
 use super::region::Region;
+use super::{build, BuildState};
 
 /// Commit the blocks a switch arm uniquely owns while leaving a shared tail
 /// available to the enclosing region.
@@ -63,6 +63,7 @@ pub(super) fn detect_switch_shape(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
+    state: &mut BuildState,
 ) -> Option<(Region, Option<usize>)> {
     let evidence = cfg.switch_at(dispatch)?;
     if !evidence.complete {
@@ -126,11 +127,11 @@ pub(super) fn detect_switch_shape(
                 } else {
                     visited.clone()
                 };
-            let arm = build(a, cfg, &mut arm_visited, arm_stop);
+            let arm = build(a, cfg, &mut arm_visited, arm_stop, state);
             commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             arm
         } else {
-            build(a, cfg, visited, arm_stop)
+            build(a, cfg, visited, arm_stop, state)
         };
         sub_arms[arm_index] = Some(arm);
     }
@@ -140,7 +141,7 @@ pub(super) fn detect_switch_shape(
         .collect();
     let formal_default = formal_default_entry.map(|entry| {
         let mut borrowed_visited = HashSet::from([dispatch]);
-        Box::new(build(entry, cfg, &mut borrowed_visited, arm_stop))
+        Box::new(build(entry, cfg, &mut borrowed_visited, arm_stop, state))
     });
     Some((
         Region::Switch {
@@ -165,6 +166,7 @@ pub(super) fn detect_guarded_switch_shape(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
+    state: &mut BuildState,
 ) -> Option<(Region, Option<usize>)> {
     let evidence = cfg.switch_guarded_by(guard)?;
     if !evidence.complete {
@@ -237,11 +239,11 @@ pub(super) fn detect_guarded_switch_shape(
             } else {
                 visited.clone()
             };
-            let region = build(arm, cfg, &mut arm_visited, join);
+            let region = build(arm, cfg, &mut arm_visited, join, state);
             commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             region
         } else {
-            build(arm, cfg, visited, join)
+            build(arm, cfg, visited, join, state)
         };
         sub_arms[arm_index] = Some(region);
     }
@@ -256,7 +258,7 @@ pub(super) fn detect_guarded_switch_shape(
     // region ownership is not the same thing as CFG reachability, and cloning a
     // shared suffix is preferable to dropping the guard's executable edge.
     let mut default_visited = HashSet::from([guard, dispatch]);
-    let formal_default = Box::new(build(default_entry, cfg, &mut default_visited, join));
+    let formal_default = Box::new(build(default_entry, cfg, &mut default_visited, join, state));
     // A dense default that no explicit case can reach is owned by this switch.
     // Commit those blocks so `build_full` does not append a second, unreachable
     // copy as leftovers.  Shared suffixes stay borrowed: an explicit case may

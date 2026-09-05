@@ -1007,6 +1007,40 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_multiple_wide_byte_switches_decline_without_crashing(tmp_path: Path) -> None:
+    """Four 48-entry tables may exceed v1's shape budget, never its stack."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None:
+        pytest.skip("ARM hard-float cross compiler is required")
+    fixture = "43_base64"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "glaurung.cli",
+            "decompile",
+            str(target),
+            "--func",
+            "base64_decode",
+            "--style",
+            "decbench",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "base64_decode" in completed.stdout
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) -> None:
     """A terminating range guard must make the following table load portable."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
