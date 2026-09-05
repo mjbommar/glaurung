@@ -135,6 +135,10 @@ tmp/
 .claude/worktrees/
 tests/decompiler_fixtures/build/
 
+# The S5 equivalence scorecard's labelled mutant corpus, regenerated with
+# `uv run python tools/equiv_mutants.py`. Generated, never edited.
+tests/csource_equiv/
+
 # execution-differential scratch (GLAURUNG_FIXTURE_TMPDIR)
 .exectmp/
 tests/realistic_corpus/build/
