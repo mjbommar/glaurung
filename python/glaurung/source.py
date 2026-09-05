@@ -51,6 +51,7 @@ __all__ = [
     "analyze_path",
     "compare",
     "control_flow_graphs",
+    "data_flow",
     "export_graphs",
     "export_path",
     "feature_names",
@@ -539,6 +540,34 @@ def normalize(code: str, dialect: str) -> str:
         ValueError: If `dialect` is neither of the two names.
     """
     return _native.source.normalize(code, dialect)
+
+
+def data_flow(code: str) -> list[dict[str, Any]]:
+    """Reaching definitions, uses, and the dependences between them.
+
+    Which write each read can see, computed by a reaching-definitions fixpoint
+    over the general control-flow graph. Scope-aware, so a shadowed ``int x``
+    in a nested block is a different variable from the one outside it.
+
+    Args:
+        code: The source text. Any byte sequence is acceptable; this never
+            raises on account of the input.
+
+    Returns:
+        One dict per function, with ``name``, ``definitions``, ``uses``,
+        ``edges``, ``unresolved_uses`` and ``dead_stores``. The two defect
+        lists hold indices into ``uses`` and ``definitions`` respectively.
+
+        A **dead store** is a write no read can see. Hand-written C has almost
+        none; a decompiler that invents a temporary and never reads it produces
+        one per invention, which is a readability defect an execution test
+        cannot see because the return value is still right.
+
+        An **unresolved use** is a read no write reaches: a global, a macro
+        constant, a name from a header this parser never saw, or a genuine
+        read of uninitialized storage.
+    """
+    return [dict(entry) for entry in _native.source.data_flow(code)]
 
 
 def export_graphs(

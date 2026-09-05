@@ -377,6 +377,87 @@ carry the same name after recovery.
 `json` is a legal value of both. Merging them would make `--format json`
 silently change the graph encoding.
 
+## Data dependence
+
+Which write each read can see. A reaching-definitions fixpoint over the general
+CFG, exposed three ways:
+
+```console
+$ glaurung source-graph PATH --repr ddg [--graph-format ...]
+```
+
+```python
+for flow in glaurung.source.data_flow(code):
+    dead = [flow["definitions"][i]["name"] for i in flow["dead_stores"]]
+```
+
+`--repr ddg` completes the set `joern-export` offers minus `cdg` and `pdg`,
+which need post-dominators this front end has not built.
+
+### Measured against Joern
+
+Both front ends on one 17-line file, in one CPython 3.12 process, 2026-09-05:
+
+| | nodes | edges | edges naming a variable |
+|---|---:|---:|---:|
+| Joern / Eclipse CDT | 13 | 23 | **0** |
+| Glaurung | 11 | 8 | **8** |
+
+pyjoern's `Function.ddg` returns every edge with an empty attribute dict, so a
+consumer cannot tell which value an edge is about. Ours names the variable on
+the edge and on both endpoints, with the kind of write and the byte range.
+
+The edge counts differ because the graphs are different things. Joern's is over
+CFG blocks: 9 of its 23 edges leave `FUNCTION_START` and 5 enter
+`FUNCTION_END`, which record reachability rather than a value flowing. Audited
+edge by edge, all 8 of ours are real definition-to-use pairs, and none of
+Joern's 23 is one we lost.
+
+### What it models, and what it does not
+
+| | |
+|---|---|
+| **Scoping** | A shadowed `int x` in a nested block is a different variable. Resolution is innermost-visible-binding at the point of use |
+| **Definitions** | Parameters, initialized declarators, `=`, compound assignment, `++`/`--`, and `&x` |
+| **`int x;`** | Declares, does **not** define. A read of it is an unresolved use, which is the read-of-uninitialized it is. `int a[8];` does define `a` — the address is well-defined |
+| **`a[i] = v`, `s.f = v`, `*p = v`** | A **use** of the base, never a definition of it. Calling them definitions would kill the base's real reaching definition, which loses edges rather than adding them |
+| **`&x`** | Recorded as a definition. Taking an address is how C spells an out parameter, and the callee may write through it |
+| **Aliasing** | None. A store through a pointer kills nothing, so the graph over-approximates: an edge may be spurious, no real dependence is missing |
+| **Interprocedural** | None. A call reads its arguments and defines nothing |
+
+### The two defect counts
+
+**Dead stores** — a write no read can see. **Unresolved uses** — a read no
+write reaches: a global, a macro constant, a name from a header this parser
+never saw, or a genuine read of uninitialized storage.
+
+A write to a global is never counted dead: it escapes the function, and the
+read that observes it is somewhere this analysis cannot see. An unread
+parameter is not counted either — the caller wrote it and the signature is the
+contract.
+
+### What the dead-store count is for
+
+Measured over ten fixtures and our own decompiler's output for the same ten,
+at engine commit `a4207caf`:
+
+| | functions | writes | dead stores |
+|---|---:|---:|---:|
+| hand-written source | 84 | 380 | **0** (0.0%) |
+| our decompiler's output | 174 | 729 | **33** (4.5%) |
+
+Every one of those 33 is a write the recovered code performs and never reads.
+The execution differential passes all of them — the return value is still
+right — so this is a readability defect that no test in the existing estate
+reports. It is the source-side companion to `defuse_baseline.json`, which asks
+the same question of the binary.
+
+The corpus-wide figure for hand-written C is 12 dead stores over 900 functions,
+and a Rust test fails if that ratio moves by more than an order of magnitude.
+Each round of over-reporting during development tripped exactly that assertion:
+897 when a bare `int x;` counted as a store, 460 when a write to a global
+counted, 27 when `++a[i]` counted as a write to `a`.
+
 ## Worked example: measuring our own decompiler
 
 The loop this exists to close. Decompile a fixture object, measure the C that

@@ -6,12 +6,17 @@
 //!
 //! # What this replaces
 //!
-//! `joern-export --repr {ast,cfg} --format {dot,graphml,...}` is the shape a
-//! caller already knows, so [`Repr`] uses Joern's spelling of the two
-//! representations we have. The three it also offers --- `cdg`, `ddg` and
-//! `pdg` --- need a data-dependence analysis this front end does not do, and
-//! are absent rather than stubbed: a `--repr ddg` that returned a control-flow
-//! graph would be worse than an error.
+//! `joern-export --repr {ast,cfg,ddg} --format {dot,graphml,...}` is the shape
+//! a caller already knows, so [`Repr`] uses Joern's spelling. The two it also
+//! offers --- `cdg` and `pdg` --- need control dependence, which is a
+//! post-dominator computation this front end has not built yet, and they stay
+//! absent rather than stubbed: a `--repr pdg` that returned something else
+//! would be worse than an error.
+//!
+//! [`Repr::Ddg`] is deliberately *not* a copy of Joern's. Its edges carry the
+//! variable each dependence is about; pyjoern's `Function.ddg` hands back
+//! edges with an empty attribute dict, so a consumer there cannot tell which
+//! value an edge is for. See [`crate::csource::dataflow`].
 //!
 //! # Which control-flow graph
 //!
@@ -54,17 +59,21 @@ pub enum Repr {
     Cfg,
     /// The syntax tree, one per function definition.
     Ast,
+    /// The data-dependence graph: definitions, uses, and the reaching edges
+    /// between them.
+    Ddg,
 }
 
 impl Repr {
     /// Every representation, in declaration order, for a CLI choice list.
-    pub const ALL: [Repr; 2] = [Repr::Cfg, Repr::Ast];
+    pub const ALL: [Repr; 3] = [Repr::Cfg, Repr::Ast, Repr::Ddg];
 
     /// This representation's stable lowercase name, as a CLI accepts it.
     pub const fn name(self) -> &'static str {
         match self {
             Repr::Cfg => "cfg",
             Repr::Ast => "ast",
+            Repr::Ddg => "ddg",
         }
     }
 
@@ -73,6 +82,7 @@ impl Repr {
         match name.trim().to_ascii_lowercase().as_str() {
             "cfg" | "control-flow" | "control_flow" => Some(Repr::Cfg),
             "ast" | "tree" | "syntax" => Some(Repr::Ast),
+            "ddg" | "dataflow" | "data-flow" => Some(Repr::Ddg),
             _ => None,
         }
     }
@@ -104,6 +114,22 @@ pub fn export(text: &str, repr: Repr) -> Parsed<Vec<GraphView>> {
             tree.functions(text)
                 .iter()
                 .map(|function| ast_view(&function.name, &tree, function.node, &spans, text))
+                .collect()
+        }
+        Repr::Ddg => {
+            let built = function_cfgs(&tree, text);
+            let (cfgs, cfg_diags) = built.into_parts();
+            for diagnostic in cfg_diags.iter() {
+                diagnostics.push(diagnostic.clone());
+            }
+            let spans = tree.token_spans(text);
+            cfgs.iter()
+                .map(|function| {
+                    let flow = crate::csource::dataflow::analyze_function(
+                        &tree, text, &spans, function,
+                    );
+                    ddg_view(&flow, text)
+                })
                 .collect()
         }
     };
@@ -202,6 +228,71 @@ pub fn ast_view(
             }
         }
     }
+    view
+}
+
+/// One function's data-dependence graph as a view.
+///
+/// Nodes are the definitions and then the uses, in that order, so a node id is
+/// stable and a reader can tell the two halves apart by the `role` attribute
+/// without following an edge. Each edge is labelled with its variable, which
+/// is the information the external comparison drops.
+///
+/// A dead store and an unresolved use are marked on the node rather than left
+/// for the reader to derive from degree, because "this write is never read" is
+/// the answer someone exports this graph to get.
+pub fn ddg_view(flow: &crate::csource::dataflow::DataFlow, text: &str) -> GraphView {
+    use crate::csource::dataflow::DataFlow;
+
+    let mut view = GraphView::new(&flow.name);
+    let def_count = flow.definitions.len() as u32;
+
+    for (index, definition) in flow.definitions.iter().enumerate() {
+        let dead = flow.is_dead_store(index as u32);
+        let source = snippet(text, definition.span);
+        view.nodes.push(
+            ExportNode::new(
+                index as u32,
+                format!("def {}{}", definition.name, if dead { " (dead)" } else { "" }),
+            )
+            .with("role", "definition")
+            .with("variable", definition.name.clone())
+            .with("def_kind", definition.kind.name())
+            .with("dead_store", if dead { "true" } else { "false" })
+            .with("cfg_node", definition.node.to_string())
+            .with("span", format!("{}:{}", definition.span.lo, definition.span.hi))
+            .with("text", source),
+        );
+    }
+    for (index, use_) in flow.uses.iter().enumerate() {
+        let unresolved = flow.unresolved_uses.contains(&(index as u32));
+        let source = snippet(text, use_.span);
+        view.nodes.push(
+            ExportNode::new(
+                def_count + index as u32,
+                format!(
+                    "use {}{}",
+                    use_.name,
+                    if unresolved { " (unresolved)" } else { "" }
+                ),
+            )
+            .with("role", "use")
+            .with("variable", use_.name.clone())
+            .with("unresolved", if unresolved { "true" } else { "false" })
+            .with("cfg_node", use_.node.to_string())
+            .with("span", format!("{}:{}", use_.span.lo, use_.span.hi))
+            .with("text", source),
+        );
+    }
+    for edge in &flow.edges {
+        view.edges.push(
+            ExportEdge::new(edge.def, def_count + edge.use_, edge.name.clone())
+                .with("variable", edge.name.clone()),
+        );
+    }
+    // Silence the unused-import warning in builds where the type alias is the
+    // only reference; the parameter above already names it.
+    let _: Option<&DataFlow> = None;
     view
 }
 
@@ -351,6 +442,69 @@ int greet(const char *name, int times)
         for repr in Repr::ALL {
             assert_eq!(Repr::parse(repr.name()), Some(repr));
         }
-        assert_eq!(Repr::parse("ddg"), None, "not offered rather than faked");
+        assert_eq!(Repr::parse("ddg"), Some(Repr::Ddg));
+        // Control dependence needs post-dominators, which are not built. The
+        // two representations that need them stay refused rather than faked.
+        assert_eq!(Repr::parse("pdg"), None, "not offered rather than faked");
+        assert_eq!(Repr::parse("cdg"), None, "not offered rather than faked");
+    }
+}
+
+#[cfg(test)]
+mod ddg_tests {
+    use super::*;
+    use crate::syntax::graph_export::{write, Format};
+
+    const SUM: &str = "int f(int n) { int s = 0; int dead = 7; for (int i = 0; i < n; i++) { s = s + i; } return s; }";
+
+    #[test]
+    fn a_ddg_export_separates_definitions_from_uses() {
+        let views = export(SUM, Repr::Ddg).into_parts().0;
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+        let roles: Vec<&str> = view
+            .nodes
+            .iter()
+            .filter_map(|n| n.attrs.iter().find(|(k, _)| k == "role").map(|(_, v)| v.as_str()))
+            .collect();
+        assert!(roles.contains(&"definition"));
+        assert!(roles.contains(&"use"));
+        // Every edge runs definition -> use, never the other way.
+        let def_count = roles.iter().filter(|r| **r == "definition").count() as u32;
+        for edge in &view.edges {
+            assert!(edge.src < def_count, "edge leaves a use: {edge:?}");
+            assert!(edge.dst >= def_count, "edge enters a definition: {edge:?}");
+        }
+    }
+
+    #[test]
+    fn every_ddg_edge_names_its_variable() {
+        // The thing pyjoern's DDG cannot tell you: which value an edge is for.
+        let views = export(SUM, Repr::Ddg).into_parts().0;
+        for edge in &views[0].edges {
+            assert!(!edge.label.is_empty(), "unlabelled edge: {edge:?}");
+            assert!(edge.attrs.iter().any(|(k, _)| k == "variable"));
+        }
+    }
+
+    #[test]
+    fn a_dead_store_is_marked_on_the_node() {
+        let views = export(SUM, Repr::Ddg).into_parts().0;
+        let dead: Vec<&str> = views[0]
+            .nodes
+            .iter()
+            .filter(|n| n.attrs.iter().any(|(k, v)| k == "dead_store" && v == "true"))
+            .filter_map(|n| n.attrs.iter().find(|(k, _)| k == "variable").map(|(_, v)| v.as_str()))
+            .collect();
+        assert_eq!(dead, vec!["dead"], "{:?}", dead);
+    }
+
+    #[test]
+    fn the_ddg_serializes_in_every_format() {
+        let views = export(SUM, Repr::Ddg).into_parts().0;
+        for format in Format::ALL {
+            let body = write(&views[0], format);
+            assert!(body.contains('s') && !body.is_empty());
+        }
     }
 }

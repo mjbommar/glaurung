@@ -525,6 +525,62 @@ pub fn export_choices_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(out)
 }
 
+/// Reaching definitions, uses and dead stores, per function.
+///
+/// The structured form of `export_graphs(repr="ddg")`, for a caller who wants
+/// the answer rather than a rendering of it. Each function is a dict with
+/// `name`, `definitions`, `uses`, `edges`, `unresolved_uses` and
+/// `dead_stores`; the two defect lists index into the first two.
+#[pyfunction]
+#[pyo3(name = "data_flow")]
+pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
+    use crate::csource::dataflow::analyze;
+
+    let flows = py.detach(|| analyze(text).into_parts().0);
+    let out = PyList::empty(py);
+    for flow in &flows {
+        let entry = PyDict::new(py);
+        entry.set_item("name", flow.name.clone())?;
+
+        let definitions = PyList::empty(py);
+        for definition in &flow.definitions {
+            let item = PyDict::new(py);
+            item.set_item("name", definition.name.clone())?;
+            item.set_item("kind", definition.kind.name())?;
+            item.set_item("cfg_node", definition.node)?;
+            item.set_item("start", definition.span.lo)?;
+            item.set_item("end", definition.span.hi)?;
+            definitions.append(item)?;
+        }
+        entry.set_item("definitions", definitions)?;
+
+        let uses = PyList::empty(py);
+        for use_ in &flow.uses {
+            let item = PyDict::new(py);
+            item.set_item("name", use_.name.clone())?;
+            item.set_item("cfg_node", use_.node)?;
+            item.set_item("start", use_.span.lo)?;
+            item.set_item("end", use_.span.hi)?;
+            uses.append(item)?;
+        }
+        entry.set_item("uses", uses)?;
+
+        let edges = PyList::empty(py);
+        for edge in &flow.edges {
+            let item = PyDict::new(py);
+            item.set_item("definition", edge.def)?;
+            item.set_item("use", edge.use_)?;
+            item.set_item("variable", edge.name.clone())?;
+            edges.append(item)?;
+        }
+        entry.set_item("edges", edges)?;
+        entry.set_item("unresolved_uses", flow.unresolved_uses.clone())?;
+        entry.set_item("dead_stores", flow.dead_stores.clone())?;
+        out.append(entry)?;
+    }
+    Ok(out)
+}
+
 /// Register the `source` submodule on the extension root.
 pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "source")?;
@@ -536,6 +592,7 @@ pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>
     sub.add_function(wrap_pyfunction!(normalize_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(export_graphs_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(export_choices_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(data_flow_py, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }
