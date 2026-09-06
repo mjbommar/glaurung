@@ -33,7 +33,12 @@ through AST lowering and migrates exact float-role projection away from
 display-name parsing. Commit `af65c260` migrates optimized DWARF register-local
 recovery as the second product consumer. Commit `7bea3314` defines canonical
 instruction-origin sets and `59840017` gives statements a transparent carrier
-without changing the 419-pair output map. Most semantic consumers, multi-output
+without changing the 419-pair output map. Commit `8cb7d171` then makes the
+enabled AST transformation and structured return-width consumers transparent
+to that carrier. Its release-built stripped differential moves from 112 to 103
+regressions while retaining 17 improvements, with zero changed classifications
+and zero infrastructure problems; see
+`results/wp3-statement-origin-propagation.md`. Most semantic consumers, multi-output
 definition identity, LLIR attribution, expression origins, and structured line
 mappings remain open. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
@@ -752,7 +757,9 @@ provenance through lowering.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
-  union-without-nesting semantics. Expression ownership and production
+  union-without-nesting semantics. Commit `8cb7d171` preserves that ownership
+  through the enabled AST pass surface and fixes origin-transparent structured
+  return-width reasoning. Expression ownership and production
   attribution remain open.
 
 ### Migration targets
@@ -781,13 +788,18 @@ provenance through lowering.
   `OriginSet`. Commit `7bea3314` lands the canonical sorted, deduplicated set,
   deterministic union, and exact clone behavior. Commit `59840017` gives
   statements a transparent carrier, converts the 64 exhaustive consumers, and
-  proves attributed loop clauses render byte-identically. Expressions and
+  proves attributed loop clauses render byte-identically. Commit `8cb7d171`
+  converts the remaining enabled pass matches identified by the corpus sweep
+  to inspect semantic statements without discarding their carriers and attaches
+  each lowered LLIR instruction VA at the block-lowering boundary. Expressions and
   structured control nodes still need direct ownership where statement-level
   attribution is insufficient.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
-  duplication, and rendering. Statement consumers and all three renderers can
-  preserve or ignore the carrier, but lowering does not yet attach LLIR VAs;
-  the wildcard consumer audit must finish before universal attribution.
+  duplication, and rendering. Commit `8cb7d171` makes enabled statement
+  consumers and all three renderers preserve or ignore the carrier without
+  changing statement meaning. Block lowering attaches each LLIR instruction VA,
+  but expression ownership, non-contiguous transformation policy, and the
+  wildcard consumer audit must finish before universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
   data; do not infer them by parsing rendered text.
 - [ ] Define non-contiguous origin behavior for folded, hoisted, and duplicated
