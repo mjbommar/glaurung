@@ -166,11 +166,15 @@ fn decompile_at_py(
         DecompileRequest {
             va: func_va,
             analysis_budget: AnalysisBudget {
-                max_functions,
-                max_blocks,
-                max_instructions,
-                timeout_ms,
-                total_timeout_ms: 0,
+                discovery: pipeline::DiscoveryBudget {
+                    max_functions,
+                    total_timeout_ms: 0,
+                },
+                cfg: pipeline::CfgBudget {
+                    max_blocks,
+                    max_instructions,
+                    timeout_ms,
+                },
                 callee: pipeline::CalleeBudget::default(),
             },
             render_options: RenderOptions {
@@ -391,11 +395,15 @@ fn decompile_range_at_py(
     let request = DecompileRequest {
         va: func_va,
         analysis_budget: AnalysisBudget {
-            max_functions: 1,
-            max_blocks,
-            max_instructions,
-            timeout_ms,
-            total_timeout_ms: 0,
+            discovery: pipeline::DiscoveryBudget {
+                max_functions: 1,
+                total_timeout_ms: 0,
+            },
+            cfg: pipeline::CfgBudget {
+                max_blocks,
+                max_instructions,
+                timeout_ms,
+            },
             callee: pipeline::CalleeBudget::default(),
         },
         render_options: RenderOptions {
@@ -895,11 +903,15 @@ fn decompile_all_py(
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
 
     let analysis_budget = AnalysisBudget {
-        max_functions: limit.max(1),
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
+        discovery: pipeline::DiscoveryBudget {
+            max_functions: limit.max(1),
+            total_timeout_ms: 0,
+        },
+        cfg: pipeline::CfgBudget {
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+        },
         callee: pipeline::CalleeBudget::default(),
     };
     let render_options = RenderOptions {
@@ -1100,11 +1112,15 @@ fn decompile_many_py(
     // need to consume this worklist merely to render one call accurately.
     let requested_function_limit = pipeline::requested_function_limit(&func_vas, max_functions);
     let analysis_budget = AnalysisBudget {
-        max_functions: requested_function_limit,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
+        discovery: pipeline::DiscoveryBudget {
+            max_functions: requested_function_limit,
+            total_timeout_ms: 0,
+        },
+        cfg: pipeline::CfgBudget {
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+        },
         callee: pipeline::CalleeBudget::default(),
     };
     let render_options = RenderOptions {

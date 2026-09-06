@@ -18,6 +18,24 @@ use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with
 /// point.  Adapters may expose different defaults, but once constructed the
 /// request has one budget identity and one conversion to discovery limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct DiscoveryBudget {
+    /// Maximum number of function records admitted to the program discovery.
+    pub(super) max_functions: usize,
+    /// Optional wall-clock bound for the complete program discovery.
+    pub(super) total_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct CfgBudget {
+    /// Maximum basic blocks admitted to one function CFG.
+    pub(super) max_blocks: usize,
+    /// Maximum decoded instructions admitted to one function CFG.
+    pub(super) max_instructions: usize,
+    /// Wall-clock bound for one function CFG.
+    pub(super) timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct CalleeBudget {
     /// Additional direct-callee bodies a callee analysis may enter.
     pub(super) max_depth: u8,
@@ -31,22 +49,19 @@ impl Default for CalleeBudget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct AnalysisBudget {
-    pub(super) max_functions: usize,
-    pub(super) max_blocks: usize,
-    pub(super) max_instructions: usize,
-    pub(super) timeout_ms: u64,
-    pub(super) total_timeout_ms: u64,
+    pub(super) discovery: DiscoveryBudget,
+    pub(super) cfg: CfgBudget,
     pub(super) callee: CalleeBudget,
 }
 
 impl AnalysisBudget {
     pub(super) fn discovery(self) -> crate::analysis::cfg::Budgets {
         crate::analysis::cfg::Budgets {
-            max_functions: self.max_functions,
-            max_blocks: self.max_blocks,
-            max_instructions: self.max_instructions,
-            timeout_ms: self.timeout_ms,
-            total_timeout_ms: self.total_timeout_ms,
+            max_functions: self.discovery.max_functions,
+            max_blocks: self.cfg.max_blocks,
+            max_instructions: self.cfg.max_instructions,
+            timeout_ms: self.cfg.timeout_ms,
+            total_timeout_ms: self.discovery.total_timeout_ms,
         }
     }
 }
@@ -1634,8 +1649,9 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 #[cfg(test)]
 mod request_tests {
     use super::{
-        AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget, DecompileCompleteness,
-        DecompileRequest, PipelineStage, PipelineStageTracker, RenderOptions,
+        AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget, CfgBudget,
+        DecompileCompleteness, DecompileRequest, DiscoveryBudget, PipelineStage,
+        PipelineStageTracker, RenderOptions,
     };
 
     #[test]
@@ -1689,11 +1705,15 @@ mod request_tests {
     #[test]
     fn pipeline_budget_preserves_every_discovery_limit() {
         let request = AnalysisBudget {
-            max_functions: 17,
-            max_blocks: 29,
-            max_instructions: 31,
-            timeout_ms: 37,
-            total_timeout_ms: 41,
+            discovery: DiscoveryBudget {
+                max_functions: 17,
+                total_timeout_ms: 41,
+            },
+            cfg: CfgBudget {
+                max_blocks: 29,
+                max_instructions: 31,
+                timeout_ms: 37,
+            },
             callee: CalleeBudget { max_depth: 3 },
         };
 
@@ -1720,17 +1740,21 @@ mod request_tests {
         let first = DecompileRequest {
             va: 0x1000,
             analysis_budget: AnalysisBudget {
-                max_functions: 1,
-                max_blocks: 256,
-                max_instructions: 10_000,
-                timeout_ms: 500,
-                total_timeout_ms: 0,
+                discovery: DiscoveryBudget {
+                    max_functions: 1,
+                    total_timeout_ms: 0,
+                },
+                cfg: CfgBudget {
+                    max_blocks: 256,
+                    max_instructions: 10_000,
+                    timeout_ms: 500,
+                },
                 callee: CalleeBudget::default(),
             },
             render_options: options,
         };
         let mut second = first;
-        second.analysis_budget.max_blocks += 1;
+        second.analysis_budget.cfg.max_blocks += 1;
 
         let first = first.fingerprint();
         let second = second.fingerprint();
