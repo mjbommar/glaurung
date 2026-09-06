@@ -189,6 +189,7 @@ impl PyDecompilerSession {
                 render_options: RenderOptions {
                     types,
                     style,
+                    shadow_v2: false,
                     pdb_cache,
                     // The session render cache is keyed on `key`, which carries
                     // no KB state, so serving an overlaid render from it would

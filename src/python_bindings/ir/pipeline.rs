@@ -40,6 +40,7 @@ impl AnalysisBudget {
 pub(super) struct RenderOptions<'a> {
     pub(super) types: bool,
     pub(super) style: &'a str,
+    pub(super) shadow_v2: bool,
     pub(super) pdb_cache: &'a str,
     pub(super) analyst_names: Option<&'a std::collections::HashMap<u64, String>>,
     pub(super) analyst_locals: Option<&'a std::collections::HashMap<i64, (String, String)>>,
@@ -67,6 +68,7 @@ pub(super) struct PipelineFingerprint {
     pub(super) types: bool,
     pub(super) debug_contracts: bool,
     pub(super) analyst_overlay: bool,
+    pub(super) shadow_v2: bool,
 }
 
 impl DecompileRequest<'_> {
@@ -77,6 +79,7 @@ impl DecompileRequest<'_> {
             analysis_budget: self.analysis_budget,
             style: self.render_options.style.to_string(),
             types: self.render_options.types,
+            shadow_v2: self.render_options.shadow_v2,
             debug_contracts: !self.render_options.pdb_cache.is_empty()
                 || (self.render_options.style == "decbench" && self.render_options.types),
             analyst_overlay: self.render_options.analyst_names.is_some()
@@ -113,6 +116,25 @@ pub(super) struct DecompileResult {
     pub(super) completeness: DecompileCompleteness,
     pub(super) provenance: Vec<&'static str>,
     pub(super) pipeline_fingerprint: PipelineFingerprint,
+}
+
+impl DecompileResult {
+    pub(super) fn from_rendered(
+        pseudocode: String,
+        function: &crate::ir::ast::Function,
+        cfg_health: crate::ir::health::CfgHealth,
+        discovered: &crate::core::function::Function,
+        provenance: Vec<&'static str>,
+        pipeline_fingerprint: PipelineFingerprint,
+    ) -> Self {
+        Self {
+            pseudocode,
+            health: crate::ir::health::measure_with_cfg(function, cfg_health),
+            completeness: DecompileCompleteness::from_function(discovered),
+            provenance,
+            pipeline_fingerprint,
+        }
+    }
 }
 
 /// Replace calls to the compiler's division runtime helpers with the arithmetic
@@ -884,6 +906,7 @@ mod request_tests {
         let options = RenderOptions {
             types: true,
             style: "decbench",
+            shadow_v2: false,
             pdb_cache: "",
             analyst_names: None,
             analyst_locals: None,

@@ -180,6 +180,7 @@ fn decompile_at_py(
             render_options: RenderOptions {
                 types,
                 style,
+                shadow_v2: false,
                 pdb_cache,
                 analyst_names: analyst_names.as_ref(),
                 analyst_locals: analyst_locals.as_ref(),
@@ -210,6 +211,7 @@ fn decompile_at_session(
     let RenderOptions {
         types,
         style,
+        shadow_v2: _,
         pdb_cache,
         analyst_names,
         analyst_locals,
@@ -593,19 +595,18 @@ fn decompile_at_session(
     } else {
         profiler.measure("render", || render(&f))
     };
-    let health = crate::ir::health::measure_with_cfg(&f, cfg_health);
-    let completeness = pipeline::DecompileCompleteness::from_function(&func);
     let pseudocode = match incompleteness_note {
         Some(note) => format!("{note}\n{text}"),
         None => text,
     };
-    Ok(DecompileResult {
+    Ok(DecompileResult::from_rendered(
         pseudocode,
-        health,
-        completeness,
+        &f,
+        cfg_health,
+        &func,
         provenance,
         pipeline_fingerprint,
-    })
+    ))
 }
 
 #[pyfunction]
@@ -647,7 +648,40 @@ fn decompile_range_at_py(
             "max_blocks and max_instructions must be non-zero",
         ));
     }
-    let _ = timeout_ms;
+    let request = DecompileRequest {
+        va: func_va,
+        analysis_budget: AnalysisBudget {
+            max_functions: 1,
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+            total_timeout_ms: 0,
+        },
+        render_options: RenderOptions {
+            types,
+            style,
+            shadow_v2: false,
+            pdb_cache,
+            analyst_names: None,
+            analyst_locals: None,
+            analyst_prototype: None,
+        },
+    };
+    let pipeline_fingerprint = request.fingerprint();
+    let DecompileRequest {
+        va: func_va,
+        analysis_budget,
+        render_options,
+    } = request;
+    let RenderOptions {
+        types,
+        style,
+        shadow_v2: _,
+        pdb_cache,
+        analyst_names: _,
+        analyst_locals: _,
+        analyst_prototype: _,
+    } = render_options;
 
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
@@ -677,14 +711,7 @@ fn decompile_range_at_py(
     })?;
     let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
     let capped_end = range_end.min(range_start.saturating_add(max_bytes));
-    let budgets = AnalysisBudget {
-        max_functions: 1,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    }
-    .discovery();
+    let budgets = analysis_budget.discovery();
     let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let block_start = Address::new(AddressKind::VA, range_start, bits, None, None)
@@ -868,7 +895,21 @@ fn decompile_range_at_py(
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
-    Ok(if style == "decbench" {
+    let provenance = match dwarf_outputs
+        .as_ref()
+        .and_then(|outputs| outputs.get(&func_va))
+    {
+        Some(_) if pdb_contract_vas.contains(&func_va) => vec![
+            crate::program::environment::DeclarationSource::Inferred.label(),
+            crate::program::environment::DeclarationSource::Pdb.label(),
+        ],
+        Some(_) => vec![
+            crate::program::environment::DeclarationSource::Inferred.label(),
+            crate::program::environment::DeclarationSource::Dwarf.label(),
+        ],
+        None => vec![crate::program::environment::DeclarationSource::Inferred.label()],
+    };
+    let pseudocode = if style == "decbench" {
         let maps = types.then(|| {
             decbench_type_maps(
                 &f,
@@ -934,7 +975,16 @@ fn decompile_range_at_py(
         profiler.measure("render_with_types", || render_with_types(&f, &renamed))
     } else {
         profiler.measure("render", || render(&f))
-    })
+    };
+    Ok(DecompileResult::from_rendered(
+        pseudocode,
+        &f,
+        cfg_health,
+        &func,
+        provenance,
+        pipeline_fingerprint,
+    )
+    .pseudocode)
 }
 
 /// Recover machine-code prototype facts, then apply a stronger declared output
@@ -1267,6 +1317,23 @@ fn decompile_all_py(
     use crate::ir::ast::render;
     use crate::ir::lift_function::lift_function_from_image;
 
+    let analysis_budget = AnalysisBudget {
+        max_functions: limit.max(1),
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+        total_timeout_ms: 0,
+    };
+    let render_options = RenderOptions {
+        types: style == "decbench",
+        style,
+        shadow_v2: false,
+        pdb_cache,
+        analyst_names: analyst_names.as_ref(),
+        analyst_locals: None,
+        analyst_prototype: None,
+    };
+
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
@@ -1287,14 +1354,7 @@ fn decompile_all_py(
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = AnalysisBudget {
-        max_functions: limit.max(1),
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    }
-    .discovery();
+    let budgets = analysis_budget.discovery();
     // Whole-binary function discovery: seconds to minutes on a large image, and
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
@@ -1356,6 +1416,12 @@ fn decompile_all_py(
         // never notices a signal. This is the supported way to stay
         // interruptible without releasing: it raises `KeyboardInterrupt` here.
         py.check_signals()?;
+        let request = DecompileRequest {
+            va: func.entry_point.value,
+            analysis_budget,
+            render_options,
+        };
+        let pipeline_fingerprint = request.fingerprint();
         let Ok(lf_raw) = lift_function_from_image(&image, func) else {
             continue;
         };
@@ -1528,8 +1594,33 @@ fn decompile_all_py(
         } else {
             profiler.measure("render", || render(&f))
         };
+        let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
+        if let Some(source) = dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&request.va))
+            .map(|_| {
+                if pdb_contract_vas.contains(&request.va) {
+                    crate::program::environment::DeclarationSource::Pdb
+                } else {
+                    crate::program::environment::DeclarationSource::Dwarf
+                }
+            })
+        {
+            provenance.push(source.label());
+        }
+        if analyst_names.is_some() {
+            provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
+        }
+        let result = DecompileResult::from_rendered(
+            text,
+            &f,
+            cfg_health,
+            func,
+            provenance,
+            pipeline_fingerprint,
+        );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
-            &text,
+            &result.pseudocode,
             prototype.as_ref(),
             &stack_facts,
             calling_convention_pointer_width(cc),
@@ -1538,7 +1629,7 @@ fn decompile_all_py(
         list.append((
             outer_name,
             func.entry_point.value,
-            text,
+            result.pseudocode,
             func.size,
             variables_to_py(py, &variables)?,
         ))?;
@@ -1614,14 +1705,23 @@ fn decompile_many_py(
     // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
     // need to consume this worklist merely to render one call accurately.
     let requested_function_limit = pipeline::requested_function_limit(&func_vas, max_functions);
-    let budgets = AnalysisBudget {
+    let analysis_budget = AnalysisBudget {
         max_functions: requested_function_limit,
         max_blocks,
         max_instructions,
         timeout_ms,
         total_timeout_ms: 0,
-    }
-    .discovery();
+    };
+    let render_options = RenderOptions {
+        types,
+        style,
+        shadow_v2,
+        pdb_cache,
+        analyst_names: analyst_names.as_ref(),
+        analyst_locals: None,
+        analyst_prototype: None,
+    };
+    let budgets = analysis_budget.discovery();
     // --- one-time analysis + name/field/string maps -----------------------
     // Whole-binary function discovery: seconds to minutes on a large image, and
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
@@ -1707,6 +1807,12 @@ fn decompile_many_py(
         if !wanted.contains(&func_va) {
             continue;
         }
+        let request = DecompileRequest {
+            va: func_va,
+            analysis_budget,
+            render_options,
+        };
+        let pipeline_fingerprint = request.fingerprint();
         let Ok(lf_raw) = lift_function_from_image(&image, func) else {
             continue;
         };
@@ -1933,8 +2039,33 @@ fn decompile_many_py(
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually
         // emitted -- see `ir::recovered_variables`.
+        let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
+        if let Some(source) = dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&request.va))
+            .map(|_| {
+                if pdb_contract_vas.contains(&request.va) {
+                    crate::program::environment::DeclarationSource::Pdb
+                } else {
+                    crate::program::environment::DeclarationSource::Dwarf
+                }
+            })
+        {
+            provenance.push(source.label());
+        }
+        if analyst_names.is_some() {
+            provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
+        }
+        let result = DecompileResult::from_rendered(
+            text,
+            &f,
+            cfg_health,
+            func,
+            provenance,
+            pipeline_fingerprint,
+        );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
-            &text,
+            &result.pseudocode,
             prototype.as_ref(),
             &stack_facts,
             calling_convention_pointer_width(cc),
@@ -1943,7 +2074,7 @@ fn decompile_many_py(
         list.append((
             name,
             func_va,
-            text,
+            result.pseudocode,
             func.size,
             variables_to_py(py, &variables)?,
         ))?;
