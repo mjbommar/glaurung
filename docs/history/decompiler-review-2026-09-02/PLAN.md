@@ -60,9 +60,11 @@ the remaining lift, direct-callee-fact, analyst-name, typed/shadow LLIR,
 stack-hint, lowering, finalization, and rendering sequence into one
 pipeline-owned `decompile_function`; all four public adapters now call that
 single per-function transaction. `74853fcc` adds checked coarse semantic-stage
-transitions and a focused invalid-order failure; individual AST-pass
-preconditions, remaining budget classes, the fixpoint driver, and their closure
-tests remain open, so WP2 is
+transitions and a focused invalid-order failure; `4ea067df` registers and checks
+the canonical order of all 20 production AST passes, including safe optional
+omissions and typed rejection of unknown, repeated, or backward passes.
+Remaining budget classes, the fixpoint driver, and their closure tests remain
+open, so WP2 is
 substantially underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
@@ -616,7 +618,7 @@ and make pass repetition/invalidation explicit.
   Python return shape.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
-- [~] Add checked `PipelineStage` and pass preconditions to
+- [x] Add checked `PipelineStage` and pass preconditions to
   `src/python_bindings/ir/pipeline.rs`; split into a new
   `src/python_bindings/ir/pass_manager.rs` only when the module-size ratchet
   requires it.
@@ -624,7 +626,9 @@ and make pass repetition/invalidation explicit.
   per-function transaction for lift, callee facts, LLIR preparation, AST
   preparation, finalization, and rendering. A deliberate Finalized-to-Rendered
   request from the Lifted stage returns the exact expected/actual-stage error.
-  Preconditions for the individual passes inside `run_ast_passes` remain.
+  `4ea067df` adds one canonical 20-pass AST order and makes every production
+  `pass!` invocation check it. Optional passes may be omitted, while unknown,
+  repeated, or backward passes return typed `AstPassOrderError` values.
 - [ ] Replace hand-repeated settle passes with a bounded fixpoint driver that
   records firing and termination reasons.
 - [x] Include analysis-budget identity and pass-version identity in the
@@ -658,8 +662,9 @@ and make pass repetition/invalidation explicit.
   across all entry points.
 - [x] No entry point independently performs discovery, naming, or callee
   analysis.
-- [~] Invalid pass order fails in a focused test. `74853fcc` proves this for
-  the coarse semantic stages; individual AST pass order remains to be checked.
+- [x] Invalid pass order fails in focused tests. `74853fcc` proves this for
+  coarse semantic stages; `4ea067df` proves it for individual AST passes and
+  separately rejects unregistered passes.
 - [ ] Every repeated pass is justified by recorded invalidation or a declared
   fixpoint, not duplicated orchestration.
 

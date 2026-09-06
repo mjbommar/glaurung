@@ -205,6 +205,15 @@ is not the completed pass manager: the individual operations inside
 `run_ast_passes` still need declared preconditions, and repeated passes still
 need the bounded fixpoint driver and firing/termination report.
 
+Commit `4ea067df` closes the individual pass-order gap. One canonical table
+registers all 20 production AST passes, and every `pass!` invocation checks its
+name and monotonic position before executing. This permits the one legitimate
+conditional pass to be omitted while rejecting unknown, duplicate, and
+backward passes with a typed `AstPassOrderError` propagated through the shared
+pipeline. Focused tests cover both an unregistered pass and a pass moved behind
+`apply_role_names`. Repeated semantic cleanup is still a separate fixpoint
+ownership problem and remains open.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -297,6 +306,14 @@ need the bounded fixpoint driver and firing/termination report.
   passed.
 - Full `cargo test --features python-ext` from a clean detached worktree at
   exact commit `74853fcc`: exit zero; 4,204 library tests passed, zero failed,
+  and five ignored; every integration and documentation target passed.
+  Identity retrieval reports 44 passed and ten ignored; doc tests report two
+  passed and one ignored.
+- Fresh release extension plus 36 entry-point-equivalence, session,
+  determinism, pipeline-profile, and render-style checks at `4ea067df`: all
+  passed.
+- Full `cargo test --features python-ext` from a clean detached worktree at
+  exact commit `4ea067df`: exit zero; 4,206 library tests passed, zero failed,
   and five ignored; every integration and documentation target passed.
   Identity retrieval reports 44 passed and ten ignored; doc tests report two
   passed and one ignored.

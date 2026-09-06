@@ -70,6 +70,7 @@ Both have since landed, so they are links again.
 | [~] One declaration/type/style renderer used by all four adapters | review WP2 | `2f7a6149` |
 | [x] One lift-to-render per-function transaction used by all four adapters | review WP2 | `2ee8fa15` |
 | [~] Checked coarse pipeline stages reject invalid ordering | review WP2 | `74853fcc` |
+| [x] Canonical 20-pass AST order rejects unknown, repeated, and backward passes | review WP2 | `4ea067df` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |
