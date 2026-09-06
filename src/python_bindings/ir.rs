@@ -33,7 +33,7 @@ mod type_maps;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList};
 
-use callee_contracts::{prepare_direct_callee_facts, refine_passthrough_parameter_hints};
+use callee_contracts::prepare_direct_callee_facts;
 
 use decbench_render::decbench_text;
 // `select_renderable_dwarf_local_facts` has no production caller in this module
@@ -57,8 +57,9 @@ use dwarf_contracts::{
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    prepare_llir_for_lowering, readonly_data_for, recognise_machine_frame, run_ast_passes,
-    target_calling_convention, AnalysisBudget, DecompileRequest, PreparedLlir, RenderOptions,
+    lower_and_run_ast_passes, prepare_llir_for_lowering, readonly_data_for,
+    recognise_machine_frame, target_calling_convention, AnalysisBudget, DecompileRequest,
+    PreparedAst, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -195,7 +196,7 @@ fn decompile_at_session(
     request: DecompileRequest<'_>,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::ir::ast::{lower, render, render_with_types};
+    use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
 
@@ -359,43 +360,10 @@ fn decompile_at_session(
             .and_then(|environment| environment.prototype_for(func_va)),
         dwarf_type_env.as_ref(),
     );
-    let PreparedLlir {
-        region,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: mut param_slots,
-        inferred_prototype,
-        mut prototype,
-        ..
-    } = prepared_llir;
-    if let Some(prototype) = prototype.as_mut() {
-        let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
-        refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
-    }
-    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
-        eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
-    }
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name =
         resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
-    let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
-    let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
-    crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
-    // Pass-by-pass AST dump for debugging the decbench lowering pipeline. Set
-    // GLAURUNG_DUMP_PASSES=1 to print the rendered body after each pass to stderr
-    // (bisect which pass corrupts a function). No-op otherwise.
-    let dump_passes = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
-    macro_rules! dp {
-        ($n:expr) => {
-            crate::ir::health::trace_pass($n, &f, cfg_health);
-            if dump_passes {
-                eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(&f));
-            }
-        };
-    }
-    dp!("lower");
     let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     data_symbols.remove_truncated_character_arrays(&mut str_pool);
     let readonly_data = readonly_data_for(&session, &image, &str_pool);
@@ -412,16 +380,26 @@ fn decompile_at_session(
             .and_then(|outputs| outputs.get(&func_va)),
         cc,
     );
-    let (mut stack_facts, role_names) = run_ast_passes(
-        &mut f,
-        &mut profiler,
+    let PreparedAst {
+        function: mut f,
+        mut profiler,
         cfg_health,
+        numbered: lf,
+        definition_widths,
+        parameter_slots: param_slots,
+        inferred_prototype,
+        prototype,
+        mut stack_facts,
+        role_names,
+    } = lower_and_run_ast_passes(
+        prepared_llir,
+        &lf_raw,
+        outer_name,
+        func_va,
+        &exception_sites,
         cc,
         image.endianness(),
         false,
-        prototype.as_ref(),
-        &mut param_slots,
-        locked_parameter_count(prototype.as_ref()),
         &callee_facts,
         &addr_map,
         &str_pool,
@@ -632,7 +610,7 @@ fn decompile_range_at_py(
     use crate::core::address_range::AddressRange;
     use crate::core::basic_block::BasicBlock;
     use crate::core::function::{Function, FunctionKind};
-    use crate::ir::ast::{lower, render, render_with_types};
+    use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
 
@@ -797,26 +775,12 @@ fn decompile_range_at_py(
             .and_then(|environment| environment.prototype_for(func_va)),
         dwarf_type_env.as_ref(),
     );
-    let PreparedLlir {
-        region,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: mut param_slots,
-        inferred_prototype,
-        prototype,
-        ..
-    } = prepared_llir;
     let declared_function_name = dwarf_outputs
         .as_ref()
         .and_then(|outputs| outputs.get(&func_va))
         .and_then(|contract| contract.function_name.as_ref())
         .cloned()
         .unwrap_or_else(|| func.name.clone());
-    let mut profiler =
-        crate::decompile::profile::FunctionProfiler::from_env(&declared_function_name, func_va);
-    let mut f = profiler.measure("lower", || lower(&lf, &region, declared_function_name));
-    crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
     // is why the four copies could not simply be diffed against each other — the pass
     // list and the local setup were braided together. None of them touch `f`, so
@@ -839,16 +803,26 @@ fn decompile_range_at_py(
             .and_then(|outputs| outputs.get(&func_va)),
         cc,
     );
-    let (mut stack_facts, role_names) = run_ast_passes(
-        &mut f,
-        &mut profiler,
+    let PreparedAst {
+        function: mut f,
+        mut profiler,
         cfg_health,
+        numbered: lf,
+        definition_widths,
+        parameter_slots: param_slots,
+        inferred_prototype,
+        prototype,
+        mut stack_facts,
+        role_names,
+    } = lower_and_run_ast_passes(
+        prepared_llir,
+        &lf_raw,
+        declared_function_name,
+        func_va,
+        &exception_sites,
         cc,
         image.endianness(),
         false,
-        prototype.as_ref(),
-        &mut param_slots,
-        locked_parameter_count(prototype.as_ref()),
         &callee_facts,
         &addr_map,
         &str_pool,
@@ -1272,7 +1246,7 @@ fn decompile_all_py(
     analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::ir::ast::{lower, render};
+    use crate::ir::ast::render;
     use crate::ir::lift_function::lift_function_from_image;
 
     let image = load_program_image(&path)?;
@@ -1416,32 +1390,12 @@ fn decompile_all_py(
                 .and_then(|environment| environment.prototype_for(func.entry_point.value)),
             dwarf_type_env.as_ref(),
         );
-        let PreparedLlir {
-            region,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: mut param_slots,
-            inferred_prototype,
-            mut prototype,
-            ..
-        } = prepared_llir;
-        if let Some(prototype) = prototype.as_mut() {
-            let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
-            refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
-        }
         let outer_name = resolve_outer_function_name_with_analyst(
             &func.name,
             func.entry_point.value,
             &addr_map,
             analyst_names.as_ref(),
         );
-        let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(
-            &outer_name,
-            func.entry_point.value,
-        );
-        let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name.clone()));
-        crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
         // This site used to run dead-flag pruning before constant folding and never
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
@@ -1453,16 +1407,26 @@ fn decompile_all_py(
                 .and_then(|outputs| outputs.get(&func.entry_point.value)),
             cc,
         );
-        let (mut stack_facts, role_names) = run_ast_passes(
-            &mut f,
-            &mut profiler,
+        let PreparedAst {
+            function: mut f,
+            mut profiler,
             cfg_health,
+            numbered: lf,
+            definition_widths,
+            parameter_slots: param_slots,
+            inferred_prototype,
+            prototype,
+            mut stack_facts,
+            role_names,
+        } = lower_and_run_ast_passes(
+            prepared_llir,
+            &lf_raw,
+            outer_name.clone(),
+            func.entry_point.value,
+            &exception_sites,
             cc,
             image.endianness(),
             false,
-            prototype.as_ref(),
-            &mut param_slots,
-            locked_parameter_count(prototype.as_ref()),
             &callee_facts,
             &addr_map,
             &str_pool,
@@ -1597,7 +1561,7 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::ir::ast::{lower, render, render_with_types};
+    use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
@@ -1791,30 +1755,12 @@ fn decompile_many_py(
             // enters this branch.
             continue;
         }
-        let PreparedLlir {
-            region,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: mut param_slots,
-            inferred_prototype,
-            mut prototype,
-            ..
-        } = prepared_llir;
-        if let Some(prototype) = prototype.as_mut() {
-            let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
-            refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
-        }
         let outer_name = resolve_outer_function_name_with_analyst(
             &func.name,
             func_va,
             &addr_map,
             analyst_names.as_ref(),
         );
-        let mut profiler =
-            crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
-        let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
-        crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
         // This site used to run dead-flag pruning before constant folding and never
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
@@ -1833,16 +1779,26 @@ fn decompile_many_py(
                 .and_then(|outputs| outputs.get(&func_va)),
             cc,
         );
-        let (mut stack_facts, role_names) = run_ast_passes(
-            &mut f,
-            &mut profiler,
+        let PreparedAst {
+            function: mut f,
+            mut profiler,
             cfg_health,
+            numbered: lf,
+            definition_widths,
+            parameter_slots: param_slots,
+            inferred_prototype,
+            prototype,
+            mut stack_facts,
+            role_names,
+        } = lower_and_run_ast_passes(
+            prepared_llir,
+            &lf_raw,
+            outer_name,
+            func_va,
+            &exception_sites,
             cc,
             image.endianness(),
             shadow_v2,
-            prototype.as_ref(),
-            &mut param_slots,
-            locked_parameter_count(prototype.as_ref()),
             &callee_facts,
             &addr_map,
             &str_pool,

@@ -5,7 +5,7 @@
 
 use pyo3::prelude::*;
 
-use super::callee_contracts::DirectCalleeFacts;
+use super::callee_contracts::{refine_passthrough_parameter_hints, DirectCalleeFacts};
 use super::dwarf_contracts::{dwarf_source_register_lifetimes, DwarfPrototypeContract};
 use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with_inferred};
 
@@ -473,6 +473,106 @@ pub(super) struct PreparedLlir {
     /// for declaration-conflict provenance.
     pub(super) inferred_prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
     pub(super) prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
+}
+
+/// Output of the common LLIR-to-AST portion of one decompilation.
+///
+/// Rendering remains an adapter concern for now, but no public entry point may
+/// independently refine the prototype, lower the selected region, or run the
+/// AST pass list. Keeping the supporting facts beside the AST prevents a
+/// renderer from accidentally pairing it with a different numbered function.
+pub(super) struct PreparedAst {
+    pub(super) function: crate::ir::ast::Function,
+    pub(super) profiler: crate::decompile::profile::FunctionProfiler,
+    pub(super) cfg_health: crate::ir::health::CfgHealth,
+    pub(super) numbered: crate::ir::types::LlirFunction,
+    pub(super) definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
+    pub(super) parameter_slots: std::collections::HashSet<usize>,
+    pub(super) inferred_prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
+    pub(super) prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
+    pub(super) stack_facts: crate::ir::stack_locals::StackLocalFacts,
+    pub(super) role_names: std::collections::HashMap<String, String>,
+}
+
+/// Lower one prepared LLIR function and run the one authoritative AST pipeline.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_and_run_ast_passes(
+    prepared: PreparedLlir,
+    raw: &crate::ir::types::LlirFunction,
+    function_name: String,
+    function_va: u64,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
+    cc: crate::ir::call_args::CallConv,
+    endianness: crate::core::binary::Endianness,
+    nested_machine_frame_cleanup: bool,
+    callee_facts: &DirectCalleeFacts,
+    address_names: &std::collections::HashMap<u64, String>,
+    string_pool: &std::collections::HashMap<u64, String>,
+    function_tables: &[crate::ir::function_tables::FunctionPointerTable],
+    stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
+    got_targets: &std::collections::HashMap<u64, u64>,
+) -> PreparedAst {
+    let PreparedLlir {
+        region,
+        cfg_health,
+        numbered,
+        definition_widths,
+        parameter_slots: mut param_slots,
+        inferred_prototype,
+        mut prototype,
+        ..
+    } = prepared;
+    if let Some(prototype) = prototype.as_mut() {
+        let exact_ssa = crate::ir::ssa::compute_ssa(raw);
+        refine_passthrough_parameter_hints(prototype, raw, &exact_ssa, callee_facts);
+    }
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
+    }
+
+    let mut profiler =
+        crate::decompile::profile::FunctionProfiler::from_env(&function_name, function_va);
+    let mut function = profiler.measure("lower", || {
+        crate::ir::ast::lower(&numbered, &region, function_name)
+    });
+    crate::ir::exception_recover::mark_landing_pads(&mut function, exception_sites);
+    crate::ir::health::trace_pass("lower", &function, cfg_health);
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!(
+            "\n===== after lower =====\n{}",
+            crate::ir::ast::render(&function)
+        );
+    }
+    let (stack_facts, role_names) = run_ast_passes(
+        &mut function,
+        &mut profiler,
+        cfg_health,
+        cc,
+        endianness,
+        nested_machine_frame_cleanup,
+        prototype.as_ref(),
+        &mut param_slots,
+        super::locked_parameter_count(prototype.as_ref()),
+        callee_facts,
+        address_names,
+        string_pool,
+        function_tables,
+        stack_object_hints,
+        got_targets,
+    );
+
+    PreparedAst {
+        function,
+        profiler,
+        cfg_health,
+        numbered,
+        definition_widths,
+        parameter_slots: param_slots,
+        inferred_prototype,
+        prototype,
+        stack_facts,
+        role_names,
+    }
 }
 
 impl PreparedLlir {
