@@ -33,10 +33,7 @@ mod type_maps;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList};
 
-use callee_contracts::{
-    apply_recovered_direct_callee_effects, recover_direct_callee_layouts,
-    refine_passthrough_parameter_hints,
-};
+use callee_contracts::{prepare_direct_callee_facts, refine_passthrough_parameter_hints};
 
 use decbench_render::decbench_text;
 // `select_renderable_dwarf_local_facts` has no production caller in this module
@@ -60,9 +57,8 @@ use dwarf_contracts::{
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    annotate_calls_in, inline_soft_helper_calls_in, prepare_llir_for_lowering, readonly_data_for,
-    recognise_machine_frame, run_ast_passes, target_calling_convention, AnalysisBudget,
-    DecompileRequest, PreparedLlir, RenderOptions,
+    prepare_llir_for_lowering, readonly_data_for, recognise_machine_frame, run_ast_passes,
+    target_calling_convention, AnalysisBudget, DecompileRequest, PreparedLlir, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -295,8 +291,6 @@ fn decompile_at_session(
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
-    inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-    annotate_calls_in(&mut lf_raw, cc, &addr_map);
     // Recovered here rather than with the other AST-pass inputs below: a call
     // through one of these tables needs its entries' parameter storage, and
     // that is the same demand-driven callee analysis.
@@ -308,10 +302,10 @@ fn decompile_at_session(
     // nested callee analysis decline to spend a layer inside a call cycle.
     let callee_call_graph = py.detach(|| session.call_graph_for(&budgets, &[func_va], &funcs));
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let mut callee_facts = recover_direct_callee_layouts(
+    let mut callee_facts = prepare_direct_callee_facts(
         &image,
         &funcs,
-        &lf_raw,
+        &mut lf_raw,
         cc,
         arm_vfp_args,
         &budgets,
@@ -322,7 +316,6 @@ fn decompile_at_session(
         Some(callee_call_graph.as_ref()),
         &mut callee_layout_cache,
     );
-    apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
     // The analyst overlay, applied now that every name-keyed analysis above has
     // run against what the binary calls things. It rewrites the address map --
     // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
@@ -765,15 +758,13 @@ fn decompile_range_at_py(
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
-    inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-    annotate_calls_in(&mut lf_raw, cc, &addr_map);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let callee_call_graph = session.call_graph_for(&budgets, &[func_va], &discovered);
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let callee_facts = recover_direct_callee_layouts(
+    let callee_facts = prepare_direct_callee_facts(
         &image,
         &discovered,
-        &lf_raw,
+        &mut lf_raw,
         cc,
         arm_vfp_args,
         &budgets,
@@ -784,7 +775,6 @@ fn decompile_range_at_py(
         Some(callee_call_graph.as_ref()),
         &mut callee_layout_cache,
     );
-    apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -1379,12 +1369,10 @@ fn decompile_all_py(
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
-        inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-        annotate_calls_in(&mut lf_raw, cc, &addr_map);
-        let mut callee_facts = recover_direct_callee_layouts(
+        let mut callee_facts = prepare_direct_callee_facts(
             &image,
             &funcs,
-            &lf_raw,
+            &mut lf_raw,
             cc,
             arm_vfp_args,
             &budgets,
@@ -1395,7 +1383,6 @@ fn decompile_all_py(
             Some(callee_call_graph.as_ref()),
             &mut callee_layout_cache,
         );
-        apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
         // The analyst overlay, applied now that every name-keyed analysis above has
         // run against what the binary calls things. It rewrites the address map --
         // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
@@ -1743,12 +1730,10 @@ fn decompile_many_py(
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
-        inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-        annotate_calls_in(&mut lf_raw, cc, &addr_map);
-        let mut callee_facts = recover_direct_callee_layouts(
+        let mut callee_facts = prepare_direct_callee_facts(
             &image,
             &funcs,
-            &lf_raw,
+            &mut lf_raw,
             cc,
             arm_vfp_args,
             &budgets,
@@ -1759,7 +1744,6 @@ fn decompile_many_py(
             Some(callee_call_graph.as_ref()),
             &mut callee_layout_cache,
         );
-        apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
         // The analyst overlay, applied now that every name-keyed analysis above has
         // run against what the binary calls things. It rewrites the address map --
         // which `resolve_names` turns into `Expr::Named` -- so one overlay renames

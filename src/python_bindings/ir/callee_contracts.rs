@@ -5,10 +5,8 @@
 //! here prevents the already-large binding orchestrator from becoming another
 //! analysis owner.
 
-use super::{
-    annotate_calls_in, calling_convention_pointer_width, inline_soft_helper_calls_in,
-    recover_decbench_prototype, DwarfPrototypeContract,
-};
+use super::pipeline::{annotate_calls_in, inline_soft_helper_calls_in};
+use super::{calling_convention_pointer_width, recover_decbench_prototype, DwarfPrototypeContract};
 
 #[derive(Debug, Default)]
 pub(super) struct DirectCalleeFacts {
@@ -478,6 +476,48 @@ pub(super) fn apply_recovered_direct_callee_effects(
             *effects = Some(recovered);
         }
     }
+}
+
+/// Prepare one caller for SSA and return all proven direct-callee facts.
+///
+/// The order is semantic: compiler helpers expand while argument registers are
+/// still architectural, ABI and known-call effects attach before SSA, callee
+/// bodies refine those conservative effects, and only then may the caller enter
+/// prototype recovery. Every public decompilation entry point must cross this
+/// boundary instead of hand-repeating that sequence.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_direct_callee_facts(
+    image: &crate::program::image::ProgramImage,
+    functions: &[crate::core::function::Function],
+    caller: &mut crate::ir::types::LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    arm_vfp_args: bool,
+    budgets: &crate::analysis::cfg::Budgets,
+    dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+    address_names: &mut std::collections::HashMap<u64, String>,
+    function_tables: &[crate::ir::function_tables::FunctionPointerTable],
+    call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
+    cache: &mut std::collections::HashMap<u64, Option<RecoveredDirectCallee>>,
+) -> DirectCalleeFacts {
+    inline_soft_helper_calls_in(caller, address_names);
+    annotate_calls_in(caller, cc, address_names);
+    let facts = recover_direct_callee_layouts(
+        image,
+        functions,
+        caller,
+        cc,
+        arm_vfp_args,
+        budgets,
+        dwarf_outputs,
+        type_env,
+        address_names,
+        function_tables,
+        call_graph,
+        cache,
+    );
+    apply_recovered_direct_callee_effects(caller, cc, &facts);
+    facts
 }
 
 /// Project recovered callee parameter types back through untouched SSA live-ins.
