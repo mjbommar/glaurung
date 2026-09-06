@@ -771,8 +771,10 @@ provenance through lowering.
 
 ### Origin and mapping surface
 
-- [ ] Extend AST definitions in `src/ir/ast.rs` or the owning AST module with
-  `OriginSet`.
+- [~] Extend AST definitions in `src/ir/ast.rs` or the owning AST module with
+  `OriginSet`. Commit `7bea3314` lands the canonical sorted, deduplicated set,
+  deterministic union, and exact clone behavior. AST nodes do not yet own the
+  set; the carrier migration remains open.
 - [ ] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering.
 - [ ] Expose line-to-address mappings from the Python binding as structured
@@ -787,7 +789,9 @@ provenance through lowering.
   type/presentation-only changes preserve value identity. The next three prove
   identity survival through lowering, exact opaque consumer lookup, and
   fail-closed ambiguity after phi-copy coalescing.
-- [ ] Unit tests for deterministic origin union and duplication.
+- [x] Unit tests for deterministic origin union and duplication. Three focused
+  tests at `7bea3314` cover non-contiguous canonical construction,
+  commutative/idempotent union, and independent duplicated sets.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
 - [ ] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
@@ -2640,8 +2644,11 @@ relevant ratchet's accepted-regression record.
    `f05c9a5d` carries exact-or-ambiguous opaque identities through AST lowering
    and migrates float-role projection as the first consumer. Commit `af65c260`
    migrates the DWARF register-local resolver as the second consumer. Both are
-   byte-identical across the 419-pair gate. Next introduce deterministic
-   compositional instruction origins, then continue consumer migrations.
+   byte-identical across the 419-pair gate. Commit `7bea3314` introduces the
+   deterministic compositional origin-set primitive and remains byte-identical
+   across the same map. Next attach it to statements/expressions and migrate
+   lowering, every enabled AST pass, rendering, and structured Python line
+   mappings before continuing consumer migrations.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
