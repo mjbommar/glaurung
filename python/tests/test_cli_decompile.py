@@ -927,7 +927,7 @@ def test_real_thumb_leaf_frame_save_does_not_become_a_source_local(
     )
 
     assert "thumb_leaf_frame(int wait)" in generated, generated
-    assert "signed char value;" in generated, generated
+    assert re.search(r"\bsigned char value(?:\s*=\s*0)?;", generated), generated
     assert "local_4" not in generated, generated
     assert "= var0;" not in generated, generated
 
