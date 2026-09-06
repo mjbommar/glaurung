@@ -3,7 +3,8 @@
 Date: 2026-09-06
 
 Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
-`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`, `21f8b29a`, `2ef9c4eb`
+`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`, `21f8b29a`, `2ef9c4eb`,
+`d900cf1b`
 
 ## Boundary moved
 
@@ -150,6 +151,15 @@ longer hold raw image-byte locals or independently sequence these name sources.
 The profile ceiling remains 20 parses across the tested language/toolchain
 samples.
 
+`d900cf1b` centralizes discovery itself. `discover_program` performs the sole
+`AnalysisBudget` conversion, releases the GIL around the session query, and
+returns `ProgramDiscovery { budgets, functions }` so downstream context cannot
+silently use different limits from those that produced the function set. All
+four adapters use this boundary with their existing seed sets. Adding the
+injected `Python` token to exact-range is not a public argument change; it makes
+that previously blocking discovery path interruptible and consistent with
+address/all/many.
+
 The expanded profile test initially exposed 21 constant object parses against
 the ceiling of 20. An exact parent/current A/B proved the result model added
 none. Call-site instrumentation then located the duplicate: the combined
@@ -218,3 +228,9 @@ without changing the ceiling.
   passed, zero failed, and five ignored; every integration and documentation
   target passed. Identity retrieval reports 44 passed and ten ignored in
   528.62 seconds.
+- Fresh release extension plus the same 37 focused checks at `d900cf1b`:
+  passed.
+- Full `cargo test --features python-ext` at `d900cf1b`: 4,203 library tests
+  passed, zero failed, and five ignored; every integration and documentation
+  target passed. Identity retrieval reports 44 passed and ten ignored in
+  526.49 seconds.
