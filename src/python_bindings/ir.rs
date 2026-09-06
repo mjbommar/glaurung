@@ -35,7 +35,7 @@ use pyo3::types::{PyAny, PyList};
 
 use callee_contracts::{
     apply_recovered_direct_callee_effects, recover_direct_callee_layouts,
-    refine_passthrough_parameter_hints, DirectCalleeFacts,
+    refine_passthrough_parameter_hints,
 };
 
 use decbench_render::decbench_text;
@@ -688,6 +688,14 @@ fn decompile_range_at_py(
     })?;
     let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
     let capped_end = range_end.min(range_start.saturating_add(max_bytes));
+    let budgets = AnalysisBudget {
+        max_functions: 1,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+        total_timeout_ms: 0,
+    }
+    .discovery();
     let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let block_start = Address::new(AddressKind::VA, range_start, bits, None, None)
@@ -696,34 +704,55 @@ fn decompile_range_at_py(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let range = AddressRange::new(block_start.clone(), capped_end - range_start, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let mut func = Function::new(format!("sub_{:x}", func_va), entry, FunctionKind::Normal)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    func.range = Some(range.clone());
-    func.size = Some(range.size);
-    func.chunks.push(range);
-    func.basic_blocks.push(BasicBlock::new(
-        format!("bb_{:x}", range_start),
-        block_start,
-        block_end,
-        1,
-        Some(Vec::new()),
-        Some(Vec::new()),
-    ));
+    // Prefer the ordinary CFG for a discovered function when every recovered
+    // block lies inside the caller's explicit range. This makes range and
+    // address requests consume the same control-flow facts without weakening
+    // the range API's ability to lift an otherwise undiscovered byte window.
+    let discovered = session.discover_functions(&budgets, &[func_va]);
+    let discovered_function = discovered
+        .iter()
+        .find(|candidate| {
+            candidate.entry_point.value == func_va
+                && !candidate.basic_blocks.is_empty()
+                && candidate.basic_blocks.iter().all(|block| {
+                    block.start_address.value >= range_start
+                        && block.end_address.value <= capped_end
+                })
+        })
+        .cloned();
+    let func = if let Some(function) = discovered_function {
+        function
+    } else {
+        let mut function = Function::new(format!("sub_{:x}", func_va), entry, FunctionKind::Normal)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        function.range = Some(range.clone());
+        function.size = Some(range.size);
+        function.chunks.push(range);
+        function.basic_blocks.push(BasicBlock::new(
+            format!("bb_{:x}", range_start),
+            block_start,
+            block_end,
+            1,
+            Some(Vec::new()),
+            Some(Vec::new()),
+        ));
+        function
+    };
 
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     // ONE parse of the image yields both the call-target names and the
     // named static storage. Two parses tripped the object-parse ceiling.
-    let (addr_map, data_symbols) =
+    let (mut addr_map, data_symbols) =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
             &data, &path, pdb_cache,
         );
-    let budgets = crate::analysis::cfg::Budgets {
-        max_functions: 1,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    };
+    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &discovered);
+    crate::ir::name_resolve::add_flirt_referenced_function_names(
+        &image,
+        &mut addr_map,
+        &discovered,
+    );
+    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &discovered);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
     // The reason is the analyst-visible one. This used to blame the
@@ -738,6 +767,24 @@ fn decompile_range_at_py(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     annotate_calls_in(&mut lf_raw, cc, &addr_map);
+    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
+    let callee_call_graph = session.call_graph_for(&budgets, &[func_va], &discovered);
+    let mut callee_layout_cache = std::collections::HashMap::new();
+    let callee_facts = recover_direct_callee_layouts(
+        &image,
+        &discovered,
+        &lf_raw,
+        cc,
+        arm_vfp_args,
+        &budgets,
+        dwarf_outputs.as_ref(),
+        dwarf_type_env.as_ref(),
+        &mut addr_map,
+        &function_tables,
+        Some(callee_call_graph.as_ref()),
+        &mut callee_layout_cache,
+    );
+    apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -780,9 +827,6 @@ fn decompile_range_at_py(
         crate::decompile::profile::FunctionProfiler::from_env(&declared_function_name, func_va);
     let mut f = profiler.measure("lower", || lower(&lf, &region, declared_function_name));
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
-    // An explicit byte range has no discovered callee Function objects from
-    // which to recover cross-function storage layouts.
-    let callee_facts = DirectCalleeFacts::default();
     // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
     // is why the four copies could not simply be diffed against each other — the pass
     // list and the local setup were braided together. None of them touch `f`, so
@@ -792,7 +836,6 @@ fn decompile_range_at_py(
     let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     data_symbols.remove_truncated_character_arrays(&mut str_pool);
     let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
     // an unrelocated linkage word. See `ir::got_fold`.
@@ -1239,7 +1282,6 @@ fn decompile_all_py(
     analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::analysis::cfg::Budgets;
     use crate::ir::ast::{lower, render};
     use crate::ir::lift_function::lift_function_from_image;
 
@@ -1263,13 +1305,14 @@ fn decompile_all_py(
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = Budgets {
+    let budgets = AnalysisBudget {
         max_functions: limit.max(1),
         max_blocks,
         max_instructions,
         timeout_ms,
         total_timeout_ms: 0,
-    };
+    }
+    .discovery();
     // Whole-binary function discovery: seconds to minutes on a large image, and
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
@@ -1567,7 +1610,6 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::analysis::cfg::Budgets;
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
@@ -1603,13 +1645,14 @@ fn decompile_many_py(
     // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
     // need to consume this worklist merely to render one call accurately.
     let requested_function_limit = pipeline::requested_function_limit(&func_vas, max_functions);
-    let budgets = Budgets {
+    let budgets = AnalysisBudget {
         max_functions: requested_function_limit,
         max_blocks,
         max_instructions,
         timeout_ms,
         total_timeout_ms: 0,
-    };
+    }
+    .discovery();
     // --- one-time analysis + name/field/string maps -----------------------
     // Whole-binary function discovery: seconds to minutes on a large image, and
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
