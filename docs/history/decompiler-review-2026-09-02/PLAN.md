@@ -659,13 +659,15 @@ and make pass repetition/invalidation explicit.
 
 - [ ] Extend `python/tests/test_decompiler_session.py` for shared-session facts
   and explicit budgets.
-- [~] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
+- [x] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
   four entry points at equal budgets.
   All four paths now emit byte-identical `tail_dispatch`, including its
   indirect-call arguments, in DecBench, C, and untyped styles with equal block,
-  instruction, and per-function time budgets. Whole-image discovery still
-  couples its output limit to `max_functions`, so exact complete budget
-  identity remains open with the batch/request migration.
+  instruction, and per-function time budgets. `c077ccca` separates
+  `decompile_all`'s output `limit` from its public discovery `max_functions`,
+  exposes the same discovery limit on exact-range, and makes single-function
+  size identity use that explicit limit. The test now constructs equal
+  discovery, CFG, callee, type, and size budgets across all four entry points.
 - [ ] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
   function-order independence.
 - [x] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
@@ -681,7 +683,7 @@ and make pass repetition/invalidation explicit.
 
 ### Exit criteria
 
-- [ ] Equal budget produces byte-identical pseudocode for the same function
+- [x] Equal budget produces byte-identical pseudocode for the same function
   across all entry points.
 - [x] No entry point independently performs discovery, naming, or callee
   analysis.
