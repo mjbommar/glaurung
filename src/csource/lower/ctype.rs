@@ -111,19 +111,51 @@ pub enum CType {
     /// A floating type. Carried so the census can name it; **not lowerable**
     /// --- see [`CType::unsupported_reason`].
     Float { bits: u16 },
-    /// A pointer. Carried so the census can name it.
-    Pointer,
+    /// A pointer, lowered as an unsigned integer of pointer width holding an
+    /// address.
+    ///
+    /// The pointee type is carried so a dereference knows how many bytes to
+    /// load, and `None` means `void *` or a pointer to something this model
+    /// does not distinguish --- a dereference of one is refused rather than
+    /// guessed at a width.
+    ///
+    /// This is the same representation the rest of the engine already uses:
+    /// `src/exec/interp.rs` executes `Op::Load` and `Op::Store` over a flat
+    /// address space, and a local already lives at a real frame address
+    /// (`Local::addr`). A pointer is that address in a register, so nothing
+    /// new is invented here --- what was missing was the lowering admitting
+    /// the type at all.
+    Pointer(Option<Box<CType>>),
     /// An array, struct, union or enum. Carried so the census can name it.
     Aggregate(&'static str),
 }
 
 impl CType {
     /// The integer type, when this is one.
+    ///
+    /// A pointer answers with the unsigned pointer-width integer it is
+    /// represented by, so comparison, assignment and passing all work without
+    /// a special case at every use site.
     pub fn as_int(&self) -> Option<IntType> {
         match self {
             CType::Int(t) => Some(*t),
+            CType::Pointer(_) => Some(IntType::ULONG),
             _ => None,
         }
+    }
+
+    /// The type this pointer points at, when it is a pointer to something the
+    /// model distinguishes.
+    pub fn pointee(&self) -> Option<&CType> {
+        match self {
+            CType::Pointer(Some(inner)) => Some(inner),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a pointer.
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, CType::Pointer(_))
     }
 
     /// Why this type cannot be lowered, or `None` when it can.
@@ -137,7 +169,11 @@ impl CType {
             // `Domain` is a bit-vector interface: no float add, no float
             // compare, no int/float conversion anywhere in `src/exec`.
             CType::Float { .. } => Some("floating-point type (no FP in the exec Domain)"),
-            CType::Pointer => Some("pointer type"),
+            // A pointer is an address in a pointer-width integer, which the
+            // `Domain` interface already handles. What a *dereference* needs
+            // is the pointee width, so an opaque pointee is refused there
+            // rather than here.
+            CType::Pointer(_) => None,
             CType::Aggregate(what) => Some(match *what {
                 "array" => "array type",
                 "struct" => "struct type",

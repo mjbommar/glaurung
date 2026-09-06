@@ -250,13 +250,35 @@ not exotic: pointers and calls are 477 of the 732 refusals. A "path feasibility"
 feature that silently answers `unknown` on 81% of functions would be a worse
 product than not shipping it.
 
+> **Partly done** (2026-09-05). Pointers are now a lowerable type:
+> `CType::Pointer` carries its pointee and reports the unsigned pointer-width
+> integer from `as_int`, which is the representation the rest of the engine
+> already uses --- `src/exec/interp.rs` executes `Op::Load`/`Op::Store` over a
+> flat address space and a local already lives at a real frame address. **The
+> `pointer type` refusal went 325 to 0**, and the corpus census is pinned by
+> `csource::lower::coverage` so it cannot come back silently.
+>
+> **Total coverage did not move: still 168/900 = 18.7%.** That is the honest
+> finding and it reorders the rest of this phase. Admitting the type exposed
+> what was behind it: calls rose to 169 as the top refusal, and array
+> subscripts and dereferences are now the pointer-shaped blockers rather than
+> the type itself. A dereference needs the *pointee width* at the use site, and
+> `expr::Val` carries only an `IntType` --- it cannot tell a pointer from a
+> `long`. Widening `Val` to carry a `CType` is the next increment and it
+> touches every expression rule, so it is its own change rather than a tail of
+> this one.
+>
+> Read that as the measurement working: the census named the wrong culprit
+> until the type was admitted, and now names the right ones.
+
 That reorders the work. **Widening the lowering is the prerequisite, and it is
 its own phase**, not a footnote to this one:
 
 | refusal class | count | what it needs |
 |---|---:|---|
-| pointer types | 325 | a memory model in the lowering; `ir::abi` already models the ABI half |
-| call expressions | 152 | a call op with a summary or an uninterpreted result |
+| ~~pointer types~~ | ~~325~~ **0** | done: `CType::Pointer` carries a pointee and lowers as a pointer-width integer |
+| call expressions | 152 → **169** | a call op with a summary or an uninterpreted result. Now the top refusal |
+| dereference and subscript | ~40 | `expr::Val` must carry a `CType`, not an `IntType`, so a use site knows the pointee width |
 | floating point | 51 | the solver has an FP route; the lowering has no FP type |
 | `switch` | 38 | a jump-table lowering; `analysis::jump_tables` does this for binaries |
 | aggregates | 36+ | struct and union member access |
@@ -268,6 +290,24 @@ the coverage is", not a predicted number. **Measure again after each**, and let
 the number decide whether phase 3 is worth starting.
 
 ## Phase 4 — The query surface, reframed
+
+> **Started** (2026-09-05). The `source` provenance rung exists, ranked **70**:
+> below the three debug-info sources and above `stdlib`. The reasoning is
+> recorded in `kb/provenance.py` and pinned by
+> `test_source_outranks_curated_data_and_loses_to_debug_info`.
+>
+> Debug info wins because it is the *toolchain's* statement about the binary
+> that was actually built --- the compiler applied the optimisations, chose the
+> layout and emitted the record --- while source is the programmer's statement
+> about what was intended. The two disagree whenever a macro, a conditional
+> compilation branch or an inlining decision came between them, and when both
+> exist the one describing the shipped artifact wins. Source beats `stdlib` for
+> the mirror-image reason: a curated bundle is our data about somebody else's
+> library, and this is the program's own text.
+>
+> The rung slots into the gap the module docstring reserves for exactly this,
+> so no existing rank moved. What remains is the writer: types from phase 1 and
+> dependence edges from phase 2 becoming KB rows.
 
 **Deliverable.** Source facts in the `.glaurung` knowledge base, with
 `set_by` provenance.

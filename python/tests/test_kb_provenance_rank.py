@@ -167,3 +167,31 @@ def test_an_upgrade_still_works(kb):
     xref_db.set_function_name(kb, VA, "analyst", set_by="manual")
     row = next(r for r in xref_db.list_function_names(kb) if r.entry_va == VA)
     assert row.canonical == "analyst"
+
+
+def test_source_outranks_curated_data_and_loses_to_debug_info():
+    """Where the `source` rung sits, and why.
+
+    Below the three debug-info sources: those are the toolchain's statement
+    about the binary that was actually built, and source is the programmer's
+    statement about what was intended. The two disagree whenever a macro, a
+    conditional compilation branch, or an inlining decision came between them,
+    and when both exist the one describing the shipped artifact wins.
+
+    Above `stdlib` for the mirror-image reason: a curated bundle is our data
+    about somebody else's library, and this is the program's own text.
+    """
+    from glaurung.llm.kb.provenance import outranks
+
+    for debug_info in ("dwarf", "pdb", "gopclntab"):
+        assert outranks(debug_info, "source"), debug_info
+        assert not outranks("source", debug_info), debug_info
+
+    for weaker in ("stdlib", "flirt", "propagated", "auto", "borrowed"):
+        assert outranks("source", weaker), weaker
+        assert not outranks(weaker, "source"), weaker
+
+    # And the analyst still wins, which is the one rule that predates the
+    # ladder.
+    assert outranks("manual", "source")
+    assert not outranks("source", "manual")

@@ -132,3 +132,67 @@ pub(crate) fn unsupported<T>(
 ) -> Result<T, LowerError> {
     Err(LowerError::new(what, ctx.offset_of(node)))
 }
+
+#[cfg(test)]
+mod coverage {
+    //! Corpus lowering coverage: the number phase 2.5 of
+    //! `docs/development/roadmap/source-semantics.md` gates on.
+    use super::*;
+
+    #[test]
+    fn corpus_coverage() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/decompiler_fixtures/src");
+        let Ok(entries) = std::fs::read_dir(&root) else { return };
+        let mut total = 0usize;
+        let mut ok = 0usize;
+        let mut reasons: std::collections::BTreeMap<String, usize> = Default::default();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("c") { continue; }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            for func in tree.functions(&text) {
+                if func.name.is_empty() { continue; }
+                total += 1;
+                match crate::csource::lower::func::lower_named_function(&text, &func.name) {
+                    Ok(_) => ok += 1,
+                    Err(e) => {
+                        let what = e.to_string();
+                        let key = what.split(": ").nth(1).unwrap_or(&what)
+                            .split_whitespace().take(4).collect::<Vec<_>>().join(" ");
+                        *reasons.entry(key).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let mut top: Vec<_> = reasons.into_iter().collect();
+        top.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        eprintln!("COVERAGE {ok}/{total} = {:.1}%", ok as f64 / total as f64 * 100.0);
+        for (reason, count) in top.iter().take(10) {
+            eprintln!("   {count:4}  {reason}");
+        }
+
+        assert!(total > 500, "corpus not found: {total} functions");
+        // A ratchet, not a target. Phase 3 of
+        // `docs/development/roadmap/source-semantics.md` is gated on this
+        // number, so it must not fall silently: a lowering change that refuses
+        // something it used to accept fails here rather than shrinking the
+        // population a later feasibility claim is measured over.
+        assert!(
+            ok * 100 / total >= 18,
+            "lowering coverage fell to {ok}/{total}"
+        );
+        // "pointer type" was 325 of 732 refusals before pointers were admitted
+        // as a lowerable type. It must not come back as a whole-type refusal.
+        let bare_pointer = top
+            .iter()
+            .find(|(reason, _)| reason == "pointer type")
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+        assert_eq!(
+            bare_pointer, 0,
+            "a bare `pointer type` refusal returned; pointers are lowerable"
+        );
+    }
+}

@@ -67,6 +67,21 @@ SET_BY_PRIORITY: Final[dict[str, int]] = {
     "dwarf": 80,
     "pdb": 80,
     "gopclntab": 80,
+    # Read out of the program's own C source, when source is available. Slots
+    # into the gap the module docstring reserves for exactly this, without
+    # moving a rung.
+    #
+    # Below the three debug-info sources on purpose. Those are the *toolchain's*
+    # statement about the binary that was actually built: the compiler applied
+    # the optimisations, chose the layout and emitted the record. Source is the
+    # programmer's statement about what was intended, and the two disagree
+    # whenever a macro, a conditional compilation branch or an inlining
+    # decision came between them. When both exist, the one describing the
+    # shipped artifact wins.
+    #
+    # Above `stdlib` for the mirror-image reason: a curated bundle is our data
+    # about somebody's library, and this is the program's own text.
+    "source": 70,
     # A curated bundle matched on an exact identifier. Strong, but it is our
     # data about a library rather than the binary's own statement.
     "stdlib": 60,

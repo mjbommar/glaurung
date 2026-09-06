@@ -327,7 +327,9 @@ fn function_result_type(ctx: &Ctx<'_>, def: &FunctionDef) -> Result<CType, Lower
         if let Some((first, end)) = ctx.extent(declarator) {
             let name_start = declarator_name_token(ctx, declarator).unwrap_or(end);
             if (first..name_start).any(|i| ctx.kind_at(i) == Some(TokenKind::Star)) {
-                return Ok(CType::Pointer);
+                // The specifiers give the pointee; the star makes it a
+                // pointer to that.
+                return Ok(CType::Pointer(Some(Box::new(ty))));
             }
         }
     }
@@ -423,9 +425,22 @@ fn push_param(
     for &index in group {
         match ctx.kind_at(index) {
             Some(TokenKind::Star) => {
+                // A parameter's pointee is whatever its specifiers named ---
+                // the words before the star. An unrecognised spelling leaves
+                // it opaque, and a dereference of an opaque pointee is refused
+                // rather than guessed at a width.
+                let words: Vec<&str> = group
+                    .iter()
+                    .take_while(|i| ctx.kind_at(**i) != Some(TokenKind::Star))
+                    .map(|i| ctx.text_at(*i))
+                    .collect();
+                let pointee = crate::csource::lower::ctype::from_specifier_tokens(
+                    words.iter().copied(),
+                )
+                .map(Box::new);
                 out.push(ParamSlot {
                     name: String::new(),
-                    ty: CType::Pointer,
+                    ty: CType::Pointer(pointee),
                     reg,
                 });
                 return Ok(());
