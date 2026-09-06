@@ -1591,6 +1591,38 @@ mod tests {
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use std::collections::HashMap;
 
+    /// Build opaque identities for hand-written numbered LLIR test inputs.
+    ///
+    /// Product code must never reconstruct this fact from a display name; the
+    /// parser is confined to tests whose fixtures predate the identity sidecar.
+    fn test_value_identities(
+        numbered: &crate::ir::types::LlirFunction,
+    ) -> crate::ir::value_number::ValueIdentities {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for instruction in numbered.blocks.iter().flat_map(|block| &block.instrs) {
+            let (definition, uses) = crate::ir::use_def::def_uses(&instruction.op);
+            for register in definition.into_iter().chain(uses) {
+                let VReg::Phys(name) = &register else {
+                    continue;
+                };
+                let Some((base, version)) = name.rsplit_once('#') else {
+                    continue;
+                };
+                let Ok(version) = version.parse() else {
+                    continue;
+                };
+                identities.record(
+                    register.clone(),
+                    crate::ir::ssa::SsaValue {
+                        base: VReg::phys(base),
+                        version,
+                    },
+                );
+            }
+        }
+        identities
+    }
+
     #[test]
     fn rust_style_hidden_result_requires_the_full_machine_contradiction() {
         use crate::ir::types_recover::RecoveredOutputKind;
@@ -1989,6 +2021,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            &test_value_identities(&numbered),
             Arch::ARM,
             crate::ir::call_args::CallConv::Arm,
             None,
@@ -2071,6 +2104,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2137,6 +2171,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2203,6 +2238,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2290,6 +2326,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2361,6 +2398,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            &test_value_identities(&numbered),
             Arch::ARM,
             crate::ir::call_args::CallConv::Arm,
             None,
@@ -2417,6 +2455,7 @@ mod tests {
             Some(&contract),
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            &test_value_identities(&numbered),
             Arch::ARM,
             crate::ir::call_args::CallConv::Arm,
             None,

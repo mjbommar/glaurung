@@ -803,6 +803,7 @@ pub(super) fn finalize_prepared_ast(
         debug_contract,
         &prepared.numbered,
         &prepared.role_names,
+        &prepared.value_identities,
         arch,
         cc,
         dwarf_type_env,
