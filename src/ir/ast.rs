@@ -83,8 +83,10 @@ pub use decbench_render::{
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
 pub use lower_region::lower;
+#[cfg(test)]
+pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
 pub(crate) use prepare::{
-    drop_machine_frame_comments, prepare_for_decbench_with_output_and_protected_locals,
+    drop_machine_frame_comments, prepare_for_decbench_with_output_and_protected_locals_and_report,
 };
 pub use prepare::{
     prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,

@@ -150,7 +150,8 @@ pub fn inline_terminal_goto_tails(function: &mut Function) {
 /// one globally unique label, accounts for every goto to it, rejects any other
 /// label in the moved region, and refuses to turn a non-tail loop exit into a
 /// break (because that would execute statements the goto skipped).
-pub fn recover_forward_exit_regions(function: &mut Function) {
+pub fn recover_forward_exit_regions(function: &mut Function) -> bool {
+    let mut changed = false;
     loop {
         let mut labels = HashMap::new();
         let mut gotos = HashMap::new();
@@ -158,7 +159,9 @@ pub fn recover_forward_exit_regions(function: &mut Function) {
         if !recover_one_forward_exit(&mut function.body, &labels, &gotos) {
             break;
         }
+        changed = true;
     }
+    changed
 }
 
 fn recover_one_forward_exit(

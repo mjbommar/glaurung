@@ -20,6 +20,59 @@ use super::{
     remove_redundant_return_constant_assignments, Function,
 };
 
+/// Why a bounded semantic fixpoint stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixpointTermination {
+    /// A complete round changed nothing.
+    Quiescent,
+    /// Every permitted round changed the function, so the safety bound fired.
+    BoundReached,
+}
+
+/// Auditable outcome of one bounded fixpoint invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixpointReport {
+    pub rounds: usize,
+    pub firing_rounds: usize,
+    pub termination: FixpointTermination,
+}
+
+impl FixpointTermination {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Quiescent => "quiescent",
+            Self::BoundReached => "bound_reached",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AstPreparationReport {
+    pub copies_and_constants: FixpointReport,
+    pub forward_regions_and_loops: FixpointReport,
+}
+
+/// Run a semantic cleanup round until it stops firing or reaches its bound.
+///
+/// The callback must never under-report a mutation. Over-reporting is safe but
+/// consumes another bounded round and is visible in the returned report.
+pub fn run_bounded_fixpoint(max_rounds: usize, mut round: impl FnMut() -> bool) -> FixpointReport {
+    let mut report = FixpointReport {
+        rounds: 0,
+        firing_rounds: 0,
+        termination: FixpointTermination::BoundReached,
+    };
+    for _ in 0..max_rounds {
+        report.rounds += 1;
+        if !round() {
+            report.termination = FixpointTermination::Quiescent;
+            return report;
+        }
+        report.firing_rounds += 1;
+    }
+    report
+}
+
 /// Remove comments that describe an already-consumed machine frame.
 ///
 /// Prologue recovery has done its semantic job once stack slots, parameters,
@@ -121,14 +174,12 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
 ///
 /// `benches/ir_dataflow.rs` calls this function rather than restating the loop,
 /// so the bench cannot drift from the schedule it claims to measure.
-pub fn settle_copies_and_constants(owned: &mut Function) {
-    for _ in 0..4 {
+pub fn settle_copies_and_constants(owned: &mut Function) -> FixpointReport {
+    run_bounded_fixpoint(4, || {
         let copies_changed = crate::ir::copy_prop::propagate_copies(owned);
         let constants_changed = crate::ir::const_fold::fold_constants(owned);
-        if !(copies_changed || constants_changed) {
-            break;
-        }
-    }
+        copies_changed || constants_changed
+    })
 }
 
 /// The explicit AST transformation that precedes DecBench rendering.
@@ -235,6 +286,21 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     protected_locals: &std::collections::HashSet<String>,
     pointer_width: u8,
 ) -> Function {
+    prepare_for_decbench_with_output_and_protected_locals_and_report(
+        f,
+        output_kind,
+        protected_locals,
+        pointer_width,
+    )
+    .0
+}
+
+pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
+    f: &Function,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    protected_locals: &std::collections::HashSet<String>,
+    pointer_width: u8,
+) -> (Function, AstPreparationReport) {
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::clear_return_values(&mut owned);
@@ -247,7 +313,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint — see the function's own docs.
-    settle_copies_and_constants(&mut owned);
+    let copies_and_constants = settle_copies_and_constants(&mut owned);
     // Folding can prove that an initially composite narrow-register rebuild is
     // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
     // the same guarded home analysis again so byte/halfword parameter spills
@@ -314,10 +380,11 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     // that join can in turn expose the enclosing linear latch. Two bounded
     // rounds recover inner loop -> forward join -> outer loop without relaxing
     // either pass's internal-label rejection.
-    for _ in 0..2 {
-        crate::ir::label_prune::recover_forward_exit_regions(&mut owned);
-        crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
-    }
+    let forward_regions_and_loops = run_bounded_fixpoint(2, || {
+        let exits_changed = crate::ir::label_prune::recover_forward_exit_regions(&mut owned);
+        let loops_changed = crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
+        exits_changed || loops_changed
+    });
     // Forward-region recovery can be the step that finally turns a linear
     // call/constant join into an ordinary two-arm assignment. Form the lazy
     // select now, then MOVE its effectful scratch value into an adjacent sole
@@ -381,5 +448,49 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::prune_void_fallthrough_return(&mut owned);
     }
-    owned
+    (
+        owned,
+        AstPreparationReport {
+            copies_and_constants,
+            forward_regions_and_loops,
+        },
+    )
+}
+
+#[cfg(test)]
+mod fixpoint_tests {
+    use super::{run_bounded_fixpoint, FixpointReport, FixpointTermination};
+
+    #[test]
+    fn bounded_fixpoint_records_quiescent_termination_and_firings() {
+        let mut remaining_changes: usize = 2;
+        let report = run_bounded_fixpoint(8, || {
+            let changed = remaining_changes != 0;
+            remaining_changes = remaining_changes.saturating_sub(1);
+            changed
+        });
+
+        assert_eq!(
+            report,
+            FixpointReport {
+                rounds: 3,
+                firing_rounds: 2,
+                termination: FixpointTermination::Quiescent,
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_fixpoint_records_that_the_safety_bound_fired() {
+        let report = run_bounded_fixpoint(3, || true);
+
+        assert_eq!(
+            report,
+            FixpointReport {
+                rounds: 3,
+                firing_rounds: 3,
+                termination: FixpointTermination::BoundReached,
+            }
+        );
+    }
 }

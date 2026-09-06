@@ -24,6 +24,18 @@ struct StageProfileEvent<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct FixpointProfileEvent<'a> {
+    schema: &'static str,
+    event: &'static str,
+    function: &'a str,
+    entry_va: String,
+    fixpoint: &'a str,
+    rounds: usize,
+    firing_rounds: usize,
+    termination: &'a str,
+}
+
+#[derive(Debug, Serialize)]
 struct RunProfileEvent<'a> {
     schema: &'static str,
     event: &'static str,
@@ -66,6 +78,28 @@ impl FunctionProfiler {
         };
         emit(&event);
         output
+    }
+
+    pub(crate) fn record_fixpoint(
+        &self,
+        fixpoint: &str,
+        rounds: usize,
+        firing_rounds: usize,
+        termination: &str,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        emit(&FixpointProfileEvent {
+            schema: SCHEMA,
+            event: "fixpoint",
+            function: &self.function,
+            entry_va: format!("{:#x}", self.entry_va),
+            fixpoint,
+            rounds,
+            firing_rounds,
+            termination,
+        });
     }
 }
 

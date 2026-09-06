@@ -52,8 +52,8 @@ def _validated_event(value: Any, line_number: int) -> JsonObject:
             f"line {line_number}: unsupported schema {value.get('schema')!r}"
         )
     event = value.get("event")
-    _non_negative_integer(value.get("duration_ns"), "duration_ns", line_number)
     if event == "stage":
+        _non_negative_integer(value.get("duration_ns"), "duration_ns", line_number)
         expected = {
             "schema",
             "event",
@@ -68,6 +68,7 @@ def _validated_event(value: Any, line_number: int) -> JsonObject:
         _non_empty_string(value.get("entry_va"), "entry_va", line_number)
         _non_empty_string(value.get("stage"), "stage", line_number)
     elif event == "run":
+        _non_negative_integer(value.get("duration_ns"), "duration_ns", line_number)
         expected = {
             "schema",
             "event",
@@ -81,6 +82,32 @@ def _validated_event(value: Any, line_number: int) -> JsonObject:
         _non_negative_integer(
             value.get("object_parse_count"), "object_parse_count", line_number
         )
+    elif event == "fixpoint":
+        expected = {
+            "schema",
+            "event",
+            "function",
+            "entry_va",
+            "fixpoint",
+            "rounds",
+            "firing_rounds",
+            "termination",
+        }
+        if set(value) != expected:
+            raise ProfileReportError(f"line {line_number}: invalid fixpoint fields")
+        _non_empty_string(value.get("function"), "function", line_number)
+        _non_empty_string(value.get("entry_va"), "entry_va", line_number)
+        _non_empty_string(value.get("fixpoint"), "fixpoint", line_number)
+        rounds = _non_negative_integer(value.get("rounds"), "rounds", line_number)
+        firing_rounds = _non_negative_integer(
+            value.get("firing_rounds"), "firing_rounds", line_number
+        )
+        if firing_rounds > rounds:
+            raise ProfileReportError(
+                f"line {line_number}: firing_rounds exceeds rounds"
+            )
+        if value.get("termination") not in {"quiescent", "bound_reached"}:
+            raise ProfileReportError(f"line {line_number}: invalid termination")
     else:
         raise ProfileReportError(f"line {line_number}: unsupported event {event!r}")
     return value
@@ -129,8 +156,19 @@ def build_report(events: Iterable[Mapping[str, Any]]) -> JsonObject:
                 "function": key[1],
                 "stage_event_count": 0,
                 "stage_duration_ns": {},
+                "fixpoints": [],
             },
         )
+        if event["event"] == "fixpoint":
+            function["fixpoints"].append(
+                {
+                    "fixpoint": event["fixpoint"],
+                    "rounds": event["rounds"],
+                    "firing_rounds": event["firing_rounds"],
+                    "termination": event["termination"],
+                }
+            )
+            continue
         function["stage_event_count"] += 1
         stages = function["stage_duration_ns"]
         stage = str(event["stage"])

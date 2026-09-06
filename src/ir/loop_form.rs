@@ -24,7 +24,8 @@ use crate::ir::types::{BinOp, CmpOp, VReg};
 /// checks exclude secondary entries and make the rewrite a representation
 /// change only: every body statement and the original latch condition remain
 /// in their original execution order.
-pub fn recover_linear_latched_do_whiles(function: &mut Function) {
+pub fn recover_linear_latched_do_whiles(function: &mut Function) -> bool {
+    let mut changed = false;
     loop {
         let mut labels = HashMap::new();
         let mut gotos = HashMap::new();
@@ -32,7 +33,9 @@ pub fn recover_linear_latched_do_whiles(function: &mut Function) {
         if !recover_one_linear_latch(&mut function.body, &labels, &gotos) {
             break;
         }
+        changed = true;
     }
+    changed
 }
 
 fn recover_one_linear_latch(

@@ -171,13 +171,14 @@ fn decbench_text_with_installed_environment(
         .keys()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    let mut prepared = profiler.measure("prepare_for_decbench", || {
-        let mut prepared = crate::ir::ast::prepare_for_decbench_with_output_and_protected_locals(
-            f,
-            output_kind,
-            &protected_locals,
-            calling_convention_pointer_width(cc),
-        );
+    let (mut prepared, fixpoints) = profiler.measure("prepare_for_decbench", || {
+        let (mut prepared, fixpoints) =
+            crate::ir::ast::prepare_for_decbench_with_output_and_protected_locals_and_report(
+                f,
+                output_kind,
+                &protected_locals,
+                calling_convention_pointer_width(cc),
+            );
         // Preparation deletes proof-dead caller-saved register zeroing from
         // hardened GCC epilogues.  Only at this point can the x86 frame owner
         // see the adjacent balanced x87 scrub and stack teardown as one exact
@@ -210,8 +211,20 @@ fn decbench_text_with_installed_environment(
         // the idempotent canary pass here so the earlier collapsed save cannot
         // leave that now-recognisable check reading an uninitialised C local.
         crate::ir::canary::collapse_canary_save(&mut prepared);
-        prepared
+        (prepared, fixpoints)
     });
+    profiler.record_fixpoint(
+        "copies_and_constants",
+        fixpoints.copies_and_constants.rounds,
+        fixpoints.copies_and_constants.firing_rounds,
+        fixpoints.copies_and_constants.termination.label(),
+    );
+    profiler.record_fixpoint(
+        "forward_regions_and_loops",
+        fixpoints.forward_regions_and_loops.rounds,
+        fixpoints.forward_regions_and_loops.firing_rounds,
+        fixpoints.forward_regions_and_loops.termination.label(),
+    );
     // From here to the verification boundary every semantic step is a NAMED pass.
     //
     // Naming is not cosmetic. `run_ast_passes` has always announced each of its
