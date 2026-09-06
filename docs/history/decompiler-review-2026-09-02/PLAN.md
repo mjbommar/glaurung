@@ -580,7 +580,12 @@ and make pass repetition/invalidation explicit.
   single-function requests, carrying rendered text, final AST health, exact
   completeness limits, provenance, and the pipeline fingerprint. `15d044eb`
   makes range/all/many construct the same request and result internally before
-  projecting their legacy adapter-specific shapes.
+  projecting their legacy adapter-specific shapes. `e9518094` begins the
+  required budget split with a fingerprinted `CalleeBudget`: its depth now
+  bounds both direct-callee and relocation-proven function-table contract
+  recovery through the shared pipeline instead of a hidden constant. CFG,
+  discovery, type, and size remain to be separated and enforced before this
+  production item can close.
 - [x] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
   `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
