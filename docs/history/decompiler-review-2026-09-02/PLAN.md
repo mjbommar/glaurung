@@ -39,9 +39,11 @@ public entry points still need to construct the request directly; the common
 per-function orchestrator is now shared from prepared LLIR through AST passes
 at `41bd90a6`, but discovery/context assembly and rendering remain adapter-owned.
 `5ea45dca` adds the result half for the single-function path with real health,
-completeness, provenance, and a versioned budget/pass fingerprint. Batch/range
-result migration, the pass manager, and the fixpoint driver remain open, so WP2
-is underway rather than complete. See
+completeness, provenance, and a versioned budget/pass fingerprint. `15d044eb`
+makes range, all, and many construct the same typed request and result internally
+before preserving their legacy Python return shapes. Context/rendering
+consolidation, the remaining budget classes, the pass manager, and the fixpoint
+driver remain open, so WP2 is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -569,8 +571,9 @@ and make pass repetition/invalidation explicit.
   differential caught range's synthetic one-block CFG and empty callee facts;
   `5a2d6c86` makes an exact discovered range reuse both authoritative inputs
   while preserving the explicit-window fallback. `41bd90a6` then makes every
-  adapter call the same LLIR-to-AST stage; request construction and the final
-  rendering/result adapter remain open.
+  adapter call the same LLIR-to-AST stage. `15d044eb` closes typed request/result
+  construction for range/all/many too; moving their context assembly and final
+  rendering behind one `decompile_function` remains open.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to

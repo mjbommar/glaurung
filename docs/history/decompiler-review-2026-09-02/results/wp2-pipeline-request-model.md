@@ -3,7 +3,7 @@
 Date: 2026-09-06
 
 Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
-`73a79d61`, `5ea45dca`
+`73a79d61`, `5ea45dca`, `15d044eb`
 
 ## Boundary moved
 
@@ -102,9 +102,16 @@ still project a string, but internally receive one `DecompileResult` carrying:
   presence.
 
 Unit tests prove that a budget change changes fingerprint identity and that
-completeness reports the exact fired limit. Range/all/many migration and a
-structured Python projection remain open, so this is not yet the complete WP2
-result surface.
+completeness reports the exact fired limit. A structured Python projection
+remains open, so this is not yet the complete public WP2 result surface.
+
+`15d044eb` completes the internal adapter migration: exact range, all, and many
+now construct the same `DecompileRequest`, including the shadow-v2 selector,
+and create `DecompileResult` from the final rendered AST before projecting their
+existing string/tuple APIs. Thus every path computes health, exact completeness,
+provenance, and the same versioned fingerprint. This does not yet centralize the
+context assembly or renderer itself; those remain the boundary required to turn
+the adapters into thin shells over one `decompile_function`.
 
 The expanded profile test initially exposed 21 constant object parses against
 the ceiling of 20. An exact parent/current A/B proved the result model added
@@ -146,3 +153,11 @@ without changing the ceiling.
   passed, zero failed, five ignored; every integration and documentation target
   passed. The identity-retrieval target reports 44 passed and ten ignored in
   524.99 seconds.
+- Fresh release extension plus entry-point equivalence, declaration, PDB,
+  session, determinism, pipeline-profile, and stripped-callee tests at
+  `15d044eb`: 37 passed.
+- Full `cargo test --features python-ext` at `15d044eb`: every enabled test
+  passed. The shared checkout contained 4,208 library tests at execution time,
+  including five concurrent-lane declarations outside this commit; five were
+  ignored. Identity retrieval reports 44 passed and ten ignored in 523.30
+  seconds, and every integration/documentation target passed.
