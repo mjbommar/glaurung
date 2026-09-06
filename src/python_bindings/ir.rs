@@ -59,7 +59,7 @@ use lift::{lift_bytes_py, lift_window_at_py};
 use pipeline::{
     lower_and_run_ast_passes, prepare_llir_for_lowering, readonly_data_for,
     recognise_machine_frame, target_calling_convention, AnalysisBudget, DecompileRequest,
-    PreparedAst, RenderOptions,
+    DecompileResult, PreparedAst, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -187,6 +187,7 @@ fn decompile_at_py(
             },
         },
     )
+    .map(|result| result.pseudocode)
 }
 
 fn decompile_at_session(
@@ -194,12 +195,13 @@ fn decompile_at_session(
     session: &crate::program::session::ProgramSession,
     path: &str,
     request: DecompileRequest<'_>,
-) -> PyResult<String> {
+) -> PyResult<DecompileResult> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
     use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
 
+    let pipeline_fingerprint = request.fingerprint();
     let DecompileRequest {
         va: func_va,
         analysis_budget,
@@ -456,6 +458,10 @@ fn decompile_at_session(
     // being rendered. See `analysis::completeness`.
     let incompleteness_note =
         crate::analysis::completeness::cfg_incompleteness_note(&func, &budgets);
+    let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
+    if analyst_names.is_some() || analyst_locals.is_some() || analyst_prototype.is_some() {
+        provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
+    }
     let text = if style == "decbench" {
         // DecBench wants concrete C types. Reuse the recovered TypeMap when it
         // was computed, else recover on demand, then remap raw-reg keys to the
@@ -520,6 +526,9 @@ fn decompile_at_session(
             ),
             (None, debug) => (debug_source, debug),
         };
+        if declared_render.is_some() && !provenance.contains(&declared_source.label()) {
+            provenance.push(declared_source.label());
+        }
         let declared_parameter_names =
             if declared_source == crate::program::environment::DeclarationSource::Analyst {
                 analyst_prototype.map(|prototype| prototype.parameter_names.as_slice())
@@ -584,9 +593,18 @@ fn decompile_at_session(
     } else {
         profiler.measure("render", || render(&f))
     };
-    Ok(match incompleteness_note {
+    let health = crate::ir::health::measure_with_cfg(&f, cfg_health);
+    let completeness = pipeline::DecompileCompleteness::from_function(&func);
+    let pseudocode = match incompleteness_note {
         Some(note) => format!("{note}\n{text}"),
         None => text,
+    };
+    Ok(DecompileResult {
+        pseudocode,
+        health,
+        completeness,
+        provenance,
+        pipeline_fingerprint,
     })
 }
 

@@ -173,7 +173,7 @@ impl PyDecompilerSession {
             }
         }
 
-        let artifact = decompile_at_session(
+        let result = decompile_at_session(
             py,
             &self.session,
             &self.path,
@@ -201,6 +201,7 @@ impl PyDecompilerSession {
                 },
             },
         )?;
+        let artifact = result.pseudocode;
         if cacheable {
             return Ok(self.rendered.install(key, artifact));
         }

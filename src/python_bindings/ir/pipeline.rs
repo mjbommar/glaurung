@@ -54,6 +54,67 @@ pub(super) struct DecompileRequest<'a> {
     pub(super) render_options: RenderOptions<'a>,
 }
 
+/// Increment whenever the enabled pass set or its semantic order changes.
+pub(super) const PIPELINE_PASS_VERSION: u32 = 1;
+
+/// Stable identity of the semantic pipeline configuration for one result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PipelineFingerprint {
+    pub(super) schema: &'static str,
+    pub(super) pass_version: u32,
+    pub(super) analysis_budget: AnalysisBudget,
+    pub(super) style: String,
+    pub(super) types: bool,
+    pub(super) debug_contracts: bool,
+    pub(super) analyst_overlay: bool,
+}
+
+impl DecompileRequest<'_> {
+    pub(super) fn fingerprint(&self) -> PipelineFingerprint {
+        PipelineFingerprint {
+            schema: "glaurung.decompile-pipeline/v1",
+            pass_version: PIPELINE_PASS_VERSION,
+            analysis_budget: self.analysis_budget,
+            style: self.render_options.style.to_string(),
+            types: self.render_options.types,
+            debug_contracts: !self.render_options.pdb_cache.is_empty()
+                || (self.render_options.style == "decbench" && self.render_options.types),
+            analyst_overlay: self.render_options.analyst_names.is_some()
+                || self.render_options.analyst_locals.is_some()
+                || self.render_options.analyst_prototype.is_some(),
+        }
+    }
+}
+
+/// Whether discovery proved the entire CFG requested for this result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DecompileCompleteness {
+    pub(super) complete: bool,
+    pub(super) fired_budgets: Vec<&'static str>,
+}
+
+impl DecompileCompleteness {
+    pub(super) fn from_function(function: &crate::core::function::Function) -> Self {
+        let fired_budgets = function.cfg_incomplete_budgets();
+        Self {
+            complete: fired_budgets.is_empty(),
+            fired_budgets,
+        }
+    }
+}
+
+/// Pipeline-owned output; Python adapters may project the pseudocode for the
+/// legacy string API without discarding the facts internally.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Legacy Python adapters project text until structured-result migration lands.
+pub(super) struct DecompileResult {
+    pub(super) pseudocode: String,
+    pub(super) health: crate::ir::health::AstHealth,
+    pub(super) completeness: DecompileCompleteness,
+    pub(super) provenance: Vec<&'static str>,
+    pub(super) pipeline_fingerprint: PipelineFingerprint,
+}
+
 /// Replace calls to the compiler's division runtime helpers with the arithmetic
 /// they perform (see [`crate::ir::soft_helpers`]).
 ///
@@ -797,7 +858,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 
 #[cfg(test)]
 mod request_tests {
-    use super::AnalysisBudget;
+    use super::{AnalysisBudget, DecompileCompleteness, DecompileRequest, RenderOptions};
 
     #[test]
     fn pipeline_budget_preserves_every_discovery_limit() {
@@ -816,5 +877,61 @@ mod request_tests {
         assert_eq!(discovery.max_instructions, 31);
         assert_eq!(discovery.timeout_ms, 37);
         assert_eq!(discovery.total_timeout_ms, 41);
+    }
+
+    #[test]
+    fn fingerprint_changes_with_budget_and_carries_the_pass_version() {
+        let options = RenderOptions {
+            types: true,
+            style: "decbench",
+            pdb_cache: "",
+            analyst_names: None,
+            analyst_locals: None,
+            analyst_prototype: None,
+        };
+        let first = DecompileRequest {
+            va: 0x1000,
+            analysis_budget: AnalysisBudget {
+                max_functions: 1,
+                max_blocks: 256,
+                max_instructions: 10_000,
+                timeout_ms: 500,
+                total_timeout_ms: 0,
+            },
+            render_options: options,
+        };
+        let mut second = first;
+        second.analysis_budget.max_blocks += 1;
+
+        let first = first.fingerprint();
+        let second = second.fingerprint();
+        assert_eq!(first.schema, "glaurung.decompile-pipeline/v1");
+        assert_eq!(first.pass_version, super::PIPELINE_PASS_VERSION);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn completeness_names_the_exact_budget_that_fired() {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::function::{Function, FunctionFlags, FunctionKind};
+
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let mut function = Function::new("f".into(), entry, FunctionKind::Normal).unwrap();
+        assert_eq!(
+            DecompileCompleteness::from_function(&function),
+            DecompileCompleteness {
+                complete: true,
+                fired_budgets: Vec::new(),
+            }
+        );
+
+        function.add_flag(FunctionFlags::CFG_BLOCK_LIMIT);
+        assert_eq!(
+            DecompileCompleteness::from_function(&function),
+            DecompileCompleteness {
+                complete: false,
+                fired_budgets: vec!["max_blocks"],
+            }
+        );
     }
 }
