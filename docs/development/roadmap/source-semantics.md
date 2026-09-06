@@ -897,8 +897,37 @@ through it needs symbolic memory, which is a real capability and not a
 loosened check. **This is now the largest single limit on phase 3, larger than
 the lowering's 403.**
 
-Roadmap items 2 and 3 built on this phase are not done: guard-duplication
-detection has its mechanism (a duplicated guard makes its negation infeasible,
-and there is a test for exactly that shape) but no reporting surface, and
-bounded property checking --- is there an input that overflows this index,
-divides by this zero --- is untouched. Neither is exposed to Python.
+### Item 2, guard duplication --- landed
+
+`redundant_guards` asks, for each decision `k` on a satisfiable path, whether
+`d(0) AND ... AND d(k-1) AND NOT d(k)` is unsatisfiable: is there any input
+that reaches this test and *fails* it. That is why it is a solver query rather
+than a syntactic one --- `x > 10` forces `x > 0`, and nothing about the two
+expressions is equal.
+
+Only satisfiable paths are examined, and that is not an optimisation.
+Implication is vacuous from a contradiction: behind an unsatisfiable prefix
+*every* later decision is "implied", so a naive version turns one infeasible
+path into a list of fake redundancy findings.
+`a_contradiction_does_not_manufacture_redundancy_findings` is the test.
+
+### The gate's tie-break --- landed, and it is the sharper probe
+
+The witness gate re-runs a model under our own interpreter, and `traps.md` says
+plainly that this is not enough: solver and emulator agreeing is two readings
+of *our* semantics. The gate names the third reading --- the machine code `gcc`
+produced from the same source --- and `witness_differential` now feeds **every
+input the solver chose** to the real binary:
+
+```
+WITNESS DIFFERENTIAL: 745 solver-chosen inputs;
+                      600 agreed with the gcc binary; 0 diverged
+```
+
+The remaining 145 are inconclusive, where one side did not finish; those are
+not disagreements and are not counted as agreement either.
+
+This is a **sharper** probe than the S4 differential's fixed vectors, and for a
+specific reason: the solver does not pick round numbers. It picks whatever
+satisfies a guard, which is disproportionately a boundary --- exactly where a
+lowering is wrong if it is wrong anywhere.

@@ -155,21 +155,44 @@ pub fn feasibility_of(text: &str, name: &str, bounds: &Bounds) -> Report {
     feasibility_of_lowered(&lowered, bounds)
 }
 
-/// [`feasibility_of`] on a function already lowered.
-pub fn feasibility_of_lowered(lowered: &LoweredFunction, bounds: &Bounds) -> Report {
-    let Some(io) = IoSpec::of_lowered(lowered) else {
-        return abstain(&lowered.name, Unknown::NoInputSpec);
-    };
+/// The symbolic run both questions start from.
+struct Explored {
+    sym: Symbolic,
+    exploration: crate::csource::equiv::explore::Exploration,
+    slots: Vec<(u32, InputSlot)>,
+    io: IoSpec,
+}
 
+/// Seed one fresh symbol per parameter and enumerate the function's paths.
+fn explored(lowered: &LoweredFunction, bounds: &Bounds) -> Option<Explored> {
+    let io = IoSpec::of_lowered(lowered)?;
     let mut sym = Symbolic::new();
     let (symbols, seeds) = seed_inputs(&mut sym, &io);
     let result_reg = crate::ir::types::VReg::phys(io.result_reg.clone());
     let (sym, exploration) = explore(&lowered.func, sym, &seeds, &result_reg, bounds);
-
-    let slots: Vec<(u32, InputSlot)> = symbols
+    let slots = symbols
         .into_iter()
         .map(|(id, slot)| (id, slot.clone()))
         .collect();
+    Some(Explored {
+        sym,
+        exploration,
+        slots,
+        io,
+    })
+}
+
+/// [`feasibility_of`] on a function already lowered.
+pub fn feasibility_of_lowered(lowered: &LoweredFunction, bounds: &Bounds) -> Report {
+    let Some(Explored {
+        sym,
+        exploration,
+        slots,
+        io,
+    }) = explored(lowered, bounds)
+    else {
+        return abstain(&lowered.name, Unknown::NoInputSpec);
+    };
 
     let mut paths = Vec::with_capacity(exploration.complete.len());
     for path in &exploration.complete {
@@ -182,7 +205,7 @@ pub fn feasibility_of_lowered(lowered: &LoweredFunction, bounds: &Bounds) -> Rep
     Report {
         name: lowered.name.clone(),
         paths,
-        cuts: exploration.cuts.clone(),
+        cuts: exploration.cuts,
         abstained: None,
     }
 }
@@ -268,6 +291,77 @@ fn takes_the_same_path(
     // is checked is that a path was reached at all under these inputs: a model
     // that sends the interpreter into a cut is not a witness.
     run.complete.len() == 1 && run.cuts.is_empty() && decisions > 0
+}
+
+/// A decision on a path that the decisions before it already force.
+///
+/// The structurer emits `if (x > 0) { ... if (x > 0) { ... } }` often enough
+/// that it has its own defect class, and the second test is *provably*
+/// redundant rather than textually equal --- `x > 10` then `x > 0`, or `x > 0`
+/// then `x >= 1`, are the same finding and no syntactic check sees either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redundancy {
+    /// Which enumerated path this was found on.
+    pub path: usize,
+    /// The index of the forced decision within that path's guard.
+    pub decision: usize,
+    /// How many earlier decisions were needed to force it.
+    pub implied_by: usize,
+}
+
+/// Decisions whose outcome earlier decisions on the same path already force.
+///
+/// # Why only feasible paths are examined
+///
+/// Implication is vacuous from a contradiction. If the decisions before index
+/// `k` are already unsatisfiable then *every* later decision is "implied", and
+/// reporting those would turn one infeasible path into a list of fake
+/// redundancy findings. So this runs on paths whose whole guard is satisfiable,
+/// which makes every prefix satisfiable too and costs one solver call per
+/// decision rather than two.
+///
+/// The query is the direct one: decision `k` is redundant exactly when
+/// `d(0) AND ... AND d(k-1) AND NOT d(k)` is unsatisfiable --- there is no
+/// input that reaches the test and fails it.
+pub fn redundant_guards(lowered: &LoweredFunction, bounds: &Bounds) -> Vec<Redundancy> {
+    let Some(Explored {
+        sym, exploration, ..
+    }) = explored(lowered, bounds)
+    else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (index, path) in exploration.complete.iter().enumerate() {
+        if path.guard.len() < 2 {
+            continue;
+        }
+        // The whole guard first: a path that cannot be taken has nothing to say
+        // about which of its tests are redundant.
+        if !matches!(solve(&sym.pool, &path.guard), SolveResult::Sat(_)) {
+            continue;
+        }
+        for k in 1..path.guard.len() {
+            let mut query: Vec<_> = path.guard[..k].to_vec();
+            let (value, bit) = path.guard[k];
+            query.push((value, !bit));
+            if matches!(solve(&sym.pool, &query), SolveResult::Unsat) {
+                found.push(Redundancy {
+                    path: index,
+                    decision: k,
+                    implied_by: k,
+                });
+            }
+        }
+    }
+    found
+}
+
+/// [`redundant_guards`] from source text.
+pub fn redundant_guards_of(text: &str, name: &str, bounds: &Bounds) -> Vec<Redundancy> {
+    match lower_named_function(text, name) {
+        Ok(f) => redundant_guards(&f, bounds),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -403,6 +497,71 @@ mod tests {
             "a verdict for every path and nothing else"
         );
     }
+    // -----------------------------------------------------------------------
+    // Guard duplication.
+    // -----------------------------------------------------------------------
+
+    fn redundancies(text: &str, name: &str) -> Vec<Redundancy> {
+        redundant_guards_of(text, name, &Bounds::default())
+    }
+
+    #[test]
+    fn a_literally_repeated_test_is_reported_as_forced() {
+        // The defect class the roadmap names: the structurer emits the same
+        // test twice on one path.
+        let found = redundancies(
+            "int f(int x) { if (x > 0) { if (x > 0) { return 1; } return 2; } return 3; }",
+            "f",
+        );
+        assert!(
+            !found.is_empty(),
+            "the inner `x > 0` is forced by the outer one"
+        );
+    }
+
+    #[test]
+    fn a_test_implied_without_being_equal_is_still_reported() {
+        // The reason this is a solver query and not a syntactic one: `x > 10`
+        // forces `x > 0`, and nothing about the two expressions is equal.
+        let found = redundancies(
+            "int f(int x) { if (x > 10) { if (x > 0) { return 1; } return 2; } return 3; }",
+            "f",
+        );
+        assert!(!found.is_empty(), "`x > 10` forces `x > 0`");
+    }
+
+    #[test]
+    fn independent_tests_are_not_reported() {
+        // The finding has to be rare enough to be worth reading. Two tests on
+        // different variables force nothing.
+        let found = redundancies(
+            "int f(int x, int y) { if (x > 0) { if (y > 0) { return 1; } return 2; } return 3; }",
+            "f",
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_contradiction_does_not_manufacture_redundancy_findings() {
+        // Implication is vacuous from a contradiction: on `x > 10 && x < 5`
+        // every later decision is "implied". Reporting those would turn one
+        // infeasible path into a list of fake findings, so only satisfiable
+        // paths are examined.
+        let found = redundancies(
+            "int f(int x) { if (x > 10) { if (x < 5) { if (x == 3) { return 1; } return 2; } } \
+             return 3; }",
+            "f",
+        );
+        for r in &found {
+            assert!(r.decision > 0);
+        }
+        // The `x == 3` test sits behind an unsatisfiable prefix and must not be
+        // reported as forced by it.
+        assert!(
+            found.len() <= 1,
+            "an unsatisfiable prefix produced findings: {found:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -488,5 +647,144 @@ mod corpus {
         assert!(decided_functions > 100, "corpus not found or not lowering");
         // Every path carries exactly one verdict, and a cut carries none.
         assert_eq!(total, feasible + infeasible + unknown);
+    }
+}
+
+#[cfg(test)]
+mod witness_differential {
+    //! The tie-break the phase 3 gate names, and the reason it is not optional.
+    //!
+    //! The witness gate inside [`super::decide`] re-runs a model under our own
+    //! interpreter, and `traps.md` is explicit that this is not enough: when
+    //! the solver and the emulator agree, that is **two readings of our own
+    //! semantics**. The tie-break is the third reading --- the machine code
+    //! `gcc` produced from the same source.
+    //!
+    //! So every input the *solver* chose is fed to the real binary, and the
+    //! lowering must agree with it there. This is a sharper probe than the S4
+    //! differential's fixed vectors precisely because the solver does not pick
+    //! round numbers: it picks whatever satisfies a guard, which is
+    //! disproportionately a boundary.
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::core::binary::Arch;
+    // Two `Verdict`s meet here: this module's, and the S4 differential's. The
+    // second is renamed rather than glob-imported, because a silent shadow is
+    // how `let Verdict::Feasible(..)` came to mean the wrong enum.
+    use crate::csource::lower::differential::{compare, Verdict as Cell};
+    use crate::csource::lower::lower_function;
+    use crate::csource::parse::parse;
+    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::types::LlirFunction;
+
+    fn fixtures_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures")
+    }
+
+    fn lift_all(data: &[u8]) -> BTreeMap<String, LlirFunction> {
+        let (funcs, _calls) = analyze_functions_bytes(
+            data,
+            &Budgets {
+                max_functions: 512,
+                max_blocks: 2048,
+                max_instructions: 200_000,
+                timeout_ms: 10_000,
+                total_timeout_ms: 0,
+            },
+        );
+        let mut out = BTreeMap::new();
+        for func in &funcs {
+            if func.name.is_empty() {
+                continue;
+            }
+            if let Ok(lifted) = lift_function_from_bytes(data, func, Arch::X86_64) {
+                out.insert(func.name.clone(), lifted);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_solver_chosen_witness_agrees_with_the_gcc_binary() {
+        let root = fixtures_root();
+        let (src, build) = (root.join("src"), root.join("build"));
+        if !src.is_dir() || !build.is_dir() {
+            crate::testing::missing_fixture("tests/decompiler_fixtures/build");
+            return;
+        }
+        let bounds = Bounds::default();
+        let mut sources: Vec<PathBuf> = std::fs::read_dir(&src)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "c"))
+            .collect();
+        sources.sort();
+
+        let (mut checked, mut agreed) = (0usize, 0usize);
+        let mut divergences: Vec<String> = Vec::new();
+
+        for path in sources {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let Ok(data) = std::fs::read(build.join(format!("{stem}-gcc-O0.so"))) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let tree = parse(&text).into_parts().0;
+            let lifted = lift_all(&data);
+
+            for def in tree.functions(&text) {
+                let Ok(lowered) = lower_function(&tree, &text, &def) else {
+                    continue;
+                };
+                // A pointer parameter has no argument this harness can supply
+                // that means the same thing in both address spaces --- the same
+                // limit the S4 differential records.
+                if lowered.params.iter().any(|p| p.ty.is_pointer()) {
+                    continue;
+                }
+                let Some(reference) = lifted.get(&lowered.name) else {
+                    continue;
+                };
+                let Some(width) = lowered.result_width() else {
+                    continue;
+                };
+                for verdict in feasibility_of_lowered(&lowered, &bounds).paths {
+                    let Verdict::Feasible(witness) = verdict.verdict else {
+                        continue;
+                    };
+                    checked += 1;
+                    match compare(&lowered, reference, &data, &witness.args, 200_000) {
+                        Cell::Match { .. } => agreed += 1,
+                        Cell::Diverged {
+                            lowered: a,
+                            lifted: b,
+                        } => divergences.push(format!(
+                            "{stem}:{} args={:x?} lowered={a:#x} lifted={b:#x}",
+                            lowered.name, witness.args
+                        )),
+                        // One side could not finish: not a disagreement.
+                        Cell::Inconclusive { .. } => {}
+                    }
+                    let _ = width;
+                }
+            }
+        }
+
+        eprintln!("WITNESS DIFFERENTIAL: {checked} solver-chosen inputs; {agreed} agreed with the gcc binary; {} diverged", divergences.len());
+        assert!(
+            checked > 50,
+            "the tie-break proved nothing: only {checked} witnesses reached the binary"
+        );
+        assert!(
+            divergences.is_empty(),
+            "solver-chosen inputs disagree with the binary gcc built: {divergences:#?}"
+        );
     }
 }
