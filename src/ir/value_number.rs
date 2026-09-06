@@ -579,7 +579,7 @@ mod tests {
         let numbered_use = ast
             .body
             .iter()
-            .find_map(|statement| match statement {
+            .find_map(|statement| match statement.semantic() {
                 crate::ir::ast::Stmt::Assign {
                     src: crate::ir::ast::Expr::Reg(value),
                     ..

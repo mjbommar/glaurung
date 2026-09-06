@@ -58,7 +58,8 @@ pub(crate) fn materialize_prototype_output(
 }
 
 fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign {
             dst: VReg::Phys(name),
             ..
@@ -129,7 +130,11 @@ pub(crate) fn clear_return_values(function: &mut Function) {
 /// distinction.  Only the outermost terminal statement is removed: returns in
 /// branches and loops still control execution and must remain explicit.
 pub(crate) fn prune_void_fallthrough_return(function: &mut Function) {
-    if matches!(function.body.last(), Some(Stmt::Return { value: None })) {
+    if function
+        .body
+        .last()
+        .is_some_and(|statement| matches!(statement.semantic(), Stmt::Return { value: None }))
+    {
         function.body.pop();
     }
 }
@@ -597,7 +602,8 @@ fn clear_body_return_values(body: &mut [Stmt]) {
 /// dead in a way that read as load-bearing.
 fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
     for statement in body {
-        let found = match statement {
+        let found = match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } if is_return_reg(dst) => Some(dst.clone()),
             Stmt::Call { dst: Some(dst), .. } if is_return_reg(dst) => Some(dst.clone()),
             Stmt::If {
@@ -623,7 +629,8 @@ fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
 
 fn apply_default_return(body: &mut [Stmt], return_register: &VReg) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value } if value.is_none() => {
                 *value = Some(Expr::Reg(return_register.clone()));
             }
@@ -665,7 +672,8 @@ fn find_written_float_result_reg(body: &[Stmt]) -> Option<VReg> {
         matches!(value, VReg::Phys(name) if is_fallback_result_register(name))
     }
     for statement in body {
-        let found = match statement {
+        let found = match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } if is_float_result_reg(dst) => Some(dst.clone()),
             Stmt::Call { dst: Some(dst), .. } if is_float_result_reg(dst) => Some(dst.clone()),
             Stmt::If {
@@ -778,6 +786,30 @@ mod tests {
                 value: Some(Expr::Reg(VReg::phys("xmm0"))),
             })
         );
+    }
+
+    #[test]
+    fn origin_wrapped_sse_result_materializes_into_origin_wrapped_return() {
+        let mut function = Function {
+            name: "negate_binary32".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0"),
+                    src: Expr::Const(1),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Return { value: None }.with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+            ],
+        };
+
+        materialize_direct_output(&mut function);
+
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Return { value: Some(Expr::Reg(returned)) }
+                if returned == &VReg::phys("xmm0")
+        ));
     }
 
     /// ...and it is a FALLBACK, not a peer. `xmm0` is also the first float

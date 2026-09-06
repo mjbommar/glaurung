@@ -1,7 +1,7 @@
 use super::refine_pointer_high_variables;
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
-use crate::ir::types::{BinOp, VReg};
+use crate::ir::types::{BinOp, CmpOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
@@ -38,6 +38,147 @@ fn exact_integer_value_width_survives_pointer_refinement() {
 
     assert_eq!(
         types.get(&VReg::phys("var0")),
+        Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        })
+    );
+}
+
+#[test]
+fn origin_wrapped_high_bit_constant_used_by_unsigned_widening_is_unsigned() {
+    let function = Function {
+        name: "divide_by_ten".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: VReg::phys("var12"),
+                src: Expr::Const(0xcccc_cccd),
+            }
+            .with_origins(OriginSet::one(0x1000)),
+            Stmt::Assign {
+                dst: VReg::phys("var20"),
+                src: Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(VReg::phys("var16"))),
+                    }),
+                    rhs: Box::new(Expr::Reg(VReg::phys("var12"))),
+                },
+            }
+            .with_origins(OriginSet::one(0x1004)),
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        VReg::phys("var12"),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+
+    refine_pointer_high_variables(&function, &mut types);
+
+    assert_eq!(
+        types.get(&VReg::phys("var12")),
+        Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        })
+    );
+}
+
+#[test]
+fn high_bit_constant_with_a_signed_use_stays_signed() {
+    let function = Function {
+        name: "signed_sentinel".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::Const(0xffff_ffff),
+            },
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(VReg::phys("var1"))),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(1)),
+                }],
+                else_body: None,
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        VReg::phys("var1"),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+
+    refine_pointer_high_variables(&function, &mut types);
+
+    assert_eq!(
+        types.get(&VReg::phys("var1")),
+        Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        })
+    );
+}
+
+#[test]
+fn high_bit_bound_compared_in_a_wide_signed_domain_is_unsigned() {
+    let function = Function {
+        name: "range_guard".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: VReg::phys("var24"),
+                src: Expr::Const(0x8000_0000),
+            }
+            .with_origins(OriginSet::one(0x2000)),
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Sle,
+                    lhs: Box::new(Expr::Reg(VReg::phys("var24"))),
+                    rhs: Box::new(Expr::Reg(VReg::phys("var22"))),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-2)),
+                }],
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x2004)),
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        VReg::phys("var24"),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+    types.upsert_public(
+        VReg::phys("var22"),
+        TypeHint::Int {
+            signed: true,
+            width: 8,
+        },
+    );
+
+    refine_pointer_high_variables(&function, &mut types);
+
+    assert_eq!(
+        types.get(&VReg::phys("var24")),
         Some(TypeHint::Int {
             signed: false,
             width: 4,

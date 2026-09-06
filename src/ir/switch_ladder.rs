@@ -1042,7 +1042,10 @@ fn goto_targets(body: &[Stmt]) -> std::collections::BTreeSet<u64> {
     let mut out = std::collections::BTreeSet::new();
     fn walk(body: &[Stmt], out: &mut std::collections::BTreeSet<u64>) {
         for s in body {
-            match s {
+            match s.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Goto { target } => {
                     out.insert(*target);
                 }
@@ -1084,9 +1087,10 @@ fn goto_targets(body: &[Stmt]) -> std::collections::BTreeSet<u64> {
 /// swallowed every `goto` into its default arm, and an orphan label left behind
 /// renders as a stray `L_11a9: ;`.
 fn prune_labels(body: &mut Vec<Stmt>, live: &std::collections::BTreeSet<u64>) {
-    body.retain(|s| !matches!(s, Stmt::Label(l) if !live.contains(l)));
+    body.retain(|s| !matches!(s.semantic(), Stmt::Label(l) if !live.contains(l)));
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -1115,6 +1119,7 @@ fn prune_labels(body: &mut Vec<Stmt>, live: &std::collections::BTreeSet<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types::VReg;
 
     fn reg(n: &str) -> Expr {
@@ -1146,6 +1151,33 @@ mod tests {
             dst: VReg::phys(dst),
             src: Expr::Const(k),
         }
+    }
+
+    #[test]
+    fn switch_cleanup_preserves_origin_wrapped_referenced_labels() {
+        let mut function = Function {
+            name: "wrapped_non_switch_goto".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: reg("condition"),
+                    then_body: vec![
+                        Stmt::Goto { target: 0x1200 }.with_origins(OriginSet::one(0x1100))
+                    ],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x10f8)),
+                Stmt::Label(0x1200).with_origins(OriginSet::one(0x1200)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1204)),
+            ],
+        };
+
+        recover_switches(&mut function);
+
+        assert!(function
+            .body
+            .iter()
+            .any(|statement| matches!(statement.semantic(), Stmt::Label(0x1200))));
     }
 
     /// gcc -O0's binary-search shape: `== k` alternating with a range prune, the

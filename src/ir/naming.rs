@@ -382,7 +382,8 @@ pub(crate) fn valid_authoritative_local_name(name: &str) -> bool {
 
 fn collect_direct_return_carriers(body: &[Stmt], out: &mut Vec<String>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return {
                 value: Some(Expr::Reg(VReg::Phys(name))),
             } => out.push(name.clone()),
@@ -947,6 +948,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn origin_wrapped_ssa_return_carrier_keeps_the_output_role() {
+        let mut function = Function {
+            name: "f".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("xmm0#7"),
+                    src: Expr::Const(42),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("xmm0#7"))),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            ],
+        };
+
+        apply_role_names(&mut function, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Assign { dst, .. } if dst == &reg("ret")
+        ));
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Return { value: Some(Expr::Reg(returned)) } if returned == &reg("ret")
+        ));
     }
 
     #[test]

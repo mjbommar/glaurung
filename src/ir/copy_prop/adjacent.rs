@@ -144,7 +144,7 @@ pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
 
 fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
-        let Some((destination, source)) = (match &body[index] {
+        let Some((destination, source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_scratch_reg(dst)
                     && !is_promoted_local_reg(dst)
@@ -159,11 +159,11 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
             continue;
         };
         let Some(consumer_index) = (index + 1..body.len())
-            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+            .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
             continue;
         };
-        let consumed = match &mut body[consumer_index] {
+        let consumed = match body[consumer_index].semantic_mut() {
             Stmt::Assign { src, .. } => {
                 if !matches!(&*src, Expr::Reg(register) if register == &destination) {
                     false
@@ -191,13 +191,18 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
             _ => false,
         };
         if consumed {
+            let origins = body[index].origins().cloned();
             body.remove(index);
+            if let Some(origins) = origins {
+                body[consumer_index - 1].merge_origins(&origins);
+            }
             return true;
         }
     }
 
     for statement in body {
-        let changed = match statement {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -235,7 +240,8 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
 
 fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     for statement in body.iter_mut() {
-        let changed = match statement {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -271,7 +277,7 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     }
 
     for index in 0..body.len().saturating_sub(1) {
-        let Some((destination, source)) = (match &body[index] {
+        let Some((destination, source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_scratch_reg(dst)
                     && !is_promoted_local_reg(dst)
@@ -287,14 +293,14 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
             continue;
         };
         let Some(next_index) = (index + 1..body.len())
-            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+            .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
             continue;
         };
         let Stmt::Assign {
             dst: overwritten,
             src: consumer,
-        } = &mut body[next_index]
+        } = body[next_index].semantic_mut()
         else {
             continue;
         };
@@ -302,7 +308,11 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
             continue;
         }
         subst(consumer, &Copies::single(destination.clone(), source));
+        let origins = body[index].origins().cloned();
         body.remove(index);
+        if let Some(origins) = origins {
+            body[next_index - 1].merge_origins(&origins);
+        }
         return true;
     }
     false
@@ -310,7 +320,8 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
 
 fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
     for statement in body.iter_mut() {
-        let changed = match statement {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -340,7 +351,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
     }
 
     for index in 0..body.len().saturating_sub(1) {
-        let Some((dst, source)) = (match &body[index] {
+        let Some((dst, source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_scratch_reg(dst)
                     && !is_promoted_local_reg(dst)
@@ -356,7 +367,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
             continue;
         };
         let Some(guard_index) = (index + 1..body.len())
-            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+            .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
             continue;
         };
@@ -364,7 +375,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
             cond,
             then_body,
             else_body,
-        } = &body[guard_index]
+        } = body[guard_index].semantic()
         else {
             continue;
         };
@@ -381,11 +392,15 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
             continue;
         }
 
-        let Stmt::If { cond, .. } = &mut body[guard_index] else {
+        let Stmt::If { cond, .. } = body[guard_index].semantic_mut() else {
             unreachable!()
         };
         subst(cond, &Copies::single(dst, source));
+        let origins = body[index].origins().cloned();
         body.remove(index);
+        if let Some(origins) = origins {
+            body[guard_index - 1].merge_origins(&origins);
+        }
         return true;
     }
     false
@@ -393,7 +408,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
 
 fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
-        let candidate = match &body[index] {
+        let candidate = match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_promoted_local_reg(dst)
                     && is_deferable_promoted_value(src)
@@ -427,7 +442,7 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
         };
 
         let Some(next_index) = (index + 1..body.len())
-            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+            .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
             continue;
         };
@@ -446,7 +461,7 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
             continue;
         }
 
-        let substituted = match &mut body[next_index] {
+        let substituted = match body[next_index].semantic_mut() {
             Stmt::Assign { src, .. } | Stmt::Store { src, .. } => {
                 let copies = Copies::single(dst, selected);
                 subst(src, &copies);
@@ -460,13 +475,18 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
             _ => false,
         };
         if substituted {
+            let origins = body[index].origins().cloned();
             body.remove(index);
+            if let Some(origins) = origins {
+                body[next_index - 1].merge_origins(&origins);
+            }
             return true;
         }
     }
 
     for statement in body {
-        let changed = match statement {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,

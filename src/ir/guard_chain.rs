@@ -467,6 +467,11 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
             let left = break_guard_condition(&body[index]);
             let right = break_guard_condition(&body[index + 1]);
             if let (Some(left), Some(right)) = (left, right) {
+                let origins = match (body[index].origins(), body[index + 1].origins()) {
+                    (Some(left), Some(right)) => Some(left.union(right)),
+                    (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+                    (None, None) => None,
+                };
                 body[index] = Stmt::If {
                     cond: Expr::Bin {
                         op: BinOp::LogicalOr,
@@ -475,13 +480,15 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
                     },
                     then_body: vec![Stmt::Break],
                     else_body: None,
-                };
+                }
+                .with_optional_origins(origins);
                 body.remove(index + 1);
                 return true;
             }
         }
 
-        let changed = match &mut body[index] {
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -516,11 +523,12 @@ fn break_guard_condition(statement: &Stmt) -> Option<Expr> {
         cond,
         then_body,
         else_body: None,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    matches!(then_body.as_slice(), [Stmt::Break]).then(|| cond.clone())
+    matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Break))
+        .then(|| cond.clone())
 }
 
 fn collapse_assignment_one(

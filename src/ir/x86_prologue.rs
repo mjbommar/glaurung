@@ -27,7 +27,7 @@
 //! [`crate::ir::stack_idiom`] pass that turns `push`/`rsp` pairs into
 //! `push %X;` and drops the trailing `rsp += N; return;`.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Run the pass over `f`'s body.
@@ -347,7 +347,7 @@ fn collapse_omit_frame_pointer_frame(body: &mut Vec<Stmt>) {
             addr,
             src: Expr::Reg(value),
             size,
-        } = &body[cursor + 1]
+        } = body[cursor + 1].semantic()
         else {
             break;
         };
@@ -374,7 +374,7 @@ fn collapse_omit_frame_pointer_frame(body: &mut Vec<Stmt>) {
     // recogniser below, not this omit-frame-pointer path.
     if cursor < body.len()
         && matches!(
-            &body[cursor],
+            body[cursor].semantic(),
             Stmt::Assign { dst, src: Expr::Reg(source) }
                 if is_rbp(dst) && is_rsp(source)
         )
@@ -434,20 +434,29 @@ fn collapse_omit_frame_pointer_frame(body: &mut Vec<Stmt>) {
         }
     }
 
+    let prologue_origins = origins_in_range(&candidate, start, cursor);
     candidate.drain(start..cursor);
     let frame_size: u64 = saves.iter().map(|save| u64::from(save.width)).sum();
     candidate.insert(
         start,
         Stmt::Comment(format!(
             "x86-64 prologue: save callee registers, frame {frame_size} bytes"
-        )),
+        ))
+        .with_optional_origins((!prologue_origins.is_empty()).then_some(prologue_origins)),
     );
     *body = candidate;
 }
 
 fn is_leading_frame_metadata(statement: &Stmt) -> bool {
-    matches!(statement, Stmt::Nop | Stmt::Label(_))
-        || matches!(statement, Stmt::Comment(text) if text.starts_with("frame:"))
+    matches!(statement.semantic(), Stmt::Nop | Stmt::Label(_))
+        || matches!(statement.semantic(), Stmt::Comment(text) if text.starts_with("frame:"))
+}
+
+fn origins_in_range(body: &[Stmt], start: usize, end: usize) -> OriginSet {
+    body[start..end]
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next))
 }
 
 fn base_name(name: &str) -> &str {
@@ -497,7 +506,7 @@ fn fixed_promoted_stack_address(expression: &Expr) -> Option<(VReg, i64, u16)> {
 
 fn is_rsp_add_width(statement: &Stmt, width: u8) -> bool {
     matches!(
-        statement,
+        statement.semantic(),
         Stmt::Assign {
             dst,
             src: Expr::Bin { op: BinOp::Add, lhs, rhs },
@@ -511,7 +520,7 @@ fn is_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(destination),
         src: Expr::Deref { addr, size },
-    } = statement
+    } = statement.semantic()
     else {
         return false;
     };
@@ -530,7 +539,7 @@ fn is_padding_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(destination),
         src: Expr::Deref { addr, size },
-    } = statement
+    } = statement.semantic()
     else {
         return false;
     };
@@ -586,7 +595,7 @@ fn contains_deref(expression: &Expr) -> bool {
 
 fn is_dead_machine_temporary(statement: &Stmt) -> bool {
     matches!(
-        statement,
+        statement.semantic(),
         Stmt::Assign {
             dst: VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. },
             src,
@@ -632,7 +641,10 @@ fn collapse_balanced_exit_bodies(
     let mut count = 0usize;
     let mut padding_restores = 0usize;
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::If {
                 then_body,
                 else_body,
@@ -681,14 +693,18 @@ fn collapse_balanced_exit_bodies(
     let returns: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter_map(|(index, statement)| matches!(statement, Stmt::Return { .. }).then_some(index))
+        .filter_map(|(index, statement)| {
+            matches!(statement.semantic(), Stmt::Return { .. }).then_some(index)
+        })
         .collect();
     for return_index in returns.into_iter().rev() {
         let (start, restored_padding) = balanced_exit_start(body, return_index, saves)?;
+        let epilogue_origins = origins_in_range(body, start, return_index);
         body.drain(start..return_index);
         body.insert(
             start,
-            Stmt::Comment("x86-64 epilogue: restore callee registers".to_string()),
+            Stmt::Comment("x86-64 epilogue: restore callee registers".to_string())
+                .with_optional_origins((!epilogue_origins.is_empty()).then_some(epilogue_origins)),
         );
         count += 1;
         padding_restores += restored_padding;
@@ -731,7 +747,10 @@ fn count_fixed_slot_reads(body: &[Stmt], save: &SavedSlot) -> usize {
         }
     }
     fn statement_reads(statement: &Stmt, save: &SavedSlot) -> usize {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Assign { src, .. } => expression_reads(src, save),
             Stmt::Store { addr, src, .. } => {
                 expression_reads(addr, save) + expression_reads(src, save)
@@ -829,7 +848,7 @@ fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
             lhs,
             rhs,
         },
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
@@ -850,7 +869,7 @@ fn rsp_add_width(stmt: &Stmt) -> Option<i64> {
             lhs,
             rhs,
         },
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
@@ -881,7 +900,7 @@ fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Opti
                 lhs,
                 rhs,
             },
-    } = predicate
+    } = predicate.semantic()
     else {
         return None;
     };
@@ -983,7 +1002,10 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
     // Returns can remain inside recovered branches/loops. Collapse those
     // lexical epilogues before handling this statement list itself.
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::If {
                 then_body,
                 else_body,
@@ -1013,7 +1035,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
     let return_positions: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter(|(_, s)| matches!(s, Stmt::Return { .. }))
+        .filter(|(_, s)| matches!(s.semantic(), Stmt::Return { .. }))
         .map(|(i, _)| i)
         .collect();
     for ret_idx in return_positions.into_iter().rev() {
@@ -1165,11 +1187,13 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         // This is common for -fomit-frame-pointer code where the only
         // epilogue work is tearing down the allocated frame.
         if ret_idx >= 1 && is_rsp_add(&body[ret_idx - 1]) {
+            let origins = body[ret_idx - 1].origins().cloned();
             body.remove(ret_idx - 1);
             ret_idx -= 1;
             body.insert(
                 ret_idx,
-                Stmt::Comment("x86-64 epilogue: tear down frame".to_string()),
+                Stmt::Comment("x86-64 epilogue: tear down frame".to_string())
+                    .with_optional_origins(origins),
             );
         }
     }
@@ -1177,7 +1201,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
 
 fn is_rsp_add(s: &Stmt) -> bool {
     matches!(
-        s,
+        s.semantic(),
         Stmt::Assign {
             dst,
             src: Expr::Bin { op: BinOp::Add, lhs, rhs },
@@ -1190,7 +1214,7 @@ fn is_rsp_add(s: &Stmt) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
 
     /// A load hidden behind a widening conversion is still a load.
     ///
@@ -1923,6 +1947,76 @@ mod tests {
     }
 
     #[test]
+    fn origin_wrapped_callee_save_frame_collapses_and_unions_origins() {
+        let slot = |offset: i64| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                object: reg("local_68"),
+                size: 16,
+            }),
+            rhs: Box::new(Expr::Const(offset)),
+        };
+        let wrap = |statement: Stmt, va| statement.with_origins(OriginSet::one(va));
+        let mut f = Function {
+            name: "wrapped_shared_exit".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Comment("frame: 16 bytes".into()),
+                wrap(sub_rsp(8), 0x1000),
+                wrap(
+                    Stmt::Store {
+                        addr: slot(8),
+                        src: Expr::Reg(reg("r12")),
+                        size: 8,
+                    },
+                    0x1004,
+                ),
+                wrap(sub_rsp(8), 0x1008),
+                wrap(
+                    Stmt::Store {
+                        addr: slot(0),
+                        src: Expr::Reg(reg("rax")),
+                        size: 8,
+                    },
+                    0x100c,
+                ),
+                wrap(rsp_add(8), 0x1010),
+                wrap(
+                    Stmt::Assign {
+                        dst: reg("r12#9"),
+                        src: Expr::Deref {
+                            addr: Box::new(slot(8)),
+                            size: 8,
+                        },
+                    },
+                    0x1014,
+                ),
+                wrap(rsp_add(8), 0x1018),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(matches!(
+            f.body[1].semantic(),
+            Stmt::Comment(text) if text.contains("save callee registers")
+        ));
+        assert_eq!(
+            f.body[1].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008, 0x100c]))
+        );
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Comment(text) if text.contains("epilogue")
+        ));
+        assert_eq!(
+            f.body[2].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014, 0x1018]))
+        );
+    }
+
+    #[test]
     fn promoted_stack_slot_epilogue_collapses_inside_a_branch() {
         let mut f = Function {
             name: "f".into(),
@@ -2131,6 +2225,27 @@ mod tests {
             &f.body[0],
             Stmt::Comment(s) if s.contains("tear down frame")
         ));
+    }
+
+    #[test]
+    fn origin_wrapped_fomit_frame_pointer_epilogue_collapses() {
+        let mut f = Function {
+            name: "wrapped_fomit".into(),
+            entry_va: 0x1000,
+            body: vec![
+                rsp_add(8).with_origins(OriginSet::one(0x1010)),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text) if text.contains("tear down frame")
+        ));
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1010)));
     }
 
     #[test]

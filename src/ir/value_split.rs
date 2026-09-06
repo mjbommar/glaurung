@@ -346,6 +346,7 @@ impl Splitter {
 
     fn walk_stmt(&self, s: &mut Stmt, state: &mut SplitState) {
         match s {
+            Stmt::Origin { stmt, .. } => self.walk_stmt(stmt, state),
             Stmt::If {
                 cond,
                 then_body,
@@ -428,10 +429,8 @@ impl Splitter {
                 let spill = self.spill_slot(s, state);
                 let scratch_definition = self.scratch_definition_slot(s, state);
 
-                match s.semantic_mut() {
-                    Stmt::Origin { .. } => {
-                        unreachable!("semantic statement cannot be an origin wrapper")
-                    }
+                match s {
+                    Stmt::Origin { .. } => unreachable!("origin wrapper handled above"),
                     Stmt::Assign { dst, src } => {
                         self.rename_expr(src, state);
                         if scratch_definition.is_some() {

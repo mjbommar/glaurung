@@ -219,7 +219,8 @@ fn fold_return_abi_extensions_body(
     signed_return: bool,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value: Some(value) } => {
                 let replacement = match value {
                     Expr::Cast {
@@ -281,7 +282,8 @@ fn first_return_value_ctype(
     skip_nulls: SkipNullReturns,
 ) -> Option<&'static str> {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value: Some(e) } => {
                 if skip_nulls == SkipNullReturns::Yes && matches!(e, Expr::Const(0)) {
                     continue;
@@ -400,6 +402,27 @@ mod tests {
     fn a_nonzero_literal_guard_still_decides_the_return_type() {
         let tm = type_map(&[("arg0", TypeHint::Pointer { pointee_width: 4 })]);
         let body = guarded(Expr::Const(-1), Expr::Reg(VReg::phys("arg0")));
+        assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
+    }
+
+    #[test]
+    fn origin_wrapped_return_keeps_its_expression_type() {
+        let tm = type_map(&[(
+            "ret",
+            TypeHint::Int {
+                signed: false,
+                width: 1,
+            },
+        )]);
+        let body = vec![Stmt::Return {
+            value: Some(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(VReg::phys("ret"))),
+            }),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1000))];
+
         assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
     }
 }

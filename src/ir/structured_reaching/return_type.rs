@@ -117,7 +117,7 @@ fn analyze_statement(
     if incoming == DefinitionClass::Unreachable {
         return incoming;
     }
-    match statement {
+    match statement.semantic() {
         Stmt::Assign {
             dst: VReg::Phys(name),
             src,
@@ -308,6 +308,23 @@ mod tests {
                 src: Expr::Const(-1),
             },
             returned_target(),
+        ];
+
+        assert_eq!(
+            returned_role_integer_fact(&function(body), "ret", &TypeMap::default()),
+            ReturnedIntegerFact::Proven(4)
+        );
+    }
+
+    #[test]
+    fn instruction_origins_are_transparent_to_return_reaching_definitions() {
+        let body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+            returned_target().with_origins(crate::ir::ast::OriginSet::one(0x1004)),
         ];
 
         assert_eq!(

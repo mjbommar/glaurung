@@ -497,7 +497,10 @@ fn collect_parameter_contract_observations(
     observations: &mut [std::collections::BTreeSet<String>],
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Call { target, args, .. } => {
                 let Expr::Named { name, .. } = target else {
                     continue;
@@ -845,7 +848,10 @@ pub fn integer_c_type_width(c_type: &str, pointer_width: u8) -> Option<u8> {
 
 fn refine_call_result_body(body: &[Stmt], types: &mut TypeMap) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Call {
                 dst: Some(dst),
                 call_spec: Some(call_spec),
@@ -902,7 +908,10 @@ pub fn apply_recovered_callee_prototypes(
 
 fn apply_recovered_body(body: &mut [Stmt], prototypes: &HashMap<u64, CallPrototype>) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Call {
                 target,
                 args,
@@ -985,7 +994,10 @@ fn direct_callee_from_spec(call_spec: &Option<CallSiteSpec>) -> Option<CallProto
 
 fn refine_body(body: &mut [Stmt], types: Option<&TypeMap>) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Call {
                 target,
                 args,
@@ -1036,7 +1048,10 @@ fn refine_body(body: &mut [Stmt], types: Option<&TypeMap>) {
 
 fn apply_body(body: &mut [Stmt]) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Call {
                 target,
                 args,
@@ -1102,7 +1117,7 @@ mod tests {
         libc_prototypes, lookup, opaque_pointer_typedef, refine_opaque_parameter_types_from_calls,
         standalone_c_type, CallPrototype, CallPrototypeAuthority,
     };
-    use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
     use crate::ir::call_args::CallConv;
     use crate::ir::types::{CallTarget, LlirBlock, LlirFunction, LlirInstr, Op};
     use crate::ir::types_recover::{TypeHint, TypeMap};
@@ -1639,6 +1654,26 @@ mod tests {
             rendered.contains("extern void free(void *);"),
             "the authoritative contract must be declared in standalone C: {rendered}"
         );
+    }
+
+    #[test]
+    fn origin_wrapped_void_call_drops_its_impossible_destination() {
+        let mut function = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                named_call("__stack_chk_fail", Vec::new(), Some(VReg::phys("rax#16")))
+                    .with_origins(OriginSet::one(0x1010)),
+            ],
+        };
+
+        apply_known_call_contracts(&mut function);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Call { dst: None, .. }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&OriginSet::one(0x1010)));
     }
 
     #[test]

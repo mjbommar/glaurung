@@ -506,7 +506,8 @@ fn entry_constant_slots(body: &[Stmt], arch: CallConv) -> Vec<bool> {
 /// other call site is reachable from it.
 fn every_call_returns_immediately(body: &[Stmt]) -> bool {
     fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -529,10 +530,13 @@ fn every_call_returns_immediately(body: &[Stmt]) -> bool {
         }
     }
     for (index, statement) in body.iter().enumerate() {
-        if matches!(statement, Stmt::Call { .. }) {
+        if matches!(statement.semantic(), Stmt::Call { .. }) {
             let mut returns = false;
             for following in &body[index + 1..] {
-                match following {
+                match following.semantic() {
+                    Stmt::Origin { .. } => {
+                        unreachable!("semantic statement cannot be an origin wrapper")
+                    }
                     Stmt::Return { .. } => {
                         returns = true;
                         break;
@@ -568,7 +572,8 @@ fn every_call_returns_immediately(body: &[Stmt]) -> bool {
 /// question is whether the slot is written ANYWHERE, so branch arms that cannot
 /// fall through still count.
 fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [bool]) {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => mark_slot_write(dst, arch, written),
         Stmt::Call { dst: Some(dst), .. } => mark_slot_write(dst, arch, written),
         Stmt::If {
@@ -664,7 +669,8 @@ fn fold_body_with_context(
         let (prefix, suffix) = body.split_at_mut(index);
         let s = &mut suffix[0];
         let nested = enclosing.with_blocked(running.clone(), reaching.clone());
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -750,7 +756,7 @@ fn fold_body_with_context(
         .iter()
         .enumerate()
         .filter_map(|(i, s)| {
-            if matches!(s, Stmt::Call { .. }) {
+            if matches!(s.semantic(), Stmt::Call { .. }) {
                 Some(i)
             } else {
                 None
@@ -818,7 +824,7 @@ fn loop_carried_arg_inputs(
         let Stmt::Assign {
             dst: VReg::Phys(dst),
             ..
-        } = statement
+        } = statement.semantic()
         else {
             continue;
         };
@@ -828,9 +834,9 @@ fn loop_carried_arg_inputs(
         if !dst.contains('#')
             || !loop_body[..update_index]
                 .iter()
-                .any(|candidate| matches!(candidate, Stmt::Call { .. }))
+                .any(|candidate| matches!(candidate.semantic(), Stmt::Call { .. }))
             || !prefix.iter().rev().any(|candidate| {
-                matches!(candidate, Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == dst)
+                matches!(candidate.semantic(), Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == dst)
             })
         {
             continue;
@@ -841,7 +847,8 @@ fn loop_carried_arg_inputs(
 }
 
 fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Call {
             target: Expr::Named { va, .. } | Expr::Addr(va),
             ..
@@ -871,7 +878,8 @@ fn table_call_target_vas(statement: &Stmt) -> Option<Vec<u64>> {
             _ => None,
         }
     }
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Call { target, .. } => entry_targets(target),
         _ => None,
     }
@@ -1097,7 +1105,8 @@ fn fold_one_recovered_layout_call_with_live_ins(
     let mut blocked_storage = vec![false; storage_slots];
     for statement in &body[..call_idx] {
         mark_arg_writes_in_stmt(statement, arch, &mut blocked_storage);
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 ..
@@ -1220,7 +1229,7 @@ pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
             lhs,
             rhs,
         },
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
@@ -1250,7 +1259,7 @@ pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Opt
             },
         src,
         size: 8,
-    } = &body[store_index]
+    } = body[store_index].semantic()
     else {
         return None;
     };
@@ -1272,7 +1281,8 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
     let mut cursor = call_index;
     while cursor > 0 {
         let index = cursor - 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store {
                 addr:
                     Expr::Lea {
@@ -1327,7 +1337,7 @@ fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
             lhs,
             rhs,
         },
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
@@ -1381,7 +1391,8 @@ pub(super) fn outgoing_stack_cleanup(
             cursor += 1;
             continue;
         }
-        match &body[cursor] {
+        match body[cursor].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 ..
@@ -1399,7 +1410,7 @@ fn lowered_stack_pop_width(body: &[Stmt], load_index: usize) -> Option<i64> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
         src: Expr::Deref { addr, size },
-    } = body.get(load_index)?
+    } = body.get(load_index)?.semantic()
     else {
         return None;
     };
@@ -1451,7 +1462,8 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
                 out.push(register.clone());
             }
         };
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => record(dst),
             Stmt::Call { dst: Some(dst), .. } => record(dst),
             Stmt::If {
@@ -1637,6 +1649,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn origin_wrapped_argument_setup_folds_into_origin_wrapped_call() {
+        let mut function = Function {
+            name: "wrapped_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                assign("rdi", 11).with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Const(11)]
+        ));
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("folded call retains setup and call origins")
+                .addresses(),
+            &[0x1000, 0x1004]
+        );
+    }
+
     /// An argument setup may only be folded into its call when nothing it reads
     /// changes in between. A coalesced phi web is one name with several
     /// definitions, so a loop that reads the carried value, computes the next
@@ -1732,6 +1771,43 @@ mod tests {
             "an unobstructed setup must still be spliced into the call: {:#?}",
             f.body
         );
+    }
+
+    #[test]
+    fn an_origin_wrapped_argument_setup_is_not_hoisted_across_a_wrapped_rewrite() {
+        let mut function = Function {
+            name: "recursive".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#10"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("r12#9"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: reg("r12#9"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("r12#9"))),
+                        rhs: Box::new(Expr::Const(2)),
+                    },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+                call_to("recursive").with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 3);
+        assert!(matches!(
+            function.body[2].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Reg(reg("rdi#10"))]
+        ));
     }
 
     #[test]
@@ -3347,6 +3423,58 @@ mod tests {
             Stmt::Call { args, .. }
                 if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
         ));
+    }
+
+    #[test]
+    fn origin_wrapped_sysv_push_and_cleanup_are_recognized() {
+        let adjust = |op, va| {
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(va))
+        };
+        let body = vec![
+            adjust(BinOp::Sub, 0x1000),
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    segment: None,
+                },
+                src: Expr::Const(7),
+                size: 8,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+            call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            Stmt::Assign {
+                dst: reg("scratch"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    }),
+                    size: 8,
+                },
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+            adjust(BinOp::Add, 0x1010),
+        ];
+
+        assert_eq!(
+            outgoing_sysv_stack_push(&body, 1),
+            Some((&Expr::Const(7), 8))
+        );
+        assert_eq!(outgoing_stack_cleanup(&body, 2, 8), Some(vec![3, 4]));
     }
 
     /// Six identical `push 0x2c(%esp)` instructions forward six DIFFERENT

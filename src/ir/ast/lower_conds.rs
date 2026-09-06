@@ -26,7 +26,7 @@
 //! `Expr` variant is a compile error rather than a silent permission.
 
 use super::lower_ops::lower_op_stmts;
-use super::{Expr, Stmt, WideArithmetic};
+use super::{Expr, OriginSet, Stmt, WideArithmetic};
 use crate::ir::types::{BinOp, CmpOp, LlirBlock, LlirFunction, LlirInstr, Op, UnOp, VReg};
 
 /// May the loop header's leftover statements be hoisted above the `while`?
@@ -280,7 +280,11 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
 pub(super) fn lower_block(b: &LlirBlock, lower_scalar_float: bool) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(b.instrs.len());
     for ins in &b.instrs {
-        out.extend(lower_op_stmts(&ins.op, lower_scalar_float));
+        out.extend(
+            lower_op_stmts(&ins.op, lower_scalar_float)
+                .into_iter()
+                .map(|statement| statement.with_origins(OriginSet::one(ins.va))),
+        );
     }
     hoist_inline_flag_conds(out)
 }
@@ -306,7 +310,7 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
     /// negated bare flag, or on `flag == 0`. Every other statement is pushed
     /// through untouched.
     fn may_hoist(stmt: &Stmt) -> bool {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign {
                 src: Expr::Select { cond, .. },
                 ..
@@ -335,9 +339,9 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
         return stmts;
     }
 
-    fn take_reaching_cmp(out: &mut Vec<Stmt>, flag: &VReg) -> Option<Expr> {
+    fn take_reaching_cmp(out: &mut Vec<Stmt>, flag: &VReg) -> Option<(Expr, OriginSet)> {
         for i in (0..out.len()).rev() {
-            match &out[i] {
+            match out[i].semantic() {
                 Stmt::Assign { dst, src } if dst == flag => {
                     if matches!(src, Expr::Cmp { .. }) {
                         let reads: usize = out[i + 1..]
@@ -351,10 +355,14 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                                 // value (GCC's `cmp; jb; ...; cmova` does). Clone
                                 // for the condition and let whole-function DCE
                                 // remove the definition only when no read remains.
-                                return Some(src.clone());
+                                return Some((
+                                    src.clone(),
+                                    out[i].origins().cloned().unwrap_or_default(),
+                                ));
                             }
-                            if let Stmt::Assign { src, .. } = out.remove(i) {
-                                return Some(src);
+                            let (removed, origins) = out.remove(i).into_semantic_with_origins();
+                            if let Stmt::Assign { src, .. } = removed {
+                                return Some((src, origins.unwrap_or_default()));
                             }
                         }
                     }
@@ -369,6 +377,7 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
 
     let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
     for stmt in stmts {
+        let (stmt, mut origins) = stmt.into_semantic_with_origins();
         let stmt = match stmt {
             Stmt::Assign {
                 dst,
@@ -388,8 +397,11 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                     let arm_reads = count_reg_uses_in_expr(&if_true, &flag)
                         + count_reg_uses_in_expr(&if_false, &flag);
                     if arm_reads == 0 {
-                        if let Some(cmp) = take_reaching_cmp(&mut out, &flag) {
+                        if let Some((cmp, contributing)) = take_reaching_cmp(&mut out, &flag) {
                             cond = Box::new(cmp);
+                            origins
+                                .get_or_insert_with(OriginSet::empty)
+                                .merge(&contributing);
                         }
                     }
                 }
@@ -421,14 +433,17 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
             } => match *src {
                 Expr::Reg(flag) => (Some(flag), true, then_body, else_body),
                 other => {
-                    out.push(Stmt::If {
-                        cond: Expr::Un {
-                            op: UnOp::Not,
-                            src: Box::new(other),
-                        },
-                        then_body,
-                        else_body,
-                    });
+                    out.push(
+                        Stmt::If {
+                            cond: Expr::Un {
+                                op: UnOp::Not,
+                                src: Box::new(other),
+                            },
+                            then_body,
+                            else_body,
+                        }
+                        .with_optional_origins(origins),
+                    );
                     continue;
                 }
             },
@@ -444,30 +459,38 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
             } if matches!(rhs.as_ref(), Expr::Const(0)) => match *lhs {
                 Expr::Reg(flag) => (Some(flag), true, then_body, else_body),
                 other => {
-                    out.push(Stmt::If {
-                        cond: Expr::Cmp {
-                            op: CmpOp::Eq,
-                            lhs: Box::new(other),
-                            rhs,
-                        },
-                        then_body,
-                        else_body,
-                    });
+                    out.push(
+                        Stmt::If {
+                            cond: Expr::Cmp {
+                                op: CmpOp::Eq,
+                                lhs: Box::new(other),
+                                rhs,
+                            },
+                            then_body,
+                            else_body,
+                        }
+                        .with_optional_origins(origins),
+                    );
                     continue;
                 }
             },
             stmt => {
-                out.push(stmt);
+                out.push(stmt.with_optional_origins(origins));
                 continue;
             }
         };
 
         let flag = flag.expect("Some by match above");
         let hoisted = take_reaching_cmp(&mut out, &flag);
+        if let Some((_, contributing)) = &hoisted {
+            origins
+                .get_or_insert_with(OriginSet::empty)
+                .merge(contributing);
+        }
 
         let cond_expr = match (hoisted, was_inverted) {
-            (Some(expr), true) => negate_cmp_expr(expr),
-            (Some(expr), false) => expr,
+            (Some((expr, _)), true) => negate_cmp_expr(expr),
+            (Some((expr, _)), false) => expr,
             (None, true) => Expr::Cmp {
                 op: CmpOp::Eq,
                 lhs: Box::new(Expr::Reg(flag)),
@@ -475,11 +498,14 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
             },
             (None, false) => Expr::Reg(flag),
         };
-        out.push(Stmt::If {
-            cond: cond_expr,
-            then_body,
-            else_body,
-        });
+        out.push(
+            Stmt::If {
+                cond: cond_expr,
+                then_body,
+                else_body,
+            }
+            .with_optional_origins(origins),
+        );
     }
     out
 }
@@ -546,15 +572,19 @@ pub(crate) fn negate_cmp_expr(expr: Expr) -> Expr {
 /// statement is a separate change). Recurses into the tail of trailing branches,
 /// because a rotated loop whose body ends in an `if` puts the jump inside it.
 pub(super) fn strip_back_edge(body: &mut Vec<Stmt>, header_va: u64) {
-    match body.last_mut() {
-        Some(Stmt::Goto { target }) if *target == header_va => {
+    let Some(last) = body.last_mut() else {
+        return;
+    };
+    match last.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+        Stmt::Goto { target } if *target == header_va => {
             body.pop();
         }
-        Some(Stmt::If {
+        Stmt::If {
             then_body,
             else_body,
             ..
-        }) => {
+        } => {
             strip_back_edge(then_body, header_va);
             if let Some(e) = else_body {
                 strip_back_edge(e, header_va);
@@ -596,7 +626,7 @@ pub(super) fn exit_is_taken_branch(lf: &LlirFunction, header: usize, exit: Optio
 pub(super) fn extract_cond_and_strip<'a>(
     block: &LlirBlock,
     mut stmts: Vec<Stmt>,
-) -> (Expr, Vec<Stmt>) {
+) -> (Expr, Vec<Stmt>, Option<OriginSet>) {
     if let Some(LlirInstr {
         op: Op::CondJump { cond, inverted, .. },
         ..
@@ -609,7 +639,8 @@ pub(super) fn extract_cond_and_strip<'a>(
         // block as structured), use that hoisted condition directly —
         // the trailing-Goto body has no semantics for the structurer
         // since we're rebuilding the whole If anyway.
-        if let Some(Stmt::If { cond, .. }) = stmts.last() {
+        let mut condition_origins = stmts.last().and_then(Stmt::origins).cloned();
+        if let Some(Stmt::If { cond, .. }) = stmts.last().map(Stmt::semantic) {
             // For a non-trivial cond (Cmp / negated form) the hoist
             // already accounted for `inverted`; just adopt it.
             if !matches!(cond, Expr::Reg(_))
@@ -623,7 +654,7 @@ pub(super) fn extract_cond_and_strip<'a>(
             {
                 let cond_expr = cond.clone();
                 stmts.pop();
-                return (cond_expr, stmts);
+                return (cond_expr, stmts, condition_origins);
             }
             // If the cond is still `!flag` (no Cmp was available to fold),
             // keep the negation and fall through to the lookup.
@@ -631,7 +662,7 @@ pub(super) fn extract_cond_and_strip<'a>(
                 if matches!(src.as_ref(), Expr::Cmp { .. }) {
                     let cond_expr = cond.clone();
                     stmts.pop();
-                    return (cond_expr, stmts);
+                    return (cond_expr, stmts, condition_origins);
                 }
             }
             stmts.pop();
@@ -641,7 +672,7 @@ pub(super) fn extract_cond_and_strip<'a>(
         // the body for the most recent assignment to that flag; if its RHS
         // is an Expr::Cmp, we pull it out and use it as the condition.
         for i in (0..stmts.len()).rev() {
-            if let Stmt::Assign { dst, src } = &stmts[i] {
+            if let Stmt::Assign { dst, src } = stmts[i].semantic() {
                 if dst == cond {
                     if matches!(src, Expr::Cmp { .. }) {
                         // Ensure the flag isn't also read elsewhere in the
@@ -654,9 +685,15 @@ pub(super) fn extract_cond_and_strip<'a>(
                             .map(|(_, s)| count_reg_uses_in_stmt(s, cond))
                             .sum::<usize>();
                         if usages == 0 && moving_condition_to_end_is_safe(src, &stmts[i + 1..]) {
-                            if let Stmt::Assign { src, .. } = stmts.remove(i) {
+                            let (removed, origins) = stmts.remove(i).into_semantic_with_origins();
+                            if let Stmt::Assign { src, .. } = removed {
+                                if let Some(origins) = origins {
+                                    condition_origins
+                                        .get_or_insert_with(OriginSet::empty)
+                                        .merge(&origins);
+                                }
                                 let cond_expr = if inverted { negate_cmp_expr(src) } else { src };
-                                return (cond_expr, stmts);
+                                return (cond_expr, stmts, condition_origins);
                             }
                         }
                     }
@@ -673,10 +710,10 @@ pub(super) fn extract_cond_and_strip<'a>(
         } else {
             Expr::Reg(cond.clone())
         };
-        return (fallback, stmts);
+        return (fallback, stmts, condition_origins);
     }
     // Fallback — no CondJump, synthesise a generic truthy condition.
-    (Expr::Const(1), stmts)
+    (Expr::Const(1), stmts, None)
 }
 
 fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
@@ -986,7 +1023,51 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::ir::ast::{Expr, Stmt};
-    use crate::ir::types::VReg;
+    use crate::ir::types::{LlirBlock, LlirInstr, Op, VReg, Value};
+
+    #[test]
+    fn lowering_attributes_every_statement_to_its_machine_instruction() {
+        let block = LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1008,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x1000,
+                    op: Op::Nop,
+                },
+                LlirInstr {
+                    va: 0x1004,
+                    op: Op::Assign {
+                        dst: VReg::phys("eax"),
+                        src: Value::Const(7),
+                    },
+                },
+            ],
+            succs: Vec::new(),
+        };
+
+        let statements = super::lower_block(&block, false);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[0].origins().expect("nop origin").addresses(),
+            &[0x1000]
+        );
+        assert_eq!(
+            statements[1]
+                .origins()
+                .expect("assignment origin")
+                .addresses(),
+            &[0x1004]
+        );
+        assert!(matches!(statements[0].semantic(), Stmt::Nop));
+        assert!(matches!(
+            statements[1].semantic(),
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src: Expr::Const(7)
+            } if name == "eax"
+        ));
+    }
 
     /// The old rule was UNSOUND, and this is the counterexample.
     ///

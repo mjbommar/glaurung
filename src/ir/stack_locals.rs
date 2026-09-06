@@ -338,7 +338,7 @@ fn arm_frame_register(body: &[Stmt], cc: Option<CallConv>) -> Option<&'static st
         let Stmt::Assign {
             dst: VReg::Phys(dst),
             src,
-        } = statement
+        } = statement.semantic()
         else {
             return None;
         };
@@ -384,7 +384,7 @@ fn frame_pointer_assignment(body: &[Stmt]) -> Option<bool> {
         let Stmt::Assign {
             dst: VReg::Phys(dst),
             src,
-        } = statement
+        } = statement.semantic()
         else {
             continue;
         };
@@ -881,7 +881,7 @@ mod overlap_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
 
     /// EPIC 3 prerequisite: the promoted-local name must be joinable back to the
     /// frame coordinate it was minted from.
@@ -2358,6 +2358,69 @@ mod tests {
             } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
                 if matches!(lhs.as_ref(), Expr::StackAddr { size: 40, .. }))
         ));
+    }
+
+    #[test]
+    fn origin_wrapped_stack_alias_still_promotes_an_indexed_object() {
+        let holder = reg("r8#1");
+        let mut f = Function {
+            name: "graph_bfs_shape".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(104)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: holder.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(64)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1004)),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rax#9")),
+                            index: Some(holder),
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 1,
+                    },
+                }
+                .with_origins(OriginSet::one(0x1008)),
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            f.body[1].semantic(),
+            Stmt::Assign {
+                src: Expr::StackAddr { size: 40, .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 1 },
+                ..
+            } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { size: 40, .. }))
+        ));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1004)));
+        assert_eq!(f.body[2].origins(), Some(&OriginSet::one(0x1008)));
     }
 
     #[test]

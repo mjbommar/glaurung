@@ -97,7 +97,10 @@ pub fn prune_overwritten_flags(f: &mut Function) {
     fn prune(body: &mut Vec<Stmt>) {
         // Recurse first so nested lists are handled independently.
         for st in body.iter_mut() {
-            match st {
+            match st.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -145,7 +148,10 @@ pub fn prune_overwritten_flags(f: &mut Function) {
         let mut pending: std::collections::HashMap<VReg, usize> = std::collections::HashMap::new();
         let mut reads: Vec<VReg> = Vec::new();
         for j in 0..body.len() {
-            match &body[j] {
+            match body[j].semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 // Anything with flow we do not model, or a nested reader: give up.
                 Stmt::Label(_)
                 | Stmt::Goto { .. }
@@ -237,7 +243,10 @@ fn prune_dead_unversioned_flags(f: &mut Function) {
         let mut live = live_out.clone();
         let mut drop_at = vec![false; body.len()];
         for index in (0..body.len()).rev() {
-            match &mut body[index] {
+            match body[index].semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } if matches!(dst, VReg::Flag(_)) => {
                     if !live.contains(dst) {
                         drop_at[index] = true;
@@ -312,7 +321,10 @@ pub fn prune_dead_flags(f: &mut Function) {
 
     fn collect_flag_defs(body: &[Stmt], out: &mut std::collections::BTreeSet<VReg>) {
         for stmt in body {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, .. }
                     if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. }) =>
                 {
@@ -353,7 +365,10 @@ pub fn prune_dead_flags(f: &mut Function) {
 
     fn retain_live(body: &mut Vec<Stmt>, live: &std::collections::BTreeSet<VReg>) {
         for stmt in body.iter_mut() {
-            match stmt {
+            match stmt.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -369,7 +384,7 @@ pub fn prune_dead_flags(f: &mut Function) {
                     init, step, body, ..
                 } => {
                     if matches!(
-                        init.as_ref(),
+                        init.as_ref().semantic(),
                         Stmt::Assign { dst, src }
                             if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
                                 && !live.contains(dst)
@@ -379,7 +394,7 @@ pub fn prune_dead_flags(f: &mut Function) {
                     }
                     retain_live(body, live);
                     if matches!(
-                        step.as_ref(),
+                        step.as_ref().semantic(),
                         Stmt::Assign { dst, src }
                             if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
                                 && !live.contains(dst)
@@ -401,7 +416,7 @@ pub fn prune_dead_flags(f: &mut Function) {
         }
         body.retain(|stmt| {
             !matches!(
-                stmt,
+                stmt.semantic(),
                 Stmt::Assign { dst, src }
                     if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
                         && !live.contains(dst)

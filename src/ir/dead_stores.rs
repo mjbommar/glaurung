@@ -85,7 +85,10 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
 
     fn prune(body: &mut Vec<Stmt>) {
         for statement in body.iter_mut() {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -482,7 +485,10 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
             if !recursive {
                 continue;
             }
-            match statement {
+            match statement.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -529,7 +535,10 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
     // it is still addressed. Both render identically as `stack_2 = rbp;`, so
     // matching only one silently left half the spills in place.
     let spilled_slot = |stmt: &Stmt| -> Option<VReg> {
-        match stmt {
+        match stmt.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
@@ -559,7 +568,10 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
     // That is the whole callee-save idiom: save at entry, restore at exit,
     // never observe it in between.
     let restore_of = |stmt: &Stmt, slot: &VReg| -> Option<VReg> {
-        match stmt {
+        match stmt.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(src),
@@ -637,7 +649,10 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
         ) {
             if recursive {
                 for statement in body.iter_mut() {
-                    match statement {
+                    match statement.semantic_mut() {
+                        Stmt::Origin { .. } => {
+                            unreachable!("semantic statement cannot be an origin wrapper")
+                        }
                         Stmt::If {
                             then_body,
                             else_body,
@@ -655,11 +670,11 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
                             init, step, body, ..
                         } => {
                             if removable(init.as_ref(), doomed_slots, spilled_slot, restore_of) {
-                                **init = Stmt::Nop;
+                                *init.semantic_mut() = Stmt::Nop;
                             }
                             prune_body(body, true, doomed_slots, spilled_slot, restore_of);
                             if removable(step.as_ref(), doomed_slots, spilled_slot, restore_of) {
-                                **step = Stmt::Nop;
+                                *step.semantic_mut() = Stmt::Nop;
                             }
                         }
                         Stmt::Switch { cases, default, .. } => {
@@ -1143,7 +1158,7 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -1808,6 +1823,38 @@ mod tests {
                     dst: reg("r15#5"),
                     src: Expr::Reg(reg("local_8")),
                 },
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(7))
+            }]
+        );
+    }
+
+    #[test]
+    fn origin_wrapped_x86_callee_save_and_restore_are_removed() {
+        let mut f = Function {
+            name: "wrapped_stack_clash_frame".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Reg(reg("r12")),
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: reg("r12#9"),
+                    src: Expr::Reg(reg("local_8")),
+                }
+                .with_origins(OriginSet::one(0x1010)),
                 Stmt::Return {
                     value: Some(Expr::Const(7)),
                 },

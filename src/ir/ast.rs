@@ -669,6 +669,48 @@ impl Stmt {
             statement => statement,
         }
     }
+
+    /// Consume a statement into its semantic node and optional provenance.
+    ///
+    /// This is the ownership-preserving counterpart of [`Self::semantic`]: a
+    /// pass that rebuilds a whole statement can transform the semantic node
+    /// and then restore the returned origins with [`Self::with_optional_origins`].
+    pub fn into_semantic_with_origins(self) -> (Self, Option<OriginSet>) {
+        match self {
+            Self::Origin { origins, stmt } => {
+                let (statement, nested) = stmt.into_semantic_with_origins();
+                let origins = nested.map_or(origins.clone(), |other| origins.union(&other));
+                (statement, Some(origins))
+            }
+            statement => (statement, None),
+        }
+    }
+
+    /// Restore optional provenance after an ownership-taking rewrite.
+    pub fn with_optional_origins(self, origins: Option<OriginSet>) -> Self {
+        match origins {
+            Some(origins) => self.with_origins(origins),
+            None => self,
+        }
+    }
+
+    /// Union provenance into this statement without exposing or nesting its
+    /// carrier. This is used when a rewrite consumes one statement into
+    /// another, such as expression reconstruction.
+    pub fn merge_origins(&mut self, origins: &OriginSet) {
+        if origins.is_empty() {
+            return;
+        }
+        match self {
+            Self::Origin {
+                origins: existing, ..
+            } => existing.merge(origins),
+            _ => {
+                let statement = std::mem::replace(self, Self::Nop);
+                *self = statement.with_origins(origins.clone());
+            }
+        }
+    }
 }
 
 /// Find switch cases whose entire body is a jump into a labelled suffix owned
@@ -2530,13 +2572,13 @@ function f @ 0x1000 {
             !lowered
                 .body
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Goto { target: 0x1010 })),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::Goto { target: 0x1010 })),
             "a jump to the next emitted region is redundant: {:#?}",
             lowered.body
         );
         assert!(
             lowered.body.iter().any(|stmt| {
-                matches!(stmt, Stmt::Assign { dst, .. } if *dst == VReg::phys("outer_index"))
+                matches!(stmt.semantic(), Stmt::Assign { dst, .. } if *dst == VReg::phys("outer_index"))
             }),
             "the following region's body must remain reachable: {:#?}",
             lowered.body
@@ -2587,7 +2629,7 @@ function f @ 0x1000 {
         let latch = lowered.body.windows(2).any(|pair| {
             matches!(pair[0], Stmt::Label(0x1030))
                 && matches!(
-                    &pair[1],
+                    pair[1].semantic(),
                     Stmt::Assign { dst, .. } if *dst == VReg::phys("index")
                 )
         });
@@ -2648,7 +2690,10 @@ function f @ 0x1000 {
             default,
         }) = body
             .iter()
-            .find(|statement| matches!(statement, Stmt::Switch { .. }))
+            .find_map(|statement| match statement.semantic() {
+                switch @ Stmt::Switch { .. } => Some(switch),
+                _ => None,
+            })
         else {
             panic!("expected typed switch inside raw loop: {body:#?}");
         };
@@ -2663,8 +2708,8 @@ function f @ 0x1000 {
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1020 }]));
         let latch_has_continue = body.iter().any(|statement| {
             matches!(
-                statement,
-                Stmt::If { then_body, .. } if then_body.iter().any(|inner| matches!(inner, Stmt::Continue))
+                statement.semantic(),
+                Stmt::If { then_body, .. } if then_body.iter().any(|inner| matches!(inner.semantic(), Stmt::Continue))
             )
         });
         assert!(
@@ -2674,13 +2719,13 @@ function f @ 0x1000 {
         assert!(
             !body
                 .iter()
-                .any(|statement| matches!(statement, Stmt::Goto { target } if *target == 0x1000)),
+                .any(|statement| matches!(statement.semantic(), Stmt::Goto { target } if *target == 0x1000)),
             "no explicit raw-loop header goto may survive: {body:#?}"
         );
         assert!(
             !body
                 .iter()
-                .any(|statement| matches!(statement, Stmt::IndirectGoto { .. })),
+                .any(|statement| matches!(statement.semantic(), Stmt::IndirectGoto { .. })),
             "the switch replaces the computed machine transfer: {body:#?}"
         );
     }
@@ -2773,9 +2818,12 @@ function f @ 0x1000 {
         else {
             panic!("expected raw while loop: {:#?}", lowered.body);
         };
-        let Some(Stmt::Switch { cases, default, .. }) = body
-            .iter()
-            .find(|statement| matches!(statement, Stmt::Switch { .. }))
+        let Some(Stmt::Switch { cases, default, .. }) =
+            body.iter()
+                .find_map(|statement| match statement.semantic() {
+                    switch @ Stmt::Switch { .. } => Some(switch),
+                    _ => None,
+                })
         else {
             panic!("expected typed switch inside raw loop: {body:#?}");
         };
@@ -2786,7 +2834,7 @@ function f @ 0x1000 {
             cases[1]
                 .1
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::If { .. })),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::If { .. })),
             "the private branch must remain inside the case body: {:#?}",
             cases[1].1
         );
@@ -2795,13 +2843,19 @@ function f @ 0x1000 {
                 cases[1]
                     .1
                     .iter()
-                    .any(|stmt| matches!(stmt, Stmt::Label(label) if *label == target)),
+                    .any(|stmt| matches!(stmt.semantic(), Stmt::Label(label) if *label == target)),
                 "private branch target {target:#x} must be defined inside its case: {:#?}",
                 cases[1].1
             );
         }
-        assert!(cases[1].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
-        assert!(cases[2].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
+        assert!(cases[1]
+            .1
+            .iter()
+            .any(|stmt| matches!(stmt.semantic(), Stmt::Continue)));
+        assert!(cases[2]
+            .1
+            .iter()
+            .any(|stmt| matches!(stmt.semantic(), Stmt::Continue)));
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
         assert!(
             !body
@@ -2857,14 +2911,14 @@ function f @ 0x1000 {
         };
 
         let lowered = lower(&lf, &region, "latch_target");
-        let Stmt::DoWhile { body, .. } = &lowered.body[0] else {
+        let Stmt::DoWhile { body, .. } = lowered.body[0].semantic() else {
             panic!("expected do-while: {:#?}", lowered.body);
         };
         let label = body
             .iter()
-            .position(|statement| matches!(statement, Stmt::Label(0x1010)));
+            .position(|statement| matches!(statement.semantic(), Stmt::Label(0x1010)));
         let latch = body.iter().position(
-            |statement| matches!(statement, Stmt::Assign { dst, .. } if *dst == VReg::phys("latch_value")),
+            |statement| matches!(statement.semantic(), Stmt::Assign { dst, .. } if *dst == VReg::phys("latch_value")),
         );
 
         assert_eq!(
@@ -2876,7 +2930,7 @@ function f @ 0x1000 {
                 .body
                 .iter()
                 .skip(1)
-                .any(|statement| matches!(statement, Stmt::Label(0x1010))),
+                .any(|statement| matches!(statement.semantic(), Stmt::Label(0x1010))),
             "the latch target escaped the loop: {:#?}",
             lowered.body
         );
@@ -2968,13 +3022,13 @@ function f @ 0x1000 {
         ]);
 
         let lowered = lower(&lf, &region, "switch_join");
-        let Some(Stmt::Switch { cases, .. }) = lowered.body.first() else {
+        let Some(Stmt::Switch { cases, .. }) = lowered.body.first().map(Stmt::semantic) else {
             panic!("expected switch first: {:#?}", lowered.body)
         };
         assert!(
             cases.iter().all(|(_, body)| !body
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Goto { target: 0x1040 }))),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::Goto { target: 0x1040 }))),
             "case-to-join edges must fall through: {:#?}",
             lowered.body
         );
@@ -2982,7 +3036,7 @@ function f @ 0x1000 {
             lowered
                 .body
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Return { .. })),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::Return { .. })),
             "the shared return must remain after the switch: {:#?}",
             lowered.body
         );
@@ -3013,6 +3067,34 @@ function f @ 0x1000 {
             "a nested clone must not own the shared label: {body:#?}"
         );
         assert!(matches!(body[1], Stmt::Label(0x2000)));
+    }
+
+    #[test]
+    fn duplicate_origin_wrapped_labels_keep_the_shallow_destination() {
+        let mut body = vec![
+            Stmt::Switch {
+                discriminant: Expr::Reg(VReg::phys("state")),
+                cases: vec![(
+                    Some(0),
+                    vec![Stmt::Label(0x2000).with_origins(OriginSet::one(0x2000))],
+                )],
+                default: None,
+            }
+            .with_origins(OriginSet::one(0x1000)),
+            Stmt::Label(0x2000).with_origins(OriginSet::one(0x2000)),
+            Stmt::Return { value: None }.with_origins(OriginSet::one(0x2004)),
+        ];
+
+        deduplicate_labels(&mut body);
+
+        let Stmt::Switch { cases, .. } = body[0].semantic() else {
+            panic!("expected switch")
+        };
+        assert!(!cases[0]
+            .1
+            .iter()
+            .any(|statement| matches!(statement.semantic(), Stmt::Label(0x2000))));
+        assert!(matches!(body[1].semantic(), Stmt::Label(0x2000)));
     }
 
     #[test]
@@ -3240,14 +3322,14 @@ function f @ 0x1000 {
 
         assert!(
             matches!(
-                lowered.first(),
+                lowered.first().map(Stmt::semantic),
                 Some(Stmt::Assign { dst, .. }) if dst == &cf
             ),
             "hoisting the branch consumed a predicate still read later: {lowered:#?}"
         );
         assert!(
             matches!(
-                lowered.get(1),
+                lowered.get(1).map(Stmt::semantic),
                 Some(Stmt::If {
                     cond: Expr::Cmp { op: CmpOp::Ult, .. },
                     ..
@@ -5343,6 +5425,39 @@ function f @ 0x1000 {
         assert!(
             text.contains("float square(void)"),
             "a bare machine return overrode the recovered prototype:\n{text}"
+        );
+    }
+
+    #[test]
+    fn origin_wrapped_scalar_return_overrides_a_stale_pointer_hint() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "wrapped_integer_return".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(-1),
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                }
+                .with_origins(OriginSet::one(0x1004)),
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("ret"), TypeHint::Pointer { pointee_width: 1 });
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&VReg::phys("ret")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
         );
     }
 

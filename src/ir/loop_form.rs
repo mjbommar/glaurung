@@ -44,9 +44,10 @@ fn recover_one_linear_latch(
     gotos: &HashMap<u64, usize>,
 ) -> bool {
     for start in 0..body.len() {
-        let Stmt::Label(target) = body[start] else {
+        let Stmt::Label(target) = body[start].semantic() else {
             continue;
         };
+        let target = *target;
         if labels.get(&target).copied() != Some(1) || gotos.get(&target).copied() != Some(1) {
             continue;
         }
@@ -54,18 +55,20 @@ fn recover_one_linear_latch(
         for latch in start + 1..body.len() {
             if let Some(condition) = tail_latch_condition(&body[latch], target) {
                 let loop_body = body[start + 1..latch].to_vec();
+                let origins = tail_latch_origins(&body[latch]);
                 body.splice(
                     start..=latch,
                     [Stmt::DoWhile {
                         body: loop_body,
                         cond: condition,
-                    }],
+                    }
+                    .with_optional_origins(origins)],
                 );
                 return true;
             }
             if statement_contains_label(&body[latch])
                 || matches!(
-                    body[latch],
+                    body[latch].semantic(),
                     Stmt::Return { .. }
                         | Stmt::Goto { .. }
                         | Stmt::IndirectGoto { .. }
@@ -80,7 +83,8 @@ fn recover_one_linear_latch(
     }
 
     for statement in body {
-        let changed = match statement {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -122,16 +126,30 @@ fn tail_latch_condition(statement: &Stmt, target: u64) -> Option<Expr> {
         cond,
         then_body,
         else_body: None,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    matches!(then_body.as_slice(), [Stmt::Goto { target: seen }] if *seen == target)
+    matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Goto { target: seen } if *seen == target))
         .then(|| cond.clone())
 }
 
+fn tail_latch_origins(statement: &Stmt) -> Option<crate::ir::ast::OriginSet> {
+    let outer = statement.origins().cloned();
+    let Stmt::If { then_body, .. } = statement.semantic() else {
+        return outer;
+    };
+    let inner = then_body.first().and_then(Stmt::origins).cloned();
+    match (outer, inner) {
+        (Some(left), Some(right)) => Some(left.union(&right)),
+        (Some(origins), None) | (None, Some(origins)) => Some(origins),
+        (None, None) => None,
+    }
+}
+
 fn statement_contains_label(statement: &Stmt) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Label(_) => true,
         Stmt::If {
             then_body,
@@ -170,7 +188,8 @@ fn count_control_targets(
     gotos: &mut HashMap<u64, usize>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Label(target) => *labels.entry(*target).or_default() += 1,
             Stmt::Goto { target } => *gotos.entry(*target).or_default() += 1,
             Stmt::If {
@@ -258,7 +277,8 @@ pub fn recover_guarded_do_whiles(f: &mut Function) {
 
 fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 cond,
                 then_body,
@@ -291,13 +311,19 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
             start += 1;
             continue;
         };
+        let (loop_statement, loop_origins) = body.remove(do_index).into_semantic_with_origins();
         let Stmt::DoWhile {
             body: loop_body, ..
-        } = body.remove(do_index)
+        } = loop_statement
         else {
             unreachable!("guarded do-while candidate points at a do-while")
         };
-        body.remove(start);
+        let (_, guard_origins) = body.remove(start).into_semantic_with_origins();
+        let origins = match (guard_origins, loop_origins) {
+            (Some(left), Some(right)) => Some(left.union(&right)),
+            (Some(origins), None) | (None, Some(origins)) => Some(origins),
+            (None, None) => None,
+        };
         body.insert(
             do_index - 1,
             Stmt::While {
@@ -307,7 +333,8 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
                     rhs: Box::new(sentinel),
                 },
                 body: loop_body,
-            },
+            }
+            .with_optional_origins(origins),
         );
         crate::ir::pass_stats::fire("recover_guarded_do_whiles");
         start = do_index;
@@ -333,16 +360,18 @@ fn recover_owned_pretested_do_while(
     let Some((last, prelude)) = then_body.split_last_mut() else {
         return;
     };
+    let origins = last.origins().cloned();
     let Stmt::DoWhile {
         body: loop_body,
         cond: latch_guard,
-    } = last
+    } = last.semantic_mut()
     else {
         return;
     };
     let mut aliases = HashMap::<VReg, Expr>::new();
     for statement in prelude {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Nop => {}
             Stmt::Assign { dst, src } if stable_value_expr(src) => {
                 aliases.insert(dst.clone(), src.clone());
@@ -360,7 +389,8 @@ fn recover_owned_pretested_do_while(
     *last = Stmt::While {
         cond: latch_guard.clone(),
         body: std::mem::take(loop_body),
-    };
+    }
+    .with_optional_origins(origins);
 }
 
 fn resolve_entry_aliases(expr: &Expr, aliases: &HashMap<VReg, Expr>, depth: usize) -> Expr {
@@ -404,13 +434,16 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
         cond: entry_guard,
         then_body,
         else_body: None,
-    } = body.get(start)?
+    } = body.get(start)?.semantic()
     else {
         return None;
     };
-    let [Stmt::Return {
+    let [guard_return] = then_body.as_slice() else {
+        return None;
+    };
+    let Stmt::Return {
         value: guard_result,
-    }] = then_body.as_slice()
+    } = guard_return.semantic()
     else {
         return None;
     };
@@ -430,7 +463,8 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
 
     let mut cursor = start + 1;
     while let Some(statement) = body.get(cursor) {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Nop => cursor += 1,
             Stmt::Assign { src, .. } if stable_value_expr(src) => cursor += 1,
             Stmt::Assign { .. } => return None,
@@ -440,7 +474,7 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     let Stmt::DoWhile {
         body: loop_body,
         cond: latch_guard,
-    } = body.get(cursor)?
+    } = body.get(cursor)?.semantic()
     else {
         return None;
     };
@@ -448,15 +482,18 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     let Stmt::Assign {
         dst: current,
         src: carried_latch,
-    } = loop_body.last()?
+    } = loop_body.last()?.semantic()
     else {
         return None;
     };
     let pre_loop = &body[start + 1..cursor];
-    let current_seed = pre_loop.iter().rev().find_map(|statement| match statement {
-        Stmt::Assign { dst, src } if dst == current => Some(src),
-        _ => None,
-    });
+    let current_seed = pre_loop
+        .iter()
+        .rev()
+        .find_map(|statement| match statement.semantic() {
+            Stmt::Assign { dst, src } if dst == current => Some(src),
+            _ => None,
+        });
     let mut result_inputs = Vec::new();
     if let Some(result) = guard_result {
         collect_expr_regs(result, &mut result_inputs);
@@ -475,14 +512,14 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     let return_index = cursor + 1;
     let Stmt::Return {
         value: final_result,
-    } = body.get(return_index)?
+    } = body.get(return_index)?.semantic()
     else {
         return None;
     };
     if guard_result != final_result
         || body[return_index + 1..]
             .iter()
-            .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+            .any(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))
     {
         return None;
     }
@@ -519,7 +556,8 @@ struct SentinelSearch {
 
 fn recover_sentinel_search_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -592,13 +630,16 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
         cond: initial_guard,
         then_body,
         else_body: None,
-    } = body.get(start)?
+    } = body.get(start)?.semantic()
     else {
         return None;
     };
-    let [Stmt::Return {
+    let [guard_return] = then_body.as_slice() else {
+        return None;
+    };
+    let Stmt::Return {
         value: Some(sentinel),
-    }] = then_body.as_slice()
+    } = guard_return.semantic()
     else {
         return None;
     };
@@ -613,7 +654,8 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     let mut cursor = start + 1;
     let mut seeds: Vec<(&VReg, &Expr)> = Vec::new();
     while let Some(statement) = body.get(cursor) {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } if src == &initial => seeds.push((dst, src)),
             Stmt::Nop => {}
             Stmt::While { .. } => break,
@@ -628,11 +670,12 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     let Stmt::While {
         cond: match_continue,
         body: loop_body,
-    } = body.get(cursor)?
+    } = body.get(cursor)?.semantic()
     else {
         return None;
     };
-    let (result, current, advance, exit_body) = match loop_body.as_slice() {
+    let semantic_loop_body = loop_body.iter().map(Stmt::semantic).collect::<Vec<_>>();
+    let (result, current, advance, exit_body) = match semantic_loop_body.as_slice() {
         [Stmt::Assign {
             dst: current,
             src: advance,
@@ -679,10 +722,8 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
         }
         _ => return None,
     };
-    if exit_body.as_slice()
-        != [Stmt::Return {
-            value: Some(sentinel.clone()),
-        }]
+    if !matches!(exit_body.as_slice(), [statement]
+        if matches!(statement.semantic(), Stmt::Return { value: Some(value) } if value == sentinel))
     {
         return None;
     }
@@ -690,14 +731,14 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     let return_index = cursor + 1;
     let Stmt::Return {
         value: Some(returned),
-    } = body.get(return_index)?
+    } = body.get(return_index)?.semantic()
     else {
         return None;
     };
     if reg_through_casts(returned) != Some(result)
         || body[return_index + 1..]
             .iter()
-            .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+            .any(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))
     {
         return None;
     }
@@ -752,7 +793,8 @@ fn reg_through_casts(mut expr: &Expr) -> Option<&VReg> {
 /// loop-hoisting heuristic.
 fn seed_exit_value_copies(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
-        match stmt {
+        match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -784,7 +826,7 @@ fn seed_exit_value_copies(stmts: &mut Vec<Stmt>) {
             continue;
         };
         let seed_count = seeds.len();
-        let Stmt::While { body, .. } = &mut stmts[index] else {
+        let Stmt::While { body, .. } = stmts[index].semantic_mut() else {
             unreachable!("exit-value candidates are always while loops");
         };
         body.drain(..seed_count);
@@ -797,7 +839,7 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
     let Stmt::While {
         cond: Expr::Const(1),
         body,
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
@@ -806,7 +848,7 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
         let Stmt::Assign {
             dst: exit_value,
             src: Expr::Reg(carried),
-        } = stmt
+        } = stmt.semantic()
         else {
             break;
         };
@@ -830,11 +872,11 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
         then_body,
         else_body: None,
         ..
-    } = body.get(seed_count)?
+    } = body.get(seed_count)?.semantic()
     else {
         return None;
     };
-    if then_body.as_slice() != [Stmt::Break] {
+    if !matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Break)) {
         return None;
     }
 
@@ -973,7 +1015,7 @@ fn last_assignment<'a>(body: &'a [Stmt], target: &VReg) -> Option<(usize, &'a Ex
     body.iter()
         .enumerate()
         .rev()
-        .find_map(|(index, stmt)| match stmt {
+        .find_map(|(index, stmt)| match stmt.semantic() {
             Stmt::Assign { dst, src } if dst == target => Some((index, src)),
             _ => None,
         })
@@ -1017,7 +1059,8 @@ fn bypasses_loop_tail(stmt: &Stmt) -> bool {
 }
 
 fn writes_reg(stmt: &Stmt, target: &VReg) -> bool {
-    match stmt {
+    match stmt.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, .. } => dst == target,
         Stmt::Call { dst, .. } => dst.as_ref() == Some(target),
         Stmt::Pop { target: dst } => dst == target,
@@ -1062,7 +1105,8 @@ pub fn promote_for_loops(f: &mut Function) {
 
 fn promote_for_body(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
-        match stmt {
+        match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -1099,7 +1143,7 @@ fn promote_for_body(stmts: &mut Vec<Stmt>) {
 
 fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
     let init_target = assigned_target(init)?;
-    let Stmt::While { cond, body } = loop_stmt else {
+    let Stmt::While { cond, body } = loop_stmt.semantic() else {
         return None;
     };
 
@@ -1108,11 +1152,12 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
             cond: exit_cond,
             then_body,
             else_body: None,
-        } = body.first()?
+        } = body.first()?.semantic()
         else {
             return None;
         };
-        if then_body.as_slice() != [Stmt::Break] {
+        if !matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Break))
+        {
             return None;
         }
         (negate_cmp_expr(exit_cond.clone()), &body[1..])
@@ -1130,16 +1175,24 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
         return None;
     }
 
-    Some(Stmt::For {
-        init: Box::new(init.clone()),
-        cond: loop_cond,
-        step: Box::new(step.clone()),
-        body: core_body.to_vec(),
-    })
+    let origins = match (init.origins(), loop_stmt.origins()) {
+        (Some(left), Some(right)) => Some(left.union(right)),
+        (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+        (None, None) => None,
+    };
+    Some(
+        Stmt::For {
+            init: Box::new(init.clone()),
+            cond: loop_cond,
+            step: Box::new(step.clone()),
+            body: core_body.to_vec(),
+        }
+        .with_optional_origins(origins),
+    )
 }
 
 fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
-    let src = match stmt {
+    let src = match stmt.semantic() {
         Stmt::Assign { src, .. } | Stmt::Store { src, .. } => src,
         _ => return false,
     };
@@ -1165,7 +1218,7 @@ fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
 }
 
 fn assigned_target(stmt: &Stmt) -> Option<&VReg> {
-    match stmt {
+    match stmt.semantic() {
         Stmt::Assign { dst, .. } => Some(dst),
         Stmt::Store {
             addr: Expr::Reg(dst @ VReg::Phys(name)),
@@ -1176,7 +1229,8 @@ fn assigned_target(stmt: &Stmt) -> Option<&VReg> {
 }
 
 fn has_iterator_bypass(stmt: &Stmt) -> bool {
-    match stmt {
+    match stmt.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Goto { .. } | Stmt::Break | Stmt::Continue => true,
         Stmt::If {
             then_body,
@@ -1221,15 +1275,19 @@ fn recover_body(stmts: &mut [Stmt]) {
                 if !matches!(cond, crate::ir::ast::Expr::Const(1)) {
                     continue;
                 }
-                let Some(Stmt::If {
+                let Some(first) = body.first() else {
+                    continue;
+                };
+                let Stmt::If {
                     cond: exit_cond,
                     then_body,
                     else_body: None,
-                }) = body.first()
+                } = first.semantic()
                 else {
                     continue;
                 };
-                if then_body.as_slice() != [Stmt::Break] {
+                if !matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Break))
+                {
                     continue;
                 }
                 *cond = negate_cmp_expr(exit_cond.clone());
@@ -1268,6 +1326,7 @@ fn recover_body(stmts: &mut [Stmt]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types::{CmpOp, VReg};
 
     fn reg(name: &str) -> VReg {
@@ -1328,6 +1387,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn origin_wrapped_linear_tail_latch_becomes_a_do_while() {
+        let mut function = Function {
+            name: "wrapped_linear_tail_latch".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Label(0x1010).with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("current"),
+                    src: Expr::Const(1),
+                }
+                .with_origins(OriginSet::one(0x1014)),
+                Stmt::If {
+                    cond: Expr::Reg(reg("continue_loop")),
+                    then_body: vec![
+                        Stmt::Goto { target: 0x1010 }.with_origins(OriginSet::one(0x101c))
+                    ],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        recover_linear_latched_do_whiles(&mut function);
+
+        assert!(matches!(function.body.as_slice(), [statement]
+            if matches!(statement.semantic(), Stmt::DoWhile { .. })
+                && statement.origins().is_some_and(|origins| origins.addresses() == [0x1018, 0x101c])));
     }
 
     #[test]

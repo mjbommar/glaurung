@@ -39,7 +39,8 @@ pub fn reconstruct(f: &mut Function) {
 fn reconstruct_body(stmts: &mut Vec<Stmt>) {
     // Recurse into nested control-flow bodies first so inlining composes.
     for s in stmts.iter_mut() {
-        match s {
+        let contributing_origins = match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -49,11 +50,17 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                 if let Some(eb) = else_body {
                     reconstruct_body(eb);
                 }
+                None
             }
-            Stmt::While { body, .. } => reconstruct_body(body),
+            Stmt::While { body, .. } | Stmt::For { body, .. } => {
+                reconstruct_body(body);
+                None
+            }
             Stmt::DoWhile { body, cond } => reconstruct_do_while(body, cond),
-            Stmt::For { body, .. } => reconstruct_body(body),
-            _ => {}
+            _ => None,
+        };
+        if let Some(origins) = contributing_origins {
+            s.merge_origins(&origins);
         }
     }
 
@@ -83,7 +90,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         // declined to inline. The clone now happens only on the accepting
         // path, where `Vec::remove` hands the expression over by value and it
         // is not a clone at all.
-        let temp = match &stmts[i] {
+        let temp = match stmts[i].semantic() {
             Stmt::Assign {
                 dst: dst @ VReg::Temp(_),
                 src,
@@ -131,7 +138,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         // the block looking for a second use the census already rules out.
         let census_proves_sole_use = temp_reads.get(&temp).copied().unwrap_or(0) <= 1;
         if !census_proves_sole_use
-            && !matches!(&stmts[i + 1], Stmt::Assign { dst, .. } if dst == &temp)
+            && !matches!(stmts[i + 1].semantic(), Stmt::Assign { dst, .. } if dst == &temp)
         {
             let mut second_use = false;
             for j in (i + 2)..stmts.len() {
@@ -139,7 +146,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                     second_use = true;
                     break;
                 }
-                if matches!(&stmts[j], Stmt::Assign { dst, .. } if dst == &temp) {
+                if matches!(stmts[j].semantic(), Stmt::Assign { dst, .. } if dst == &temp) {
                     break;
                 }
             }
@@ -167,10 +174,14 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         // Remove first and take the RHS by value; `stmts[i]` is then the
         // former `stmts[i + 1]`, so the rewrite and the resulting list are
         // exactly what substitute-then-remove produced.
-        let Stmt::Assign { src: def_expr, .. } = stmts.remove(i) else {
+        let (definition, origins) = stmts.remove(i).into_semantic_with_origins();
+        let Stmt::Assign { src: def_expr, .. } = definition else {
             unreachable!("guarded by the `Stmt::Assign` match above")
         };
         substitute_in_stmt(&mut stmts[i], &temp, &def_expr);
+        if let Some(origins) = origins {
+            stmts[i].merge_origins(&origins);
+        }
         // Don't advance — the next iteration may inline a chained temp.
     }
 }
@@ -352,23 +363,31 @@ fn count_temp_reads_in_stmt(s: &Stmt, out: &mut std::collections::HashMap<VReg, 
 /// definition after substituting the first read, leaving the latch undefined.
 /// A temporary `If` statement lets the existing linear-run logic see the latch
 /// as the final consumer without giving it any branch semantics.
-fn reconstruct_do_while(body: &mut Vec<Stmt>, cond: &mut Expr) {
+fn reconstruct_do_while(
+    body: &mut Vec<Stmt>,
+    cond: &mut Expr,
+) -> Option<crate::ir::ast::OriginSet> {
     body.push(Stmt::If {
         cond: std::mem::replace(cond, Expr::Const(1)),
         then_body: Vec::new(),
         else_body: None,
     });
     reconstruct_body(body);
-    let Some(Stmt::If {
+    let Some(latch) = body.pop() else {
+        unreachable!("the synthetic do-while latch must remain last")
+    };
+    let (latch, origins) = latch.into_semantic_with_origins();
+    let Stmt::If {
         cond: reconstructed,
         then_body,
         else_body: None,
-    }) = body.pop()
+    } = latch
     else {
         unreachable!("the synthetic do-while latch must remain last")
     };
     debug_assert!(then_body.is_empty());
     *cond = reconstructed;
+    origins
 }
 
 // -- Reg-reference utilities --------------------------------------------------
@@ -470,7 +489,8 @@ fn reads_as_address_register(s: &Stmt, target: &VReg) -> bool {
 
 /// Visit every top-level expression of a statement.
 fn for_each_expr_in_stmt(s: &Stmt, visit: &mut impl FnMut(&Expr)) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target } => visit(target),
         Stmt::Assign { src, .. } => visit(src),
         Stmt::Store { addr, src, .. } => {
@@ -606,7 +626,8 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
 fn count_reg_uses_in_stmt_recursive(s: &Stmt, target: &VReg) -> usize {
     let direct = count_reg_uses_in_stmt(s, target);
     direct
-        + match s {
+        + match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,

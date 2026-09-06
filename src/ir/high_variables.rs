@@ -33,6 +33,7 @@ enum ValueClass {
 pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut TypeMap) {
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
+    refine_exact_unsigned_constants(&function.body, &definitions, types);
     let object_model = infer_from_ast(function);
     if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
         eprintln!("\n===== inferred memory objects =====\n{object_model:#?}");
@@ -90,6 +91,55 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
             &object_model,
             types,
         );
+    }
+}
+
+/// Correct a narrow signed declaration only when the prepared value graph
+/// proves both halves of the unsigned interpretation.
+///
+/// A positive immediate whose high bit is set is an exact machine bit pattern,
+/// but is not representable by the corresponding signed C type.  That alone is
+/// deliberately insufficient evidence: the same bits may denote a negative
+/// value.  Retype the value only when every definition has that exact shape and
+/// every use either enters explicitly unsigned widening arithmetic or is
+/// compared in a wider signed domain that can represent the complete narrow
+/// unsigned range. This keeps the decision per-value and use-backed instead of
+/// making all high-bit literals globally unsigned.
+fn refine_exact_unsigned_constants(
+    body: &[Stmt],
+    definitions: &HashMap<String, Vec<Definition>>,
+    types: &mut TypeMap,
+) {
+    let mut candidates: Vec<_> = types
+        .iter()
+        .filter_map(|(register, hint)| match (register, hint) {
+            (
+                VReg::Phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width,
+                },
+            ) if is_high_variable(name) && *width < 8 => Some((name.clone(), *width)),
+            _ => None,
+        })
+        .collect();
+    candidates.sort_unstable();
+
+    for (name, width) in candidates {
+        let Some(value_definitions) = definitions.get(&name) else {
+            continue;
+        };
+        if value_definitions.is_empty()
+            || !value_definitions
+                .iter()
+                .all(|definition| definition.is_unsigned_high_bit_literal(width))
+        {
+            continue;
+        }
+        let mut uses = 0usize;
+        if body_uses_preserve_positive_value(body, &name, width, types, &mut uses) && uses != 0 {
+            types.force_int_signedness(VReg::phys(&name), false);
+        }
     }
 }
 
@@ -485,6 +535,18 @@ impl Definition {
             Self::Assignment(Expr::Reg(VReg::Phys(source))) if unsafe_uses.contains(source)
         )
     }
+
+    fn is_unsigned_high_bit_literal(&self, width: u8) -> bool {
+        let Self::Assignment(Expr::Const(value)) = self else {
+            return false;
+        };
+        if *value < 0 || width == 0 || width >= 8 {
+            return false;
+        }
+        let bits = u32::from(width) * 8;
+        let value = i128::from(*value);
+        value >= (1_i128 << (bits - 1)) && value < (1_i128 << bits)
+    }
 }
 
 /// Resolve one prepared value to a unique source parameter through pure copies.
@@ -535,7 +597,7 @@ fn single_exact_parameter_origin(
 
 fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -598,6 +660,227 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
             _ => {}
         }
     }
+}
+
+fn body_uses_preserve_positive_value(
+    body: &[Stmt],
+    name: &str,
+    width: u8,
+    types: &TypeMap,
+    uses: &mut usize,
+) -> bool {
+    body.iter().all(|statement| match statement.semantic() {
+        Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
+            expr_uses_preserve_positive_value(src, name, width, types, false, uses)
+        }
+        Stmt::Store { addr, src, .. } => {
+            expr_uses_preserve_positive_value(addr, name, width, types, false, uses)
+                && expr_uses_preserve_positive_value(src, name, width, types, false, uses)
+        }
+        Stmt::Call { target, args, .. } => {
+            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+                && args.iter().all(|argument| {
+                    expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+                })
+        }
+        Stmt::Throw { value } | Stmt::Push { value } => {
+            expr_uses_preserve_positive_value(value, name, width, types, false, uses)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            body_uses_preserve_positive_value(try_body, name, width, types, uses)
+                && catches.iter().all(|catch| {
+                    body_uses_preserve_positive_value(&catch.body, name, width, types, uses)
+                })
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && body_uses_preserve_positive_value(then_body, name, width, types, uses)
+                && else_body.as_ref().is_none_or(|else_body| {
+                    body_uses_preserve_positive_value(else_body, name, width, types, uses)
+                })
+        }
+        Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
+            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && body_uses_preserve_positive_value(body, name, width, types, uses)
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            body_uses_preserve_positive_value(
+                std::slice::from_ref(init.as_ref()),
+                name,
+                width,
+                types,
+                uses,
+            ) && expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && body_uses_preserve_positive_value(body, name, width, types, uses)
+                && body_uses_preserve_positive_value(
+                    std::slice::from_ref(step.as_ref()),
+                    name,
+                    width,
+                    types,
+                    uses,
+                )
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            expr_uses_preserve_positive_value(discriminant, name, width, types, false, uses)
+                && cases.iter().all(|(_, case)| {
+                    body_uses_preserve_positive_value(case, name, width, types, uses)
+                })
+                && default.as_ref().is_none_or(|default| {
+                    body_uses_preserve_positive_value(default, name, width, types, uses)
+                })
+        }
+        Stmt::IndirectGoto { target } => {
+            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+        }
+        Stmt::Return { value: None }
+        | Stmt::Label(_)
+        | Stmt::Goto { .. }
+        | Stmt::Continue
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_)
+        | Stmt::Pop { .. } => true,
+        Stmt::Origin { .. } => unreachable!("semantic() removes origin wrappers"),
+    })
+}
+
+fn expr_uses_preserve_positive_value(
+    expression: &Expr,
+    name: &str,
+    width: u8,
+    types: &TypeMap,
+    unsigned_context: bool,
+    uses: &mut usize,
+) -> bool {
+    match expression {
+        Expr::Reg(VReg::Phys(found)) if found == name => {
+            *uses += 1;
+            unsigned_context
+        }
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::StackAddr { .. } => true,
+        Expr::Cast {
+            signed,
+            width: cast_width,
+            expr,
+        } => expr_uses_preserve_positive_value(
+            expr,
+            name,
+            width,
+            types,
+            !*signed && *cast_width >= width,
+            uses,
+        ),
+        Expr::Bin { lhs, rhs, .. } => {
+            let lhs_context = unsigned_widening_cast(rhs, width);
+            let rhs_context = unsigned_widening_cast(lhs, width);
+            expr_uses_preserve_positive_value(lhs, name, width, types, lhs_context, uses)
+                && expr_uses_preserve_positive_value(rhs, name, width, types, rhs_context, uses)
+        }
+        Expr::Cmp { op, lhs, rhs } => {
+            let signed_comparison = matches!(
+                op,
+                crate::ir::types::CmpOp::Slt | crate::ir::types::CmpOp::Sle
+            );
+            let lhs_context = signed_comparison && wide_signed_integer(rhs, types);
+            let rhs_context = signed_comparison && wide_signed_integer(lhs, types);
+            expr_uses_preserve_positive_value(lhs, name, width, types, lhs_context, uses)
+                && expr_uses_preserve_positive_value(rhs, name, width, types, rhs_context, uses)
+        }
+        Expr::Deref { addr, .. }
+        | Expr::Un { src: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
+        | Expr::FunctionTableEntry { index: addr, .. } => {
+            expr_uses_preserve_positive_value(addr, name, width, types, false, uses)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && expr_uses_preserve_positive_value(
+                    if_true,
+                    name,
+                    width,
+                    types,
+                    unsigned_context,
+                    uses,
+                )
+                && expr_uses_preserve_positive_value(
+                    if_false,
+                    name,
+                    width,
+                    types,
+                    unsigned_context,
+                    uses,
+                )
+        }
+        Expr::Call { target, args, .. } => {
+            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+                && args.iter().all(|argument| {
+                    expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+                })
+        }
+        Expr::WideArithmetic { args, .. } => args.iter().all(|argument| {
+            expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+        }),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => !base
+            .iter()
+            .chain(index.iter())
+            .any(|register| matches!(register, VReg::Phys(found) if found == name)),
+    }
+}
+
+fn wide_signed_integer(expression: &Expr, types: &TypeMap) -> bool {
+    match expression {
+        Expr::Cast {
+            signed: true,
+            width: 8,
+            ..
+        } => true,
+        Expr::Reg(register @ VReg::Phys(name)) => match types.get(register) {
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }) => true,
+            None => is_high_variable(name),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn unsigned_widening_cast(expression: &Expr, width: u8) -> bool {
+    matches!(
+        expression,
+        Expr::Cast {
+            signed: false,
+            width: cast_width,
+            ..
+        } if *cast_width > width
+    )
 }
 
 fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -> Option<u8> {
@@ -780,7 +1063,7 @@ fn is_trusted_copy_source(name: &str) -> bool {
 /// byte-scaled character-pointer arithmetic stay eligible.
 fn collect_unsafe_pointer_uses(body: &[Stmt], types: Option<&TypeMap>, out: &mut HashSet<String>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
                 collect_unsafe_expr(src, false, types, out)
             }

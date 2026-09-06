@@ -34,7 +34,8 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
     // Recurse first so inner bodies are folded before we inspect an outer
     // fall-through return.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -61,7 +62,7 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
 
     let mut i = 0;
     while i < body.len() {
-        let Some(dst) = (match &body[i] {
+        let Some(dst) = (match body[i].semantic() {
             Stmt::Assign { dst, .. } if crate::ir::direct_output::is_exact_return_storage(dst) => {
                 Some(dst.clone())
             }
@@ -71,10 +72,13 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
             continue;
         };
         let mut return_index = i + 1;
-        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+        while body
+            .get(return_index)
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+        {
             return_index += 1;
         }
-        let fold_here = match body.get(return_index) {
+        let fold_here = match body.get(return_index).map(Stmt::semantic) {
             Some(Stmt::Return { value: None }) => true,
             Some(Stmt::Return {
                 value: Some(Expr::Reg(returned)),
@@ -82,10 +86,19 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
             _ => false,
         };
         if fold_here {
-            let Stmt::Assign { src, .. } = body.remove(i) else {
+            let (definition, definition_origins) = body.remove(i).into_semantic_with_origins();
+            let Stmt::Assign { src, .. } = definition else {
                 unreachable!()
             };
-            body[return_index - 1] = Stmt::Return { value: Some(src) };
+            let (_, return_origins) = std::mem::replace(&mut body[return_index - 1], Stmt::Nop)
+                .into_semantic_with_origins();
+            let origins = match (definition_origins, return_origins) {
+                (Some(left), Some(right)) => Some(left.union(&right)),
+                (Some(origins), None) | (None, Some(origins)) => Some(origins),
+                (None, None) => None,
+            };
+            body[return_index - 1] =
+                Stmt::Return { value: Some(src) }.with_optional_origins(origins);
             continue;
         }
         i += 1;

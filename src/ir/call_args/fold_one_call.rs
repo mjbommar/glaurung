@@ -139,7 +139,7 @@ pub(super) fn fold_one_call(
             })
             .collect::<Option<Vec<_>>>();
         if let Some(arguments) = reaching_inputs {
-            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+            if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                 *args = arguments;
             }
             return;
@@ -150,7 +150,7 @@ pub(super) fn fold_one_call(
         // a tail call). Keep the current register values explicit instead of
         // degrading the proven fixed-arity call to `callee(void)`.
         if matches!(arch, CallConv::Arm | CallConv::ArmHardFloat) {
-            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+            if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                 if args.is_empty() {
                     *args = layout.iter().cloned().map(Expr::Reg).collect();
                 }
@@ -214,7 +214,7 @@ pub(super) fn fold_one_call(
         // failure block). Reaching definitions across CFG edges require dataflow
         // proof; this local backward fold deliberately stops here.
         if matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::Label(_)
                 | Stmt::Goto { .. }
                 | Stmt::IndirectGoto { .. }
@@ -255,7 +255,7 @@ pub(super) fn fold_one_call(
             // sequence. Without this boundary a first call with six register
             // arguments could mistake `push rbp` for a seventh argument.
             if matches!(
-                &body[i],
+                body[i].semantic(),
                 Stmt::Assign {
                     dst: VReg::Phys(frame),
                     src: Expr::Reg(VReg::Phys(stack)),
@@ -265,8 +265,8 @@ pub(super) fn fold_one_call(
                 break;
             }
         }
-        let stop = matches!(&body[i], Stmt::Call { .. });
-        if let Stmt::Assign { dst, src } = &body[i] {
+        let stop = matches!(body[i].semantic(), Stmt::Call { .. });
+        if let Stmt::Assign { dst, src } = body[i].semantic() {
             if let VReg::Phys(name) = dst {
                 if let Some(slot) = slot_of(arch, name.as_str()) {
                     if known_arm_core_arity.is_some_and(|arity| slot >= arity) {
@@ -482,7 +482,7 @@ pub(super) fn fold_one_call(
             // this branch was skipped and `call_into_spill` kept none of its
             // eight arguments. `is_return_register` tolerates the `#version`
             // suffix, which is what makes the versioned spelling recognisable.
-            let return_register = match &body[i] {
+            let return_register = match body[i].semantic() {
                 Stmt::Call {
                     dst: Some(VReg::Phys(name)),
                     ..
@@ -510,7 +510,7 @@ pub(super) fn fold_one_call(
                     .any(|argument| reads_reg_in_expr(argument, &return_register))
                 || forwards_return_to_slot_zero;
             if consumes_return {
-                let existing_result = match &body[i] {
+                let existing_result = match body[i].semantic() {
                     Stmt::Call { dst, .. } => dst.clone(),
                     _ => None,
                 }
@@ -539,7 +539,10 @@ pub(super) fn fold_one_call(
                     // with the bare architectural spelling, and renaming that
                     // later as the caller's `arg0` loses the producer result.
                     for statement in body.iter_mut().take(call_idx).skip(i + 1) {
-                        match statement {
+                        match statement.semantic_mut() {
+                            Stmt::Origin { .. } => {
+                                unreachable!("semantic statement cannot be an origin wrapper")
+                            }
                             Stmt::Assign { src, .. } => {
                                 let _ = substitute_exact_reg(src, &return_register, &replacement);
                             }
@@ -552,7 +555,7 @@ pub(super) fn fold_one_call(
                     }
                     found[0] = Some((KEEP_ARG_SETUP, replacement));
                 }
-                if let Stmt::Call { dst, .. } = &mut body[i] {
+                if let Stmt::Call { dst, .. } = body[i].semantic_mut() {
                     *dst = Some(result);
                 }
             }
@@ -602,9 +605,9 @@ pub(super) fn fold_one_call(
             && enclosing.entry_value_reaches(0)
             && !body[..call_idx]
                 .iter()
-                .any(|statement| matches!(statement, Stmt::Call { .. }))
+                .any(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
             && matches!(
-                &body[call_idx],
+                body[call_idx].semantic(),
                 Stmt::Call {
                     target: Expr::Named { .. },
                     args,
@@ -638,7 +641,7 @@ pub(super) fn fold_one_call(
                             .unwrap_or("rdi"),
                     ))
                 });
-            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+            if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                 *args = vec![incoming];
             }
         }
@@ -713,11 +716,19 @@ pub(super) fn fold_one_call(
     }
 
     // Splice the args in.
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = args_out;
     }
 
     // Remove the folded assigns. Sort descending to keep call_idx valid.
+    let consumed_origins = used_stmt_indices
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used_stmt_indices.sort_by(|a, b| b.cmp(a));
     for idx in used_stmt_indices {
         body.remove(idx);

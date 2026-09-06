@@ -210,7 +210,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
 
     fn statements(body: &[Stmt], tm: &mut TypeMap) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Origin { stmt, .. } => statements(std::slice::from_ref(stmt), tm),
                 Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => expression(src, tm),
                 Stmt::Store { addr, src, .. } => {
@@ -291,7 +291,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
 fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> bool {
     fn walk(body: &[Stmt], target: &str, tm: &TypeMap, found: &mut bool, valid: &mut bool) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Assign {
                     dst: VReg::Phys(name),
                     src,
@@ -417,7 +417,7 @@ fn collect_pointer_accesses_body(
     observed: &mut std::collections::HashMap<String, std::collections::BTreeSet<u8>>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { src, .. } | Stmt::Push { value: src } => {
                 collect_pointer_accesses_expr(src, tm, observed)
             }
@@ -566,7 +566,7 @@ fn constant_needs_wide_word(value: i64) -> bool {
 
 fn collect_high_half_requirements(body: &[Stmt], required: &mut std::collections::HashSet<String>) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign { src, .. } | Stmt::Push { value: src } => {
                 collect_high_half_expr(src, required)
             }
@@ -689,7 +689,7 @@ fn require_wide_expr(expr: &Expr, required: &mut std::collections::HashSet<Strin
 
 fn propagate_required_widths(body: &[Stmt], required: &mut std::collections::HashSet<String>) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -802,7 +802,7 @@ fn collect_definition_widths(
     defs: &mut std::collections::HashMap<String, u8>,
 ) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -862,7 +862,7 @@ fn widest_return_value(
     defs: &std::collections::HashMap<String, u8>,
 ) -> Option<u8> {
     body.iter()
-        .filter_map(|stmt| match stmt {
+        .filter_map(|stmt| match stmt.semantic() {
             Stmt::Return { value: Some(expr) } => expression_value_width(expr, tm, defs),
             Stmt::If {
                 then_body,

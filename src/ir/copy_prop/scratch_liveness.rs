@@ -146,10 +146,10 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                     };
                     visit_stmt_reads(init, &mut add_root);
                     visit_stmt_reads(step, &mut add_root);
-                    if let Stmt::Assign { dst, .. } = &**init {
+                    if let Stmt::Assign { dst, .. } = init.semantic() {
                         roots.insert(dst.clone());
                     }
-                    if let Stmt::Assign { dst, .. } = &**step {
+                    if let Stmt::Assign { dst, .. } = step.semantic() {
                         roots.insert(dst.clone());
                     }
                     add_roots(cond, roots);
@@ -186,11 +186,14 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
     fn prune_body(body: &mut Vec<Stmt>, live: &RegSet) -> bool {
         let before = body.len();
         body.retain(|statement| {
-            !matches!(statement, Stmt::Assign { dst, .. } if is_scratch_reg(dst) && !live.contains(dst))
+            !matches!(statement.semantic(), Stmt::Assign { dst, .. } if is_scratch_reg(dst) && !live.contains(dst))
         });
         let mut pruned = body.len() != before;
         for statement in body {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
