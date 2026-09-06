@@ -33,7 +33,7 @@
 //! even when nothing in this file uses it — see the comments in that block.
 
 use crate::analysis::jump_table::{
-    decode_bounded_relative_jump_table, decode_thumb_table_branch, discover_jump_tables,
+    decode_bounded_relative_jump_table_from_base, decode_thumb_table_branch, discover_jump_tables,
 };
 use crate::analysis::vtable::discover_vtables;
 use crate::core::address::{Address, AddressKind};
@@ -86,14 +86,15 @@ use body_index::{cap_discovered_functions_at_va, va_in_function_body, BodyIndex}
 use budgets::scan_within;
 
 use ctrl_flow::{
-    arm_defined_register, arm_ldr_pc_table_dispatch, arm_pop_writes_pc, classify_ctrl_flow,
-    guard_fallthrough_bound, immediate_target, is_code_padding_terminator,
-    is_unconditional_branch_mnemonic, memory_operand_va,
+    arm_add_pc_table_dispatch, arm_defined_register, arm_ldr_pc_table_dispatch, arm_pop_writes_pc,
+    classify_ctrl_flow, guard_fallthrough_bound, guard_taken_bound, immediate_target,
+    is_code_padding_terminator, is_unconditional_branch_mnemonic, memory_operand_va,
 };
 
 use dispatch_flow::{
-    combine_dispatch_bounds, join_dispatch_bounds, merge_dispatch_addresses, replay_dispatch_block,
-    trim_unproven_dispatch_edges, BlockStreams, TentativeDispatchEdges,
+    combine_dispatch_bounds, join_dispatch_bounds, merge_dispatch_addresses,
+    observe_dispatch_instruction, replay_dispatch_block, trim_unproven_dispatch_edges,
+    BlockStreams, TentativeDispatchEdges,
 };
 use dispatch_resolution::resolve_dispatch;
 

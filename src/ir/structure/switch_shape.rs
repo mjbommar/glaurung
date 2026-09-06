@@ -18,11 +18,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::build;
 use super::cfg::{natural_loop_body, Cfg};
 use super::loop_shape::terminal_path_stays_outside_loop;
-use super::path_predicates::can_reach;
+use super::path_predicates::{can_reach, shared_return_chain};
 use super::region::Region;
+use super::{build, BuildState};
 
 /// Commit the blocks a switch arm uniquely owns while leaving a shared tail
 /// available to the enclosing region.
@@ -63,20 +63,34 @@ pub(super) fn detect_switch_shape(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
+    state: &mut BuildState,
 ) -> Option<(Region, Option<usize>)> {
+    let evidence = cfg.switch_at(dispatch)?;
+    if !evidence.complete {
+        return None;
+    }
     let all_arms = cfg.succs[dispatch].clone();
-    let mut arms = all_arms.clone();
-    let mut case_labels = cfg.case_labels[dispatch].clone();
+    let mut arms = evidence
+        .cases
+        .iter()
+        .map(|case| case.target)
+        .collect::<Vec<_>>();
+    let mut case_labels = evidence
+        .cases
+        .iter()
+        .map(|case| case.values.clone())
+        .collect::<Vec<_>>();
     if arms.len() < 2 || !cfg.is_switch_dispatch(dispatch) {
         return None;
     }
-    let formal_default_entry = arms
-        .iter()
-        .position(|arm| is_guarded_switch_default(dispatch, *arm, cfg))
-        .map(|position| {
-            case_labels.remove(position);
-            arms.remove(position)
-        });
+    let formal_default_entry = evidence.default.as_ref().and_then(|default| {
+        arms.iter()
+            .position(|arm| *arm == default.target)
+            .map(|position| {
+                case_labels.remove(position);
+                arms.remove(position)
+            })
+    });
     if arms.is_empty() {
         return None;
     }
@@ -86,7 +100,8 @@ pub(super) fn detect_switch_shape(
     // reaches that continuation.  The enclosing boundary is still a proven
     // join and is the correct ownership limit for every case.
     let effective_join = join.or(enclosing_stop);
-    let arm_build_order = switch_arm_build_order(dispatch, &arms, cfg, effective_join)?;
+    let arm_build_order =
+        switch_arm_build_order(dispatch, &arms, cfg, effective_join, &HashSet::new())?;
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
 
     visited.insert(dispatch);
@@ -113,11 +128,11 @@ pub(super) fn detect_switch_shape(
                 } else {
                     visited.clone()
                 };
-            let arm = build(a, cfg, &mut arm_visited, arm_stop);
+            let arm = build(a, cfg, &mut arm_visited, arm_stop, state);
             commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             arm
         } else {
-            build(a, cfg, visited, arm_stop)
+            build(a, cfg, visited, arm_stop, state)
         };
         sub_arms[arm_index] = Some(arm);
     }
@@ -127,7 +142,7 @@ pub(super) fn detect_switch_shape(
         .collect();
     let formal_default = formal_default_entry.map(|entry| {
         let mut borrowed_visited = HashSet::from([dispatch]);
-        Box::new(build(entry, cfg, &mut borrowed_visited, arm_stop))
+        Box::new(build(entry, cfg, &mut borrowed_visited, arm_stop, state))
     });
     Some((
         Region::Switch {
@@ -152,27 +167,43 @@ pub(super) fn detect_guarded_switch_shape(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
+    state: &mut BuildState,
 ) -> Option<(Region, Option<usize>)> {
-    let [first, second] = cfg.succs[guard].as_slice() else {
+    let evidence = cfg.switch_guarded_by(guard)?;
+    if !evidence.complete {
         return None;
-    };
-    let (dispatch, default_entry) =
-        [(*first, *second), (*second, *first)]
-            .into_iter()
-            .find(|(dispatch, default_entry)| {
-                cfg.is_switch_dispatch(*dispatch)
-                    && cfg.preds[*dispatch] == vec![guard]
-                    && is_guarded_switch_default(*dispatch, *default_entry, cfg)
-            })?;
+    }
+    let dispatch = evidence.dispatch;
+    let default_entry = evidence.default.as_ref()?.target;
+    if cfg.preds[dispatch] != vec![guard] || !cfg.is_switch_dispatch(dispatch) {
+        return None;
+    }
 
     let all_arms = cfg.succs[dispatch].clone();
-    let mut arms = all_arms.clone();
-    let mut case_labels = cfg.case_labels[dispatch].clone();
+    let mut arms = evidence
+        .cases
+        .iter()
+        .map(|case| case.target)
+        .collect::<Vec<_>>();
+    let mut case_labels = evidence
+        .cases
+        .iter()
+        .map(|case| case.values.clone())
+        .collect::<Vec<_>>();
     // A sparse table can encode holes by pointing table slots at the range
     // guard's default target. A dense table has no such slot: the guard alone
     // owns its out-of-range edge. Both are the same source-level switch. Remove
     // the default-labelled table destination when present, but do not require
     // one merely to prove the guarded shape.
+    let dispatch_is_in_loop = innermost_natural_loop_containing(dispatch, cfg).is_some();
+    let dense_guard_is_proven = if dispatch_is_in_loop {
+        // Folding a cyclic guard changes ownership of backedges and shared
+        // latches. Keep that path on the direct comparison contract until the
+        // raw-loop verifier can validate general predicate DAG provenance.
+        cfg.branch_is_direct_unsigned_comparison(guard)
+    } else {
+        cfg.branch_depends_on_unsigned_comparison(guard)
+    };
     match arms.iter().position(|arm| *arm == default_entry) {
         Some(default_position) => {
             arms.remove(default_position);
@@ -183,7 +214,7 @@ pub(super) fn detect_guarded_switch_shape(
         // already prove the guard relationship in `is_guarded_switch_default`;
         // requiring the destination to occur in the table as well rejects the
         // canonical dense shape at function scope.
-        None if cfg.branch_depends_on_unsigned_comparison(guard) => {}
+        None if dense_guard_is_proven => {}
         None => return None,
     }
     if arms.is_empty() {
@@ -199,14 +230,48 @@ pub(super) fn detect_guarded_switch_shape(
         Some(default_entry),
     )
     .or(enclosing_stop);
-    let arm_build_order = switch_arm_build_order(dispatch, &arms, cfg, join)?;
+    // Clang may put the value for case zero in the dispatch block itself and
+    // make that table slot enter a bare RET also used by the out-of-range
+    // comparison tree. The return selects a predecessor-specific SSA value,
+    // so it must be rendered at the case site, but the default path remains
+    // its structural owner. Admit only an already-proved bounded shared-return
+    // chain which the typed formal default can actually reach.
+    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
+    let borrowed_return_arms: HashMap<usize, Vec<usize>> = if enclosing_loop.is_none() {
+        arms.iter()
+            .filter_map(|arm| {
+                can_reach(default_entry, *arm, cfg)
+                    .then(|| shared_return_chain(*arm, cfg))
+                    .flatten()
+                    .map(|chain| (*arm, chain))
+            })
+            .collect()
+    } else {
+        // In a loop, the default can reach a case through the next iteration.
+        // That cyclic reachability is not shared-return ownership and must not
+        // bypass the arm's external-predecessor rejection. RawLoop owns these
+        // cases and already has explicit terminal-exit handling.
+        HashMap::new()
+    };
+    let borrowed_return_entries = borrowed_return_arms.keys().copied().collect();
+    let arm_build_order =
+        switch_arm_build_order(dispatch, &arms, cfg, join, &borrowed_return_entries)?;
 
     visited.insert(dispatch);
-    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
     let mut sub_arms: Vec<Option<Region>> = vec![None; arms.len()];
     for arm_index in arm_build_order {
         let arm = arms[arm_index];
-        let region = if Some(arm) == join {
+        let region = if let Some(chain) = borrowed_return_arms.get(&arm) {
+            let mut parts = chain
+                .iter()
+                .map(|block| Region::Borrowed(Box::new(Region::Block(*block))))
+                .collect::<Vec<_>>();
+            if parts.len() == 1 {
+                parts.pop().expect("the borrowed return chain is non-empty")
+            } else {
+                Region::Seq(parts)
+            }
+        } else if Some(arm) == join {
             // Direct dispatch-to-join is `case ...: break;`. The join is emitted
             // once after the switch instead of being duplicated in the case.
             Region::Seq(Vec::new())
@@ -218,11 +283,11 @@ pub(super) fn detect_guarded_switch_shape(
             } else {
                 visited.clone()
             };
-            let region = build(arm, cfg, &mut arm_visited, join);
+            let region = build(arm, cfg, &mut arm_visited, join, state);
             commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             region
         } else {
-            build(arm, cfg, visited, join)
+            build(arm, cfg, visited, join, state)
         };
         sub_arms[arm_index] = Some(region);
     }
@@ -237,16 +302,22 @@ pub(super) fn detect_guarded_switch_shape(
     // region ownership is not the same thing as CFG reachability, and cloning a
     // shared suffix is preferable to dropping the guard's executable edge.
     let mut default_visited = HashSet::from([guard, dispatch]);
-    let formal_default = Box::new(build(default_entry, cfg, &mut default_visited, join));
+    let formal_default = Box::new(build(default_entry, cfg, &mut default_visited, join, state));
     // A dense default that no explicit case can reach is owned by this switch.
     // Commit those blocks so `build_full` does not append a second, unreachable
     // copy as leftovers.  Shared suffixes stay borrowed: an explicit case may
     // still need to own their continuation outside the formal default clone.
+    let borrowed_return_blocks = borrowed_return_arms
+        .values()
+        .flatten()
+        .copied()
+        .collect::<HashSet<_>>();
     visited.extend(default_visited.into_iter().filter(|block| {
         *block != guard
             && *block != dispatch
             && Some(*block) != join
-            && arms.iter().all(|arm| !can_reach(*arm, *block, cfg))
+            && (borrowed_return_blocks.contains(block)
+                || arms.iter().all(|arm| !can_reach(*arm, *block, cfg)))
     }));
 
     Some((
@@ -272,6 +343,7 @@ fn switch_arm_build_order(
     arms: &[usize],
     cfg: &Cfg,
     shared_join: Option<usize>,
+    borrowed_return_entries: &HashSet<usize>,
 ) -> Option<Vec<usize>> {
     use std::collections::VecDeque;
 
@@ -289,7 +361,10 @@ fn switch_arm_build_order(
         let borrowed_terminal_exit = enclosing_loop.as_ref().is_some_and(|(_, body)| {
             !body.contains(arm) && terminal_path_stays_outside_loop(*arm, body, cfg)
         });
-        Some(*arm) != shared_join && has_external_predecessor && !borrowed_terminal_exit
+        Some(*arm) != shared_join
+            && has_external_predecessor
+            && !borrowed_terminal_exit
+            && !borrowed_return_entries.contains(arm)
     }) {
         return None;
     }
@@ -330,14 +405,6 @@ fn switch_arm_build_order(
 
 /// Return true when `candidate` is both a table destination and the proven
 /// out-of-range target of the conditional guarding `dispatch`.
-fn is_guarded_switch_default(dispatch: usize, candidate: usize, cfg: &Cfg) -> bool {
-    cfg.preds[candidate].iter().any(|guard| {
-        cfg.edges[*guard].iter().any(|edge| {
-            edge.to == candidate && edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault
-        }) && cfg.edges[*guard].iter().any(|edge| edge.to == dispatch)
-    })
-}
-
 /// Walk reachable blocks from each arm and return the block reached from the
 /// greatest number of DISTINCT arms that also has >1 predecessors and is
 /// dominated by `dispatch`. Address order breaks ties only after arm coverage;

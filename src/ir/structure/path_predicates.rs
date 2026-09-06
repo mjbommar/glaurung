@@ -49,6 +49,41 @@ pub(super) fn shared_return_chain(entry: usize, cfg: &Cfg) -> Option<Vec<usize>>
     None
 }
 
+/// Return a private acyclic prefix from one conditional arm through a machine
+/// return. The final return block may be shared; every preceding block is
+/// exclusively owned by this arm.
+///
+/// The caller may transfer ownership of the prefix into the conditional arm
+/// and render a shared terminal as a borrowed predecessor-sensitive view.
+/// Branches, cycles, shared non-terminal suffixes, and chains beyond the fixed
+/// bound are refused.
+pub(super) fn private_return_chain(entry: usize, owner: usize, cfg: &Cfg) -> Option<Vec<usize>> {
+    if cfg.preds[entry].as_slice() != [owner] {
+        return None;
+    }
+
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = entry;
+    for _ in 0..8 {
+        if !seen.insert(current) {
+            return None;
+        }
+        chain.push(current);
+        match cfg.succs[current].as_slice() {
+            [] if cfg.ends_in_return[current] => return Some(chain),
+            [next]
+                if cfg.preds[*next].as_slice() == [current]
+                    || (cfg.ends_in_return[*next] && cfg.succs[*next].is_empty()) =>
+            {
+                current = *next
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// Whether `entry` is a natural loop's distinguished continuation.
 ///
 /// A pre-tested loop leaves through its header; a rotated/bottom-tested loop

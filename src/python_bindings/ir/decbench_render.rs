@@ -328,6 +328,13 @@ fn decbench_text_with_installed_environment(
             "fold_constants_after_typed_folds",
             crate::ir::const_fold::fold_constants(&mut prepared)
         );
+        // Comparison fusion may expose `predicate == 0`; constant folding
+        // converts that shell to the exact inverse comparison before path
+        // contradiction pruning compares outer and nested guards.
+        pass!(
+            "prune_contradictory_nested_guards",
+            crate::ir::guard_chain::prune_contradictory_nested_guards(&mut prepared)
+        );
     }
     pass!("fold_guarded_readonly_lookups", {
         crate::ir::readonly_fold::fold_guarded_readonly_lookups(&mut prepared, readonly_data);

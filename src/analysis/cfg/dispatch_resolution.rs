@@ -36,6 +36,62 @@ pub(super) fn resolve_dispatch(
     instruction: &Instruction,
     tables: &std::collections::BTreeMap<u64, Vec<u64>>,
 ) -> Option<crate::analysis::dispatch::Resolution> {
+    if let Some(branch) = tracker.arm_byte_table_branch(instruction) {
+        let Some(entry_count) = branch.entry_count else {
+            return Some(crate::analysis::dispatch::Resolution::Unresolved(
+                crate::analysis::dispatch::Unresolved::NoBound(branch.table_va),
+            ));
+        };
+        return Some(
+            match crate::analysis::jump_table::decode_arm_unsigned_byte_table(
+                image,
+                data,
+                branch.table_va,
+                branch.target_base,
+                entry_count,
+                |target| in_exec_regions(regions, target).is_some(),
+            ) {
+                Ok(table) => crate::analysis::dispatch::Resolution::Table {
+                    table_va: table.table_va,
+                    targets: table.targets,
+                },
+                Err(decline) => crate::analysis::dispatch::Resolution::Unresolved(
+                    crate::analysis::dispatch::Unresolved::NoTableAt {
+                        table: branch.table_va,
+                        decline,
+                    },
+                ),
+            },
+        );
+    }
+    if let Some(branch) = tracker.aarch64_byte_table_branch(instruction) {
+        let Some(entry_count) = branch.entry_count else {
+            return Some(crate::analysis::dispatch::Resolution::Unresolved(
+                crate::analysis::dispatch::Unresolved::NoBound(branch.table_va),
+            ));
+        };
+        return Some(
+            match crate::analysis::jump_table::decode_aarch64_signed_byte_table(
+                image,
+                data,
+                branch.table_va,
+                branch.target_base,
+                entry_count,
+                |target| in_exec_regions(regions, target).is_some(),
+            ) {
+                Ok(table) => crate::analysis::dispatch::Resolution::Table {
+                    table_va: table.table_va,
+                    targets: table.targets,
+                },
+                Err(decline) => crate::analysis::dispatch::Resolution::Unresolved(
+                    crate::analysis::dispatch::Unresolved::NoTableAt {
+                        table: branch.table_va,
+                        decline,
+                    },
+                ),
+            },
+        );
+    }
     // Thumb-2 `tbb`/`tbh` name their table in the instruction (`pc` is the base)
     // and store it inline in `.text` as unsigned halfword counts. Nothing about
     // that shape reaches `resolve_with`, which resolves a REGISTER to a
@@ -102,10 +158,15 @@ pub(super) fn resolve_dispatch(
             },
         );
     }
-    tracker.resolve_with(instruction, tables, |table_va, entry_count| {
-        decode_bounded_relative_jump_table(image, data, table_va, entry_count, |target| {
-            in_exec_regions(regions, target).is_some()
-        })
+    tracker.resolve_with(instruction, tables, |table_va, target_base, entry_count| {
+        decode_bounded_relative_jump_table_from_base(
+            image,
+            data,
+            table_va,
+            target_base,
+            entry_count,
+            |target| in_exec_regions(regions, target).is_some(),
+        )
         .map(|table| table.targets)
     })
 }

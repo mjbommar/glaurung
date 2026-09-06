@@ -92,10 +92,32 @@ enum Val {
     /// It is per-value rather than per-register for the same reason the whole
     /// `bounded` map exists: `sub $0x8,%rsp` in a prologue must never supply an
     /// extent to the next dispatch it happens to precede.
-    TableOffset { table: u64, bound: Option<u64> },
+    TableOffset {
+        table: u64,
+        target_base: u64,
+        bound: Option<u64>,
+    },
     /// `table + (i32)*(table + idx*4)` — a dispatch target. Jumping through this
     /// register reaches exactly the table's entries.
-    TableTarget { table: u64, bound: Option<u64> },
+    TableTarget {
+        table: u64,
+        target_base: u64,
+        bound: Option<u64>,
+    },
+    /// One signed byte loaded from an AArch64 compact branch table.
+    Aarch64ByteOffset { table: u64, bound: Option<u64> },
+    /// `target_base + sign_extend(table[index]) * 4` immediately before `br`.
+    Aarch64ByteTarget {
+        table: u64,
+        target_base: u64,
+        bound: Option<u64>,
+    },
+    /// A word loaded from an ARM32 PC-relative literal pool.  GCC uses this as
+    /// the displacement in `add rBase, pc, rOffset` when materialising a PIC
+    /// switch table address.
+    ArmPcRelativeOffset(u64),
+    /// One unsigned byte loaded from an A32 compact branch table.
+    ArmByteOffset { table: u64, bound: Option<u64> },
 }
 
 /// Why an indirect transfer's targets could not be recovered.
@@ -251,6 +273,28 @@ pub struct ThumbTableBranch {
     pub entry_count: Option<usize>,
 }
 
+/// AArch64's compact signed-byte table dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aarch64ByteTableBranch {
+    /// Address of the signed-byte offset table.
+    pub table_va: u64,
+    /// Address to which each sign-extended, scaled entry is added.
+    pub target_base: u64,
+    /// Exact table extent proved by the dispatch guard.
+    pub entry_count: Option<usize>,
+}
+
+/// A32's `LDRB; ADD pc, pc, Rm, LSL #2` compact branch table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArmByteTableBranch {
+    /// Address of the unsigned-byte offset table.
+    pub table_va: u64,
+    /// A32 value of `pc` at the dispatch instruction.
+    pub target_base: u64,
+    /// Exact table extent proved by the dispatch guard.
+    pub entry_count: Option<usize>,
+}
+
 /// The outcome of resolving one indirect transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -395,7 +439,13 @@ impl DispatchTracker {
             .iter()
             .filter_map(|(register, value)| match value {
                 Val::Addr(address) => Some((register.clone(), *address)),
-                Val::ScaledIndex { .. } | Val::TableOffset { .. } | Val::TableTarget { .. } => None,
+                Val::ScaledIndex { .. }
+                | Val::TableOffset { .. }
+                | Val::TableTarget { .. }
+                | Val::Aarch64ByteOffset { .. }
+                | Val::Aarch64ByteTarget { .. }
+                | Val::ArmPcRelativeOffset(_)
+                | Val::ArmByteOffset { .. } => None,
             })
             .collect()
     }
@@ -418,6 +468,15 @@ impl DispatchTracker {
 
     fn set(&mut self, reg: &str, v: Val) {
         self.regs.insert(canon(reg), v);
+    }
+
+    /// Record an address materialised by an externally proved machine idiom.
+    ///
+    /// The CFG owns image access, so it recognizes i386 PC-thunk bodies and
+    /// supplies the exact return address here instead of teaching this
+    /// instruction-only interpreter to parse object files.
+    pub(crate) fn materialize_address(&mut self, reg: &str, address: u64) {
+        self.set(reg, Val::Addr(address));
     }
 
     fn clear(&mut self, reg: &str) {
@@ -457,19 +516,23 @@ impl DispatchTracker {
     /// * GCC -O0: `[scaled_index + table_base]`, after
     ///   `scaled_index = bounded_index*4`
     ///
-    /// The displacement must be zero and the total index scale exactly four;
-    /// broader address arithmetic is not enough evidence for a relative-offset
-    /// jump table.
-    fn table_load_on_entry(&self, ins: &Instruction) -> Option<(u64, Option<u64>)> {
+    /// The total index scale must be exactly four. A displacement is accepted
+    /// only as the checked difference between the tracked target base and the
+    /// table address; this is GCC i386 PIC's GOT-relative table spelling.
+    fn table_load_on_entry(&self, ins: &Instruction) -> Option<(u64, u64, Option<u64>)> {
         let memory = ins
             .operands
             .iter()
             .find(|operand| operand.displacement.is_some())?;
-        if memory.displacement != Some(0) {
-            return None;
-        }
-
-        let mut table = None;
+        let displacement = memory.displacement?;
+        let displacement = if ins.arch.eq_ignore_ascii_case("x86")
+            && (0..=i64::from(u32::MAX)).contains(&displacement)
+        {
+            i64::from(displacement as u32 as i32)
+        } else {
+            displacement
+        };
+        let mut target_base = None;
         let mut index_bound = None;
         let mut components = Vec::with_capacity(2);
         if let Some(base) = memory.base.as_deref().filter(|base| *base != "rip") {
@@ -480,8 +543,8 @@ impl DispatchTracker {
         }
         for (register, address_scale) in components {
             match self.get(register) {
-                Some(Val::Addr(address)) if address_scale == 1 && table.is_none() => {
-                    table = Some(address);
+                Some(Val::Addr(address)) if address_scale == 1 && target_base.is_none() => {
+                    target_base = Some(address);
                 }
                 Some(Val::ScaledIndex { bound, scale })
                     if address_scale.checked_mul(scale) == Some(4) && index_bound.is_none() =>
@@ -494,7 +557,9 @@ impl DispatchTracker {
                 _ => {}
             }
         }
-        Some((table?, index_bound?))
+        let target_base = target_base?;
+        let table = target_base.checked_add_signed(displacement)?;
+        Some((table, target_base, index_bound?))
     }
 
     fn fresh_value(&mut self) -> u64 {
@@ -893,6 +958,23 @@ impl DispatchTracker {
             }
         }
 
+        // Capstone 5 reports every AArch64 operand as a read in our portable
+        // Instruction model, so the generic destination-access path below
+        // cannot see these definitions. Model the exact compiler sequence only
+        // after the range logic above has consumed comparisons. Every other
+        // destination write is killed conservatively.
+        if self.observe_aarch64_compact_table(ins, m.as_ref()) {
+            return;
+        }
+
+        // A32's compact PIC switch reads one unsigned byte from a materialised
+        // table and branches with `add pc, pc, byte, lsl #2`.  Capstone does
+        // not expose ARM writes, so handle the exact load before the generic
+        // destination path for the same reason as `arm_adr_target` below.
+        if self.observe_arm_byte_table_load(ins) {
+            return;
+        }
+
         // ARM `add rD, pc, #imm` — the assembler's `adr`, and the only way a
         // jump table's base reaches a register on 32-bit ARM.
         //
@@ -953,21 +1035,64 @@ impl DispatchTracker {
             // read. The index is deliberately not tracked: every entry is a
             // possible outcome, which is exactly the successor set we want.
             "movslq" | "movsxd" | "movsx" => match table_load_on_entry {
-                Some((table, bound)) => self.set(dest, Val::TableOffset { table, bound }),
+                Some((table, target_base, bound)) => self.set(
+                    dest,
+                    Val::TableOffset {
+                        table,
+                        target_base,
+                        bound,
+                    },
+                ),
                 _ => self.clear(dest),
             },
             // offset + base == target. Either operand order.
             "add" => {
+                if let Some((table, target_base, bound)) = table_load_on_entry {
+                    if self.get(dest) == Some(Val::Addr(target_base)) {
+                        self.set(
+                            dest,
+                            Val::TableTarget {
+                                table,
+                                target_base,
+                                bound,
+                            },
+                        );
+                        return;
+                    }
+                }
                 let src = ins.operands.get(1).and_then(|o| o.register.as_deref());
                 let dv = self.get(dest);
                 let sv = src.and_then(|s| self.get(s));
-                match (dv, sv) {
-                    (Some(Val::TableOffset { table: a, bound }), Some(Val::Addr(b)))
-                    | (Some(Val::Addr(b)), Some(Val::TableOffset { table: a, bound }))
-                        if a == b =>
-                    {
-                        self.set(dest, Val::TableTarget { table: a, bound })
+                if let (Some(Val::Addr(address)), Some(delta)) = (dv.clone(), imm1) {
+                    if let Some(materialized) = address.checked_add_signed(delta) {
+                        self.set(dest, Val::Addr(materialized));
+                        return;
                     }
+                }
+                match (dv, sv) {
+                    (
+                        Some(Val::TableOffset {
+                            table,
+                            target_base,
+                            bound,
+                        }),
+                        Some(Val::Addr(base)),
+                    )
+                    | (
+                        Some(Val::Addr(base)),
+                        Some(Val::TableOffset {
+                            table,
+                            target_base,
+                            bound,
+                        }),
+                    ) if target_base == base => self.set(
+                        dest,
+                        Val::TableTarget {
+                            table,
+                            target_base,
+                            bound,
+                        },
+                    ),
                     _ => self.clear(dest),
                 }
             }
@@ -977,8 +1102,15 @@ impl DispatchTracker {
                 // immediate is kept as a candidate address so non-PIC tables,
                 // which name the table with a plain `mov`, still resolve.
                 let src = ins.operands.get(1);
-                if let Some((table, bound)) = table_load_on_entry {
-                    self.set(dest, Val::TableOffset { table, bound });
+                if let Some((table, target_base, bound)) = table_load_on_entry {
+                    self.set(
+                        dest,
+                        Val::TableOffset {
+                            table,
+                            target_base,
+                            bound,
+                        },
+                    );
                 } else if let Some(v) = src
                     .and_then(|o| o.register.as_deref())
                     .and_then(|r| self.get(r))
@@ -998,6 +1130,149 @@ impl DispatchTracker {
             // safe direction: it costs a resolution, never invents one.
             _ => self.clear(dest),
         }
+    }
+
+    fn observe_aarch64_compact_table(&mut self, ins: &Instruction, mnemonic: &str) -> bool {
+        if !ins.arch.eq_ignore_ascii_case("arm64") && !ins.arch.eq_ignore_ascii_case("aarch64") {
+            return false;
+        }
+        let destination = ins
+            .operands
+            .first()
+            .and_then(|operand| operand.register.as_deref());
+        match mnemonic {
+            // An arbitrary callee may overwrite every volatile register and
+            // the condition flags. Keeping any table/address proof across it
+            // would turn a stale pre-call sequence into a false dispatch.
+            "bl" | "blr" | "blraa" | "blraaz" | "blrab" | "blrabz" => {
+                self.reset();
+                true
+            }
+            "adr" | "adrp" => {
+                let Some((destination, address)) = destination.zip(
+                    ins.operands
+                        .get(1)
+                        .and_then(|operand| operand.immediate)
+                        .and_then(|value| u64::try_from(value).ok()),
+                ) else {
+                    if let Some(destination) = destination {
+                        self.clear(destination);
+                    }
+                    return true;
+                };
+                self.set(destination, Val::Addr(address));
+                true
+            }
+            "add" if ins.operands.len() == 3 => {
+                let Some(destination) = destination else {
+                    return false;
+                };
+                let source = ins
+                    .operands
+                    .get(1)
+                    .and_then(|operand| operand.register.as_deref());
+                if let Some(immediate) = ins
+                    .operands
+                    .get(2)
+                    .and_then(|operand| operand.immediate)
+                    .and_then(|value| u64::try_from(value).ok())
+                {
+                    let Some(Val::Addr(base)) = source.and_then(|register| self.get(register))
+                    else {
+                        self.clear(destination);
+                        return true;
+                    };
+                    match base.checked_add(immediate) {
+                        Some(address) => self.set(destination, Val::Addr(address)),
+                        None => self.clear(destination),
+                    }
+                    return true;
+                }
+                let offset = ins
+                    .operands
+                    .get(2)
+                    .and_then(|operand| operand.register.as_deref());
+                let base_value = source.and_then(|register| self.get(register));
+                let offset_value = offset.and_then(|register| self.get(register));
+                if aarch64_add_sxtb_shift_two(ins) {
+                    if let (
+                        Some(Val::Addr(target_base)),
+                        Some(Val::Aarch64ByteOffset { table, bound }),
+                    ) = (base_value, offset_value)
+                    {
+                        self.set(
+                            destination,
+                            Val::Aarch64ByteTarget {
+                                table,
+                                target_base,
+                                bound,
+                            },
+                        );
+                        return true;
+                    }
+                }
+                self.clear(destination);
+                true
+            }
+            "ldrb" => {
+                let Some(destination) = destination else {
+                    return true;
+                };
+                let Some(memory) = ins.operands.iter().find(|operand| {
+                    matches!(operand.kind, crate::core::instruction::OperandKind::Memory)
+                }) else {
+                    self.clear(destination);
+                    return true;
+                };
+                if memory.displacement.unwrap_or(0) != 0 {
+                    self.clear(destination);
+                    return true;
+                }
+                let Some(Val::Addr(table)) = memory.base.as_deref().and_then(|base| self.get(base))
+                else {
+                    self.clear(destination);
+                    return true;
+                };
+                let bound = memory
+                    .index
+                    .as_deref()
+                    .and_then(|index| self.bounded.get(canon_ref(index).as_ref()).copied());
+                self.set(destination, Val::Aarch64ByteOffset { table, bound });
+                true
+            }
+            _ => {
+                if aarch64_defines_operand_zero(mnemonic) {
+                    if let Some(destination) = destination {
+                        self.clear(destination);
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// Resolve the compact AArch64 table target held by a `br` register.
+    pub fn aarch64_byte_table_branch(&self, ins: &Instruction) -> Option<Aarch64ByteTableBranch> {
+        if !ins.mnemonic.eq_ignore_ascii_case("br") {
+            return None;
+        }
+        let register = ins.operands.first()?.register.as_deref()?;
+        let Val::Aarch64ByteTarget {
+            table,
+            target_base,
+            bound,
+        } = self.get(register)?
+        else {
+            return None;
+        };
+        let entry_count = bound
+            .and_then(|maximum| usize::try_from(maximum).ok())
+            .and_then(|maximum| maximum.checked_add(1));
+        Some(Aarch64ByteTableBranch {
+            table_va: table,
+            target_base,
+            entry_count,
+        })
     }
 
     /// Forget everything known about `register`, for a caller that must model
@@ -1028,7 +1303,7 @@ impl DispatchTracker {
         ins: &Instruction,
         tables: &BTreeMap<u64, Vec<u64>>,
     ) -> Option<Resolution> {
-        self.resolve_with(ins, tables, |_table, _entry_count| {
+        self.resolve_with(ins, tables, |_table, _target_base, _entry_count| {
             Err(crate::analysis::jump_table::TableDecline::DecodeNotAttempted)
         })
     }
@@ -1046,11 +1321,15 @@ impl DispatchTracker {
         decode_bounded: F,
     ) -> Option<Resolution>
     where
-        F: FnOnce(u64, usize) -> Result<Vec<u64>, crate::analysis::jump_table::TableDecline>,
+        F: FnOnce(u64, u64, usize) -> Result<Vec<u64>, crate::analysis::jump_table::TableDecline>,
     {
         let reg = ins.operands.first()?.register.as_deref()?;
         Some(match self.get(reg) {
-            Some(Val::TableTarget { table, bound }) => match bound {
+            Some(Val::TableTarget {
+                table,
+                target_base,
+                bound,
+            }) => match bound {
                 // The scan cannot see where a table ends; the guard can. Without a
                 // guard there is NO safe entry count, so this fails closed.
                 //
@@ -1084,7 +1363,7 @@ impl DispatchTracker {
                         .map(<[u64]>::to_vec);
                     match scanned
                         .ok_or(())
-                        .or_else(|()| decode_bounded(table, entry_count))
+                        .or_else(|()| decode_bounded(table, target_base, entry_count))
                     {
                         Ok(targets) => Resolution::Table {
                             table_va: table,
@@ -1106,6 +1385,43 @@ impl DispatchTracker {
             _ => Resolution::Unresolved(Unresolved::UnknownBase),
         })
     }
+}
+
+/// Validate AArch64 `ADD Xd, Xn, Wm, SXTB #2` from its fixed-width encoding.
+fn aarch64_add_sxtb_shift_two(ins: &Instruction) -> bool {
+    let Ok(bytes) = <[u8; 4]>::try_from(ins.bytes.as_slice()) else {
+        return false;
+    };
+    let word = u32::from_le_bytes(bytes);
+    // 64-bit ADD (extended register), no flags, option=SXTB, imm3=2.
+    ((word >> 21) & 0x7ff) == 0b10001011001
+        && ((word >> 13) & 0x7) == 0b100
+        && ((word >> 10) & 0x7) == 2
+}
+
+fn aarch64_defines_operand_zero(mnemonic: &str) -> bool {
+    let control_flow = mnemonic == "b"
+        || mnemonic.starts_with("b.")
+        || matches!(
+            mnemonic,
+            "bl" | "blr"
+                | "br"
+                | "braa"
+                | "braaz"
+                | "brab"
+                | "brabz"
+                | "cbz"
+                | "cbnz"
+                | "tbz"
+                | "tbnz"
+        );
+    !(control_flow
+        || mnemonic.starts_with("ret")
+        || mnemonic.starts_with("cmp")
+        || mnemonic.starts_with("cmn")
+        || mnemonic.starts_with("tst")
+        || mnemonic.starts_with("str")
+        || mnemonic.starts_with("stp"))
 }
 
 #[cfg(test)]
@@ -1200,6 +1516,135 @@ mod tests {
 
     fn tables() -> BTreeMap<u64, Vec<u64>> {
         BTreeMap::from([(0x2000, vec![0x112e, 0x113a, 0x1146, 0x1152])])
+    }
+
+    #[test]
+    fn real_aarch64_signed_byte_dispatch_preserves_table_extent_and_target_base() {
+        use crate::core::binary::Endianness;
+        use crate::core::disassembler::{Architecture, Disassembler};
+        use crate::disasm::capstone::CapstoneDisassembler;
+
+        let decoder = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("AArch64 decoder");
+        let words = [
+            (0x5f0, 0x9000_0003u32), // adrp x3, 0
+            (0x5f4, 0x911e_9063),    // add x3, x3, #0x7a4
+            (0x5f8, 0x3860_4863),    // ldrb w3, [x3, w0, uxtw]
+            (0x5fc, 0x1000_0060),    // adr x0, 0x608
+            (0x600, 0x8b23_8803),    // add x3, x0, w3, sxtb #2
+        ];
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("x0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+        for (va, word) in words {
+            let address = crate::core::address::Address::new(
+                crate::core::address::AddressKind::VA,
+                va,
+                64,
+                None,
+                None,
+            )
+            .expect("instruction address");
+            let instruction = decoder
+                .disassemble_instruction(&address, &word.to_le_bytes())
+                .expect("decode real compiler instruction");
+            tracker.observe(&instruction);
+        }
+        let branch_address = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x604,
+            64,
+            None,
+            None,
+        )
+        .expect("branch address");
+        let branch = decoder
+            .disassemble_instruction(&branch_address, &0xd61f_0060u32.to_le_bytes())
+            .expect("decode br x3");
+        assert_eq!(
+            tracker.aarch64_byte_table_branch(&branch),
+            Some(Aarch64ByteTableBranch {
+                table_va: 0x7a4,
+                target_base: 0x608,
+                entry_count: Some(16),
+            })
+        );
+    }
+
+    #[test]
+    fn aarch64_wrong_scale_and_unmodelled_write_fail_closed() {
+        use crate::core::binary::Endianness;
+        use crate::core::disassembler::{Architecture, Disassembler};
+        use crate::disasm::capstone::CapstoneDisassembler;
+
+        let decoder = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("AArch64 decoder");
+        let decode = |va, word: u32| {
+            let address = crate::core::address::Address::new(
+                crate::core::address::AddressKind::VA,
+                va,
+                64,
+                None,
+                None,
+            )
+            .expect("instruction address");
+            decoder
+                .disassemble_instruction(&address, &word.to_le_bytes())
+                .expect("decode test instruction")
+        };
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("x0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+        for (va, word) in [
+            (0x5f0, 0x9000_0003),
+            (0x5f4, 0x911e_9063),
+            (0x5f8, 0x3860_4863),
+            (0x5fc, 0x1000_0060),
+            // Same ADD-extended-register form, but SXTB #1, not the table's
+            // proved #2 scale.
+            (0x600, 0x8b23_8403),
+        ] {
+            tracker.observe(&decode(va, word));
+        }
+        let branch = decode(0x604, 0xd61f_0060);
+        assert_eq!(tracker.aarch64_byte_table_branch(&branch), None);
+
+        // A generic AArch64 definition must also kill a previously tracked
+        // address even though Capstone labels its destination operand Read.
+        let mut overwritten = DispatchTracker::new();
+        overwritten.observe(&decode(0x5fc, 0x1000_0060));
+        let mut bic = ins("bic", vec![reg_read("x0"), reg_read("x0"), reg_read("x1")]);
+        bic.arch = "arm64".to_string();
+        overwritten.observe(&bic);
+        assert!(overwritten.export_addresses().is_empty());
+
+        // A call between the exact table calculation and the branch may
+        // clobber every participating register. It must invalidate the whole
+        // candidate even when the disassembler exposes the call target as a
+        // read operand rather than a destination.
+        let mut called = DispatchTracker::new();
+        called.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("x0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+        for (va, word) in [
+            (0x5f0, 0x9000_0003),
+            (0x5f4, 0x911e_9063),
+            (0x5f8, 0x3860_4863),
+            (0x5fc, 0x1000_0060),
+            (0x600, 0x8b23_8803),
+        ] {
+            called.observe(&decode(va, word));
+        }
+        called.observe(&decode(0x604, 0x9400_0000)); // bl 0x604
+        assert_eq!(
+            called.aarch64_byte_table_branch(&decode(0x608, 0xd61f_0060)),
+            None
+        );
     }
 
     /// An `Instruction` at a chosen address and length — ARM `pc` arithmetic
@@ -1341,6 +1786,71 @@ mod tests {
             .expect("the A32 spelling resolves too");
         assert_eq!(branch.table_va, 0x0800_0014);
         assert_eq!(branch.entry_count, Some(8));
+    }
+
+    #[test]
+    fn the_real_a32_unsigned_byte_dispatch_preserves_extent_and_pc_base() {
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::A32));
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("r0".to_string(), 15)]),
+            ..Bounds::default()
+        }));
+
+        // GCC 15 fixture 206: the literal word 0x264 is added to A32 pc at
+        // 0x3b8 (0x3c0), materialising the byte table at 0x624.
+        tracker.materialize_arm_pc_relative_offset("r3", 0x264);
+        tracker.observe(&ins_at(
+            "add",
+            vec![reg_read("r3"), reg_read("pc"), reg_read("r3")],
+            0x3b8,
+            4,
+        ));
+        tracker.observe(&ins_at(
+            "ldrb",
+            vec![reg_read("r0"), mem_op_scale(Some("r3"), 0, Some("r0"), 1)],
+            0x3c4,
+            4,
+        ));
+        let mut offset = reg_read("r0");
+        offset.scale = Some(4);
+        let branch = tracker
+            .arm_byte_table_branch(&ins_at(
+                "add",
+                vec![reg_read("pc"), reg_read("pc"), offset],
+                0x3c8,
+                4,
+            ))
+            .expect("the exact A32 compact table terminal resolves");
+        assert_eq!(branch.table_va, 0x624);
+        assert_eq!(branch.target_base, 0x3d0);
+        assert_eq!(branch.entry_count, Some(16));
+    }
+
+    #[test]
+    fn a32_unsigned_byte_dispatch_refuses_wrong_scale_and_mode() {
+        let make_terminal = |scale| {
+            let mut offset = reg_read("r0");
+            offset.scale = Some(scale);
+            ins_at(
+                "add",
+                vec![reg_read("pc"), reg_read("pc"), offset],
+                0x3c8,
+                4,
+            )
+        };
+        let mut tracker = DispatchTracker::new();
+        tracker.set_arm_pc_mode(Some(ArmPcMode::A32));
+        tracker.materialize_address("r3", 0x624);
+        tracker.observe(&ins_at(
+            "ldrb",
+            vec![reg_read("r0"), mem_op_scale(Some("r3"), 0, Some("r0"), 1)],
+            0x3c4,
+            4,
+        ));
+        assert!(tracker.arm_byte_table_branch(&make_terminal(2)).is_none());
+        tracker.set_arm_pc_mode(Some(ArmPcMode::Thumb));
+        assert!(tracker.arm_byte_table_branch(&make_terminal(4)).is_none());
     }
 
     /// Without a declared execution state the base is never materialised, so
@@ -1624,7 +2134,7 @@ mod tests {
         ];
         let decoder =
             registry::for_arch(Architecture::X86_64, Endianness::Little).expect("x86-64 decoder");
-        let mut replay = |tracker: &mut DispatchTracker, base: u64, bytes: &[u8]| {
+        let replay = |tracker: &mut DispatchTracker, base: u64, bytes: &[u8]| {
             let mut offset = 0usize;
             let mut last = None;
             while offset < bytes.len() {
@@ -2136,6 +2646,43 @@ mod tests {
                 targets: vec![0x112e, 0x113a, 0x1146, 0x1152],
             })
         );
+    }
+
+    /// GCC i386 PIC keeps one GOT base distinct from the displaced table
+    /// address and folds the load-plus-add into one instruction.
+    #[test]
+    fn the_i386_got_relative_add_memory_dispatch_preserves_both_bases() {
+        let mut t = DispatchTracker::new();
+        t.materialize_address("eax", 0x1155);
+        t.observe(&ins("add", vec![reg_op("eax"), imm_op(0x2e9f)]));
+        t.observe(&ins("cmp", vec![reg_op("edx"), imm_op(15)]));
+        let mut table_add = ins(
+            "add",
+            vec![
+                reg_op("eax"),
+                // iced exposes the encoded negative i386 disp32 as unsigned.
+                mem_op(Some("eax"), 0xffff_e00c, Some("edx")),
+            ],
+        );
+        table_add.arch = "x86".to_string();
+        t.observe(&table_add);
+        let result = t.resolve_with(
+            &ins("jmp", vec![reg_read("eax")]),
+            &BTreeMap::new(),
+            |table, target_base, count| {
+                assert_eq!(table, 0x2000);
+                assert_eq!(target_base, 0x3ff4);
+                assert_eq!(count, 16);
+                Ok(vec![0x1100; count])
+            },
+        );
+        assert!(matches!(
+            result,
+            Some(Resolution::Table {
+                table_va: 0x2000,
+                targets,
+            }) if targets.len() == 16
+        ));
     }
 
     /// The block walker observes every decoded instruction *including the

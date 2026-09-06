@@ -56,6 +56,9 @@ mod switch_shape;
 mod verify;
 
 pub(crate) use cfg::{BranchPredicate, Cfg};
+pub use cfg::{
+    SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+};
 use fallback::{
     contains_structured_loop, contains_switch, has_inner_loop_exit_that_reenters_via_outer_cycle,
     has_loop_conditional_with_join_beyond_loop, has_multi_latch_loop_with_distinct_exits,
@@ -64,9 +67,11 @@ use fallback::{
 use if_shape::detect_if_shape;
 use loop_shape::{
     detect_bottom_tested_loop, detect_natural_loop, detect_raw_dispatch_loop,
-    detect_raw_multi_latch_loop, has_dispatch_natural_loop, loop_break_shape,
+    detect_raw_multi_latch_loop, has_dispatch_natural_loop, linear_path_reaches_raw_dispatch_loop,
+    loop_break_shape,
 };
-pub use region::{entry_block, Region};
+use path_predicates::private_return_chain;
+pub use region::{entry_block, RawSwitchInlineRegion, Region};
 use switch_shape::{detect_guarded_switch_shape, detect_switch_shape};
 pub use verify::{verify_region, StructError};
 // `find_switch_join` has no caller outside `switch_shape` itself except `mod
@@ -236,7 +241,11 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
         return Region::Unstructured((0..lf.blocks.len()).collect());
     }
     let mut visited: HashSet<usize> = HashSet::new();
-    let region = build(0, cfg, &mut visited, None);
+    let mut state = BuildState::default();
+    let region = build(0, cfg, &mut visited, None, &mut state);
+    if state.exhausted {
+        return Region::Unstructured((0..lf.blocks.len()).collect());
+    }
     let leftover: Vec<usize> = (0..lf.blocks.len())
         .filter(|b| !visited.contains(b))
         .collect();
@@ -270,7 +279,47 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
 
 /// Recursively build a Region starting at `start`, stopping at `stop_at`
 /// (exclusive). `visited` tracks blocks consumed into the output.
-fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<usize>) -> Region {
+#[derive(Default)]
+struct BuildState {
+    depth: usize,
+    calls: usize,
+    exhausted: bool,
+}
+
+/// Bound speculative recursive shape recovery by the graph it is recovering.
+///
+/// A valid descent must consume or stop at a CFG block. More nested calls than
+/// there are blocks, or more than a small constant number of speculative calls
+/// per block, proves that recognisers are revisiting shapes through cloned
+/// ownership state. Mark the attempt exhausted so `build_full` selects the
+/// complete labelled CFG instead of overflowing the native stack or spending
+/// unbounded time exploring the same graph.
+fn build(
+    start: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+    stop_at: Option<usize>,
+    state: &mut BuildState,
+) -> Region {
+    let call_budget = cfg.succs.len().saturating_mul(8).max(64);
+    if state.depth > cfg.succs.len() || state.calls >= call_budget {
+        state.exhausted = true;
+        return Region::Seq(Vec::new());
+    }
+    state.calls += 1;
+    state.depth += 1;
+    let region = build_inner(start, cfg, visited, stop_at, state);
+    state.depth -= 1;
+    region
+}
+
+fn build_inner(
+    start: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+    stop_at: Option<usize>,
+    state: &mut BuildState,
+) -> Region {
     let mut parts: Vec<Region> = Vec::new();
     let mut cur = start;
 
@@ -304,7 +353,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // Detect this before inserting `cur` into `visited`: the recovered body
         // begins at `cur` and must be structured recursively up to (but not
         // including) the conditional latch.
-        if let Some(loop_r) = detect_bottom_tested_loop(cur, cfg, visited) {
+        if let Some(loop_r) = detect_bottom_tested_loop(cur, cfg, visited, state) {
             parts.push(loop_r.region);
             match loop_r.exit {
                 Some(next) => {
@@ -340,7 +389,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // natural loop with that block as header. We only structure this when
         // `cur` itself is the loop header (single-block loop) or when we are
         // already sitting at the header.
-        if let Some(loop_r) = detect_natural_loop(cur, cfg, visited) {
+        if let Some(loop_r) = detect_natural_loop(cur, cfg, visited, state) {
             parts.push(loop_r.region);
             match loop_r.exit {
                 Some(next) => {
@@ -357,7 +406,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // destination blocks; treating that graph as an if/else loses the
         // switch expression and half its labels.
         if cfg.is_switch_dispatch(cur) {
-            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at) {
+            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at, state) {
                 parts.push(sw);
                 match after {
                     Some(next) => {
@@ -383,7 +432,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
                     let break_region = if break_entry == exit {
                         Region::Goto(exit)
                     } else {
-                        build(break_entry, cfg, visited, Some(exit))
+                        build(break_entry, cfg, visited, Some(exit), state)
                     };
                     parts.push(Region::IfThen {
                         cond: cur,
@@ -400,7 +449,9 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             // required when the default path shares a terminal tail with one
             // explicit case: ordinary if/else ownership cannot represent that
             // overlap without either duplicating or dropping the tail.
-            if let Some((sw, after)) = detect_guarded_switch_shape(cur, cfg, visited, stop_at) {
+            if let Some((sw, after)) =
+                detect_guarded_switch_shape(cur, cfg, visited, stop_at, state)
+            {
                 parts.push(sw);
                 match after {
                     Some(next) => {
@@ -410,7 +461,7 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
                     None => break,
                 }
             }
-            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at) {
+            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at, state) {
                 parts.push(ite);
                 match after {
                     Some(next) => {
@@ -418,6 +469,60 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
                         continue;
                     }
                     None => break,
+                }
+            }
+
+            // An out-of-loop guard may have a bypass arm and a straight-line
+            // continuation into a multi-exit dispatch loop. No ordinary
+            // diamond owns the two paths because they never rejoin. Preserve
+            // the bypass and keep walking the other arm so the local RawLoop
+            // recogniser can own every latch. An exclusively-owned bounded
+            // chain ending in a machine return can be owned directly by the
+            // guard; shared, branching, cyclic, or non-returning bypasses stay
+            // explicit gotos.
+            if let Some(taken) = cfg.cond_taken[cur] {
+                let other = cfg.succs[cur].iter().copied().find(|succ| *succ != taken);
+                if let Some(other) = other {
+                    let taken_reaches = linear_path_reaches_raw_dispatch_loop(taken, cfg);
+                    let other_reaches = linear_path_reaches_raw_dispatch_loop(other, cfg);
+                    let guarded_continuation = match (taken_reaches, other_reaches) {
+                        (true, false) => Some((taken, other, true)),
+                        (false, true) => Some((other, taken, false)),
+                        _ => None,
+                    };
+                    if let Some((continuation, bypass, invert)) = guarded_continuation {
+                        let bypass_region =
+                            if let Some(chain) = private_return_chain(bypass, cur, cfg) {
+                                let last = chain.len() - 1;
+                                let mut blocks: Vec<_> = chain
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, block)| {
+                                        if index == last && cfg.preds[block].len() > 1 {
+                                            Region::Borrowed(Box::new(Region::Block(block)))
+                                        } else {
+                                            visited.insert(block);
+                                            Region::Block(block)
+                                        }
+                                    })
+                                    .collect();
+                                if blocks.len() == 1 {
+                                    blocks.pop().expect("the private return chain is nonempty")
+                                } else {
+                                    Region::Seq(blocks)
+                                }
+                            } else {
+                                Region::Goto(bypass)
+                            };
+                        parts.push(Region::IfThen {
+                            cond: cur,
+                            then_r: Box::new(bypass_region),
+                            join: None,
+                            invert,
+                        });
+                        cur = continuation;
+                        continue;
+                    }
                 }
             }
         }
@@ -494,11 +599,12 @@ fn build_arm(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     stop_at: Option<usize>,
+    state: &mut BuildState,
 ) -> Region {
     if Some(entry) != stop_at && visited.contains(&entry) {
         return Region::Goto(entry);
     }
-    build(entry, cfg, visited, stop_at)
+    build(entry, cfg, visited, stop_at, state)
 }
 
 #[cfg(test)]
@@ -893,6 +999,149 @@ mod tests {
         assert!(
             crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region).is_empty(),
             "dense guarded switch must account for every typed edge: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn guarded_switch_case_may_borrow_a_return_shared_with_the_default() {
+        // Reduced from fixture 215 Clang O2 `wide_selector_mixed`. Case zero
+        // enters the bare RET after setting its result in the dispatch block;
+        // the out-of-range comparison tree also reaches that RET after setting
+        // -1. The return therefore selects a predecessor-specific SSA value.
+        // It is a valid borrowed presentation tail, not a reason to discard
+        // all six CFG-proven switch arms.
+        let comparison = VReg::Flag(crate::ir::types::Flag::C);
+        let condition = VReg::Flag(crate::ir::types::Flag::Z);
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: comparison.clone(),
+                        op: crate::ir::types::CmpOp::Ule,
+                        lhs: Value::Reg(VReg::phys("index")),
+                        rhs: Value::Const(5),
+                    },
+                    // x86 `ja` consumes a boolean assembled from arithmetic
+                    // flags rather than the comparison result directly.
+                    Op::Assign {
+                        dst: condition.clone(),
+                        src: Value::Reg(comparison),
+                    },
+                    Op::CondJump {
+                        cond: condition,
+                        target: 0x1800,
+                        inverted: true,
+                    },
+                ],
+                vec![0x1100, 0x1800],
+            ),
+            (
+                0x1100,
+                vec![
+                    Op::Assign {
+                        dst: VReg::phys("eax"),
+                        src: Value::Const(30),
+                    },
+                    Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("target")),
+                        index: Some(Value::Reg(VReg::phys("index"))),
+                    },
+                ],
+                vec![0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700],
+            ),
+            (0x1200, vec![Op::Return], vec![]),
+            (0x1300, vec![Op::Return], vec![]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Return], vec![]),
+            (0x1600, vec![Op::Return], vec![]),
+            (0x1700, vec![Op::Return], vec![]),
+            (
+                0x1800,
+                vec![Op::Assign {
+                    dst: VReg::phys("eax"),
+                    src: Value::Const(-1),
+                }],
+                vec![0x1200],
+            ),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover(&lf, &ssa);
+        fn contains_switch(region: &Region) -> bool {
+            match region {
+                Region::Switch { .. } => true,
+                Region::Seq(parts) => parts.iter().any(contains_switch),
+                Region::IfThen { then_r, .. }
+                | Region::While { body: then_r, .. }
+                | Region::DoWhile { body: then_r, .. }
+                | Region::MultiExitLoop { body: then_r, .. }
+                | Region::Borrowed(then_r) => contains_switch(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    contains_switch(then_r) || contains_switch(else_r)
+                }
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => false,
+            }
+        }
+        assert!(
+            contains_switch(&region),
+            "the shared return must not erase typed switch evidence: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn arithmetic_value_flow_does_not_prove_an_unsigned_switch_guard() {
+        // A branch predicate may depend on a value that was computed from an
+        // earlier unsigned comparison without being that comparison's boolean
+        // result.  Following arbitrary def-use edges made the ARM fixture-206
+        // loop latch look like a switch range guard and destroyed its already
+        // recovered inner switch.  Only predicate-preserving operations may
+        // carry unsigned-comparison evidence to a conditional branch.
+        let comparison = VReg::Temp(70);
+        let arithmetic = VReg::Temp(71);
+        let condition = VReg::Temp(72);
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: comparison.clone(),
+                        op: crate::ir::types::CmpOp::Ult,
+                        lhs: Value::Reg(VReg::phys("index")),
+                        rhs: Value::Const(6),
+                    },
+                    Op::Bin {
+                        dst: arithmetic.clone(),
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Value::Reg(comparison),
+                        rhs: Value::Const(1),
+                    },
+                    Op::Cmp {
+                        dst: condition.clone(),
+                        op: crate::ir::types::CmpOp::Eq,
+                        lhs: Value::Reg(arithmetic),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondJump {
+                        cond: condition,
+                        target: 0x1100,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1100, 0x1200],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+            (0x1200, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        assert!(
+            !cfg.branch_depends_on_unsigned_comparison(0),
+            "arithmetic ancestry is not boolean range-proof provenance"
         );
     }
 
@@ -1582,6 +1831,203 @@ mod tests {
     }
 
     #[test]
+    fn two_exit_multi_latch_switch_loop_has_local_raw_ownership() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // Reduced fixture-206 A32 shape. The loop header has a normal exit;
+        // the guarded switch has three distinct latches plus one early-return
+        // case. No ordinary single-latch While/DoWhile can own all backedges.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1200), vec![0x1200, 0x1700]), // header / normal exit
+            (0x1200, cond(0x1300), vec![0x1300, 0x1500]), // table guard/default
+            (
+                0x1300,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1400, 0x1600, 0x1800],
+            ),
+            (0x1400, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1500, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1600, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1700, vec![Op::Return], vec![]),
+            (0x1800, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let (region, health) = recover_verified_with_health(&lf, &ssa);
+        let rendered = format!("{region:#?}");
+        assert!(
+            rendered.contains("RawLoop"),
+            "loop ownership was lost: {rendered}"
+        );
+        assert_ne!(
+            region,
+            Region::Unstructured((0..lf.blocks.len()).collect()),
+            "only the loop should degrade, not the whole function"
+        );
+        assert_eq!(health.structure_fallbacks, 0, "{region:#?}");
+        let cfg = Cfg::from(&lf, &ssa);
+        assert_eq!(
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region),
+            Vec::new(),
+            "the local RawLoop must own every latch and both real exits: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn raw_dispatch_partition_owns_a_private_branching_dag_but_not_its_shared_latch() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1200), vec![0x1200, 0x1800]),
+            (0x1200, cond(0x1300), vec![0x1300, 0x1700]),
+            (
+                0x1300,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1400, 0x1600, 0x1900],
+            ),
+            (0x1400, cond(0x1500), vec![0x1500, 0x1a00]),
+            (0x1500, vec![Op::Nop], vec![0x1b00]),
+            (0x1600, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1700, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1800, vec![Op::Return], vec![]),
+            (0x1900, vec![Op::Return], vec![]),
+            (0x1a00, vec![Op::Nop], vec![0x1b00]),
+            (0x1b00, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+        ]);
+
+        fn inline_regions(region: &Region) -> Option<&[RawSwitchInlineRegion]> {
+            match region {
+                Region::RawLoop {
+                    switch_inline_regions,
+                    ..
+                } => Some(switch_inline_regions),
+                Region::Seq(parts) => parts.iter().find_map(inline_regions),
+                Region::IfThen { then_r, .. } => inline_regions(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    inline_regions(then_r).or_else(|| inline_regions(else_r))
+                }
+                Region::Borrowed(inner) => inline_regions(inner),
+                _ => None,
+            }
+        }
+
+        let region = recover_for(&lf);
+        let inline_regions =
+            inline_regions(&region).expect("the dispatch loop must retain its partition");
+        assert!(
+            inline_regions
+                .iter()
+                .any(|region| region.entry == 4 && region.blocks == vec![4, 5, 10, 11]),
+            "the private branching case region was not recovered: {region:#?}"
+        );
+        assert!(
+            inline_regions
+                .iter()
+                .flat_map(|region| region.blocks.iter())
+                .all(|block| *block != 1),
+            "the shared loop header must stop every private region: {region:#?}"
+        );
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn preloop_guard_owns_a_private_return_chain_before_raw_dispatch_loop() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // B0 has one private two-block return arm and one linear continuation
+        // into a two-latch dispatch loop. This is the reduced fixture-206 A32
+        // pre-loop guard: the return chain belongs to the guard and must not be
+        // represented as a cross-region goto.
+        let lf = mk_cfg(vec![
+            (0x1000, cond(0x1100), vec![0x1200, 0x1100]),
+            (0x1100, vec![Op::Nop], vec![0x1180]),
+            (0x1200, vec![Op::Nop], vec![0x1300]),
+            (0x1180, vec![Op::Return], vec![]),
+            (
+                0x1300,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1400, 0x1500, 0x1180, 0x1700],
+            ),
+            (0x1400, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1500, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1700, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover_for(&lf);
+        let rendered = format!("{region:#?}");
+        assert!(rendered.contains("RawLoop"), "loop was lost: {rendered}");
+        assert!(
+            !rendered.contains("Goto(1)"),
+            "private return stayed a goto: {rendered}"
+        );
+        let cfg = Cfg::from(&lf, &ssa);
+        assert_eq!(
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region),
+            Vec::new(),
+            "the guard, private return, and loop must all be owned: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn two_exit_single_latch_switch_loop_does_not_force_raw_ownership() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, cond(0x1100), vec![0x1100, 0x1500]),
+            (
+                0x1100,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1200, 0x1400],
+            ),
+            (0x1200, vec![Op::Nop], vec![0x1300]),
+            (0x1300, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Return], vec![]),
+        ]);
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        assert!(
+            detect_raw_dispatch_loop(0, &cfg, &mut HashSet::new()).is_none(),
+            "a single-latch two-exit loop remains eligible for ordinary structure"
+        );
+    }
+
+    #[test]
     fn nested_loop_with_distinct_match_and_exhaustion_exits_falls_back_totally() {
         // Reduced GCC -O2 `has_pair`. B4/B3 is the inner search loop: B4's
         // match edge returns through B5, while B3's exhausted edge reaches the
@@ -1923,7 +2369,13 @@ mod tests {
 
         let ssa = compute_ssa(&lf);
         let cfg = Cfg::from(&lf, &ssa);
-        let region = build(0, &cfg, &mut HashSet::new(), Some(3));
+        let region = build(
+            0,
+            &cfg,
+            &mut HashSet::new(),
+            Some(3),
+            &mut BuildState::default(),
+        );
 
         assert!(
             format!("{region:#?}").contains("Goto(\n            2"),

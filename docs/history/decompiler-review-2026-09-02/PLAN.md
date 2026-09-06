@@ -10,7 +10,7 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-05 through homogeneous-float
+Current-state snapshot: reconciled 2026-09-06 through homogeneous-float
 behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
 `1bee3fb1`, and census commit `a0915220`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
@@ -21,10 +21,44 @@ nested post-tested branches preserved; it still lacks the remaining promotion
 measurements. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
 slice and the O0 `classify` signed-result vertical slice, but not the general
-solver. WP2, WP3,
+solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
+unsigned parameter declaration while rendering a contradictory signed machine
+comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP2, WP3,
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
+The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
+authoritatively declared eight-byte integer parameter now carries both aligned
+entry words into the AST instead of presenting its high word as an invented
+local. Four ARMv7/ARMv7-A32 O2 fixture-215 cells move to execution-correct
+output with no attributable regression across the 60-cell architecture slice.
+Big-endian ordering, inferred prototypes, and residual A32 O0 storage defects
+remain deliberately open. See
+`results/wp6-wp9-aapcs32-wide-parameters.md`.
+The matching i386 cdecl32 carrier is landed at `fcd9bd2d`, with baseline and
+census commits `9b307e0b` and `d1bf72a7`. Authoritatively declared eight-byte
+integer parameters now join their two adjacent incoming stack words without
+truncating the promoted whole-argument role. Fixture 202 and 215 gain nine
+execution-correct O0/O2 cells with no attributable regression in the complete
+410-lane i386 comparison. Signed selectors remain WP6/WP7 work and the i386 O2
+mixed selector remains WP5 work. See
+`results/wp6-wp9-cdecl32-wide-parameters.md`.
+The required exact-clean-checkout Rust gate at `d1bf72a7` is green: the library
+target reports 4,126 passed, zero failed, and five ignored, and every
+integration and documentation target passes. The long identity-retrieval
+target independently reports 44 passed, zero failed, and ten ignored.
+The next bounded WP7 range slice is landed at `f39bdf0e`, with census commit
+`98ea766c`. The i386 O2 `wide_selector_mixed` guard now recovers `op <= 5` from
+the exact cdecl32 high/low borrow identity and removes the repeated impossible
+`op > 5` nested arm. The complete 410-lane i386 sweep has no attributable
+execution-verdict movement; this is an output/readability improvement, and the
+still-unrecovered indirect jump remains WP5 work. See
+`results/wp7-cdecl32-wide-range-predicate.md`.
+The required exact-clean-checkout Rust gate at `98ea766c` is green: its library
+target reports 4,132 passed, zero failed, and five ignored, and every
+integration and documentation target passes. The complete host sweep executes
+824 of 838 lanes with zero regressions and reproduces 35 pre-existing
+unratcheted improvements.
 The first fixture-217 follow-on is a bounded WP9 instruction-semantics
 increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
 typed binary32 lanes. The following WP6/WP9 call-boundary increment is also
@@ -82,13 +116,133 @@ and unrecovered functions from 27 to 25. Deduplicated emitted gotos move from
 focused inventory suite passes. An isolated parent/tip fitness A/B records
 the final borrowed-provenance slice's exact cost as 61 product lines with no file
 threshold crossing, maximum-size growth, or IR-count growth. The next WP5
-slice is the shared immutable case/default/provenance object named in immediate
-action 5, not another fixture-specific switch recognizer.
+slice is now landed at `9ad9414d`: `Cfg` builds one immutable, ordered
+case/default/provenance object from typed edges and labels, and both production
+and shadow-v2 consume it. Completeness fails closed when any typed case lacks a
+non-empty label, when default evidence is ambiguous, or when evidence is
+otherwise truncated. The independent v2 verifier checks relational invariants
+rather than trusting or duplicating the producer. Forged missing-label,
+missing-default, and incomplete-evidence tests prove those refusal boundaries.
+The full Rust gate reports 4,351 passed, zero failed, and 17 ignored across 35
+targets. See `results/wp5-shared-switch-evidence.md`. This completes the shared
+transport increment, not WP5: remaining compiler/architecture execution cells,
+decline classification, and the full Python/matrix gates remain open.
+Commit `460259fa` carries that canonical object through a WP4 `RawLoop`, closing
+another place where lowering reconstructed switch facts from successor order.
+The real fixture-206 A32 loop now retains its proven guard-only default even
+though that target is not a dispatch successor, and its native v1 round trip
+remains green. Incomplete evidence declines to the prior lossless labelled
+form. This is prerequisite transport for handler partitioning, not the
+partition itself; labelled handler bodies and their shared join remain open.
+See `results/wp5-raw-loop-switch-evidence.md`.
+Commit `88e6584c` then uses that transport to absorb the real raw-loop range
+guard under the same complete-evidence, single-predecessor, and SSA unsigned
+comparison proof as ordinary guarded switches. Fixture 206 now renders
+`switch ((var11 & 7))` directly: the `var12` temporary, redundant range-check
+`if`, and one goto disappear while the typed default and native execution are
+preserved. See `results/wp4-raw-switch-guard.md`. Handler bodies remain labelled
+until the separate exclusive-entry/shared-join partition is proved.
+The first such partition is now production at `13588284`. A case/default entry
+whose only predecessors are its typed dispatch/folded guard is emitted directly
+inside that arm, while every shared successor remains in canonical raw
+ownership and is emitted once. The real A32 loop moves from seven remaining
+gotos to zero with unchanged native execution and silent accounting. This is a
+one-block exclusive-prefix proof; see
+`results/wp4-raw-switch-exclusive-entries.md`.
+Commit `ca30c62f` extends that ownership through bounded, disjoint private
+linear prefixes and independently rejects a forged prefix that crosses a
+shared join. The exact-tip structural gate completes 25 of 27 tests: its eight
+regression findings and six improvement findings all reproduce byte-identically
+at the preceding exact commit. They are baseline debt and earlier improvements,
+respectively, rather than changes attributable to this increment. The complete
+six-test def-use census likewise produces an identical parent/tip report (four
+tests green, the same regression and improvement ratchets red). Branching
+private regions are now covered by the follow-on `1ce1a80b`: bounded,
+predecessor-closed private DAGs retain their conditional inside the typed arm,
+while an independent verifier rejects a forged shared-join crossing. A real
+GCC ARMv7 A32 case loses two out-of-line gotos, preserves native execution, and
+keeps accounting silent. Cyclic, cross-arm, and shared-join ownership and the
+remaining promotion gates stay open; see
+`results/wp4-raw-switch-private-prefixes.md` and
+`results/wp4-raw-switch-private-branches.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
 fixture 204 remains account-clean, and the `deep152_while_tower` correctness
 canary remains green.
+The next architecture slice is now landed separately at behavioral commit
+`310b949e`: GCC AArch64 O2's guarded `LDRB`/`SXTB #2` compact byte table
+becomes an execution-correct 16-case production switch for
+`206::dense_dispatch`. The exact fixture moves from `fail` to `pass`; a
+ten-lane adjacent AArch64 switch slice has no regressions, and the full Rust
+gate is green. An isolated full 412-lane AArch64 parent/tip comparison produces
+the same four older regressions and fourteen stale improvements at both
+revisions, proving no architecture-wide regression is attributable to the
+slice. This is one fail-closed compiler encoding, not completion of WP5's
+architecture matrix. See
+`results/wp5-aarch64-compact-byte-switch.md`.
+Hardening commit `5dbc3fc4` additionally invalidates all AArch64 dispatch facts
+across direct and indirect calls, preventing a callee-clobbered address from
+being reused as false switch evidence; the focused and architecture-wide
+results are unchanged. Its post-source whole Python gate completed red at
+4,595 passed and 126 failed. Exact comparison with the 118-failure parent
+snapshot found eight tip-only node IDs: seven pass together on immediate
+clean-tip retry, while the sole deterministic delta is the six-test census
+increase committed at `88bb8650`. The focused census suite is green and the
+never-executed pool remains zero; this is triaged full-gate evidence, not a
+release-green claim.
+The following i386 slice is landed at behavioral commit `b84233ec`. GCC PIC's
+PC thunk and checked GOT arithmetic now preserve distinct table and target-base
+addresses through bounded relative decode. Eight i386 O2 cells move from
+`fail` to execution-verified `pass`, including a switch nested in a loop. The
+complete 410-lane parent/tip comparison has zero attributable regression and
+the full Rust gate is green. The census increase is recorded at `86d224f5`;
+its exact-checkout whole Python gate completed at 4,597 passed, 125 failed, 891
+expected failures, 78 skipped, and 125 deselected. There are no tip-only
+failing node IDs relative to the AArch64 parent; the sole removed failure is
+the census check updated by `86d224f5`. This is triaged broadly-red evidence,
+not a release-green claim. See
+`results/wp5-i386-got-relative-switch.md`.
+The following ARMv7 A32 slice is landed at `76cce5d1` and hardened at
+`5ef0bcb9`. Exact PC-relative literal materialisation, unsigned byte-table
+decode, and `add pc, pc, rOffset, lsl #2` semantics recover nine O2 switch
+functions with zero parent/tip decline across 410 lanes and 1,604 function
+verdicts. Production `dense_dispatch` and shadow-v2 `dispatch_in_loop` pass
+native execution. Commit `6f0ba701` closes the latter's production-v1 WP4
+ownership defect: all six latch backedges are locally owned and production now
+passes with a real switch inside the loop. Four valid wide byte switches in
+`43_base64` exposed a v1 recursive
+stack overflow; the shared graph-sized structure work budget now selects the
+complete labelled CFG in 0.17 seconds instead of crashing. See
+`results/wp5-armv7-a32-byte-switch.md`.
+The exact 410-lane post-repair comparison has one attributable movement,
+`dispatch_in_loop` from `fail` to `pass`; two unrelated alternating rows are
+recorded as same-revision harness instability rather than code regressions.
+See `results/wp4-a32-multi-latch-dispatch-loop.md`.
+The follow-on quality increments at `28b3bc5b` and `0e29ffc4` eliminate the
+unreachable undefined `var1` select arm and the final outer-guard
+`EdgeViaGoto`. Exact host and A32 comparisons show no attributable status
+decline; see `results/wp4-a32-guard-quality.md`.
+Commit `c9483542` then lowers every exact raw-loop header backedge to
+source-level `continue`, removing six more gotos and the unused header label
+from the real output without changing its execution status or clean accounting.
+The exact 3,346-function host comparison has zero status/category movement;
+see `results/wp4-raw-loop-continue.md`.
+The next host-wide-selector slice is landed at `9333881e` and hardened at
+`98a0d2d3`. Clang and GCC O2 fixture-215 `wide_selector_mixed` now retain all
+six typed cases even though case zero borrows a return also reached by the
+formal default. The first complete def-use run caught that unrestricted SSA
+ancestry and cyclic borrowed-return reachability regressed the already-green
+fixture-206 Clang O2 loop switch. That movement was rejected, reduced to a
+unit and real-binary regression, and repaired by distinguishing boolean
+predicate provenance from arbitrary data dependence and by keeping cyclic
+guard ownership on a direct-comparison contract. The hardened result preserves
+both switches and restores all 169 normalized def-use findings byte-for-byte.
+The exact whole-Python comparison has no ordinary tip-only regression, and the
+1,676-object inventory moves from 38 to 30 unrecovered observations and from
+6,823 to 6,502 emitted gotos. Commit `0466a2e0` ratchets those repairs and
+promotes the Duff latch to a positive test; see
+`results/wp5-wide-selector-shared-return.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -866,9 +1020,15 @@ one authoritative set of case edges.
   `ldr pc, [pc, r0, lsl #2]` through the relevant lifter/machine-model layer.
   Both forms already decode through `dispatch_resolution.rs`; the remaining
   work is to complete the architecture lanes and consolidate the evidence
-  contract.
-- [~] Represent resolved case values, targets, default edge, provenance,
-  bounds, and completeness as typed evidence attached to `Op::IndirectJump`.
+  contract. AArch64's GCC O2 compact signed-byte form is now also decoded:
+  W/X register identity and the taken-edge `b.ls` bound prove the selector and
+  extent, while exact `LDRB` plus encoded `ADD ..., SXTB #2` evidence proves
+  the table and target base. Checked decoding rejects malformed,
+  non-executable, overlapping, or wrongly scaled candidates. This is the
+  bounded `310b949e` slice, not general AArch64 dispatch completion.
+- [x] Represent resolved case values, targets, default edge, provenance,
+  bounds, and completeness as typed evidence derived from `Op::IndirectJump`
+  and its typed CFG edges.
   `Op::IndirectJump.index`, typed CFG `SwitchCase`/`SwitchDefault` edges, and
   ordered `Cfg::case_labels` already carry the first production facts. WP4's
   independently verified `RegionCandidate` now receives explicit
@@ -876,10 +1036,20 @@ one authoritative set of case edges.
   the real `102_duffs_device-gcc-O2.so::duff_copy` fixture records one dispatch,
   eight ordered values `0..7`, and its linked bypass edge. The verified WP4
   tree now consumes that same evidence and renders an eight-arm switch with
-  honest labelled transfers into the suffix-entry region. A forged-label test
-  proves that block/edge coverage alone cannot validate this metadata.
-- [ ] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
-  rendering consume the same evidence object.
+  honest labelled transfers into the suffix-entry region. At `9ad9414d`, the
+  shared immutable `SwitchEvidence` is built once by `Cfg` from typed
+  `SwitchCase`/`SwitchDefault` edges plus ordered labels, and production and v2
+  consume it. Completeness fails closed on missing or empty labels, ambiguous
+  defaults, and incomplete evidence; v2 declines before recovery or rendering.
+  The verifier remains independent and checks edge/label/default relationships,
+  including rejection of forged missing labels and deletion of a proven
+  default.
+- [~] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
+  rendering consume the same evidence object. Both structurers now share the
+  immutable typed object and rendering receives their structured result.
+  Structure accounting and the independent verifier intentionally retain
+  separate relational checks rather than accepting producer assertions. The
+  remaining corpus-wide accounting and decline evidence is still open.
 - [ ] Add `Op::Switch` only if it becomes the sole semantic owner of those
   targets and receives execution semantics.
 
@@ -920,7 +1090,33 @@ one authoritative set of case edges.
   so neither `EdgeUnaccounted` nor `BlockDuplicated` remains. The full-matrix
   `152_deep_nesting` canary proves predecessor-specific return values were not
   traded away for cleaner accounting.
-  Other compiler/optimization and named fixture lanes remain.
+  The AArch64 GCC O2 `206::dense_dispatch` lane now recovers its compact
+  signed-byte branch table as cases `0..15` plus default and passes all 22
+  deterministic execution cases. Ten adjacent AArch64 switch lanes report no
+  regression after the single reviewed baseline movement. The complete
+  412-lane AArch64 O0/O2 comparison has no attributable regression: all four
+  reported regressions reproduce identically at parent `7c0ba967`.
+  Its whole Python gate is complete but red: seven of eight apparent new
+  failures pass on immediate focused retry, and the one deterministic delta is
+  the expected six-test census increase now recorded at `88bb8650`. Other
+  compiler/optimization and named fixture lanes remain.
+  GCC i386 O2's GOT-relative table form is also recovered. Eight cells now
+  pass execution, table address and target base remain distinct typed facts,
+  and all four regressions in the complete 410-lane comparison reproduce at
+  the parent. Its exact-checkout whole Python gate has no tip-only failing node
+  IDs and remains broadly red at 4,597 passed and 125 failed.
+  GCC ARMv7 A32 O2's compact unsigned-byte form is now recovered from exact
+  PC-relative literal materialisation through the scaled PC terminal. Nine
+  function verdicts improve and none decline across the complete 410-lane,
+  1,604-function parent/tip comparison. `dense_dispatch` passes production
+  execution; `dispatch_in_loop` passes both shadow-v2 and, after `6f0ba701`,
+  production-v1 execution. Its multi-latch raw loop owns every backedge and
+  initially left one explicit outer-guard transfer as a quality-only accounting
+  finding. The bounded private-prefix/shared-terminal repair at `0e29ffc4`
+  closes that finding, while `28b3bc5b` removes the adjacent unreachable
+  undefined select arm. A graph-sized recursive work budget also makes four
+  valid 48-entry tables degrade to complete labelled CFG output rather than
+  overflowing the native stack.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
@@ -1108,6 +1304,19 @@ representable literal, and retains wider-literal and unsigned cases. This
 closes the concrete example's cast-heavy predicate spelling without claiming
 the general WP6 constraint solver is complete.
 
+The bounded fixture-215 follow-on at `a88edd9a`/`8ab39b50` handles the inverse
+boundary conflict: an authoritative `uint64_t` parameter consumed by a signed
+machine comparison in Clang O2's partition tree. `DeclarationPlan` preserves
+the source signature and records that its integer fact is authoritative; the
+renderer applies a same-width signed cast only at that exact relational use.
+The initially broader rule over all inferred unsigned declarations was rejected
+after the structural census exposed unnecessary churn. The narrowed tip makes
+`wide_selector_high_labels` pass `UINT64_MAX`, moves the final Clang-O2
+fixture-215 cell from fail to pass, and produces byte-identical matched
+parent/tip structural and def-use diagnostics. This is a concrete per-use WP6
+increment, not the general solver. See
+`results/wp6-authoritative-unsigned-signed-edge.md`.
+
 Required regression coverage is equally part of completion:
 
 - `python/tests/test_classify_signed_loop.py` must assert the signed declaration,
@@ -1193,10 +1402,12 @@ name-parsing convention was introduced.
 - [~] Land one rule per increment:
   1. [x] flag-derived relational normalization, beginning with the exact typed
      equivalence `!((x == k) || (x <s k)) == (x >s k)` seen in `classify`;
-  2. [ ] strength-reduced constant multiplication;
-  3. [ ] signed division/modulo by a power of two;
-  4. [ ] compiler magic-number division;
-  5. [ ] compound boolean-mask normalization;
+  2. [x] bounded cdecl32 high/low borrow normalization for an authoritative
+     unsigned 64-bit source and an immutable, single-definition alias chain;
+  3. [ ] strength-reduced constant multiplication;
+  4. [ ] signed division/modulo by a power of two;
+  5. [ ] compiler magic-number division;
+  6. [ ] compound boolean-mask normalization;
 - [ ] Each rule must declare operand width, signed interpretation,
   preconditions, output type, and origin composition.
 - [ ] Never peel or narrow casts unless equivalence is proved at the original
@@ -1233,6 +1444,19 @@ view, compile as C, and pass 34 differential cases each. The 24-lane loops,
 polarity, switch, and width corpus reports zero scoped regressions. This closes
 the predicate subproblem only; stripped return inference and redundant return
 casts remain WP6 work. See `results/wp7b-classify-signed-predicate.md`.
+
+The bounded two-word range rule landed at `f39bdf0e`. It recognizes only the
+exact cdecl32 identity `(0 <u hi) | ((0 - hi) <u (k <u lo))`, requires `hi` and
+`lo` to be the unsigned 32-bit projections of the same recovered unsigned
+eight-byte source, and resolves only single-definition aliases whose complete
+dependency set is never assigned. A following path rule removes the repeated
+inverse nested guard only after ordinary boolean folding makes both typed
+comparisons structurally complementary. This is an explicit pre-WP3 range-
+fusion exception, not the general SSA-expression framework; mutable or
+ambiguous identities decline. The real i386 O2 output replaces the flag tree
+with `op <= 5` and removes the impossible nested arm, while retaining the
+honest unrecovered indirect jump and red execution status. See
+`results/wp7-cdecl32-wide-range-predicate.md`.
 
 At `81ffe9ab`, `cargo test --features python-ext` passes, including 15 focused
 comparison-fusion tests and 191 AST/render tests; the six def-use census tests
@@ -1833,6 +2057,23 @@ The conversion is deliberately outside the generic C catalog normalizer, so it
 does not reinterpret Rust pointers or aggregates. Exact RED/GREEN and isolated
 snapshot evidence is in `results/wp9-rust-scalar-source-types.md`.
 
+### Implementation evidence - 2026-09-06 cdecl32 wide source parameters
+
+Commit `fcd9bd2d` extends the bounded 32-bit wide-parameter carrier from
+AAPCS32 register pairs to authoritatively declared i386 cdecl stack pairs. The
+high incoming word is projected from the same source argument while the
+promoted low `argN` role remains the whole value. Layout stops at unknown or
+unsupported preceding parameter types. This moves nine fixture-202/215 O0/O2
+cells to execution-correct output with no attributable regression across the
+complete 410-lane i386 comparison.
+
+An initially broader rewrite truncated the already-whole low role and caused
+three scalar regressions. It was rejected before commit; those controls are
+unchanged by the final implementation. Signed wide selectors and the i386 O2
+mixed switch remain in WP6/WP7 and WP5 respectively. Exact contracts,
+attribution, and gate evidence are in
+`results/wp6-wp9-cdecl32-wide-parameters.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
@@ -2088,17 +2329,93 @@ relevant ratchet's accepted-regression record.
    regression statuses. The corpus-wide execution route is now live; still
    complete unexplained block/edge accounting, pinned GED, structure-axis
    movement, and accepted runtime/output-size budgets.
-5. Complete WP5's shared typed-case transport so discovery, accounting, both
-   structurers, and rendering consume one case/default/provenance object; add
-   the remaining fixture/compiler/architecture execution cells and classify
-   every residual decline. Malformed, truncated, overlapping, and wrapping
-   table safety tests and the new chained inclusive/exclusive guard tests are
+5. Extend the landed WP5 shared typed-case transport across the remaining
+   fixture/compiler/architecture execution cells and classify every residual
+   decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
+   case/default/provenance evidence consumed by production and v2; incomplete
+   or inconsistent evidence declines before recovery, and the verifier checks
+   the relationships independently. Malformed, truncated, overlapping, and
+   wrapping table safety tests and the new chained inclusive/exclusive guard tests are
    already present and must remain green. Fixture 204's Clang O2 seven-case
    evidence now reaches the production structurer, passes all 34 execution
    cases, and has moved its baseline from `fail` to `pass`; the remaining work
-   now has clean accounting through explicit borrowed return-tail provenance;
-   remaining work is the shared case/default evidence object and the unverified
-   compiler/architecture cells.
+   now has clean accounting through explicit borrowed return-tail provenance.
+   The unverified compiler/architecture cells, remaining matrix gates, and
+   residual decline census remain. The AArch64 slice's full Python gate has run
+   and is triaged but remains broadly red; do not call WP5 complete from the
+   green Rust gate or focused retry evidence alone.
+   The next i386 slice at `b84233ec` removes eight more O2 failures with zero
+   attributable regression across all 410 i386 lanes. Its full Rust and focused
+   execution gates are green; its whole Python suite is complete and has zero
+   tip-only failure IDs, while remaining broadly red at 125 failures.
+   The stacked ARMv7 A32 slice at `76cce5d1`/`5ef0bcb9` removes nine more O2
+   failures with zero attributable decline across 1,604 function verdicts.
+   Commit `6f0ba701` then closes the isolated production-v1 loop-backedge
+   ownership failure; its exact full A32 comparison adds the intended
+   `dispatch_in_loop` fail-to-pass movement with no attributable decline.
+   Commits `28b3bc5b` and `0e29ffc4` remove the surviving outer-guard goto and
+   undefined-looking temporary as separately proved quality work, with no
+   attributable decline in the exact host/A32 comparisons. Commit `c9483542`
+   then replaces the raw loop's six exact header-backedge gotos with
+   source-level `continue`, with no attributable A32 status change. Next
+   `460259fa` carries the shared typed case/default evidence into that raw loop;
+   the real guard-only default is no longer lost merely because it is not a
+   dispatch successor. `88e6584c` folds the now-redundant proven range guard
+   into that switch, removing its temporary, conditional, and goto without
+   changing execution. Continue with Thumb loop tables, AArch64 adjacent-table
+   variants, and wide-selector forms. For handler inlining, add a verified
+   presentation partition over the canonical raw ownership: exclusive arm
+   prefixes, optional guard-only default prefix, one unique shared join, and
+   residual blocks. Refuse external handler predecessors, cross-arm edges,
+   cycles, non-unique joins, or any partition that would emit a block twice.
+   `13588284` completes the first one-block exclusive-entry slice and removes
+   every goto from the real A32 function. Extend it through multi-block private
+   prefixes only after proving interior predecessor closure and an exact stop
+   at the unique shared join; retain the current refusal rules otherwise.
+   `ca30c62f` completes that bounded straight-line extension with an independent
+   verifier: interiors are exact one-predecessor/one-successor chains, prefixes
+   are disjoint and capped at eight blocks, and a forged shared-join crossing
+   is rejected. Its exact-tip structural run has no attributable regression or
+   improvement: exact parent/tip rendering is byte-identical for every row in
+   both red aggregate ratchets, which are retained for explicit baseline
+   review. The full def-use census is also parent/tip identical: four of six
+   tests pass and the two aggregate baseline-drift ratchets remain red.
+   Commit `1ce1a80b` completes the next bounded branching slice: a typed arm
+   may own a deterministic, predecessor-closed private DAG of at most 16
+   blocks. Its independent verifier accepts a private diamond and rejects a
+   forged region crossing a case/default shared join. On a real GCC ARMv7 A32
+   byte-table loop, case 0 moves from two out-of-line gotos to an inline
+   `if (acc <= 6)` with native execution preserved. Cyclic regions, cross-arm
+   ownership, shared-join ownership, and general unique-join partitioning
+   remain refused; do not widen them without equivalent independent proof.
+   Its exact structural and def-use reports reproduce every preceding
+   regression/improvement finding without adding a row: 25 of 27 structural
+   tests and four of six def-use tests pass, with both two-sided baseline-debt
+   ratchets intentionally still red. Its required release-built whole-Python
+   parent/tip replay also finds zero tip-only failure IDs: parent `33aed1ae`
+   has 116 failures and tip `146bd4c8` has 115, with the sole removed failure
+   being the intentionally refreshed test census. Both runs have 4,621 passes
+   and 889 expected failures. Parent has 69 skips versus tip's 71 because two
+   stripped fixture-08 objects were absent from the tip run's externally
+   selected fixture directory; this is recorded as an environment mismatch,
+   not an implementation result. The suite therefore remains broadly red and
+   the timing is not a matched performance comparison.
+   See `results/wp4-raw-switch-private-branches.md`.
+   The following host wide-selector slice at `9333881e` recovers Clang and GCC
+   O2 fixture-215 `wide_selector_mixed`, including the case-zero return shared
+   with the formal default. Its first full def-use census exposed one real
+   fixture-206 loop-switch regression from over-broad predicate/cyclic
+   ownership. Hardening commit `98a0d2d3` rejects arithmetic ancestry, limits
+   transitive provenance to boolean operations, and refuses transitive dense-
+   guard folding inside cyclic ownership. Fixture 215 and both the host-Clang
+   and ARMv7 fixture-206 controls now pass together; the normalized def-use
+   report is again exactly the preceding 169 findings. Continue the wide-
+   selector matrix only from this hardened boundary. Its exact whole-Python
+   comparison attributes all nine new failure IDs to strict-XPASS
+   improvements, with no ordinary regression, and `0466a2e0` refreshes the
+   full 1,676-object defect inventory (38 to 30 unrecovered observations;
+   6,823 to 6,502 gotos). See
+   `results/wp5-wide-selector-shared-return.md`.
 6. Begin WP2/WP3 as an independent architecture lane, using conservative
    invalidate-everything fallback while passes migrate incrementally.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
@@ -2110,6 +2427,10 @@ relevant ratchet's accepted-regression record.
    value constraints rather than extending fixture-specific ABI adapters.
    Keep Rust totals separate and do not generalize the SysV/x86 evidence to
    unsupported architectures, vector forms, or language ABIs.
+   The fixture-215 signed-edge slice at `8ab39b50` is the model for boundary
+   conflicts: retain the authoritative declaration, attach the machine
+   interpretation to one use, and refuse inferred declarations. Extend that
+   model through stable WP3 identities rather than adding renderer name rules.
    The first fixture-217 prerequisite models legacy packed binary32 arithmetic,
    and the following bounded compiler-runtime boundary is landed. Direct SysV
    calls to `__mulsc3`/`__muldc3` now carry exact source-ordered
@@ -2130,6 +2451,17 @@ relevant ratchet's accepted-regression record.
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
    into a named required architecture profile. Do not canonicalize partial
    VFP/NEON writes until LLIR can represent the untouched lanes.
+   The AAPCS32 wide-parameter slice at `62a4ab72` additionally carries both
+   little-endian core-register words of an authoritative eight-byte integer
+   parameter into one source argument. Continue with the residual A32 O0
+   frame/storage identity failures and an independently specified i386 pair;
+   do not generalize this declared-parameter fact to inferred values before
+   WP3 provides stable identity. See
+   `results/wp6-wp9-aapcs32-wide-parameters.md`.
+   A first spelling-level `fp`/`r11` frame-alias prototype fixed the two A32 O0
+   fixture-215 cells but caused 188 regressions in the complete 410-lane A32
+   O0/O2 comparison and was rejected. Resume only with exact SSA-definition
+   lifetime evidence; never make the architectural alias globally active.
 10. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned

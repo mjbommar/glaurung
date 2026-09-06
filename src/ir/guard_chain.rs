@@ -70,6 +70,81 @@ pub fn collapse_nested_terminal_return_guards(function: &mut Function) {
     while collapse_nested_return_one(&mut function.body) {}
 }
 
+/// Remove a leading nested guard contradicted by its exact outer path fact.
+///
+/// `if (x <= k) { if (k < x) { dead; } live; }` evaluates `dead` on no input.
+/// The comparison operands must be structurally identical (casts included),
+/// both conditions must be side-effect-free, the inner guard must have no
+/// `else`, and only comments may precede it. Those restrictions make this a
+/// path contradiction rather than a guess about correlated expressions.
+pub fn prune_contradictory_nested_guards(function: &mut Function) {
+    while prune_one_contradictory_nested_guard(&mut function.body) {}
+}
+
+fn prune_one_contradictory_nested_guard(body: &mut Vec<Stmt>) -> bool {
+    for statement in body.iter_mut() {
+        let changed = match statement {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                let leading = then_body
+                    .iter()
+                    .position(|statement| !matches!(statement, Stmt::Comment(_) | Stmt::Nop));
+                if let Some(index) = leading {
+                    let contradicted = match &then_body[index] {
+                        Stmt::If {
+                            cond: inner,
+                            else_body: None,
+                            ..
+                        } => exact_pure_complements(cond, inner),
+                        _ => false,
+                    };
+                    if contradicted {
+                        then_body.remove(index);
+                        return true;
+                    }
+                }
+                prune_one_contradictory_nested_guard(then_body)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(prune_one_contradictory_nested_guard)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prune_one_contradictory_nested_guard(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| prune_one_contradictory_nested_guard(body))
+                    || default
+                        .as_mut()
+                        .is_some_and(prune_one_contradictory_nested_guard)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                prune_one_contradictory_nested_guard(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| prune_one_contradictory_nested_guard(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn exact_pure_complements(left: &Expr, right: &Expr) -> bool {
+    matches!(left, Expr::Cmp { .. })
+        && matches!(right, Expr::Cmp { .. })
+        && is_short_circuit_safe_boolean(left)
+        && is_short_circuit_safe_boolean(right)
+        && (negate_cmp_expr(left.clone()) == *right || negate_cmp_expr(right.clone()) == *left)
+}
+
 /// Keep one shared terminal return when an early guard returns the exact same
 /// value as the function's final statement.
 ///
@@ -1380,5 +1455,117 @@ mod tests {
         assert_eq!(rendered.matches("if (").count(), 2, "{rendered}");
         assert!(!rendered.contains(" || "), "{rendered}");
         assert_eq!(rendered.matches("break;").count(), 2, "{rendered}");
+    }
+
+    #[test]
+    fn an_exact_contradictory_leading_nested_guard_is_removed() {
+        let outer = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("op"))),
+            rhs: Box::new(Expr::Const(5)),
+        };
+        let inner = super::negate_cmp_expr(outer.clone());
+        let mut function = Function {
+            name: "guarded_table".into(),
+            entry_va: 0x1500,
+            body: vec![Stmt::If {
+                cond: outer,
+                then_body: vec![
+                    Stmt::Comment("compiler duplicate compare".into()),
+                    Stmt::If {
+                        cond: inner,
+                        then_body: vec![Stmt::Return {
+                            value: Some(Expr::Const(30)),
+                        }],
+                        else_body: None,
+                    },
+                    Stmt::IndirectGoto {
+                        target: Expr::Reg(reg("table_target")),
+                    },
+                ],
+                else_body: None,
+            }],
+        };
+
+        super::prune_contradictory_nested_guards(&mut function);
+
+        let Stmt::If { then_body, .. } = &function.body[0] else {
+            panic!("expected outer guard")
+        };
+        assert!(
+            !then_body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::If { .. })),
+            "the impossible branch must be absent: {function:#?}"
+        );
+        assert!(
+            then_body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::IndirectGoto { .. })),
+            "the live table dispatch must remain"
+        );
+    }
+
+    #[test]
+    fn changed_width_memory_or_intervening_work_blocks_contradiction_pruning() {
+        let outer = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("op"))),
+            rhs: Box::new(Expr::Const(5)),
+        };
+        let candidates = [
+            (
+                Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(5)),
+                    rhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(reg("op"))),
+                    }),
+                },
+                Vec::new(),
+            ),
+            (
+                Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(5)),
+                    rhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("op"))),
+                        size: 8,
+                    }),
+                },
+                Vec::new(),
+            ),
+            (
+                super::negate_cmp_expr(outer.clone()),
+                vec![Stmt::Assign {
+                    dst: reg("op"),
+                    src: Expr::Const(0),
+                }],
+            ),
+        ];
+
+        for (inner, mut prefix) in candidates {
+            prefix.push(Stmt::If {
+                cond: inner,
+                then_body: vec![Stmt::Return { value: None }],
+                else_body: None,
+            });
+            let mut function = Function {
+                name: "decline_guard".into(),
+                entry_va: 0x1500,
+                body: vec![Stmt::If {
+                    cond: outer.clone(),
+                    then_body: prefix,
+                    else_body: None,
+                }],
+            };
+            let original = function.clone();
+
+            super::prune_contradictory_nested_guards(&mut function);
+
+            assert_eq!(function, original);
+        }
     }
 }

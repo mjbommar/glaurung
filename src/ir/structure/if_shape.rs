@@ -22,7 +22,7 @@ use super::path_predicates::{
     every_path_reaches_join_or_terminates, is_natural_loop_distinguished_exit, shared_return_chain,
 };
 use super::region::Region;
-use super::{build, build_arm};
+use super::{build, build_arm, BuildState};
 
 /// Whether the lowered condition at block `cond` must be negated when
 /// `then_entry` is used as the `then` arm. The raw condition is true when the
@@ -44,6 +44,7 @@ pub(super) fn detect_if_shape(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
     stop_at: Option<usize>,
+    state: &mut BuildState,
 ) -> Option<(Region, Option<usize>)> {
     let t = cfg.succs[cond][0];
     let e = cfg.succs[cond][1];
@@ -59,8 +60,8 @@ pub(super) fn detect_if_shape(
         let invert = invert_for(cfg, cond, t);
         // Mark cond consumed, recurse on arms.
         visited.insert(cond);
-        let then_r = build_arm(t, cfg, visited, Some(join));
-        let else_r = build_arm(e, cfg, visited, Some(join));
+        let then_r = build_arm(t, cfg, visited, Some(join), state);
+        let else_r = build_arm(e, cfg, visited, Some(join), state);
         return Some((
             Region::IfThenElse {
                 cond,
@@ -88,7 +89,7 @@ pub(super) fn detect_if_shape(
         if body_rejoins && cfg.preds[join].contains(&cond) {
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            let then_r = build(body, cfg, visited, Some(join));
+            let then_r = build(body, cfg, visited, Some(join), state);
             return Some((
                 Region::IfThen {
                     cond,
@@ -122,7 +123,7 @@ pub(super) fn detect_if_shape(
         if let Some((body, cont)) = body_and_cont {
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            let then_r = build(body, cfg, visited, None);
+            let then_r = build(body, cfg, visited, None, state);
             return Some((
                 Region::IfThen {
                     cond,
@@ -149,7 +150,7 @@ pub(super) fn detect_if_shape(
         if body_terminates {
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            let then_r = build(body, cfg, visited, None);
+            let then_r = build(body, cfg, visited, None, state);
             return Some((
                 Region::IfThen {
                     cond,
@@ -265,7 +266,7 @@ pub(super) fn detect_if_shape(
         {
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            let then_r = build(body, cfg, visited, Some(join));
+            let then_r = build(body, cfg, visited, Some(join), state);
             return Some((
                 Region::IfThen {
                     cond,
@@ -300,7 +301,7 @@ pub(super) fn detect_if_shape(
         {
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            let then_r = build(body, cfg, visited, Some(join));
+            let then_r = build(body, cfg, visited, Some(join), state);
             return Some((
                 Region::IfThen {
                     cond,
@@ -323,8 +324,8 @@ pub(super) fn detect_if_shape(
     if t_terminates && e_terminates {
         let invert = invert_for(cfg, cond, t);
         visited.insert(cond);
-        let then_r = build(t, cfg, visited, None);
-        let else_r = build(e, cfg, visited, None);
+        let then_r = build(t, cfg, visited, None, state);
+        let else_r = build(e, cfg, visited, None, state);
         return Some((
             Region::IfThenElse {
                 cond,
@@ -381,8 +382,8 @@ pub(super) fn detect_if_shape(
                 // ownership of blocks which can rejoin the region boundary;
                 // otherwise outer paths lose their one real epilogue.
                 let mut scoped_visited = visited.clone();
-                let then_r = build_arm(then_a, cfg, &mut scoped_visited, Some(join));
-                let else_r = build_arm(else_a, cfg, &mut scoped_visited, Some(join));
+                let then_r = build_arm(then_a, cfg, &mut scoped_visited, Some(join), state);
+                let else_r = build_arm(else_a, cfg, &mut scoped_visited, Some(join), state);
                 visited.extend(
                     scoped_visited
                         .into_iter()
@@ -391,8 +392,8 @@ pub(super) fn detect_if_shape(
                 (then_r, else_r)
             } else {
                 (
-                    build_arm(then_a, cfg, visited, Some(join)),
-                    build_arm(else_a, cfg, visited, Some(join)),
+                    build_arm(then_a, cfg, visited, Some(join), state),
+                    build_arm(else_a, cfg, visited, Some(join), state),
                 )
             };
             return Some((

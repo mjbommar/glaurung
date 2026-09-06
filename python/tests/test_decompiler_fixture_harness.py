@@ -227,6 +227,20 @@ def test_batch_decompile_forwards_explicit_shadow_selection(monkeypatch) -> None
     assert calls[1][2]["shadow_v2"] is True
 
 
+def test_batch_decompile_preserves_requested_thumb_symbol_address(monkeypatch) -> None:
+    """An exported Thumb VA remains a valid lookup key after canonicalization."""
+
+    def fake_decompile_many(binary, vas, **kwargs):
+        assert vas == [0x1001]
+        return [("thumb_f", 0x1000, "int thumb_f(void) { return 1; }")]
+
+    monkeypatch.setattr(D.g.ir, "decompile_many", fake_decompile_many)
+
+    recovered = D.decompiled_many_c("fixture.so", [0x1001])
+
+    assert recovered[0x1001] == "int thumb_f(void) { return 1; }"
+
+
 def test_scoped_fixture_lanes_forward_shadow_selection(monkeypatch) -> None:
     """A shadow corpus run uses the ordinary lane scheduler and exact functions."""
     calls = []

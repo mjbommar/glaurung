@@ -1032,6 +1032,13 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     // The declaration already expresses the narrow signed
                     // value, and the literal fits that type. C's usual
                     // conversions therefore preserve the comparison.
+                } else if matches!(op, CmpOp::Slt | CmpOp::Sle)
+                    && write_declared_unsigned_as_signed_comparison_operand(lhs, out)
+                {
+                    // The machine relation is signed even though stronger
+                    // declaration evidence keeps this value unsigned at the
+                    // function boundary. State the machine interpretation at
+                    // this use rather than changing the declaration.
                 } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
                     || !matches!(rhs.as_ref(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(lhs, out)
@@ -1043,6 +1050,10 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     && write_value_preserving_signed_comparison_operand(rhs, lhs, out)
                 {
                     // Symmetric constant-on-the-left form.
+                } else if matches!(op, CmpOp::Slt | CmpOp::Sle)
+                    && write_declared_unsigned_as_signed_comparison_operand(rhs, out)
+                {
+                    // Symmetric declared-unsigned operand.
                 } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
                     || !matches!(lhs.as_ref(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(rhs, out)
@@ -1396,6 +1407,32 @@ fn write_value_preserving_signed_comparison_operand(
         return false;
     }
     write_reg_dec(register, out);
+    true
+}
+
+/// Render the signed interpretation carried by a machine comparison without
+/// weakening an authoritative unsigned declaration.
+///
+/// A compiler may legally lower an unsigned source switch with a signed tree
+/// edge when the surrounding partition proves the values on that edge. If the
+/// recovered signature correctly remains `uint64_t`, printing the direct C
+/// comparison would apply C's unsigned conversions and change the edge for
+/// values such as `UINT64_MAX`. The comparison operator is per-use evidence;
+/// make that use signed at the exact declared width and leave the declaration
+/// authority untouched.
+fn write_declared_unsigned_as_signed_comparison_operand(
+    expression: &Expr,
+    out: &mut String,
+) -> bool {
+    let Expr::Reg(register @ VReg::Phys(name)) = expression else {
+        return false;
+    };
+    let Some((false, width)) = dec_plan(|plan| plan.authoritative_integer_parameter(name)) else {
+        return false;
+    };
+    let _ = write!(out, "({})(", target_int_ctype(true, width));
+    write_reg_dec(register, out);
+    out.push(')');
     true
 }
 

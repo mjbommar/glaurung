@@ -28,7 +28,9 @@ use crate::ir::types_recover::{TypeHint, TypeMap};
 #[cfg(test)]
 use crate::ir::call_contracts::{CallPrototypeAuthority, CallSiteSpec};
 #[cfg(test)]
-use crate::ir::structure::Region;
+use crate::ir::structure::{
+    Region, SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+};
 #[cfg(test)]
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, Value};
 
@@ -2547,7 +2549,15 @@ function f @ 0x1000 {
                 }],
                 vec![0x1010, 0x1020, 0x1030],
             ),
-            (0x1010, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (
+                0x1010,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1000,
+                    inverted: false,
+                }],
+                vec![0x1020, 0x1000],
+            ),
             (0x1020, vec![Op::Return], vec![]),
             (0x1030, vec![Op::Return], vec![]),
         ]);
@@ -2556,6 +2566,9 @@ function f @ 0x1000 {
                 header: 0,
                 blocks: vec![0, 1],
                 exits: vec![2, 3],
+                switch: None,
+                switch_guard: None,
+                switch_inline_regions: Vec::new(),
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2583,11 +2596,26 @@ function f @ 0x1000 {
             cases,
             &vec![
                 (Some(0), vec![Stmt::Goto { target: 0x1010 }]),
-                (Some(1), vec![Stmt::Goto { target: 0x1020 }]),
                 (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
             ]
         );
-        assert!(default.is_none());
+        assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1020 }]));
+        let latch_has_continue = body.iter().any(|statement| {
+            matches!(
+                statement,
+                Stmt::If { then_body, .. } if then_body.iter().any(|inner| matches!(inner, Stmt::Continue))
+            )
+        });
+        assert!(
+            latch_has_continue,
+            "the owned latch-to-header edge must become continue: {body:#?}"
+        );
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::Goto { target } if *target == 0x1000)),
+            "no explicit raw-loop header goto may survive: {body:#?}"
+        );
         assert!(
             !body
                 .iter()
@@ -2597,12 +2625,11 @@ function f @ 0x1000 {
     }
 
     #[test]
-    fn a_raw_dispatch_loop_coalesces_guard_default_table_slots() {
-        // PIC switch tables commonly point every unused in-range slot at the
-        // same block as the preceding bounds guard. Rendering each hole as a
-        // separate C case preserves execution but invents source CFG nodes.
-        // Once the guard proves the shared default target, those slots can be
-        // represented exactly by one `default` arm.
+    fn a_raw_dispatch_loop_uses_typed_case_values_and_guard_only_default() {
+        // The CFG evidence, not successor position, owns source-level case
+        // values. The bounds guard's default need not also appear among the
+        // dispatch successors; retaining SwitchEvidence on RawLoop is what
+        // makes both facts available to AST lowering.
         let lf = mk_cfg(vec![
             (
                 0x1000,
@@ -2619,18 +2646,60 @@ function f @ 0x1000 {
                     target: Value::Reg(VReg::phys("target")),
                     index: Some(Value::Reg(VReg::phys("state"))),
                 }],
-                vec![0x1020, 0x1050, 0x1030, 0x1050],
+                vec![0x1020, 0x1030],
             ),
-            (0x1020, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (
+                0x1020,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1040,
+                    inverted: false,
+                }],
+                vec![0x1040, 0x1060],
+            ),
             (0x1030, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
-            (0x1040, vec![Op::Return], vec![]),
+            (0x1040, vec![Op::Nop], vec![0x1070]),
             (0x1050, vec![Op::Return], vec![]),
+            (0x1060, vec![Op::Nop], vec![0x1070]),
+            (0x1070, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
         ]);
         let region = Region::Seq(vec![
             Region::RawLoop {
                 header: 0,
-                blocks: vec![0, 1, 2, 3],
+                blocks: vec![0, 1, 2, 3, 4, 6, 7],
                 exits: vec![5],
+                switch: Some(SwitchEvidence {
+                    dispatch: 1,
+                    cases: vec![
+                        SwitchCaseEvidence {
+                            target: 2,
+                            values: vec![10, 12],
+                        },
+                        SwitchCaseEvidence {
+                            target: 3,
+                            values: vec![42],
+                        },
+                    ],
+                    default: Some(SwitchDefaultEvidence {
+                        guard: 0,
+                        target: 5,
+                        dispatch: Some(1),
+                        taken: true,
+                    }),
+                    complete: true,
+                    provenance: SwitchEvidenceProvenance::TypedCfgEdges,
+                }),
+                switch_guard: Some(0),
+                switch_inline_regions: vec![
+                    crate::ir::structure::RawSwitchInlineRegion {
+                        entry: 2,
+                        blocks: vec![2, 4, 6, 7],
+                    },
+                    crate::ir::structure::RawSwitchInlineRegion {
+                        entry: 3,
+                        blocks: vec![3],
+                    },
+                ],
             },
             Region::Block(5),
         ]);
@@ -2649,14 +2718,42 @@ function f @ 0x1000 {
         else {
             panic!("expected typed switch inside raw loop: {body:#?}");
         };
-        assert_eq!(
-            cases,
-            &vec![
-                (Some(0), vec![Stmt::Goto { target: 0x1020 }]),
-                (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
-            ]
+        assert_eq!(cases[0], (Some(10), Vec::new()));
+        assert_eq!(cases[1].0, Some(12));
+        assert_eq!(cases[2].0, Some(42));
+        assert!(
+            cases[1]
+                .1
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::If { .. })),
+            "the private branch must remain inside the case body: {:#?}",
+            cases[1].1
         );
+        for target in [0x1040, 0x1060, 0x1070] {
+            assert!(
+                cases[1]
+                    .1
+                    .iter()
+                    .any(|stmt| matches!(stmt, Stmt::Label(label) if *label == target)),
+                "private branch target {target:#x} must be defined inside its case: {:#?}",
+                cases[1].1
+            );
+        }
+        assert!(cases[1].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
+        assert!(cases[2].1.iter().any(|stmt| matches!(stmt, Stmt::Continue)));
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::If { .. })),
+            "the proven range guard must be absorbed into the typed switch: {body:#?}"
+        );
+        assert!(
+            !body.iter().any(|statement| {
+                matches!(statement, Stmt::Label(target) if matches!(*target, 0x1020 | 0x1030 | 0x1040 | 0x1060 | 0x1070))
+            }),
+            "private handler regions must be emitted in their case arms: {body:#?}"
+        );
     }
 
     #[test]
@@ -10128,6 +10225,61 @@ function f @ 0x1000 {
         assert!(
             rendered.contains("uint32_t fixed_width(const int32_t *arg0, int32_t arg1)"),
             "fixed-width DWARF prototype was discarded:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn signed_machine_comparison_casts_an_authoritative_unsigned_parameter_per_use() {
+        let function = Function {
+            name: "signed_edge".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0x1_0000_0000)),
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "int32_t".into(),
+            parameter_types: vec!["uint64_t".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        );
+
+        assert!(
+            rendered.contains("int32_t signed_edge(uint64_t arg0)"),
+            "the authoritative boundary type changed:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("(long)(arg0) < 0x100000000"),
+            "the signed machine edge lost its per-use interpretation:\n{rendered}"
+        );
+
+        let recovered = CallPrototype {
+            authority: CallPrototypeAuthority::Recovered,
+            ..prototype
+        };
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&recovered),
+        );
+        assert!(
+            !rendered.contains("(long)(arg0)"),
+            "an inferred declaration must not trigger the authoritative-source exception:\n\
+             {rendered}"
         );
     }
 

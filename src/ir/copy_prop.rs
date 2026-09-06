@@ -885,7 +885,18 @@ mod tests {
             !dump.contains("FlagValue"),
             "flag algebra stayed opaque:\n{dump}"
         );
-        assert_eq!(dump.matches("op: Slt").count(), 2, "{dump}");
+        // Both selects used the exact same recovered predicate. Once the outer
+        // false arm is selected, the inner predicate is necessarily false too,
+        // so the unreachable `2` arm and its duplicate comparison disappear.
+        assert_eq!(dump.matches("op: Slt").count(), 1, "{dump}");
+        assert!(
+            dump.contains("if_true: Const(\n                    1"),
+            "{dump}"
+        );
+        assert!(
+            dump.contains("if_false: Const(\n                    3"),
+            "{dump}"
+        );
     }
 
     #[test]

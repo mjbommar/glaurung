@@ -131,22 +131,7 @@ fn reg_size(r: Register) -> u8 {
 /// destination is rejected: `mov (%esp),%esp` is not this idiom, and treating it
 /// as one would silently rewrite the stack pointer.
 pub fn pc_thunk_register(body: &[u8]) -> Option<&'static str> {
-    let [0x8b, modrm, 0x24, 0xc3, ..] = body else {
-        return None;
-    };
-    if modrm & 0xC7 != 0x04 {
-        return None;
-    }
-    match (modrm >> 3) & 7 {
-        0 => Some("eax"),
-        1 => Some("ecx"),
-        2 => Some("edx"),
-        3 => Some("ebx"),
-        4 => None, // `mov (%esp),%esp`
-        5 => Some("ebp"),
-        6 => Some("esi"),
-        _ => Some("edi"),
-    }
+    crate::target::x86_pc_thunk_register(body)
 }
 
 /// The register-view descriptor for a partial (bit-preserving) GP write, or

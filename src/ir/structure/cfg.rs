@@ -19,8 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
-use crate::ir::types::{CmpOp, LlirFunction, Op, Value, Width};
-use crate::ir::use_def::InstrAddr;
+use crate::ir::types::{BinOp, CmpOp, LlirFunction, Op, UnOp, Value, Width};
+use crate::ir::use_def::{use_count, InstrAddr};
 
 /// A shared, immutable set of block indices — what the natural-loop memos hand
 /// out. Shared rather than cloned because every consumer only reads it.
@@ -32,6 +32,39 @@ pub(crate) struct BranchPredicate {
     pub(crate) op: Option<CmpOp>,
     pub(crate) operand_width: Option<Width>,
     pub(crate) inverted: bool,
+}
+
+/// Where the facts in a resolved switch came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchEvidenceProvenance {
+    /// Case and default roles were classified from the lifted CFG's typed edges.
+    TypedCfgEdges,
+}
+
+/// One destination of a resolved dispatch and every table value selecting it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchCaseEvidence {
+    pub target: usize,
+    pub values: Vec<i64>,
+}
+
+/// The range-guard edge which bypasses a resolved dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchDefaultEvidence {
+    pub guard: usize,
+    pub target: usize,
+    pub dispatch: Option<usize>,
+    pub taken: bool,
+}
+
+/// Immutable case/default facts shared by every structuring consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchEvidence {
+    pub dispatch: usize,
+    pub cases: Vec<SwitchCaseEvidence>,
+    pub default: Option<SwitchDefaultEvidence>,
+    pub complete: bool,
+    pub provenance: SwitchEvidenceProvenance,
 }
 
 /// Lookup helpers built once per call to [`super::recover`].
@@ -88,6 +121,8 @@ pub(crate) struct Cfg {
     /// Re-deriving is what inverted rotated-loop conditions: "successor 0 is the
     /// fallthrough" is a guess, and the branch's own target is a fact.
     pub(crate) edges: Vec<Vec<crate::ir::cfg_edges::Edge>>,
+    /// Resolved switch facts, derived once from `edges` and `case_labels`.
+    switches: Vec<SwitchEvidence>,
     /// Lazily-built reflexive-transitive reachability closure, one dense bitset
     /// row of `⌈n/64⌉` words per block: bit `t` of row `s` is set iff `t` is
     /// reachable from `s` (with `s` reachable from itself).
@@ -226,6 +261,7 @@ impl Cfg {
                 |a: usize, b: usize| dom.get(a).and_then(|r| r.get(b)).copied().unwrap_or(false);
             crate::ir::cfg_edges::classify(lf, &succs, d)
         };
+        let switches = derive_switch_evidence(&succs, &case_labels, &edges, &cond_taken);
         let mut cfg = Cfg {
             succs,
             case_labels,
@@ -239,6 +275,7 @@ impl Cfg {
             block_instruction_counts,
             explicit_dispatch,
             edges,
+            switches,
             reaches: std::cell::OnceCell::new(),
             loop_bodies: std::cell::RefCell::new(HashMap::new()),
             header_loop_bodies: std::cell::RefCell::new(HashMap::new()),
@@ -253,11 +290,43 @@ impl Cfg {
         self.branch_predicates.clone()
     }
 
+    pub(crate) fn switches(&self) -> &[SwitchEvidence] {
+        &self.switches
+    }
+
+    pub(crate) fn switch_at(&self, dispatch: usize) -> Option<&SwitchEvidence> {
+        self.switches
+            .iter()
+            .find(|switch| switch.dispatch == dispatch)
+    }
+
+    pub(crate) fn switch_guarded_by(&self, guard: usize) -> Option<&SwitchEvidence> {
+        self.switches.iter().find(|switch| {
+            switch
+                .default
+                .as_ref()
+                .is_some_and(|default| default.guard == guard)
+        })
+    }
+
     pub(super) fn branch_depends_on_unsigned_comparison(&self, block: usize) -> bool {
         self.unsigned_guard_conditions
             .get(block)
             .copied()
             .unwrap_or(false)
+    }
+
+    /// Whether the conditional consumes an unsigned comparison result without
+    /// an intervening boolean-expression graph.
+    ///
+    /// Raw-loop guard absorption intentionally uses this narrower contract:
+    /// cyclic reachability gives its lowerer stronger ownership obligations
+    /// than a one-shot guarded switch. The broader transitive predicate proof
+    /// remains available to ordinary guarded-switch recovery.
+    pub(super) fn branch_is_direct_unsigned_comparison(&self, block: usize) -> bool {
+        self.branch_predicates.get(block).is_some_and(|predicate| {
+            predicate.is_some_and(|predicate| matches!(predicate.op, Some(CmpOp::Ult | CmpOp::Ule)))
+        })
     }
 
     fn derive_branch_predicates(
@@ -266,24 +335,57 @@ impl Cfg {
         ssa: &SsaInfo,
     ) -> (Vec<Option<BranchPredicate>>, Vec<bool>) {
         let mut comparisons = HashMap::new();
-        let mut comparison_inputs: HashMap<SsaValue, Vec<SsaValue>> = HashMap::new();
+        let mut value_inputs: HashMap<SsaValue, Vec<SsaValue>> = HashMap::new();
         for (block_idx, block) in lf.blocks.iter().enumerate() {
             for (instr_idx, instruction) in block.instrs.iter().enumerate() {
-                let Op::Cmp { op, lhs, rhs, .. } = &instruction.op else {
-                    continue;
-                };
                 let addr = InstrAddr {
                     block_idx,
                     instr_idx,
                 };
-                if let Some(value) = ssa.def_value_ref(lf, addr) {
-                    comparisons.insert(value.clone(), (*op, comparison_operand_width(lhs, rhs)));
-                    comparison_inputs.insert(
+                let Some(value) = ssa.def_value_ref(lf, addr) else {
+                    continue;
+                };
+                // This is predicate provenance, not general data dependence.
+                // Copies and boolean compositions preserve the meaning of a
+                // comparison; arithmetic, loads, extensions and the operands
+                // *being compared* do not. Following every SSA input let an
+                // unrelated earlier unsigned comparison leak through ordinary
+                // arithmetic into a later branch and misclassify loop control
+                // as a switch range guard.
+                let preserves_predicate = matches!(
+                    &instruction.op,
+                    Op::Assign { .. }
+                        | Op::Bin {
+                            op: BinOp::LogicalAnd
+                                | BinOp::LogicalOr
+                                | BinOp::And
+                                | BinOp::Or
+                                | BinOp::Xor,
+                            ..
+                        }
+                        | Op::Un { op: UnOp::Not, .. }
+                ) || matches!(
+                    &instruction.op,
+                    Op::Cmp {
+                        op: CmpOp::Eq | CmpOp::Ne,
+                        lhs: Value::Const(0 | 1),
+                        ..
+                    } | Op::Cmp {
+                        op: CmpOp::Eq | CmpOp::Ne,
+                        rhs: Value::Const(0 | 1),
+                        ..
+                    }
+                );
+                if preserves_predicate {
+                    value_inputs.insert(
                         value.clone(),
-                        (0..2)
+                        (0..use_count(&instruction.op))
                             .filter_map(|operand| ssa.use_value_ref(lf, addr, operand).cloned())
                             .collect(),
                     );
+                }
+                if let Op::Cmp { op, lhs, rhs, .. } = &instruction.op {
+                    comparisons.insert(value.clone(), (*op, comparison_operand_width(lhs, rhs)));
                 }
             }
         }
@@ -310,7 +412,7 @@ impl Cfg {
             fn reaches_unsigned_comparison(
                 value: &SsaValue,
                 comparisons: &HashMap<SsaValue, (CmpOp, Option<Width>)>,
-                comparison_inputs: &HashMap<SsaValue, Vec<SsaValue>>,
+                value_inputs: &HashMap<SsaValue, Vec<SsaValue>>,
                 seen: &mut HashSet<SsaValue>,
             ) -> bool {
                 if !seen.insert(value.clone()) {
@@ -322,19 +424,14 @@ impl Cfg {
                 {
                     return true;
                 }
-                comparison_inputs.get(value).is_some_and(|inputs| {
+                value_inputs.get(value).is_some_and(|inputs| {
                     inputs.iter().any(|input| {
-                        reaches_unsigned_comparison(input, comparisons, comparison_inputs, seen)
+                        reaches_unsigned_comparison(input, comparisons, value_inputs, seen)
                     })
                 })
             }
             unsigned_guard_conditions[block_idx] = condition.is_some_and(|value| {
-                reaches_unsigned_comparison(
-                    value,
-                    &comparisons,
-                    &comparison_inputs,
-                    &mut HashSet::new(),
-                )
+                reaches_unsigned_comparison(value, &comparisons, &value_inputs, &mut HashSet::new())
             });
             predicates[block_idx] = Some(BranchPredicate {
                 op: comparison.map(|(op, _)| *op),
@@ -470,6 +567,162 @@ impl Cfg {
 
     pub(super) fn is_explicit_switch_dispatch(&self, block: usize) -> bool {
         self.explicit_dispatch[block] && self.is_switch_dispatch(block)
+    }
+}
+
+fn derive_switch_evidence(
+    succs: &[Vec<usize>],
+    case_labels: &[Vec<Vec<i64>>],
+    edges: &[Vec<crate::ir::cfg_edges::Edge>],
+    cond_taken: &[Option<usize>],
+) -> Vec<SwitchEvidence> {
+    edges
+        .iter()
+        .enumerate()
+        .filter_map(|(dispatch, dispatch_edges)| {
+            let cases = dispatch_edges
+                .iter()
+                .enumerate()
+                .filter(|(_, edge)| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+                .filter_map(|(position, edge)| {
+                    case_labels
+                        .get(dispatch)
+                        .and_then(|labels| labels.get(position))
+                        .map(|values| SwitchCaseEvidence {
+                            target: edge.to,
+                            values: values.clone(),
+                        })
+                })
+                .collect::<Vec<_>>();
+            if cases.is_empty() {
+                return None;
+            }
+
+            let defaults = edges
+                .iter()
+                .enumerate()
+                .flat_map(|(guard, guard_edges)| {
+                    guard_edges.iter().filter_map(move |edge| {
+                        (edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault
+                            && succs[guard]
+                                .iter()
+                                .any(|successor| *successor == dispatch && *successor != edge.to))
+                        .then_some(SwitchDefaultEvidence {
+                            guard,
+                            target: edge.to,
+                            dispatch: Some(dispatch),
+                            taken: cond_taken[guard] == Some(edge.to),
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            let labelled_case_count = case_labels.get(dispatch).map_or(0, Vec::len);
+            let typed_case_count = dispatch_edges
+                .iter()
+                .filter(|edge| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+                .count();
+            let complete = labelled_case_count == typed_case_count
+                && cases.len() == typed_case_count
+                && cases.iter().all(|case| !case.values.is_empty())
+                && defaults.len() <= 1;
+            Some(SwitchEvidence {
+                dispatch,
+                cases,
+                default: (defaults.len() == 1).then(|| defaults[0].clone()),
+                complete,
+                provenance: SwitchEvidenceProvenance::TypedCfgEdges,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod switch_evidence_tests {
+    use super::*;
+    use crate::ir::cfg_edges::{Edge, EdgeKind};
+
+    fn edge(to: usize, kind: EdgeKind) -> Edge {
+        Edge {
+            to,
+            kind,
+            back: false,
+        }
+    }
+
+    #[test]
+    fn missing_or_empty_case_labels_make_evidence_incomplete() {
+        let succs = vec![vec![1, 2], vec![], vec![]];
+        let edges = vec![
+            vec![edge(1, EdgeKind::SwitchCase), edge(2, EdgeKind::SwitchCase)],
+            vec![],
+            vec![],
+        ];
+        let missing =
+            derive_switch_evidence(&succs, &[vec![vec![0]], vec![], vec![]], &edges, &[None; 3]);
+        assert_eq!(missing.len(), 1);
+        assert!(!missing[0].complete);
+
+        let empty = derive_switch_evidence(
+            &succs,
+            &[vec![vec![0], vec![]], vec![], vec![]],
+            &edges,
+            &[None; 3],
+        );
+        assert!(!empty[0].complete);
+    }
+
+    #[test]
+    fn forged_or_ambiguous_defaults_are_not_complete_guard_facts() {
+        let dispatch_edges = vec![edge(2, EdgeKind::SwitchCase), edge(3, EdgeKind::SwitchCase)];
+        let forged = derive_switch_evidence(
+            &[vec![2, 4], vec![2, 3], vec![], vec![], vec![]],
+            &[vec![], vec![vec![0], vec![1]], vec![], vec![], vec![]],
+            &[
+                vec![
+                    edge(4, EdgeKind::SwitchDefault),
+                    edge(2, EdgeKind::Fallthrough),
+                ],
+                dispatch_edges.clone(),
+                vec![],
+                vec![],
+                vec![],
+            ],
+            &[Some(4), None, None, None, None],
+        );
+        assert!(forged[0].complete);
+        assert!(
+            forged[0].default.is_none(),
+            "unrelated default must not attach"
+        );
+
+        let ambiguous = derive_switch_evidence(
+            &[vec![1, 4], vec![2, 3], vec![], vec![], vec![], vec![1, 4]],
+            &[
+                vec![],
+                vec![vec![0], vec![1]],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            ],
+            &[
+                vec![
+                    edge(4, EdgeKind::SwitchDefault),
+                    edge(1, EdgeKind::Fallthrough),
+                ],
+                dispatch_edges,
+                vec![],
+                vec![],
+                vec![],
+                vec![
+                    edge(4, EdgeKind::SwitchDefault),
+                    edge(1, EdgeKind::Fallthrough),
+                ],
+            ],
+            &[Some(4), None, None, None, None, Some(4)],
+        );
+        assert!(!ambiguous[0].complete);
+        assert!(ambiguous[0].default.is_none());
     }
 }
 

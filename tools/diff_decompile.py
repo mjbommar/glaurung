@@ -866,9 +866,18 @@ def decompiled_many_c(
         return {}
     recovered: dict[int, str] = {}
     for _name, va, code, *_extra in rows:
-        recovered[int(va)] = "\n".join(
+        canonical_va = int(va)
+        rendered = "\n".join(
             line for line in code.splitlines() if not line.strip().startswith("//")
         )
+        recovered[canonical_va] = rendered
+        # ELF Thumb symbols carry bit zero as the instruction-set selector,
+        # while the decompiler reports the canonical aligned code address.
+        # Preserve the API's requested-address contract for callers that use
+        # the exported symbol value as their lookup key.
+        for requested_va in requested:
+            if (requested_va & ~1) == canonical_va:
+                recovered[requested_va] = rendered
     return recovered
 
 

@@ -22,7 +22,7 @@ use super::lower_conds::{
 };
 use super::lower_ops::{lower_value, switch_index_of};
 use super::{Expr, Function, Stmt};
-use crate::ir::structure::Region;
+use crate::ir::structure::{Region, SwitchEvidence};
 use crate::ir::types::{LlirFunction, Op, VReg};
 
 /// Drop a trailing `goto <target_va>` from a lowered arm — control already
@@ -317,6 +317,11 @@ fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
 /// bodies jump to the original block labels.
 fn lower_raw_loop_block(
     block: &crate::ir::types::LlirBlock,
+    block_index: usize,
+    lf: &LlirFunction,
+    switch: Option<&SwitchEvidence>,
+    fold_switch_guard: bool,
+    inline_regions: &[crate::ir::structure::RawSwitchInlineRegion],
     default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
@@ -331,6 +336,31 @@ fn lower_raw_loop_block(
             _ => None,
         });
     let mut statements = lower_block(block, lower_scalar_float);
+    if fold_switch_guard {
+        let guard_is_exact = switch
+            .filter(|evidence| evidence.complete)
+            .and_then(|evidence| evidence.default.as_ref().map(|default| (evidence, default)))
+            .is_some_and(|(evidence, default)| {
+                default.guard == block_index
+                    && default.dispatch == Some(evidence.dispatch)
+                    && matches!(
+                        block.instrs.last().map(|instr| &instr.op),
+                        Some(Op::CondJump { .. })
+                    )
+                    && block.succs.len() == 2
+                    && lf
+                        .blocks
+                        .get(evidence.dispatch)
+                        .is_some_and(|dispatch| block.succs.contains(&dispatch.start_va))
+                    && lf
+                        .blocks
+                        .get(default.target)
+                        .is_some_and(|target| block.succs.contains(&target.start_va))
+            });
+        if guard_is_exact && matches!(statements.last(), Some(Stmt::If { .. })) {
+            statements.pop();
+        }
+    }
     let Some(discriminant) = explicit_index else {
         return statements;
     };
@@ -344,17 +374,87 @@ fn lower_raw_loop_block(
         return statements;
     };
     statements.remove(indirect_position);
-    let cases = block
-        .succs
-        .iter()
-        .enumerate()
-        .filter(|(_, target)| default_target != Some(**target))
-        .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
-        .collect();
+    let typed_switch = switch
+        .filter(|evidence| evidence.complete)
+        .filter(|evidence| evidence.dispatch == block_index);
+    let lower_inline_region = |target: usize| {
+        let region = inline_regions
+            .iter()
+            .find(|region| region.entry == target)?;
+        let mut body = Vec::new();
+        for (position, block_index) in region.blocks.iter().copied().enumerate() {
+            let block = lf.blocks.get(block_index)?;
+            if position > 0 {
+                body.push(Stmt::Label(block.start_va));
+            }
+            let mut statements = lower_block(block, lower_scalar_float);
+            let lexical_next = region
+                .blocks
+                .get(position + 1)
+                .and_then(|next| lf.blocks.get(*next))
+                .map(|next| next.start_va);
+            if let Some(next) = lexical_next {
+                strip_trailing_goto(&mut statements, next);
+            }
+            body.extend(statements);
+            if let Some(successor) = implicit_successor(block) {
+                if Some(successor) != lexical_next {
+                    body.push(Stmt::Goto { target: successor });
+                }
+            }
+        }
+        Some(body)
+    };
+    let cases = if let Some(evidence) = typed_switch {
+        evidence
+            .cases
+            .iter()
+            .flat_map(|case| {
+                let target = lf.blocks.get(case.target).map(|block| block.start_va);
+                let inline_body = lower_inline_region(case.target);
+                let last_value = case.values.len().saturating_sub(1);
+                case.values
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(move |(position, value)| {
+                        target.map(|target| {
+                            let body = if position == last_value {
+                                inline_body
+                                    .clone()
+                                    .unwrap_or_else(|| vec![Stmt::Goto { target }])
+                            } else {
+                                Vec::new()
+                            };
+                            (Some(value), body)
+                        })
+                    })
+            })
+            .collect()
+    } else {
+        block
+            .succs
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| default_target != Some(**target))
+            .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
+            .collect()
+    };
+    let typed_default = typed_switch
+        .and_then(|evidence| evidence.default.as_ref())
+        .and_then(|default| lf.blocks.get(default.target))
+        .map(|block| block.start_va);
+    let default_body = typed_switch
+        .and_then(|evidence| evidence.default.as_ref())
+        .and_then(|default| lower_inline_region(default.target));
     statements.push(Stmt::Switch {
         discriminant,
         cases,
-        default: default_target.map(|target| vec![Stmt::Goto { target }]),
+        default: default_body.or_else(|| {
+            typed_default
+                .or(default_target)
+                .map(|target| vec![Stmt::Goto { target }])
+        }),
     });
     statements
 }
@@ -675,15 +775,33 @@ fn lower_region_inner(
             header,
             blocks,
             exits: _,
+            switch,
+            switch_guard,
+            switch_inline_regions,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
-            for (position, block_index) in blocks.iter().copied().enumerate() {
+            let inlined_blocks = switch_inline_regions
+                .iter()
+                .flat_map(|region| region.blocks.iter())
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            let rendered_blocks = blocks
+                .iter()
+                .copied()
+                .filter(|block| !inlined_blocks.contains(block))
+                .collect::<Vec<_>>();
+            for (position, block_index) in rendered_blocks.iter().copied().enumerate() {
                 let block = &lf.blocks[block_index];
                 let default_target = raw_dispatch_default_target(lf, blocks, block_index);
                 loop_body.push(Stmt::Label(block.start_va));
                 loop_body.extend(lower_raw_loop_block(
                     block,
+                    block_index,
+                    lf,
+                    switch.as_ref(),
+                    *switch_guard == Some(block_index),
+                    switch_inline_regions,
                     default_target,
                     lower_scalar_float,
                 ));
@@ -692,7 +810,7 @@ fn lower_region_inner(
                 // loop owns a non-contiguous subset and starts at its header, so
                 // make every displaced fallthrough explicit. Falling off the
                 // final block naturally starts the next `while (1)` iteration.
-                let lexical_next = blocks
+                let lexical_next = rendered_blocks
                     .get(position + 1)
                     .map(|next| lf.blocks[*next].start_va)
                     .unwrap_or(header_va);
@@ -702,6 +820,18 @@ fn lower_region_inner(
                     }
                 }
             }
+            // Every transfer from an owned raw-loop block back to this exact
+            // header is a source-level continue. Apply the same recursive,
+            // nested-loop-safe conversion used by MultiExitLoop: this reaches
+            // conditional latches and switch arms without crossing a nested
+            // loop boundary. Exit transfers and case-to-handler gotos remain
+            // explicit.
+            let loop_body = materialize_multi_exit_transfers(
+                loop_body,
+                header_va,
+                &std::collections::HashMap::new(),
+                true,
+            );
             vec![Stmt::While {
                 cond: Expr::Const(1),
                 body: loop_body,

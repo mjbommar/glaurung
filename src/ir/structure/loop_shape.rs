@@ -18,10 +18,10 @@
 
 use std::collections::HashSet;
 
-use super::build;
 use super::cfg::{natural_loop_body, Cfg};
 use super::path_predicates::can_reach;
-use super::region::Region;
+use super::region::{RawSwitchInlineRegion, Region};
+use super::{build, BuildState};
 
 pub(super) struct LoopRegion {
     pub(super) region: Region,
@@ -39,7 +39,10 @@ pub(super) fn has_dispatch_natural_loop(header: usize, cfg: &Cfg) -> bool {
     dispatch_natural_loop_parts(header, cfg).is_some()
 }
 
-fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usize>, Vec<usize>)> {
+fn dispatch_natural_loop_parts(
+    header: usize,
+    cfg: &Cfg,
+) -> Option<(HashSet<usize>, Vec<usize>, usize)> {
     let tails: Vec<usize> = cfg.preds[header]
         .iter()
         .copied()
@@ -50,7 +53,7 @@ fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usiz
     }
 
     let mut body = HashSet::new();
-    for tail in tails {
+    for &tail in &tails {
         body.extend(natural_loop_body(header, tail, cfg).iter().copied());
     }
     if body
@@ -77,7 +80,7 @@ fn dispatch_natural_loop_parts(header: usize, cfg: &Cfg) -> Option<(HashSet<usiz
         .into_iter()
         .collect();
     exits.sort_unstable();
-    Some((body, exits))
+    Some((body, exits, tails.len()))
 }
 
 /// Recognise a natural loop that contains exactly one resolved indirect dispatch.
@@ -94,12 +97,13 @@ pub(super) fn detect_raw_dispatch_loop(
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
 ) -> Option<LoopRegion> {
-    let (body, exits) = dispatch_natural_loop_parts(header, cfg)?;
+    let (body, exits, latch_count) = dispatch_natural_loop_parts(header, cfg)?;
     // One normal-exhaustion path plus one terminal case is representable by
-    // the ordinary structured loop/switch builder. Raw labelled CFG is needed
-    // only once the dispatch has additional distinct exits that the current
-    // region algebra cannot own without dropping or inventing an edge.
-    if exits.len() < 3 {
+    // the ordinary structured loop/switch builder only when there is a single
+    // latch. With multiple dominated latches, no ordinary While/DoWhile shape
+    // owns all case-to-header edges; retaining the local RawLoop is strictly
+    // better than forcing the entire function into labelled fallback.
+    if exits.len() < 3 && !(exits.len() == 2 && latch_count > 1) {
         return None;
     }
 
@@ -115,14 +119,57 @@ pub(super) fn detect_raw_dispatch_loop(
         [exit] => Some(*exit),
         _ => None,
     };
+    let switch = blocks
+        .iter()
+        .find_map(|block| cfg.switch_at(*block))
+        .cloned();
+    let switch_guard = switch.as_ref().and_then(|evidence| {
+        let default = evidence.default.as_ref()?;
+        (evidence.complete
+            && default.dispatch == Some(evidence.dispatch)
+            && body_contains_guard_and_dispatch(&blocks, default.guard, evidence.dispatch)
+            && cfg.preds[evidence.dispatch] == vec![default.guard]
+            && cfg.branch_is_direct_unsigned_comparison(default.guard))
+        .then_some(default.guard)
+    });
+    let switch_inline_regions = switch
+        .as_ref()
+        .filter(|evidence| evidence.complete)
+        .map(|evidence| exclusive_switch_regions(evidence, &blocks, cfg))
+        .unwrap_or_default();
     Some(LoopRegion {
         region: Region::RawLoop {
             header,
             blocks,
             exits,
+            switch,
+            switch_guard,
+            switch_inline_regions,
         },
         exit: continuation,
     })
+}
+
+/// Whether a straight-line continuation reaches a dispatch loop that must be
+/// represented as a local [`Region::RawLoop`].
+///
+/// This is used only when an otherwise-unstructured guard has one bypass arm
+/// and one linear path into the loop. It lets the caller preserve the bypass
+/// as an explicit conditional goto and continue into the owned loop instead
+/// of abandoning the entire suffix as function-level leftovers.
+pub(super) fn linear_path_reaches_raw_dispatch_loop(start: usize, cfg: &Cfg) -> bool {
+    let mut current = start;
+    let mut seen = HashSet::new();
+    while seen.insert(current) {
+        if detect_raw_dispatch_loop(current, cfg, &mut HashSet::new()).is_some() {
+            return true;
+        }
+        let [next] = cfg.succs[current].as_slice() else {
+            return false;
+        };
+        current = *next;
+    }
+    false
 }
 
 /// Recognise a reducible multi-latch loop whose only exits all reach the same
@@ -181,9 +228,96 @@ pub(super) fn detect_raw_multi_latch_loop(
             header,
             blocks,
             exits,
+            switch: None,
+            switch_guard: None,
+            switch_inline_regions: Vec::new(),
         },
         exit: Some(exit),
     })
+}
+
+fn body_contains_guard_and_dispatch(blocks: &[usize], guard: usize, dispatch: usize) -> bool {
+    blocks.contains(&guard) && blocks.contains(&dispatch)
+}
+
+fn exclusive_switch_regions(
+    evidence: &super::cfg::SwitchEvidence,
+    blocks: &[usize],
+    cfg: &Cfg,
+) -> Vec<RawSwitchInlineRegion> {
+    let guard = evidence.default.as_ref().map(|default| default.guard);
+    let default_target = evidence.default.as_ref().map(|default| default.target);
+    let case_targets = evidence
+        .cases
+        .iter()
+        .map(|case| case.target)
+        .collect::<HashSet<_>>();
+    let mut entries = case_targets
+        .iter()
+        .copied()
+        .filter(|target| {
+            blocks.contains(target)
+                && !cfg.preds[*target].is_empty()
+                && cfg.preds[*target]
+                    .iter()
+                    .all(|predecessor| *predecessor == evidence.dispatch)
+        })
+        .collect::<Vec<_>>();
+    if let Some(target) = default_target.filter(|target| !case_targets.contains(target)) {
+        if blocks.contains(&target)
+            && !cfg.preds[target].is_empty()
+            && cfg.preds[target]
+                .iter()
+                .all(|predecessor| *predecessor == evidence.dispatch || Some(*predecessor) == guard)
+        {
+            entries.push(target);
+        }
+    }
+    entries.sort_unstable();
+    entries.dedup();
+    let entry_set = entries.iter().copied().collect::<HashSet<_>>();
+    let mut claimed = HashSet::new();
+    let mut regions = Vec::new();
+    for entry in entries {
+        if claimed.contains(&entry) {
+            continue;
+        }
+        let mut ordered = vec![entry];
+        let mut owned = HashSet::from([entry]);
+        while ordered.len() < 16 {
+            let mut frontier = ordered
+                .iter()
+                .flat_map(|block| cfg.succs[*block].iter().copied())
+                .filter(|next| {
+                    blocks.contains(next)
+                        && *next != evidence.dispatch
+                        && Some(*next) != guard
+                        && !entry_set.contains(next)
+                        && !claimed.contains(next)
+                        && !owned.contains(next)
+                        && !cfg.preds[*next].is_empty()
+                        && cfg.preds[*next]
+                            .iter()
+                            .all(|predecessor| owned.contains(predecessor))
+                })
+                .collect::<Vec<_>>();
+            frontier.sort_unstable();
+            frontier.dedup();
+            if frontier.is_empty() {
+                break;
+            }
+            let remaining = 16 - ordered.len();
+            frontier.truncate(remaining);
+            owned.extend(frontier.iter().copied());
+            ordered.extend(frontier);
+        }
+        claimed.extend(ordered.iter().copied());
+        regions.push(RawSwitchInlineRegion {
+            entry,
+            blocks: ordered,
+        });
+    }
+    regions
 }
 
 /// Recognise a natural while-loop headed at `header`.
@@ -197,6 +331,7 @@ pub(super) fn detect_natural_loop(
     header: usize,
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
+    state: &mut BuildState,
 ) -> Option<LoopRegion> {
     if cfg.succs[header].len() != 2 {
         return None;
@@ -229,7 +364,7 @@ pub(super) fn detect_natural_loop(
     visited.insert(header);
     let exit_was_visited = visited.contains(&exit);
     visited.insert(exit);
-    let body = build(body_head, cfg, visited, Some(header));
+    let body = build(body_head, cfg, visited, Some(header), state);
     if !exit_was_visited {
         visited.remove(&exit);
     }
@@ -253,6 +388,7 @@ pub(super) fn detect_bottom_tested_loop(
     header: usize,
     cfg: &Cfg,
     visited: &mut HashSet<usize>,
+    state: &mut BuildState,
 ) -> Option<LoopRegion> {
     // A genuine single-latch do-while has exactly one dominated predecessor of
     // its header. A pre-tested loop with `continue` or an early-exit arm may
@@ -339,7 +475,7 @@ pub(super) fn detect_bottom_tested_loop(
     // cannot absorb control outside the loop.
     visited.insert(cond);
     let exit_was_visited = !visited.insert(exit);
-    let body = build(header, cfg, visited, Some(cond));
+    let body = build(header, cfg, visited, Some(cond), state);
     if !exit_was_visited {
         visited.remove(&exit);
     }

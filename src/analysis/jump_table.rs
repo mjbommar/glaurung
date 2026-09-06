@@ -76,9 +76,9 @@ pub enum TableDecline {
     ObjectParseFailed,
     /// Entry `index` resolved to a VA outside every executable region.
     NonExecutableTarget { index: usize, target: u64 },
-    /// Entry `index` of a Thumb table resolved back INTO the table. Unsigned
-    /// entries make that impossible for real code, so it is the signature of an
-    /// over-long bound reading the case bodies that follow the table.
+    /// Entry `index` resolved back inside the bytes being decoded as its table.
+    /// This is the signature of an over-long bound or a false-positive dispatch
+    /// pattern, not a case target that may safely reach structuring.
     TargetInsideTable { index: usize, target: u64 },
     /// Entry `index`'s target address arithmetic overflowed.
     TargetArithmeticOverflow { index: usize },
@@ -181,6 +181,32 @@ pub fn decode_bounded_relative_jump_table<F>(
 where
     F: Fn(u64) -> bool,
 {
+    decode_bounded_relative_jump_table_from_base(
+        image,
+        data,
+        table_va,
+        table_va,
+        entry_count,
+        is_executable_va,
+    )
+}
+
+/// Decode a relative-offset table whose entries are relative to `target_base`.
+///
+/// Most 64-bit tables use the table itself as the base. GCC i386 PIC instead
+/// keeps the GOT base in a register, reads the table at a negative displacement
+/// from it, and adds every stored offset back to that GOT base.
+pub fn decode_bounded_relative_jump_table_from_base<F>(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    table_va: u64,
+    target_base: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Result<JumpTable, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
     if entry_count == 0 {
         return Err(TableDecline::ZeroEntries);
     }
@@ -214,9 +240,10 @@ where
             else {
                 continue;
             };
-            match decode_relative_entries(
+            match decode_relative_entries_from_base(
                 entries,
                 table_va,
+                target_base,
                 entry_count,
                 little_endian,
                 &is_executable_va,
@@ -243,9 +270,10 @@ where
         let Some(entries) = section_entries(span.address, span.bytes, table_va, byte_count) else {
             continue;
         };
-        match decode_relative_entries(
+        match decode_relative_entries_from_base(
             entries,
             table_va,
+            target_base,
             entry_count,
             little_endian,
             &is_executable_va,
@@ -258,6 +286,199 @@ where
         }
     }
     Err(decline)
+}
+
+/// Decode AArch64 `LDRB; ADD ..., Wm, SXTB #2; BR` compact branch tables.
+pub fn decode_aarch64_signed_byte_table<F>(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    table_va: u64,
+    target_base: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Result<JumpTable, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    if entry_count == 0 {
+        return Err(TableDecline::ZeroEntries);
+    }
+    if entry_count > MAX_TABLE_ENTRIES {
+        return Err(TableDecline::EntryCountAboveCeiling {
+            requested: entry_count,
+            ceiling: MAX_TABLE_ENTRIES,
+        });
+    }
+    let mut decline = TableDecline::NoSectionCovers {
+        table_va,
+        byte_count: entry_count,
+    };
+    if let Some(image) = image {
+        for section in image.sections() {
+            let Some(entries) =
+                section_entries(section.address(), section.data(), table_va, entry_count)
+            else {
+                continue;
+            };
+            match decode_aarch64_signed_byte_entries(
+                entries,
+                table_va,
+                target_base,
+                &is_executable_va,
+            ) {
+                Ok(targets) => return Ok(JumpTable { table_va, targets }),
+                Err(reason) => decline = reason,
+            }
+        }
+        return Err(decline);
+    }
+    let object = crate::decompile::profile::parse_object(data)
+        .map_err(|_| TableDecline::ObjectParseFailed)?;
+    for span in crate::program::spans::addressable_spans(&object) {
+        let Some(entries) = section_entries(span.address, span.bytes, table_va, entry_count) else {
+            continue;
+        };
+        match decode_aarch64_signed_byte_entries(entries, table_va, target_base, &is_executable_va)
+        {
+            Ok(targets) => return Ok(JumpTable { table_va, targets }),
+            Err(reason) => decline = reason,
+        }
+    }
+    Err(decline)
+}
+
+fn decode_aarch64_signed_byte_entries<F>(
+    entries: &[u8],
+    table_va: u64,
+    target_base: u64,
+    is_executable_va: &F,
+) -> Result<Vec<u64>, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    let table_end = table_va
+        .checked_add(
+            u64::try_from(entries.len()).map_err(|_| TableDecline::ExtentOverflow {
+                entry_count: entries.len(),
+                entry_size: 1,
+            })?,
+        )
+        .ok_or(TableDecline::TargetArithmeticOverflow { index: 0 })?;
+    let mut targets = Vec::with_capacity(entries.len());
+    for (index, byte) in entries.iter().copied().enumerate() {
+        let scaled = i64::from(byte as i8)
+            .checked_mul(4)
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
+        let target = target_base
+            .checked_add_signed(scaled)
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
+        if !is_executable_va(target) {
+            return Err(TableDecline::NonExecutableTarget { index, target });
+        }
+        if (table_va..table_end).contains(&target) {
+            return Err(TableDecline::TargetInsideTable { index, target });
+        }
+        targets.push(target);
+    }
+    Ok(targets)
+}
+
+/// Decode A32 `LDRB; ADD pc, pc, Rm, LSL #2` compact branch tables.
+///
+/// Each table byte is an unsigned instruction-word offset from the A32 value
+/// of `pc` at the terminal `add`.  The exact extent must come from the unsigned
+/// range guard; reading beyond it would reinterpret adjacent data as branches.
+pub fn decode_arm_unsigned_byte_table<F>(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    table_va: u64,
+    target_base: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Result<JumpTable, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    if entry_count == 0 {
+        return Err(TableDecline::ZeroEntries);
+    }
+    if entry_count > MAX_TABLE_ENTRIES {
+        return Err(TableDecline::EntryCountAboveCeiling {
+            requested: entry_count,
+            ceiling: MAX_TABLE_ENTRIES,
+        });
+    }
+    let mut decline = TableDecline::NoSectionCovers {
+        table_va,
+        byte_count: entry_count,
+    };
+    if let Some(image) = image {
+        for section in image.sections() {
+            let Some(entries) =
+                section_entries(section.address(), section.data(), table_va, entry_count)
+            else {
+                continue;
+            };
+            match decode_arm_unsigned_byte_entries(
+                entries,
+                table_va,
+                target_base,
+                &is_executable_va,
+            ) {
+                Ok(targets) => return Ok(JumpTable { table_va, targets }),
+                Err(reason) => decline = reason,
+            }
+        }
+        return Err(decline);
+    }
+    let object = crate::decompile::profile::parse_object(data)
+        .map_err(|_| TableDecline::ObjectParseFailed)?;
+    for span in crate::program::spans::addressable_spans(&object) {
+        let Some(entries) = section_entries(span.address, span.bytes, table_va, entry_count) else {
+            continue;
+        };
+        match decode_arm_unsigned_byte_entries(entries, table_va, target_base, &is_executable_va) {
+            Ok(targets) => return Ok(JumpTable { table_va, targets }),
+            Err(reason) => decline = reason,
+        }
+    }
+    Err(decline)
+}
+
+fn decode_arm_unsigned_byte_entries<F>(
+    entries: &[u8],
+    table_va: u64,
+    target_base: u64,
+    is_executable_va: &F,
+) -> Result<Vec<u64>, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    let table_end = table_va
+        .checked_add(
+            u64::try_from(entries.len()).map_err(|_| TableDecline::ExtentOverflow {
+                entry_count: entries.len(),
+                entry_size: 1,
+            })?,
+        )
+        .ok_or(TableDecline::TargetArithmeticOverflow { index: 0 })?;
+    let mut targets = Vec::with_capacity(entries.len());
+    for (index, byte) in entries.iter().copied().enumerate() {
+        let scaled = u64::from(byte)
+            .checked_mul(4)
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
+        let target = target_base
+            .checked_add(scaled)
+            .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
+        if !is_executable_va(target) {
+            return Err(TableDecline::NonExecutableTarget { index, target });
+        }
+        if (table_va..table_end).contains(&target) {
+            return Err(TableDecline::TargetInsideTable { index, target });
+        }
+        targets.push(target);
+    }
+    Ok(targets)
 }
 
 /// Exactly `byte_count` bytes at `table_va` inside one section, when they fit.
@@ -540,9 +761,31 @@ where
     Ok(targets)
 }
 
+#[cfg(test)]
 fn decode_relative_entries<F>(
     bytes: &[u8],
     table_va: u64,
+    entry_count: usize,
+    little_endian: bool,
+    is_executable_va: &F,
+) -> Result<Vec<u64>, TableDecline>
+where
+    F: Fn(u64) -> bool,
+{
+    decode_relative_entries_from_base(
+        bytes,
+        table_va,
+        table_va,
+        entry_count,
+        little_endian,
+        is_executable_va,
+    )
+}
+
+fn decode_relative_entries_from_base<F>(
+    bytes: &[u8],
+    table_va: u64,
+    target_base: u64,
     entry_count: usize,
     little_endian: bool,
     is_executable_va: &F,
@@ -570,7 +813,7 @@ where
         } else {
             i32::from_be_bytes(bytes)
         };
-        let target = table_va
+        let target = target_base
             .checked_add_signed(i64::from(raw))
             .ok_or(TableDecline::TargetArithmeticOverflow { index })?;
         if !is_executable_va(target) {
@@ -683,6 +926,67 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aarch64_signed_byte_entries_use_separate_target_base_and_scale_four() {
+        let entries = [0xff, 0x00, 0x02];
+        assert_eq!(
+            decode_aarch64_signed_byte_entries(&entries, 0x200, 0x100, &|target| {
+                (0xf0..=0x110).contains(&target)
+            }),
+            Ok(vec![0xfc, 0x100, 0x108])
+        );
+    }
+
+    #[test]
+    fn aarch64_signed_byte_entries_decline_one_non_executable_target() {
+        assert_eq!(
+            decode_aarch64_signed_byte_entries(&[0, 1], 0x200, 0x100, &|target| {
+                target == 0x100
+            }),
+            Err(TableDecline::NonExecutableTarget {
+                index: 1,
+                target: 0x104,
+            })
+        );
+    }
+
+    #[test]
+    fn aarch64_signed_byte_entries_decline_target_inside_table() {
+        assert_eq!(
+            decode_aarch64_signed_byte_entries(&[0], 0x100, 0x100, &|_| true),
+            Err(TableDecline::TargetInsideTable {
+                index: 0,
+                target: 0x100,
+            })
+        );
+    }
+
+    #[test]
+    fn arm_unsigned_byte_entries_use_a32_pc_base_and_scale_four() {
+        let entries = [0u8, 3, 8, 1];
+        assert_eq!(
+            decode_arm_unsigned_byte_entries(&entries, 0x624, 0x3d0, &|target| {
+                (0x3d0..0x500).contains(&target)
+            }),
+            Ok(vec![0x3d0, 0x3dc, 0x3f0, 0x3d4])
+        );
+    }
+
+    #[test]
+    fn arm_unsigned_byte_entries_decline_overflow_and_non_code() {
+        assert_eq!(
+            decode_arm_unsigned_byte_entries(&[1], 0x200, u64::MAX - 2, &|_| true),
+            Err(TableDecline::TargetArithmeticOverflow { index: 0 })
+        );
+        assert_eq!(
+            decode_arm_unsigned_byte_entries(&[0, 2], 0x200, 0x100, &|target| target == 0x100),
+            Err(TableDecline::NonExecutableTarget {
+                index: 1,
+                target: 0x108,
+            })
+        );
+    }
 
     /// Mirror the inner-loop logic on a synthetic byte buffer so the
     /// scan invariants are testable without a real ELF.
@@ -831,6 +1135,28 @@ mod tests {
             }),
             Err(TableDecline::TargetArithmeticOverflow { index: 0 }),
             "a malformed negative offset must not wrap above the address space"
+        );
+    }
+
+    #[test]
+    fn relative_entries_can_use_a_distinct_checked_target_base() {
+        let table_va = 0x2000;
+        let target_base = 0x3ff4;
+        let targets = [0x1150u64, 0x1180];
+        let entries: Vec<u8> = targets
+            .into_iter()
+            .flat_map(|target| ((target as i64 - target_base as i64) as i32).to_le_bytes())
+            .collect();
+        assert_eq!(
+            decode_relative_entries_from_base(
+                &entries,
+                table_va,
+                target_base,
+                targets.len(),
+                true,
+                &|target| (0x1000..0x1400).contains(&target),
+            ),
+            Ok(targets.to_vec())
         );
     }
 
