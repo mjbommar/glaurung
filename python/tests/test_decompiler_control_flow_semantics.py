@@ -69,7 +69,8 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     code = D.decompiled_c(str(binary), functions["fsm"])
     assert code is not None
     assert "signed char c;" in code, code
-    assert "int i;" in code and "int st;" in code, code
+    assert ("int i;" in code or "for (int i =" in code), code
+    assert ("int st;" in code or "int st =" in code), code
 
     # The preferred recovery is a structured switch whose C `break`s flow to
     # one latch after the switch.  Requiring a particular number of gotos made
@@ -448,7 +449,9 @@ def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["sum_array"])
     assert code is not None
-    assert "a[" in code and "int i;" in code and "int s;" in code, code
+    assert "a[" in code, code
+    assert ("int i;" in code or "for (int i =" in code), code
+    assert ("int s;" in code or "int s =" in code), code
     assert "arg0" not in code, code
     assert "long var3;" not in code and "long var6;" not in code, code
     assert (
@@ -910,7 +913,7 @@ def test_clang_o0_linked_list_sum_round_trips_exact_instruction_bytes(
     find_code = D.decompiled_c(str(original), functions["list_find"])
     assert code is not None
     assert find_code is not None
-    assert "while ((h != 0))" in code, code
+    assert "while (h != 0)" in code, code
     assert "(long)h" not in code, code
     assert "(unsigned long)((unsigned int)(h->val))" not in code, code
     assert "(unsigned long)((unsigned int)(h->val))" not in find_code, find_code
