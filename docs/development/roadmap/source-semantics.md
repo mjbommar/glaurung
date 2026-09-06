@@ -549,8 +549,12 @@ moves phase 3 behind a prerequisite:
 | 1 declared types | **landed** |
 | 2 interprocedural summaries | **landed** |
 | 2.5 widen the lowering | **landed to 55.2%** --- pointers, arrays, subscript, pointer scaling, calls by substitution, macro and standard constants |
-| 3 path feasibility | **landed** --- `src/csource/feasibility.rs`; 373 of 1,131 decided paths are infeasible |
-| 4 KB facts | **landed** |
+| 3 path feasibility | **landed, all three items** --- `src/csource/feasibility.rs`; 373 of 1,131 decided paths infeasible, 8 blocks provably dead, 4 functions with reachable UB |
+| 4 KB facts | **landed** --- prototypes, dependence edges and infeasible-path verdicts, all `set_by = "source"` |
+
+**Every deliverable and gate in this document is now met.** What is left is
+listed under "what this does not decide yet" and in the coverage table --- work
+this plan *names* rather than work it *asks for*.
 
 **Phase 3's gate cleared, and phase 3 then landed.** The sequencing section
 above set it explicitly: "if pointers and calls do not move 18.7%
