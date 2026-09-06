@@ -88,6 +88,16 @@ pub struct Local {
     /// not a pointer, or a pointer whose pointee is opaque --- and a
     /// dereference of the second is refused rather than guessed.
     pub pointee: Option<IntType>,
+    /// The element count, when this name is an *array* rather than a scalar.
+    ///
+    /// An array is the one binding whose slot holds the object itself rather
+    /// than a value to load: `int a[10]` owns 40 bytes, and the name `a` is
+    /// worth the *address* of those bytes, not their contents. So `ty` and
+    /// `pointee` describe the decayed pointer --- `ULONG` to the element type
+    /// --- and `elements` is what says the decay is a constant rather than a
+    /// load. It is also the only place the array's extent is recorded, which
+    /// an initializer needs to know when to stop.
+    pub elements: Option<u64>,
 }
 
 /// Where `break` and `continue` go in the innermost enclosing loop.
@@ -225,14 +235,41 @@ impl<'a, 'b> Lowerer<'a, 'b> {
     }
 
     /// Declare `name`, recording what it points at when it is a pointer.
-    pub fn declare_typed(
-        &mut self,
-        name: &str,
-        ty: IntType,
-        pointee: Option<IntType>,
-    ) -> Local {
+    pub fn declare_typed(&mut self, name: &str, ty: IntType, pointee: Option<IntType>) -> Local {
         let addr = self.b.slot(u64::from(ty.width.bytes().max(1)));
-        let local = Local { addr, ty, pointee };
+        self.bind(
+            name,
+            Local {
+                addr,
+                ty,
+                pointee,
+                elements: None,
+            },
+        )
+    }
+
+    /// Declare `name` as an array of `count` elements of type `elem`.
+    ///
+    /// The slot is the whole object --- `count * sizeof(elem)` bytes --- and
+    /// the binding describes the pointer the name decays to, so every use site
+    /// that already handles a pointer handles an array without knowing it is
+    /// one. See [`Local::elements`].
+    pub fn declare_array(&mut self, name: &str, elem: IntType, count: u64) -> Local {
+        let bytes = u64::from(elem.width.bytes().max(1)).saturating_mul(count);
+        let addr = self.b.slot(bytes);
+        self.bind(
+            name,
+            Local {
+                addr,
+                ty: IntType::ULONG,
+                pointee: Some(elem),
+                elements: Some(count),
+            },
+        )
+    }
+
+    /// Put `local` in the innermost scope under `name`.
+    fn bind(&mut self, name: &str, local: Local) -> Local {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), local);
         }
@@ -289,7 +326,10 @@ fn parse_integer_literal(body: &str) -> Option<i128> {
     if digits.is_empty() {
         return None;
     }
-    let value = if let Some(hex) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+    let value = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         i128::from_str_radix(hex, 16).ok()?
     } else {
         digits.parse::<i128>().ok()?
@@ -530,10 +570,9 @@ fn push_param(
                     .take_while(|i| ctx.kind_at(**i) != Some(TokenKind::Star))
                     .map(|i| ctx.text_at(*i))
                     .collect();
-                let pointee = crate::csource::lower::ctype::from_specifier_tokens(
-                    words.iter().copied(),
-                )
-                .map(Box::new);
+                let pointee =
+                    crate::csource::lower::ctype::from_specifier_tokens(words.iter().copied())
+                        .map(Box::new);
                 // The name is the last identifier in the group --- `const
                 // char *name` names `name`. Without it the parameter is
                 // declared anonymously and the body cannot find it, which

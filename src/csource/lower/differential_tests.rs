@@ -67,6 +67,23 @@ struct Tally {
     /// Fixture functions that lowered but whose name discovery did not find in
     /// the built binary --- inlined away, or renamed.
     unmatched_symbols: usize,
+    /// Functions this harness cannot call, because a parameter is a pointer.
+    ///
+    /// The sweep supplies the same integer vector to both sides, and there is
+    /// no integer that is a valid address in *both* address spaces: the lifted
+    /// side runs over the real image, where a small integer lands in the ELF
+    /// header, and the lowered side runs over a frame the interpreter owns.
+    /// Passing one anyway does not compare two readings of C --- both sides are
+    /// then reading whatever happens to be at an address the program never
+    /// gave them, which is undefined on both.
+    ///
+    /// This became load-bearing when arrays and pointer arithmetic landed:
+    /// `03_loop_shapes:for_sum(const int *p)` had been refused by the lowering
+    /// and so never reached the sweep. The moment it lowered, eight cells of
+    /// `lowered=0x0 lifted=0x468b4685` appeared --- and `0x464c457f` is
+    /// `\x7fELF`, which is what says the lifted side was reading the image
+    /// header rather than an array.
+    uncallable_signatures: usize,
 }
 
 /// Sweep the corpus, returning the per-cell verdicts and a running tally.
@@ -125,6 +142,10 @@ fn sweep(lanes: &[&str], only: Option<&str>) -> Option<(Tally, Vec<String>, Vec<
                     tally.unmatched_symbols += 1;
                     continue;
                 };
+                if function.params.iter().any(|p| p.ty.is_pointer()) {
+                    tally.uncallable_signatures += 1;
+                    continue;
+                }
                 tally.functions += 1;
                 for args in vectors(function.params.len()) {
                     match compare(function, reference, &data, &args, STEPS) {
@@ -223,8 +244,9 @@ fn report(label: &str, lanes: &[&str], only: Option<&str>) -> Option<(Tally, Vec
     let total = tally.matched + tally.diverged + tally.inconclusive;
     println!("--- S4 differential: {label} ---");
     println!(
-        "functions x lanes compared: {}; symbols not found in the binary: {}",
-        tally.functions, tally.unmatched_symbols
+        "functions x lanes compared: {}; symbols not found in the binary: {}; \
+         signatures this harness cannot call: {}",
+        tally.functions, tally.unmatched_symbols, tally.uncallable_signatures
     );
     println!(
         "cells: {total}; match: {}; diverged: {}; inconclusive: {}",

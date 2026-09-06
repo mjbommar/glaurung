@@ -181,7 +181,7 @@ mod coverage {
         // something it used to accept fails here rather than shrinking the
         // population a later feasibility claim is measured over.
         assert!(
-            ok * 100 / total >= 20,
+            ok * 100 / total >= 34,
             "lowering coverage fell to {ok}/{total}"
         );
         // "pointer type" was 325 of 732 refusals before pointers were admitted

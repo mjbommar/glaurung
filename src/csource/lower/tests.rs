@@ -269,15 +269,11 @@ fn a_long_result_keeps_all_sixty_four_bits() {
 
 #[test]
 fn an_unlowerable_construct_is_refused_by_name_rather_than_approximated() {
-    // A pointer parameter and a plain dereference now lower --- see
-    // `a_pointer_parameter_dereferences_to_its_pointee`. What is still refused
-    // is arithmetic on one, because the lowering does not scale by the pointee
-    // size and an unscaled `cursor + 1` walks one byte instead of four. The
-    // S4 differential caught exactly that against the real binary.
-    let err = lower_named_function("int f(int *p) { return *(p + 1); }", "f")
-        .expect_err("pointer arithmetic is not modelled");
-    assert!(err.what.contains("pointer arithmetic"), "{err}");
-    // Pointer-to-pointer is refused too: `Local::pointee` is one level deep,
+    // Pointer parameters, dereference and now arithmetic all lower --- see
+    // `pointer_arithmetic_scales_by_the_pointee_width`. What remains refused is
+    // listed here, each by the name it refuses under.
+    //
+    // Pointer-to-pointer: `Local::pointee` is one level deep,
     // and treating `**p` as `*p` would read the wrong bytes.
     let err = lower_named_function("int f(int **p) { return **p; }", "f")
         .expect_err("pointer-to-pointer is not modelled");
@@ -381,7 +377,10 @@ fn a_pointee_width_decides_how_many_bytes_a_dereference_reads() {
     // which this lowering still refuses, and writing the test with one would
     // be testing a construct that does not exist yet.
     let wide = lower("int f(int a) { int x = a; int *p = &x; return *p; }", "f");
-    let narrow = lower("int f(int a) { char c = (char)a; char *p = &c; return *p; }", "f");
+    let narrow = lower(
+        "int f(int a) { char c = (char)a; char *p = &c; return *p; }",
+        "f",
+    );
     assert_eq!(call(&wide, &[0x44332211]), 0x44332211);
     // 0x11 fits in a signed char, so the sign extension is a no-op here.
     assert_eq!(call(&narrow, &[0x44332211]), 0x11);
@@ -410,7 +409,10 @@ fn a_macro_constant_takes_its_base_and_sign() {
 #[test]
 fn a_trailing_comment_does_not_become_part_of_the_value() {
     // The fixture corpus writes `#define N 8   /* ... */` constantly.
-    let f = lower("#define N 8   /* eight of them */\nint f(void) { return N; }", "f");
+    let f = lower(
+        "#define N 8   /* eight of them */\nint f(void) { return N; }",
+        "f",
+    );
     assert_eq!(call(&f, &[]), 8);
 }
 
@@ -442,6 +444,231 @@ fn a_local_wins_over_a_macro_of_the_same_name() {
     // Safe rather than arbitrary: C expands macros before scoping, so a file
     // that both defines `N` and declares a local `N` does not compile. The
     // order is asserted so a future change cannot silently invert it.
-    let f = lower("#define VALUE 99\nint f(int a) { int VALUE = a; return VALUE; }", "f");
+    let f = lower(
+        "#define VALUE 99\nint f(int a) { int VALUE = a; return VALUE; }",
+        "f",
+    );
     assert_eq!(call(&f, &[7]), 7);
+}
+
+// ---------------------------------------------------------------------------
+// Arrays, subscripts and pointer arithmetic.
+//
+// Every expected value below was produced by `gcc -O0` *and* `gcc -O1` on the
+// equivalent C, per `CLAUDE.md`: "to decide what C means, compile it". Deriving
+// them from a second reading of the same rules would only prove two of my
+// readings agree.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_array_element_is_addressed_by_its_index() {
+    let f = lower(
+        "int pick(int i) { int a[4]; a[0] = 10; a[1] = 20; a[2] = 30; a[3] = 40; return a[i]; }",
+        "pick",
+    );
+    assert_eq!(call(&f, &[0]), 10);
+    assert_eq!(call(&f, &[2]), 30);
+    assert_eq!(call(&f, &[3]), 40);
+}
+
+#[test]
+fn a_braced_initializer_fills_the_front_and_zeroes_the_rest() {
+    // gcc: `int b[4] = {7, 8}` gives 7 8 0 0. The zeroes are C's guarantee, and
+    // the lowering emits them rather than trusting the frame to be clear.
+    let f = lower(
+        "int pick(int i) { int b[4] = {7, 8}; return b[i]; }",
+        "pick",
+    );
+    assert_eq!(call(&f, &[0]), 7);
+    assert_eq!(call(&f, &[1]), 8);
+    assert_eq!(call(&f, &[2]), 0);
+    assert_eq!(call(&f, &[3]), 0);
+}
+
+#[test]
+fn pointer_arithmetic_scales_by_the_pointee_width() {
+    // The regression this whole capability was blocked on: `p += 2` on an
+    // `int *` advances eight bytes, not two.
+    let ints = lower(
+        "int walk(void) { int a[4] = {1, 2, 3, 4}; int *p = a; p += 2; return *p; }",
+        "walk",
+    );
+    assert_eq!(call(&ints, &[]), 3);
+    // The same source shape on a `char *` advances two bytes, which is the
+    // point: one rule, two widths. gcc says `*q` is 3.
+    let chars = lower(
+        "int walk(void) { char c[4] = {1, 2, 3, 4}; char *q = c; q += 2; return *q; }",
+        "walk",
+    );
+    assert_eq!(call(&chars, &[]), 3);
+}
+
+#[test]
+fn an_increment_of_a_pointer_scales_too() {
+    let f = lower(
+        "int second(void) { int a[3] = {11, 22, 33}; int *p = a; p++; return *p; }",
+        "second",
+    );
+    assert_eq!(call(&f, &[]), 22);
+    // `*++p` must still see a pointer, or the dereference has no width.
+    let prefixed = lower(
+        "int third(void) { int a[3] = {11, 22, 33}; int *p = a; ++p; return *++p; }",
+        "third",
+    );
+    assert_eq!(call(&prefixed, &[]), 33);
+}
+
+#[test]
+fn a_negative_index_walks_backwards() {
+    // gcc: with `p = a + 7` over `a[k] = k * 10`, `p[-1]` is 60. The index is
+    // sign-extended before it is scaled --- scaling the unsigned reading of -1
+    // would land 16GB away.
+    let f = lower(
+        "int back(void) { int a[8]; int k = 0; while (k < 8) { a[k] = k * 10; k++; } \
+         int *p = a + 7; return p[-1]; }",
+        "back",
+    );
+    assert_eq!(call(&f, &[]), 60);
+}
+
+#[test]
+fn pointer_difference_counts_elements_and_keeps_its_sign() {
+    // gcc: `p - a` is 7 and `a - p` is -7. The second is why the difference
+    // goes through signed division: an unsigned divide turns -28 bytes into an
+    // enormous positive count.
+    let forward = lower(
+        "long gap(void) { int a[8]; int *p = a + 7; return p - a; }",
+        "gap",
+    );
+    assert_eq!(call(&forward, &[]), 7);
+    let backward = lower(
+        "long gap(void) { int a[8]; int *p = a + 7; return a - p; }",
+        "gap",
+    );
+    assert_eq!(call(&backward, &[]), (-7i64) as u64);
+}
+
+#[test]
+fn a_subscript_is_addition_so_it_commutes() {
+    // `2[a]` is legal C and gcc agrees it is `a[2]`. It is here because it
+    // proves the lowering implements the *definition* rather than a special
+    // case for an array on the left.
+    let f = lower(
+        "int odd(void) { int a[3] = {5, 6, 7}; return 2[a]; }",
+        "odd",
+    );
+    assert_eq!(call(&f, &[]), 7);
+}
+
+#[test]
+fn an_element_is_writable_through_a_subscript_and_through_a_pointer() {
+    let subscript = lower(
+        "int put(int v) { int a[3] = {0, 0, 0}; a[1] = v; return a[1]; }",
+        "put",
+    );
+    assert_eq!(call(&subscript, &[42]), 42);
+    let indirect = lower(
+        "int put(int v) { int a[3] = {0, 0, 0}; int *p = a + 1; *p = v; return a[1]; }",
+        "put",
+    );
+    assert_eq!(call(&indirect, &[42]), 42);
+}
+
+#[test]
+fn a_narrow_element_is_truncated_by_the_store_not_by_the_load() {
+    // The store width comes from the address value's pointee. A `char` array
+    // written with 0x1ff must read back 0xff sign-extended, i.e. -1.
+    let f = lower(
+        "int narrow(int v) { char c[2] = {0, 0}; c[0] = v; return c[0]; }",
+        "narrow",
+    );
+    assert_eq!(call(&f, &[0x1ff]), (-1i32) as u32 as u64);
+}
+
+#[test]
+fn incrementing_an_element_reads_and_writes_the_same_cell() {
+    let f = lower(
+        "int bump(int i) { int a[3] = {1, 2, 3}; a[i]++; return a[i]; }",
+        "bump",
+    );
+    assert_eq!(call(&f, &[1]), 3);
+    let prefix = lower(
+        "int bump(int i) { int a[3] = {1, 2, 3}; return ++a[i]; }",
+        "bump",
+    );
+    assert_eq!(call(&prefix, &[2]), 4);
+}
+
+#[test]
+fn a_compound_assignment_through_a_subscript_evaluates_the_index_once() {
+    // gcc, at -O0 and -O1: `a[i++] += 5` leaves `a[2]` at 25 and `i` at 3. If
+    // the address were computed twice, `i` would reach 4 and the read and the
+    // write would land in different cells.
+    let f = lower(
+        "int once(void) { int a[8]; int k = 0; while (k < 8) { a[k] = k * 10; k++; } \
+         int i = 2; a[i++] += 5; return a[2] * 100 + i; }",
+        "once",
+    );
+    assert_eq!(call(&f, &[]), 2503);
+}
+
+#[test]
+fn the_address_of_an_element_is_the_array_plus_the_index() {
+    // gcc: `&a[2] - a` is 2. `&a[i]` is the subscript's address computation
+    // with the load left off, which is why it needs no code of its own.
+    let f = lower("long where(int i) { int a[8]; return &a[i] - a; }", "where");
+    assert_eq!(call(&f, &[5]), 5);
+}
+
+#[test]
+fn a_macro_may_give_the_array_its_extent() {
+    // `#define N 8` then `int a[N]` is the shape the fixture corpus writes, and
+    // the extent has to come from the same macro table the expressions use.
+    let f = lower(
+        "#define N 4\nint last(void) { int a[N]; a[N - 1] = 9; return a[3]; }",
+        "last",
+    );
+    assert_eq!(call(&f, &[]), 9);
+}
+
+#[test]
+fn an_array_without_a_constant_extent_is_refused() {
+    // A variable-length array's storage is not a fixed frame slot, so it is a
+    // different object rather than a bigger one.
+    let err = lower_named_function("int f(int n) { int a[n]; a[0] = 1; return a[0]; }", "f")
+        .expect_err("a variable-length array is not a frame slot");
+    assert!(err.what.contains("extent"), "{err}");
+}
+
+#[test]
+fn a_multi_dimensional_array_is_refused() {
+    // `Local::pointee` is one `IntType` deep, so there is nowhere to record a
+    // row stride. Refusing is the difference between no answer and a wrong one.
+    let err = lower_named_function("int f(void) { int m[2][3]; return m[1][2]; }", "f")
+        .expect_err("a row stride cannot be recorded");
+    assert!(err.what.contains("multi-dimensional"), "{err}");
+}
+
+#[test]
+fn an_array_name_is_not_a_modifiable_lvalue() {
+    let err = lower_named_function(
+        "int f(void) { int a[2]; int b[2]; a = b; return a[0]; }",
+        "f",
+    )
+    .expect_err("C does not allow assigning to an array name");
+    assert!(err.what.contains("array name"), "{err}");
+}
+
+#[test]
+fn the_construct_the_refusal_test_used_to_name_now_lowers() {
+    // `*(p + 1)` was the example in
+    // `an_unlowerable_construct_is_refused_by_name_rather_than_approximated`
+    // of a named refusal. It is kept as a test of the thing itself so the
+    // refusal list cannot quietly grow it back.
+    let f = lower(
+        "int at(int i) { int a[4] = {2, 4, 6, 8}; int *p = a; return *(p + i); }",
+        "at",
+    );
+    assert_eq!(call(&f, &[0]), 2);
+    assert_eq!(call(&f, &[3]), 8);
 }

@@ -13,8 +13,9 @@ use crate::ir::types::{Op, VReg, Value};
 use crate::syntax::ids::NodeId;
 
 use super::build::BlockRef;
+use super::ctype::IntType;
 use super::expr::lower_expr;
-use super::func::{token_words, LoopTargets, Lowerer, RESULT_REG};
+use super::func::{token_words, Ctx, LoopTargets, Lowerer, RESULT_REG};
 use super::{unsupported, LowerError};
 
 /// One step of the statement walk.
@@ -411,19 +412,31 @@ fn declaration(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<(), LowerError
             .extent(child)
             .ok_or_else(|| LowerError::new("declarator with no tokens", ctx.offset_of(node)))?;
         // A `*` makes this declarator a pointer to the base type, which is a
-        // pointer-width integer holding an address. Brackets and parens are
-        // still refused: an array declarator needs a multi-slot frame object
-        // and a function declarator is not an object at all.
+        // pointer-width integer holding an address. A `[` makes it an array,
+        // which owns a multi-element frame object. A `(` is a function
+        // declarator, which is not an object at all and is still refused.
         let stars = (first..end)
             .filter(|i| ctx.kind_at(*i) == Some(TokenKind::Star))
             .count();
-        if (first..end).any(|i| {
-            matches!(
-                ctx.kind_at(i),
-                Some(TokenKind::LBracket) | Some(TokenKind::LParen)
-            )
-        }) {
-            return unsupported("array or function declarator", child, ctx);
+        if (first..end).any(|i| ctx.kind_at(i) == Some(TokenKind::LParen)) {
+            return unsupported("function declarator", child, ctx);
+        }
+        let brackets = (first..end)
+            .filter(|i| ctx.kind_at(*i) == Some(TokenKind::LBracket))
+            .count();
+        if brackets > 0 {
+            // A pointer-to-array or array-of-pointer is two levels of
+            // indirection in one declarator, and `Local` models one.
+            if stars > 0 {
+                return unsupported("array of pointers", child, ctx);
+            }
+            // `int m[2][3]` needs the row stride at every subscript, which
+            // `Local::pointee` (one `IntType`) cannot carry.
+            if brackets > 1 {
+                return unsupported("multi-dimensional array", child, ctx);
+            }
+            index = array_declarator(low, node, child, base, &kids, index)?;
+            continue;
         }
         // Only a single level of indirection is modelled. `int **p` would need
         // the pointee to be a pointer, and `Local::pointee` is one `IntType`
@@ -476,3 +489,135 @@ fn declaration(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<(), LowerError
     }
     Ok(())
 }
+
+/// The number of elements an array declarator's `[ ... ]` asks for.
+///
+/// Only a constant extent is admitted: an integer literal, or an object-like
+/// macro naming one, which is what `#define N 8` followed by `int a[N]` needs.
+/// A variable-length array is a genuinely different object --- its size is a
+/// run-time value and its storage is not a fixed frame slot --- so it is
+/// refused rather than guessed at some maximum.
+fn array_extent(ctx: &Ctx<'_>, first: u32, end: u32) -> Option<u64> {
+    let open = (first..end).find(|i| ctx.kind_at(*i) == Some(TokenKind::LBracket))?;
+    let close = (open..end).find(|i| ctx.kind_at(*i) == Some(TokenKind::RBracket))?;
+    let inner: Vec<u32> = ((open + 1)..close).collect();
+    let [only] = inner[..] else { return None };
+    let text = ctx.text_at(only);
+    if let Some((bits, _)) = super::literal::parse_literal(text) {
+        return u64::try_from(bits).ok();
+    }
+    ctx.macro_value(text).and_then(|v| u64::try_from(v).ok())
+}
+
+/// Declare one array local and apply its initializer.
+///
+/// Returns the index of the next unconsumed `Decl` child, so the caller's walk
+/// continues past an initializer this consumed.
+///
+/// # Why the elements are written one at a time
+///
+/// There is no bulk-store op: `src/exec` executes `Op::Store` at a width, so a
+/// braced initializer becomes one store per element. The tail past the last
+/// initializer is *explicitly* zeroed rather than assumed zero, because C
+/// guarantees those elements are zero and the interpreter's frame memory is
+/// not ours to make promises about. That is also why the element count is
+/// capped: `int big[100000] = {0}` would emit a hundred thousand stores, and a
+/// function that takes minutes to lower is a worse outcome than a refusal.
+fn array_declarator(
+    low: &mut Lowerer<'_, '_>,
+    node: NodeId,
+    declarator: NodeId,
+    base: IntType,
+    kids: &[NodeId],
+    mut index: usize,
+) -> Result<usize, LowerError> {
+    let ctx = low.ctx;
+    let (first, end) = ctx
+        .extent(declarator)
+        .ok_or_else(|| LowerError::new("declarator with no tokens", ctx.offset_of(node)))?;
+    let Some(name_node) = ctx
+        .children(declarator)
+        .into_iter()
+        .find(|c| ctx.tag(*c) == Some(NodeTag::DeclName))
+    else {
+        return unsupported("array declarator with no name", declarator, ctx);
+    };
+    let name = ctx.text_of(name_node).to_string();
+
+    let initializer = kids
+        .get(index)
+        .copied()
+        .filter(|c| ctx.tag(*c) == Some(NodeTag::Initializer));
+    let Some(count) = array_extent(ctx, first, end) else {
+        // `int a[] = { ... }` takes its extent from the initializer, which is
+        // a real C rule; without one there is no object to declare.
+        return unsupported("array with no constant extent", declarator, ctx);
+    };
+    if count == 0 {
+        return unsupported("zero-length array", declarator, ctx);
+    }
+    if count > MAX_ARRAY_ELEMENTS {
+        return unsupported(
+            "array larger than the lowering will unroll",
+            declarator,
+            ctx,
+        );
+    }
+
+    // Every initializer element is evaluated *before* the name is declared,
+    // for the reason the scalar path gives: `int a[2] = { a[0] }` in an inner
+    // scope reads the outer `a`.
+    let mut values = Vec::new();
+    if let Some(init) = initializer {
+        index += 1;
+        let Some(inner) = ctx.children(init).first().copied() else {
+            return unsupported("empty initializer", init, ctx);
+        };
+        if ctx.tag(inner) != Some(NodeTag::InitList) {
+            // `int a[3] = "abc"` and `int a[3] = f()` are both real C or near
+            // enough to appear in decompiled output; neither is a list of
+            // element values and neither is modelled.
+            return unsupported("array initializer that is not a braced list", init, ctx);
+        }
+        let elements = ctx.children(inner);
+        if elements.len() as u64 > count {
+            return unsupported(
+                "array initializer with more elements than the array",
+                init,
+                ctx,
+            );
+        }
+        for element in elements {
+            if ctx.tag(element) == Some(NodeTag::InitList) {
+                return unsupported("nested braced initializer", init, ctx);
+            }
+            values.push(lower_expr(low, element)?);
+        }
+    }
+
+    let local = low.declare_array(&name, base, count);
+    let width = base.width.bytes().max(1) as u8;
+    let stride = u64::from(base.width.bytes().max(1));
+    for (position, value) in values.iter().enumerate() {
+        let stored = super::value::convert(low, value, base);
+        low.b
+            .store_abs(local.addr + position as u64 * stride, width, &stored.reg);
+    }
+    // C zero-fills the elements a braced initializer does not mention. An
+    // array with *no* initializer is uninitialized in C and is left alone.
+    if initializer.is_some() {
+        let zero = low.b.temp();
+        low.b.assign_const(&zero, 0);
+        for position in values.len() as u64..count {
+            low.b
+                .store_abs(local.addr + position * stride, width, &zero);
+        }
+    }
+    Ok(index)
+}
+
+/// The most elements a braced initializer or its zero-fill will unroll.
+///
+/// Not a property of C: a budget, because each element costs one emitted
+/// store. See [`array_declarator`].
+const MAX_ARRAY_ELEMENTS: u64 = 4096;

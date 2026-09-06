@@ -279,8 +279,13 @@ branch at the name lookup.
 
 1. ~~**Globals**~~ --- superseded above. The real remainder is 54 file-scope
    variables, which is no longer the biggest prize.
-2. **Array and subscript** (+70 here, but it shares pointer scaling with the
+2. ~~**Array and subscript**~~ (+70 here, but it shares pointer scaling with the
    pointer-arithmetic gap, so it buys depth on 576 pointer functions too).
+
+   > **Landed** (2026-09-06). **Coverage 181/900 -> 311/900, 20.1% -> 34.6%.**
+   > The parenthetical was right and badly understated: the census forecast +70
+   > and the delivered figure is **+130**. See "The depth gap was four times
+   > what the census could see" below.
 3. **`__builtin_*` and macro-shaped callees** --- small, and it shrinks the
    external-call bucket before the hard part.
 4. **Uninterpreted calls behind a mode flag** --- unblocks phase 3 without
@@ -568,3 +573,48 @@ prerequisite is measured and currently unmet.
   phases 1 and 2 extend
 * [traps.md](../traps.md) — "our own emulator is not an oracle", which decides
   how phase 3 has to be gated
+
+### The depth gap was four times what the census could see
+
+Finding 2 of the holistic plan said depth and breadth are different axes and
+put a number on the difference: pointers were *admitted*, the census said 197
+pointer-only functions, the lowering delivered 168, so the gap was 29. That was
+the gap **visible from the pointer row alone**. The real one was larger,
+because a function refused for pointer arithmetic is counted by the census
+under whatever else it also contains --- so the arithmetic gap was distributed
+across every row, invisible in all of them.
+
+Admitting arrays and subscript required pointer scaling as a prerequisite
+(`a[i]` *is* `*(a + i)`; there is no separate array addressing). Landing them
+together moved coverage **181 -> 311 of 900**, against a forecast of +70:
+
+| | forecast | delivered |
+|---|---:|---:|
+| array / subscript | +70 | +130 |
+
+The lesson for the next increment: **a cumulative census column is a ceiling on
+breadth and says nothing about depth**, and where a new capability shares
+machinery with an admitted-but-shallow one, the shared machinery is worth more
+than the new capability. The next row, `call (defined here)`, has no such
+shared machinery --- an inliner is new mechanism throughout --- so its +62
+should be read as closer to literal.
+
+### What the differential could not see, and why it went quiet about it
+
+Landing arrays made `03_loop_shapes:for_sum(const int *p)` lower for the first
+time, and the S4 differential immediately reported eight divergences of
+`lowered=0x0 lifted=0x468b4685`. Neither side was wrong. The sweep supplies the
+same integer vector to both, and there is no integer that is a valid address in
+*both* address spaces --- `0x464c457f` is `\x7fELF`, which is what says the
+lifted side was reading the image header rather than an array.
+
+**A pointer parameter makes a function uncallable by this harness**, and the
+sweep now skips one, counting it in the tally rather than dropping it silently:
+181 functions compared, **130 skipped as uncallable**. Matched cells rose
+2,710 -> 2,910 and divergences stayed at zero.
+
+That 130 is a real limit on the oracle, and it grows every time the lowering
+admits more pointer code. Supplying a valid pointer argument means writing an
+array into the lifted side's address space and passing its address to both ---
+which the harness could do, and which is the natural next increment for the
+differential itself rather than for the lowering.

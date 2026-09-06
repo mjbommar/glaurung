@@ -33,7 +33,7 @@ use super::build::BlockRef;
 use super::ctype::{CType, IntType};
 use super::func::{Local, Lowerer};
 use super::literal::parse_literal;
-use super::value::{binary, canonicalize, convert, deref, load_local, unary, Val};
+use super::value::{binary, canonicalize, convert, deref, index_address, load_local, unary, Val};
 use super::{unsupported, LowerError};
 
 /// One step of the expression walk.
@@ -50,8 +50,33 @@ enum Job {
     Convert { ty: IntType },
     /// Pop and discard the top value (a comma operator's left operand).
     Discard,
+    /// Combine the top two values into the address of `base[index]`.
+    ///
+    /// Leaves a *pointer* on the stack, not the element: a subscript in rvalue
+    /// position is this followed by [`Job::Deref`], and one in lvalue position
+    /// is this alone. That is C's own definition, `a[i]` is `*(a + i)`, and
+    /// splitting at the address is what lets both positions share it.
+    Index { node: NodeId },
     /// Store the top value into a local; the assignment's value replaces it.
     Store { var: Local },
+    /// Store the top value through the address below it on the stack.
+    ///
+    /// The width comes from the address value's [`Val::pointee`], so `*p = v`
+    /// and `a[i] = v` need no separate static type for the target.
+    StoreIndirect { node: NodeId },
+    /// Compound-assign through the address below the top value.
+    ///
+    /// The address is evaluated once and read *and* written through, which is
+    /// what `a[i++] += 1` requires: C increments `i` exactly once.
+    CompoundIndirect { node: NodeId, op: TokenKind },
+    /// `++` or `--` on the object at the address on top of the stack.
+    StepIndirect {
+        node: NodeId,
+        increment: bool,
+        /// Whether the expression's value is the old one (`x++`) or the new
+        /// one (`++x`).
+        post: bool,
+    },
     /// Apply a compound assignment to a local using the top value.
     Compound {
         var: Local,
@@ -121,12 +146,59 @@ pub fn lower_expr(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<Val, LowerE
             Job::Discard => {
                 pop(&mut values, node, low)?;
             }
+            Job::Index { node } => {
+                let index = pop(&mut values, node, low)?;
+                let base = pop(&mut values, node, low)?;
+                values.push(index_address(low, node, &base, &index)?);
+            }
             Job::Store { var } => {
                 let v = pop(&mut values, node, low)?;
                 let stored = convert(low, &v, var.ty);
                 low.b
                     .store_abs(var.addr, var.ty.width.bytes().max(1) as u8, &stored.reg);
                 values.push(stored);
+            }
+            Job::StoreIndirect { node } => {
+                let v = pop(&mut values, node, low)?;
+                let addr = pop(&mut values, node, low)?;
+                let ty = pointee_of(low, node, &addr)?;
+                let stored = convert(low, &v, ty);
+                low.b
+                    .store_reg(&addr.reg, ty.width.bytes().max(1) as u8, &stored.reg);
+                values.push(stored);
+            }
+            Job::CompoundIndirect { node, op } => {
+                let rhs = pop(&mut values, node, low)?;
+                let addr = pop(&mut values, node, low)?;
+                let ty = pointee_of(low, node, &addr)?;
+                let lhs = deref(low, node, &addr)?;
+                let combined = binary(low, node, op, lhs, rhs)?;
+                let stored = convert(low, &combined, ty);
+                low.b
+                    .store_reg(&addr.reg, ty.width.bytes().max(1) as u8, &stored.reg);
+                values.push(stored);
+            }
+            Job::StepIndirect {
+                node,
+                increment,
+                post,
+            } => {
+                let addr = pop(&mut values, node, low)?;
+                let ty = pointee_of(low, node, &addr)?;
+                let old = deref(low, node, &addr)?;
+                let one = low.b.temp();
+                low.b.assign_const(&one, 1);
+                let raw = low.b.temp();
+                low.b.binop(
+                    &raw,
+                    if increment { BinOp::Add } else { BinOp::Sub },
+                    &old.reg,
+                    &one,
+                );
+                let new = canonicalize(low, &raw, ty);
+                low.b
+                    .store_reg(&addr.reg, ty.width.bytes().max(1) as u8, &new);
+                values.push(if post { old } else { Val::plain(new, ty) });
             }
             Job::Compound { var, op, node } => {
                 let rhs = pop(&mut values, node, low)?;
@@ -391,24 +463,41 @@ fn prefix(
     };
     match op {
         TokenKind::PlusPlus | TokenKind::MinusMinus => {
-            let var = lvalue(low, operand)?;
-            let (_, new) = step_local(low, var, op == TokenKind::PlusPlus)?;
-            values.push(new);
+            let increment = op == TokenKind::PlusPlus;
+            match place_of(low, operand)? {
+                Place::Var(var) => {
+                    let (_, new) = step_local(low, var, increment)?;
+                    values.push(new);
+                }
+                Place::Indirect(target) => {
+                    jobs.push(Job::StepIndirect {
+                        node,
+                        increment,
+                        post: false,
+                    });
+                    push_address(low, target, jobs)?;
+                }
+            }
             Ok(())
         }
         TokenKind::Amp => {
             // `&x` on a local is its frame address, which the lowering already
-            // knows: `Local::addr`. Only a bare local is handled --- `&a[i]`
-            // and `&s.f` need the arithmetic that pointer scaling would bring,
-            // and are refused by `lvalue` rather than approximated here.
-            let var = lvalue(low, operand)?;
-            let out = low.b.temp();
-            low.b.assign_const(&out, var.addr as i64);
-            values.push(Val {
-                reg: out,
-                ty: crate::csource::lower::ctype::IntType::ULONG,
-                pointee: Some(var.ty),
-            });
+            // knows: `Local::addr`. `&a[i]` and `&*p` are the *address* half of
+            // a subscript or dereference with the load left off, which is
+            // exactly what `push_address` produces --- so taking an address is
+            // the one operation that needs no code of its own beyond this.
+            match place_of(low, operand)? {
+                Place::Var(var) => {
+                    let out = low.b.temp();
+                    low.b.assign_const(&out, var.addr as i64);
+                    values.push(Val {
+                        reg: out,
+                        ty: IntType::ULONG,
+                        pointee: Some(var.ty),
+                    });
+                }
+                Place::Indirect(target) => push_address(low, target, jobs)?,
+            }
             Ok(())
         }
         TokenKind::Star => {
@@ -434,7 +523,7 @@ fn prefix(
 fn postfix(
     low: &mut Lowerer<'_, '_>,
     node: NodeId,
-    _jobs: &mut Vec<Job>,
+    jobs: &mut Vec<Job>,
     values: &mut Vec<Val>,
 ) -> Result<(), LowerError> {
     let ctx = low.ctx;
@@ -448,19 +537,82 @@ fn postfix(
             // `Op::Call` as `Outcome::CalledOut` and stops, so a lowered call
             // could not be executed even if it were emitted.
             Some(NodeTag::CallArgs) => return unsupported("call expression", node, ctx),
-            Some(NodeTag::IndexSuffix) => return unsupported("array subscript", node, ctx),
             Some(NodeTag::MemberSuffix) => return unsupported("struct member access", node, ctx),
-            Some(NodeTag::IncDecSuffix) => {}
+            Some(NodeTag::IndexSuffix) | Some(NodeTag::IncDecSuffix) => {}
             _ => return unsupported("postfix suffix", node, ctx),
         }
     }
-    if suffixes.len() != 1 {
-        return unsupported("chained postfix increment", node, ctx);
+    // Subscripts come first in any chain this admits: `a[i]++` is a subscript
+    // then an increment, and `a++[i]` is legal C but subscripts the *old*
+    // pointer, which is a distinction not worth carrying.
+    let subscripts = suffixes
+        .iter()
+        .take_while(|s| ctx.tag(**s) == Some(NodeTag::IndexSuffix))
+        .count();
+    match &suffixes[subscripts..] {
+        [] if subscripts == 0 => {
+            jobs.push(Job::Eval(primary));
+            Ok(())
+        }
+        [] => push_subscripts(low, primary, &suffixes[..subscripts], jobs, true),
+        [step] if ctx.tag(*step) == Some(NodeTag::IncDecSuffix) => {
+            let increment = ctx.text_of(*step).starts_with("++");
+            if subscripts == 0 {
+                return match place_of(low, primary)? {
+                    Place::Var(var) => {
+                        let (old, _) = step_local(low, var, increment)?;
+                        values.push(old);
+                        Ok(())
+                    }
+                    Place::Indirect(target) => {
+                        jobs.push(Job::StepIndirect {
+                            node,
+                            increment,
+                            post: true,
+                        });
+                        push_address(low, target, jobs)
+                    }
+                };
+            }
+            jobs.push(Job::StepIndirect {
+                node,
+                increment,
+                post: true,
+            });
+            push_subscripts(low, primary, &suffixes[..subscripts], jobs, false)
+        }
+        _ => unsupported("chained postfix suffix", node, ctx),
     }
-    let var = lvalue(low, primary)?;
-    let increment = ctx.text_of(suffixes[0]).starts_with("++");
-    let (old, _) = step_local(low, var, increment)?;
-    values.push(old);
+}
+
+/// Push the jobs for `primary[i0][i1]...`, leaving the element on the stack
+/// when `load` is set and its address when it is not.
+///
+/// A chain past the first subscript is admitted but rarely survives: the first
+/// element of an `int *` is an `int`, which carries no pointee, so `p[i][j]`
+/// reaches [`index_address`]'s refusal rather than a wrong address. That is the
+/// intended outcome --- [`Local::pointee`] is one level deep, so a real
+/// two-dimensional array is refused at its declaration.
+fn push_subscripts(
+    low: &Lowerer<'_, '_>,
+    primary: NodeId,
+    suffixes: &[NodeId],
+    jobs: &mut Vec<Job>,
+    load: bool,
+) -> Result<(), LowerError> {
+    let ctx = low.ctx;
+    // Reverse of execution order: the primary is pushed last so it runs first.
+    for (position, suffix) in suffixes.iter().copied().enumerate().rev() {
+        if load || position + 1 < suffixes.len() {
+            jobs.push(Job::Deref { node: suffix });
+        }
+        jobs.push(Job::Index { node: suffix });
+        let Some(index) = ctx.children(suffix).first().copied() else {
+            return unsupported("empty subscript", suffix, ctx);
+        };
+        jobs.push(Job::Eval(index));
+    }
+    jobs.push(Job::Eval(primary));
     Ok(())
 }
 
@@ -542,26 +694,164 @@ fn assign_node(
     }
     // The last child is the value; every earlier child is a target, applied
     // right to left.
+    let places: Vec<Place> = ops
+        .iter()
+        .enumerate()
+        .map(|(index, _)| place_of(low, kids[index]))
+        .collect::<Result<_, _>>()?;
+
     for (index, op) in ops.iter().copied().enumerate() {
-        let var = lvalue(low, kids[index])?;
-        let job = if op == TokenKind::Eq {
-            Job::Store { var }
+        let base = if op == TokenKind::Eq {
+            None
         } else {
-            Job::Compound {
-                var,
-                op: compound_base(op).ok_or_else(|| {
-                    LowerError::new(
-                        format!("assignment operator `{}`", op.name()),
-                        ctx.offset_of(node),
-                    )
-                })?,
-                node,
-            }
+            Some(compound_base(op).ok_or_else(|| {
+                LowerError::new(
+                    format!("assignment operator `{}`", op.name()),
+                    ctx.offset_of(node),
+                )
+            })?)
         };
-        jobs.push(job);
+        jobs.push(match (places[index], base) {
+            (Place::Var(var), None) => Job::Store { var },
+            (Place::Var(var), Some(op)) => Job::Compound { var, op, node },
+            (Place::Indirect(target), None) => Job::StoreIndirect { node: target },
+            (Place::Indirect(target), Some(op)) => Job::CompoundIndirect { node: target, op },
+        });
     }
     jobs.push(Job::Eval(kids[kids.len() - 1]));
+    // Every target address is computed *before* the value, so the value stack
+    // is `[addr0, .., addrN, value]` and each store pops the value it just
+    // produced and the address immediately beneath it. C leaves the order of a
+    // target's address and the assigned value unspecified, so choosing one is
+    // legal; choosing *this* one is what makes the stack discipline work.
+    for index in (0..ops.len()).rev() {
+        if let Place::Indirect(target) = places[index] {
+            push_address(low, target, jobs)?;
+        }
+    }
     Ok(())
+}
+
+/// What an assignment, an increment or an `&` acts on.
+#[derive(Debug, Clone, Copy)]
+enum Place {
+    /// A named local at a fixed frame address.
+    Var(Local),
+    /// An object at an address that must be computed: `*p` or `a[i]`. The node
+    /// is the whole target expression, and [`push_address`] pushes the jobs
+    /// that leave its address on the value stack.
+    ///
+    /// The *type* of the object is not carried here: it is the `pointee` of
+    /// the address value, which the address computation already knows. That is
+    /// what keeps this from needing a static type checker for expressions.
+    Indirect(NodeId),
+}
+
+/// Classify an assignable expression without emitting anything.
+///
+/// Emitting nothing is the point: [`assign_node`] must know the shape of every
+/// target before it pushes a single job, and the addresses have to be computed
+/// in a different order from the one they are discovered in.
+fn place_of(low: &Lowerer<'_, '_>, node: NodeId) -> Result<Place, LowerError> {
+    let ctx = low.ctx;
+    let mut current = node;
+    // Unwrap parentheses without recursion; the depth is bounded by the tree.
+    for _ in 0..1024 {
+        match ctx.tag(current) {
+            Some(NodeTag::ParenExpr) => match ctx.children(current).first().copied() {
+                Some(inner) => current = inner,
+                None => return unsupported("empty parenthesised lvalue", node, ctx),
+            },
+            Some(NodeTag::NameRef) => {
+                let name = ctx.text_of(current);
+                let var = low.lookup(name).ok_or_else(|| {
+                    LowerError::new(
+                        format!("assignment to non-local `{name}`"),
+                        ctx.offset_of(node),
+                    )
+                })?;
+                // An array name is not a modifiable lvalue in C, and `&a` is a
+                // pointer to the array rather than to its first element --- a
+                // type this model does not have. Both are refused here rather
+                // than approximated at the three call sites.
+                if var.elements.is_some() {
+                    return unsupported("array name where a scalar object is required", node, ctx);
+                }
+                return Ok(Place::Var(var));
+            }
+            Some(NodeTag::UnaryExpr) if unary_operator(low, current) == Some(TokenKind::Star) => {
+                return Ok(Place::Indirect(current));
+            }
+            Some(NodeTag::PostfixExpr) if ends_in_subscript(low, current) => {
+                return Ok(Place::Indirect(current));
+            }
+            _ => return unsupported("assignment to a non-variable lvalue", node, ctx),
+        }
+    }
+    unsupported("parenthesis nesting beyond the lowering's bound", node, ctx)
+}
+
+/// The operator of a prefix expression.
+fn unary_operator(low: &Lowerer<'_, '_>, node: NodeId) -> Option<TokenKind> {
+    let token = low.ctx.main_token(node)?;
+    low.ctx.kind_at(token.raw())
+}
+
+/// Whether every suffix of a postfix expression is a subscript.
+///
+/// A trailing `++` or a call makes the whole thing an rvalue, so only a pure
+/// subscript chain is a place.
+fn ends_in_subscript(low: &Lowerer<'_, '_>, node: NodeId) -> bool {
+    let kids = low.ctx.children(node);
+    match kids.split_first() {
+        Some((_, suffixes)) if !suffixes.is_empty() => suffixes
+            .iter()
+            .all(|s| low.ctx.tag(*s) == Some(NodeTag::IndexSuffix)),
+        _ => false,
+    }
+}
+
+/// Push the jobs that leave the address of an indirect place on the stack.
+///
+/// The value they leave is a *pointer* value, so its `pointee` says how wide
+/// the object is --- which is why a store through it needs no other type
+/// information. Paired with [`place_of`], which decides that `node` is one of
+/// the two shapes handled here.
+fn push_address(
+    low: &Lowerer<'_, '_>,
+    node: NodeId,
+    jobs: &mut Vec<Job>,
+) -> Result<(), LowerError> {
+    let ctx = low.ctx;
+    match ctx.tag(node) {
+        // `*p` --- the address is `p` itself, with the load left off.
+        Some(NodeTag::UnaryExpr) => {
+            let Some(operand) = ctx.children(node).first().copied() else {
+                return unsupported("dereference with no operand", node, ctx);
+            };
+            jobs.push(Job::Eval(operand));
+            Ok(())
+        }
+        // `a[i]` --- the subscript chain with the final load left off.
+        Some(NodeTag::PostfixExpr) => {
+            let kids = ctx.children(node);
+            let Some((&primary, suffixes)) = kids.split_first() else {
+                return unsupported("empty postfix expression", node, ctx);
+            };
+            push_subscripts(low, primary, suffixes, jobs, false)
+        }
+        _ => unsupported("address of a non-place expression", node, ctx),
+    }
+}
+
+/// The type of the object an address value points at.
+fn pointee_of(low: &Lowerer<'_, '_>, node: NodeId, addr: &Val) -> Result<IntType, LowerError> {
+    addr.pointee.ok_or_else(|| {
+        LowerError::new(
+            "store through a pointer with no known pointee width",
+            low.ctx.offset_of(node),
+        )
+    })
 }
 
 /// The arithmetic operator inside a compound assignment.
@@ -581,32 +871,6 @@ fn compound_base(op: TokenKind) -> Option<TokenKind> {
     })
 }
 
-/// Resolve an assignable expression to the local it names.
-pub(crate) fn lvalue(low: &Lowerer<'_, '_>, node: NodeId) -> Result<Local, LowerError> {
-    let ctx = low.ctx;
-    let mut current = node;
-    // Unwrap parentheses without recursion; the depth is bounded by the tree.
-    for _ in 0..1024 {
-        match ctx.tag(current) {
-            Some(NodeTag::ParenExpr) => match ctx.children(current).first().copied() {
-                Some(inner) => current = inner,
-                None => return unsupported("empty parenthesised lvalue", node, ctx),
-            },
-            Some(NodeTag::NameRef) => {
-                let name = ctx.text_of(current);
-                return low.lookup(name).ok_or_else(|| {
-                    LowerError::new(
-                        format!("assignment to non-local `{name}`"),
-                        ctx.offset_of(node),
-                    )
-                });
-            }
-            _ => return unsupported("assignment to a non-variable lvalue", node, ctx),
-        }
-    }
-    unsupported("parenthesis nesting beyond the lowering's bound", node, ctx)
-}
-
 /// `++x` / `x++` on a local: returns `(old value, new value)`.
 fn step_local(
     low: &mut Lowerer<'_, '_>,
@@ -614,8 +878,13 @@ fn step_local(
     increment: bool,
 ) -> Result<(Val, Val), LowerError> {
     let old = load_local(low, var);
+    // `p++` on an `int32_t *` advances four bytes, the same rule `p + 1`
+    // follows. A non-pointer steps by one because its `pointee` is `None`.
+    let step = var
+        .pointee
+        .map_or(1, |pointee| i64::from(pointee.width.bytes().max(1)));
     let one = low.b.temp();
-    low.b.assign_const(&one, 1);
+    low.b.assign_const(&one, step);
     let raw = low.b.temp();
     low.b.binop(
         &raw,
@@ -631,8 +900,9 @@ fn step_local(
         Val {
             reg: new,
             ty: var.ty,
-            // An arithmetic or conversion result is not a pointer.
-            pointee: None,
+            // Incrementing a pointer yields a pointer: `*++p` needs the
+            // pointee to survive the step or the dereference has no width.
+            pointee: var.pointee,
         },
     ))
 }

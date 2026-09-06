@@ -58,6 +58,18 @@ impl Val {
 
 /// Read a local into a canonical temporary.
 pub(crate) fn load_local(low: &mut Lowerer<'_, '_>, var: Local) -> Val {
+    // An array name *decays*: it is worth the address of its storage, and
+    // there is no cell to load it from. Every use site downstream then sees an
+    // ordinary pointer, which is why subscript needs no array-specific rule.
+    if var.elements.is_some() {
+        let out = low.b.temp();
+        low.b.assign_const(&out, var.addr as i64);
+        return Val {
+            reg: out,
+            ty: var.ty,
+            pointee: var.pointee,
+        };
+    }
     let raw = low.b.temp();
     low.b
         .load_abs(&raw, var.addr, var.ty.width.bytes().max(1) as u8);
@@ -188,21 +200,14 @@ pub(crate) fn binary(
 ) -> Result<Val, LowerError> {
     use TokenKind::*;
 
-    // Pointer arithmetic scales by the pointee size: `cursor + 1` on an
-    // `int32_t *` advances four bytes, not one. This lowering does not scale,
-    // so it refuses rather than emitting the unscaled add.
-    //
-    // Found by `s4_differential_on_the_gcc_o0_lane`, not by reading the code:
+    // Pointer arithmetic scales by the pointee size, and this is the one
+    // arithmetic rule the differential caught us getting wrong by omission:
     // `128_qualifier_combinations:pointer_to_const_walks` returned 0 from the
     // lowering against 0x2464c45 from the real binary, because `cursor += 1`
-    // walked one byte at a time. A silently wrong address is exactly the class
-    // of defect `docs/development/traps.md` says an approximate lowering
-    // produces, so the answer is a named refusal until the scaling exists.
+    // on an `int32_t *` walked one byte instead of four. It was a named
+    // refusal until the scaling existed; it now exists.
     if matches!(op, Plus | Minus) && (lhs.pointee.is_some() || rhs.pointee.is_some()) {
-        return Err(LowerError::new(
-            "pointer arithmetic (no pointee scaling)",
-            low.ctx.offset_of(node),
-        ));
+        return pointer_arithmetic(low, node, op, &lhs, &rhs);
     }
 
     // Shifts do not take the usual arithmetic conversions: the result type is
@@ -377,4 +382,144 @@ fn magnitude(low: &mut Lowerer<'_, '_>, value: &VReg) -> (VReg, VReg) {
         width: Width::W64,
     });
     (negative, out)
+}
+
+/// How many bytes one element of `pointee` occupies.
+///
+/// The pointee is an [`IntType`], so this is its width --- the model has no
+/// pointer to an aggregate, and a pointer whose pointee it cannot name carries
+/// `None` and is refused by the caller rather than given a size.
+fn element_bytes(pointee: IntType) -> i64 {
+    i64::from(pointee.width.bytes().max(1))
+}
+
+/// `p + n`, `n + p`, `p - n` and `p - q`.
+///
+/// Split out of [`binary`] because none of the usual arithmetic conversions
+/// apply: the result of `p + n` is a *pointer*, not the common type of a
+/// pointer and an integer, and `p - q` is a signed `ptrdiff_t` however
+/// unsigned the addresses were.
+///
+/// The index is converted to signed 64-bit before scaling, which is what makes
+/// `p + (-1)` walk backwards: an `int` -1 sign-extends to -1 rather than to
+/// 4294967295, and multiplying the wrong one by the element size would land
+/// 16GB away instead of one element back.
+fn pointer_arithmetic(
+    low: &mut Lowerer<'_, '_>,
+    node: NodeId,
+    op: TokenKind,
+    lhs: &Val,
+    rhs: &Val,
+) -> Result<Val, LowerError> {
+    let refuse = |what: &str| Err(LowerError::new(what.to_string(), low.ctx.offset_of(node)));
+
+    match (lhs.pointee, rhs.pointee) {
+        // `p - q`: the number of elements between two pointers into the same
+        // object. C requires they point into one array, so a difference that is
+        // not a whole number of elements is undefined and the truncating
+        // division below is as correct as anything can be.
+        (Some(a), Some(b)) => {
+            if op != TokenKind::Minus {
+                return refuse("arithmetic on two pointers other than subtraction");
+            }
+            if a.width != b.width {
+                return refuse("subtraction of pointers to different types");
+            }
+            let bytes = low.b.temp();
+            low.b.binop(&bytes, BinOp::Sub, &lhs.reg, &rhs.reg);
+            let size = element_bytes(a);
+            if size == 1 {
+                return Ok(Val::plain(bytes, IntType::LONG));
+            }
+            // Through `divide` rather than a bare `BinOp::Div`, which is
+            // *unsigned*: `q - p` where `q` precedes `p` is a negative
+            // difference, and dividing it unsigned yields an enormous positive
+            // count instead of a small negative one.
+            let numerator = Val::plain(bytes, IntType::LONG);
+            let divisor = low.b.temp();
+            low.b.assign_const(&divisor, size);
+            let raw = divide(
+                low,
+                &numerator,
+                &Val::plain(divisor, IntType::LONG),
+                IntType::LONG,
+                false,
+            );
+            Ok(Val::plain(
+                canonicalize(low, &raw, IntType::LONG),
+                IntType::LONG,
+            ))
+        }
+        // `p + n` and `p - n`.
+        (Some(pointee), None) => {
+            let offset = scaled_offset(low, rhs, pointee);
+            let raw = low.b.temp();
+            let kind = if op == TokenKind::Plus {
+                BinOp::Add
+            } else {
+                BinOp::Sub
+            };
+            low.b.binop(&raw, kind, &lhs.reg, &offset);
+            Ok(Val {
+                reg: canonicalize(low, &raw, IntType::ULONG),
+                ty: IntType::ULONG,
+                pointee: Some(pointee),
+            })
+        }
+        // `n + p`. `n - p` is not C: an integer minus a pointer has no meaning
+        // and no compiler accepts it, so it is refused rather than commuted.
+        (None, Some(pointee)) => {
+            if op != TokenKind::Plus {
+                return refuse("integer minus pointer");
+            }
+            let offset = scaled_offset(low, lhs, pointee);
+            let raw = low.b.temp();
+            low.b.binop(&raw, BinOp::Add, &rhs.reg, &offset);
+            Ok(Val {
+                reg: canonicalize(low, &raw, IntType::ULONG),
+                ty: IntType::ULONG,
+                pointee: Some(pointee),
+            })
+        }
+        // Reached only when a pointer-typed value carries no pointee, which is
+        // `void *` and a pointer to something the model does not distinguish.
+        // Scaling by an unknown size is exactly the silent-wrong-address defect
+        // this arm exists to avoid.
+        (None, None) => refuse("pointer arithmetic on a pointer with no known pointee width"),
+    }
+}
+
+/// `index * sizeof(*p)`, in signed 64-bit.
+fn scaled_offset(low: &mut Lowerer<'_, '_>, index: &Val, pointee: IntType) -> VReg {
+    let widened = convert(low, index, IntType::LONG);
+    let size = element_bytes(pointee);
+    if size == 1 {
+        return widened.reg;
+    }
+    let scale = low.b.temp();
+    low.b.assign_const(&scale, size);
+    let out = low.b.temp();
+    low.b.binop(&out, BinOp::Mul, &widened.reg, &scale);
+    out
+}
+
+/// The address of `base[index]`, as a pointer value.
+///
+/// C defines `a[i]` as `*(a + i)`, so this is [`pointer_arithmetic`]'s `Plus`
+/// case reached from the subscript syntax --- including `i[a]`, which is the
+/// same expression written the other way round and which real code does use in
+/// obfuscated form.
+pub(crate) fn index_address(
+    low: &mut Lowerer<'_, '_>,
+    node: NodeId,
+    base: &Val,
+    index: &Val,
+) -> Result<Val, LowerError> {
+    if base.pointee.is_none() && index.pointee.is_none() {
+        return Err(LowerError::new(
+            "subscript of a value that is not a pointer or array",
+            low.ctx.offset_of(node),
+        ));
+    }
+    pointer_arithmetic(low, node, TokenKind::Plus, base, index)
 }
