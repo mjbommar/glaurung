@@ -10,14 +10,25 @@ use object::{ObjectSection, ObjectSymbol, RelocationTarget};
 /// Build a best-effort map of GOT entry addresses (r_offset) to symbol names.
 /// Supports ELF64 RELA and ELF32 REL formats. Returns empty on failure.
 pub fn elf_got_map(data: &[u8]) -> Vec<(u64, String)> {
-    let mut out: Vec<(u64, String)> = Vec::new();
     let Ok(obj) = crate::decompile::profile::parse_object(data) else {
-        return out;
+        return Vec::new();
     };
     if obj.format() != object::BinaryFormat::Elf {
-        return out;
+        return Vec::new();
     }
+    elf_got_map_from_object(data, &obj)
+}
 
+/// Build the GOT-name map from an object the caller already parsed.
+///
+/// Symbol and data-name recovery already holds this exact object. Accepting it
+/// here prevents that combined context builder from reopening the same image
+/// solely to ask a second question about its relocations.
+pub fn elf_got_map_from_object<'data, O>(data: &'data [u8], obj: &O) -> Vec<(u64, String)>
+where
+    O: object::Object<'data>,
+{
+    let mut out: Vec<(u64, String)> = Vec::new();
     // Collect dynsym index -> name map
     let mut dynsym_off: Option<usize> = None;
     let mut dynsym_size: Option<usize> = None;

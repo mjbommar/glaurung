@@ -233,6 +233,7 @@ pub fn collect_address_map_and_data_symbols(
 ) -> (HashMap<u64, String>, crate::ir::data_symbols::DataSymbols) {
     let mut out = HashMap::new();
     let mut data_symbols = crate::ir::data_symbols::DataSymbols::new();
+    let mut got_names = Vec::new();
     // Defined symbols (functions + exported vars). Several symbols routinely share
     // one address, so the FIRST one seen must not simply win — see `symbol_rank`.
     if let Ok(obj) = crate::decompile::profile::parse_object(data) {
@@ -268,13 +269,14 @@ pub fn collect_address_map_and_data_symbols(
         // 20 to 21 and tripped the object-parse ceiling. Parsing an image
         // twice to ask it two questions is what that test exists to prevent.
         data_symbols = crate::ir::data_symbols::from_object(&obj);
+        got_names = crate::analysis::elf_got::elf_got_map_from_object(data, &obj);
     }
     // PE exports. The object crate does not expose PE exports through
     // dynamic_symbols(), so recover the export table directly for Windows
     // decompile output.
     collect_pe_exports(data, &mut out);
     // ELF GOT (may name something the symbol table doesn't).
-    for (va, name) in crate::analysis::elf_got::elf_got_map(data) {
+    for (va, name) in got_names {
         out.insert(va, name);
     }
     // ELF PLT.
