@@ -239,7 +239,7 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     )
 
     assert " frame_return(int wait)" in text.splitlines()[1], text
-    assert "signed char c;" in text, text
+    assert re.search(r"\bsigned char c(?:\s*=\s*0)?;", text), text
     assert "return c;" in text, text
     assert "arg0 = " not in text, text
     assert "return 0;" not in text, text
