@@ -672,8 +672,12 @@ and make pass repetition/invalidation explicit.
   exposes the same discovery limit on exact-range, and makes single-function
   size identity use that explicit limit. The test now constructs equal
   discovery, CFG, callee, type, and size budgets across all four entry points.
-- [ ] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
-  function-order independence.
+- [x] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
+  function-order independence. `c907121a` serializes the complete fingerprint
+  canonically into opt-in pipeline evidence and proves, across fresh processes,
+  that reversing a three-function request changes neither each function's
+  pseudocode nor its fingerprint. Serialization remains lazy when profiling is
+  disabled.
 - [x] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
   firing counts, and bounded fixpoint termination. `5f7df194` validates and
   aggregates both production fixpoint reports, including impossible counts and
