@@ -927,7 +927,7 @@ fn findings_entry<'py>(
         item.set_item("args", v.witness.args.clone())?;
         violations.append(item)?;
     }
-    out.set_item("undefined_behaviour", violations)?;
+    out.set_item("undefined_behavior", violations)?;
     Ok(out)
 }
 

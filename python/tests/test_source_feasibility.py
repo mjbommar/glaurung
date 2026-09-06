@@ -73,7 +73,7 @@ def test_the_report_has_every_field_a_consumer_reads():
         "total",
         "abstained",
         "redundant_guards",
-        "undefined_behaviour",
+        "undefined_behavior",
     ):
         assert key in report, key
     assert report["function"] == "decide"
@@ -129,10 +129,10 @@ def test_a_duplicated_guard_is_reported_as_forced():
 
 
 @needs_solver
-def test_reachable_undefined_behaviour_carries_the_input_that_triggers_it():
+def test_reachable_undefined_behavior_carries_the_input_that_triggers_it():
     found = glaurung.source.source_findings(DIVIDE)
     entry = next(e for e in found if e["function"] == "divide")
-    ub = entry["undefined_behaviour"]
+    ub = entry["undefined_behavior"]
     assert ub, entry
     assert ub[0]["property"] == "division_by_zero"
     # The divisor is the second parameter, and it must be the zero.
@@ -167,5 +167,5 @@ def test_a_clean_function_reports_nothing_but_still_decides_its_paths():
     report = glaurung.source.path_feasibility(FINE, "fine")
     assert report["infeasible"] == 0
     assert report["redundant_guards"] == []
-    assert report["undefined_behaviour"] == []
+    assert report["undefined_behavior"] == []
     assert report["feasible"] >= 1, "it still has a path, and it is takeable"

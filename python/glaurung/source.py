@@ -720,7 +720,7 @@ def path_feasibility(
         (addresses no input reaches); ``cuts`` and ``total`` (whether the
         enumeration covered the function); ``abstained`` (set when nothing
         could be decided, naming the reason); ``redundant_guards``; and
-        ``undefined_behaviour``.
+        ``undefined_behavior``.
 
         ``unreachable_blocks`` is only ever non-empty when ``total`` is true:
         with a path cut by a bound, "every path I looked at is infeasible" is

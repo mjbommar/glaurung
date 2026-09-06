@@ -763,7 +763,7 @@ worth reading, the other answers about a **function** and reports everything.
 # High level: every function in the unit that has something to say.
 for found in glaurung.source.source_findings(code):
     print(found["function"], found["infeasible"], found["unreachable_blocks"],
-          found["redundant_guards"], found["undefined_behaviour"])
+          found["redundant_guards"], found["undefined_behavior"])
 
 # Low level: one function, everything about it, bounds under your control.
 report = glaurung.source.path_feasibility(code, "decide", max_block_visits=32)
@@ -788,7 +788,7 @@ Both return the same shape:
 | `cuts` / `total` | why paths were abandoned, and whether the enumeration covered the function |
 | `abstained` | set when nothing could be decided, naming the reason |
 | `redundant_guards` | decisions earlier decisions already force |
-| `undefined_behaviour` | inputs that make it misbehave, with the property |
+| `undefined_behavior` | inputs that make it misbehave, with the property |
 
 The function is walked **once** for all four questions; asking them separately
 would enumerate its paths three more times.
@@ -882,7 +882,7 @@ two readings of *our* semantics.
 ### Three things built on it
 
 All three arrive in the same result, under `unreachable_blocks`,
-`redundant_guards` and `undefined_behaviour`.
+`redundant_guards` and `undefined_behavior`.
 
 **Unreachable code.** A block that only infeasible paths reach is code no input
 executes — 7 functions and 8 blocks in the corpus. Nothing is claimed unless
