@@ -38,9 +38,17 @@ enabled AST transformation and structured return-width consumers transparent
 to that carrier. Its release-built stripped differential moves from 112 to 103
 regressions while retaining 17 improvements, with zero changed classifications
 and zero infrastructure problems; see
-`results/wp3-statement-origin-propagation.md`. Most semantic consumers, multi-output
-definition identity, LLIR attribution, expression origins, and structured line
-mappings remain open. A bounded, pre-WP3 WP7B relational slice is
+`results/wp3-statement-origin-propagation.md`. Commit `cda7ab73` migrates the
+post-pipeline C++ exception consumer and unions the contributing instruction
+origins into recovered `try`/`catch`, `throw`, and catch-return nodes. The real
+Clang O2 stripped exception cell returns to green and the same complete
+differential improves again to 102 regressions, still with 17 improvements and
+zero infrastructure problems; see
+`results/wp3-exception-origin-propagation.md`. Commit `cb9e5b10` then migrates
+six control-oriented wildcard consumers with an exactly neutral complete
+differential; see `results/wp3-control-consumer-origins.md`. Most semantic
+consumers, multi-output definition identity, expression origins, and structured
+line mappings remain open. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
@@ -759,8 +767,12 @@ provenance through lowering.
   canonical set and `59840017` adds transparent statement ownership with
   union-without-nesting semantics. Commit `8cb7d171` preserves that ownership
   through the enabled AST pass surface and fixes origin-transparent structured
-  return-width reasoning. Expression ownership and production
-  attribution remain open.
+  return-width reasoning. Commit `cda7ab73` additionally makes post-pipeline
+  exception recovery origin-transparent and unions contributing origins into
+  its synthesized structured nodes. Commit `cb9e5b10` migrates six more
+  control-oriented wildcard consumers and preserves composed origins on their
+  synthesized statements. Expression ownership, the remaining wildcard
+  consumers, and production attribution remain open.
 
 ### Migration targets
 
@@ -798,8 +810,10 @@ provenance through lowering.
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
   changing statement meaning. Block lowering attaches each LLIR instruction VA,
-  but expression ownership, non-contiguous transformation policy, and the
-  wildcard consumer audit must finish before universal attribution.
+  and `cda7ab73` plus `cb9e5b10` migrate exception recovery and six
+  control-oriented wildcard consumers. Expression ownership, non-contiguous
+  transformation policy, and the remaining wildcard audit must finish before
+  universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
   data; do not infer them by parsing rendered text.
 - [ ] Define non-contiguous origin behavior for folded, hoisted, and duplicated
@@ -2674,9 +2688,14 @@ relevant ratchet's accepted-regression record.
    across the same map. Commit `59840017` attaches it transparently to
    statements, converts the 64 exhaustive consumers, and proves rendering and
    the complete 419-pair map remain byte-identical. Next finish the wildcard
-   consumer audit, attach each `LlirInstr.va` during lowering, union origins in
-   folds, preserve them through structuring/duplication, and expose structured
-   Python line mappings before continuing consumer migrations.
+   consumer audit, union origins in folds, preserve them through remaining
+   structuring/duplication paths, and expose structured Python line mappings
+   before continuing consumer migrations. Commit `8cb7d171` already attaches
+   each `LlirInstr.va` during lowering; `cda7ab73` closes the exception-recovery
+   consumer and moves the stripped differential from 103 to 102 regressions.
+   Commit `cb9e5b10` closes six more control-oriented wildcard consumers with
+   an exactly neutral 102-regression/17-improvement stripped differential; next
+   migrate `guarded_switch`, then the remaining guarded/switch/latch consumers.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
