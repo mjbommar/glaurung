@@ -175,14 +175,14 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
                 instr_idx: ii,
             };
             // Read out of the indexed SSA tables rather than the
-            // address-keyed maps: same answer, no hashing. See
-            // `SsaInfo::def_version`.
-            let def_ver = ssa.def_version(lf, addr);
+            // address-keyed maps: same answer, no hashing. Keep the base as
+            // well as the version so target-qualified aliases stay coherent.
+            let def_value = ssa.def_value_ref(lf, addr);
             // Only the use ARITY is wanted here; `def_uses` would allocate a
             // vector of cloned register spellings to report it.
             use_values.clear();
             use_values.extend((0..use_count(&ins.op)).map(|k| ssa.use_value(lf, addr, k)));
-            tag_op(&mut ins.op, def_ver, &use_values, &ctx);
+            tag_op(&mut ins.op, def_value, &use_values, &ctx);
             if let (Some(dst), Some(width)) = (
                 def_ref(&ins.op),
                 operation_definition_width(&lf.blocks[bi].instrs[ii].op),
@@ -471,6 +471,46 @@ mod tests {
             }
             other => panic!("expected sign extension, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn target_aware_numbering_uses_the_arm32_parent_for_defs_and_uses() {
+        use crate::core::binary::{Arch, Endianness, Format};
+        use crate::ir::types::MemOp;
+        use crate::target::TargetSpec;
+
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("fp"),
+                src: Value::Reg(VReg::phys("sp")),
+            },
+            Op::Load {
+                dst: VReg::phys("r0"),
+                addr: MemOp {
+                    base: Some(VReg::phys("r11")),
+                    index: None,
+                    scale: 0,
+                    disp: -16,
+                    size: 4,
+                    segment: None,
+                    endian: crate::ir::types::Endian::Little,
+                },
+            },
+        ]);
+        let target =
+            TargetSpec::from_image_metadata(Arch::ARM, Endianness::Little, Format::ELF, false);
+        let ssa = compute_ssa_for_target(&lf, target);
+
+        let numbered = value_number(&lf, &ssa, CallConv::Arm);
+
+        assert_eq!(
+            def_uses(&numbered.blocks[0].instrs[0].op).0,
+            Some(VReg::phys("r11#1"))
+        );
+        let Op::Load { addr, .. } = &numbered.blocks[0].instrs[1].op else {
+            panic!("expected ARM frame load: {numbered:#?}")
+        };
+        assert_eq!(addr.base, Some(VReg::phys("r11#1")));
     }
 
     #[test]

@@ -162,6 +162,19 @@ fn tag_use_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx) {
     }
 }
 
+/// Apply the exact SSA identity of one definition.
+///
+/// Definitions and uses must take their base from the same target-qualified
+/// side car. In particular ARM32 spells its frame pointer as both `fp` and
+/// `r11`; using only the SSA version here left `fp = sp` unnumbered while all
+/// later frame reads became `r11#1`, manufacturing a value with no definition.
+fn tag_def_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx) {
+    if let Some(value) = value {
+        *v = value.base.clone();
+        tag_phys(v, value.version, ctx);
+    }
+}
+
 /// Rewrite a `Value`'s register (if any) to the identity at `use_values[*ui]`,
 /// advancing the use cursor exactly as `def_uses` enumerated it.
 fn tag_value(v: &mut Value, use_values: &[Option<SsaValue>], ui: &mut usize, ctx: &VnCtx) {
@@ -190,18 +203,23 @@ fn tag_memop_uses(
 /// Apply the def version and the ordered use versions to one op's registers.
 /// The use order mirrors `use_def::def_uses` exactly (memory base before index,
 /// operands left-to-right), so the SSA `use_versions` line up by index.
-pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>], ctx: &VnCtx) {
+pub(crate) fn tag_op(
+    op: &mut Op,
+    def_value: Option<&SsaValue>,
+    use_values: &[Option<SsaValue>],
+    ctx: &VnCtx,
+) {
     let mut ui = 0usize;
     match op {
         Op::Assign { dst, src } => {
             tag_value(src, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
-        Op::Undef { dst, .. } => tag_phys(dst, def_ver, ctx),
+        Op::Undef { dst, .. } => tag_def_phys(dst, def_value, ctx),
         Op::Bin { dst, lhs, rhs, .. } => {
             tag_value(lhs, use_values, &mut ui, ctx);
             tag_value(rhs, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         // Computed target plus an optional normalized switch index, no def —
         // mirrors `use_def::def_uses`.
@@ -213,16 +231,16 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
         }
         Op::Un { dst, src, .. } => {
             tag_value(src, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         Op::Cmp { dst, lhs, rhs, .. } => {
             tag_value(lhs, use_values, &mut ui, ctx);
             tag_value(rhs, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         Op::Load { dst, addr } => {
             tag_memop_uses(addr, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         Op::CondLoad {
             dst,
@@ -235,7 +253,7 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
             ui = 1;
             tag_memop_uses(addr, use_values, &mut ui, ctx);
             tag_value(fallback, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         Op::Store { addr, src } => {
             tag_memop_uses(addr, use_values, &mut ui, ctx);
@@ -272,7 +290,7 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
                     ui += 1;
                 }
                 if let Some(r) = e.result.as_mut() {
-                    tag_phys(r, def_ver, ctx);
+                    tag_def_phys(r, def_value, ctx);
                 }
             }
         }
@@ -282,12 +300,12 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
         | Op::Trunc { dst, src, .. }
         | Op::Extract { dst, src, .. } => {
             tag_value(src, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         Op::Concat { dst, hi, lo } => {
             tag_value(hi, use_values, &mut ui, ctx);
             tag_value(lo, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         Op::Ite {
             dst, cond, t, e, ..
@@ -297,7 +315,7 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
             ui = 1;
             tag_value(t, use_values, &mut ui, ctx);
             tag_value(e, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            tag_def_phys(dst, def_value, ctx);
         }
         // Effect-only and single-output intrinsics fit the ordinary SSA model
         // exactly. This includes memory effects such as `memory.fill` and
@@ -308,7 +326,7 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
                 tag_value(input, use_values, &mut ui, ctx);
             }
             if let Some((output, _)) = outs.first_mut() {
-                tag_phys(output, def_ver, ctx);
+                tag_def_phys(output, def_value, ctx);
             }
         }
         // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
