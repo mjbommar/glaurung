@@ -333,7 +333,8 @@ pub(super) fn fold_one_call(
                             // Keep the setup where it stands when moving it to
                             // the call would read a value written after it; the
                             // call then names the argument register instead.
-                            found[slot] = if versioned_operand_is_reassigned(src, body, i, call_idx)
+                            found[slot] = if !substitutable
+                                || versioned_operand_is_reassigned(src, body, i, call_idx)
                             {
                                 Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
                             } else {

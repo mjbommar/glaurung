@@ -5710,6 +5710,70 @@ mod tests {
     }
 
     #[test]
+    fn rsp_relative_argument_load_stays_before_tail_epilogue() {
+        // GCC saves an incoming value in its local frame, reloads it into the
+        // fourth SysV argument register, restores rsp, and only then performs
+        // a tail call. Moving the load expression into the call changes its
+        // coordinate phase: [rsp+8] before the restore is entry_rsp-16, while
+        // [rsp+8] afterwards is the incoming seventh-argument slot.
+        let adjust_rsp = |op| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(24)),
+            },
+        };
+        let local_address = || Expr::Lea {
+            base: Some(reg("rsp")),
+            index: None,
+            scale: 1,
+            disp: 8,
+            segment: None,
+        };
+        let saved_load = Stmt::Assign {
+            dst: reg("rcx#1"),
+            src: Expr::Deref {
+                addr: Box::new(local_address()),
+                size: 8,
+            },
+        };
+        let mut f = Function {
+            name: "format_wrapper".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                adjust_rsp(BinOp::Sub),
+                Stmt::Store {
+                    addr: local_address(),
+                    src: Expr::Reg(reg("rsi")),
+                    size: 8,
+                },
+                saved_load.clone(),
+                assign("rdx#1", 3),
+                assign("rsi#1", 0),
+                assign("rdi#1", 0),
+                adjust_rsp(BinOp::Add),
+                call_to("error"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(
+            f.body.contains(&saved_load),
+            "the phase-sensitive load must remain before the rsp restore: {f:#?}"
+        );
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}")
+        };
+        assert_eq!(args.get(3), Some(&Expr::Reg(reg("rcx#1"))), "{f:#?}");
+
+        crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+        let rendered = crate::ir::ast::render(&f);
+        assert!(!rendered.contains("arg6"), "{rendered}");
+    }
+
+    #[test]
     fn fixed_arm_library_contract_crosses_shadowed_argument_setup() {
         // GCC 15 emits two consecutive `mov r1, #0` instructions before the
         // A32 rb_validate memset. The nearest definition is the call input;
