@@ -150,6 +150,35 @@ const VERIFIED_EQUIVALENT: &[(&str, &str, &str)] = &[
         "probe is (char)0x80 == -128, so `< 0` and `< 1` are both true",
     ),
     (
+        "equality-flip",
+        "146_opaque_predicates.c::opaque_two_way_join",
+        "the guard selects between two arms that compute the same value, so \
+         inverting it cannot change the result: `(v ^ k) + ((v & k) << 1)` is \
+         addition split into sum-without-carry plus carries, and \
+         `(v | k) + (v & k)` is addition split into the union plus the \
+         double-counted bits. Both are `v + k` for every uint32 pair, which is \
+         what the fixture's own comment claims and what gcc 15.2.0 confirms at \
+         -O0 and -O1 over exhaustive 12-bit pairs, the boundary values and 50M \
+         random full-width pairs: zero disagreements",
+    ),
+    (
+        "logic-flip",
+        "146_opaque_predicates.c::opaque_square_residue",
+        "`residue` is `(v * v) & 3` and a square is congruent to 0 or 1 modulo \
+         4, so the original's `residue == 2 || residue == 3` is false for every \
+         input; the mutant's `residue == 2 && residue == 3` is false because \
+         the two equalities contradict each other. Neither version ever takes \
+         the guarded arm. Verified **exhaustively over all 2^32 values** under \
+         gcc 15.2.0 at -O0 and -O1: zero disagreements",
+    ),
+    (
+        "negate-condition",
+        "146_opaque_predicates.c::opaque_two_way_join",
+        "the same two-armed identity the `equality-flip` entry above records: \
+         both arms compute `v + k`, so negating the guard swaps which route is \
+         taken to the same value",
+    ),
+    (
         "null-body",
         "117_modular_arithmetic.c::wraps_to_zero",
         "`value + (0u - value)` is 0 for every uint32, which is what the stub returns",
