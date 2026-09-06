@@ -2,7 +2,7 @@
 
 Date: 2026-09-06
 
-Behavioral commits: `d6a65779`, `5a2d6c86`
+Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`
 
 ## Boundary moved
 
@@ -46,6 +46,23 @@ The same commit routes range/all/many discovery through the pipeline-owned
 `DecompileRequest`, and their remaining per-function orchestration is still
 duplicated.
 
+## Shared callee preparation
+
+`e19bd73b` removes another independently repeated orchestration sequence from
+all four entry points. `callee_contracts.rs::prepare_direct_callee_facts` now
+owns this exact order:
+
+1. expand compiler soft helpers while argument registers are architectural;
+2. attach ABI and known-call effects before SSA;
+3. recover bounded direct-callee layouts and prototypes; and
+4. apply those recovered effects to the caller before its own recovery.
+
+Address, exact range, all, and many call this boundary instead of importing and
+sequencing its component passes themselves. This completes the plan's shared
+callee-preparation item. It does not complete the common per-function
+orchestrator: declaration selection, LLIR preparation, lowering, AST passes,
+and rendering are still repeated in `ir.rs`.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -57,5 +74,10 @@ duplicated.
   identity-retrieval target reports 44 passed and ten ignored.
 - `python/tests/test_decompiler_entrypoint_equivalence.py`: one full-text
   four-entry-point differential passed.
-- Declaration authority, PDB type recovery, session reuse, and entry-point
-  equivalence focused set: 22 passed.
+- Declaration authority, PDB type recovery, session reuse, entry-point
+  equivalence, and the stripped forwarded-parameter regression focused set:
+  23 passed after a fresh release extension build at `e19bd73b`.
+- Full `cargo test --features python-ext` at `e19bd73b`: 4,201 library tests
+  passed, zero failed, five ignored; every integration and documentation target
+  passed. The long identity-retrieval target reports 44 passed and ten ignored
+  in 522.46 seconds.

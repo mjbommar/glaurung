@@ -31,9 +31,13 @@ landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
 `DecompileRequest`, `AnalysisBudget`, and `RenderOptions`; every discovery
-limit survives one checked conversion. The other three public entry points,
-structured result, fingerprint, pass manager, and fixpoint driver remain open,
-so WP2 is now started rather than complete. See
+limit survives one checked conversion. Exact-range discovery converged with
+the other entry points at `5a2d6c86`, and `e19bd73b` moves the ordered helper,
+ABI-call, recovered-callee, and caller-effect sequence behind one
+`callee_contracts.rs` boundary used by all four entry points. The other three
+public entry points still need to construct the request directly; the common
+per-function orchestrator, structured result, fingerprint, pass manager, and
+fixpoint driver remain open, so WP2 is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -553,7 +557,7 @@ and make pass repetition/invalidation explicit.
   `5a2d6c86` makes an exact discovered range reuse both authoritative inputs
   while preserving the explicit-window fallback. Extraction of the remaining
   common per-function body is still open.
-- [ ] Move shared callee-contract preparation through
+- [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to
   `src/python_bindings/ir/pipeline.rs`; split into a new
