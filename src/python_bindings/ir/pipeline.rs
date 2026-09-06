@@ -192,6 +192,43 @@ pub(super) fn readonly_data_for(
     readonly_data
 }
 
+/// Immutable, image-wide facts shared by every function rendered from one
+/// decompilation request.
+///
+/// These used to be assembled independently by each Python adapter.  Keeping
+/// their construction here makes the ownership explicit and, for batch
+/// requests, guarantees that the string/data reconciliation and relocation
+/// interpretation happen exactly once for the entire image.
+pub(super) struct ProgramRenderContext {
+    pub(super) data_symbols: crate::ir::data_symbols::DataSymbols,
+    pub(super) string_pool: std::collections::HashMap<u64, String>,
+    pub(super) readonly_data: crate::ir::readonly_fold::ReadonlyData,
+    pub(super) function_tables: Vec<crate::ir::function_tables::FunctionPointerTable>,
+    pub(super) got_targets: std::collections::HashMap<u64, u64>,
+}
+
+pub(super) fn prepare_program_render_context(
+    session: &crate::program::session::ProgramSession,
+    image: &crate::program::image::ProgramImage,
+    data_symbols: crate::ir::data_symbols::DataSymbols,
+) -> ProgramRenderContext {
+    let mut string_pool = crate::ir::strings_fold::collect_string_pool_from_image(image);
+    data_symbols.remove_truncated_character_arrays(&mut string_pool);
+    let readonly_data = readonly_data_for(session, image, &string_pool);
+    let function_tables =
+        crate::ir::function_tables::collect_function_pointer_tables(&image.bytes());
+    let got_targets = crate::analysis::elf_got::elf_got_target_map(&image.bytes())
+        .into_iter()
+        .collect();
+    ProgramRenderContext {
+        data_symbols,
+        string_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    }
+}
+
 /// THE AST pass pipeline. Every public decompile entry point runs exactly this.
 ///
 /// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,

@@ -57,9 +57,9 @@ use dwarf_contracts::{
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    lower_and_run_ast_passes, prepare_llir_for_lowering, readonly_data_for,
+    lower_and_run_ast_passes, prepare_llir_for_lowering, prepare_program_render_context,
     recognise_machine_frame, target_calling_convention, AnalysisBudget, DecompileRequest,
-    DecompileResult, PreparedAst, RenderOptions,
+    DecompileResult, PreparedAst, ProgramRenderContext, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -275,6 +275,13 @@ fn decompile_at_session(
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(session, &image, data_symbols);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
     // against what the binary calls them -- `session.environment`,
@@ -296,10 +303,6 @@ fn decompile_at_session(
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
-    // Recovered here rather than with the other AST-pass inputs below: a call
-    // through one of these tables needs its entries' parameter storage, and
-    // that is the same demand-driven callee analysis.
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
@@ -368,16 +371,6 @@ fn decompile_at_session(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name =
         resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
             .as_ref()
@@ -769,6 +762,13 @@ fn decompile_range_at_py(
         &discovered,
     );
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &discovered);
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(&session, &image, data_symbols);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
     // The reason is the analyst-visible one. This used to blame the
@@ -781,7 +781,6 @@ fn decompile_range_at_py(
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let callee_call_graph = session.call_graph_for(&budgets, &[func_va], &discovered);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let callee_facts = prepare_direct_callee_facts(
@@ -832,16 +831,6 @@ fn decompile_range_at_py(
     // hoisting them is order-preserving.
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
             .as_ref()
@@ -1382,6 +1371,13 @@ fn decompile_all_py(
     // `int validate(char *, int)` to `long f(void)` at every call site. The
     // rename is a presentation decision, so it is applied after the analysis
     // that depends on binary truth -- see below.
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(&session, &image, data_symbols);
     let environment_targets = funcs
         .iter()
         .take(limit)
@@ -1391,17 +1387,6 @@ fn decompile_all_py(
         .then(|| session.environment(&budgets, cc, &addr_map, &environment_targets));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
@@ -1750,21 +1735,17 @@ fn decompile_many_py(
     // `int validate(char *, int)` to `long f(void)` at every call site. The
     // rename is a presentation decision, so it is applied after the analysis
     // that depends on binary truth -- see below.
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(&session, &image, data_symbols);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &func_vas));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
