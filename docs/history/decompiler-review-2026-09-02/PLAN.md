@@ -46,9 +46,13 @@ differential improves again to 102 regressions, still with 17 improvements and
 zero infrastructure problems; see
 `results/wp3-exception-origin-propagation.md`. Commit `cb9e5b10` then migrates
 six control-oriented wildcard consumers with an exactly neutral complete
-differential; see `results/wp3-control-consumer-origins.md`. Most semantic
-consumers, multi-output definition identity, expression origins, and structured
-line mappings remain open. A bounded, pre-WP3 WP7B relational slice is
+differential; see `results/wp3-control-consumer-origins.md`. Commit `52914784`
+migrates guarded-switch recovery without weakening its ownership and range
+proofs, remains exactly neutral on the same differential, and reduces the
+shared whole-Python failing-node set from 228 to 227; see
+`results/wp3-guarded-switch-origins.md`. Most semantic consumers, multi-output
+definition identity, expression origins, and structured line mappings remain
+open. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
@@ -771,7 +775,10 @@ provenance through lowering.
   exception recovery origin-transparent and unions contributing origins into
   its synthesized structured nodes. Commit `cb9e5b10` migrates six more
   control-oriented wildcard consumers and preserves composed origins on their
-  synthesized statements. Expression ownership, the remaining wildcard
+  synthesized statements. Commit `52914784` makes guarded-switch recovery
+  transparent through recognition, recursion, and mutation and preserves the
+  union of each removed guard, discriminator copy, and inner switch on the
+  replacement. Expression ownership, the remaining wildcard
   consumers, and production attribution remain open.
 
 ### Migration targets
@@ -811,7 +818,9 @@ provenance through lowering.
   consumers and all three renderers preserve or ignore the carrier without
   changing statement meaning. Block lowering attaches each LLIR instruction VA,
   and `cda7ab73` plus `cb9e5b10` migrate exception recovery and six
-  control-oriented wildcard consumers. Expression ownership, non-contiguous
+  control-oriented wildcard consumers. Commit `52914784` adds the guarded-
+  switch consumer, including direct, copied-discriminator, speculative, and
+  early-return shapes. Expression ownership, non-contiguous
   transformation policy, and the remaining wildcard audit must finish before
   universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
