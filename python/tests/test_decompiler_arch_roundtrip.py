@@ -1039,6 +1039,26 @@ def test_i386_wide_selector_uses_both_cdecl_stack_words(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_i386_o2_wide_guard_recovers_one_source_comparison(tmp_path: Path) -> None:
+    """Two cdecl dword comparisons are one uint64_t range predicate."""
+    arch = "i386"
+    if shutil.which(A.TARGETS[arch].cc) is None:
+        pytest.skip("i386 cross compiler is required")
+    fixture = "215_switch_on_wide_selector"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+
+    functions = D.exported_functions(str(target))
+    recovered = D.decompiled_c(str(target), functions["wide_selector_mixed"])
+    assert recovered is not None
+    assert re.search(r"\bop\)?\s*<=\s*\(unsigned long\)\(5\)", recovered), recovered
+    assert not re.search(r"\b5\)?\s*<\s*\(unsigned long\)\(op\)", recovered), recovered
+    assert "0 - var8" not in recovered, recovered
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> None:
     """Discovery and typed transport reach the structurer that owns loop latches."""
     arch = "armv7_a32"
