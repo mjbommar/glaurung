@@ -195,6 +195,16 @@ the shared production path, not WP2: the additional explicit budget classes,
 checked pass preconditions/order, bounded fixpoint reporting, and exact budget
 closure tests remain.
 
+Commit `74853fcc` begins the checked-order half without changing the pass list
+or rendered output. `PipelineStageTracker` now requires and records the coarse
+production transitions from start through lift, callee facts, LLIR
+preparation, AST preparation, finalization, and rendering. A focused negative
+test attempts to render from the Lifted stage and proves the transition fails
+with its expected and actual stages while preserving the current state. This
+is not the completed pass manager: the individual operations inside
+`run_ast_passes` still need declared preconditions, and repeated passes still
+need the bounded fixpoint driver and firing/termination report.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -279,6 +289,14 @@ closure tests remain.
   checks at `2ee8fa15`: all passed.
 - Full `cargo test --features python-ext` from a clean detached worktree at
   exact commit `2ee8fa15`: exit zero; 4,203 library tests passed, zero failed,
+  and five ignored; every integration and documentation target passed.
+  Identity retrieval reports 44 passed and ten ignored; doc tests report two
+  passed and one ignored.
+- Fresh release extension plus 36 entry-point-equivalence, session,
+  determinism, pipeline-profile, and render-style checks at `74853fcc`: all
+  passed.
+- Full `cargo test --features python-ext` from a clean detached worktree at
+  exact commit `74853fcc`: exit zero; 4,204 library tests passed, zero failed,
   and five ignored; every integration and documentation target passed.
   Identity retrieval reports 44 passed and ten ignored; doc tests report two
   passed and one ignored.
