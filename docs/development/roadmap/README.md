@@ -256,7 +256,11 @@ decoded/effect capability censuses and several silent-writer repairs. WP3's
 first bounded lifecycle slices are landed at `925dc002` and `09522773`:
 explicit conservative invalidation retains one SSA owner across definedness,
 prototype recovery, and return materialization, with byte-identical output
-across the 419-pair identity gate. Persistent identity through AST lowering,
+across the 419-pair identity gate. Commit `f05c9a5d` then carries exact or
+explicitly ambiguous opaque SSA identities beside the lowered AST and migrates
+float-role type projection as the first product consumer. Commit `af65c260`
+migrates optimized DWARF register-local recovery as the second; both 419-pair
+maps are byte-identical. Multi-output identity, remaining display-name consumers,
 origins, and remaining mutating-pass migrations keep WP3 open. WP6 and WP7B
 remain open architectural work. No current-tip release gate
 is claimed green; isolated overlay results in the review record retain their

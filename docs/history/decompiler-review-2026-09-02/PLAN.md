@@ -27,8 +27,12 @@ comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP3 and
 the general WP7B idiom framework remain the principal architectural packages.
 WP3 has its first bounded consumer migration at `925dc002`: pipeline-owned SSA
 now has explicit conservative invalidation and reconstructs after the
-definedness pass changes uses. This does not yet provide persistent identity
-through AST lowering or instruction origins. A bounded, pre-WP3 WP7B relational slice is
+definedness pass changes uses. Commit `09522773` retains that owner across
+return materialization, and `f05c9a5d` carries an opaque value-identity sidecar
+through AST lowering and migrates exact float-role projection away from
+display-name parsing. Commit `af65c260` migrates optimized DWARF register-local
+recovery as the second product consumer. Most semantic consumers, multi-output definition
+identity, and instruction origins remain open. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
@@ -736,7 +740,12 @@ provenance through lowering.
   definedness-normalization and return-materialization mutations declare
   `Uses` and reconstruct before indirect-target, structuring, and
   value-numbering consumers; other mutating passes remain to migrate.
-- [ ] Preserve opaque SSA value identity through AST lowering.
+- [~] Preserve opaque SSA value identity through AST lowering. Commit
+  `f05c9a5d` carries exact or explicitly ambiguous `SsaValue` candidates beside
+  value-numbered LLIR and the lowered production AST, and migrates float-role
+  projection as the first product consumer; `af65c260` migrates optimized
+  DWARF register-local recovery. Multi-output definitions, AST
+  pass-native identities, and the remaining consumers are still open.
 - [ ] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated.
 
@@ -746,8 +755,11 @@ provenance through lowering.
   consumption before AST lowering.
 - [ ] Move constant folding, dead-store elimination, and DCE in bounded
   increments, one pass at a time.
-- [ ] Remove semantic parsing of `ret`, `argN`, `local_`, and `#version` only
+- [~] Remove semantic parsing of `ret`, `argN`, `local_`, and `#version` only
   after each consumer has a typed identity replacement.
+  `f05c9a5d` removes `#version` parsing from production float-role projection;
+  `af65c260` removes it from optimized DWARF register-local recovery.
+  Compatibility and other product consumers remain.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [ ] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -769,15 +781,18 @@ provenance through lowering.
 
 - [~] Unit tests for SSA invalidation and reconstruction. The first three tests
   prove conservative default invalidation, revisioned reconstruction, and that
-  type/presentation-only changes preserve value identity.
+  type/presentation-only changes preserve value identity. The next three prove
+  identity survival through lowering, exact opaque consumer lookup, and
+  fail-closed ambiguity after phi-copy coalescing.
 - [ ] Unit tests for deterministic origin union and duplication.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
 - [ ] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
   non-contiguous mappings.
 - [~] Run the 419-pair output identity sweep after each migrated pass. The
-  first migrated pass is byte-identical across all 419 lanes; repeat this gate
-  for every subsequent identity-only migration.
+  invalidation, persistent-lifecycle, and first opaque-identity consumer slices
+  are byte-identical across all 419 lanes; repeat this gate for every
+  subsequent identity-only migration.
 
 ### Exit criteria
 
@@ -2467,7 +2482,10 @@ relevant ratchet's accepted-regression record.
 
 - [~] WP2 is complete; WP3 remains open.
 - [x] Entry points agree at equal budget.
-- [ ] Semantic consumers use stable values, not display names.
+- [~] Semantic consumers use stable values, not display names. Exact float-role
+  projection and optimized DWARF register-local recovery are the first two
+  migrated AST-side product consumers; the remaining name parsers keep this
+  criterion open.
 - [ ] Origin mappings are deterministic.
 
 ### M4 — Largest measured defect classes closed
@@ -2613,8 +2631,15 @@ relevant ratchet's accepted-regression record.
    full 1,676-object defect inventory (38 to 30 unrecovered observations;
    6,823 to 6,502 gotos). See
    `results/wp5-wide-selector-shared-return.md`.
-6. Begin WP2/WP3 as an independent architecture lane, using conservative
-   invalidate-everything fallback while passes migrate incrementally.
+6. [~] Continue WP3 as the active architecture lane now that WP2 is complete.
+   Commits `925dc002` and `09522773` establish conservative versioned SSA
+   invalidation across definedness and return materialization. Commit
+   `f05c9a5d` carries exact-or-ambiguous opaque identities through AST lowering
+   and migrates float-role projection as the first consumer. Commit `af65c260`
+   migrates the DWARF register-local resolver as the second consumer. Both are
+   byte-identical across the 419-pair gate. Next introduce deterministic
+   compositional instruction origins, then continue consumer migrations.
+   Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
    Fixture `197` is now closed across its four host lanes: all non-structural
