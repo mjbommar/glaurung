@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 325,
+  "core": 326,
   "lfs": 114,
   "fixtures": 38,
   "toolchain": 37,
@@ -288,6 +288,9 @@
   ],
   "test_decompiler_emission_invariants.py": [
    "toolchain"
+  ],
+  "test_decompiler_entrypoint_equivalence.py": [
+   "core"
   ],
   "test_decompiler_fixture_build_cache.py": [
    "fixtures",
