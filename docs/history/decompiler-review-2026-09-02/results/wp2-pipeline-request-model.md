@@ -176,6 +176,14 @@ same ordered implementation. The adapters retain only their distinct public
 return shapes and rendering policies; centralizing those render policies is the
 next WP2 boundary.
 
+Commit `2f7a6149` closes that next boundary. One pipeline-owned
+`render_prepared_ast` now selects analyst/debug declaration authority, projects
+DecBench and plain type maps, records declaration conflicts, selects all output
+styles, carries provenance, and prefixes per-function incompleteness. All four
+adapters call it and retain only their public Python container/variable
+projection. The entry-point differential now covers DecBench, C, and untyped
+styles rather than one render mode.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -246,5 +254,12 @@ next WP2 boundary.
   passed, including full-text four-entry-point equivalence.
 - Full `cargo test --features python-ext` from a clean detached worktree at
   exact commit `1e1ac0a8`: 4,203 library tests passed, zero failed, and five
+  ignored; every integration and documentation target passed. Identity
+  retrieval reports 44 passed and ten ignored.
+- Fresh release extension plus the expanded 39 focused checks at `2f7a6149`:
+  passed. The entry-point differential passes three render styles across all
+  four public paths, and the test-census guard also passes.
+- Full `cargo test --features python-ext` from a clean detached worktree at
+  exact commit `2f7a6149`: 4,203 library tests passed, zero failed, and five
   ignored; every integration and documentation target passed. Identity
   retrieval reports 44 passed and ten ignored.

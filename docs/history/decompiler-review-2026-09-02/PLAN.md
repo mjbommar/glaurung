@@ -53,9 +53,11 @@ their discovered functions for all four adapters; exact-range discovery now
 also releases the GIL. `1e1ac0a8` moves post-lowering semantic finalization --
 analyst and DWARF local facts, exception recovery, machine-frame cleanup, and
 PDB field annotations -- behind one `finalize_prepared_ast` boundary used by
-all four adapters. Per-function rendering, the remaining budget classes, the
-pass manager, and the fixpoint driver remain open, so WP2 is underway rather
-than complete. See
+all four adapters. `2f7a6149` then makes one `render_prepared_ast` select
+declaration authority, project types, record conflicts, render every style,
+and attach per-function incompleteness for all four adapters. The outer
+per-function orchestrator, remaining budget classes, pass manager, and fixpoint
+driver remain open, so WP2 is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -581,8 +583,10 @@ and make pass repetition/invalidation explicit.
   centralizes binary-truth address names and data symbols in
   `ProgramNameContext`; `d900cf1b` centralizes budget conversion and function
   discovery in `ProgramDiscovery`; `1e1ac0a8` centralizes post-lowering
-  semantic finalization in `finalize_prepared_ast`. Per-function rendering
-  still needs to move before this item is complete.
+  semantic finalization in `finalize_prepared_ast`; `2f7a6149` centralizes
+  declaration selection, type projection, all style rendering, provenance, and
+  incompleteness in `render_prepared_ast`. The adapter-owned lift/preparation
+  shell still needs to move before this item is complete.
 - [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
   Module-level and reusable-session `decompile_at` create the typed request;
@@ -597,8 +601,10 @@ and make pass repetition/invalidation explicit.
   `d900cf1b` removes the four discovery calls and keeps each result paired with
   its exact budgets. `1e1ac0a8` removes four adapter-owned finalization
   sequences while preserving their analyst, debug, exception, frame, and PDB
-  semantics. Moving final rendering behind one `decompile_function` remains
-  open.
+  semantics. `2f7a6149` removes the four remaining render-policy copies; a
+  three-style differential proves DecBench, C, and untyped output agree across
+  address, exact-range, all, and many. Moving the remaining lift/preparation
+  shell behind one `decompile_function` remains open.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to
@@ -620,8 +626,8 @@ and make pass repetition/invalidation explicit.
   and explicit budgets.
 - [~] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
   four entry points at equal budgets.
-  The first production case is landed: all four paths emit byte-identical
-  `tail_dispatch`, including its indirect-call arguments, with equal block,
+  All four paths now emit byte-identical `tail_dispatch`, including its
+  indirect-call arguments, in DecBench, C, and untyped styles with equal block,
   instruction, and per-function time budgets. Whole-image discovery still
   couples its output limit to `max_functions`, so exact complete budget
   identity remains open with the batch/request migration.
