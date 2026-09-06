@@ -157,9 +157,16 @@ def test_the_callees_recovered_prototype_survives_the_rename(
     binary: Path, project: str
 ) -> None:
     """Stated directly, so a failure names the defect rather than a diff."""
+    plain = _decompile(binary, "driver", None)
     text = _decompile(binary, "driver", project)
-    assert re.search(r"extern int parse_packet_hdr\(char \*, int\);", text), (
+    before = re.search(r"^\s*extern .+\bvalidate\([^;]+\);$", plain, re.M)
+    after = re.search(r"^\s*extern .+\bparse_packet_hdr\([^;]+\);$", text, re.M)
+    assert before is not None and after is not None, (
         "the callee's recovered prototype did not follow the rename:\n" + text
+    )
+    assert after.group(0).replace("parse_packet_hdr", "validate") == before.group(0), (
+        "the rename changed the callee's recovered prototype:\n"
+        f"before: {before.group(0)}\nafter:  {after.group(0)}"
     )
     assert "(void))parse_packet_hdr)()" not in text, (
         "the call site lost its arguments:\n" + text
