@@ -229,6 +229,43 @@ pub(super) fn prepare_program_render_context(
     }
 }
 
+/// Debug declarations and layouts prepared once for a program request.
+///
+/// `DwarfTypeEnv` deliberately remains a borrowed view constructed by the
+/// caller after this owned context is in place; making this struct
+/// self-referential would obscure, rather than clarify, the lifetime boundary.
+pub(super) struct ProgramDebugContext {
+    pub(super) output_contracts:
+        Option<std::collections::HashMap<u64, super::dwarf_contracts::DwarfPrototypeContract>>,
+    pub(super) pdb_contract_vas: std::collections::HashSet<u64>,
+    pub(super) types: Option<Vec<crate::debug::dwarf::DwarfType>>,
+}
+
+pub(super) fn prepare_program_debug_context(
+    session: &crate::program::session::ProgramSession,
+    image: &crate::program::image::ProgramImage,
+    binary_path: &str,
+    pdb_cache: &str,
+    enabled: bool,
+) -> ProgramDebugContext {
+    if !enabled {
+        return ProgramDebugContext {
+            output_contracts: None,
+            pdb_contract_vas: std::collections::HashSet::new(),
+            types: None,
+        };
+    }
+    let (output_contracts, pdb_contract_vas, pdb_types) =
+        super::dwarf_contracts::debug_output_contracts(image, binary_path, pdb_cache);
+    let mut types = session.debug_types().to_vec();
+    types.extend(pdb_types);
+    ProgramDebugContext {
+        output_contracts: Some(output_contracts),
+        pdb_contract_vas,
+        types: Some(types),
+    }
+}
+
 /// THE AST pass pipeline. Every public decompile entry point runs exactly this.
 ///
 /// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
