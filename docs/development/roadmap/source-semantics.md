@@ -286,8 +286,9 @@ branch at the name lookup.
    > The parenthetical was right and badly understated: the census forecast +70
    > and the delivered figure is **+130**. See "The depth gap was four times
    > what the census could see" below.
-3. **`__builtin_*` and macro-shaped callees** --- small, and it shrinks the
-   external-call bucket before the hard part.
+3. ~~**`__builtin_*` and macro-shaped callees**~~ --- small, and it shrinks the
+   external-call bucket before the hard part. **Superseded**: measured, it is
+   small in payoff too. See "The third time the census moved the answer" below.
 4. **Uninterpreted calls behind a mode flag** --- unblocks phase 3 without
    waiting for real call semantics.
 5. **Inlining intra-unit calls** --- what the differential needs, and the
@@ -618,3 +619,44 @@ admits more pointer code. Supplying a valid pointer argument means writing an
 array into the lifted side's address space and passing its address to both ---
 which the harness could do, and which is the natural next increment for the
 differential itself rather than for the lowering.
+
+### The third time the census moved the answer
+
+`csource::lower::call_census` asks of the functions now refused for a call what
+kind of callee is actually blocking them. Measured 2026-09-06, after arrays
+landed:
+
+| callee | call sites | functions blocked by it |
+|---|---:|---:|
+| defined in this file (needs an inliner) | 384 | **136** |
+| external function (needs a model or an unknown) | 84 | 19 |
+| function-like macro (not a function at all) | 18 | 8 |
+| compiler builtin (needs a one-line model) | 31 | 7 |
+
+A function needs *every* callee it contains, so each is counted under the
+hardest one it has.
+
+Step 3 of the ordering above put `__builtin_*` and macro-shaped callees first
+because they are cheap. They are: `__builtin_expect` returns its first argument
+and `UNLIKELY`/`WIDEN`/`AS_CASE` are not functions. But cheap to build is not
+the same as worth building --- **together they unblock 15 functions, against
+136 for an inliner.** Nineteen call sites of `__builtin_expect` collapse to
+seven functions, because a function that uses it usually calls something real
+as well.
+
+**So the ordering is now: the mode, then the inliner, and the builtins ride
+along with whichever needs them.**
+
+The mode goes first because it is worth more than either. Under an
+uninterpreted-call policy *every* call lowers --- all 274 refusals, not 136 ---
+and phase 3 is what the whole roadmap is aimed at. An unconstrained return
+value is not an approximation for path feasibility; it is the correct model of
+"this call could return anything", and a path proved infeasible under it is
+infeasible under any implementation of the callee. The inliner then follows for
+the differential, which needs the other answer to the same question.
+
+That is the third time in this phase that measuring changed the plan: the
+bundle census moved globals ahead of calls, the unresolved census replaced
+globals with macro constants, and this one replaces builtins with the mode. The
+pattern is consistent enough to state as a rule --- **rank by what a change
+unblocks, never by what it costs**, and the cost only breaks ties.
