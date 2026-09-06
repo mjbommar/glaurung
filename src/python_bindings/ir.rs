@@ -35,7 +35,6 @@ use pyo3::types::{PyAny, PyList};
 
 use callee_contracts::prepare_direct_callee_facts;
 
-use decbench_render::decbench_text;
 // `select_renderable_dwarf_local_facts` has no production caller in this module
 // -- its only consumer here is the `mod tests` below, so the import is gated the
 // same way `dwarf_return_hint` already is, rather than being dead in the shipped
@@ -58,11 +57,10 @@ use lift::{lift_bytes_py, lift_window_at_py};
 use pipeline::{
     discover_program, finalize_prepared_ast, lower_and_run_ast_passes, prepare_llir_for_lowering,
     prepare_program_debug_context, prepare_program_name_context, prepare_program_render_context,
-    target_calling_convention, AnalysisBudget, DecompileRequest, DecompileResult, PreparedAst,
-    ProgramDebugContext, ProgramDiscovery, ProgramNameContext, ProgramRenderContext, RenderOptions,
+    render_prepared_ast, target_calling_convention, AnalysisBudget, DecompileRequest,
+    DecompileResult, FunctionRenderContext, ProgramDebugContext, ProgramDiscovery,
+    ProgramNameContext, ProgramRenderContext, RenderOptions,
 };
-
-use type_maps::{decbench_type_maps, remap_type_map};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AnalystPrototype {
@@ -198,9 +196,7 @@ fn decompile_at_session(
     request: DecompileRequest<'_>,
 ) -> PyResult<DecompileResult> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::types_recover::recover_types_for;
 
     let pipeline_fingerprint = request.fingerprint();
     let DecompileRequest {
@@ -385,18 +381,7 @@ fn decompile_at_session(
         &stack_object_hints,
         &got_targets,
     );
-    let PreparedAst {
-        function: f,
-        mut profiler,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: param_slots,
-        inferred_prototype,
-        prototype,
-        stack_facts,
-        role_names,
-    } = finalize_prepared_ast(
+    let mut prepared = finalize_prepared_ast(
         prepared,
         analyst_locals,
         dwarf_outputs
@@ -423,157 +408,48 @@ fn decompile_at_session(
                 .cloned()
         })
         .filter(|name| !name.is_empty() && !name.starts_with("sub_"));
-    // Design Rule 8: a proof that did not complete becomes an explicit unknown
-    // in the output, not a silent omission. `func` carries whichever discovery
-    // budget stopped ITS OWN walk, so this can only ever fire for the function
-    // being rendered. See `analysis::completeness`.
-    let incompleteness_note =
-        crate::analysis::completeness::cfg_incompleteness_note(&func, &budgets);
-    let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
-    if analyst_names.is_some() || analyst_locals.is_some() || analyst_prototype.is_some() {
-        provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
-    }
-    let text = if style == "decbench" {
-        // DecBench wants concrete C types. Reuse the recovered TypeMap when it
-        // was computed, else recover on demand, then remap raw-reg keys to the
-        // AST's role names (`arg0`, `ret`, ...) before rendering.
-        let maps = types.then(|| {
-            decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("typed DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            )
-        });
-        let (decl, width, exact_value_widths) = match &maps {
-            Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
-            None => (None, None, None),
-        };
-        // The analyst's prototype outranks the compiler's, for the same reason
-        // their rename outranks the symbol table: it is a decision ABOUT the
-        // recovered facts rather than another one of them. It lands in the slot
-        // DWARF already uses -- `declared_prototype` overrides the recovered
-        // prototype for rendering and drives both the return type and the
-        // parameter c_types (`ast::declaration_plan`) -- so there is no second
-        // mechanism and the two cannot disagree.
-        // Analyst first, then DWARF -- see `CallPrototype::from_analyst`.
-        let dwarf_render_contract = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va));
-        let debug_source = if pdb_contract_vas.contains(&func_va) {
-            crate::program::environment::DeclarationSource::Pdb
-        } else {
-            crate::program::environment::DeclarationSource::Dwarf
-        };
-        let debug_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-        let analyst_render = analyst_prototype.map(|prototype| {
-            crate::ir::call_contracts::CallPrototype::from_analyst(
-                &prototype.return_type,
-                &prototype.parameter_types,
-                prototype.variadic,
-            )
-        });
-        let (declared_source, declared_render) = match (analyst_render, debug_render) {
-            (Some(analyst), Some(debug)) => {
-                crate::program::environment::DeclarationSource::strongest(
-                    (
-                        crate::program::environment::DeclarationSource::Analyst,
-                        Some(analyst),
-                    ),
-                    (debug_source, Some(debug)),
-                )
-            }
-            (Some(analyst), None) => (
-                crate::program::environment::DeclarationSource::Analyst,
-                Some(analyst),
-            ),
-            (None, debug) => (debug_source, debug),
-        };
-        if declared_render.is_some() && !provenance.contains(&declared_source.label()) {
-            provenance.push(declared_source.label());
-        }
-        let declared_parameter_names =
-            if declared_source == crate::program::environment::DeclarationSource::Analyst {
-                analyst_prototype.map(|prototype| prototype.parameter_names.as_slice())
+    let rendered = render_prepared_ast(
+        &mut prepared,
+        FunctionRenderContext {
+            raw: &lf_raw,
+            discovered: &func,
+            budgets: &budgets,
+            function_va: func_va,
+            render_options: RenderOptions {
+                types,
+                style,
+                shadow_v2: false,
+                pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+                analyst_names,
+                analyst_locals,
+                analyst_prototype,
+            },
+            debug_contract: dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+            debug_type_env: dwarf_type_env.as_ref(),
+            debug_source: if pdb_contract_vas.contains(&func_va) {
+                crate::program::environment::DeclarationSource::Pdb
             } else {
-                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice())
-            };
-        if analyst_prototype.is_some() {
-            use crate::program::environment::DeclarationSource;
-            record_prototype_conflict_with_candidate(
-                &f.name,
-                func_va,
-                DeclarationSource::Analyst.label(),
-                declared_render.as_ref(),
-                DeclarationSource::Dwarf.label(),
-                dwarf_render_contract
-                    .and_then(dwarf_render_prototype)
-                    .as_ref(),
-            );
-        }
-        record_recovered_prototype_conflict(
-            &f.name,
-            func_va,
-            declared_source.label(),
-            declared_render.as_ref(),
-            inferred_prototype.as_ref(),
-            cc,
-        );
-        decbench_text(
-            &f,
-            &mut profiler,
-            cfg_health,
-            &exception_sites,
-            decl,
-            width,
-            exact_value_widths,
-            &readonly_data,
-            &str_pool,
-            prototype.as_ref(),
-            declared_render.as_ref(),
-            declared_parameter_names,
-            dwarf_types.as_deref().unwrap_or(&[]),
-            &stack_facts.source_types,
-            &stack_facts.source_names,
-            dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-            cc,
-            &addr_map,
-            &callee_facts.env,
-            &data_symbols,
-        )
-    } else if style == "c" {
-        let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
-        match pdb_outer_name {
-            Some(name) => format!("// PDB: {}\n{}", name, body),
-            None => body,
-        }
-    } else if types {
-        // Plain-with-types style. Non-decbench paths skip `value_number`, so the
-        // raw LLIR is the canonical one; remap the TypeMap keys from raw physical
-        // regs into the role-based names the AST now uses.
-        let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
-        profiler.measure("render_with_types", || render_with_types(&f, &renamed))
-    } else {
-        profiler.measure("render", || render(&f))
-    };
-    let pseudocode = match incompleteness_note {
-        Some(note) => format!("{note}\n{text}"),
-        None => text,
-    };
+                crate::program::environment::DeclarationSource::Dwarf
+            },
+            exception_sites: &exception_sites,
+            readonly_data: &readonly_data,
+            string_pool: &str_pool,
+            address_names: &addr_map,
+            symbol_env: &callee_facts.env,
+            data_symbols: &data_symbols,
+            calling_convention: cc,
+            pdb_outer_name: pdb_outer_name.as_deref(),
+        },
+    );
     Ok(DecompileResult::from_rendered(
-        pseudocode,
-        &f,
-        cfg_health,
+        rendered.text,
+        &prepared.function,
+        prepared.cfg_health,
         &func,
-        provenance,
+        rendered.provenance,
         pipeline_fingerprint,
     ))
 }
@@ -599,9 +475,7 @@ fn decompile_range_at_py(
     use crate::core::address_range::AddressRange;
     use crate::core::basic_block::BasicBlock;
     use crate::core::function::{Function, FunctionKind};
-    use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::types_recover::recover_types_for;
 
     if range_end <= range_start {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -821,18 +695,7 @@ fn decompile_range_at_py(
         &stack_object_hints,
         &got_targets,
     );
-    let PreparedAst {
-        function: f,
-        mut profiler,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: param_slots,
-        inferred_prototype,
-        prototype,
-        stack_facts,
-        role_names,
-    } = finalize_prepared_ast(
+    let mut prepared = finalize_prepared_ast(
         prepared,
         None,
         dwarf_outputs
@@ -846,93 +709,48 @@ fn decompile_range_at_py(
         &addr_map,
         field_map.as_ref(),
     );
-    let provenance = match dwarf_outputs
-        .as_ref()
-        .and_then(|outputs| outputs.get(&func_va))
-    {
-        Some(_) if pdb_contract_vas.contains(&func_va) => vec![
-            crate::program::environment::DeclarationSource::Inferred.label(),
-            crate::program::environment::DeclarationSource::Pdb.label(),
-        ],
-        Some(_) => vec![
-            crate::program::environment::DeclarationSource::Inferred.label(),
-            crate::program::environment::DeclarationSource::Dwarf.label(),
-        ],
-        None => vec![crate::program::environment::DeclarationSource::Inferred.label()],
-    };
-    let pseudocode = if style == "decbench" {
-        let maps = types.then(|| {
-            decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("typed DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            )
-        });
-        let (decl, width, exact_value_widths) = match &maps {
-            Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
-            None => (None, None, None),
-        };
-        let dwarf_render_contract = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va));
-        let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-        record_recovered_prototype_conflict(
-            &f.name,
-            func_va,
-            if pdb_contract_vas.contains(&func_va) {
-                crate::program::environment::DeclarationSource::Pdb.label()
-            } else {
-                crate::program::environment::DeclarationSource::Dwarf.label()
+    let rendered = render_prepared_ast(
+        &mut prepared,
+        FunctionRenderContext {
+            raw: &lf_raw,
+            discovered: &func,
+            budgets: &budgets,
+            function_va: func_va,
+            render_options: RenderOptions {
+                types,
+                style,
+                shadow_v2: false,
+                pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+                analyst_names: None,
+                analyst_locals: None,
+                analyst_prototype: None,
             },
-            declared_render.as_ref(),
-            inferred_prototype.as_ref(),
-            cc,
-        );
-        decbench_text(
-            &f,
-            &mut profiler,
-            cfg_health,
-            &exception_sites,
-            decl,
-            width,
-            exact_value_widths,
-            &readonly_data,
-            &str_pool,
-            prototype.as_ref(),
-            declared_render.as_ref(),
-            dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
-            dwarf_types.as_deref().unwrap_or(&[]),
-            &stack_facts.source_types,
-            &stack_facts.source_names,
-            dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-            cc,
-            &addr_map,
-            &callee_facts.env,
-            &data_symbols,
-        )
-    } else if style == "c" {
-        profiler.measure("render_c", || crate::ir::ast::render_c(&f))
-    } else if types {
-        let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
-        profiler.measure("render_with_types", || render_with_types(&f, &renamed))
-    } else {
-        profiler.measure("render", || render(&f))
-    };
+            debug_contract: dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+            debug_type_env: dwarf_type_env.as_ref(),
+            debug_source: if pdb_contract_vas.contains(&func_va) {
+                crate::program::environment::DeclarationSource::Pdb
+            } else {
+                crate::program::environment::DeclarationSource::Dwarf
+            },
+            exception_sites: &exception_sites,
+            readonly_data: &readonly_data,
+            string_pool: &str_pool,
+            address_names: &addr_map,
+            symbol_env: &callee_facts.env,
+            data_symbols: &data_symbols,
+            calling_convention: cc,
+            pdb_outer_name: None,
+        },
+    );
     Ok(DecompileResult::from_rendered(
-        pseudocode,
-        &f,
-        cfg_health,
+        rendered.text,
+        &prepared.function,
+        prepared.cfg_health,
         &func,
-        provenance,
+        rendered.provenance,
         pipeline_fingerprint,
     )
     .pseudocode)
@@ -1265,7 +1083,6 @@ fn decompile_all_py(
     analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::ir::ast::render;
     use crate::ir::lift_function::lift_function_from_image;
 
     let analysis_budget = AnalysisBudget {
@@ -1439,18 +1256,7 @@ fn decompile_all_py(
             &stack_object_hints,
             &got_targets,
         );
-        let PreparedAst {
-            function: f,
-            mut profiler,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: param_slots,
-            inferred_prototype,
-            prototype,
-            stack_facts,
-            role_names,
-        } = finalize_prepared_ast(
+        let mut prepared = finalize_prepared_ast(
             prepared,
             None,
             dwarf_outputs
@@ -1464,91 +1270,46 @@ fn decompile_all_py(
             &addr_map,
             field_map.as_ref(),
         );
-        let text = if style == "decbench" {
-            let (decl, width, exact_value_widths) = decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            );
-            let dwarf_render_contract = dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value));
-            let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-            record_recovered_prototype_conflict(
-                &f.name,
-                func.entry_point.value,
-                if pdb_contract_vas.contains(&func.entry_point.value) {
-                    crate::program::environment::DeclarationSource::Pdb.label()
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf.label()
-                },
-                declared_render.as_ref(),
-                inferred_prototype.as_ref(),
-                cc,
-            );
-            decbench_text(
-                &f,
-                &mut profiler,
-                cfg_health,
-                &exception_sites,
-                Some(&decl),
-                Some(&width),
-                Some(&exact_value_widths),
-                &readonly_data,
-                &str_pool,
-                prototype.as_ref(),
-                declared_render.as_ref(),
-                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
-                dwarf_types.as_deref().unwrap_or(&[]),
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-                cc,
-                &addr_map,
-                &callee_facts.env,
-                &data_symbols,
-            )
-        } else {
-            profiler.measure("render", || render(&f))
-        };
-        let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
-        if let Some(source) = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&request.va))
-            .map(|_| {
-                if pdb_contract_vas.contains(&request.va) {
+        let rendered = render_prepared_ast(
+            &mut prepared,
+            FunctionRenderContext {
+                raw: &lf_raw,
+                discovered: func,
+                budgets: &budgets,
+                function_va: func.entry_point.value,
+                render_options,
+                debug_contract: dwarf_outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.get(&func.entry_point.value)),
+                debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+                debug_type_env: dwarf_type_env.as_ref(),
+                debug_source: if pdb_contract_vas.contains(&func.entry_point.value) {
                     crate::program::environment::DeclarationSource::Pdb
                 } else {
                     crate::program::environment::DeclarationSource::Dwarf
-                }
-            })
-        {
-            provenance.push(source.label());
-        }
-        if analyst_names.is_some() {
-            provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
-        }
+                },
+                exception_sites: &exception_sites,
+                readonly_data: &readonly_data,
+                string_pool: &str_pool,
+                address_names: &addr_map,
+                symbol_env: &callee_facts.env,
+                data_symbols: &data_symbols,
+                calling_convention: cc,
+                pdb_outer_name: None,
+            },
+        );
         let result = DecompileResult::from_rendered(
-            text,
-            &f,
-            cfg_health,
+            rendered.text,
+            &prepared.function,
+            prepared.cfg_health,
             func,
-            provenance,
+            rendered.provenance,
             pipeline_fingerprint,
         );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
             &result.pseudocode,
-            prototype.as_ref(),
-            &stack_facts,
+            prepared.prototype.as_ref(),
+            &prepared.stack_facts,
             calling_convention_pointer_width(cc),
             &lf_raw,
         );
@@ -1596,9 +1357,7 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::ir::ast::{render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
     let image = load_program_image(&path)?;
@@ -1797,13 +1556,6 @@ fn decompile_many_py(
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
         // for the same function, and the fixture gate's structural lane measured a
         // different pipeline from its execution lane. It cannot drift again.
-        // Type recovery runs on the pre-canonicalisation LLIR and does not touch `f`,
-        // so it is hoisted above the shared pipeline rather than braided into it.
-        let tm = if types {
-            Some(recover_types_for(&lf_raw, cc))
-        } else {
-            None
-        };
         let stack_object_hints = dwarf_stack_object_hints(
             dwarf_outputs
                 .as_ref()
@@ -1826,18 +1578,7 @@ fn decompile_many_py(
             &stack_object_hints,
             &got_targets,
         );
-        let PreparedAst {
-            function: f,
-            mut profiler,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: param_slots,
-            inferred_prototype,
-            prototype,
-            stack_facts,
-            role_names,
-        } = finalize_prepared_ast(
+        let mut prepared = finalize_prepared_ast(
             prepared,
             None,
             dwarf_outputs
@@ -1855,81 +1596,42 @@ fn decompile_many_py(
             .get(&func_va)
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
-        let text = if style == "decbench" {
-            let (decl, width, exact_value_widths) = decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            );
-            let dwarf_render_contract = dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va));
-            let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-            record_recovered_prototype_conflict(
-                &f.name,
-                func_va,
-                if pdb_contract_vas.contains(&func_va) {
-                    crate::program::environment::DeclarationSource::Pdb.label()
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf.label()
+        let rendered = render_prepared_ast(
+            &mut prepared,
+            FunctionRenderContext {
+                raw: &lf_raw,
+                discovered: func,
+                budgets: &budgets,
+                function_va: func_va,
+                render_options: RenderOptions {
+                    types,
+                    style,
+                    shadow_v2,
+                    pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+                    analyst_names: analyst_names.as_ref(),
+                    analyst_locals: None,
+                    analyst_prototype: None,
                 },
-                declared_render.as_ref(),
-                inferred_prototype.as_ref(),
-                cc,
-            );
-            decbench_text(
-                &f,
-                &mut profiler,
-                cfg_health,
-                &exception_sites,
-                Some(&decl),
-                Some(&width),
-                Some(&exact_value_widths),
-                &readonly_data,
-                &str_pool,
-                prototype.as_ref(),
-                declared_render.as_ref(),
-                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
-                dwarf_types.as_deref().unwrap_or(&[]),
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-                cc,
-                &addr_map,
-                &callee_facts.env,
-                &data_symbols,
-            )
-        } else if style == "c" {
-            let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
-            match pdb_outer_name {
-                Some(name) => format!("// PDB: {}\n{}", name, body),
-                None => body,
-            }
-        } else {
-            match tm {
-                Some(tm) => {
-                    let renamed = remap_type_map(&tm, &f, cc, &param_slots);
-                    profiler.measure("render_with_types", || render_with_types(&f, &renamed))
-                }
-                None => profiler.measure("render", || render(&f)),
-            }
-        };
-        // Per function, from that function's own walk: in a set where one entry
-        // hit a budget and the next did not, only the first is marked. See
-        // `analysis::completeness`.
-        let text = match crate::analysis::completeness::cfg_incompleteness_note(func, &budgets) {
-            Some(note) => format!("{note}\n{text}"),
-            None => text,
-        };
+                debug_contract: dwarf_outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.get(&func_va)),
+                debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+                debug_type_env: dwarf_type_env.as_ref(),
+                debug_source: if pdb_contract_vas.contains(&func_va) {
+                    crate::program::environment::DeclarationSource::Pdb
+                } else {
+                    crate::program::environment::DeclarationSource::Dwarf
+                },
+                exception_sites: &exception_sites,
+                readonly_data: &readonly_data,
+                string_pool: &str_pool,
+                address_names: &addr_map,
+                symbol_env: &callee_facts.env,
+                data_symbols: &data_symbols,
+                calling_convention: cc,
+                pdb_outer_name: pdb_outer_name.as_deref(),
+            },
+        );
         let name = resolve_outer_function_name_with_analyst(
             &func.name,
             func_va,
@@ -1940,35 +1642,18 @@ fn decompile_many_py(
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually
         // emitted -- see `ir::recovered_variables`.
-        let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
-        if let Some(source) = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&request.va))
-            .map(|_| {
-                if pdb_contract_vas.contains(&request.va) {
-                    crate::program::environment::DeclarationSource::Pdb
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf
-                }
-            })
-        {
-            provenance.push(source.label());
-        }
-        if analyst_names.is_some() {
-            provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
-        }
         let result = DecompileResult::from_rendered(
-            text,
-            &f,
-            cfg_health,
+            rendered.text,
+            &prepared.function,
+            prepared.cfg_health,
             func,
-            provenance,
+            rendered.provenance,
             pipeline_fingerprint,
         );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
             &result.pseudocode,
-            prototype.as_ref(),
-            &stack_facts,
+            prepared.prototype.as_ref(),
+            &prepared.stack_facts,
             calling_convention_pointer_width(cc),
             &lf_raw,
         );

@@ -673,6 +673,201 @@ pub(super) fn finalize_prepared_ast(
     prepared
 }
 
+/// Program and request facts needed to render one finalized AST.
+///
+/// Keeping these facts in one typed object prevents the four Python adapters
+/// from independently choosing declaration authority, type projections, or
+/// incompleteness behavior. Adapter-specific Python containers remain outside
+/// this boundary.
+pub(super) struct FunctionRenderContext<'a> {
+    pub(super) raw: &'a crate::ir::types::LlirFunction,
+    pub(super) discovered: &'a crate::core::function::Function,
+    pub(super) budgets: &'a crate::analysis::cfg::Budgets,
+    pub(super) function_va: u64,
+    pub(super) render_options: RenderOptions<'a>,
+    pub(super) debug_contract: Option<&'a DwarfPrototypeContract>,
+    pub(super) debug_types: &'a [crate::debug::dwarf::DwarfType],
+    pub(super) debug_type_env: Option<&'a crate::ir::dwarf_type_env::DwarfTypeEnv<'a>>,
+    pub(super) debug_source: crate::program::environment::DeclarationSource,
+    pub(super) exception_sites: &'a [crate::analysis::exception::ExceptionCallSite],
+    pub(super) readonly_data: &'a crate::ir::readonly_fold::ReadonlyData,
+    pub(super) string_pool: &'a std::collections::HashMap<u64, String>,
+    pub(super) address_names: &'a std::collections::HashMap<u64, String>,
+    pub(super) symbol_env: &'a crate::ir::symbol_env::SymbolEnv,
+    pub(super) data_symbols: &'a crate::ir::data_symbols::DataSymbols,
+    pub(super) calling_convention: crate::ir::call_args::CallConv,
+    pub(super) pdb_outer_name: Option<&'a str>,
+}
+
+pub(super) struct RenderedAst {
+    pub(super) text: String,
+    pub(super) provenance: Vec<&'static str>,
+}
+
+/// Render one already-finalized AST through the single shared style policy.
+pub(super) fn render_prepared_ast(
+    prepared: &mut PreparedAst,
+    context: FunctionRenderContext<'_>,
+) -> RenderedAst {
+    let FunctionRenderContext {
+        raw,
+        discovered,
+        budgets,
+        function_va,
+        render_options,
+        debug_contract,
+        debug_types,
+        debug_type_env,
+        debug_source,
+        exception_sites,
+        readonly_data,
+        string_pool,
+        address_names,
+        symbol_env,
+        data_symbols,
+        calling_convention: cc,
+        pdb_outer_name,
+    } = context;
+    let mut provenance = vec![crate::program::environment::DeclarationSource::Inferred.label()];
+    if render_options.analyst_names.is_some()
+        || render_options.analyst_locals.is_some()
+        || render_options.analyst_prototype.is_some()
+    {
+        provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
+    }
+
+    let text = if render_options.style == "decbench" {
+        let maps = render_options.types.then(|| {
+            super::type_maps::decbench_type_maps(
+                &prepared.function,
+                raw,
+                &prepared.numbered,
+                prepared
+                    .prototype
+                    .as_ref()
+                    .expect("typed DecBench prototype"),
+                cc,
+                &prepared.parameter_slots,
+                &prepared.stack_facts.sizes,
+                &prepared.stack_facts.source_types,
+                &prepared.stack_facts.source_names,
+                debug_type_env,
+                &prepared.role_names,
+                &prepared.definition_widths,
+            )
+        });
+        let (decl, width, exact_value_widths) = match &maps {
+            Some((decl, width, exact)) => (Some(decl), Some(width), Some(exact)),
+            None => (None, None, None),
+        };
+        let debug_render = debug_contract.and_then(super::dwarf_contracts::dwarf_render_prototype);
+        let analyst_render = render_options.analyst_prototype.map(|prototype| {
+            crate::ir::call_contracts::CallPrototype::from_analyst(
+                &prototype.return_type,
+                &prototype.parameter_types,
+                prototype.variadic,
+            )
+        });
+        let (declared_source, declared_render) = match (analyst_render, debug_render) {
+            (Some(analyst), Some(debug)) => {
+                crate::program::environment::DeclarationSource::strongest(
+                    (
+                        crate::program::environment::DeclarationSource::Analyst,
+                        Some(analyst),
+                    ),
+                    (debug_source, Some(debug)),
+                )
+            }
+            (Some(analyst), None) => (
+                crate::program::environment::DeclarationSource::Analyst,
+                Some(analyst),
+            ),
+            (None, debug) => (debug_source, debug),
+        };
+        if declared_render.is_some() && !provenance.contains(&declared_source.label()) {
+            provenance.push(declared_source.label());
+        }
+        let declared_parameter_names =
+            if declared_source == crate::program::environment::DeclarationSource::Analyst {
+                render_options
+                    .analyst_prototype
+                    .map(|prototype| prototype.parameter_names.as_slice())
+            } else {
+                debug_contract.map(|contract| contract.parameter_names.as_slice())
+            };
+        if render_options.analyst_prototype.is_some() {
+            super::record_prototype_conflict_with_candidate(
+                &prepared.function.name,
+                function_va,
+                crate::program::environment::DeclarationSource::Analyst.label(),
+                declared_render.as_ref(),
+                crate::program::environment::DeclarationSource::Dwarf.label(),
+                debug_contract
+                    .and_then(super::dwarf_contracts::dwarf_render_prototype)
+                    .as_ref(),
+            );
+        }
+        super::record_recovered_prototype_conflict(
+            &prepared.function.name,
+            function_va,
+            declared_source.label(),
+            declared_render.as_ref(),
+            prepared.inferred_prototype.as_ref(),
+            cc,
+        );
+        super::decbench_render::decbench_text(
+            &prepared.function,
+            &mut prepared.profiler,
+            prepared.cfg_health,
+            exception_sites,
+            decl,
+            width,
+            exact_value_widths,
+            readonly_data,
+            string_pool,
+            prepared.prototype.as_ref(),
+            declared_render.as_ref(),
+            declared_parameter_names,
+            debug_types,
+            &prepared.stack_facts.source_types,
+            &prepared.stack_facts.source_names,
+            debug_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
+            cc,
+            address_names,
+            symbol_env,
+            data_symbols,
+        )
+    } else if render_options.style == "c" {
+        let body = prepared
+            .profiler
+            .measure("render_c", || crate::ir::ast::render_c(&prepared.function));
+        match pdb_outer_name {
+            Some(name) => format!("// PDB: {name}\n{body}"),
+            None => body,
+        }
+    } else if render_options.types {
+        let recovered = crate::ir::types_recover::recover_types_for(raw, cc);
+        let renamed = super::type_maps::remap_type_map(
+            &recovered,
+            &prepared.function,
+            cc,
+            &prepared.parameter_slots,
+        );
+        prepared.profiler.measure("render_with_types", || {
+            crate::ir::ast::render_with_types(&prepared.function, &renamed)
+        })
+    } else {
+        prepared
+            .profiler
+            .measure("render", || crate::ir::ast::render(&prepared.function))
+    };
+    let text = match crate::analysis::completeness::cfg_incompleteness_note(discovered, budgets) {
+        Some(note) => format!("{note}\n{text}"),
+        None => text,
+    };
+    RenderedAst { text, provenance }
+}
+
 pub(super) fn target_calling_convention(
     image: &crate::program::image::ProgramImage,
 ) -> PyResult<crate::ir::call_args::CallConv> {
