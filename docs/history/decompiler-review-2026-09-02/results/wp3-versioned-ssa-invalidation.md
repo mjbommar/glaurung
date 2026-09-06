@@ -30,7 +30,7 @@ migration, per-pass change sets, and the legacy-`All` ratchet remain open.
 - `tests/test_census_baseline.json`: census commit `4bfee20c` records the three
   new unit contracts.
 
-The exact parent for the behavioral comparison is `d0cfdfce`; the exact
+The exact parent for the first behavioral comparison is `d0cfdfce`; its exact
 measured tip is `4bfee20c`.
 
 ## Verification
@@ -79,5 +79,36 @@ instead of `arg0`. A full parent Python run was not performed, so this result
 does not claim the entire Python failure set is independently A/B-proven.
 The byte-identical 419-lane comparison, focused consumer tests, and green full
 Rust gate are the bounded causality evidence for this identity-only slice.
+
+## Follow-on: retain the owner across return materialization
+
+Commit `09522773` removes the remaining throw-away SSA construction inside
+`prepare_llir_for_lowering_with_shadow`. One `VersionedSsa` now spans initial
+definedness normalization, prototype recovery, and explicit return-value
+materialization. Materializing a recovered return declares `Invalidate::Uses`;
+the same owner reconstructs before indirect-target recovery, structuring, and
+value numbering. Its revision therefore records both repairs rather than
+resetting to zero at the second boundary.
+
+Focused verification at `09522773`:
+
+- 15 SSA tests passed, including two sequential invalidations on one owner;
+- the direct return-materialization SSA test passed;
+- 19 entry-point-equivalence, determinism, and pipeline-profile tests passed
+  against a release-built extension;
+- `cargo test --features python-ext` passed completely: 4,212 library tests,
+  zero failed, five ignored, plus every integration and documentation target;
+  the 44-test CFR target reported 44 passed and ten ignored in 523.24 seconds;
+- the 419-lane stripped identity map is byte-for-byte identical to the prior
+  `4bfee20c` map, with the same SHA-256 shown above. The command still exits 1
+  for the identical pre-existing ratchet drift.
+
+The mandatory whole Python suite completed with 87 failed node IDs, 881
+xfails, and 57 skips. The focused WP3 tests are not among the failures. This is
+still a red repository-wide gate and therefore not release evidence; the
+captured log is
+`$HOME/.cache/glaurung/tmp/wp3-return-ssa-python.log`. The shell command used
+`tee`, whose zero exit status masked pytest's nonzero status, so the result is
+classified from pytest's failure report rather than the pipeline status.
 
 No DecBench run or upstream interaction was performed.

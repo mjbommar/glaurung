@@ -720,9 +720,9 @@ provenance through lowering.
 ### Core model
 
 - [~] Add a pipeline-owned, versioned `SsaInfo` near the existing SSA
-  implementation under `src/ir/`. `925dc002` lands the owner for the bounded
-  definedness-normalization transaction; ownership does not yet persist across
-  the complete lowering pipeline.
+  implementation under `src/ir/`. `925dc002` lands the owner and `09522773`
+  retains it across definedness normalization, prototype recovery, and return
+  materialization; ownership does not yet persist through AST lowering.
 - [x] Define explicit invalidation classes: CFG changed, definitions changed,
   uses changed, types changed, and presentation-only change.
 - [x] Make an unclassified mutating pass conservatively return
@@ -733,8 +733,9 @@ provenance through lowering.
 - [ ] Require every newly added mutating pass to declare a change set, and
   ratchet the count of legacy `Invalidate::All` passes downward.
 - [~] Recompute or repair SSA before the next consumer when invalidated. The
-  definedness-normalization mutation declares `Uses` and reconstructs before
-  consumption; other mutating passes remain to migrate.
+  definedness-normalization and return-materialization mutations declare
+  `Uses` and reconstruct before indirect-target, structuring, and
+  value-numbering consumers; other mutating passes remain to migrate.
 - [ ] Preserve opaque SSA value identity through AST lowering.
 - [ ] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated.
