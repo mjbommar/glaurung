@@ -1,6 +1,6 @@
 # WP2 nested-callee budget
 
-Revision under test: `e9518094`
+Revisions under test: `e9518094`, `b3a6543a`, `dc303793`, `87edaeb6`
 
 ## Result
 
@@ -38,10 +38,33 @@ uv run pytest -q python/tests/test_decompiler_entrypoint_equivalence.py \
   6 passed
 ```
 
-## Scope
+## Completed follow-on slices
 
-This is one enforced slice of WP2's explicit budget model, not closure of that
-model. Discovery and CFG limits must become distinct types, the type refinement
-cap must enter the request, and batch/range output sizing must stop borrowing
-discovery fields before the production checkbox or equal-budget exit criterion
-can be marked complete.
+- `b3a6543a` separates `DiscoveryBudget` from `CfgBudget`; their five fields
+  still project exactly into the existing discovery engine.
+- `dc303793` makes the float-copy type fixed point consume a fingerprinted
+  `TypeBudget`. Exhaustion preserves its best-effort lattice facts, and zero
+  rounds decline only that refinement.
+- `87edaeb6` makes range fallback bytes and all/many result counts consume a
+  fingerprinted `SizeBudget` instead of adapter-local arithmetic or loop
+  limits.
+
+The pipeline request/result production item is now complete: callee, discovery,
+CFG, type, and size limits are distinct, enforced, and included in request
+identity. The separate WP2 test and exit-criterion checkboxes remain open until
+the public adapters can be exercised with one exactly equal complete budget.
+
+Additional validation after each slice included a fresh release extension and:
+
+```text
+cargo test --features python-ext python_bindings::ir::pipeline::request_tests
+  6 passed
+
+cargo test --features python-ext python_bindings::ir::type_maps::tests
+  16 passed
+
+uv run pytest -q python/tests/test_decompiler_entrypoint_equivalence.py \
+  python/tests/test_decompiler_session.py \
+  python/tests/test_pipeline_profile_report.py
+  13 passed
+```

@@ -563,7 +563,7 @@ and make pass repetition/invalidation explicit.
 
 ### Production changes
 
-- [~] Introduce a pipeline-owned request and result model in
+- [x] Introduce a pipeline-owned request and result model in
   `src/python_bindings/ir/pipeline.rs`:
   - `DecompileRequest { va, style, analysis_budget, render_options }`
   - `AnalysisBudget` with explicit callee, discovery, type, CFG, and size
@@ -583,9 +583,15 @@ and make pass repetition/invalidation explicit.
   projecting their legacy adapter-specific shapes. `e9518094` begins the
   required budget split with a fingerprinted `CalleeBudget`: its depth now
   bounds both direct-callee and relocation-proven function-table contract
-  recovery through the shared pipeline instead of a hidden constant. CFG,
-  discovery, type, and size remain to be separated and enforced before this
-  production item can close.
+  recovery through the shared pipeline instead of a hidden constant.
+  `b3a6543a` separates program-level function-count/total-time discovery limits
+  from per-function block/instruction/time CFG limits while preserving their
+  exact projection into the discovery engine. `dc303793` replaces the hidden
+  render-time type fixed-point cap with a request-owned `TypeBudget`; exhaustion
+  keeps the best accumulated facts, and a zero-budget test proves it does not
+  erase pre-existing evidence. `87edaeb6` adds `SizeBudget`, which now bounds
+  explicit-range fallback bytes and all/many result counts. All five budget
+  classes are enforced, fingerprinted, and constructed by every adapter.
 - [x] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
   `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
