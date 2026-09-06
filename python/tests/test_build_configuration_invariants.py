@@ -568,7 +568,15 @@ def test_the_recovered_interface_is_identical_in_every_configuration(
 # --------------------------------------------------------------------------
 # 4. Frame disjointness.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("config", CONFIG_NAMES)
+@pytest.mark.parametrize(
+    "config",
+    _configs_xfail(
+        {"lto"},
+        "OPEN DEFECT (-flto): no frame object is recovered, so disjointness "
+        "has no non-vacuous denominator. The dedicated frame-object and "
+        "definedness tests below pin the same missing-frame root cause.",
+    ),
+)
 def test_frame_locals_occupy_disjoint_byte_ranges(built, recovered, config) -> None:
     """Two named frame slots may not claim the same byte, in any configuration.
 
