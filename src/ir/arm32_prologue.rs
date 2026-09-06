@@ -560,6 +560,7 @@ fn expr_mentions_sp(expression: &Expr) -> bool {
 
 fn stmt_mentions_sp(statement: &Stmt) -> bool {
     match statement {
+        Stmt::Origin { stmt, .. } => stmt_mentions_sp(stmt),
         Stmt::Assign { dst, src } => is_sp(dst) || expr_mentions_sp(src),
         Stmt::Store { addr, src, .. } => expr_mentions_sp(addr) || expr_mentions_sp(src),
         Stmt::Call {
@@ -741,7 +742,8 @@ mod tests {
             }
         }
 
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 matches!(dst, VReg::Phys(name) if base_name(name) == "sp") || expr_mentions_sp(src)
             }

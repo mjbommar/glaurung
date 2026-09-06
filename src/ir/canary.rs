@@ -504,6 +504,7 @@ fn is_identity_address(expr: &Expr, target: &crate::ir::types::VReg) -> bool {
 
 fn stmt_overwrites(stmt: &Stmt, target: &crate::ir::types::VReg) -> bool {
     match stmt {
+        Stmt::Origin { stmt, .. } => stmt_overwrites(stmt, target),
         Stmt::Assign { dst, .. } => dst == target,
         Stmt::Call { dst, .. } => dst.as_ref() == Some(target),
         Stmt::Pop { target: dst } => dst == target,
@@ -514,6 +515,7 @@ fn stmt_overwrites(stmt: &Stmt, target: &crate::ir::types::VReg) -> bool {
 fn rewrite_body(body: &mut [Stmt]) {
     for s in body.iter_mut() {
         match s {
+            Stmt::Origin { stmt, .. } => rewrite_body(std::slice::from_mut(stmt.as_mut())),
             Stmt::IndirectGoto { target } => rewrite_expr(target),
             Stmt::Assign { src, .. } => rewrite_expr(src),
             Stmt::Store { addr, src, .. } => {

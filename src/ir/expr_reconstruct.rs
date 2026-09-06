@@ -259,7 +259,8 @@ fn count_temp_reads_in_expr(e: &Expr, out: &mut std::collections::HashMap<VReg, 
 }
 
 fn count_temp_reads_in_stmt(s: &Stmt, out: &mut std::collections::HashMap<VReg, u32>) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst: _, src } => count_temp_reads_in_expr(src, out),
         Stmt::Store { addr, src, .. } => {
             count_temp_reads_in_expr(addr, out);
@@ -552,7 +553,8 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
 }
 
 fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target: t } => count_reg_uses(t, target),
         Stmt::Assign { src, .. } => count_reg_uses(src, target),
         Stmt::Store { addr, src, .. } => count_reg_uses(addr, target) + count_reg_uses(src, target),
@@ -796,7 +798,8 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
 }
 
 fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
-    match s {
+    match s.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target: t } => substitute_in_expr(t, target, with),
         Stmt::Assign { src, .. } => substitute_in_expr(src, target, with),
         Stmt::Store { addr, src, .. } => {

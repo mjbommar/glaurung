@@ -27,7 +27,8 @@ pub fn resolve_names(f: &mut Function, addr_map: &HashMap<u64, String>) {
 
 fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => resolve_expr(target, addr_map),
             Stmt::Assign { src, .. } => resolve_expr(src, addr_map),
             Stmt::Store { addr, src, .. } => {

@@ -489,7 +489,8 @@ fn walk(
     snapshots: &mut HashMap<VReg, VReg>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 expand_expr(src, aliases);
                 expand_memory_address_components(src, components);

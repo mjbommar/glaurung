@@ -162,6 +162,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
     fn body(statements: &mut [Stmt], tm: &TypeMap) {
         for statement in statements {
             match statement {
+                Stmt::Origin { stmt, .. } => body(std::slice::from_mut(stmt.as_mut()), tm),
                 Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
                     expression(src, tm);
                 }
@@ -329,6 +330,7 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
     fn body(statements: &mut [Stmt], tm: &TypeMap) {
         for statement in statements {
             match statement {
+                Stmt::Origin { stmt, .. } => body(std::slice::from_mut(stmt.as_mut()), tm),
                 Stmt::Assign { src, .. } => expression(src, tm),
                 Stmt::Store { addr, src, .. } => {
                     expression(addr, tm);
@@ -414,6 +416,7 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
 fn fold_body(body: &mut [Stmt], changed: &mut bool) {
     for s in body.iter_mut() {
         match s {
+            Stmt::Origin { stmt, .. } => fold_body(std::slice::from_mut(stmt.as_mut()), changed),
             Stmt::IndirectGoto { target } => fold_expr(target, changed),
             Stmt::Assign { src, .. } => fold_expr(src, changed),
             Stmt::Store { addr, src, size } => {

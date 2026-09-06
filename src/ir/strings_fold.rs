@@ -153,7 +153,8 @@ pub fn fold_string_literals(f: &mut Function, pool: &HashMap<u64, String>) {
 
 fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => fold_expr(target, pool),
             Stmt::Assign { src, .. } => fold_expr(src, pool),
             Stmt::Store { addr, src, .. } => {

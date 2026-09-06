@@ -280,13 +280,15 @@ fn coalesce_body(
 }
 
 fn top_level_defines(statement: &Stmt, target: &VReg) -> bool {
+    let statement = statement.semantic();
     matches!(statement, Stmt::Assign { dst, .. } if dst == target)
         || matches!(statement, Stmt::Call { dst: Some(dst), .. } if dst == target)
         || matches!(statement, Stmt::Pop { target: dst } if dst == target)
 }
 
 fn statement_contains_goto(statement: &Stmt) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Goto { .. } => true,
         Stmt::If {
             then_body,
@@ -341,7 +343,8 @@ fn protected_register(register: &VReg, protected: &std::collections::HashSet<Str
 }
 
 fn statement_mentions(statement: &Stmt, target: &VReg) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => dst == target || expression_reads(src, target),
         Stmt::Store { addr, src, .. } => {
             expression_reads(addr, target) || expression_reads(src, target)
@@ -442,7 +445,8 @@ fn replace_statement_register(statement: &mut Stmt, target: &VReg, replacement: 
             *register = replacement.clone();
         }
     };
-    match statement {
+    match statement.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             replace_vreg(dst);
             replace_register(src, target, replacement);
@@ -551,7 +555,8 @@ fn replace_statement_register(statement: &mut Stmt, target: &VReg, replacement: 
 
 fn fold_body(body: &mut [Stmt]) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,

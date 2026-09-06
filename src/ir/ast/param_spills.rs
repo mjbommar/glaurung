@@ -671,6 +671,9 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
     }
     for s in body.iter_mut() {
         match s {
+            Stmt::Origin { stmt, .. } => {
+                rename_phys_in_body(std::slice::from_mut(stmt.as_mut()), map)
+            }
             Stmt::Assign { dst, src } => {
                 rn(dst, map);
                 re(src, map);

@@ -100,7 +100,10 @@ pub(super) fn seed_indexed_stack_objects(
         starts: &mut Vec<(String, i64, u8)>,
     ) -> Option<i64> {
         for stmt in body {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } => {
                     // AAPCS uses r7/r11/fp arithmetic to restore SP in the
                     // epilogue. At this pre-value-folding stage the constant
@@ -462,7 +465,10 @@ pub(super) fn collect_read_stack_slots(
         reads: &mut Vec<(String, i64, u8)>,
     ) -> Option<i64> {
         for stmt in body {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } => {
                     collect_expr(src, sp_delta, ctx, address_defs, reads);
                     if is_stack_pointer_reg(dst, ctx) {

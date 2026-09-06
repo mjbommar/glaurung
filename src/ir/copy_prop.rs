@@ -171,13 +171,15 @@ fn audit_change_report(pass: &str, changed: bool, before: &Function, after: &Fun
 /// richer bodies needs an effect proof this local propagation pass does not
 /// attempt.
 fn is_exact_return_guard(then_body: &[Stmt], else_body: &Option<Vec<Stmt>>) -> bool {
-    else_body.is_none() && matches!(then_body, [Stmt::Return { .. }])
+    else_body.is_none()
+        && matches!(then_body, [statement] if matches!(statement.semantic(), Stmt::Return { .. }))
 }
 
 fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 *changed |= subst(src, &copies);
                 invalidate(&mut copies, dst);
@@ -292,7 +294,8 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
 fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mut bool) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 *changed |= subst(src, &copies);
                 invalidate(&mut copies, dst);

@@ -528,7 +528,8 @@ fn collect_flag_reads_in_stmt(
     out: &mut std::collections::BTreeSet<VReg>,
     versioned: bool,
 ) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target } => collect_flag_reads_in_expr(target, out, versioned),
         Stmt::Assign { src, .. } => collect_flag_reads_in_expr(src, out, versioned),
         Stmt::Store { addr, src, .. } => {
@@ -689,7 +690,8 @@ mod tests {
     }
 
     fn count_reads_in_stmt(s: &Stmt, target: &VReg) -> usize {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target: t } => count_reads_in_expr(t, target),
             Stmt::Assign { src, .. } => count_reads_in_expr(src, target),
             Stmt::Store { addr, src, .. } => {

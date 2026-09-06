@@ -245,6 +245,9 @@ pub(super) fn invalidate(copies: &mut Copies, written: &VReg) {
 fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
     for statement in body {
         match statement {
+            Stmt::Origin { stmt, .. } => {
+                collect_written_regs(std::slice::from_ref(stmt.as_ref()), written)
+            }
             Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
                 written.insert(dst.clone());
             }

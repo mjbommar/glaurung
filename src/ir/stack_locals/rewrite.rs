@@ -34,7 +34,8 @@ pub(super) fn rewrite_body(
     read_slots: &HashSet<SlotKey>,
 ) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => {
                 rewrite_expr(target, map, names, ctx, *sp_delta, address_defs);
                 *sp_delta = None;
@@ -629,7 +630,10 @@ pub(super) fn reconcile_late_address_taken_objects(
 
     fn walk(body: &mut [Stmt], objects: &HashMap<VReg, ObjectView>) {
         for statement in body {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { src, .. } => rewrite_value(src, objects),
                 Stmt::Store { addr, src, .. } => {
                     if let Expr::Reg(reg) = addr {

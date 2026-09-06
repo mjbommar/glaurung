@@ -704,6 +704,13 @@ impl Splitter {
     /// enclosing vector body to insert immediately after the call.
     fn walk_stmt(&mut self, statement: &mut Stmt, state: &mut FlowState) -> Vec<Stmt> {
         match statement {
+            Stmt::Origin { origins, stmt } => {
+                return self
+                    .walk_stmt(stmt, state)
+                    .into_iter()
+                    .map(|statement| statement.with_origins(origins.clone()))
+                    .collect();
+            }
             Stmt::Assign { dst, src } => {
                 self.rewrite_expr(src, state);
                 self.kill_definition(dst, state);

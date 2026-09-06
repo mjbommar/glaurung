@@ -312,7 +312,7 @@ fn write_stmt(s: &Stmt, out: &mut String, level: usize) {
 }
 
 fn write_for_clause(s: &Stmt, tm: Option<&TypeMap>, out: &mut String) {
-    match s {
+    match s.semantic() {
         Stmt::Assign { dst, src } => {
             write_reg_with_type(dst, tm, out);
             out.push_str(" = ");
@@ -329,6 +329,7 @@ fn write_for_clause(s: &Stmt, tm: Option<&TypeMap>, out: &mut String) {
 
 fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize) {
     match s {
+        Stmt::Origin { stmt, .. } => write_stmt_ctx(stmt, tm, out, level),
         Stmt::Assign { dst, src } => {
             if level > 1 {
                 if let Expr::Select {
@@ -636,7 +637,9 @@ impl fmt::Display for Function {
 }
 
 fn body_starts_with_frame_comment(body: &[Stmt]) -> bool {
-    matches!(body.first(), Some(Stmt::Comment(s)) if s.contains("frame"))
+    body.first().is_some_and(
+        |statement| matches!(statement.semantic(), Stmt::Comment(s) if s.contains("frame")),
+    )
 }
 
 /// Convenience — render a function to a stable string.
@@ -650,7 +653,8 @@ pub fn render(f: &Function) -> String {
 pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
     let mut total: i64 = 0;
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst,
                 src:

@@ -775,6 +775,7 @@ fn expr_reads_memory(expr: &Expr) -> bool {
 fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
     let writes_read_register = |dst: &VReg| count_reg_uses_in_expr(condition, dst) > 0;
     match stmt {
+        Stmt::Origin { stmt, .. } => stmt_may_change_condition_input(stmt, condition),
         Stmt::Assign { dst, .. } => writes_read_register(dst),
         Stmt::Store { addr, .. } => {
             let promoted_local_write = matches!(addr,
@@ -926,6 +927,7 @@ pub(super) fn one_armed_select<'a>(
 
 fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
     match s {
+        Stmt::Origin { stmt, .. } => count_reg_uses_in_stmt(stmt, target),
         Stmt::Assign { src, .. } => count_reg_uses_in_expr(src, target),
         Stmt::Store { addr, src, .. } => {
             count_reg_uses_in_expr(addr, target) + count_reg_uses_in_expr(src, target)

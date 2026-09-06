@@ -239,7 +239,8 @@ fn reads_of(e: &Expr) -> Vec<String> {
 /// Every name defined anywhere in `body`, including nested bodies.
 fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>) {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } => out.extend(checked_name(dst)),
             Stmt::Store { addr, .. } => out.extend(stored_slot(addr)),
             Stmt::Pop { target } => out.extend(checked_name(target)),
@@ -543,7 +544,8 @@ fn undefined_reads(e: &Expr, defined: &BTreeSet<String>, found: &mut BTreeSet<St
 /// recording reads that no definition reaches.
 fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<String>) {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             // The dispatch READS its target; an undefined read here is as real
             // as any other.
             Stmt::IndirectGoto { target } => undefined_reads(target, defined, found),

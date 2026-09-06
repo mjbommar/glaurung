@@ -123,7 +123,8 @@ fn visit_definitions<'a>(
     visitor: &mut impl FnMut(Option<&'a Expr>),
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } if dst == target => visitor(Some(src)),
             Stmt::Store {
                 addr: Expr::Reg(dst),
@@ -202,7 +203,8 @@ fn infer_body(
 ) -> bool {
     let mut changed = false;
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 if let Some(name) = pointer_source_type(src, layouts, pointer_width, pointer_types)
                 {
@@ -378,7 +380,8 @@ fn annotate_body(
     definitions: &mut HashMap<VReg, Expr>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 annotate_expr(src, layouts, pointer_width, pointer_types, definitions);
                 if expression_reads(src, dst) {

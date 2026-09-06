@@ -84,7 +84,10 @@ pub(super) fn collect_label_stack_deltas(
         address_defs: &HashMap<VReg, (String, i64)>,
     ) -> StackFlow {
         for statement in body {
-            match statement {
+            match statement.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } if is_stack_pointer_reg(dst, ctx) => {
                     flow = update_stack_assignment(flow, dst, src, ctx, address_defs);
                 }

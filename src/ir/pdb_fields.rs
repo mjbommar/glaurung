@@ -117,7 +117,8 @@ pub fn annotate_function_fields(function: &mut Function, field_map: &PdbFieldMap
 }
 
 fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
-    match stmt {
+    match stmt.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target } => annotate_expr(target, field_map),
         Stmt::Assign { src, .. } => annotate_expr(src, field_map),
         Stmt::Store { addr, src, .. } => {

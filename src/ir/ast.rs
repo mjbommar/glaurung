@@ -496,6 +496,13 @@ impl ScalarType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
+    /// An ordinary statement and the machine instructions that contributed to
+    /// it. Rewrites preserve this wrapper, union it when nodes are combined,
+    /// and clone it exactly when a proved tail is duplicated.
+    Origin {
+        origins: OriginSet,
+        stmt: Box<Stmt>,
+    },
     Assign {
         dst: VReg,
         src: Expr,
@@ -621,6 +628,49 @@ pub enum Stmt {
     },
 }
 
+impl Stmt {
+    /// Attach provenance, unioning rather than nesting if already attributed.
+    pub fn with_origins(self, origins: OriginSet) -> Self {
+        match self {
+            Self::Origin {
+                origins: existing,
+                stmt,
+            } => Self::Origin {
+                origins: existing.union(&origins),
+                stmt,
+            },
+            stmt => Self::Origin {
+                origins,
+                stmt: Box::new(stmt),
+            },
+        }
+    }
+
+    /// Machine instructions contributing to this statement, when attributed.
+    pub fn origins(&self) -> Option<&OriginSet> {
+        match self {
+            Self::Origin { origins, .. } => Some(origins),
+            _ => None,
+        }
+    }
+
+    /// The semantic node below any provenance wrapper.
+    pub fn semantic(&self) -> &Self {
+        match self {
+            Self::Origin { stmt, .. } => stmt.semantic(),
+            statement => statement,
+        }
+    }
+
+    /// Mutable semantic node access that keeps provenance around replacements.
+    pub fn semantic_mut(&mut self) -> &mut Self {
+        match self {
+            Self::Origin { stmt, .. } => stmt.semantic_mut(),
+            statement => statement,
+        }
+    }
+}
+
 /// Find switch cases whose entire body is a jump into a labelled suffix owned
 /// by another arm. C can express that CFG directly by placing the redirected
 /// `case` label at the existing label inside the owner arm. Keeping this as a
@@ -632,14 +682,17 @@ pub(crate) fn switch_suffix_case_labels(
     let direct_labels: std::collections::HashSet<u64> = cases
         .iter()
         .flat_map(|(_, body)| body.iter())
-        .filter_map(|stmt| match stmt {
+        .filter_map(|stmt| match stmt.semantic() {
             Stmt::Label(target) => Some(*target),
             _ => None,
         })
         .collect();
     let mut suffixes = std::collections::BTreeMap::<u64, Vec<i64>>::new();
     for (label, body) in cases {
-        let (Some(label), [Stmt::Goto { target }]) = (label, body.as_slice()) else {
+        let (Some(label), [statement]) = (label, body.as_slice()) else {
+            continue;
+        };
+        let Stmt::Goto { target } = statement.semantic() else {
             continue;
         };
         if direct_labels.contains(target) {
@@ -1186,6 +1239,10 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
 fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
     ids.statement_count = ids.statement_count.saturating_add(1);
     match s {
+        Stmt::Origin { stmt, .. } => {
+            ids.statement_count = ids.statement_count.saturating_sub(1);
+            collect_idents_stmt(stmt, ids);
+        }
         Stmt::Assign { dst, src } => {
             collect_reg(dst, ids);
             if matches!(src, Expr::Deref { size: 16, .. }) {

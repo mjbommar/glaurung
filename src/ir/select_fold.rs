@@ -21,7 +21,8 @@ fn fold_masks_in_body(body: &mut [Stmt]) {
 }
 
 fn fold_masks_in_stmt(statement: &mut Stmt) {
-    match statement {
+    match statement.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => fold_masks_in_expr(src),
         Stmt::Store { addr, src, .. } => {
             fold_masks_in_expr(addr);

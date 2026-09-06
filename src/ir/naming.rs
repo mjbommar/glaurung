@@ -455,7 +455,8 @@ fn live_in_arg_slots(body: &[Stmt], cc: CallConv) -> std::collections::HashSet<u
 /// order: the reads of a statement are reported before its write. Memory stores
 /// write memory, not a register, so their operands are all reads.
 fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             walk_expr_phys(src, &mut |n| cb(n, false));
             if let VReg::Phys(n) = dst {
@@ -574,7 +575,8 @@ fn collect_first_appearance_phys(body: &[Stmt]) -> Vec<String> {
 }
 
 fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target } => walk_expr_phys(target, cb),
         Stmt::Assign { dst, src } => {
             if let VReg::Phys(n) = dst {
@@ -792,7 +794,8 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
 
 fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => rewrite_expr(target, role),
             Stmt::Assign { dst, src } => {
                 rename_vreg(dst, role);

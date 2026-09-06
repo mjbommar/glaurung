@@ -242,7 +242,8 @@ fn fold_body(
     let mut nonnegative = inherited_nonnegative.clone();
     let mut current_guard = active_guard.cloned();
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(dst),
                 src,

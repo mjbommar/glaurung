@@ -73,6 +73,12 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
     ) {
         for statement in body {
             match statement {
+                Stmt::Origin { stmt, .. } => collect_body(
+                    std::slice::from_ref(stmt.as_ref()),
+                    dependencies,
+                    roots,
+                    has_unknown,
+                ),
                 Stmt::Assign { dst, src } if is_scratch_reg(dst) => {
                     add_regs(src, dependencies.entry(dst.clone()).or_default());
                     if src.contains_call() {

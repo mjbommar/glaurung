@@ -98,6 +98,8 @@ impl FromIterator<u64> for OriginSet {
 #[cfg(test)]
 mod tests {
     use super::OriginSet;
+    use crate::ir::ast::{render_c, render_decbench, Expr, Function, Stmt};
+    use crate::ir::types::VReg;
 
     #[test]
     fn construction_sorts_and_deduplicates_non_contiguous_origins() {
@@ -125,5 +127,68 @@ mod tests {
         duplicate.merge(&OriginSet::one(0x1010));
         assert_eq!(original.addresses(), &[0x1000, 0x1004]);
         assert_eq!(duplicate.addresses(), &[0x1000, 0x1004, 0x1010]);
+    }
+
+    #[test]
+    fn reattributing_a_statement_unions_without_nesting() {
+        let statement = Stmt::Nop
+            .with_origins(OriginSet::from_addresses([0x1010, 0x1000]))
+            .with_origins(OriginSet::from_addresses([0x1020, 0x1010]));
+
+        assert_eq!(
+            statement
+                .origins()
+                .expect("attributed statement")
+                .addresses(),
+            &[0x1000, 0x1010, 0x1020]
+        );
+        let Stmt::Origin { stmt, .. } = statement else {
+            panic!("statement must have one origin wrapper");
+        };
+        assert!(matches!(*stmt, Stmt::Nop));
+    }
+
+    #[test]
+    fn origin_wrappers_do_not_change_rendered_text() {
+        let init = Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Const(0),
+        };
+        let step = Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        };
+        let body = Stmt::For {
+            init: Box::new(init.clone()),
+            cond: Expr::Const(1),
+            step: Box::new(step.clone()),
+            body: vec![Stmt::Nop],
+        };
+        let plain = Function {
+            name: "count".to_string(),
+            entry_va: 0x1000,
+            body: vec![body.clone(), Stmt::Return { value: None }],
+        };
+        let attributed = Function {
+            name: plain.name.clone(),
+            entry_va: plain.entry_va,
+            body: vec![
+                Stmt::For {
+                    init: Box::new(init.with_origins(OriginSet::one(0x1000))),
+                    cond: Expr::Const(1),
+                    step: Box::new(step.with_origins(OriginSet::one(0x1008))),
+                    body: vec![Stmt::Nop.with_origins(OriginSet::one(0x1004))],
+                }
+                .with_origins(OriginSet::from_addresses([0x1000, 0x1004, 0x1008])),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x100c)),
+            ],
+        };
+
+        assert_eq!(render_c(&attributed), render_c(&plain));
+        assert_eq!(render_decbench(&attributed), render_decbench(&plain));
     }
 }

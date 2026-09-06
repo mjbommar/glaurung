@@ -354,7 +354,8 @@ fn resolve_body(
 ) {
     let mut definitions = inherited_definitions.clone();
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
                 resolve_expr(target, tables, &definitions);
                 promote_table_copy(target, &definitions);

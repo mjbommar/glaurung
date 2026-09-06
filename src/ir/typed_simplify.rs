@@ -68,7 +68,8 @@ fn destination_width(register: &VReg, types: &TypeMap) -> Option<u8> {
 
 fn fold_body(statements: &mut [Stmt], types: &TypeMap) {
     for statement in statements {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 if let Some(width) = destination_width(dst, types) {
                     fold_modular_expression(src, width);

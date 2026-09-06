@@ -278,6 +278,7 @@ fn float_store_pointee_ctype(src: &Expr, size: u8) -> Option<&'static str> {
 
 pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
     match s {
+        Stmt::Origin { stmt, .. } => write_stmt_dec(stmt, out, level),
         Stmt::Assign { dst, src } => {
             if dec_is_wide_local(dst) {
                 if let Expr::Deref {
@@ -648,7 +649,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             for (label, body) in cases {
                 match label {
                     Some(n) if seen.insert(*n) => {
-                        if matches!(body.as_slice(), [Stmt::Goto { target }] if suffix_labels.contains_key(target))
+                        if matches!(body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Goto { target } if suffix_labels.contains_key(target)))
                         {
                             continue;
                         }
@@ -672,7 +673,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
                     let _ = writeln!(out, "case {}:", label);
                 }
                 for s in body {
-                    if let Stmt::Label(target) = s {
+                    if let Stmt::Label(target) = s.semantic() {
                         if let Some(labels) = suffix_labels.get(target) {
                             for label in labels {
                                 indent(out, level + 1);
@@ -713,14 +714,16 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
 }
 
 fn case_body_has_terminal_transfer(body: &[Stmt]) -> bool {
-    matches!(
-        body.last(),
-        Some(Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::Break | Stmt::Continue)
-    )
+    body.last().is_some_and(|statement| {
+        matches!(
+            statement.semantic(),
+            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::Break | Stmt::Continue
+        )
+    })
 }
 
 fn write_for_clause_dec(s: &Stmt, out: &mut String, prefer_increment: bool) {
-    let (dst, src) = match s {
+    let (dst, src) = match s.semantic() {
         Stmt::Assign { dst, src } => (dst, src),
         Stmt::Store {
             addr: Expr::Reg(dst),

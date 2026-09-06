@@ -410,7 +410,8 @@ fn count_reads_in_body(body: &[Stmt], target: &VReg) -> usize {
 }
 
 fn count_reads_in_statement(statement: &Stmt, target: &VReg) -> usize {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => count_reads_in_expr(src, target),
         Stmt::Store { addr, src, .. } => {
             count_reads_in_expr(addr, target) + count_reads_in_expr(src, target)

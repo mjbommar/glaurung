@@ -428,7 +428,10 @@ impl Splitter {
                 let spill = self.spill_slot(s, state);
                 let scratch_definition = self.scratch_definition_slot(s, state);
 
-                match s {
+                match s.semantic_mut() {
+                    Stmt::Origin { .. } => {
+                        unreachable!("semantic statement cannot be an origin wrapper")
+                    }
                     Stmt::Assign { dst, src } => {
                         self.rename_expr(src, state);
                         if scratch_definition.is_some() {

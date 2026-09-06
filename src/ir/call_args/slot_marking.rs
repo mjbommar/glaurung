@@ -104,6 +104,7 @@ pub(super) fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mu
 
 pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
     match s {
+        Stmt::Origin { stmt, .. } => mark_arg_reads_in_stmt(stmt, arch, read_between),
         Stmt::IndirectGoto { target } => mark_arg_reads_in_expr(target, arch, read_between),
         Stmt::Assign { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
         Stmt::Store { addr, src, .. } => {
@@ -218,6 +219,7 @@ pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mu
 /// Fail-closed: anything not proven to leave counts as falling through.
 fn body_falls_through(body: &[Stmt]) -> bool {
     match body.last() {
+        Some(Stmt::Origin { stmt, .. }) => body_falls_through(std::slice::from_ref(stmt)),
         Some(
             Stmt::Return { .. }
             | Stmt::Throw { .. }
@@ -235,6 +237,7 @@ fn body_falls_through(body: &[Stmt]) -> bool {
 
 pub(super) fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [bool]) {
     match s {
+        Stmt::Origin { stmt, .. } => mark_arg_writes_in_stmt(stmt, arch, blocked_incoming),
         // A computed transfer writes no argument slot.
         Stmt::IndirectGoto { .. } => {}
         // Every ABI argument register is caller-clobbered. A top-level call is

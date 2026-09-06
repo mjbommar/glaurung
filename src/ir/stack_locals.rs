@@ -720,7 +720,7 @@ fn body_falls_through(body: &[Stmt]) -> bool {
     let Some(last) = body.last() else {
         return true;
     };
-    match last {
+    match last.semantic() {
         Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => false,
         Stmt::If {
             then_body,

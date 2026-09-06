@@ -222,7 +222,8 @@ pub(crate) fn prune_unread_promoted_locals(
     }
 
     fn observes(statement: &Stmt, target: &VReg) -> bool {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => src.contains_reg(target),
             Stmt::Store { addr, src, .. } => {
                 (!matches!(addr, Expr::Reg(register) if register == target)
@@ -430,7 +431,8 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
     }
 
     fn direct_reads(statement: &Stmt, target: &VReg) -> bool {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => reads(src, target),
             Stmt::Store { addr, src, .. } => {
                 (!matches!(addr, Expr::Reg(register) if register == target) && reads(addr, target))

@@ -211,6 +211,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
     fn statements(body: &[Stmt], tm: &mut TypeMap) {
         for statement in body {
             match statement {
+                Stmt::Origin { stmt, .. } => statements(std::slice::from_ref(stmt), tm),
                 Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => expression(src, tm),
                 Stmt::Store { addr, src, .. } => {
                     expression(addr, tm);

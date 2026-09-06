@@ -184,7 +184,8 @@ fn rewrite_catches(
 
 fn rewrite_body(body: &mut [Stmt], replacements: &HashMap<VReg, Expr>, changed: &mut usize) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } | Stmt::Throw { value: target } => {
                 rewrite_expr(target, replacements, changed)
             }

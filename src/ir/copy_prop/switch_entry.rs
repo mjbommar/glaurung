@@ -42,7 +42,8 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
     let mut copies = Copies::new();
     let mut changed = false;
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 let mut resolved = src.clone();
                 subst(&mut resolved, &copies);
@@ -105,7 +106,8 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
 fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
     let mut copies = incoming.clone();
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 subst(src, &copies);
                 invalidate(&mut copies, dst);

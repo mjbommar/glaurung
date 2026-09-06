@@ -852,7 +852,8 @@ fn is_saved_frame_slot(v: &VReg) -> bool {
 /// Recursive AST walks must use this view; pairing it with [`stmt_reads`]
 /// would count the same nested restore once for every enclosing control node.
 fn stmt_reads_direct(statement: &Stmt, register: &VReg) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expr_reads(src, register),
         Stmt::Store { addr, src, .. } => expr_reads(addr, register) || expr_reads(src, register),
         Stmt::Call { target, args, .. } => {
@@ -954,7 +955,8 @@ fn is_x86_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool
 }
 
 pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expr_reads(src, dst),
         Stmt::Store { addr, src, .. } => expr_reads(addr, dst) || expr_reads(src, dst),
         Stmt::Call { target, args, .. } => {

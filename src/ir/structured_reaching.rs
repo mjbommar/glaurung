@@ -85,7 +85,8 @@ fn analyze_statement(
 ) -> Outcome {
     let mut written = initially_written;
     let mut saw_read = false;
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             saw_read |= observed(src, read_value, written);
             written |= dst == written_value;
@@ -269,7 +270,10 @@ fn expression_reads(expression: &Expr, value: &VReg) -> bool {
 fn unstructured_has_both_events(body: &[Stmt], read: &VReg, written: &VReg) -> bool {
     fn scan(body: &[Stmt], read: &VReg, written: &VReg, events: &mut (bool, bool)) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } => {
                     events.0 |= dst == written;
                     events.1 |= expression_reads(src, read);

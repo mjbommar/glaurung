@@ -269,6 +269,7 @@ fn write_expr_c(e: &Expr, out: &mut String) {
 
 fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
     match s {
+        Stmt::Origin { stmt, .. } => write_stmt_c(stmt, out, level),
         Stmt::Assign { dst, src } => {
             if level > 1 {
                 if let Expr::Select {
@@ -491,7 +492,7 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             out.push_str(") {\n");
             let suffix_labels = switch_suffix_case_labels(cases);
             for (label, body) in cases {
-                if matches!((label, body.as_slice()), (Some(_), [Stmt::Goto { target }]) if suffix_labels.contains_key(target))
+                if matches!((label, body.as_slice()), (Some(_), [statement]) if matches!(statement.semantic(), Stmt::Goto { target } if suffix_labels.contains_key(target)))
                 {
                     continue;
                 }
@@ -502,7 +503,7 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
                     out.push_str("case _:\n");
                 }
                 for s in body {
-                    if let Stmt::Label(target) = s {
+                    if let Stmt::Label(target) = s.semantic() {
                         if let Some(labels) = suffix_labels.get(target) {
                             for label in labels {
                                 indent(out, level + 1);
@@ -559,7 +560,7 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
 }
 
 fn write_for_clause_c(s: &Stmt, out: &mut String, prefer_increment: bool) {
-    let (dst, src) = match s {
+    let (dst, src) = match s.semantic() {
         Stmt::Assign { dst, src } => (dst, src),
         Stmt::Store {
             addr: Expr::Reg(dst),

@@ -983,7 +983,8 @@ fn last_assignment<'a>(body: &'a [Stmt], target: &VReg) -> Option<(usize, &'a Ex
 /// unconditional tail assignments. Returns leave the function and nested-loop
 /// breaks leave only that nested loop, so neither is a bypass of this backedge.
 fn bypasses_loop_tail(stmt: &Stmt) -> bool {
-    match stmt {
+    match stmt.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break | Stmt::Continue => true,
         Stmt::If {
             then_body,
@@ -1202,7 +1203,8 @@ fn has_iterator_bypass(stmt: &Stmt) -> bool {
 
 fn recover_body(stmts: &mut [Stmt]) {
     for stmt in stmts {
-        match stmt {
+        match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
