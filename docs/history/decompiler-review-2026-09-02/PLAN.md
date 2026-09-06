@@ -31,8 +31,11 @@ definedness pass changes uses. Commit `09522773` retains that owner across
 return materialization, and `f05c9a5d` carries an opaque value-identity sidecar
 through AST lowering and migrates exact float-role projection away from
 display-name parsing. Commit `af65c260` migrates optimized DWARF register-local
-recovery as the second product consumer. Most semantic consumers, multi-output definition
-identity, and instruction origins remain open. A bounded, pre-WP3 WP7B relational slice is
+recovery as the second product consumer. Commit `7bea3314` defines canonical
+instruction-origin sets and `59840017` gives statements a transparent carrier
+without changing the 419-pair output map. Most semantic consumers, multi-output
+definition identity, LLIR attribution, expression origins, and structured line
+mappings remain open. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
@@ -746,8 +749,11 @@ provenance through lowering.
   projection as the first product consumer; `af65c260` migrates optimized
   DWARF register-local recovery. Multi-output definitions, AST
   pass-native identities, and the remaining consumers are still open.
-- [ ] Add a compositional instruction-origin set to expressions/statements;
-  unions must be deterministic and deduplicated.
+- [~] Add a compositional instruction-origin set to expressions/statements;
+  unions must be deterministic and deduplicated. `7bea3314` defines the
+  canonical set and `59840017` adds transparent statement ownership with
+  union-without-nesting semantics. Expression ownership and production
+  attribution remain open.
 
 ### Migration targets
 
@@ -773,10 +779,15 @@ provenance through lowering.
 
 - [~] Extend AST definitions in `src/ir/ast.rs` or the owning AST module with
   `OriginSet`. Commit `7bea3314` lands the canonical sorted, deduplicated set,
-  deterministic union, and exact clone behavior. AST nodes do not yet own the
-  set; the carrier migration remains open.
-- [ ] Thread origins through lowering, expression rewrites, structuring, tail
-  duplication, and rendering.
+  deterministic union, and exact clone behavior. Commit `59840017` gives
+  statements a transparent carrier, converts the 64 exhaustive consumers, and
+  proves attributed loop clauses render byte-identically. Expressions and
+  structured control nodes still need direct ownership where statement-level
+  attribution is insufficient.
+- [~] Thread origins through lowering, expression rewrites, structuring, tail
+  duplication, and rendering. Statement consumers and all three renderers can
+  preserve or ignore the carrier, but lowering does not yet attach LLIR VAs;
+  the wildcard consumer audit must finish before universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
   data; do not infer them by parsing rendered text.
 - [ ] Define non-contiguous origin behavior for folded, hoisted, and duplicated
@@ -789,9 +800,10 @@ provenance through lowering.
   type/presentation-only changes preserve value identity. The next three prove
   identity survival through lowering, exact opaque consumer lookup, and
   fail-closed ambiguity after phi-copy coalescing.
-- [x] Unit tests for deterministic origin union and duplication. Three focused
+- [x] Unit tests for deterministic origin union and duplication. Five focused
   tests at `7bea3314` cover non-contiguous canonical construction,
-  commutative/idempotent union, and independent duplicated sets.
+  commutative/idempotent union, and independent duplicated sets; `59840017`
+  adds union-without-nesting and byte-identical C/scored rendering.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
 - [ ] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
@@ -799,7 +811,8 @@ provenance through lowering.
 - [~] Run the 419-pair output identity sweep after each migrated pass. The
   invalidation, persistent-lifecycle, and first opaque-identity consumer slices
   are byte-identical across all 419 lanes; repeat this gate for every
-  subsequent identity-only migration.
+  subsequent identity-only migration. The statement carrier at `59840017`
+  retains the exact same JSON SHA-256 and zero infrastructure problems.
 
 ### Exit criteria
 
@@ -2646,9 +2659,12 @@ relevant ratchet's accepted-regression record.
    migrates the DWARF register-local resolver as the second consumer. Both are
    byte-identical across the 419-pair gate. Commit `7bea3314` introduces the
    deterministic compositional origin-set primitive and remains byte-identical
-   across the same map. Next attach it to statements/expressions and migrate
-   lowering, every enabled AST pass, rendering, and structured Python line
-   mappings before continuing consumer migrations.
+   across the same map. Commit `59840017` attaches it transparently to
+   statements, converts the 64 exhaustive consumers, and proves rendering and
+   the complete 419-pair map remain byte-identical. Next finish the wildcard
+   consumer audit, attach each `LlirInstr.va` during lowering, union origins in
+   folds, preserve them through structuring/duplication, and expose structured
+   Python line mappings before continuing consumer migrations.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
