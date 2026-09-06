@@ -657,11 +657,14 @@ and make pass repetition/invalidation explicit.
   identity remains open with the batch/request migration.
 - [ ] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
   function-order independence.
-- [~] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
+- [x] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
   firing counts, and bounded fixpoint termination. `5f7df194` validates and
   aggregates both production fixpoint reports, including impossible counts and
-  the closed termination vocabulary. An explicit ordered stage-sequence field
-  remains to cover pass order in this report.
+  the closed termination vocabulary. `a7797e28` emits the checked semantic
+  transaction as one ordered `pipeline_stages` sequence, rejects malformed or
+  duplicate traces, and proves the real production order is lift, callee facts,
+  LLIR preparation, AST preparation, finalization, then rendering without
+  changing pseudocode.
 - [ ] Test that a deliberately lower range budget differs only with an
   explicit completeness reason.
 
