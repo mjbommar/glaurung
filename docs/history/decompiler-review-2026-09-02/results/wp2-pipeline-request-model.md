@@ -184,6 +184,17 @@ adapters call it and retain only their public Python container/variable
 projection. The entry-point differential now covers DecBench, C, and untyped
 styles rather than one render mode.
 
+Commit `2ee8fa15` closes the outer orchestration boundary. One pipeline-owned
+`decompile_function` now owns the entire per-function transaction: lift,
+direct-callee facts, analyst-name overlay, typed and shadow LLIR preparation,
+shadow selection, stack hints, lowering and AST passes, finalization, and
+rendering. Address, exact-range, all, and many are adapters over that same
+transaction and no longer independently perform per-function discovery,
+naming, callee analysis, lowering, finalization, or rendering. This completes
+the shared production path, not WP2: the additional explicit budget classes,
+checked pass preconditions/order, bounded fixpoint reporting, and exact budget
+closure tests remain.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -263,3 +274,11 @@ styles rather than one render mode.
   exact commit `2f7a6149`: 4,203 library tests passed, zero failed, and five
   ignored; every integration and documentation target passed. Identity
   retrieval reports 44 passed and ten ignored.
+- Fresh release extension plus 55 focused pipeline, entry-point, declaration,
+  PDB, session, determinism, profile, render-style, and stripped-parameter
+  checks at `2ee8fa15`: all passed.
+- Full `cargo test --features python-ext` from a clean detached worktree at
+  exact commit `2ee8fa15`: exit zero; 4,203 library tests passed, zero failed,
+  and five ignored; every integration and documentation target passed.
+  Identity retrieval reports 44 passed and ten ignored; doc tests report two
+  passed and one ignored.

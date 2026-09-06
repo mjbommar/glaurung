@@ -55,9 +55,13 @@ analyst and DWARF local facts, exception recovery, machine-frame cleanup, and
 PDB field annotations -- behind one `finalize_prepared_ast` boundary used by
 all four adapters. `2f7a6149` then makes one `render_prepared_ast` select
 declaration authority, project types, record conflicts, render every style,
-and attach per-function incompleteness for all four adapters. The outer
-per-function orchestrator, remaining budget classes, pass manager, and fixpoint
-driver remain open, so WP2 is underway rather than complete. See
+and attach per-function incompleteness for all four adapters. `2ee8fa15` moves
+the remaining lift, direct-callee-fact, analyst-name, typed/shadow LLIR,
+stack-hint, lowering, finalization, and rendering sequence into one
+pipeline-owned `decompile_function`; all four public adapters now call that
+single per-function transaction. Remaining budget classes, the checked pass
+manager, fixpoint driver, and their closure tests remain open, so WP2 is
+substantially underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -571,7 +575,7 @@ and make pass repetition/invalidation explicit.
   completeness limits, provenance, and the pipeline fingerprint. `15d044eb`
   makes range/all/many construct the same request and result internally before
   projecting their legacy adapter-specific shapes.
-- [~] Move common orchestration out of `src/python_bindings/ir.rs` into one
+- [x] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
   `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
   lower-stage health tracing, and the AST pass invocation behind one
@@ -585,9 +589,10 @@ and make pass repetition/invalidation explicit.
   discovery in `ProgramDiscovery`; `1e1ac0a8` centralizes post-lowering
   semantic finalization in `finalize_prepared_ast`; `2f7a6149` centralizes
   declaration selection, type projection, all style rendering, provenance, and
-  incompleteness in `render_prepared_ast`. The adapter-owned lift/preparation
-  shell still needs to move before this item is complete.
-- [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
+  incompleteness in `render_prepared_ast`. `2ee8fa15` moves the final
+  adapter-owned lift/preparation shell behind `decompile_function`, which now
+  owns the complete per-function lift-to-render transaction.
+- [x] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
   Module-level and reusable-session `decompile_at` create the typed request;
   all/range/many now share its budget conversion. The first full-text
@@ -603,8 +608,10 @@ and make pass repetition/invalidation explicit.
   sequences while preserving their analyst, debug, exception, frame, and PDB
   semantics. `2f7a6149` removes the four remaining render-policy copies; a
   three-style differential proves DecBench, C, and untyped output agree across
-  address, exact-range, all, and many. Moving the remaining lift/preparation
-  shell behind one `decompile_function` remains open.
+  address, exact-range, all, and many. `2ee8fa15` removes the remaining four
+  lift/preparation copies: each adapter now constructs shared contexts and a
+  typed request, calls `decompile_function`, and projects only its legacy
+  Python return shape.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to
@@ -642,7 +649,7 @@ and make pass repetition/invalidation explicit.
 
 - [ ] Equal budget produces byte-identical pseudocode for the same function
   across all entry points.
-- [ ] No entry point independently performs discovery, naming, or callee
+- [x] No entry point independently performs discovery, naming, or callee
   analysis.
 - [ ] Invalid pass order fails in a focused test.
 - [ ] Every repeated pass is justified by recorded invalidation or a declared

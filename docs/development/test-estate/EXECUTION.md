@@ -68,6 +68,7 @@ Both have since landed, so they are links again.
 | [~] Pipeline-owned discovery pairs exact budgets with function facts | review WP2 | `d900cf1b` |
 | [~] One post-lowering AST-finalization boundary used by all four adapters | review WP2 | `1e1ac0a8` |
 | [~] One declaration/type/style renderer used by all four adapters | review WP2 | `2f7a6149` |
+| [x] One lift-to-render per-function transaction used by all four adapters | review WP2 | `2ee8fa15` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |
