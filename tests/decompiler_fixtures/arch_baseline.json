@@ -10416,8 +10416,8 @@
   "215_switch_on_wide_selector:armv7:O2": {
     "narrow_selector_control": "pass",
     "signed_wide_selector": "fail",
-    "wide_selector_dense": "fail",
-    "wide_selector_high_labels": "fail",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
     "wide_selector_mixed": "fail"
   },
   "215_switch_on_wide_selector:armv7_a32:O0": {
@@ -10430,8 +10430,8 @@
   "215_switch_on_wide_selector:armv7_a32:O2": {
     "narrow_selector_control": "pass",
     "signed_wide_selector": "fail",
-    "wide_selector_dense": "fail",
-    "wide_selector_high_labels": "fail",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
     "wide_selector_mixed": "fail"
   },
   "215_switch_on_wide_selector:i386:O0": {
