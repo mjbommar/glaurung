@@ -70,6 +70,7 @@ pub mod expr;
 pub mod func;
 pub mod literal;
 pub mod stmt;
+pub mod value;
 
 #[cfg(test)]
 mod census_tests;

@@ -143,7 +143,7 @@ fn statement(
                     let Some(ret) = low.ret.as_int() else {
                         return unsupported("value returned from a void function", node, ctx);
                     };
-                    let converted = super::expr::convert(low, &value, ret);
+                    let converted = super::value::convert(low, &value, ret);
                     low.b.emit(Op::Assign {
                         dst: VReg::phys(RESULT_REG),
                         src: Value::Reg(converted.reg),
@@ -469,7 +469,7 @@ fn declaration(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<(), LowerError
         };
         let local = low.declare_typed(&name, slot_ty, pointee);
         if let Some(value) = value {
-            let stored = super::expr::convert(low, &value, slot_ty);
+            let stored = super::value::convert(low, &value, slot_ty);
             low.b
                 .store_abs(local.addr, slot_ty.width.bytes().max(1) as u8, &stored.reg);
         }
