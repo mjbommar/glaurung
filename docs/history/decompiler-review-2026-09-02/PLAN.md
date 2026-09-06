@@ -657,8 +657,12 @@ and make pass repetition/invalidation explicit.
 
 ### Tests
 
-- [ ] Extend `python/tests/test_decompiler_session.py` for shared-session facts
-  and explicit budgets.
+- [x] Extend `python/tests/test_decompiler_session.py` for shared-session facts
+  and explicit budgets. `357579c4` exposes exact program-fact ownership and
+  proves two distinct discovery budgets retain distinct discovery/call-graph
+  artifacts while reusing one compatible program environment and one immutable
+  symbol/type fact set. Cache clearing removes budget-dependent facts and
+  intentionally retains image-derived facts.
 - [x] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
   four entry points at equal budgets.
   All four paths now emit byte-identical `tail_dispatch`, including its
