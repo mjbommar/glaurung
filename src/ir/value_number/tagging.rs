@@ -169,10 +169,26 @@ fn tag_use_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx) {
 /// `r11`; using only the SSA version here left `fp = sp` unnumbered while all
 /// later frame reads became `r11#1`, manufacturing a value with no definition.
 fn tag_def_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx) {
-    if let Some(value) = value {
-        *v = value.base.clone();
-        tag_phys(v, value.version, ctx);
+    let version = value.map_or(0, |value| value.version);
+    if let (
+        VReg::Phys(original),
+        Some(SsaValue {
+            base: VReg::Phys(canonical),
+            ..
+        }),
+    ) = (&*v, value)
+    {
+        // Keep the established architecture-blind spelling path unless the
+        // target-aware SSA side car knows an alias that path cannot express.
+        // This is currently the ARM32 `fp`/`r11` family. Replacing every base
+        // here is broader than alias repair: synthetic and unreachable defs
+        // may deliberately have no exact side-car identity and must retain the
+        // historical version-zero treatment.
+        if canonical_phys_name(original) != canonical {
+            *v = VReg::Phys(canonical.clone());
+        }
     }
+    tag_phys(v, version, ctx);
 }
 
 /// Rewrite a `Value`'s register (if any) to the identity at `use_values[*ui]`,
