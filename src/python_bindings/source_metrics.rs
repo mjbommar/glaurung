@@ -800,7 +800,138 @@ pub fn reaches_py(
 }
 
 
-/// Path feasibility verdicts for one function.
+/// The bounds every solver-backed query runs under.
+///
+/// Exposed as keyword arguments rather than a class because there are four
+/// knobs anyone actually turns and nine in the struct. The rest keep their
+/// defaults, which are sized so a corpus sweep is minutes rather than hours.
+///
+/// `max_block_visits` is the one to raise first: it is the loop unroll depth,
+/// and it is why 510 of 1,131 corpus paths are cut rather than decided.
+#[cfg(feature = "symbolic")]
+fn bounds_from(
+    max_paths: Option<u64>,
+    max_block_visits: Option<u32>,
+    max_steps: Option<u64>,
+    solver_timeout_ms: Option<u64>,
+) -> crate::csource::equiv::Bounds {
+    let mut bounds = crate::csource::equiv::Bounds::default();
+    if let Some(v) = max_paths {
+        bounds.max_paths = v;
+    }
+    if let Some(v) = max_block_visits {
+        bounds.max_block_visits = v;
+    }
+    if let Some(v) = max_steps {
+        bounds.max_steps = v;
+    }
+    if let Some(v) = solver_timeout_ms {
+        bounds.solver_timeout_ms = v;
+    }
+    bounds
+}
+
+/// One path verdict as a dict.
+#[cfg(feature = "symbolic")]
+fn path_entry<'py>(
+    py: Python<'py>,
+    path: &crate::csource::feasibility::PathVerdict,
+) -> PyResult<Bound<'py, PyDict>> {
+    use crate::csource::feasibility::Verdict;
+
+    let entry = PyDict::new(py);
+    entry.set_item("decisions", path.decisions)?;
+    match &path.verdict {
+        Verdict::Feasible(w) => {
+            entry.set_item("verdict", "feasible")?;
+            entry.set_item("args", w.args.clone())?;
+            entry.set_item("why", py.None())?;
+        }
+        Verdict::Infeasible => {
+            entry.set_item("verdict", "infeasible")?;
+            entry.set_item("args", py.None())?;
+            entry.set_item("why", py.None())?;
+        }
+        Verdict::Unknown(why) => {
+            entry.set_item("verdict", "unknown")?;
+            entry.set_item("args", py.None())?;
+            entry.set_item("why", describe(why))?;
+        }
+    }
+    Ok(entry)
+}
+
+/// Everything one `Findings` says, as a dict.
+#[cfg(feature = "symbolic")]
+fn findings_entry<'py>(
+    py: Python<'py>,
+    found: &crate::csource::feasibility::Findings,
+) -> PyResult<Bound<'py, PyDict>> {
+    let report = &found.report;
+    let out = PyDict::new(py);
+    out.set_item("function", report.name.clone())?;
+
+    let paths = PyList::empty(py);
+    for path in &report.paths {
+        paths.append(path_entry(py, path)?)?;
+    }
+    out.set_item("paths", paths)?;
+    out.set_item("feasible", report.feasible())?;
+    out.set_item("infeasible", report.infeasible())?;
+    out.set_item("unknown", report.unknown())?;
+    out.set_item("unreachable_blocks", report.unreachable_blocks.clone())?;
+
+    // A cut path carries no verdict, and `total` is what says whether the
+    // enumeration covered the function. An `unreachable_blocks` claim is only
+    // made when it did; a consumer drawing any other conclusion from a partial
+    // enumeration needs to know it was partial.
+    let cuts = PyList::empty(py);
+    for cut in &report.cuts {
+        cuts.append(format!("{cut:?}"))?;
+    }
+    out.set_item("cuts", cuts)?;
+    out.set_item("total", report.cuts.is_empty())?;
+    out.set_item(
+        "abstained",
+        match &report.abstained {
+            Some(why) => describe(why).into_pyobject(py)?.into_any(),
+            None => py.None().into_bound(py),
+        },
+    )?;
+
+    let redundant = PyList::empty(py);
+    for r in &found.redundant {
+        let item = PyDict::new(py);
+        item.set_item("path", r.path)?;
+        item.set_item("decision", r.decision)?;
+        item.set_item("implied_by", r.implied_by)?;
+        redundant.append(item)?;
+    }
+    out.set_item("redundant_guards", redundant)?;
+
+    let violations = PyList::empty(py);
+    for v in &found.violations {
+        use crate::csource::feasibility::Property;
+        let item = PyDict::new(py);
+        item.set_item("path", v.path)?;
+        match v.property {
+            Property::DivisionByZero => {
+                item.set_item("property", "division_by_zero")?;
+                item.set_item("width", py.None())?;
+            }
+            Property::ShiftPastWidth { width } => {
+                item.set_item("property", "shift_past_width")?;
+                item.set_item("width", width)?;
+            }
+        }
+        item.set_item("args", v.witness.args.clone())?;
+        violations.append(item)?;
+    }
+    out.set_item("undefined_behaviour", violations)?;
+    Ok(out)
+}
+
+/// Everything the solver can say about one function.
 ///
 /// Needs an extension built with the `symbolic` feature, which is deliberately
 /// opt-in: `python-ext` bundles the concrete emulator but not the symbolic
@@ -814,78 +945,130 @@ pub fn reaches_py(
 /// another would make the stub describe exactly one build and be stale against
 /// the other. One signature, two bodies.
 ///
-/// Each entry is one enumerated path: `decisions` is how many branch decisions
-/// guard it, `verdict` is `"feasible"`, `"infeasible"` or `"unknown"`, `args`
-/// is the input that takes it (feasible only), and `why` names the reason for
-/// an abstention. A function the lowering refuses yields a single entry whose
-/// `why` carries the construct.
+/// The function is walked **once** for all four questions; asking them
+/// separately would enumerate its paths three more times.
 #[cfg(feature = "symbolic")]
 #[pyfunction]
 #[pyo3(name = "path_feasibility")]
+#[pyo3(signature = (text, name, *, max_paths=None, max_block_visits=None, max_steps=None, solver_timeout_ms=None))]
 pub fn path_feasibility_py<'py>(
     py: Python<'py>,
     text: &str,
     name: &str,
-) -> PyResult<Bound<'py, PyList>> {
-    use crate::csource::equiv::Bounds;
-    use crate::csource::feasibility::{feasibility_of, Unknown, Verdict};
+    max_paths: Option<u64>,
+    max_block_visits: Option<u32>,
+    max_steps: Option<u64>,
+    solver_timeout_ms: Option<u64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    use crate::csource::feasibility::findings_of;
 
-    let report = py.detach(|| feasibility_of(text, name, &Bounds::default()));
-    let out = PyList::empty(py);
-    if let Some(why) = &report.abstained {
-        let entry = PyDict::new(py);
-        entry.set_item("decisions", py.None())?;
-        entry.set_item("verdict", "unknown")?;
-        entry.set_item("args", py.None())?;
-        entry.set_item("why", describe(why))?;
-        out.append(entry)?;
-        return Ok(out);
-    }
-    for path in &report.paths {
-        let entry = PyDict::new(py);
-        entry.set_item("decisions", path.decisions)?;
-        match &path.verdict {
-            Verdict::Feasible(w) => {
-                entry.set_item("verdict", "feasible")?;
-                entry.set_item("args", w.args.clone())?;
-                entry.set_item("why", py.None())?;
-            }
-            Verdict::Infeasible => {
-                entry.set_item("verdict", "infeasible")?;
-                entry.set_item("args", py.None())?;
-                entry.set_item("why", py.None())?;
-            }
-            Verdict::Unknown(why) => {
-                entry.set_item("verdict", "unknown")?;
-                entry.set_item("args", py.None())?;
-                entry.set_item("why", describe(why))?;
-            }
-        }
-        out.append(entry)?;
-    }
-    Ok(out)
+    let bounds = bounds_from(max_paths, max_block_visits, max_steps, solver_timeout_ms);
+    let found = py.detach(|| findings_of(text, name, &bounds));
+    findings_entry(py, &found)
 }
 
 /// The same entry point on a build without the symbolic engine.
 ///
-/// Raises rather than returning an empty list: "no paths" and "this build
-/// cannot answer" are different facts, and a caller that cannot tell them apart
-/// would record "nothing infeasible" for a function it never examined.
+/// Raises rather than returning an empty result: "nothing to report" and "this
+/// build cannot answer" are different facts, and a caller that cannot tell them
+/// apart would record "nothing infeasible" for a function it never examined.
 #[cfg(not(feature = "symbolic"))]
 #[pyfunction]
 #[pyo3(name = "path_feasibility")]
+#[pyo3(signature = (text, name, *, max_paths=None, max_block_visits=None, max_steps=None, solver_timeout_ms=None))]
 pub fn path_feasibility_py<'py>(
     py: Python<'py>,
     text: &str,
     name: &str,
-) -> PyResult<Bound<'py, PyList>> {
-    let _ = (text, name);
+    max_paths: Option<u64>,
+    max_block_visits: Option<u32>,
+    max_steps: Option<u64>,
+    solver_timeout_ms: Option<u64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let _ = (text, name, max_paths, max_block_visits, max_steps, solver_timeout_ms);
     let _ = py;
-    Err(pyo3::exceptions::PyRuntimeError::new_err(
-        "glaurung was built without the `symbolic` feature, so path \
-         feasibility is unavailable; rebuild with `maturin develop -F \
+    Err(unavailable())
+}
+
+/// Solver findings for every function in a translation unit that has any.
+///
+/// The high-level half: `path_feasibility` answers about one function and
+/// reports everything including the ordinary case, which is what a caller
+/// building its own analysis wants. This answers about a whole file and returns
+/// **only functions with something to say** --- an infeasible path, a block no
+/// input reaches, a guard an earlier one forces, or an input that makes it
+/// execute undefined behaviour. A function whose every path is feasible and
+/// whose guards are all load bearing is the ordinary case, and listing it would
+/// bury the ones that are not.
+///
+/// Functions the lowering refuses are skipped rather than listed: "I could not
+/// read this" is not a finding about the program. Ask `path_feasibility` by
+/// name to see the refusal and the construct it names.
+#[cfg(feature = "symbolic")]
+#[pyfunction]
+#[pyo3(name = "source_findings")]
+#[pyo3(signature = (text, *, max_paths=None, max_block_visits=None, max_steps=None, solver_timeout_ms=None))]
+pub fn source_findings_py<'py>(
+    py: Python<'py>,
+    text: &str,
+    max_paths: Option<u64>,
+    max_block_visits: Option<u32>,
+    max_steps: Option<u64>,
+    solver_timeout_ms: Option<u64>,
+) -> PyResult<Bound<'py, PyList>> {
+    use crate::csource::feasibility::findings_of;
+    use crate::csource::parse::parse;
+
+    let bounds = bounds_from(max_paths, max_block_visits, max_steps, solver_timeout_ms);
+    let found = py.detach(|| {
+        let tree = parse(text).into_parts().0;
+        let mut out = Vec::new();
+        for def in tree.functions(text) {
+            if def.name.is_empty() {
+                continue;
+            }
+            let one = findings_of(text, &def.name, &bounds);
+            if one.report.abstained.is_some() || one.is_empty() {
+                continue;
+            }
+            out.push(one);
+        }
+        out
+    });
+
+    let list = PyList::empty(py);
+    for one in &found {
+        list.append(findings_entry(py, one)?)?;
+    }
+    Ok(list)
+}
+
+/// The same entry point on a build without the symbolic engine.
+#[cfg(not(feature = "symbolic"))]
+#[pyfunction]
+#[pyo3(name = "source_findings")]
+#[pyo3(signature = (text, *, max_paths=None, max_block_visits=None, max_steps=None, solver_timeout_ms=None))]
+pub fn source_findings_py<'py>(
+    py: Python<'py>,
+    text: &str,
+    max_paths: Option<u64>,
+    max_block_visits: Option<u32>,
+    max_steps: Option<u64>,
+    solver_timeout_ms: Option<u64>,
+) -> PyResult<Bound<'py, PyList>> {
+    let _ = (text, max_paths, max_block_visits, max_steps, solver_timeout_ms);
+    let _ = py;
+    Err(unavailable())
+}
+
+/// The one error both unsupported-build arms raise.
+#[cfg(not(feature = "symbolic"))]
+fn unavailable() -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(
+        "glaurung was built without the `symbolic` feature, so solver-backed \
+         source analysis is unavailable; rebuild with `maturin develop -F \
          pyo3/extension-module,python-ext,symbolic`",
-    ))
+    )
 }
 
 /// One abstention rendered for a Python consumer.
@@ -917,6 +1100,7 @@ pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>
     sub.add_function(wrap_pyfunction!(call_summaries_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(reaches_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(path_feasibility_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(source_findings_py, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }

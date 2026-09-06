@@ -397,9 +397,13 @@ def _write_feasibility(
     import json
 
     try:
-        paths = glaurung.source.path_feasibility(code, name)
+        # A dict, not a list: `path_feasibility` reports the whole function --
+        # counts, dead blocks, redundant guards and reachable UB alongside the
+        # per-path verdicts. Only the verdicts are written here.
+        report = glaurung.source.path_feasibility(code, name)
     except RuntimeError:
         return (0, 0)
+    paths = report["paths"]
 
     feasible = 0
     infeasible = 0

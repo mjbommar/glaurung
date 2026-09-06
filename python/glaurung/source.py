@@ -681,8 +681,16 @@ def call_summaries(code: str) -> list[dict[str, Any]]:
     return [dict(entry) for entry in _native.source.call_summaries(code)]
 
 
-def path_feasibility(code: str, function: str) -> list[dict[str, Any]]:
-    """Which paths through `function` any input can actually take.
+def path_feasibility(
+    code: str,
+    function: str,
+    *,
+    max_paths: int | None = None,
+    max_block_visits: int | None = None,
+    max_steps: int | None = None,
+    solver_timeout_ms: int | None = None,
+) -> dict[str, Any]:
+    """Everything the solver can say about one function.
 
     A reachability answer that has never been checked for satisfiability
     reports paths no input can take. On decompiler output that is not a rare
@@ -698,18 +706,86 @@ def path_feasibility(code: str, function: str) -> list[dict[str, Any]]:
     Args:
         code: The source text.
         function: The function to decide, by name.
+        max_paths: Paths to enumerate before enumeration is cut.
+        max_block_visits: Loop unroll depth, as the number of times one block
+            may be entered on one path. **The knob to raise first**: it is why
+            a path through a long loop is cut rather than decided.
+        max_steps: Instructions one path may retire before it is cut.
+        solver_timeout_ms: The solver's per-check wall.
 
     Returns:
-        One entry per enumerated path, each with ``decisions`` (how many branch
-        decisions guard it), ``verdict`` (``"feasible"``, ``"infeasible"`` or
-        ``"unknown"``), ``args`` (an input that takes it, feasible only) and
-        ``why`` (the reason for an abstention). A function the lowering refuses
-        yields a single entry whose ``why`` names the construct.
+        A dict with ``function``; ``paths`` (one entry per enumerated path,
+        each with ``decisions``, ``verdict``, ``args`` and ``why``); the counts
+        ``feasible``, ``infeasible`` and ``unknown``; ``unreachable_blocks``
+        (addresses no input reaches); ``cuts`` and ``total`` (whether the
+        enumeration covered the function); ``abstained`` (set when nothing
+        could be decided, naming the reason); ``redundant_guards``; and
+        ``undefined_behaviour``.
+
+        ``unreachable_blocks`` is only ever non-empty when ``total`` is true:
+        with a path cut by a bound, "every path I looked at is infeasible" is
+        not "no input gets here".
 
     Raises:
         RuntimeError: If the extension was built without ``symbolic``.
     """
-    return [dict(entry) for entry in _native.source.path_feasibility(code, function)]
+    return dict(
+        _native.source.path_feasibility(
+            code,
+            function,
+            max_paths=max_paths,
+            max_block_visits=max_block_visits,
+            max_steps=max_steps,
+            solver_timeout_ms=solver_timeout_ms,
+        )
+    )
+
+
+def source_findings(
+    code: str,
+    *,
+    max_paths: int | None = None,
+    max_block_visits: int | None = None,
+    max_steps: int | None = None,
+    solver_timeout_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """Solver findings for every function in a translation unit that has any.
+
+    The high-level half of the pair. :func:`path_feasibility` answers about one
+    function and reports everything including the ordinary case, which is what
+    a caller building its own analysis wants. This answers about a whole file
+    and returns **only functions with something to say** -- an infeasible path,
+    a block no input reaches, a guard an earlier one forces, or an input that
+    makes it execute undefined behaviour.
+
+    Functions the lowering refuses are skipped rather than listed: "I could not
+    read this" is not a finding about the program. Ask :func:`path_feasibility`
+    by name to see the refusal and the construct it names.
+
+    Args:
+        code: The source text.
+        max_paths: As :func:`path_feasibility`.
+        max_block_visits: As :func:`path_feasibility`.
+        max_steps: As :func:`path_feasibility`.
+        solver_timeout_ms: As :func:`path_feasibility`.
+
+    Returns:
+        One entry per function with a finding, shaped as
+        :func:`path_feasibility`'s return value.
+
+    Raises:
+        RuntimeError: If the extension was built without ``symbolic``.
+    """
+    return [
+        dict(entry)
+        for entry in _native.source.source_findings(
+            code,
+            max_paths=max_paths,
+            max_block_visits=max_block_visits,
+            max_steps=max_steps,
+            solver_timeout_ms=solver_timeout_ms,
+        )
+    ]
 
 
 def reaches(code: str, source: str, parameter: int, sink: str) -> str:
@@ -1024,6 +1100,7 @@ from glaurung._source_files import (
 __all__ += [
     "Function",
     "path_feasibility",
+    "source_findings",
     "SourceParseError",
     "SourceParseWarning",
     "fast_cfgs_from_source",

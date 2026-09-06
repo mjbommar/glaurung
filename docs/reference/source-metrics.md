@@ -755,15 +755,54 @@ Everything above reads the program's *structure*. This asks whether a path
 through it can be taken by any input at all, by putting the branch conditions
 to an SMT solver.
 
+There are two entry points, and the split is the same one `analyze` and
+`data_flow` already make: one answers about a **file** and reports only what is
+worth reading, the other answers about a **function** and reports everything.
+
 ```python
-for path in glaurung.source.path_feasibility(code, "decide"):
+# High level: every function in the unit that has something to say.
+for found in glaurung.source.source_findings(code):
+    print(found["function"], found["infeasible"], found["unreachable_blocks"],
+          found["redundant_guards"], found["undefined_behaviour"])
+
+# Low level: one function, everything about it, bounds under your control.
+report = glaurung.source.path_feasibility(code, "decide", max_block_visits=32)
+for path in report["paths"]:
     print(path["decisions"], path["verdict"], path["args"], path["why"])
 ```
 
-Each entry is one enumerated path: `decisions` is how many branch decisions
-guard it, `verdict` is `"feasible"`, `"infeasible"` or `"unknown"`, `args` is a
-concrete input that takes it (feasible only), and `why` names the reason for an
-abstention.
+`source_findings` omits a function whose every path is feasible, whose guards
+are all load bearing and which cannot be made to misbehave — the ordinary case,
+which would otherwise bury the ones that are not. It also skips functions the
+lowering refuses: "I could not read this" is not a finding about the program.
+Ask `path_feasibility` by name to see the refusal.
+
+Both return the same shape:
+
+| key | |
+|---|---|
+| `function` | the name |
+| `paths` | one entry per enumerated path: `decisions`, `verdict`, `args`, `why` |
+| `feasible` / `infeasible` / `unknown` | counts over those paths |
+| `unreachable_blocks` | addresses no input reaches |
+| `cuts` / `total` | why paths were abandoned, and whether the enumeration covered the function |
+| `abstained` | set when nothing could be decided, naming the reason |
+| `redundant_guards` | decisions earlier decisions already force |
+| `undefined_behaviour` | inputs that make it misbehave, with the property |
+
+The function is walked **once** for all four questions; asking them separately
+would enumerate its paths three more times.
+
+### Bounds
+
+Four knobs, as keyword arguments on both calls: `max_paths`,
+`max_block_visits`, `max_steps` and `solver_timeout_ms`. The rest of the
+`Bounds` struct keeps defaults sized so a corpus sweep is minutes rather than
+hours.
+
+**`max_block_visits` is the one to raise first.** It is the loop unroll depth,
+and it is why 510 of 1,131 corpus paths are cut rather than decided. Raising it
+trades that for query size.
 
 **This needs an extension built with the `symbolic` feature.** The default
 wheel bundles the concrete emulator but not the symbolic engine or a solver, so
@@ -842,7 +881,8 @@ two readings of *our* semantics.
 
 ### Three things built on it
 
-Rust-side today (`src/csource/feasibility.rs`); not yet exposed to Python.
+All three arrive in the same result, under `unreachable_blocks`,
+`redundant_guards` and `undefined_behaviour`.
 
 **Unreachable code.** A block that only infeasible paths reach is code no input
 executes — 7 functions and 8 blocks in the corpus. Nothing is claimed unless

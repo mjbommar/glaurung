@@ -344,6 +344,92 @@ fn takes_the_same_path(
     run.complete.len() == 1 && run.cuts.is_empty() && decisions > 0
 }
 
+/// Everything the solver can say about one function.
+///
+/// # Why this exists rather than three calls
+///
+/// [`feasibility_of`], [`redundant_guards`] and [`property_violations`] each
+/// enumerate the function's paths, and enumeration is the expensive half ---
+/// the solver queries are cheap beside it. Asking all three separately walks
+/// the same function three times and builds three copies of the same
+/// expression DAG. This walks it once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Findings {
+    /// Per-path verdicts, the cuts, and the blocks no input reaches.
+    pub report: Report,
+    /// Decisions earlier decisions on the same path already force.
+    pub redundant: Vec<Redundancy>,
+    /// Inputs that make the function execute undefined behaviour.
+    pub violations: Vec<PropertyFinding>,
+}
+
+impl Findings {
+    /// Whether there is anything here worth showing a person.
+    ///
+    /// A function whose every path is feasible, whose guards are all load
+    /// bearing and which cannot be made to misbehave is the ordinary case, and
+    /// listing it would bury the four that are not.
+    pub fn is_empty(&self) -> bool {
+        self.report.infeasible() == 0
+            && self.report.unreachable_blocks.is_empty()
+            && self.redundant.is_empty()
+            && self.violations.is_empty()
+    }
+}
+
+/// Ask everything of `name` in `text`, walking it once.
+pub fn findings_of(text: &str, name: &str, bounds: &Bounds) -> Findings {
+    match lower_named_function(text, name) {
+        Ok(f) => findings(&f, bounds),
+        Err(e) => Findings {
+            report: abstain(name, Unknown::NotLowered(e.to_string())),
+            redundant: Vec::new(),
+            violations: Vec::new(),
+        },
+    }
+}
+
+/// [`findings_of`] on a function already lowered.
+pub fn findings(lowered: &LoweredFunction, bounds: &Bounds) -> Findings {
+    let Some(Explored {
+        mut sym,
+        exploration,
+        slots,
+        io,
+    }) = explored(lowered, bounds)
+    else {
+        return Findings {
+            report: abstain(&lowered.name, Unknown::NoInputSpec),
+            redundant: Vec::new(),
+            violations: Vec::new(),
+        };
+    };
+
+    let mut paths = Vec::with_capacity(exploration.complete.len());
+    for path in &exploration.complete {
+        paths.push(PathVerdict {
+            decisions: path.guard.len(),
+            verdict: decide(lowered, &sym, &path.guard, &slots, &io, bounds),
+        });
+    }
+    let unreachable = unreachable_blocks(&exploration, &paths);
+    let redundant = redundancies(&sym, &exploration);
+    // Last, because it is the only one that adds terms to the pool.
+    let violations = violations(&mut sym, &exploration, &slots);
+
+    Findings {
+        report: Report {
+            name: lowered.name.clone(),
+            paths,
+            cuts: exploration.cuts,
+            abstained: None,
+            unreachable_blocks: unreachable,
+        },
+        redundant,
+        violations,
+    }
+}
+
 /// A decision on a path that the decisions before it already force.
 ///
 /// The structurer emits `if (x > 0) { ... if (x > 0) { ... } }` often enough
@@ -381,6 +467,14 @@ pub fn redundant_guards(lowered: &LoweredFunction, bounds: &Bounds) -> Vec<Redun
     else {
         return Vec::new();
     };
+    redundancies(&sym, &exploration)
+}
+
+/// [`redundant_guards`] over an exploration already done.
+fn redundancies(
+    sym: &Symbolic,
+    exploration: &crate::csource::equiv::explore::Exploration,
+) -> Vec<Redundancy> {
     let mut found = Vec::new();
     for (index, path) in exploration.complete.iter().enumerate() {
         if path.guard.len() < 2 {
@@ -471,27 +565,39 @@ pub fn property_violations(lowered: &LoweredFunction, bounds: &Bounds) -> Vec<Pr
     else {
         return Vec::new();
     };
+    violations(&mut sym, &exploration, &slots)
+}
 
+/// [`property_violations`] over an exploration already done.
+///
+/// Takes `&mut Symbolic` because it is the only question here that *adds* to
+/// the expression pool: the obligation `divisor == 0` is a term that did not
+/// exist until it was asked.
+fn violations(
+    sym: &mut Symbolic,
+    exploration: &crate::csource::equiv::explore::Exploration,
+    slots: &[(u32, InputSlot)],
+) -> Vec<PropertyFinding> {
     let mut found = Vec::new();
     for (index, path) in exploration.complete.iter().enumerate() {
         let mut roots = vec![path.result];
         roots.extend(path.guard.iter().map(|(e, _)| *e));
-        for (property, operand) in obligations(&sym, &roots) {
+        for (property, operand) in obligations(sym, &roots) {
             let condition = match property {
                 Property::DivisionByZero => {
                     let width = sym.pool.width_of(operand);
-                    let zero = Domain::constant(&mut sym, width, 0);
-                    Domain::cmp(&mut sym, CmpOp::Eq, &operand, &zero, width)
+                    let zero = Domain::constant(sym, width, 0);
+                    Domain::cmp(sym, CmpOp::Eq, &operand, &zero, width)
                 }
                 Property::ShiftPastWidth { width } => {
                     let w = sym.pool.width_of(operand);
-                    let zero = Domain::constant(&mut sym, w, 0);
-                    let limit = Domain::constant(&mut sym, w, u128::from(width));
+                    let zero = Domain::constant(sym, w, 0);
+                    let limit = Domain::constant(sym, w, u128::from(width));
                     // Undefined below zero and at or above the width; `Sle` the
                     // other way round is the `>=` this `CmpOp` has no variant for.
-                    let negative = Domain::cmp(&mut sym, CmpOp::Slt, &operand, &zero, w);
-                    let too_wide = Domain::cmp(&mut sym, CmpOp::Sle, &limit, &operand, w);
-                    Domain::binop(&mut sym, BinOp::Or, &negative, &too_wide, Width::W1)
+                    let negative = Domain::cmp(sym, CmpOp::Slt, &operand, &zero, w);
+                    let too_wide = Domain::cmp(sym, CmpOp::Sle, &limit, &operand, w);
+                    Domain::binop(sym, BinOp::Or, &negative, &too_wide, Width::W1)
                 }
             };
             let mut query: Vec<(ExprId, bool)> = path.guard.clone();
