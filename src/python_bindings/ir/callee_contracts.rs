@@ -26,7 +26,7 @@ pub(super) struct DirectCalleeFacts {
     pub(super) table_entry_layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
 }
 
-type RecoveredDirectCallee = (
+pub(super) type RecoveredDirectCallee = (
     Vec<crate::ir::types::VReg>,
     crate::ir::call_contracts::CallPrototype,
     String,

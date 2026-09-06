@@ -5,7 +5,10 @@
 
 use pyo3::prelude::*;
 
-use super::callee_contracts::{refine_passthrough_parameter_hints, DirectCalleeFacts};
+use super::callee_contracts::{
+    prepare_direct_callee_facts, refine_passthrough_parameter_hints, DirectCalleeFacts,
+    RecoveredDirectCallee,
+};
 use super::dwarf_contracts::{dwarf_source_register_lifetimes, DwarfPrototypeContract};
 use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with_inferred};
 
@@ -704,6 +707,196 @@ pub(super) struct RenderedAst {
     pub(super) provenance: Vec<&'static str>,
 }
 
+pub(super) struct FunctionPipelineContext<'a> {
+    pub(super) image: &'a crate::program::image::ProgramImage,
+    pub(super) functions: &'a [crate::core::function::Function],
+    pub(super) discovered: &'a crate::core::function::Function,
+    pub(super) budgets: &'a crate::analysis::cfg::Budgets,
+    pub(super) render_options: RenderOptions<'a>,
+    pub(super) debug_outputs: Option<&'a std::collections::HashMap<u64, DwarfPrototypeContract>>,
+    pub(super) debug_types: &'a [crate::debug::dwarf::DwarfType],
+    pub(super) debug_type_env: Option<&'a crate::ir::dwarf_type_env::DwarfTypeEnv<'a>>,
+    pub(super) debug_source: crate::program::environment::DeclarationSource,
+    pub(super) program_fact: Option<&'a crate::program::environment::FunctionPrototypeFact>,
+    pub(super) exception_sites: &'a [crate::analysis::exception::ExceptionCallSite],
+    pub(super) address_names: &'a mut std::collections::HashMap<u64, String>,
+    pub(super) function_tables: &'a [crate::ir::function_tables::FunctionPointerTable],
+    pub(super) got_targets: &'a std::collections::HashMap<u64, u64>,
+    pub(super) string_pool: &'a std::collections::HashMap<u64, String>,
+    pub(super) readonly_data: &'a crate::ir::readonly_fold::ReadonlyData,
+    pub(super) data_symbols: &'a crate::ir::data_symbols::DataSymbols,
+    pub(super) field_map: Option<&'a crate::ir::pdb_fields::PdbFieldMap>,
+    pub(super) call_graph: Option<&'a crate::program::call_graph::ProgramCallGraph>,
+    pub(super) callee_cache: &'a mut std::collections::HashMap<u64, Option<RecoveredDirectCallee>>,
+    pub(super) calling_convention: crate::ir::call_args::CallConv,
+    pub(super) arm_vfp_args: bool,
+    pub(super) prefer_debug_function_name: bool,
+    pub(super) pdb_outer_name: Option<&'a str>,
+}
+
+pub(super) struct PipelineFunctionOutput {
+    pub(super) raw: crate::ir::types::LlirFunction,
+    pub(super) prepared: PreparedAst,
+    pub(super) rendered: RenderedAst,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FunctionPipelineError {
+    Lift(String),
+    Shadow(&'static str),
+}
+
+impl std::fmt::Display for FunctionPipelineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lift(reason) => formatter.write_str(reason),
+            Self::Shadow(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
+/// Execute the complete semantic pipeline for one discovered function.
+pub(super) fn decompile_function(
+    context: FunctionPipelineContext<'_>,
+) -> Result<PipelineFunctionOutput, FunctionPipelineError> {
+    let FunctionPipelineContext {
+        image,
+        functions,
+        discovered,
+        budgets,
+        render_options,
+        debug_outputs,
+        debug_types,
+        debug_type_env,
+        debug_source,
+        program_fact,
+        exception_sites,
+        address_names,
+        function_tables,
+        got_targets,
+        string_pool,
+        readonly_data,
+        data_symbols,
+        field_map,
+        call_graph,
+        callee_cache,
+        calling_convention: cc,
+        arm_vfp_args,
+        prefer_debug_function_name,
+        pdb_outer_name,
+    } = context;
+    let function_va = discovered.entry_point.value;
+    let mut raw = crate::ir::lift_function::lift_function_from_image(image, discovered)
+        .map_err(|error| FunctionPipelineError::Lift(error.to_string()))?;
+    let mut callee_facts = prepare_direct_callee_facts(
+        image,
+        functions,
+        &mut raw,
+        cc,
+        arm_vfp_args,
+        budgets,
+        debug_outputs,
+        debug_type_env,
+        address_names,
+        function_tables,
+        call_graph,
+        callee_cache,
+    );
+    if let Some(names) = render_options.analyst_names {
+        let renames = crate::ir::name_resolve::apply_analyst_names(address_names, names);
+        if !renames.is_empty() {
+            callee_facts.env.rename_display(&renames);
+        }
+    }
+    let debug_contract = debug_outputs.and_then(|outputs| outputs.get(&function_va));
+    let typed_pipeline =
+        render_options.style == "decbench" && (render_options.types || render_options.shadow_v2);
+    let mut prepared_llir = prepare_llir_for_lowering_with_shadow(
+        &mut raw,
+        image,
+        exception_sites,
+        cc,
+        typed_pipeline,
+        arm_vfp_args,
+        debug_contract,
+        program_fact,
+        debug_type_env,
+        render_options.shadow_v2,
+    );
+    prepared_llir
+        .select_shadow_v2(render_options.shadow_v2, render_options.style == "decbench")
+        .map_err(FunctionPipelineError::Shadow)?;
+    let function_name = if prefer_debug_function_name {
+        debug_contract
+            .and_then(|contract| contract.function_name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| discovered.name.clone())
+    } else {
+        crate::ir::name_resolve::resolve_outer_function_name_with_analyst(
+            &discovered.name,
+            function_va,
+            address_names,
+            render_options.analyst_names,
+        )
+    };
+    let stack_object_hints = super::dwarf_contracts::dwarf_stack_object_hints(debug_contract, cc);
+    let prepared = lower_and_run_ast_passes(
+        prepared_llir,
+        &raw,
+        function_name,
+        function_va,
+        exception_sites,
+        cc,
+        image.endianness(),
+        render_options.shadow_v2,
+        &callee_facts,
+        address_names,
+        string_pool,
+        function_tables,
+        &stack_object_hints,
+        got_targets,
+    );
+    let mut prepared = finalize_prepared_ast(
+        prepared,
+        render_options.analyst_locals,
+        debug_contract,
+        image.target().architecture(),
+        cc,
+        debug_type_env,
+        render_options.style,
+        exception_sites,
+        address_names,
+        field_map,
+    );
+    let rendered = render_prepared_ast(
+        &mut prepared,
+        FunctionRenderContext {
+            raw: &raw,
+            discovered,
+            budgets,
+            function_va,
+            render_options,
+            debug_contract,
+            debug_types,
+            debug_type_env,
+            debug_source,
+            exception_sites,
+            readonly_data,
+            string_pool,
+            address_names,
+            symbol_env: &callee_facts.env,
+            data_symbols,
+            calling_convention: cc,
+            pdb_outer_name,
+        },
+    );
+    Ok(PipelineFunctionOutput {
+        raw,
+        prepared,
+        rendered,
+    })
+}
+
 /// Render one already-finalized AST through the single shared style policy.
 pub(super) fn render_prepared_ast(
     prepared: &mut PreparedAst,
@@ -1086,31 +1279,6 @@ pub(super) fn requested_function_limit(func_vas: &[u64], max_functions: usize) -
     } else {
         max_functions
     }
-}
-
-pub(super) fn prepare_llir_for_lowering(
-    function: &mut crate::ir::types::LlirFunction,
-    image: &crate::program::image::ProgramImage,
-    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
-    cc: crate::ir::call_args::CallConv,
-    recover_semantic_prototype: bool,
-    arm_vfp_args: bool,
-    declared: Option<&DwarfPrototypeContract>,
-    program_fact: Option<&crate::program::environment::FunctionPrototypeFact>,
-    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
-) -> PreparedLlir {
-    prepare_llir_for_lowering_with_shadow(
-        function,
-        image,
-        exception_sites,
-        cc,
-        recover_semantic_prototype,
-        arm_vfp_args,
-        declared,
-        program_fact,
-        type_env,
-        false,
-    )
 }
 
 pub(super) fn prepare_llir_for_lowering_with_shadow(

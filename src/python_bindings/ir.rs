@@ -33,8 +33,6 @@ mod type_maps;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList};
 
-use callee_contracts::prepare_direct_callee_facts;
-
 // `select_renderable_dwarf_local_facts` has no production caller in this module
 // -- its only consumer here is the `mod tests` below, so the import is gated the
 // same way `dwarf_return_hint` already is, rather than being dead in the shipped
@@ -49,17 +47,16 @@ use dwarf_contracts::dwarf_return_hint;
 // wired before the split.
 use dwarf_contracts::{
     calling_convention_pointer_width, dwarf_render_prototype, dwarf_return_hint_with_env,
-    dwarf_stack_object_hints, DwarfPrototypeContract,
+    DwarfPrototypeContract,
 };
 
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    discover_program, finalize_prepared_ast, lower_and_run_ast_passes, prepare_llir_for_lowering,
-    prepare_program_debug_context, prepare_program_name_context, prepare_program_render_context,
-    render_prepared_ast, target_calling_convention, AnalysisBudget, DecompileRequest,
-    DecompileResult, FunctionRenderContext, ProgramDebugContext, ProgramDiscovery,
-    ProgramNameContext, ProgramRenderContext, RenderOptions,
+    decompile_function, discover_program, prepare_program_debug_context,
+    prepare_program_name_context, prepare_program_render_context, target_calling_convention,
+    AnalysisBudget, DecompileRequest, DecompileResult, FunctionPipelineContext,
+    ProgramDebugContext, ProgramDiscovery, ProgramNameContext, ProgramRenderContext, RenderOptions,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,7 +193,6 @@ fn decompile_at_session(
     request: DecompileRequest<'_>,
 ) -> PyResult<DecompileResult> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::ir::lift_function::lift_function_from_image;
 
     let pipeline_fingerprint = request.fingerprint();
     let DecompileRequest {
@@ -250,7 +246,6 @@ fn decompile_at_session(
             ))
         })?;
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
@@ -281,16 +276,6 @@ fn decompile_at_session(
     // that depends on binary truth -- see below.
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    // The reason is the analyst-visible one. This used to blame the
-    // architecture unconditionally, so an x86-64 function whose blocks were all
-    // attributed to a neighbour reported "LLIR lifter does not support this
-    // architecture" about a lifter that supports it perfectly well.
-    let lf_raw = lift_function_from_image(&image, &func)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
-    // call participates in def/use like any other instruction instead of every later
-    // pass having to special-case it (see `ir::abi`).
-    let mut lf_raw = lf_raw;
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
@@ -298,103 +283,8 @@ fn decompile_at_session(
     // nested callee analysis decline to spend a layer inside a call cycle.
     let callee_call_graph = py.detach(|| session.call_graph_for(&budgets, &[func_va], &funcs));
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let mut callee_facts = prepare_direct_callee_facts(
-        &image,
-        &funcs,
-        &mut lf_raw,
-        cc,
-        arm_vfp_args,
-        &budgets,
-        dwarf_outputs.as_ref(),
-        dwarf_type_env.as_ref(),
-        &mut addr_map,
-        &function_tables,
-        Some(callee_call_graph.as_ref()),
-        &mut callee_layout_cache,
-    );
-    // The analyst overlay, applied now that every name-keyed analysis above has
-    // run against what the binary calls things. It rewrites the address map --
-    // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
-    // the definition AND every call site, and it rekeys the recovered symbol
-    // environment so the callee keeps the prototype recovered under its old
-    // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-    if let Some(names) = analyst_names {
-        {
-            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-            if !renames.is_empty() {
-                {
-                    callee_facts.env.rename_display(&renames);
-                }
-            }
-        }
-    }
-    // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
-    // -> `rdi`) so def/use versions line up for value correctness. But the
-    // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
-    // canonicalisation erases it. So type recovery runs on `lf_raw` (widths
-    // intact) while everything downstream uses the canonicalised `lf`; the
-    // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
-    // narrower width.
-    // Live-in argument slots (authoritative parameter set) for the type-map
-    // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
-    // Recover the semantic prototype while SSA value IDs are still available.
-    // It survives the AST pipeline as an immutable companion object; naming is
-    // now only a final projection (`value -> argN`), never a type-analysis key.
-    let prepared_llir = prepare_llir_for_lowering(
-        &mut lf_raw,
-        &image,
-        &exception_sites,
-        cc,
-        style == "decbench" && types,
-        arm_vfp_args,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        program_environment
-            .as_deref()
-            .and_then(|environment| environment.prototype_for(func_va)),
-        dwarf_type_env.as_ref(),
-    );
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let outer_name =
-        resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
-    let stack_object_hints = dwarf_stack_object_hints(
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        cc,
-    );
-    let prepared = lower_and_run_ast_passes(
-        prepared_llir,
-        &lf_raw,
-        outer_name,
-        func_va,
-        &exception_sites,
-        cc,
-        image.endianness(),
-        false,
-        &callee_facts,
-        &addr_map,
-        &str_pool,
-        &function_tables,
-        &stack_object_hints,
-        &got_targets,
-    );
-    let mut prepared = finalize_prepared_ast(
-        prepared,
-        analyst_locals,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        arch,
-        cc,
-        dwarf_type_env.as_ref(),
-        style,
-        &exception_sites,
-        &addr_map,
-        field_map.as_ref(),
-    );
     // Emit a `// PDB: <name>` provenance comment in C-style output when the
     // outer function name came from a PDB public symbol -- a hint that this
     // name is Microsoft-authoritative (and not LLM-proposed / FLIRT / CFG-
@@ -408,48 +298,53 @@ fn decompile_at_session(
                 .cloned()
         })
         .filter(|name| !name.is_empty() && !name.starts_with("sub_"));
-    let rendered = render_prepared_ast(
-        &mut prepared,
-        FunctionRenderContext {
-            raw: &lf_raw,
-            discovered: &func,
-            budgets: &budgets,
-            function_va: func_va,
-            render_options: RenderOptions {
-                types,
-                style,
-                shadow_v2: false,
-                pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
-                analyst_names,
-                analyst_locals,
-                analyst_prototype,
-            },
-            debug_contract: dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
-            debug_type_env: dwarf_type_env.as_ref(),
-            debug_source: if pdb_contract_vas.contains(&func_va) {
-                crate::program::environment::DeclarationSource::Pdb
-            } else {
-                crate::program::environment::DeclarationSource::Dwarf
-            },
-            exception_sites: &exception_sites,
-            readonly_data: &readonly_data,
-            string_pool: &str_pool,
-            address_names: &addr_map,
-            symbol_env: &callee_facts.env,
-            data_symbols: &data_symbols,
-            calling_convention: cc,
-            pdb_outer_name: pdb_outer_name.as_deref(),
+    let output = decompile_function(FunctionPipelineContext {
+        image: &image,
+        functions: &funcs,
+        discovered: &func,
+        budgets: &budgets,
+        render_options: RenderOptions {
+            types,
+            style,
+            shadow_v2: false,
+            pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+            analyst_names,
+            analyst_locals,
+            analyst_prototype,
         },
-    );
+        debug_outputs: dwarf_outputs.as_ref(),
+        debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+        debug_type_env: dwarf_type_env.as_ref(),
+        debug_source: if pdb_contract_vas.contains(&func_va) {
+            crate::program::environment::DeclarationSource::Pdb
+        } else {
+            crate::program::environment::DeclarationSource::Dwarf
+        },
+        exception_sites: &exception_sites,
+        program_fact: program_environment
+            .as_deref()
+            .and_then(|environment| environment.prototype_for(func_va)),
+        address_names: &mut addr_map,
+        function_tables: &function_tables,
+        got_targets: &got_targets,
+        string_pool: &str_pool,
+        readonly_data: &readonly_data,
+        data_symbols: &data_symbols,
+        field_map: field_map.as_ref(),
+        call_graph: Some(callee_call_graph.as_ref()),
+        callee_cache: &mut callee_layout_cache,
+        calling_convention: cc,
+        arm_vfp_args,
+        prefer_debug_function_name: false,
+        pdb_outer_name: pdb_outer_name.as_deref(),
+    })
+    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     Ok(DecompileResult::from_rendered(
-        rendered.text,
-        &prepared.function,
-        prepared.cfg_health,
+        output.rendered.text,
+        &output.prepared.function,
+        output.prepared.cfg_health,
         &func,
-        rendered.provenance,
+        output.rendered.provenance,
         pipeline_fingerprint,
     ))
 }
@@ -475,7 +370,6 @@ fn decompile_range_at_py(
     use crate::core::address_range::AddressRange;
     use crate::core::basic_block::BasicBlock;
     use crate::core::function::{Function, FunctionKind};
-    use crate::ir::lift_function::lift_function_from_image;
 
     if range_end <= range_start {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -546,7 +440,6 @@ fn decompile_range_at_py(
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let bits = image.target().address_bits().ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("target address width is unknown")
@@ -613,144 +506,57 @@ fn decompile_range_at_py(
     } = prepare_program_render_context(&session, &image, data_symbols);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    // The reason is the analyst-visible one. This used to blame the
-    // architecture unconditionally, so an x86-64 function whose blocks were all
-    // attributed to a neighbour reported "LLIR lifter does not support this
-    // architecture" about a lifter that supports it perfectly well.
-    let lf_raw = lift_function_from_image(&image, &func)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
-    // call participates in def/use like any other instruction instead of every later
-    // pass having to special-case it (see `ir::abi`).
-    let mut lf_raw = lf_raw;
     let callee_call_graph = session.call_graph_for(&budgets, &[func_va], &discovered);
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let callee_facts = prepare_direct_callee_facts(
-        &image,
-        &discovered,
-        &mut lf_raw,
-        cc,
-        arm_vfp_args,
-        &budgets,
-        dwarf_outputs.as_ref(),
-        dwarf_type_env.as_ref(),
-        &mut addr_map,
-        &function_tables,
-        Some(callee_call_graph.as_ref()),
-        &mut callee_layout_cache,
-    );
-    // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
-    // -> `rdi`) so def/use versions line up for value correctness. But the
-    // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
-    // canonicalisation erases it. So type recovery runs on `lf_raw` (widths
-    // intact) while everything downstream uses the canonicalised `lf`; the
-    // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
-    // narrower width.
-    let prepared_llir = prepare_llir_for_lowering(
-        &mut lf_raw,
-        &image,
-        &exception_sites,
-        cc,
-        style == "decbench" && types,
-        arm_vfp_args,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        program_environment
-            .as_deref()
-            .and_then(|environment| environment.prototype_for(func_va)),
-        dwarf_type_env.as_ref(),
-    );
-    let declared_function_name = dwarf_outputs
-        .as_ref()
-        .and_then(|outputs| outputs.get(&func_va))
-        .and_then(|contract| contract.function_name.as_ref())
-        .cloned()
-        .unwrap_or_else(|| func.name.clone());
-    // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
-    // is why the four copies could not simply be diffed against each other — the pass
-    // list and the local setup were braided together. None of them touch `f`, so
-    // hoisting them is order-preserving.
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let stack_object_hints = dwarf_stack_object_hints(
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        cc,
-    );
-    let prepared = lower_and_run_ast_passes(
-        prepared_llir,
-        &lf_raw,
-        declared_function_name,
-        func_va,
-        &exception_sites,
-        cc,
-        image.endianness(),
-        false,
-        &callee_facts,
-        &addr_map,
-        &str_pool,
-        &function_tables,
-        &stack_object_hints,
-        &got_targets,
-    );
-    let mut prepared = finalize_prepared_ast(
-        prepared,
-        None,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        arch,
-        cc,
-        dwarf_type_env.as_ref(),
-        style,
-        &exception_sites,
-        &addr_map,
-        field_map.as_ref(),
-    );
-    let rendered = render_prepared_ast(
-        &mut prepared,
-        FunctionRenderContext {
-            raw: &lf_raw,
-            discovered: &func,
-            budgets: &budgets,
-            function_va: func_va,
-            render_options: RenderOptions {
-                types,
-                style,
-                shadow_v2: false,
-                pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
-                analyst_names: None,
-                analyst_locals: None,
-                analyst_prototype: None,
-            },
-            debug_contract: dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
-            debug_type_env: dwarf_type_env.as_ref(),
-            debug_source: if pdb_contract_vas.contains(&func_va) {
-                crate::program::environment::DeclarationSource::Pdb
-            } else {
-                crate::program::environment::DeclarationSource::Dwarf
-            },
-            exception_sites: &exception_sites,
-            readonly_data: &readonly_data,
-            string_pool: &str_pool,
-            address_names: &addr_map,
-            symbol_env: &callee_facts.env,
-            data_symbols: &data_symbols,
-            calling_convention: cc,
-            pdb_outer_name: None,
+    let output = decompile_function(FunctionPipelineContext {
+        image: &image,
+        functions: &discovered,
+        discovered: &func,
+        budgets: &budgets,
+        render_options: RenderOptions {
+            types,
+            style,
+            shadow_v2: false,
+            pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+            analyst_names: None,
+            analyst_locals: None,
+            analyst_prototype: None,
         },
-    );
+        debug_outputs: dwarf_outputs.as_ref(),
+        debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+        debug_type_env: dwarf_type_env.as_ref(),
+        debug_source: if pdb_contract_vas.contains(&func_va) {
+            crate::program::environment::DeclarationSource::Pdb
+        } else {
+            crate::program::environment::DeclarationSource::Dwarf
+        },
+        exception_sites: &exception_sites,
+        program_fact: program_environment
+            .as_deref()
+            .and_then(|environment| environment.prototype_for(func_va)),
+        address_names: &mut addr_map,
+        function_tables: &function_tables,
+        got_targets: &got_targets,
+        string_pool: &str_pool,
+        readonly_data: &readonly_data,
+        data_symbols: &data_symbols,
+        field_map: field_map.as_ref(),
+        call_graph: Some(callee_call_graph.as_ref()),
+        callee_cache: &mut callee_layout_cache,
+        calling_convention: cc,
+        arm_vfp_args,
+        prefer_debug_function_name: true,
+        pdb_outer_name: None,
+    })
+    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     Ok(DecompileResult::from_rendered(
-        rendered.text,
-        &prepared.function,
-        prepared.cfg_health,
+        output.rendered.text,
+        &output.prepared.function,
+        output.prepared.cfg_health,
         &func,
-        rendered.provenance,
+        output.rendered.provenance,
         pipeline_fingerprint,
     )
     .pseudocode)
@@ -1083,7 +889,6 @@ fn decompile_all_py(
     analyst_names: Option<std::collections::HashMap<u64, String>>,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::ir::lift_function::lift_function_from_image;
 
     let analysis_budget = AnalysisBudget {
         max_functions: limit.max(1),
@@ -1119,7 +924,6 @@ fn decompile_all_py(
         functions: funcs,
     } = discover_program(py, &session, analysis_budget, &[]);
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let ProgramNameContext {
@@ -1171,147 +975,55 @@ fn decompile_all_py(
             render_options,
         };
         let pipeline_fingerprint = request.fingerprint();
-        let Ok(lf_raw) = lift_function_from_image(&image, func) else {
-            continue;
-        };
-        // See `ir::abi`: the ABI's call effects go on the calls before SSA.
-        let mut lf_raw = lf_raw;
-        let mut callee_facts = prepare_direct_callee_facts(
-            &image,
-            &funcs,
-            &mut lf_raw,
-            cc,
-            arm_vfp_args,
-            &budgets,
-            dwarf_outputs.as_ref(),
-            dwarf_type_env.as_ref(),
-            &mut addr_map,
-            &function_tables,
-            Some(callee_call_graph.as_ref()),
-            &mut callee_layout_cache,
-        );
-        // The analyst overlay, applied now that every name-keyed analysis above has
-        // run against what the binary calls things. It rewrites the address map --
-        // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
-        // the definition AND every call site, and it rekeys the recovered symbol
-        // environment so the callee keeps the prototype recovered under its old
-        // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-        if let Some(names) = analyst_names.as_ref() {
-            {
-                let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-                if !renames.is_empty() {
-                    {
-                        callee_facts.env.rename_display(&renames);
-                    }
-                }
-            }
-        }
-        // Recover types on the pre-canonicalisation LLIR (sub-register widths
-        // intact); see the note in `decompile_at`.
-        let prepared_llir = prepare_llir_for_lowering(
-            &mut lf_raw,
-            &image,
-            &exception_sites,
-            cc,
-            style == "decbench",
-            arm_vfp_args,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            program_environment
+        let Ok(output) = decompile_function(FunctionPipelineContext {
+            image: &image,
+            functions: &funcs,
+            discovered: func,
+            budgets: &budgets,
+            render_options,
+            debug_outputs: dwarf_outputs.as_ref(),
+            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+            debug_type_env: dwarf_type_env.as_ref(),
+            debug_source: if pdb_contract_vas.contains(&func.entry_point.value) {
+                crate::program::environment::DeclarationSource::Pdb
+            } else {
+                crate::program::environment::DeclarationSource::Dwarf
+            },
+            exception_sites: &exception_sites,
+            program_fact: program_environment
                 .as_deref()
                 .and_then(|environment| environment.prototype_for(func.entry_point.value)),
-            dwarf_type_env.as_ref(),
-        );
-        let outer_name = resolve_outer_function_name_with_analyst(
-            &func.name,
-            func.entry_point.value,
-            &addr_map,
-            analyst_names.as_ref(),
-        );
-        // One pass list, shared with every other entry point — see `run_ast_passes`.
-        // This site used to run dead-flag pruning before constant folding and never
-        // pruned unreferenced labels, so `--all` produced different output from `--vas`
-        // for the same function, and the fixture gate's structural lane measured a
-        // different pipeline from its execution lane. It cannot drift again.
-        let stack_object_hints = dwarf_stack_object_hints(
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            cc,
-        );
-        let prepared = lower_and_run_ast_passes(
-            prepared_llir,
-            &lf_raw,
-            outer_name.clone(),
-            func.entry_point.value,
-            &exception_sites,
-            cc,
-            image.endianness(),
-            false,
-            &callee_facts,
-            &addr_map,
-            &str_pool,
-            &function_tables,
-            &stack_object_hints,
-            &got_targets,
-        );
-        let mut prepared = finalize_prepared_ast(
-            prepared,
-            None,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            arch,
-            cc,
-            dwarf_type_env.as_ref(),
-            style,
-            &exception_sites,
-            &addr_map,
-            field_map.as_ref(),
-        );
-        let rendered = render_prepared_ast(
-            &mut prepared,
-            FunctionRenderContext {
-                raw: &lf_raw,
-                discovered: func,
-                budgets: &budgets,
-                function_va: func.entry_point.value,
-                render_options,
-                debug_contract: dwarf_outputs
-                    .as_ref()
-                    .and_then(|outputs| outputs.get(&func.entry_point.value)),
-                debug_types: dwarf_types.as_deref().unwrap_or(&[]),
-                debug_type_env: dwarf_type_env.as_ref(),
-                debug_source: if pdb_contract_vas.contains(&func.entry_point.value) {
-                    crate::program::environment::DeclarationSource::Pdb
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf
-                },
-                exception_sites: &exception_sites,
-                readonly_data: &readonly_data,
-                string_pool: &str_pool,
-                address_names: &addr_map,
-                symbol_env: &callee_facts.env,
-                data_symbols: &data_symbols,
-                calling_convention: cc,
-                pdb_outer_name: None,
-            },
-        );
+            address_names: &mut addr_map,
+            function_tables: &function_tables,
+            got_targets: &got_targets,
+            string_pool: &str_pool,
+            readonly_data: &readonly_data,
+            data_symbols: &data_symbols,
+            field_map: field_map.as_ref(),
+            call_graph: Some(callee_call_graph.as_ref()),
+            callee_cache: &mut callee_layout_cache,
+            calling_convention: cc,
+            arm_vfp_args,
+            prefer_debug_function_name: false,
+            pdb_outer_name: None,
+        }) else {
+            continue;
+        };
+        let outer_name = output.prepared.function.name.clone();
         let result = DecompileResult::from_rendered(
-            rendered.text,
-            &prepared.function,
-            prepared.cfg_health,
+            output.rendered.text,
+            &output.prepared.function,
+            output.prepared.cfg_health,
             func,
-            rendered.provenance,
+            output.rendered.provenance,
             pipeline_fingerprint,
         );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
             &result.pseudocode,
-            prepared.prototype.as_ref(),
-            &prepared.stack_facts,
+            output.prepared.prototype.as_ref(),
+            &output.prepared.stack_facts,
             calling_convention_pointer_width(cc),
-            &lf_raw,
+            &output.raw,
         );
         list.append((
             outer_name,
@@ -1357,7 +1069,6 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::ir::lift_function::lift_function_from_image;
     use std::collections::HashSet;
 
     let image = load_program_image(&path)?;
@@ -1404,7 +1115,6 @@ fn decompile_many_py(
         functions: funcs,
     } = discover_program(py, &session, analysis_budget, &func_vas);
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let ProgramNameContext {
@@ -1479,183 +1189,71 @@ fn decompile_many_py(
             render_options,
         };
         let pipeline_fingerprint = request.fingerprint();
-        let Ok(lf_raw) = lift_function_from_image(&image, func) else {
-            continue;
-        };
-        // See `ir::abi`: the ABI's call effects go on the calls before SSA.
-        let mut lf_raw = lf_raw;
-        let mut callee_facts = prepare_direct_callee_facts(
-            &image,
-            &funcs,
-            &mut lf_raw,
-            cc,
-            arm_vfp_args,
-            &budgets,
-            dwarf_outputs.as_ref(),
-            dwarf_type_env.as_ref(),
-            &mut addr_map,
-            &function_tables,
-            Some(callee_call_graph.as_ref()),
-            &mut callee_layout_cache,
-        );
-        // The analyst overlay, applied now that every name-keyed analysis above has
-        // run against what the binary calls things. It rewrites the address map --
-        // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
-        // the definition AND every call site, and it rekeys the recovered symbol
-        // environment so the callee keeps the prototype recovered under its old
-        // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-        if let Some(names) = analyst_names.as_ref() {
-            {
-                let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-                if !renames.is_empty() {
-                    {
-                        callee_facts.env.rename_display(&renames);
-                    }
-                }
-            }
-        }
-        // Recover types on the pre-canonicalisation LLIR (sub-register widths
-        // intact); see the note in `decompile_at`.
-        let mut prepared_llir = pipeline::prepare_llir_for_lowering_with_shadow(
-            &mut lf_raw,
-            &image,
-            &exception_sites,
-            cc,
-            style == "decbench",
-            arm_vfp_args,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            program_environment
-                .as_deref()
-                .and_then(|environment| environment.prototype_for(func_va)),
-            dwarf_type_env.as_ref(),
-            shadow_v2,
-        );
-        if prepared_llir
-            .select_shadow_v2(shadow_v2, style == "decbench")
-            .is_err()
-        {
-            // Shadow-v2 is an explicitly requested, verified subset. A typed
-            // refusal for one function must not abort the rest of a batch:
-            // omit this row so the caller can compare requested VAs with
-            // returned VAs and account for the decline independently. The
-            // style contract is checked once above, so unavailability is the
-            // only possible error here. Default production selection never
-            // enters this branch.
-            continue;
-        }
-        let outer_name = resolve_outer_function_name_with_analyst(
-            &func.name,
-            func_va,
-            &addr_map,
-            analyst_names.as_ref(),
-        );
-        // One pass list, shared with every other entry point — see `run_ast_passes`.
-        // This site used to run dead-flag pruning before constant folding and never
-        // pruned unreferenced labels, so `--all` produced different output from `--vas`
-        // for the same function, and the fixture gate's structural lane measured a
-        // different pipeline from its execution lane. It cannot drift again.
-        let stack_object_hints = dwarf_stack_object_hints(
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            cc,
-        );
-        let prepared = lower_and_run_ast_passes(
-            prepared_llir,
-            &lf_raw,
-            outer_name,
-            func_va,
-            &exception_sites,
-            cc,
-            image.endianness(),
-            shadow_v2,
-            &callee_facts,
-            &addr_map,
-            &str_pool,
-            &function_tables,
-            &stack_object_hints,
-            &got_targets,
-        );
-        let mut prepared = finalize_prepared_ast(
-            prepared,
-            None,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            arch,
-            cc,
-            dwarf_type_env.as_ref(),
-            style,
-            &exception_sites,
-            &addr_map,
-            field_map.as_ref(),
-        );
         let pdb_outer_name = pdb_public_map
             .get(&func_va)
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
-        let rendered = render_prepared_ast(
-            &mut prepared,
-            FunctionRenderContext {
-                raw: &lf_raw,
-                discovered: func,
-                budgets: &budgets,
-                function_va: func_va,
-                render_options: RenderOptions {
-                    types,
-                    style,
-                    shadow_v2,
-                    pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
-                    analyst_names: analyst_names.as_ref(),
-                    analyst_locals: None,
-                    analyst_prototype: None,
-                },
-                debug_contract: dwarf_outputs
-                    .as_ref()
-                    .and_then(|outputs| outputs.get(&func_va)),
-                debug_types: dwarf_types.as_deref().unwrap_or(&[]),
-                debug_type_env: dwarf_type_env.as_ref(),
-                debug_source: if pdb_contract_vas.contains(&func_va) {
-                    crate::program::environment::DeclarationSource::Pdb
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf
-                },
-                exception_sites: &exception_sites,
-                readonly_data: &readonly_data,
-                string_pool: &str_pool,
-                address_names: &addr_map,
-                symbol_env: &callee_facts.env,
-                data_symbols: &data_symbols,
-                calling_convention: cc,
-                pdb_outer_name: pdb_outer_name.as_deref(),
+        let Ok(output) = decompile_function(FunctionPipelineContext {
+            image: &image,
+            functions: &funcs,
+            discovered: func,
+            budgets: &budgets,
+            render_options: RenderOptions {
+                types,
+                style,
+                shadow_v2,
+                pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+                analyst_names: analyst_names.as_ref(),
+                analyst_locals: None,
+                analyst_prototype: None,
             },
-        );
-        let name = resolve_outer_function_name_with_analyst(
-            &func.name,
-            func_va,
-            &addr_map,
-            analyst_names.as_ref(),
-        );
+            debug_outputs: dwarf_outputs.as_ref(),
+            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+            debug_type_env: dwarf_type_env.as_ref(),
+            debug_source: if pdb_contract_vas.contains(&func_va) {
+                crate::program::environment::DeclarationSource::Pdb
+            } else {
+                crate::program::environment::DeclarationSource::Dwarf
+            },
+            exception_sites: &exception_sites,
+            program_fact: program_environment
+                .as_deref()
+                .and_then(|environment| environment.prototype_for(func_va)),
+            address_names: &mut addr_map,
+            function_tables: &function_tables,
+            got_targets: &got_targets,
+            string_pool: &str_pool,
+            readonly_data: &readonly_data,
+            data_symbols: &data_symbols,
+            field_map: field_map.as_ref(),
+            call_graph: Some(callee_call_graph.as_ref()),
+            callee_cache: &mut callee_layout_cache,
+            calling_convention: cc,
+            arm_vfp_args,
+            prefer_debug_function_name: false,
+            pdb_outer_name: pdb_outer_name.as_deref(),
+        }) else {
+            continue;
+        };
+        let name = output.prepared.function.name.clone();
         // The structured inventory a consumer needs to match our locals without
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually
         // emitted -- see `ir::recovered_variables`.
         let result = DecompileResult::from_rendered(
-            rendered.text,
-            &prepared.function,
-            prepared.cfg_health,
+            output.rendered.text,
+            &output.prepared.function,
+            output.prepared.cfg_health,
             func,
-            rendered.provenance,
+            output.rendered.provenance,
             pipeline_fingerprint,
         );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
             &result.pseudocode,
-            prepared.prototype.as_ref(),
-            &prepared.stack_facts,
+            output.prepared.prototype.as_ref(),
+            &output.prepared.stack_facts,
             calling_convention_pointer_width(cc),
-            &lf_raw,
+            &output.raw,
         );
         list.append((
             name,
@@ -1696,8 +1294,6 @@ fn variables_to_py(
     }
     Ok(list.into())
 }
-
-use crate::ir::name_resolve::resolve_outer_function_name_with_analyst;
 
 /// Drain and return the definition-before-use verdicts recorded since the last call.
 ///
@@ -1847,7 +1443,7 @@ mod tests {
             .expect("the fixture function is discovered");
         let mut function = crate::ir::lift_function::lift_function_from_image(image, target)
             .expect("the fixture function lifts");
-        let prepared = super::prepare_llir_for_lowering(
+        let prepared = super::pipeline::prepare_llir_for_lowering_with_shadow(
             &mut function,
             image,
             &[],
@@ -1857,6 +1453,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         let mir = prepared
@@ -1927,10 +1524,10 @@ mod tests {
         assert!(!text.contains("unrecovered indirect jump"), "{text}");
     }
 
-    use super::dwarf_contracts::merge_dwarf_register_local_facts;
+    use super::dwarf_contracts::{dwarf_stack_object_hints, merge_dwarf_register_local_facts};
     use super::{
-        dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
-        select_renderable_dwarf_local_facts, DwarfPrototypeContract,
+        dwarf_return_hint, dwarf_return_hint_with_env, select_renderable_dwarf_local_facts,
+        DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
