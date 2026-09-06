@@ -61,7 +61,8 @@ use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
     annotate_calls_in, inline_soft_helper_calls_in, prepare_llir_for_lowering, readonly_data_for,
-    recognise_machine_frame, run_ast_passes, target_calling_convention, PreparedLlir,
+    recognise_machine_frame, run_ast_passes, target_calling_convention, AnalysisBudget,
+    DecompileRequest, PreparedLlir, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -170,42 +171,51 @@ fn decompile_at_py(
         py,
         &session,
         &path,
-        func_va,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        types,
-        style,
-        pdb_cache,
-        max_functions,
-        analyst_names.as_ref(),
-        analyst_locals.as_ref(),
-        analyst_prototype.as_ref(),
+        DecompileRequest {
+            va: func_va,
+            analysis_budget: AnalysisBudget {
+                max_functions,
+                max_blocks,
+                max_instructions,
+                timeout_ms,
+                total_timeout_ms: 0,
+            },
+            render_options: RenderOptions {
+                types,
+                style,
+                pdb_cache,
+                analyst_names: analyst_names.as_ref(),
+                analyst_locals: analyst_locals.as_ref(),
+                analyst_prototype: analyst_prototype.as_ref(),
+            },
+        },
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn decompile_at_session(
+fn decompile_at_session(
     py: Python<'_>,
     session: &crate::program::session::ProgramSession,
     path: &str,
-    func_va: u64,
-    max_blocks: usize,
-    max_instructions: usize,
-    timeout_ms: u64,
-    types: bool,
-    style: &str,
-    pdb_cache: &str,
-    max_functions: usize,
-    analyst_names: Option<&std::collections::HashMap<u64, String>>,
-    analyst_locals: Option<&std::collections::HashMap<i64, (String, String)>>,
-    analyst_prototype: Option<&AnalystPrototype>,
+    request: DecompileRequest<'_>,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::analysis::cfg::Budgets;
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
+
+    let DecompileRequest {
+        va: func_va,
+        analysis_budget,
+        render_options,
+    } = request;
+    let RenderOptions {
+        types,
+        style,
+        pdb_cache,
+        analyst_names,
+        analyst_locals,
+        analyst_prototype,
+    } = render_options;
 
     let image = session.image().clone();
     let data = image.bytes();
@@ -229,13 +239,7 @@ pub(super) fn decompile_at_session(
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = Budgets {
-        max_functions,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    };
+    let budgets = analysis_budget.discovery();
     // Whole-binary function discovery: seconds to minutes on a large image, and
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses

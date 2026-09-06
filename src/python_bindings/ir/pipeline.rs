@@ -9,6 +9,51 @@ use super::callee_contracts::DirectCalleeFacts;
 use super::dwarf_contracts::{dwarf_source_register_lifetimes, DwarfPrototypeContract};
 use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with_inferred};
 
+/// Explicit work limits for one decompilation request.
+///
+/// This is deliberately owned by the pipeline rather than by a Python entry
+/// point.  Adapters may expose different defaults, but once constructed the
+/// request has one budget identity and one conversion to discovery limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct AnalysisBudget {
+    pub(super) max_functions: usize,
+    pub(super) max_blocks: usize,
+    pub(super) max_instructions: usize,
+    pub(super) timeout_ms: u64,
+    pub(super) total_timeout_ms: u64,
+}
+
+impl AnalysisBudget {
+    pub(super) fn discovery(self) -> crate::analysis::cfg::Budgets {
+        crate::analysis::cfg::Budgets {
+            max_functions: self.max_functions,
+            max_blocks: self.max_blocks,
+            max_instructions: self.max_instructions,
+            timeout_ms: self.timeout_ms,
+            total_timeout_ms: self.total_timeout_ms,
+        }
+    }
+}
+
+/// Rendering and analyst overlays attached to one pipeline request.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RenderOptions<'a> {
+    pub(super) types: bool,
+    pub(super) style: &'a str,
+    pub(super) pdb_cache: &'a str,
+    pub(super) analyst_names: Option<&'a std::collections::HashMap<u64, String>>,
+    pub(super) analyst_locals: Option<&'a std::collections::HashMap<i64, (String, String)>>,
+    pub(super) analyst_prototype: Option<&'a super::AnalystPrototype>,
+}
+
+/// The common input to the single-function pipeline.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DecompileRequest<'a> {
+    pub(super) va: u64,
+    pub(super) analysis_budget: AnalysisBudget,
+    pub(super) render_options: RenderOptions<'a>,
+}
+
 /// Replace calls to the compiler's division runtime helpers with the arithmetic
 /// they perform (see [`crate::ir::soft_helpers`]).
 ///
@@ -647,5 +692,29 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         parameter_slots,
         inferred_prototype,
         prototype,
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::AnalysisBudget;
+
+    #[test]
+    fn pipeline_budget_preserves_every_discovery_limit() {
+        let request = AnalysisBudget {
+            max_functions: 17,
+            max_blocks: 29,
+            max_instructions: 31,
+            timeout_ms: 37,
+            total_timeout_ms: 41,
+        };
+
+        let discovery = request.discovery();
+
+        assert_eq!(discovery.max_functions, 17);
+        assert_eq!(discovery.max_blocks, 29);
+        assert_eq!(discovery.max_instructions, 31);
+        assert_eq!(discovery.timeout_ms, 37);
+        assert_eq!(discovery.total_timeout_ms, 41);
     }
 }
