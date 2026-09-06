@@ -625,6 +625,54 @@ pub(super) fn recognise_machine_frame(
     crate::ir::dead_stores::prune_callee_saved_spills(f, cc);
 }
 
+/// Apply the presentation-boundary semantic facts every renderer consumes.
+///
+/// This remains part of the pipeline rather than an adapter concern: rendering
+/// an AST before debug locals, exception semantics, machine-frame cleanup, or
+/// field facts have landed is a different decompilation result.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn finalize_prepared_ast(
+    mut prepared: PreparedAst,
+    analyst_locals: Option<&std::collections::HashMap<i64, (String, String)>>,
+    debug_contract: Option<&super::dwarf_contracts::DwarfPrototypeContract>,
+    arch: crate::core::binary::Arch,
+    cc: crate::ir::call_args::CallConv,
+    dwarf_type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+    style: &str,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
+    address_names: &std::collections::HashMap<u64, String>,
+    field_map: Option<&crate::ir::pdb_fields::PdbFieldMap>,
+) -> PreparedAst {
+    if let Some(locals) = analyst_locals {
+        crate::ir::stack_locals::apply_analyst_locals(&mut prepared.stack_facts, locals);
+    }
+    super::dwarf_contracts::merge_dwarf_register_local_facts(
+        &mut prepared.stack_facts,
+        debug_contract,
+        &prepared.numbered,
+        &prepared.role_names,
+        arch,
+        cc,
+        dwarf_type_env,
+    );
+    if style == "decbench" {
+        crate::ir::exception_recover::recover_typed_handlers(
+            &mut prepared.function,
+            exception_sites,
+        );
+        crate::ir::exception_recover::mark_int_throws_with_address_map(
+            &mut prepared.function,
+            address_names,
+        );
+        crate::ir::exception_recover::recover_throws(&mut prepared.function);
+    }
+    recognise_machine_frame(&mut prepared.function, cc);
+    if let Some(field_map) = field_map {
+        crate::ir::pdb_fields::annotate_function_fields(&mut prepared.function, field_map);
+    }
+    prepared
+}
+
 pub(super) fn target_calling_convention(
     image: &crate::program::image::ProgramImage,
 ) -> PyResult<crate::ir::call_args::CallConv> {

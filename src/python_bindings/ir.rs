@@ -50,17 +50,16 @@ use dwarf_contracts::dwarf_return_hint;
 // wired before the split.
 use dwarf_contracts::{
     calling_convention_pointer_width, dwarf_render_prototype, dwarf_return_hint_with_env,
-    dwarf_stack_object_hints, merge_dwarf_register_local_facts, DwarfPrototypeContract,
+    dwarf_stack_object_hints, DwarfPrototypeContract,
 };
 
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    discover_program, lower_and_run_ast_passes, prepare_llir_for_lowering,
+    discover_program, finalize_prepared_ast, lower_and_run_ast_passes, prepare_llir_for_lowering,
     prepare_program_debug_context, prepare_program_name_context, prepare_program_render_context,
-    recognise_machine_frame, target_calling_convention, AnalysisBudget, DecompileRequest,
-    DecompileResult, PreparedAst, ProgramDebugContext, ProgramDiscovery, ProgramNameContext,
-    ProgramRenderContext, RenderOptions,
+    target_calling_convention, AnalysisBudget, DecompileRequest, DecompileResult, PreparedAst,
+    ProgramDebugContext, ProgramDiscovery, ProgramNameContext, ProgramRenderContext, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -370,18 +369,7 @@ fn decompile_at_session(
             .and_then(|outputs| outputs.get(&func_va)),
         cc,
     );
-    let PreparedAst {
-        function: mut f,
-        mut profiler,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: param_slots,
-        inferred_prototype,
-        prototype,
-        mut stack_facts,
-        role_names,
-    } = lower_and_run_ast_passes(
+    let prepared = lower_and_run_ast_passes(
         prepared_llir,
         &lf_raw,
         outer_name,
@@ -397,36 +385,31 @@ fn decompile_at_session(
         &stack_object_hints,
         &got_targets,
     );
-    // The analyst's own names and types for frame slots, joined by frame
-    // offset and applied through the SAME mechanism debug names use --
-    // `source_names` / `source_types`, consumed by
-    // `naming::apply_authoritative_local_names` at the presentation boundary.
-    // Riding that path rather than building a second one means a rename cannot
-    // turn a scalar assignment into a pointer store, and an analyst who names a
-    // variable `int` gets the same rejection a bad DWARF name gets.
-    if let Some(locals) = analyst_locals {
-        crate::ir::stack_locals::apply_analyst_locals(&mut stack_facts, locals);
-    }
-    merge_dwarf_register_local_facts(
-        &mut stack_facts,
+    let PreparedAst {
+        function: f,
+        mut profiler,
+        cfg_health,
+        numbered: lf,
+        definition_widths,
+        parameter_slots: param_slots,
+        inferred_prototype,
+        prototype,
+        stack_facts,
+        role_names,
+    } = finalize_prepared_ast(
+        prepared,
+        analyst_locals,
         dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va)),
-        &lf,
-        &role_names,
         arch,
         cc,
         dwarf_type_env.as_ref(),
+        style,
+        &exception_sites,
+        &addr_map,
+        field_map.as_ref(),
     );
-    if style == "decbench" {
-        crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-        crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-        crate::ir::exception_recover::recover_throws(&mut f);
-    }
-    recognise_machine_frame(&mut f, cc);
-    if let Some(field_map) = &field_map {
-        crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-    }
     // Emit a `// PDB: <name>` provenance comment in C-style output when the
     // outer function name came from a PDB public symbol -- a hint that this
     // name is Microsoft-authoritative (and not LLM-proposed / FLIRT / CFG-
@@ -822,18 +805,7 @@ fn decompile_range_at_py(
             .and_then(|outputs| outputs.get(&func_va)),
         cc,
     );
-    let PreparedAst {
-        function: mut f,
-        mut profiler,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: param_slots,
-        inferred_prototype,
-        prototype,
-        mut stack_facts,
-        role_names,
-    } = lower_and_run_ast_passes(
+    let prepared = lower_and_run_ast_passes(
         prepared_llir,
         &lf_raw,
         declared_function_name,
@@ -849,26 +821,31 @@ fn decompile_range_at_py(
         &stack_object_hints,
         &got_targets,
     );
-    merge_dwarf_register_local_facts(
-        &mut stack_facts,
+    let PreparedAst {
+        function: f,
+        mut profiler,
+        cfg_health,
+        numbered: lf,
+        definition_widths,
+        parameter_slots: param_slots,
+        inferred_prototype,
+        prototype,
+        stack_facts,
+        role_names,
+    } = finalize_prepared_ast(
+        prepared,
+        None,
         dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va)),
-        &lf,
-        &role_names,
         arch,
         cc,
         dwarf_type_env.as_ref(),
+        style,
+        &exception_sites,
+        &addr_map,
+        field_map.as_ref(),
     );
-    if style == "decbench" {
-        crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-        crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-        crate::ir::exception_recover::recover_throws(&mut f);
-    }
-    recognise_machine_frame(&mut f, cc);
-    if let Some(field_map) = &field_map {
-        crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-    }
     let provenance = match dwarf_outputs
         .as_ref()
         .and_then(|outputs| outputs.get(&func_va))
@@ -1446,18 +1423,7 @@ fn decompile_all_py(
                 .and_then(|outputs| outputs.get(&func.entry_point.value)),
             cc,
         );
-        let PreparedAst {
-            function: mut f,
-            mut profiler,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: param_slots,
-            inferred_prototype,
-            prototype,
-            mut stack_facts,
-            role_names,
-        } = lower_and_run_ast_passes(
+        let prepared = lower_and_run_ast_passes(
             prepared_llir,
             &lf_raw,
             outer_name.clone(),
@@ -1473,26 +1439,31 @@ fn decompile_all_py(
             &stack_object_hints,
             &got_targets,
         );
-        merge_dwarf_register_local_facts(
-            &mut stack_facts,
+        let PreparedAst {
+            function: f,
+            mut profiler,
+            cfg_health,
+            numbered: lf,
+            definition_widths,
+            parameter_slots: param_slots,
+            inferred_prototype,
+            prototype,
+            stack_facts,
+            role_names,
+        } = finalize_prepared_ast(
+            prepared,
+            None,
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            &lf,
-            &role_names,
             arch,
             cc,
             dwarf_type_env.as_ref(),
+            style,
+            &exception_sites,
+            &addr_map,
+            field_map.as_ref(),
         );
-        if style == "decbench" {
-            crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-            crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-            crate::ir::exception_recover::recover_throws(&mut f);
-        }
-        recognise_machine_frame(&mut f, cc);
-        if let Some(field_map) = &field_map {
-            crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-        }
         let text = if style == "decbench" {
             let (decl, width, exact_value_widths) = decbench_type_maps(
                 &f,
@@ -1839,18 +1810,7 @@ fn decompile_many_py(
                 .and_then(|outputs| outputs.get(&func_va)),
             cc,
         );
-        let PreparedAst {
-            function: mut f,
-            mut profiler,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: param_slots,
-            inferred_prototype,
-            prototype,
-            mut stack_facts,
-            role_names,
-        } = lower_and_run_ast_passes(
+        let prepared = lower_and_run_ast_passes(
             prepared_llir,
             &lf_raw,
             outer_name,
@@ -1866,26 +1826,31 @@ fn decompile_many_py(
             &stack_object_hints,
             &got_targets,
         );
-        merge_dwarf_register_local_facts(
-            &mut stack_facts,
+        let PreparedAst {
+            function: f,
+            mut profiler,
+            cfg_health,
+            numbered: lf,
+            definition_widths,
+            parameter_slots: param_slots,
+            inferred_prototype,
+            prototype,
+            stack_facts,
+            role_names,
+        } = finalize_prepared_ast(
+            prepared,
+            None,
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va)),
-            &lf,
-            &role_names,
             arch,
             cc,
             dwarf_type_env.as_ref(),
+            style,
+            &exception_sites,
+            &addr_map,
+            field_map.as_ref(),
         );
-        if style == "decbench" {
-            crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-            crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-            crate::ir::exception_recover::recover_throws(&mut f);
-        }
-        recognise_machine_frame(&mut f, cc);
-        if let Some(field_map) = &field_map {
-            crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-        }
         let pdb_outer_name = pdb_public_map
             .get(&func_va)
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
@@ -2277,10 +2242,10 @@ mod tests {
         assert!(!text.contains("unrecovered indirect jump"), "{text}");
     }
 
+    use super::dwarf_contracts::merge_dwarf_register_local_facts;
     use super::{
         dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
-        merge_dwarf_register_local_facts, select_renderable_dwarf_local_facts,
-        DwarfPrototypeContract,
+        select_renderable_dwarf_local_facts, DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
