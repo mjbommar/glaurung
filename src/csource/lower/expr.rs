@@ -701,7 +701,6 @@ pub(crate) fn canonicalize(low: &mut Lowerer<'_, '_>, raw: &VReg, ty: IntType) -
     out
 }
 
-/// A prefix operator applied to a lowered value.
 /// Load through a pointer.
 ///
 /// The pointee width is what decides how many bytes to read, which is why
@@ -723,6 +722,7 @@ fn deref(low: &mut Lowerer<'_, '_>, node: NodeId, ptr: &Val) -> Result<Val, Lowe
     Ok(Val::plain(out, pointee))
 }
 
+/// A prefix operator applied to a lowered value.
 fn unary(
     low: &mut Lowerer<'_, '_>,
     node: NodeId,

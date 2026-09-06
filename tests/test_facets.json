@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 325,
+  "core": 326,
   "lfs": 114,
   "fixtures": 38,
   "toolchain": 37,
@@ -724,6 +724,9 @@
   ],
   "test_kb_siglib.py": [
    "lfs"
+  ],
+  "test_kb_source_facts.py": [
+   "core"
   ],
   "test_kb_stack_var_preserves.py": [
    "core"

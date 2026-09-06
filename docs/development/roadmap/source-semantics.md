@@ -315,7 +315,27 @@ the number decide whether phase 3 is worth starting.
 
 ## Phase 4 — The query surface, reframed
 
-> **Started** (2026-09-05). The `source` provenance rung exists, ranked **70**:
+> **Landed** (2026-09-06). `python/glaurung/llm/kb/source_facts.py` writes
+> prototypes with the types the source spells and data-dependence edges into an
+> open project, all with `set_by = "source"`. Verified on a real fixture:
+> `05_cleanup_and_state_machine.c` yields 2 prototypes --- `const uint8_t *in`,
+> `int` --- and 112 dependence edges. 11 Python tests, including that `manual`
+> still outranks it and that it outranks `auto`, which is the half of the
+> ladder that was broken before `kb/provenance.py` existed.
+>
+> No schema change was needed. `function_prototypes` already carries `set_by`,
+> `params_json` and a `source` column, and a dependence edge is a typed edge
+> between two identified points, which is what the generic `kb_nodes`/
+> `kb_edges` tables are for. Adding a table would have meant a schema version
+> bump for a shape that already fits.
+>
+> One bug the tests caught: the first version left `session_id` NULL, and the
+> `UNIQUE (session_id, node_id)` constraint never fires on NULL because SQL
+> says NULL is not equal to NULL --- so `INSERT OR REPLACE` inserted a
+> duplicate instead of replacing, and re-ingesting a file doubled every row.
+> `test_ingesting_twice_is_idempotent` is what found it.
+>
+> The `source` provenance rung, ranked **70**:
 > below the three debug-info sources and above `stdlib`. The reasoning is
 > recorded in `kb/provenance.py` and pinned by
 > `test_source_outranks_curated_data_and_loses_to_debug_info`.
@@ -386,6 +406,28 @@ moves phase 3 behind a prerequisite:
    and calls do not move 18.7% substantially, stop here and bank phases 1, 2
    and 4 — they are worth having on their own and none of them needs a solver.
 5. **Phase 4, KB facts.** Cheap once 1 and 2 exist; can be done in parallel.
+   **Done** --- and it was cheap for the reason predicted: the tables already
+   existed, so it was a serialization layer rather than an analysis.
+
+## Where this stands, 2026-09-06
+
+| phase | status |
+|---|---|
+| 1 declared types | **landed** |
+| 2 interprocedural summaries | **landed** |
+| 2.5 widen the lowering | **pointers only** --- coverage still 18.7%, `call expression` now the top refusal at 185 |
+| 3 path feasibility | **not started**, correctly: its gate is the coverage number and that number has not moved |
+| 4 KB facts | **landed** |
+
+Three of five are done and phase 3 is blocked on 2.5 by design. What phases 1,
+2 and 4 deliver together --- declared types, interprocedural reachability with
+a three-valued answer, and both written into a queryable store with provenance
+--- needs no solver at all, which is the ordering this plan chose on purpose.
+
+The next increment is **calls in the lowering**: 185 of the remaining refusals,
+and phase 2 has just built the summaries a call op would apply. Subscripts and
+pointer stores need the pointee scaling that the S4 differential proved must be
+exact or refused, so they follow rather than lead.
 
 Note what this ordering protects: phases 1, 2 and 4 deliver a better product
 than Joern on our one language without the solver being involved at all. Phase 3
