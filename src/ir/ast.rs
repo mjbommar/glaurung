@@ -63,6 +63,7 @@ mod lower_conds;
 mod lower_ops;
 mod lower_region;
 mod named_calls;
+mod origin;
 mod param_spills;
 mod prepare;
 mod return_ctype;
@@ -83,6 +84,7 @@ pub use decbench_render::{
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
 pub use lower_region::lower;
+pub use origin::OriginSet;
 #[cfg(test)]
 pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
 pub(crate) use prepare::{
