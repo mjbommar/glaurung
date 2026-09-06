@@ -47,6 +47,18 @@ The required exact-clean-checkout Rust gate at `d1bf72a7` is green: the library
 target reports 4,126 passed, zero failed, and five ignored, and every
 integration and documentation target passes. The long identity-retrieval
 target independently reports 44 passed, zero failed, and ten ignored.
+The next bounded WP7 range slice is landed at `f39bdf0e`, with census commit
+`98ea766c`. The i386 O2 `wide_selector_mixed` guard now recovers `op <= 5` from
+the exact cdecl32 high/low borrow identity and removes the repeated impossible
+`op > 5` nested arm. The complete 410-lane i386 sweep has no attributable
+execution-verdict movement; this is an output/readability improvement, and the
+still-unrecovered indirect jump remains WP5 work. See
+`results/wp7-cdecl32-wide-range-predicate.md`.
+The required exact-clean-checkout Rust gate at `98ea766c` is green: its library
+target reports 4,132 passed, zero failed, and five ignored, and every
+integration and documentation target passes. The complete host sweep executes
+824 of 838 lanes with zero regressions and reproduces 35 pre-existing
+unratcheted improvements.
 The first fixture-217 follow-on is a bounded WP9 instruction-semantics
 increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
 typed binary32 lanes. The following WP6/WP9 call-boundary increment is also
@@ -1390,10 +1402,12 @@ name-parsing convention was introduced.
 - [~] Land one rule per increment:
   1. [x] flag-derived relational normalization, beginning with the exact typed
      equivalence `!((x == k) || (x <s k)) == (x >s k)` seen in `classify`;
-  2. [ ] strength-reduced constant multiplication;
-  3. [ ] signed division/modulo by a power of two;
-  4. [ ] compiler magic-number division;
-  5. [ ] compound boolean-mask normalization;
+  2. [x] bounded cdecl32 high/low borrow normalization for an authoritative
+     unsigned 64-bit source and an immutable, single-definition alias chain;
+  3. [ ] strength-reduced constant multiplication;
+  4. [ ] signed division/modulo by a power of two;
+  5. [ ] compiler magic-number division;
+  6. [ ] compound boolean-mask normalization;
 - [ ] Each rule must declare operand width, signed interpretation,
   preconditions, output type, and origin composition.
 - [ ] Never peel or narrow casts unless equivalence is proved at the original
@@ -1430,6 +1444,19 @@ view, compile as C, and pass 34 differential cases each. The 24-lane loops,
 polarity, switch, and width corpus reports zero scoped regressions. This closes
 the predicate subproblem only; stripped return inference and redundant return
 casts remain WP6 work. See `results/wp7b-classify-signed-predicate.md`.
+
+The bounded two-word range rule landed at `f39bdf0e`. It recognizes only the
+exact cdecl32 identity `(0 <u hi) | ((0 - hi) <u (k <u lo))`, requires `hi` and
+`lo` to be the unsigned 32-bit projections of the same recovered unsigned
+eight-byte source, and resolves only single-definition aliases whose complete
+dependency set is never assigned. A following path rule removes the repeated
+inverse nested guard only after ordinary boolean folding makes both typed
+comparisons structurally complementary. This is an explicit pre-WP3 range-
+fusion exception, not the general SSA-expression framework; mutable or
+ambiguous identities decline. The real i386 O2 output replaces the flag tree
+with `op <= 5` and removes the impossible nested arm, while retaining the
+honest unrecovered indirect jump and red execution status. See
+`results/wp7-cdecl32-wide-range-predicate.md`.
 
 At `81ffe9ab`, `cargo test --features python-ext` passes, including 15 focused
 comparison-fusion tests and 191 AST/render tests; the six def-use census tests
