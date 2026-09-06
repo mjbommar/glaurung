@@ -64,6 +64,7 @@ Both have since landed, so they are links again.
 | [x] All four adapters construct typed requests/results before legacy projection | review WP2 | `15d044eb` |
 | [~] Pipeline-owned image-wide render context used once per adapter/batch | review WP2 | `e0588083` |
 | [~] Pipeline-owned DWARF/PDB context used once per adapter/batch | review WP2 | `21f8b29a` |
+| [~] Pipeline-owned binary-truth name/data context used once per adapter/batch | review WP2 | `2ef9c4eb` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |

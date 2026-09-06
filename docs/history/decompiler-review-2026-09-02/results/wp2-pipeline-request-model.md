@@ -3,7 +3,7 @@
 Date: 2026-09-06
 
 Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
-`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`, `21f8b29a`
+`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`, `21f8b29a`, `2ef9c4eb`
 
 ## Boundary moved
 
@@ -140,6 +140,16 @@ avoiding a self-referential context while keeping the preparation policy in one
 place. Each adapter retains its exact prior enablement condition, including the
 declaration-only DecBench batch mode.
 
+`2ef9c4eb` centralizes the remaining binary-truth name/data preparation.
+`prepare_program_name_context` now owns the combined object parse and the
+ordered enrichment with discovered names, FLIRT-referenced names, and ordinary
+referenced-function names. It returns the address-name map and data symbols as
+one `ProgramNameContext`; analyst overlays remain intentionally later because
+semantic callee/environment queries must use binary truth. The four adapters no
+longer hold raw image-byte locals or independently sequence these name sources.
+The profile ceiling remains 20 parses across the tested language/toolchain
+samples.
+
 The expanded profile test initially exposed 21 constant object parses against
 the ceiling of 20. An exact parent/current A/B proved the result model added
 none. Call-site instrumentation then located the duplicate: the combined
@@ -201,3 +211,10 @@ without changing the ceiling.
   passed, zero failed, and five ignored; every integration and documentation
   target passed. Identity retrieval reports 44 passed and ten ignored in
   526.66 seconds.
+- Fresh release extension plus the same 37 focused checks at `2ef9c4eb`:
+  passed, including full-text entry-point equivalence and the object-parse
+  ceiling.
+- Full `cargo test --features python-ext` at `2ef9c4eb`: 4,203 library tests
+  passed, zero failed, and five ignored; every integration and documentation
+  target passed. Identity retrieval reports 44 passed and ten ignored in
+  528.62 seconds.
