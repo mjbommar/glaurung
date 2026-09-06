@@ -14,6 +14,7 @@ FIXTURES = ROOT / "tests" / "decompiler_fixtures"
 sys.path.insert(0, str(ROOT / "tools"))
 
 D = importlib.import_module("diff_decompile")
+INCOMPLETE_MARKER = "GLAURUNG-INCOMPLETE"
 
 
 @pytest.mark.parametrize(("style", "types"), [("decbench", True), ("c", False), ("", False)])
@@ -59,3 +60,30 @@ def test_discovered_exact_range_matches_every_whole_cfg_entry_point(
     )
 
     assert by_address == by_range == by_batch == by_all
+
+
+def test_lower_exact_range_budget_preserves_output_and_names_the_fired_limit() -> None:
+    """Changing only the range CFG budget must make incompleteness explicit."""
+    binary = FIXTURES / "build" / "08_indirect_dispatch-gcc-O2.so"
+    path = str(binary)
+    va = D.exported_functions(path)["tail_dispatch"]
+    common = {
+        "max_functions": 64,
+        "max_instructions": 200_000,
+        "timeout_ms": 5000,
+        "types": True,
+        "style": "decbench",
+    }
+
+    complete = g.ir.decompile_range_at(path, va, va, va + 0x26, max_blocks=4096, **common)
+    limited = g.ir.decompile_range_at(path, va, va, va + 0x26, max_blocks=1, **common)
+
+    assert limited != complete
+    assert INCOMPLETE_MARKER not in complete
+    assert INCOMPLETE_MARKER in limited
+    assert "tail_dispatch" in complete and "tail_dispatch" in limited
+
+    header = "\n".join(line for line in limited.splitlines() if line.startswith("//"))
+    assert "max_blocks=1" in header
+    assert "max_instructions=" not in header
+    assert "timeout_ms=" not in header
