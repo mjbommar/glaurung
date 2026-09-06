@@ -9268,10 +9268,10 @@
     "bsc202_assign_bit": "pass",
     "bsc202_clear_bit": "pass",
     "bsc202_clz32": "pass",
-    "bsc202_clz64": "fail",
+    "bsc202_clz64": "pass",
     "bsc202_count_and_index": "pass",
     "bsc202_ctz32": "pass",
-    "bsc202_ctz64": "fail",
+    "bsc202_ctz64": "pass",
     "bsc202_msb_first_bit": "pass",
     "bsc202_reflect_in_byte": "pass",
     "bsc202_scatter_bits": "pass",
@@ -9282,10 +9282,10 @@
     "bsc202_assign_bit": "pass",
     "bsc202_clear_bit": "fail",
     "bsc202_clz32": "pass",
-    "bsc202_clz64": "fail",
+    "bsc202_clz64": "pass",
     "bsc202_count_and_index": "pass",
     "bsc202_ctz32": "pass",
-    "bsc202_ctz64": "fail",
+    "bsc202_ctz64": "pass",
     "bsc202_msb_first_bit": "pass",
     "bsc202_reflect_in_byte": "pass",
     "bsc202_scatter_bits": "pass",
@@ -10437,15 +10437,15 @@
   "215_switch_on_wide_selector:i386:O0": {
     "narrow_selector_control": "pass",
     "signed_wide_selector": "fail",
-    "wide_selector_dense": "fail",
-    "wide_selector_high_labels": "fail",
-    "wide_selector_mixed": "fail"
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
+    "wide_selector_mixed": "pass"
   },
   "215_switch_on_wide_selector:i386:O2": {
     "narrow_selector_control": "pass",
     "signed_wide_selector": "fail",
-    "wide_selector_dense": "fail",
-    "wide_selector_high_labels": "fail",
+    "wide_selector_dense": "pass",
+    "wide_selector_high_labels": "pass",
     "wide_selector_mixed": "fail"
   },
   "215_switch_on_wide_selector:x86_64:O0": {
