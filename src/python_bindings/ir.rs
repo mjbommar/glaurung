@@ -56,10 +56,11 @@ use dwarf_contracts::{
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    lower_and_run_ast_passes, prepare_llir_for_lowering, prepare_program_debug_context,
-    prepare_program_name_context, prepare_program_render_context, recognise_machine_frame,
-    target_calling_convention, AnalysisBudget, DecompileRequest, DecompileResult, PreparedAst,
-    ProgramDebugContext, ProgramNameContext, ProgramRenderContext, RenderOptions,
+    discover_program, lower_and_run_ast_passes, prepare_llir_for_lowering,
+    prepare_program_debug_context, prepare_program_name_context, prepare_program_render_context,
+    recognise_machine_frame, target_calling_convention, AnalysisBudget, DecompileRequest,
+    DecompileResult, PreparedAst, ProgramDebugContext, ProgramDiscovery, ProgramNameContext,
+    ProgramRenderContext, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -239,12 +240,10 @@ fn decompile_at_session(
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = analysis_budget.discovery();
-    // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `Budgets` is
-    // `Copy`; no `Bound`/`Py` reference crosses the closure boundary. See
-    // `python_bindings::analysis`.
-    let funcs = py.detach(|| session.discover_functions(&budgets, &[func_va]));
+    let ProgramDiscovery {
+        budgets,
+        functions: funcs,
+    } = discover_program(py, session, analysis_budget, &[func_va]);
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
@@ -600,6 +599,7 @@ fn decompile_at_session(
 #[pyo3(name = "decompile_range_at")]
 #[pyo3(signature = (path, func_va, range_start, range_end, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache=""))]
 fn decompile_range_at_py(
+    py: Python<'_>,
     path: String,
     func_va: u64,
     range_start: u64,
@@ -696,7 +696,6 @@ fn decompile_range_at_py(
     })?;
     let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
     let capped_end = range_end.min(range_start.saturating_add(max_bytes));
-    let budgets = analysis_budget.discovery();
     let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let block_start = Address::new(AddressKind::VA, range_start, bits, None, None)
@@ -709,7 +708,10 @@ fn decompile_range_at_py(
     // block lies inside the caller's explicit range. This makes range and
     // address requests consume the same control-flow facts without weakening
     // the range API's ability to lift an otherwise undiscovered byte window.
-    let discovered = session.discover_functions(&budgets, &[func_va]);
+    let ProgramDiscovery {
+        budgets,
+        functions: discovered,
+    } = discover_program(py, &session, analysis_budget, &[func_va]);
     let discovered_function = discovered
         .iter()
         .find(|candidate| {
@@ -1318,12 +1320,10 @@ fn decompile_all_py(
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = analysis_budget.discovery();
-    // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `Budgets` is
-    // `Copy`; no `Bound`/`Py` reference crosses the closure boundary. See
-    // `python_bindings::analysis`.
-    let funcs = py.detach(|| session.discover_functions(&budgets, &[]));
+    let ProgramDiscovery {
+        budgets,
+        functions: funcs,
+    } = discover_program(py, &session, analysis_budget, &[]);
     let cc = target_calling_convention(&image)?;
     let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
@@ -1668,13 +1668,11 @@ fn decompile_many_py(
         analyst_locals: None,
         analyst_prototype: None,
     };
-    let budgets = analysis_budget.discovery();
     // --- one-time analysis + name/field/string maps -----------------------
-    // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `Budgets` is
-    // `Copy`; no `Bound`/`Py` reference crosses the closure boundary. See
-    // `python_bindings::analysis`.
-    let funcs = py.detach(|| session.discover_functions(&budgets, &func_vas));
+    let ProgramDiscovery {
+        budgets,
+        functions: funcs,
+    } = discover_program(py, &session, analysis_budget, &func_vas);
     let cc = target_calling_convention(&image)?;
     let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();

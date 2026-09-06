@@ -35,6 +35,25 @@ impl AnalysisBudget {
     }
 }
 
+/// One authoritative discovery result paired with the exact limits that
+/// produced it. Keeping these together prevents later context builders from
+/// accidentally querying the session with a different budget identity.
+pub(super) struct ProgramDiscovery {
+    pub(super) budgets: crate::analysis::cfg::Budgets,
+    pub(super) functions: std::sync::Arc<[crate::core::function::Function]>,
+}
+
+pub(super) fn discover_program(
+    py: Python<'_>,
+    session: &crate::program::session::ProgramSession,
+    analysis_budget: AnalysisBudget,
+    requested_vas: &[u64],
+) -> ProgramDiscovery {
+    let budgets = analysis_budget.discovery();
+    let functions = py.detach(|| session.discover_functions(&budgets, requested_vas));
+    ProgramDiscovery { budgets, functions }
+}
+
 /// Rendering and analyst overlays attached to one pipeline request.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RenderOptions<'a> {
