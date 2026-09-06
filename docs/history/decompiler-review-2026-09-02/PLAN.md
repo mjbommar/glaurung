@@ -41,8 +41,11 @@ at `41bd90a6`, but discovery/context assembly and rendering remain adapter-owned
 `5ea45dca` adds the result half for the single-function path with real health,
 completeness, provenance, and a versioned budget/pass fingerprint. `15d044eb`
 makes range, all, and many construct the same typed request and result internally
-before preserving their legacy Python return shapes. Context/rendering
-consolidation, the remaining budget classes, the pass manager, and the fixpoint
+before preserving their legacy Python return shapes. `e0588083` moves the
+image-wide string/data reconciliation, relocated read-only data, function-table,
+and GOT facts into one pipeline-owned `ProgramRenderContext` used by all four
+adapters and prepared once per batch. Discovery/debug context, per-function
+rendering, the remaining budget classes, the pass manager, and the fixpoint
 driver remain open, so WP2 is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
@@ -549,21 +552,23 @@ and make pass repetition/invalidation explicit.
   `d6a65779` lands the request half for module-level and reusable-session
   `decompile_at`: the VA, five explicit discovery limits, render selection,
   debug cache, and analyst overlays now cross one typed boundary. The result
-  model and the range/all/many request adapters remain open. Follow-on
+  model and the range/all/many request adapters were initially open. Follow-on
   `5a2d6c86` moves all four entry points onto the same `AnalysisBudget`
   conversion and makes an exact discovered range reuse the ordinary CFG and
   direct-callee facts. `5ea45dca` adds `DecompileResult` for module/session
   single-function requests, carrying rendered text, final AST health, exact
-  completeness limits, provenance, and the pipeline fingerprint. Range/all/many
-  still return their adapter-specific shapes directly.
+  completeness limits, provenance, and the pipeline fingerprint. `15d044eb`
+  makes range/all/many construct the same request and result internally before
+  projecting their legacy adapter-specific shapes.
 - [~] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
   `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
   lower-stage health tracing, and the AST pass invocation behind one
   pipeline-owned `lower_and_run_ast_passes` boundary. All four adapters consume
   its `PreparedAst`, including exact-range, which previously skipped
-  pass-through parameter refinement. Context assembly and rendering still need
-  to move before this item is complete.
+  pass-through parameter refinement. `e0588083` then centralizes the immutable
+  image-wide render facts in `ProgramRenderContext`. Discovery/debug context and
+  per-function rendering still need to move before this item is complete.
 - [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
   Module-level and reusable-session `decompile_at` create the typed request;
@@ -572,8 +577,9 @@ and make pass repetition/invalidation explicit.
   `5a2d6c86` makes an exact discovered range reuse both authoritative inputs
   while preserving the explicit-window fallback. `41bd90a6` then makes every
   adapter call the same LLIR-to-AST stage. `15d044eb` closes typed request/result
-  construction for range/all/many too; moving their context assembly and final
-  rendering behind one `decompile_function` remains open.
+  construction for range/all/many too. `e0588083` removes four copies of the
+  image-wide render-context builder; moving the remaining discovery/debug
+  context and final rendering behind one `decompile_function` remains open.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to

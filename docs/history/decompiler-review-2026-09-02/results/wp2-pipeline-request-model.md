@@ -3,7 +3,7 @@
 Date: 2026-09-06
 
 Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
-`73a79d61`, `5ea45dca`, `15d044eb`
+`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`
 
 ## Boundary moved
 
@@ -22,10 +22,12 @@ remaining entry points migrate.
 
 ## Deliberate boundary
 
-This is the first WP2 production slice, not completion. `decompile_range_at`,
-`decompile_all`, and `decompile_many` still own duplicated orchestration. The
-pipeline-owned structured result, completeness/provenance, fingerprint,
-checked pass stages, and bounded fixpoint driver also remain open. No new
+This is an incremental WP2 production series, not completion. All four adapters
+now construct typed requests/results, share callee preparation and LLIR-to-AST
+lowering, and consume one image-wide render-context builder. Discovery/debug
+assembly, declaration-local merging, and final rendering remain adapter-owned.
+Checked pass stages, the bounded fixpoint driver, the remaining explicit budget
+classes, and a structured public Python projection also remain open. No new
 public Python API or output format is claimed.
 
 ## Exact-range convergence
@@ -113,6 +115,22 @@ provenance, and the same versioned fingerprint. This does not yet centralize the
 context assembly or renderer itself; those remain the boundary required to turn
 the adapters into thin shells over one `decompile_function`.
 
+## Program render context
+
+`e0588083` removes four copies of the immutable image-wide render setup.
+`pipeline.rs::prepare_program_render_context` is now the sole constructor for:
+
+- data-symbol/string-pool reconciliation;
+- relocation-aware read-only data;
+- function-pointer tables; and
+- ELF GOT target facts.
+
+Every adapter consumes the resulting `ProgramRenderContext`. All/many prepare
+it once outside their per-function loops, preserving the batch performance
+contract. This is deliberately narrower than the final `decompile_function`
+boundary: debug-contract loading, discovery and address-name construction,
+per-function declaration facts, and final rendering still remain to migrate.
+
 The expanded profile test initially exposed 21 constant object parses against
 the ceiling of 20. An exact parent/current A/B proved the result model added
 none. Call-site instrumentation then located the duplicate: the combined
@@ -161,3 +179,10 @@ without changing the ceiling.
   including five concurrent-lane declarations outside this commit; five were
   ignored. Identity retrieval reports 44 passed and ten ignored in 523.30
   seconds, and every integration/documentation target passed.
+- Fresh release extension plus the same entry-point, declaration, PDB, session,
+  determinism, pipeline-profile, and stripped-callee set at `e0588083`: 37
+  passed.
+- Full `cargo test --features python-ext` at `e0588083`: 4,203 library tests
+  passed, zero failed, and five ignored; every integration and documentation
+  target passed. Identity retrieval reports 44 passed and ten ignored in
+  524.91 seconds.
