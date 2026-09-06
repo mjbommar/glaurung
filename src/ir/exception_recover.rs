@@ -7,7 +7,7 @@
 //! `try`/`catch`.  ABI allocation/store/throw sequences become `Stmt::Throw`.
 
 use crate::analysis::exception::{CatchType, ExceptionAction, ExceptionCallSite};
-use crate::ir::ast::{CatchClause, Expr, Function, Stmt};
+use crate::ir::ast::{CatchClause, Expr, Function, OriginSet, Stmt};
 use crate::ir::types::VReg;
 
 /// Preserve landing-pad identity through generic label cleanup without making
@@ -17,7 +17,7 @@ pub fn mark_landing_pads(function: &mut Function, sites: &[ExceptionCallSite]) {
         let Some(index) = function
             .body
             .iter()
-            .position(|stmt| matches!(stmt, Stmt::Label(va) if *va == site.landing_pad))
+            .position(|stmt| matches!(stmt.semantic(), Stmt::Label(va) if *va == site.landing_pad))
         else {
             continue;
         };
@@ -34,8 +34,8 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
         site.action == ExceptionAction::Catch
             && site.catch_type == Some(CatchType::Int)
             && function.body.iter().any(|stmt| {
-                matches!(stmt, Stmt::Label(va) if *va == site.landing_pad)
-                    || matches!(stmt, Stmt::Comment(text) if text == &format!(
+                matches!(stmt.semantic(), Stmt::Label(va) if *va == site.landing_pad)
+                    || matches!(stmt.semantic(), Stmt::Comment(text) if text == &format!(
                         "__glaurung_eh_landing_{:x}",
                         site.landing_pad
                     ))
@@ -45,8 +45,8 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
     };
     let marker = format!("__glaurung_eh_landing_{:x}", site.landing_pad);
     let Some(landing_index) = function.body.iter().position(|stmt| {
-        matches!(stmt, Stmt::Label(va) if *va == site.landing_pad)
-            || matches!(stmt, Stmt::Comment(text) if text == &marker)
+        matches!(stmt.semantic(), Stmt::Label(va) if *va == site.landing_pad)
+            || matches!(stmt.semantic(), Stmt::Comment(text) if text == &marker)
     }) else {
         return;
     };
@@ -57,7 +57,7 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(index, stmt)| match stmt {
+            .find_map(|(index, stmt)| match stmt.semantic() {
                 Stmt::Return { value: Some(value) } => Some((index, value.clone())),
                 _ => None,
             })
@@ -89,39 +89,39 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
     // jumps into the normal epilogue.  That exact target label is the boundary:
     // copying from the normal return-register definition would overwrite the
     // handler's value before returning it.
-    let shared_epilogue_start =
-        handler[end_index + 1..tail_end]
-            .iter()
-            .find_map(|stmt| match stmt {
-                Stmt::Goto { target } => normal
-                    .iter()
-                    .position(|candidate| matches!(candidate, Stmt::Label(va) if va == target)),
-                _ => None,
-            });
+    let shared_epilogue_start = handler[end_index + 1..tail_end]
+        .iter()
+        .find_map(|stmt| match stmt.semantic() {
+            Stmt::Goto { target } => normal.iter().position(
+                |candidate| matches!(candidate.semantic(), Stmt::Label(va) if va == target),
+            ),
+            _ => None,
+        });
     let return_suffix_start = shared_epilogue_start.unwrap_or_else(|| match &return_value {
         Expr::Reg(return_reg) => normal[..return_index]
             .iter()
             .rposition(
-                |statement| matches!(statement, Stmt::Assign { dst, .. } if dst == return_reg),
+                |statement| matches!(statement.semantic(), Stmt::Assign { dst, .. } if dst == return_reg),
             )
             .unwrap_or(return_index),
         _ => return_index,
     });
     let return_suffix: Vec<Stmt> = normal[return_suffix_start..=return_index]
         .iter()
-        .filter(|stmt| !matches!(stmt, Stmt::Label(_) | Stmt::Goto { .. }))
+        .filter(|stmt| !matches!(stmt.semantic(), Stmt::Label(_) | Stmt::Goto { .. }))
         .cloned()
         .collect();
     catch_body.extend(
         handler[end_index + 1..tail_end]
             .iter()
-            .filter(|stmt| !matches!(stmt, Stmt::Label(_) | Stmt::Goto { .. }))
+            .filter(|stmt| !matches!(stmt.semantic(), Stmt::Label(_) | Stmt::Goto { .. }))
             .cloned(),
     );
     replace_caught_value(&mut catch_body, &catch_pointer, &binding);
     catch_body.extend(return_suffix);
     fold_restored_catch_return(&mut catch_body);
 
+    let origins = origins_of(&function.body);
     function.body = vec![Stmt::TryCatch {
         try_body: normal.to_vec(),
         catches: vec![CatchClause {
@@ -129,7 +129,8 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
             binding,
             body: catch_body,
         }],
-    }];
+    }
+    .with_optional_origins((!origins.is_empty()).then_some(origins))];
     if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
         eprintln!(
             "\n===== after recover_typed_handlers =====\n{}",
@@ -147,7 +148,7 @@ fn fold_restored_catch_return(body: &mut Vec<Stmt>) {
         body.iter()
             .enumerate()
             .rev()
-            .find_map(|(index, stmt)| match stmt {
+            .find_map(|(index, stmt)| match stmt.semantic() {
                 Stmt::Store {
                     addr: Expr::Reg(VReg::Phys(name)),
                     src,
@@ -162,7 +163,7 @@ fn fold_restored_catch_return(body: &mut Vec<Stmt>) {
         body.iter()
             .enumerate()
             .skip(store_index + 1)
-            .find_map(|(index, stmt)| match stmt {
+            .find_map(|(index, stmt)| match stmt.semantic() {
                 Stmt::Pop { target } => Some((index, target.clone())),
                 _ => None,
             })
@@ -170,16 +171,18 @@ fn fold_restored_catch_return(body: &mut Vec<Stmt>) {
         return;
     };
     if !matches!(
-        body.get(pop_index + 1),
+        body.get(pop_index + 1).map(Stmt::semantic),
         Some(Stmt::Return {
             value: Some(Expr::Reg(register))
         }) if register == &target
     ) {
         return;
     }
+    let origins = origins_of(&body[store_index..=pop_index + 1]);
     body.splice(
         pop_index..=pop_index + 1,
-        [Stmt::Return { value: Some(saved) }],
+        [Stmt::Return { value: Some(saved) }
+            .with_optional_origins((!origins.is_empty()).then_some(origins))],
     );
 }
 
@@ -220,7 +223,7 @@ fn mark_int_throws_in(
 ) {
     let mut addresses = inherited_addresses.clone();
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::Assign { dst, src } => {
                 if let Some(address) = known_exception_address(src, &addresses) {
                     addresses.insert(dst.clone(), address);
@@ -383,7 +386,7 @@ fn statements_reference_named_address(
 
     let mut definitions = inherited_addresses.clone();
     for (index, statement) in statements.iter().enumerate() {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { dst, src } => {
                 if index >= proof_start
                     && expression_references(src, &definitions, address_names, expected_name)
@@ -443,7 +446,7 @@ fn statements_reference_named_address(
 
 fn recover_throws_in(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -485,9 +488,9 @@ fn recover_throws_in(body: &mut Vec<Stmt>) {
     else {
         return;
     };
-    let marker = allocate
-        .checked_sub(1)
-        .filter(|index| matches!(&body[*index], Stmt::Comment(text) if text == INT_THROW_MARKER));
+    let marker = allocate.checked_sub(1).filter(
+        |index| matches!(body[*index].semantic(), Stmt::Comment(text) if text == INT_THROW_MARKER),
+    );
     if marker.is_none()
         && !body[allocate..=throw]
             .iter()
@@ -498,15 +501,18 @@ fn recover_throws_in(body: &mut Vec<Stmt>) {
     let Some(value) = resolved_throw_value(body, allocate, throw) else {
         return;
     };
+    let replacement_start = marker.unwrap_or(allocate);
+    let origins = origins_of(&body[replacement_start..=throw]);
     body.splice(
-        marker.unwrap_or(allocate)..=throw,
+        replacement_start..=throw,
         [Stmt::Throw {
             value: Expr::Cast {
                 signed: true,
                 width: 4,
                 expr: Box::new(value),
             },
-        }],
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins))],
     );
 }
 
@@ -558,7 +564,7 @@ fn resolved_throw_value(body: &[Stmt], allocate: usize, throw: usize) -> Option<
 
     let mut definitions = std::collections::HashMap::new();
     for (index, statement) in body.iter().enumerate().take(throw) {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { dst, src } => {
                 definitions.insert(dst.clone(), src.clone());
             }
@@ -579,7 +585,7 @@ fn resolved_throw_value(body: &[Stmt], allocate: usize, throw: usize) -> Option<
 }
 
 fn call_name(statement: &Stmt) -> Option<&str> {
-    let Stmt::Call { target, .. } = statement else {
+    let Stmt::Call { target, .. } = statement.semantic() else {
         return None;
     };
     match target {
@@ -589,7 +595,7 @@ fn call_name(statement: &Stmt) -> Option<&str> {
 }
 
 fn call_destination(statement: &Stmt) -> Option<VReg> {
-    let Stmt::Call { dst, .. } = statement else {
+    let Stmt::Call { dst, .. } = statement.semantic() else {
         return None;
     };
     dst.clone()
@@ -612,7 +618,7 @@ fn is_throw_call(statement: &Stmt) -> bool {
 }
 
 fn is_unwind_boundary(statement: &Stmt) -> bool {
-    matches!(statement, Stmt::Label(_))
+    matches!(statement.semantic(), Stmt::Label(_))
         || call_name(statement).is_some_and(|name| name.starts_with("_Unwind_Resume"))
 }
 
@@ -639,7 +645,7 @@ fn statement_mentions_typeinfo_int(statement: &Stmt) -> bool {
             _ => false,
         }
     }
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { src, .. } => expression_mentions(src),
         Stmt::Store { addr, src, .. } => expression_mentions(addr) || expression_mentions(src),
         Stmt::Call { target, args, .. } => {
@@ -657,7 +663,7 @@ fn replace_caught_value(body: &mut [Stmt], pointer: &VReg, binding: &VReg) {
             if let Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
-            } = statement
+            } = statement.semantic()
             {
                 if aliases.contains(source) {
                     aliases.insert(dst.clone());
@@ -705,7 +711,7 @@ fn replace_caught_value(body: &mut [Stmt], pointer: &VReg, binding: &VReg) {
         }
     }
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::Assign { src, .. } => rewrite(src, &aliases, binding),
             Stmt::Store { addr, src, .. } => {
                 rewrite(addr, &aliases, binding);
@@ -720,6 +726,13 @@ fn replace_caught_value(body: &mut [Stmt], pointer: &VReg, binding: &VReg) {
             _ => {}
         }
     }
+}
+
+fn origins_of(statements: &[Stmt]) -> OriginSet {
+    statements
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next))
 }
 
 #[cfg(test)]
@@ -789,6 +802,62 @@ mod tests {
             Stmt::Assign { src: Expr::Reg(name), .. } if name == &VReg::phys("exception_0")
         ));
         assert!(matches!(catches[0].body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn instruction_origins_survive_typed_handler_recovery() {
+        let pointer = VReg::phys("caught_ptr");
+        let statements = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(7),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            },
+            Stmt::Label(0x1030),
+            abi_call("__cxa_begin_catch@plt", Some(pointer.clone())),
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Reg(pointer)),
+                    size: 4,
+                },
+            },
+            abi_call("__cxa_end_catch@plt", None),
+        ];
+        let mut function = Function {
+            name: "f".to_string(),
+            entry_va: 0x1000,
+            body: statements
+                .into_iter()
+                .enumerate()
+                .map(|(index, statement)| {
+                    statement
+                        .with_origins(crate::ir::ast::OriginSet::one(0x1000 + index as u64 * 4))
+                })
+                .collect(),
+        };
+        let sites = [ExceptionCallSite {
+            function_start: 0x1000,
+            protected_start: 0x1004,
+            protected_end: 0x1010,
+            landing_pad: 0x1030,
+            action: ExceptionAction::Catch,
+            catch_type: Some(CatchType::Int),
+            type_info_location: Some(0x4000),
+        }];
+
+        recover_typed_handlers(&mut function, &sites);
+
+        assert!(matches!(function.body[0].semantic(), Stmt::TryCatch { .. }));
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("handler origins")
+                .addresses(),
+            &[0x1000, 0x1004, 0x1008, 0x100c, 0x1010, 0x1014]
+        );
     }
 
     #[test]
