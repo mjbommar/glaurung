@@ -158,7 +158,13 @@ fn statement(
                     }
                 }
             }
-            low.b.emit(Op::Return);
+            // Inside an inlined body a `return` is a *jump*: emitting
+            // `Op::Return` would end the caller's function too, which is the
+            // one thing substituting a body must not do.
+            match low.inlining.last() {
+                Some(frame) => low.b.jump(frame.join),
+                None => low.b.emit(Op::Return),
+            }
             let dead = low.b.new_block();
             low.b.switch_to(dead);
             Ok(())

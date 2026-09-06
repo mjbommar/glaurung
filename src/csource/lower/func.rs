@@ -100,6 +100,21 @@ pub struct Local {
     pub elements: Option<u64>,
 }
 
+/// One inlined call in progress.
+///
+/// The lowering has no `Op::Call` it could execute --- `Machine::run_function`
+/// surfaces one as `Outcome::CalledOut` and stops --- so a call to a function
+/// defined in the same file is lowered by *substituting its body*. This is what
+/// a `return` inside that body needs to know: it must jump to the caller's join
+/// block rather than emit `Op::Return`, which would end the whole function.
+#[derive(Debug, Clone)]
+pub struct InlineFrame {
+    /// The callee's name, so a recursive call can be recognised and refused.
+    pub callee: String,
+    /// Where a `return` in the inlined body jumps to.
+    pub join: super::build::BlockRef,
+}
+
 /// Where `break` and `continue` go in the innermost enclosing loop.
 #[derive(Debug, Clone, Copy)]
 pub struct LoopTargets {
@@ -127,6 +142,11 @@ pub struct Ctx<'a> {
     /// this**, against 54 real file-scope variables, so resolving them is by
     /// far the cheapest coverage available.
     macros: std::collections::BTreeMap<String, i128>,
+    /// Every function *defined* in this translation unit, by name.
+    ///
+    /// Cached here because `Tree::functions` walks the whole tree, and an
+    /// inliner asks "is this callee defined here" at every call site.
+    defined: std::collections::BTreeMap<String, FunctionDef>,
 }
 
 impl<'a> Ctx<'a> {
@@ -134,12 +154,31 @@ impl<'a> Ctx<'a> {
     pub fn new(tree: &'a Tree, text: &'a str) -> Self {
         let spans = tree.token_spans(text);
         let macros = object_like_integer_macros(text);
+        let defined = tree
+            .functions(text)
+            .into_iter()
+            .filter(|f| !f.name.is_empty())
+            .map(|f| (f.name.clone(), f))
+            .collect();
         Self {
             tree,
             text,
             spans,
             macros,
+            defined,
         }
+    }
+
+    /// The definition of `name`, when this translation unit contains one.
+    pub fn function_named(&self, name: &str) -> Option<&FunctionDef> {
+        self.defined.get(name)
+    }
+
+    /// The result type and parameters of a function defined here.
+    pub fn signature(&self, def: &FunctionDef) -> Result<(CType, Vec<ParamSlot>), LowerError> {
+        let ret = function_result_type(self, def)?;
+        let params = function_parameters(self, def)?;
+        Ok((ret, params))
     }
 
     /// The integer value of `name`, when the file defines it as an object-like
@@ -214,6 +253,18 @@ pub struct Lowerer<'a, 'b> {
     pub loops: Vec<LoopTargets>,
     /// The declared result type.
     pub ret: CType,
+    /// Inlined calls currently open, innermost last.
+    ///
+    /// Empty while lowering the outermost function's own statements; a `return`
+    /// consults the last entry.
+    pub inlining: Vec<InlineFrame>,
+    /// Every function on the inline stack, outermost first, including the one
+    /// being lowered.
+    ///
+    /// This is what makes recursion terminate rather than loop: substituting a
+    /// body is not a fixpoint, so `f` calling `f` --- directly or through any
+    /// cycle --- would substitute forever. A name already here is refused.
+    pub outer: Vec<String>,
 }
 
 impl<'a, 'b> Lowerer<'a, 'b> {
@@ -383,6 +434,8 @@ pub fn lower_function(
         scopes: vec![BTreeMap::new()],
         loops: Vec::new(),
         ret: ret.clone(),
+        inlining: Vec::new(),
+        outer: vec![def.name.clone()],
     };
 
     // Prologue: move each argument register into the parameter's frame slot,

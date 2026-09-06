@@ -32,6 +32,7 @@ use crate::syntax::ids::NodeId;
 use super::build::BlockRef;
 use super::ctype::{CType, IntType};
 use super::func::{Local, Lowerer};
+use super::call::{inline_call, parenthesised_type};
 use super::literal::parse_literal;
 use super::value::{binary, canonicalize, convert, deref, index_address, load_local, unary, Val};
 use super::{unsupported, LowerError};
@@ -533,15 +534,45 @@ fn postfix(
     };
     for suffix in suffixes {
         match ctx.tag(*suffix) {
-            // A call needs the callee's body: `Machine::run_function` surfaces
-            // `Op::Call` as `Outcome::CalledOut` and stops, so a lowered call
-            // could not be executed even if it were emitted.
-            Some(NodeTag::CallArgs) => return unsupported("call expression", node, ctx),
+            // A call is handled below, by substituting the callee's body.
+            Some(NodeTag::CallArgs) => {}
             Some(NodeTag::MemberSuffix) => return unsupported("struct member access", node, ctx),
             Some(NodeTag::IndexSuffix) | Some(NodeTag::IncDecSuffix) => {}
             _ => return unsupported("postfix suffix", node, ctx),
         }
     }
+    // A call is the whole postfix expression or it is refused: `f()[i]` and
+    // `f()->x` need the result to be a pointer into something, which a
+    // substituted body does not give a name to.
+    if let [args] = suffixes {
+        if ctx.tag(*args) == Some(NodeTag::CallArgs) {
+            // `(uint32_t)(x)` is a *cast*, but `(a)(b)` is a call, and the two
+            // are the same shape to a parser with no type table. This one has
+            // a type table, so the ambiguity is resolved here rather than left
+            // to the grammar --- and resolved conservatively: a parenthesised
+            // name that does not resolve to a type stays a call, which is what
+            // an actual `(fp)(x)` through a function pointer needs.
+            if let Some(ty) = parenthesised_type(low, primary) {
+                let arguments = ctx.children(*args);
+                let [only] = arguments[..] else {
+                    return unsupported("cast applied to more than one operand", node, ctx);
+                };
+                jobs.push(Job::Convert { ty });
+                jobs.push(Job::Eval(only));
+                return Ok(());
+            }
+            let value = inline_call(low, node, primary, *args)?;
+            values.push(value);
+            return Ok(());
+        }
+    }
+    if suffixes
+        .iter()
+        .any(|s| ctx.tag(*s) == Some(NodeTag::CallArgs))
+    {
+        return unsupported("call in a postfix chain", node, ctx);
+    }
+
     // Subscripts come first in any chain this admits: `a[i]++` is a subscript
     // then an increment, and `a++[i]` is legal C but subscripts the *old*
     // pointer, which is a distinction not worth carrying.

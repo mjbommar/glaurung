@@ -672,3 +672,175 @@ fn the_construct_the_refusal_test_used_to_name_now_lowers() {
     assert_eq!(call(&f, &[0]), 2);
     assert_eq!(call(&f, &[3]), 8);
 }
+
+// ---------------------------------------------------------------------------
+// Calls, substituted rather than emitted.
+//
+// Expected values from `gcc -O0` and `-O1` on the equivalent C, as above.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_call_to_a_function_defined_here_is_substituted() {
+    let f = lower(
+        "int g(int a) { return a + 1; } int f(int x) { return g(x); }",
+        "f",
+    );
+    assert_eq!(call(&f, &[3]), 4);
+}
+
+#[test]
+fn a_return_inside_an_inlined_body_does_not_end_the_caller() {
+    // The whole hazard of substitution: `Op::Return` in the callee would end
+    // `f` as well, and the `+ 7` would never run. gcc says 17.
+    let f = lower(
+        "int early(int a) { if (a > 0) return 10; return 20; } \
+         int f(int a) { return early(a) + 7; }",
+        "f",
+    );
+    assert_eq!(call(&f, &[1]), 17);
+    assert_eq!(call(&f, &[0]), 27);
+}
+
+#[test]
+fn a_callee_cannot_see_the_callers_locals() {
+    // `hidden` is a local of the caller, not a global. A scope stack that
+    // leaked would silently make this compile-and-run instead of refusing.
+    let err = lower_named_function(
+        "int g(int a) { return a + hidden; } int f(int x) { int hidden = 5; return g(x); }",
+        "f",
+    )
+    .expect_err("a callee does not see the caller's frame");
+    assert!(err.what.contains("hidden"), "{err}");
+}
+
+#[test]
+fn a_break_in_a_callee_cannot_target_the_callers_loop() {
+    let err = lower_named_function(
+        "int g(int a) { break; return a; } \
+         int f(int n) { int s = 0; while (n > 0) { s += g(n); n--; } return s; }",
+        "f",
+    )
+    .expect_err("the callee has no enclosing loop of its own");
+    assert!(err.what.contains("break"), "{err}");
+}
+
+#[test]
+fn an_argument_is_narrowed_to_the_parameters_declared_type() {
+    // gcc: `narrow((char) 200)` is -56, because 200 does not fit in a signed
+    // `char`. The truncation belongs to the call, not to the caller.
+    let f = lower(
+        "char narrow(char c) { return c; } int f(int v) { return narrow(v); }",
+        "f",
+    );
+    assert_eq!(call(&f, &[200]), (-56i32) as u32 as u64);
+}
+
+#[test]
+fn a_callee_writes_through_a_pointer_into_the_callers_frame() {
+    // gcc: 5. The callee's parameter is the caller's frame address, so the
+    // store lands in the caller's local --- which is the whole reason
+    // substitution has to keep one flat address space.
+    let f = lower(
+        "void setit(int *p) { *p = 5; } int f(void) { int x = 0; setit(&x); return x; }",
+        "f",
+    );
+    assert_eq!(call(&f, &[]), 5);
+}
+
+#[test]
+fn two_calls_to_one_function_get_two_frames() {
+    // gcc: `g(2) + g(20)` is 3 + 21 = 24. One shared frame would make the
+    // second call overwrite the first's parameter before it was read.
+    let f = lower(
+        "int g(int a) { return a + 1; } int f(int a) { return g(a) + g(a * 10); }",
+        "f",
+    );
+    assert_eq!(call(&f, &[2]), 24);
+}
+
+#[test]
+fn a_call_inside_a_loop_runs_once_per_iteration() {
+    // gcc: 0+1 + 1+1 + 2+1 + 3+1 = 10. One set of frame slots is reused across
+    // iterations, which is what a real frame does.
+    let f = lower(
+        "int g(int a) { return a + 1; } \
+         int f(int n) { int s = 0; for (int i = 0; i < n; i++) s += g(i); return s; }",
+        "f",
+    );
+    assert_eq!(call(&f, &[4]), 10);
+}
+
+#[test]
+fn a_recursive_call_is_refused_by_name() {
+    // Substitution is not a fixpoint, so this is a refusal and not a depth
+    // cut. `csource::dataflow::interproc`'s summaries are the mechanism that
+    // does terminate on a cycle.
+    let err = lower_named_function(
+        "int fact(int n) { if (n < 2) return 1; return n * fact(n - 1); }",
+        "fact",
+    )
+    .expect_err("a body cannot be substituted into itself");
+    assert!(err.what.contains("recursive"), "{err}");
+}
+
+#[test]
+fn mutual_recursion_is_refused_through_the_cycle() {
+    let err = lower_named_function(
+        "int odd(int n); int even(int n) { return n == 0 ? 1 : odd(n - 1); } \
+         int odd(int n) { return n == 0 ? 0 : even(n - 1); }",
+        "even",
+    )
+    .expect_err("a cycle of any length is still a cycle");
+    assert!(err.what.contains("recursive"), "{err}");
+}
+
+#[test]
+fn an_arity_mismatch_is_refused_rather_than_padded() {
+    let err = lower_named_function(
+        "int g(int a, int b) { return a + b; } int f(int x) { return g(x); }",
+        "f",
+    )
+    .expect_err("a missing argument has no value to pass");
+    assert!(err.what.contains("arguments"), "{err}");
+}
+
+#[test]
+fn a_callee_not_defined_in_this_file_is_refused_by_its_name() {
+    // Naming the callee is what lets `call_census` rank them: `memcpy` needs a
+    // model, `__builtin_expect` needs one line, and `UNLIKELY` is not a
+    // function at all.
+    let err = lower_named_function("int f(int n) { return __builtin_expect(n, 0); }", "f")
+        .expect_err("there is no body to substitute");
+    assert!(err.what.contains("__builtin_expect"), "{err}");
+}
+
+#[test]
+fn a_cast_shaped_like_a_call_is_a_cast() {
+    // `(uint8_t)(x)` and `f(x)` are the same shape to a parser with no type
+    // table. This one has a type table.
+    let f = lower("int f(int x) { return (unsigned char)(x + 1); }", "f");
+    assert_eq!(call(&f, &[254]), 255);
+    assert_eq!(call(&f, &[255]), 0);
+}
+
+#[test]
+fn a_parenthesised_name_that_is_not_a_type_stays_a_call() {
+    // The disambiguation must be conservative in this direction: turning a
+    // real call into a cast would silently drop the callee.
+    let f = lower(
+        "int g(int a) { return a * 3; } int f(int x) { return (g)(x); }",
+        "f",
+    );
+    assert_eq!(call(&f, &[5]), 15);
+}
+
+#[test]
+fn a_local_shadowing_a_type_name_keeps_its_call() {
+    // C lets an object shadow a typedef name. `(size_t)(x)` is then not a cast
+    // at all, and resolving names against the scopes first is what says so.
+    let err = lower_named_function("int f(int x) { int size_t = 2; return (size_t)(x); }", "f")
+        .expect_err("a local is not callable");
+    // The refusal names the callee rather than the shape, which is the more
+    // useful of the two: `size_t` here is a variable being called.
+    assert!(err.what.contains("`size_t`"), "{err}");
+}

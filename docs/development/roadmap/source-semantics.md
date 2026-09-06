@@ -289,10 +289,9 @@ branch at the name lookup.
 3. ~~**`__builtin_*` and macro-shaped callees**~~ --- small, and it shrinks the
    external-call bucket before the hard part. **Superseded**: measured, it is
    small in payoff too. See "The third time the census moved the answer" below.
-4. **Uninterpreted calls behind a mode flag** --- unblocks phase 3 without
-   waiting for real call semantics.
-5. **Inlining intra-unit calls** --- what the differential needs, and the
-   summaries phase 2 built are what a non-inlining alternative would use.
+4. ~~**Uninterpreted calls behind a mode flag**~~ --- deferred, see below.
+5. ~~**Inlining intra-unit calls**~~ --- **landed first**. See "The mode had no
+   consumer, and the inliner had an oracle".
 6. `switch`, aggregates, float --- each with a known price and no dependants.
 
 Re-run `construct_census` after each; it is a permanent test rather than a
@@ -660,3 +659,68 @@ bundle census moved globals ahead of calls, the unresolved census replaced
 globals with macro constants, and this one replaces builtins with the mode. The
 pattern is consistent enough to state as a rule --- **rank by what a change
 unblocks, never by what it costs**, and the cost only breaks ties.
+
+### The mode had no consumer, and the inliner had an oracle
+
+The section above concluded, from the call census, that the uninterpreted-call
+mode should go before the inliner because it unblocks 274 functions against
+136. That conclusion does not survive its own rule.
+
+**Rank by what a change unblocks** --- and an uninterpreted return value
+unblocks nothing until something consumes one. Phase 3's driver does not exist
+yet, so coverage under a mode nothing reads is a number, not a capability. The
+inliner's 136 are executable the moment they lower, and the S4 differential
+checks them against binaries gcc built. One had an oracle today and the other
+had a promise, so the inliner went first.
+
+> **Landed** (2026-09-06). **Coverage 311/900 -> 483/900, 34.6% -> 53.7%**, and
+> `call expression` has left the top ten entirely. Zero divergences; the
+> differential now compares **291 functions and 4,006 cells**, up from 181 and
+> 2,910.
+
+**The forecast was 136 and the delivery was 172, for the same reason as last
+time.** The inliner alone was worth about what the census said. The rest came
+from a refusal *hidden behind* the call refusal: 147 functions were failing on
+`(uint32_t)(x)`, which is a **cast**, but `(a)(b)` is a call, and the two are
+the same shape to a parser with no type table. Admitting calls exposed it; the
+lowering has a type table, so it resolves the ambiguity where the call is
+handled --- conservatively, so `(fp)(x)` stays a call and a local named
+`size_t` keeps its own name.
+
+That is now twice that the delivered number beat the forecast because a census
+of *first* refusals cannot see what is queued behind one. The rule holds ---
+rank by what a change unblocks --- with the amendment that **the census
+undercounts, never overcounts**, so a forecast is a floor.
+
+### What the inliner cost, and what it now blocks on
+
+Recursion is refused by name rather than bounded, because substitution is not a
+fixpoint: `csource::dataflow::interproc`'s summaries are the mechanism that
+terminates on a cycle, and a non-substituting call would use them. Of the 50
+functions still refused for a call, 18 are that.
+
+The remaining bucket is worth re-reading before the next increment:
+
+| callee | functions still blocked |
+|---|---:|
+| defined in this file (recursion, or nesting past the bound) | 18 |
+| external function | 17 |
+| function-like macro | 8 |
+| compiler builtin | 7 |
+
+`__builtin_*` and macro-shaped callees are now 15 of 50 rather than 15 of 170,
+so the cheap step that was rejected for being small is now proportionally the
+largest thing left in this bucket. The head of the refusal list has moved
+elsewhere entirely --- `switch` at 60, float at 56, struct at 42+19 --- and
+`NULL` at 22 is a one-line fix that only became visible once calls stopped
+masking it.
+
+**The differential now outruns its oracle in the other direction.** Inconclusive
+cells rose 219 -> 1,224, and the largest classes are `lifted=called out to
+Some(...)`: our lowering substitutes the callee, gcc at -O0 emits a real call,
+and the lifted interpreter stops at it. Those cells are not disagreements, they
+are questions the oracle cannot answer --- and closing them means teaching the
+lifted side to follow a call into another lifted function, which is an
+`src/exec` capability rather than a lowering one. Along with the 192 signatures
+the harness cannot call, that is now the binding constraint on the oracle
+rather than on the lowering.

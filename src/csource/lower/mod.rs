@@ -63,6 +63,7 @@
 //! crash. Decompiler C nests exactly that deeply.
 
 pub mod build;
+pub mod call;
 pub mod ctype;
 #[cfg(feature = "exec")]
 pub mod differential;
@@ -198,7 +199,7 @@ mod coverage {
         // something it used to accept fails here rather than shrinking the
         // population a later feasibility claim is measured over.
         assert!(
-            ok * 100 / total >= 34,
+            ok * 100 / total >= 53,
             "lowering coverage fell to {ok}/{total}"
         );
         // "pointer type" was 325 of 732 refusals before pointers were admitted
@@ -554,10 +555,18 @@ mod call_census {
                 if func.name.is_empty() {
                     continue;
                 }
+                // Matched on the shape of the refusal rather than one string:
+                // once the inliner landed, "call expression" was replaced by
+                // "call to `memcpy`, which is not defined in this file" and
+                // "recursive call to `quicksort_range`", and a filter pinned to
+                // the old wording silently reported zero.
                 let refused_for_a_call =
                     match crate::csource::lower::func::lower_named_function(&text, &func.name) {
                         Ok(_) => false,
-                        Err(e) => e.to_string().contains("call expression"),
+                        Err(e) => {
+                            let what = e.what.as_str();
+                            what.starts_with("call ") || what.starts_with("recursive call")
+                        }
                     };
                 let Some(flow) = flows.iter().find(|f| f.name == func.name) else {
                     continue;
