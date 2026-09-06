@@ -32,9 +32,21 @@ authoritatively declared eight-byte integer parameter now carries both aligned
 entry words into the AST instead of presenting its high word as an invented
 local. Four ARMv7/ARMv7-A32 O2 fixture-215 cells move to execution-correct
 output with no attributable regression across the 60-cell architecture slice.
-Big-endian ordering, inferred prototypes, residual A32 O0 storage defects, and
-i386 pairs remain deliberately open. See
+Big-endian ordering, inferred prototypes, and residual A32 O0 storage defects
+remain deliberately open. See
 `results/wp6-wp9-aapcs32-wide-parameters.md`.
+The matching i386 cdecl32 carrier is landed at `fcd9bd2d`, with baseline and
+census commits `9b307e0b` and `d1bf72a7`. Authoritatively declared eight-byte
+integer parameters now join their two adjacent incoming stack words without
+truncating the promoted whole-argument role. Fixture 202 and 215 gain nine
+execution-correct O0/O2 cells with no attributable regression in the complete
+410-lane i386 comparison. Signed selectors remain WP6/WP7 work and the i386 O2
+mixed selector remains WP5 work. See
+`results/wp6-wp9-cdecl32-wide-parameters.md`.
+The required exact-clean-checkout Rust gate at `d1bf72a7` is green: the library
+target reports 4,126 passed, zero failed, and five ignored, and every
+integration and documentation target passes. The long identity-retrieval
+target independently reports 44 passed, zero failed, and ten ignored.
 The first fixture-217 follow-on is a bounded WP9 instruction-semantics
 increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
 typed binary32 lanes. The following WP6/WP9 call-boundary increment is also
@@ -2017,6 +2029,23 @@ to `long`; the clean O2 snapshot retains the previously recovered virtual call.
 The conversion is deliberately outside the generic C catalog normalizer, so it
 does not reinterpret Rust pointers or aggregates. Exact RED/GREEN and isolated
 snapshot evidence is in `results/wp9-rust-scalar-source-types.md`.
+
+### Implementation evidence - 2026-09-06 cdecl32 wide source parameters
+
+Commit `fcd9bd2d` extends the bounded 32-bit wide-parameter carrier from
+AAPCS32 register pairs to authoritatively declared i386 cdecl stack pairs. The
+high incoming word is projected from the same source argument while the
+promoted low `argN` role remains the whole value. Layout stops at unknown or
+unsupported preceding parameter types. This moves nine fixture-202/215 O0/O2
+cells to execution-correct output with no attributable regression across the
+complete 410-lane i386 comparison.
+
+An initially broader rewrite truncated the already-whole low role and caused
+three scalar regressions. It was rejected before commit; those controls are
+unchanged by the final implementation. Signed wide selectors and the i386 O2
+mixed switch remain in WP6/WP7 and WP5 respectively. Exact contracts,
+attribution, and gate evidence are in
+`results/wp6-wp9-cdecl32-wide-parameters.md`.
 
 ### Exit criteria
 
