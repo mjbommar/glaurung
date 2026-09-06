@@ -1363,14 +1363,13 @@ pub(super) fn target_calling_convention(
 /// normalized LLIR consumed by region recovery and value numbering.  Keeping
 /// this sequence in one helper prevents the four Python decompilation entry
 /// points from drifting into different value models.
-fn normalize_definedness_and_compute_ssa(
+fn normalize_definedness_with_ssa(
     function: &mut crate::ir::types::LlirFunction,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     cc: crate::ir::call_args::CallConv,
-    target: crate::target::TargetSpec,
-) -> crate::ir::ssa::SsaInfo {
+    ssa: &mut crate::ir::ssa::VersionedSsa,
+) {
     let graph = crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let mut ssa = crate::ir::ssa::VersionedSsa::compute(&graph, target);
     let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, ssa.ensure(&graph), cc);
     if crate::ir::definedness::erase_unobserved_masked_inputs(function, ssa.ensure(&graph), &oracle)
         != 0
@@ -1380,8 +1379,6 @@ fn normalize_definedness_and_compute_ssa(
             crate::analysis::exception::with_exceptional_successors(function, exception_sites);
         ssa.ensure(&normalized_graph);
     }
-    ssa.into_info()
-        .expect("definedness normalization ensured current SSA")
 }
 
 /// One shared LLIR preparation pipeline for every decompilation entry point.
@@ -1573,8 +1570,13 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     prepare_shadow_v2: bool,
 ) -> PreparedLlir {
-    let mut ssa =
-        normalize_definedness_and_compute_ssa(function, exception_sites, cc, *image.target());
+    let initial_graph =
+        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
+    let mut ssa_state = crate::ir::ssa::VersionedSsa::compute(&initial_graph, *image.target());
+    normalize_definedness_with_ssa(function, exception_sites, cc, &mut ssa_state);
+    let current_graph =
+        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
+    let ssa = ssa_state.ensure(&current_graph).clone();
     let provisional_slots = if recover_semantic_prototype {
         crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc).2
     } else {
@@ -1616,8 +1618,12 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     if prototype.as_ref().is_some_and(|prototype| {
         crate::ir::types_recover::materialize_return_values(function, cc, prototype) != 0
     }) {
-        ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc, *image.target());
+        ssa_state.invalidate(crate::ir::ssa::Invalidate::Uses);
+        normalize_definedness_with_ssa(function, exception_sites, cc, &mut ssa_state);
     }
+    let current_graph =
+        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
+    let ssa = ssa_state.ensure(&current_graph).clone();
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== prototype-resolved LLIR =====");
         for block in &function.blocks {

@@ -1029,6 +1029,9 @@ mod tests {
             ),
             2
         );
+
+        state.invalidate(Invalidate::Uses);
+        assert_eq!(state.ensure(&function).revision(), 2);
         assert!(state.into_info().is_ok());
     }
 
