@@ -711,24 +711,11 @@ def test_the_stack_guard_is_never_part_of_the_recovered_interface(
 # --------------------------------------------------------------------------
 # 7. A recovered branch describes a branch that was really there.
 # --------------------------------------------------------------------------
-#: Configurations in which the recovery is known to emit a statically decidable
-#: guard. Every lane whose frame carries a canary is here, which on this host is
-#: every lane except the one that explicitly asks for no protector: the defect is
-#: in how the guard LOAD is modelled, so it appears wherever a guard appears and
-#: is unrelated to linkage, frame pointers or optimisation level. The set can
-#: only shrink — a listed lane that stops exhibiting it fails this test.
-DECIDABLE_GUARD_KNOWN_BAD = {
-    "shared_pic",
-    "pie_exe",
-    "nopie_exe",
-    "static_exe",
-    "no_unwind_tables",
-    "frame_pointer",
-    "omit_frame_pointer",
-    "size_opt",
-    "lto",
-    "stack_protector",
-}
+#: Configurations in which recovery is known to emit a statically decidable
+#: guard. The set can only shrink: the complete eleven-configuration sweep now
+#: finds none, including every lane whose frame carries a canary. Keep the empty
+#: ratchet so any future recurrence fails as an ordinary unlisted problem.
+DECIDABLE_GUARD_KNOWN_BAD: set[str] = set()
 
 
 @pytest.mark.parametrize("config", CONFIG_NAMES)
