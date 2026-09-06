@@ -315,6 +315,7 @@ fn decompile_at_session(
         budgets: &budgets,
         callee_budget: analysis_budget.callee,
         type_budget: analysis_budget.types,
+        pipeline_fingerprint: pipeline_fingerprint.clone(),
         render_options: RenderOptions {
             types,
             style,
@@ -540,6 +541,7 @@ fn decompile_range_at_py(
         budgets: &budgets,
         callee_budget: analysis_budget.callee,
         type_budget: analysis_budget.types,
+        pipeline_fingerprint: pipeline_fingerprint.clone(),
         render_options: RenderOptions {
             types,
             style,
@@ -1015,6 +1017,7 @@ fn decompile_all_py(
             budgets: &budgets,
             callee_budget: analysis_budget.callee,
             type_budget: analysis_budget.types,
+            pipeline_fingerprint: pipeline_fingerprint.clone(),
             render_options,
             debug_outputs: dwarf_outputs.as_ref(),
             debug_types: dwarf_types.as_deref().unwrap_or(&[]),
@@ -1249,6 +1252,7 @@ fn decompile_many_py(
             budgets: &budgets,
             callee_budget: analysis_budget.callee,
             type_budget: analysis_budget.types,
+            pipeline_fingerprint: pipeline_fingerprint.clone(),
             render_options: RenderOptions {
                 types,
                 style,

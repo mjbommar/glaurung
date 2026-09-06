@@ -17,7 +17,7 @@ use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with
 /// This is deliberately owned by the pipeline rather than by a Python entry
 /// point.  Adapters may expose different defaults, but once constructed the
 /// request has one budget identity and one conversion to discovery limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) struct DiscoveryBudget {
     /// Maximum number of function records admitted to the program discovery.
     pub(super) max_functions: usize,
@@ -25,7 +25,7 @@ pub(super) struct DiscoveryBudget {
     pub(super) total_timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) struct CfgBudget {
     /// Maximum basic blocks admitted to one function CFG.
     pub(super) max_blocks: usize,
@@ -35,7 +35,7 @@ pub(super) struct CfgBudget {
     pub(super) timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) struct CalleeBudget {
     /// Additional direct-callee bodies a callee analysis may enter.
     pub(super) max_depth: u8,
@@ -47,7 +47,7 @@ impl Default for CalleeBudget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) struct TypeBudget {
     /// Maximum rounds in the render-time type refinement fixed point.
     pub(super) max_refinement_rounds: usize,
@@ -61,7 +61,7 @@ impl Default for TypeBudget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) struct SizeBudget {
     /// Maximum byte window synthesized by the explicit-range fallback.
     pub(super) max_range_bytes: u64,
@@ -81,7 +81,7 @@ impl SizeBudget {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub(super) struct AnalysisBudget {
     pub(super) discovery: DiscoveryBudget,
     pub(super) cfg: CfgBudget,
@@ -145,7 +145,7 @@ pub(super) struct DecompileRequest<'a> {
 pub(super) const PIPELINE_PASS_VERSION: u32 = 1;
 
 /// Stable identity of the semantic pipeline configuration for one result.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(super) struct PipelineFingerprint {
     pub(super) schema: &'static str,
     pub(super) pass_version: u32,
@@ -155,6 +155,12 @@ pub(super) struct PipelineFingerprint {
     pub(super) debug_contracts: bool,
     pub(super) analyst_overlay: bool,
     pub(super) shadow_v2: bool,
+}
+
+impl PipelineFingerprint {
+    pub(super) fn canonical(&self) -> String {
+        serde_json::to_string(self).expect("pipeline fingerprint is serializable")
+    }
 }
 
 impl DecompileRequest<'_> {
@@ -858,6 +864,7 @@ pub(super) struct FunctionPipelineContext<'a> {
     pub(super) budgets: &'a crate::analysis::cfg::Budgets,
     pub(super) callee_budget: CalleeBudget,
     pub(super) type_budget: TypeBudget,
+    pub(super) pipeline_fingerprint: PipelineFingerprint,
     pub(super) render_options: RenderOptions<'a>,
     pub(super) debug_outputs: Option<&'a std::collections::HashMap<u64, DwarfPrototypeContract>>,
     pub(super) debug_types: &'a [crate::debug::dwarf::DwarfType],
@@ -1000,6 +1007,7 @@ pub(super) fn decompile_function(
         budgets,
         callee_budget,
         type_budget,
+        pipeline_fingerprint,
         render_options,
         debug_outputs,
         debug_types,
@@ -1156,7 +1164,7 @@ pub(super) fn decompile_function(
     )?;
     prepared
         .profiler
-        .record_pipeline_stages(stages.operations());
+        .record_pipeline_stages(stages.operations(), || pipeline_fingerprint.canonical());
     Ok(PipelineFunctionOutput {
         raw,
         prepared,
@@ -1826,6 +1834,8 @@ mod request_tests {
         let mut fifth_request = fourth_request;
         fifth_request.analysis_budget.size.max_output_functions += 1;
         assert_ne!(fourth_request.fingerprint(), fifth_request.fingerprint());
+        assert_eq!(first.canonical(), first.canonical());
+        assert_ne!(first.canonical(), second.canonical());
     }
 
     #[test]

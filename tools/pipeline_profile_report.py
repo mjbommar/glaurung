@@ -109,11 +109,19 @@ def _validated_event(value: Any, line_number: int) -> JsonObject:
         if value.get("termination") not in {"quiescent", "bound_reached"}:
             raise ProfileReportError(f"line {line_number}: invalid termination")
     elif event == "pipeline":
-        expected = {"schema", "event", "function", "entry_va", "stages"}
+        expected = {
+            "schema",
+            "event",
+            "function",
+            "entry_va",
+            "stages",
+            "fingerprint",
+        }
         if set(value) != expected:
             raise ProfileReportError(f"line {line_number}: invalid pipeline fields")
         _non_empty_string(value.get("function"), "function", line_number)
         _non_empty_string(value.get("entry_va"), "entry_va", line_number)
+        _non_empty_string(value.get("fingerprint"), "fingerprint", line_number)
         stages = value.get("stages")
         if not isinstance(stages, list) or not stages:
             raise ProfileReportError(f"line {line_number}: invalid pipeline stages")
@@ -171,6 +179,7 @@ def build_report(events: Iterable[Mapping[str, Any]]) -> JsonObject:
                 "stage_duration_ns": {},
                 "fixpoints": [],
                 "pipeline_stages": [],
+                "pipeline_fingerprint": "",
             },
         )
         if event["event"] == "fixpoint":
@@ -189,6 +198,7 @@ def build_report(events: Iterable[Mapping[str, Any]]) -> JsonObject:
                     f"duplicate pipeline trace for {key[1]} at {key[0]}"
                 )
             function["pipeline_stages"] = list(event["stages"])
+            function["pipeline_fingerprint"] = str(event["fingerprint"])
             continue
         function["stage_event_count"] += 1
         stages = function["stage_duration_ns"]

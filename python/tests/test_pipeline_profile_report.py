@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -48,7 +49,8 @@ def test_profile_parser_aggregates_repeated_function_stages(report_module):
         (
             '[glaurung-pipeline-profile] {"schema":"glaurung-pipeline-profile-v1",'
             '"event":"pipeline","function":"main","entry_va":"0x1000",'
-            '"stages":["lift","prepare_direct_callee_facts","render_prepared_ast"]}'
+            '"stages":["lift","prepare_direct_callee_facts","render_prepared_ast"],'
+            '"fingerprint":"{\\"schema\\":\\"pipeline\\"}"}'
         ),
         (
             '[glaurung-pipeline-profile] {"schema":"glaurung-pipeline-profile-v1",'
@@ -79,6 +81,7 @@ def test_profile_parser_aggregates_repeated_function_stages(report_module):
                     "prepare_direct_callee_facts",
                     "render_prepared_ast",
                 ],
+                "pipeline_fingerprint": '{"schema":"pipeline"}',
                 "fixpoints": [
                     {
                         "fixpoint": "copies_and_constants",
@@ -165,6 +168,9 @@ def test_real_profile_is_output_transparent_and_counts_all_object_parses(report_
         "finalize_prepared_ast",
         "render_prepared_ast",
     ]
+    fingerprint = json.loads(report["functions"][0]["pipeline_fingerprint"])
+    assert fingerprint["schema"] == "glaurung.decompile-pipeline/v1"
+    assert fingerprint["pass_version"] >= 1
     assert {item["fixpoint"] for item in report["functions"][0]["fixpoints"]} == {
         "copies_and_constants",
         "forward_regions_and_loops",

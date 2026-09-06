@@ -42,6 +42,7 @@ struct PipelineProfileEvent<'a> {
     function: &'a str,
     entry_va: String,
     stages: &'a [&'static str],
+    fingerprint: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,16 +117,22 @@ impl FunctionProfiler {
     /// Timed stages are intentionally more granular and may change as work is
     /// subdivided. This trace instead mirrors `PipelineStageTracker`, making
     /// the pipeline's semantic order explicit and machine-checkable.
-    pub(crate) fn record_pipeline_stages(&self, stages: &[&'static str]) {
+    pub(crate) fn record_pipeline_stages(
+        &self,
+        stages: &[&'static str],
+        fingerprint: impl FnOnce() -> String,
+    ) {
         if !self.enabled {
             return;
         }
+        let fingerprint = fingerprint();
         emit(&PipelineProfileEvent {
             schema: SCHEMA,
             event: "pipeline",
             function: &self.function,
             entry_va: format!("{:#x}", self.entry_va),
             stages,
+            fingerprint: &fingerprint,
         });
     }
 }

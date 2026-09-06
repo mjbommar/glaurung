@@ -31,6 +31,7 @@ only one that can catch it.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -67,6 +68,24 @@ for name, va in sorted(D.exported_functions(binary).items()):
     rendered[name] = D.decompiled_c(binary, va) or ""
 blob = json.dumps(rendered, sort_keys=True).encode()
 print(hashlib.sha256(blob).hexdigest())
+"""
+
+ORDER_CHILD = """
+import json, sys
+import glaurung as g
+
+binary = sys.argv[1]
+addresses = json.loads(sys.argv[2])
+rows = g.ir.decompile_many(
+    binary,
+    addresses,
+    max_functions=64,
+    max_blocks=4096,
+    max_instructions=200000,
+    timeout_ms=5000,
+    style="decbench",
+)
+print(json.dumps({str(row[1]): row[2] for row in rows}, sort_keys=True))
 """
 
 
@@ -131,3 +150,43 @@ def test_the_subject_list_is_not_empty():
     assert SUBJECTS, "no determinism subjects configured"
     for name in SUBJECTS:
         assert (CANARY / name).is_file(), f"{name} is not in the canary set"
+
+
+def _profiled_batch(binary: Path, addresses: list[int]) -> tuple[dict[str, str], dict[str, str]]:
+    environment = os.environ.copy()
+    environment["GLAURUNG_PIPELINE_PROFILE"] = "1"
+    process = subprocess.run(
+        [sys.executable, "-c", ORDER_CHILD, str(binary), json.dumps(addresses)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        env=environment,
+        timeout=600,
+        check=False,
+    )
+    assert process.returncode == 0, process.stderr[-1000:]
+    rendered = json.loads(process.stdout)
+    fingerprints: dict[str, str] = {}
+    prefix = "[glaurung-pipeline-profile] "
+    for line in process.stderr.splitlines():
+        if not line.startswith(prefix):
+            continue
+        event = json.loads(line[len(prefix) :])
+        if event.get("event") == "pipeline":
+            fingerprints[str(int(event["entry_va"], 16))] = event["fingerprint"]
+    assert fingerprints.keys() == rendered.keys()
+    for fingerprint in fingerprints.values():
+        assert json.loads(fingerprint)["schema"] == "glaurung.decompile-pipeline/v1"
+    return rendered, fingerprints
+
+
+def test_function_request_order_changes_neither_output_nor_pipeline_fingerprint():
+    """Batch ordering is presentation only, never semantic pipeline input."""
+    binary = CANARY / "04_switch_shapes-gcc-O0.so"
+    addresses = sorted(D.exported_functions(str(binary)).values())[:3]
+    assert len(addresses) == 3
+
+    forward = _profiled_batch(binary, addresses)
+    reverse = _profiled_batch(binary, list(reversed(addresses)))
+
+    assert forward == reverse
