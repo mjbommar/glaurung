@@ -244,6 +244,18 @@ The exact whole-Python comparison has no ordinary tip-only regression, and the
 promotes the Duff latch to a positive test; see
 `results/wp5-wide-selector-shared-return.md`.
 
+Commit `a8ba1b87` closes one concrete WP3/WP9 identity seam exposed by the
+whole-Python fail-fast gate. Target-aware SSA already gave ARM32 `fp` and
+`r11` one canonical value, but value numbering applied that canonical base
+only to uses. Definitions now consume the same exact `SsaValue` base and
+version. The real GCC A32 O0 `03_loop_shapes::while_prefix` output moves from
+an undefined raw `var0` frame base back to source-level `p[i]`, initialized
+`i`/`s`, and execution-correct output. All 44 value-numbering, 12 SSA, 85
+stack-local, and 12 ARM32 semantic tests pass. This is a bounded identity
+handoff, not completion of WP3 invalidation/origins or the wider WP9
+architecture migration. See
+`results/wp3-wp9-arm32-definition-identity.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -1841,7 +1853,10 @@ complex-helper call boundary. See `results/wp9-packed-float-arithmetic.md`.
 ### Tests
 
 - [ ] Byte-identical fixture sweep for each architecture-only migration.
-- [ ] Extend architecture roundtrip and ARM32 semantic tests.
+- [~] Extend architecture roundtrip and ARM32 semantic tests. The existing
+  twelve-test ARM32 semantic module now pins the target-qualified definition
+  identity through readable C and source-to-QEMU execution; broader
+  architecture closure remains open.
 - [x] New census test: every decoded mnemonic is lifted or has a reviewed,
   reasoned exemption. Both the post-lift opaque-effect census and the raw
   decoded-mnemonic-to-LLIR correlation are now enforced across all four lifted
@@ -2087,7 +2102,10 @@ attribution, and gate evidence are in
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
-- [ ] ARM32 has an explicit register-view model.
+- [x] ARM32 has an explicit register-view model. `TargetSpec` owns its core
+  aliases and complete VFP/NEON view hierarchy; SSA definitions and uses now
+  consume the same target-qualified base. Migration of remaining consumers is
+  tracked by the preceding exit criterion.
 - [ ] The capability census is part of `default` or a clearly named required
   architecture profile.
 
