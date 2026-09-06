@@ -36,6 +36,15 @@ struct FixpointProfileEvent<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct PipelineProfileEvent<'a> {
+    schema: &'static str,
+    event: &'static str,
+    function: &'a str,
+    entry_va: String,
+    stages: &'a [&'static str],
+}
+
+#[derive(Debug, Serialize)]
 struct RunProfileEvent<'a> {
     schema: &'static str,
     event: &'static str,
@@ -99,6 +108,24 @@ impl FunctionProfiler {
             rounds,
             firing_rounds,
             termination,
+        });
+    }
+
+    /// Record the checked semantic transaction in the order it completed.
+    ///
+    /// Timed stages are intentionally more granular and may change as work is
+    /// subdivided. This trace instead mirrors `PipelineStageTracker`, making
+    /// the pipeline's semantic order explicit and machine-checkable.
+    pub(crate) fn record_pipeline_stages(&self, stages: &[&'static str]) {
+        if !self.enabled {
+            return;
+        }
+        emit(&PipelineProfileEvent {
+            schema: SCHEMA,
+            event: "pipeline",
+            function: &self.function,
+            entry_va: format!("{:#x}", self.entry_va),
+            stages,
         });
     }
 }

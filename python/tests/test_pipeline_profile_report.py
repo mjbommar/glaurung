@@ -47,6 +47,11 @@ def test_profile_parser_aggregates_repeated_function_stages(report_module):
         ),
         (
             '[glaurung-pipeline-profile] {"schema":"glaurung-pipeline-profile-v1",'
+            '"event":"pipeline","function":"main","entry_va":"0x1000",'
+            '"stages":["lift","prepare_direct_callee_facts","render_prepared_ast"]}'
+        ),
+        (
+            '[glaurung-pipeline-profile] {"schema":"glaurung-pipeline-profile-v1",'
             '"event":"run","entry_point":"decompile_many","duration_ns":30,'
             '"object_parse_count":12}'
         ),
@@ -69,6 +74,11 @@ def test_profile_parser_aggregates_repeated_function_stages(report_module):
                 "function": "main",
                 "stage_event_count": 2,
                 "stage_duration_ns": {"lower": 17},
+                "pipeline_stages": [
+                    "lift",
+                    "prepare_direct_callee_facts",
+                    "render_prepared_ast",
+                ],
                 "fixpoints": [
                     {
                         "fixpoint": "copies_and_constants",
@@ -147,6 +157,14 @@ def test_real_profile_is_output_transparent_and_counts_all_object_parses(report_
     assert report["runs"][0]["object_parse_count"] > 0
     assert report["functions"][0]["stage_event_count"] >= 20
     assert report["functions"][0]["stage_duration_ns"]["render_decbench"] > 0
+    assert report["functions"][0]["pipeline_stages"] == [
+        "lift",
+        "prepare_direct_callee_facts",
+        "prepare_llir_for_lowering_with_shadow",
+        "lower_and_run_ast_passes",
+        "finalize_prepared_ast",
+        "render_prepared_ast",
+    ]
     assert {item["fixpoint"] for item in report["functions"][0]["fixpoints"]} == {
         "copies_and_constants",
         "forward_regions_and_loops",

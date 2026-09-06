@@ -853,15 +853,17 @@ impl std::fmt::Display for PipelineStageError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PipelineStageTracker {
     current: PipelineStage,
+    operations: Vec<&'static str>,
 }
 
 impl PipelineStageTracker {
     fn new() -> Self {
         Self {
             current: PipelineStage::Start,
+            operations: Vec::new(),
         }
     }
 
@@ -879,7 +881,12 @@ impl PipelineStageTracker {
             });
         }
         self.current = next;
+        self.operations.push(operation);
         Ok(())
+    }
+
+    fn operations(&self) -> &[&'static str] {
+        &self.operations
     }
 }
 
@@ -1076,6 +1083,9 @@ pub(super) fn decompile_function(
         PipelineStage::Finalized,
         PipelineStage::Rendered,
     )?;
+    prepared
+        .profiler
+        .record_pipeline_stages(stages.operations());
     Ok(PipelineFunctionOutput {
         raw,
         prepared,
