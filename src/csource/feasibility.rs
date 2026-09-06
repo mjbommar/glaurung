@@ -651,11 +651,17 @@ fn obligations(sym: &Symbolic, roots: &[ExprId]) -> Vec<(Property, ExprId)> {
                 match op {
                     BinOp::Div => out.push((Property::DivisionByZero, b)),
                     BinOp::Shl | BinOp::Shr | BinOp::Sar => {
+                        // `width` here is the *evaluation* width, which is 64:
+                        // `Builder::binop` emits width-less ops on 64-bit
+                        // temporaries and normalizes after. C's threshold is
+                        // the promoted operand width, and the mask the lowering
+                        // applied is what records it.
+                        let (count, masked_to) = unmasked_count(sym, b);
                         out.push((
                             Property::ShiftPastWidth {
-                                width: width.bits(),
+                                width: masked_to.unwrap_or_else(|| width.bits()),
                             },
-                            unmasked_count(sym, b),
+                            count,
                         ));
                     }
                     _ => {}
@@ -684,11 +690,21 @@ fn obligations(sym: &Symbolic, roots: &[ExprId]) -> Vec<(Property, ExprId)> {
     out
 }
 
-/// See through `count & (width - 1)` to the count the source wrote.
+/// See through `count & (width - 1)` to the count the source wrote, and to the
+/// width C measures it against.
 ///
 /// The lowering applies that mask so a shift has one defined answer; the count
-/// C calls undefined is the one before it.
-fn unmasked_count(sym: &Symbolic, count: ExprId) -> ExprId {
+/// C calls undefined is the one before it. **The mask also carries the
+/// threshold**, and that is the only place it survives: by the time the shift
+/// is an `Expr::Bin` its `width` is 64, because `Builder::binop` evaluates on
+/// 64-bit temporaries and normalizes afterwards. Reading the threshold off the
+/// node instead would test `count >= 64` for a 32-bit shift and miss every
+/// count from 32 to 63 --- all of them undefined, all of them reported clean.
+/// `a_thirty_two_bit_shift_is_measured_against_thirty_two` is the test.
+///
+/// Returns the pre-mask count, and the width the mask implies when there was
+/// one.
+fn unmasked_count(sym: &Symbolic, count: ExprId) -> (ExprId, Option<u16>) {
     if let Expr::Bin {
         op: BinOp::And,
         a,
@@ -700,11 +716,11 @@ fn unmasked_count(sym: &Symbolic, count: ExprId) -> ExprId {
             // Exactly the shape `Builder` emits: an all-ones mask one below a
             // power of two. Anything else is the program's own `&`.
             if (*value + 1).is_power_of_two() {
-                return *a;
+                return (*a, u16::try_from(*value + 1).ok());
             }
         }
     }
-    count
+    (count, None)
 }
 
 #[cfg(test)]
@@ -1026,6 +1042,48 @@ mod tests {
         assert!(
             r.unreachable_blocks.is_empty(),
             "a cut enumeration cannot prove code dead: {r:?}"
+        );
+    }
+
+    #[test]
+    fn a_thirty_two_bit_shift_is_measured_against_thirty_two() {
+        // Every count from 32 to 47 is undefined for a 32-bit operand, and all
+        // of them are below the 64-bit width the LLIR node carries. Reading the
+        // threshold off the node reported this function clean.
+        let found = violations(
+            "int f(int a, int n) { if (n < 32 || n > 47) { return 0; } return a << n; }",
+            "f",
+        );
+        let shifts: Vec<_> = found
+            .iter()
+            .filter(|f| matches!(f.property, Property::ShiftPastWidth { .. }))
+            .collect();
+        assert!(
+            !shifts.is_empty(),
+            "32..47 is undefined at 32 bits: {found:?}"
+        );
+        assert!(
+            matches!(shifts[0].property, Property::ShiftPastWidth { width: 32 }),
+            "the threshold is C's operand width, not the evaluation width: {:?}",
+            shifts[0].property
+        );
+        let n = shifts[0].witness.args[1] as i64 as i32;
+        assert!((32..=47).contains(&n), "witness n = {n}");
+    }
+
+    #[test]
+    fn a_sixty_four_bit_shift_keeps_its_own_threshold() {
+        // The mirror: 40 is a perfectly defined shift of a `long`, and must not
+        // be reported now that the threshold moved.
+        let found = violations(
+            "long f(long a, int n) { if (n < 32 || n > 47) { return 0; } return a << n; }",
+            "f",
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|f| matches!(f.property, Property::ShiftPastWidth { .. })),
+            "32..47 is in range for a 64-bit operand: {found:?}"
         );
     }
 }
