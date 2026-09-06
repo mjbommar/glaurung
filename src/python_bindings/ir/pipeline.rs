@@ -207,6 +207,43 @@ pub(super) struct ProgramRenderContext {
     pub(super) got_targets: std::collections::HashMap<u64, u64>,
 }
 
+/// Binary-truth names and data symbols for one discovered program view.
+///
+/// Analyst names are intentionally excluded: callee and environment recovery
+/// must consume the names present in the binary, then apply presentation
+/// overlays after every name-keyed semantic query has completed.
+pub(super) struct ProgramNameContext {
+    pub(super) address_names: std::collections::HashMap<u64, String>,
+    pub(super) data_symbols: crate::ir::data_symbols::DataSymbols,
+}
+
+pub(super) fn prepare_program_name_context(
+    image: &crate::program::image::ProgramImage,
+    binary_path: &str,
+    pdb_cache: Option<&std::path::Path>,
+    functions: &[crate::core::function::Function],
+) -> ProgramNameContext {
+    // The combined collector intentionally owns the only object parse here:
+    // GOT, code-name, and data-symbol extraction must reuse the parsed image.
+    let (mut address_names, data_symbols) =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
+            image.bytes(),
+            binary_path,
+            pdb_cache,
+        );
+    crate::ir::name_resolve::add_discovered_function_names(&mut address_names, functions);
+    crate::ir::name_resolve::add_flirt_referenced_function_names(
+        image,
+        &mut address_names,
+        functions,
+    );
+    crate::ir::name_resolve::add_referenced_function_names(&mut address_names, functions);
+    ProgramNameContext {
+        address_names,
+        data_symbols,
+    }
+}
+
 pub(super) fn prepare_program_render_context(
     session: &crate::program::session::ProgramSession,
     image: &crate::program::image::ProgramImage,

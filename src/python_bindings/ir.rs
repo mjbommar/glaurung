@@ -57,9 +57,9 @@ use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
     lower_and_run_ast_passes, prepare_llir_for_lowering, prepare_program_debug_context,
-    prepare_program_render_context, recognise_machine_frame, target_calling_convention,
-    AnalysisBudget, DecompileRequest, DecompileResult, PreparedAst, ProgramDebugContext,
-    ProgramRenderContext, RenderOptions,
+    prepare_program_name_context, prepare_program_render_context, recognise_machine_frame,
+    target_calling_convention, AnalysisBudget, DecompileRequest, DecompileResult, PreparedAst,
+    ProgramDebugContext, ProgramNameContext, ProgramRenderContext, RenderOptions,
 };
 
 use type_maps::{decbench_type_maps, remap_type_map};
@@ -219,7 +219,6 @@ fn decompile_at_session(
     } = render_options;
 
     let image = session.image().clone();
-    let data = image.bytes();
     // An ARM32 Thumb symbol's value carries the Thumb bit; the entry it denotes
     // is one lower. Anything resolving a callee through `.symtab` hands us that
     // value verbatim, and decoding one byte in recovers a body with no
@@ -242,9 +241,9 @@ fn decompile_at_session(
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let budgets = analysis_budget.discovery();
     // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
-    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
-    // the closure boundary. See `python_bindings::analysis`.
+    // the reason `Ctrl-C` used to do nothing until it finished. `Budgets` is
+    // `Copy`; no `Bound`/`Py` reference crosses the closure boundary. See
+    // `python_bindings::analysis`.
     let funcs = py.detach(|| session.discover_functions(&budgets, &[func_va]));
     let func = funcs
         .iter()
@@ -266,15 +265,10 @@ fn decompile_at_session(
     // It is also what tells `soft_helpers` which call targets are libgcc
     // division helpers, and that has to happen while the IR is still physical.
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, path, pdb_cache, &funcs);
     let ProgramRenderContext {
         data_symbols,
         string_pool: str_pool,
@@ -679,7 +673,6 @@ fn decompile_range_at_py(
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
-    let data = image.bytes();
     let exception_sites = image.exception_call_sites();
     let ProgramDebugContext {
         output_contracts: dwarf_outputs,
@@ -748,19 +741,10 @@ fn decompile_range_at_py(
     };
 
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &discovered);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(
-        &image,
-        &mut addr_map,
-        &discovered,
-    );
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &discovered);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, &path, pdb_cache, &discovered);
     let ProgramRenderContext {
         data_symbols,
         string_pool: str_pool,
@@ -1325,7 +1309,6 @@ fn decompile_all_py(
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
-    let data = image.bytes();
     let exception_sites = image.exception_call_sites();
     let ProgramDebugContext {
         output_contracts: dwarf_outputs,
@@ -1337,23 +1320,18 @@ fn decompile_all_py(
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let budgets = analysis_budget.discovery();
     // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
-    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
-    // the closure boundary. See `python_bindings::analysis`.
+    // the reason `Ctrl-C` used to do nothing until it finished. `Budgets` is
+    // `Copy`; no `Bound`/`Py` reference crosses the closure boundary. See
+    // `python_bindings::analysis`.
     let funcs = py.detach(|| session.discover_functions(&budgets, &[]));
     let cc = target_calling_convention(&image)?;
     let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, &path, pdb_cache, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
     // against what the binary calls them -- `session.environment`,
@@ -1655,7 +1633,6 @@ fn decompile_many_py(
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
-    let data = image.bytes();
     // See `decompile_at`: an ARM32 Thumb `.symtab` value carries the Thumb bit.
     let func_vas: Vec<u64> = func_vas
         .into_iter()
@@ -1694,23 +1671,18 @@ fn decompile_many_py(
     let budgets = analysis_budget.discovery();
     // --- one-time analysis + name/field/string maps -----------------------
     // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
-    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
-    // the closure boundary. See `python_bindings::analysis`.
+    // the reason `Ctrl-C` used to do nothing until it finished. `Budgets` is
+    // `Copy`; no `Bound`/`Py` reference crosses the closure boundary. See
+    // `python_bindings::analysis`.
     let funcs = py.detach(|| session.discover_functions(&budgets, &func_vas));
     let cc = target_calling_convention(&image)?;
     let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, &path, pdb_cache, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
     // against what the binary calls them -- `session.environment`,
