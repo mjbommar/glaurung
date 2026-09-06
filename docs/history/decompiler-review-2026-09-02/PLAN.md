@@ -759,7 +759,10 @@ provenance through lowering.
   after each consumer has a typed identity replacement.
   `f05c9a5d` removes `#version` parsing from production float-role projection;
   `af65c260` removes it from optimized DWARF register-local recovery.
-  Compatibility and other product consumers remain.
+  Compatibility and other product consumers remain. The latter migration also
+  exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
+  merge hid the unresolved SysV `al` variadic live-in. That cell is now an
+  honest strict xfail rather than a semantic identity exception.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [ ] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

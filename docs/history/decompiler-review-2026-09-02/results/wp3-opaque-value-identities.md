@@ -128,6 +128,29 @@ cargo test --features python-ext
 
 The command exited zero. Every library, integration, and documentation target
 passed; the long CFR target reported 44 passed and ten ignored in 565.30
-seconds. The mandatory post-commit whole Python gate remains to be run from the
-committed documentation state; the focused, identity, and Rust gates do not
-replace it.
+seconds.
+
+The mandatory post-commit whole Python gate then completed from the committed
+documentation state:
+
+```bash
+uv run pytest python/tests/
+```
+
+It reported 86 failed, 4,713 passed, 881 xfailed, 78 skipped, and 128
+deselected in 2,867.08 seconds. The prior identity run reported 87 failed and
+4,711 passed. The committed build and census state closed those two prior
+bookkeeping failures. One apparently new node was
+`gcc-O2-vsa_double_args` in `test_variadic_abi_invariants.py`.
+
+An isolated release-built A/B proved that node passed at parent `f05c9a5d` and
+failed at `af65c260`. Comparing the rendered function showed that the parent
+was a false pass: display-name recovery conflated every `rax` lifetime with the
+DWARF local `index`, thereby hiding the incoming SysV `al` vector-count read.
+Opaque identity correctly sees several candidates for the bare kept-return
+spelling, declines the local binding, and exposes the existing undefined
+machine live-in as `ret`. The test inventory now records that cell as the same
+strict xfail as the other unresolved variadic register-save-area lanes. The
+complete variadic module passes with eleven expected xfails; only the already
+repaired GCC O2 forwarding cell remains an ordinary pass. This is an honest
+defect reclassification, not a claimed variadic-lowering repair.

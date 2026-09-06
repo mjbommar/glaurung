@@ -114,16 +114,18 @@ CONTROLS = ("vsa_control_fixed", "vsa_control_mixed")
 
 #: Current exact failure surface for the stronger no-undefined-read property.
 #: Strict marks make any newly repaired lane fail as XPASS until this inventory
-#: is deliberately reduced. The two unmarked GCC O2 cases are already clean.
+#: is deliberately reduced. The one unmarked GCC O2 case is already clean.
+#:
+#: `gcc:O2 vsa_double_args` used to appear clean only because register-local
+#: recovery conflated every lifetime in `rax` with the DWARF local `index`.
+#: Opaque SSA identity correctly declines that ambiguous merge and exposes the
+#: incoming SysV `al` vector-count read as `ret`. Keep the cell strict-xfail
+#: until variadic machine-state lowering models that live-in explicitly.
 _UNDEFINED_XFAILS = {
     (cc, opt, name)
     for cc, opt in LANES
     for name in VARIADIC
-    if (cc, opt, name)
-    not in {
-        ("gcc", "O2", "vsa_forward"),
-        ("gcc", "O2", "vsa_double_args"),
-    }
+    if (cc, opt, name) not in {("gcc", "O2", "vsa_forward")}
 }
 VARIADIC_CASES = [
     pytest.param(
@@ -362,7 +364,7 @@ def test_a_variadic_function_reads_no_undefined_value(recovered, cc, opt, name) 
     rendering `...` does not make raw register names legal source expressions.
 
     Each currently failing compiler/optimization/function cell is strict-xfail;
-    the two repaired GCC O2 cells are ordinary passing cases.
+    the repaired GCC O2 forwarding cell is an ordinary passing case.
     """
     block = _require(_lane(recovered, cc, opt), name)
     problems = _violations(block)
