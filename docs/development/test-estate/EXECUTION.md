@@ -59,6 +59,8 @@ Both have since landed, so they are links again.
 | [~] Exact-range CFG/callee convergence across all four entry points | review WP2 | `5a2d6c86` |
 | [x] One ordered callee-preparation boundary used by all four entry points | review WP2 | `e19bd73b` |
 | [~] One LLIR-to-AST stage used by all four entry points | review WP2 | `41bd90a6` |
+| [x] Combined symbol/data/GOT context reuses one parsed object (21 -> 20 parses) | review WP2 | `73a79d61` |
+| [~] Structured single-function result with health/completeness/provenance/fingerprint | review WP2 | `5ea45dca` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |

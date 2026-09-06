@@ -38,8 +38,10 @@ ABI-call, recovered-callee, and caller-effect sequence behind one
 public entry points still need to construct the request directly; the common
 per-function orchestrator is now shared from prepared LLIR through AST passes
 at `41bd90a6`, but discovery/context assembly and rendering remain adapter-owned.
-The structured result, fingerprint, pass manager, and fixpoint driver also
-remain open, so WP2 is underway rather than complete. See
+`5ea45dca` adds the result half for the single-function path with real health,
+completeness, provenance, and a versioned budget/pass fingerprint. Batch/range
+result migration, the pass manager, and the fixpoint driver remain open, so WP2
+is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -548,7 +550,10 @@ and make pass repetition/invalidation explicit.
   model and the range/all/many request adapters remain open. Follow-on
   `5a2d6c86` moves all four entry points onto the same `AnalysisBudget`
   conversion and makes an exact discovered range reuse the ordinary CFG and
-  direct-callee facts.
+  direct-callee facts. `5ea45dca` adds `DecompileResult` for module/session
+  single-function requests, carrying rendered text, final AST health, exact
+  completeness limits, provenance, and the pipeline fingerprint. Range/all/many
+  still return their adapter-specific shapes directly.
 - [~] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
   `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
@@ -574,8 +579,12 @@ and make pass repetition/invalidation explicit.
   requires it.
 - [ ] Replace hand-repeated settle passes with a bounded fixpoint driver that
   records firing and termination reasons.
-- [ ] Include analysis-budget identity and pass-version identity in the
+- [x] Include analysis-budget identity and pass-version identity in the
   pipeline fingerprint.
+  `5ea45dca` defines schema `glaurung.decompile-pipeline/v1`, explicit
+  `PIPELINE_PASS_VERSION`, the complete `AnalysisBudget`, style/type/debug
+  selectors, and analyst-overlay presence. A unit test proves a budget change
+  changes fingerprint identity.
 
 ### Tests
 

@@ -2,7 +2,8 @@
 
 Date: 2026-09-06
 
-Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`
+Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
+`73a79d61`, `5ea45dca`
 
 ## Boundary moved
 
@@ -83,8 +84,35 @@ The boundary deliberately returns the numbered LLIR, prototype, width map,
 stack facts, and profiler beside the AST so a renderer cannot accidentally use
 facts from another function. Context/discovery assembly, declaration-local
 merging, and rendering still live in the adapters; therefore the planned
-pipeline-owned `decompile_function(session, request)` and `DecompileResult`
-are not yet complete.
+pipeline-owned `decompile_function(session, request)` and all-entry-point result
+migration are not yet complete.
+
+## Structured result and fingerprint
+
+`5ea45dca` adds the result half of the typed boundary for module-level and
+reusable-session single-function decompilation. Their legacy Python methods
+still project a string, but internally receive one `DecompileResult` carrying:
+
+- pseudocode;
+- final, renderer-independent `AstHealth`;
+- explicit completeness plus the exact discovery-budget names that fired;
+- the declaration/analyst provenance that influenced the result; and
+- `PipelineFingerprint`, including schema, explicit pass-set version, every
+  `AnalysisBudget` field, style/type/debug selectors, and analyst-overlay
+  presence.
+
+Unit tests prove that a budget change changes fingerprint identity and that
+completeness reports the exact fired limit. Range/all/many migration and a
+structured Python projection remain open, so this is not yet the complete WP2
+result surface.
+
+The expanded profile test initially exposed 21 constant object parses against
+the ceiling of 20. An exact parent/current A/B proved the result model added
+none. Call-site instrumentation then located the duplicate: the combined
+symbol/data collector held an `object::File` but reparsed the bytes to recover
+GOT names. `73a79d61` adds parsed-object GOT extraction and reuses that object,
+restoring 20 parses across GCC C, Clang C, Go, Rust, and both discovery limits
+without changing the ceiling.
 
 ## Validation
 
@@ -110,3 +138,11 @@ are not yet complete.
   passed, zero failed, five ignored; every integration and documentation target
   passed. The identity-retrieval target reports 44 passed and ten ignored in
   524.96 seconds.
+- Fresh release extension plus pipeline profile, entry-point equivalence,
+  declaration, PDB, session, and determinism tests at `5ea45dca`: 36 passed.
+  The whole-program parse count is 20 for all four language/toolchain samples
+  and for both tested discovery limits.
+- Full `cargo test --features python-ext` at `5ea45dca`: 4,203 library tests
+  passed, zero failed, five ignored; every integration and documentation target
+  passed. The identity-retrieval target reports 44 passed and ten ignored in
+  524.99 seconds.
