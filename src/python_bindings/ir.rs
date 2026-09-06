@@ -177,7 +177,10 @@ fn decompile_at_py(
                 },
                 callee: pipeline::CalleeBudget::default(),
                 types: pipeline::TypeBudget::default(),
-                size: pipeline::SizeBudget::from_instruction_and_output_limits(max_instructions, 1),
+                size: pipeline::SizeBudget::from_instruction_and_output_limits(
+                    max_instructions,
+                    max_functions,
+                ),
             },
             render_options: RenderOptions {
                 types,
@@ -360,7 +363,7 @@ fn decompile_at_session(
 
 #[pyfunction]
 #[pyo3(name = "decompile_range_at")]
-#[pyo3(signature = (path, func_va, range_start, range_end, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache=""))]
+#[pyo3(signature = (path, func_va, range_start, range_end, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache="", max_functions=1usize))]
 fn decompile_range_at_py(
     py: Python<'_>,
     path: String,
@@ -373,6 +376,7 @@ fn decompile_range_at_py(
     types: bool,
     style: &str,
     pdb_cache: &str,
+    max_functions: usize,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_range_at");
     use crate::core::address::{Address, AddressKind};
@@ -399,7 +403,7 @@ fn decompile_range_at_py(
         va: func_va,
         analysis_budget: AnalysisBudget {
             discovery: pipeline::DiscoveryBudget {
-                max_functions: 1,
+                max_functions,
                 total_timeout_ms: 0,
             },
             cfg: pipeline::CfgBudget {
@@ -409,7 +413,10 @@ fn decompile_range_at_py(
             },
             callee: pipeline::CalleeBudget::default(),
             types: pipeline::TypeBudget::default(),
-            size: pipeline::SizeBudget::from_instruction_and_output_limits(max_instructions, 1),
+            size: pipeline::SizeBudget::from_instruction_and_output_limits(
+                max_instructions,
+                max_functions,
+            ),
         },
         render_options: RenderOptions {
             types,
@@ -889,12 +896,12 @@ fn record_prototype_conflict_with_candidate(
 /// Decompile the first `limit` discovered functions. Returns a list of
 /// `(func_name, entry_va, pseudocode)` triples.
 ///
-/// Default `limit=30000` matches the function-discovery cap so the
-/// `--all` flag really does emit every function unless the user
-/// explicitly opts back into a smaller window.
+/// `limit` bounds returned artifacts independently from `max_functions`, which
+/// bounds program discovery. Their defaults match so `--all` emits every
+/// discovered function unless the caller requests a smaller output window.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None))]
+#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None, max_functions=30_000usize))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,
@@ -905,12 +912,13 @@ fn decompile_all_py(
     pdb_cache: &str,
     style: &str,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
+    max_functions: usize,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
 
     let analysis_budget = AnalysisBudget {
         discovery: pipeline::DiscoveryBudget {
-            max_functions: limit.max(1),
+            max_functions: max_functions.max(1),
             total_timeout_ms: 0,
         },
         cfg: pipeline::CfgBudget {

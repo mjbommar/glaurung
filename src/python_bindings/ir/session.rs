@@ -194,7 +194,10 @@ impl PyDecompilerSession {
                     },
                     callee: CalleeBudget::default(),
                     types: TypeBudget::default(),
-                    size: SizeBudget::from_instruction_and_output_limits(max_instructions, 1),
+                    size: SizeBudget::from_instruction_and_output_limits(
+                        max_instructions,
+                        max_functions,
+                    ),
                 },
                 render_options: RenderOptions {
                     types,

@@ -30,19 +30,31 @@ def test_discovered_exact_range_matches_every_whole_cfg_entry_point(
         "max_instructions": 200_000,
         "timeout_ms": 5000,
     }
+    equal_max_functions = 64
 
     by_address = g.ir.decompile_at(
-        path, va, max_functions=1, types=types, **common
+        path, va, max_functions=equal_max_functions, types=types, **common
     )
     by_range = g.ir.decompile_range_at(
-        path, va, va, va + 0x26, types=types, **common
+        path,
+        va,
+        va,
+        va + 0x26,
+        max_functions=equal_max_functions,
+        types=types,
+        **common,
     )
     [(_name, _va, by_batch, *_extra)] = g.ir.decompile_many(
-        path, [va], max_functions=1, types=types, **common
+        path, [va], max_functions=equal_max_functions, types=types, **common
     )
     by_all = next(
         row[2]
-        for row in g.ir.decompile_all(path, limit=64, **common)
+        for row in g.ir.decompile_all(
+            path,
+            limit=equal_max_functions,
+            max_functions=equal_max_functions,
+            **common,
+        )
         if row[1] == va
     )
 
