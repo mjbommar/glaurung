@@ -234,7 +234,11 @@ O2 float and double complex-multiply cells all move to pass, four improvements
 with no scoped adjacent regression. General exact call-boundary facts and
 exceptional-input coverage remain WP6 work; this two-helper catalogued contract
 does not establish other ABIs, arbitrary aggregate calls, or vector support.
-WP8 has
+WP2 is complete: all four public entry points now share one typed request,
+result, discovery, preparation, finalization, and rendering transaction with
+explicit enforced budgets, checked pass ordering, bounded fixpoints, stable
+fingerprints, and equal-budget output identity. The final exact-range budget
+contract landed at `e7b7de67`. WP8 has
 authoritative DWARF/PDB/analyst
 declaration slices and now owns their total priority order in the program
 environment; authoritative tagged PDB pointers also retain their nominal type
@@ -248,8 +252,8 @@ be reconstructed from a cached artifact. DWARF variadic markers now survive
 into GCC and Clang rendered signatures across O0/O2; generic stripped-binary
 variadic inference and complete SysV `va_start` lowering remain open. WP9 has
 target-owned ARM32 register views plus standing
-decoded/effect capability censuses and several silent-writer repairs. WP2,
-WP3, WP6, and WP7B remain open architectural work. No current-tip release gate
+decoded/effect capability censuses and several silent-writer repairs. WP3,
+WP6, and WP7B remain open architectural work. No current-tip release gate
 is claimed green; isolated overlay results in the review record retain their
 named scope and must not be read as cross-architecture or full-plan
 completion.

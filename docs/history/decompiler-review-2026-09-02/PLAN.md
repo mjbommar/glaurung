@@ -561,6 +561,11 @@ If accepted:
 Purpose: remove semantic differences caused solely by the Python entry point
 and make pass repetition/invalidation explicit.
 
+Status: complete. Commit `e7b7de67` closes the final exact-range budget
+contract; the 27-test focused WP2 suite covers shared session facts, all-entry-
+point equivalence, fresh-process determinism, pipeline reporting, and explicit
+incompleteness.
+
 ### Production changes
 
 - [x] Introduce a pipeline-owned request and result model in
@@ -686,8 +691,11 @@ and make pass repetition/invalidation explicit.
   duplicate traces, and proves the real production order is lift, callee facts,
   LLIR preparation, AST preparation, finalization, then rendering without
   changing pseudocode.
-- [ ] Test that a deliberately lower range budget differs only with an
-  explicit completeness reason.
+- [x] Test that a deliberately lower range budget differs only with an
+  explicit completeness reason. The exact-range `tail_dispatch` regression
+  changes only `max_blocks` from 4096 to 1, requires both calls to retain a
+  rendered function body, and proves the constrained result names exactly the
+  fired `max_blocks=1` limit while the complete result remains unmarked.
 
 ### Exit criteria
 
@@ -2444,8 +2452,8 @@ relevant ratchet's accepted-regression record.
 
 ### M3 — One semantic pipeline
 
-- [ ] WP2 and WP3 complete.
-- [ ] Entry points agree at equal budget.
+- [~] WP2 is complete; WP3 remains open.
+- [x] Entry points agree at equal budget.
 - [ ] Semantic consumers use stable values, not display names.
 - [ ] Origin mappings are deterministic.
 

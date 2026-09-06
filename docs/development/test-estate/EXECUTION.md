@@ -55,21 +55,21 @@ Both have since landed, so they are links again.
 | [x] Host-compiler test scoped to validated majors | (found by CI) | `09f4d511` |
 | [x] Canary set: default suite exercises the decompiler | estate 2 | `b4d23221` |
 | [x] ARM32 definition identity and stack-coordinate phase repairs | review WP3/WP9 | `4fa0b12f`, `a8ba1b87`, `dcdc99cc` |
-| [~] Pipeline-owned request model for module/session `decompile_at` | review WP2 | `d6a65779` |
-| [~] Exact-range CFG/callee convergence across all four entry points | review WP2 | `5a2d6c86` |
+| [x] Pipeline-owned request model for module/session `decompile_at` | review WP2 | `d6a65779`, closed `e7b7de67` |
+| [x] Exact-range CFG/callee convergence across all four entry points | review WP2 | `5a2d6c86`, closed `e7b7de67` |
 | [x] One ordered callee-preparation boundary used by all four entry points | review WP2 | `e19bd73b` |
-| [~] One LLIR-to-AST stage used by all four entry points | review WP2 | `41bd90a6` |
+| [x] One LLIR-to-AST stage used by all four entry points | review WP2 | `41bd90a6`, closed `e7b7de67` |
 | [x] Combined symbol/data/GOT context reuses one parsed object (21 -> 20 parses) | review WP2 | `73a79d61` |
-| [~] Structured single-function result with health/completeness/provenance/fingerprint | review WP2 | `5ea45dca` |
+| [x] Structured single-function result with health/completeness/provenance/fingerprint | review WP2 | `5ea45dca`, closed `e7b7de67` |
 | [x] All four adapters construct typed requests/results before legacy projection | review WP2 | `15d044eb` |
-| [~] Pipeline-owned image-wide render context used once per adapter/batch | review WP2 | `e0588083` |
-| [~] Pipeline-owned DWARF/PDB context used once per adapter/batch | review WP2 | `21f8b29a` |
-| [~] Pipeline-owned binary-truth name/data context used once per adapter/batch | review WP2 | `2ef9c4eb` |
-| [~] Pipeline-owned discovery pairs exact budgets with function facts | review WP2 | `d900cf1b` |
-| [~] One post-lowering AST-finalization boundary used by all four adapters | review WP2 | `1e1ac0a8` |
-| [~] One declaration/type/style renderer used by all four adapters | review WP2 | `2f7a6149` |
+| [x] Pipeline-owned image-wide render context used once per adapter/batch | review WP2 | `e0588083`, closed `e7b7de67` |
+| [x] Pipeline-owned DWARF/PDB context used once per adapter/batch | review WP2 | `21f8b29a`, closed `e7b7de67` |
+| [x] Pipeline-owned binary-truth name/data context used once per adapter/batch | review WP2 | `2ef9c4eb`, closed `e7b7de67` |
+| [x] Pipeline-owned discovery pairs exact budgets with function facts | review WP2 | `d900cf1b`, closed `e7b7de67` |
+| [x] One post-lowering AST-finalization boundary used by all four adapters | review WP2 | `1e1ac0a8`, closed `e7b7de67` |
+| [x] One declaration/type/style renderer used by all four adapters | review WP2 | `2f7a6149`, closed `e7b7de67` |
 | [x] One lift-to-render per-function transaction used by all four adapters | review WP2 | `2ee8fa15` |
-| [~] Checked coarse pipeline stages reject invalid ordering | review WP2 | `74853fcc` |
+| [x] Checked coarse pipeline stages reject invalid ordering | review WP2 | `74853fcc`, closed `e7b7de67` |
 | [x] Canonical 20-pass AST order rejects unknown, repeated, and backward passes | review WP2 | `4ea067df` |
 | [x] Bounded AST fixpoints report rounds, firings, and termination | review WP2 | `5f7df194` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
