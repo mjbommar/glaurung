@@ -48,10 +48,25 @@ impl Default for CalleeBudget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct TypeBudget {
+    /// Maximum rounds in the render-time type refinement fixed point.
+    pub(super) max_refinement_rounds: usize,
+}
+
+impl Default for TypeBudget {
+    fn default() -> Self {
+        Self {
+            max_refinement_rounds: 512,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct AnalysisBudget {
     pub(super) discovery: DiscoveryBudget,
     pub(super) cfg: CfgBudget,
     pub(super) callee: CalleeBudget,
+    pub(super) types: TypeBudget,
 }
 
 impl AnalysisBudget {
@@ -793,6 +808,7 @@ pub(super) struct FunctionRenderContext<'a> {
     pub(super) raw: &'a crate::ir::types::LlirFunction,
     pub(super) discovered: &'a crate::core::function::Function,
     pub(super) budgets: &'a crate::analysis::cfg::Budgets,
+    pub(super) type_budget: TypeBudget,
     pub(super) function_va: u64,
     pub(super) render_options: RenderOptions<'a>,
     pub(super) debug_contract: Option<&'a DwarfPrototypeContract>,
@@ -820,6 +836,7 @@ pub(super) struct FunctionPipelineContext<'a> {
     pub(super) discovered: &'a crate::core::function::Function,
     pub(super) budgets: &'a crate::analysis::cfg::Budgets,
     pub(super) callee_budget: CalleeBudget,
+    pub(super) type_budget: TypeBudget,
     pub(super) render_options: RenderOptions<'a>,
     pub(super) debug_outputs: Option<&'a std::collections::HashMap<u64, DwarfPrototypeContract>>,
     pub(super) debug_types: &'a [crate::debug::dwarf::DwarfType],
@@ -961,6 +978,7 @@ pub(super) fn decompile_function(
         discovered,
         budgets,
         callee_budget,
+        type_budget,
         render_options,
         debug_outputs,
         debug_types,
@@ -1093,6 +1111,7 @@ pub(super) fn decompile_function(
             raw: &raw,
             discovered,
             budgets,
+            type_budget,
             function_va,
             render_options,
             debug_contract,
@@ -1133,6 +1152,7 @@ pub(super) fn render_prepared_ast(
         raw,
         discovered,
         budgets,
+        type_budget,
         function_va,
         render_options,
         debug_contract,
@@ -1174,6 +1194,7 @@ pub(super) fn render_prepared_ast(
                 debug_type_env,
                 &prepared.role_names,
                 &prepared.definition_widths,
+                type_budget.max_refinement_rounds,
             )
         });
         let (decl, width, exact_value_widths) = match &maps {
@@ -1651,7 +1672,7 @@ mod request_tests {
     use super::{
         AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget, CfgBudget,
         DecompileCompleteness, DecompileRequest, DiscoveryBudget, PipelineStage,
-        PipelineStageTracker, RenderOptions,
+        PipelineStageTracker, RenderOptions, TypeBudget,
     };
 
     #[test]
@@ -1715,6 +1736,9 @@ mod request_tests {
                 timeout_ms: 37,
             },
             callee: CalleeBudget { max_depth: 3 },
+            types: TypeBudget {
+                max_refinement_rounds: 43,
+            },
         };
 
         let discovery = request.discovery();
@@ -1750,6 +1774,7 @@ mod request_tests {
                     timeout_ms: 500,
                 },
                 callee: CalleeBudget::default(),
+                types: TypeBudget::default(),
             },
             render_options: options,
         };
@@ -1769,6 +1794,9 @@ mod request_tests {
         };
         third_request.analysis_budget.callee.max_depth += 1;
         assert_ne!(first, third_request.fingerprint());
+        let mut fourth_request = third_request;
+        fourth_request.analysis_budget.types.max_refinement_rounds += 1;
+        assert_ne!(third_request.fingerprint(), fourth_request.fingerprint());
     }
 
     #[test]

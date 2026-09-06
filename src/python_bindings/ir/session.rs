@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 
 use super::pipeline::{
     AnalysisBudget, CalleeBudget, CfgBudget, DecompileRequest, DiscoveryBudget, RenderOptions,
+    TypeBudget,
 };
 use super::{decompile_at_session, load_program_session};
 
@@ -192,6 +193,7 @@ impl PyDecompilerSession {
                         timeout_ms,
                     },
                     callee: CalleeBudget::default(),
+                    types: TypeBudget::default(),
                 },
                 render_options: RenderOptions {
                     types,

@@ -236,6 +236,7 @@ fn float_expression_width(
 fn refine_float_copy_types(
     body: &[crate::ir::ast::Stmt],
     types: &mut crate::ir::types_recover::TypeMap,
+    max_rounds: usize,
 ) {
     use crate::ir::ast::{Expr, Stmt};
     use crate::ir::types::{VReg, VReg::Phys};
@@ -308,9 +309,11 @@ fn refine_float_copy_types(
     // Every reported round strictly changes at least one entry, and the join
     // only ever moves a register from "no fact"/integer-ish to float, so the
     // number of rounds is bounded by the number of float-typed destinations.
-    // The cap is a backstop against a future non-monotone edit to the lattice:
-    // it fails loudly in debug builds rather than hanging a release gate.
-    const MAX_ROUNDS: usize = 512;
+    // The request-owned cap also bounds a future non-monotone edit to the
+    // lattice. Reaching it preserves the best facts accumulated so far.
+    if max_rounds == 0 {
+        return;
+    }
     let mut rounds = 0;
     loop {
         let mut changed = false;
@@ -319,11 +322,7 @@ fn refine_float_copy_types(
         if !changed {
             break;
         }
-        if rounds >= MAX_ROUNDS {
-            debug_assert!(
-                false,
-                "refine_float_copy_types did not reach a fixed point in {MAX_ROUNDS} rounds"
-            );
+        if rounds >= max_rounds {
             break;
         }
     }
@@ -493,6 +492,7 @@ pub(super) fn decbench_type_maps(
     dwarf_type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     role_names: &std::collections::HashMap<String, String>,
     definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
+    max_refinement_rounds: usize,
 ) -> (
     crate::ir::types_recover::TypeMap,
     crate::ir::types_recover::TypeMap,
@@ -544,7 +544,7 @@ pub(super) fn decbench_type_maps(
     apply_stack_source_types(&mut decl, source_types, source_names, cc, dwarf_type_env);
     merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
-    refine_float_copy_types(&f.body, &mut decl);
+    refine_float_copy_types(&f.body, &mut decl, max_refinement_rounds);
     for (role, hint) in numbered.iter() {
         refine_numbered_declaration(&mut decl, role, hint);
     }
@@ -578,7 +578,7 @@ pub(super) fn decbench_type_maps(
     apply_stack_source_types(&mut width, source_types, source_names, cc, dwarf_type_env);
     merge_exact_definition_widths(&mut width, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
-    refine_float_copy_types(&f.body, &mut width);
+    refine_float_copy_types(&f.body, &mut width, max_refinement_rounds);
     for (role, hint) in numbered.iter() {
         match hint {
             crate::ir::types_recover::TypeHint::Pointer { pointee_width } => {
@@ -709,7 +709,7 @@ mod tests {
             src: Expr::FloatConst { bits: 0, width: 4 },
         }];
 
-        refine_float_copy_types(&body, &mut types);
+        refine_float_copy_types(&body, &mut types, 512);
 
         assert_eq!(types.get(&accumulator), Some(TypeHint::Float { width: 8 }));
     }
@@ -725,9 +725,26 @@ mod tests {
             src: Expr::Reg(source),
         }];
 
-        refine_float_copy_types(&body, &mut types);
+        refine_float_copy_types(&body, &mut types, 512);
 
         assert_eq!(types.get(&slot), Some(TypeHint::Float { width: 4 }));
+    }
+
+    #[test]
+    fn zero_type_budget_declines_refinement_without_hiding_existing_facts() {
+        let slot = VReg::phys("local_c");
+        let source = VReg::phys("s0");
+        let mut types = TypeMap::default();
+        types.upsert_public(source.clone(), TypeHint::Float { width: 4 });
+        let body = vec![Stmt::Assign {
+            dst: slot.clone(),
+            src: Expr::Reg(source.clone()),
+        }];
+
+        refine_float_copy_types(&body, &mut types, 0);
+
+        assert_eq!(types.get(&slot), None);
+        assert_eq!(types.get(&source), Some(TypeHint::Float { width: 4 }));
     }
 
     #[test]
