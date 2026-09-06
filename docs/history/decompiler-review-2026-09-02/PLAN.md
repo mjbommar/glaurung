@@ -10,7 +10,7 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-05 through homogeneous-float
+Current-state snapshot: reconciled 2026-09-06 through homogeneous-float
 behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
 `1bee3fb1`, and census commit `a0915220`. WP0 and
 WP7A are complete; the bounded WP1 production trial is complete and rejected,
@@ -27,6 +27,14 @@ comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP2, WP3
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
+The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
+authoritatively declared eight-byte integer parameter now carries both aligned
+entry words into the AST instead of presenting its high word as an invented
+local. Four ARMv7/ARMv7-A32 O2 fixture-215 cells move to execution-correct
+output with no attributable regression across the 60-cell architecture slice.
+Big-endian ordering, inferred prototypes, residual A32 O0 storage defects, and
+i386 pairs remain deliberately open. See
+`results/wp6-wp9-aapcs32-wide-parameters.md`.
 The first fixture-217 follow-on is a bounded WP9 instruction-semantics
 increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
 typed binary32 lanes. The following WP6/WP9 call-boundary increment is also
@@ -2387,6 +2395,13 @@ relevant ratchet's accepted-regression record.
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
    into a named required architecture profile. Do not canonicalize partial
    VFP/NEON writes until LLIR can represent the untouched lanes.
+   The AAPCS32 wide-parameter slice at `62a4ab72` additionally carries both
+   little-endian core-register words of an authoritative eight-byte integer
+   parameter into one source argument. Continue with the residual A32 O0
+   frame/storage identity failures and an independently specified i386 pair;
+   do not generalize this declared-parameter fact to inferred values before
+   WP3 provides stable identity. See
+   `results/wp6-wp9-aapcs32-wide-parameters.md`.
 10. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned
