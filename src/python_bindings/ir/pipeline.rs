@@ -62,11 +62,32 @@ impl Default for TypeBudget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct SizeBudget {
+    /// Maximum byte window synthesized by the explicit-range fallback.
+    pub(super) max_range_bytes: u64,
+    /// Maximum function artifacts projected by a batch adapter.
+    pub(super) max_output_functions: usize,
+}
+
+impl SizeBudget {
+    pub(super) fn from_instruction_and_output_limits(
+        max_instructions: usize,
+        max_output_functions: usize,
+    ) -> Self {
+        Self {
+            max_range_bytes: (max_instructions as u64).saturating_mul(16).max(1),
+            max_output_functions,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct AnalysisBudget {
     pub(super) discovery: DiscoveryBudget,
     pub(super) cfg: CfgBudget,
     pub(super) callee: CalleeBudget,
     pub(super) types: TypeBudget,
+    pub(super) size: SizeBudget,
 }
 
 impl AnalysisBudget {
@@ -1672,7 +1693,7 @@ mod request_tests {
     use super::{
         AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget, CfgBudget,
         DecompileCompleteness, DecompileRequest, DiscoveryBudget, PipelineStage,
-        PipelineStageTracker, RenderOptions, TypeBudget,
+        PipelineStageTracker, RenderOptions, SizeBudget, TypeBudget,
     };
 
     #[test]
@@ -1739,6 +1760,10 @@ mod request_tests {
             types: TypeBudget {
                 max_refinement_rounds: 43,
             },
+            size: SizeBudget {
+                max_range_bytes: 47,
+                max_output_functions: 53,
+            },
         };
 
         let discovery = request.discovery();
@@ -1775,6 +1800,7 @@ mod request_tests {
                 },
                 callee: CalleeBudget::default(),
                 types: TypeBudget::default(),
+                size: SizeBudget::from_instruction_and_output_limits(10_000, 1),
             },
             render_options: options,
         };
@@ -1797,6 +1823,9 @@ mod request_tests {
         let mut fourth_request = third_request;
         fourth_request.analysis_budget.types.max_refinement_rounds += 1;
         assert_ne!(third_request.fingerprint(), fourth_request.fingerprint());
+        let mut fifth_request = fourth_request;
+        fifth_request.analysis_budget.size.max_output_functions += 1;
+        assert_ne!(fourth_request.fingerprint(), fifth_request.fingerprint());
     }
 
     #[test]

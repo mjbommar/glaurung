@@ -177,6 +177,7 @@ fn decompile_at_py(
                 },
                 callee: pipeline::CalleeBudget::default(),
                 types: pipeline::TypeBudget::default(),
+                size: pipeline::SizeBudget::from_instruction_and_output_limits(max_instructions, 1),
             },
             render_options: RenderOptions {
                 types,
@@ -408,6 +409,7 @@ fn decompile_range_at_py(
             },
             callee: pipeline::CalleeBudget::default(),
             types: pipeline::TypeBudget::default(),
+            size: pipeline::SizeBudget::from_instruction_and_output_limits(max_instructions, 1),
         },
         render_options: RenderOptions {
             types,
@@ -458,7 +460,7 @@ fn decompile_range_at_py(
     let bits = image.target().address_bits().ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("target address width is unknown")
     })?;
-    let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
+    let max_bytes = analysis_budget.size.max_range_bytes;
     let capped_end = range_end.min(range_start.saturating_add(max_bytes));
     let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -918,6 +920,7 @@ fn decompile_all_py(
         },
         callee: pipeline::CalleeBudget::default(),
         types: pipeline::TypeBudget::default(),
+        size: pipeline::SizeBudget::from_instruction_and_output_limits(max_instructions, limit),
     };
     let render_options = RenderOptions {
         types: style == "decbench",
@@ -970,7 +973,7 @@ fn decompile_all_py(
     } = prepare_program_render_context(&session, &image, data_symbols);
     let environment_targets = funcs
         .iter()
-        .take(limit)
+        .take(analysis_budget.size.max_output_functions)
         .map(|function| function.entry_point.value)
         .collect::<Vec<_>>();
     let program_environment = (style == "decbench")
@@ -985,7 +988,7 @@ fn decompile_all_py(
     let callee_call_graph = py.detach(|| session.call_graph_for(&budgets, &[], &funcs));
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
-    for func in funcs.iter().take(limit) {
+    for func in funcs.iter().take(analysis_budget.size.max_output_functions) {
         // The GIL is held across the per-function lifting work (the loop builds
         // a `PyList` as it goes), so CPython never re-enters its eval loop and
         // never notices a signal. This is the supported way to stay
@@ -1129,6 +1132,10 @@ fn decompile_many_py(
         },
         callee: pipeline::CalleeBudget::default(),
         types: pipeline::TypeBudget::default(),
+        size: pipeline::SizeBudget::from_instruction_and_output_limits(
+            max_instructions,
+            requested_function_limit,
+        ),
     };
     let render_options = RenderOptions {
         types,
@@ -1205,6 +1212,7 @@ fn decompile_many_py(
     // not something a clock between passes could have caught anyway — the spin
     // that motivated this was inside `refine_float_copy_types`, where no
     // between-pass check could reach it. See its fixed-point proof.
+    let mut output_count = 0usize;
     for func in funcs.iter() {
         // See `decompile_all_py`: keeps a long multi-function decompile
         // interruptible while the GIL is held for the `PyList` it is building.
@@ -1212,6 +1220,9 @@ fn decompile_many_py(
         let func_va = func.entry_point.value;
         if !wanted.contains(&func_va) {
             continue;
+        }
+        if output_count >= analysis_budget.size.max_output_functions {
+            break;
         }
         let request = DecompileRequest {
             va: func_va,
@@ -1294,6 +1305,7 @@ fn decompile_many_py(
             func.size,
             variables_to_py(py, &variables)?,
         ))?;
+        output_count += 1;
     }
     Ok(list.into())
 }
