@@ -180,7 +180,7 @@ mod coverage {
         // something it used to accept fails here rather than shrinking the
         // population a later feasibility claim is measured over.
         assert!(
-            ok * 100 / total >= 18,
+            ok * 100 / total >= 20,
             "lowering coverage fell to {ok}/{total}"
         );
         // "pointer type" was 325 of 732 refusals before pointers were admitted
@@ -194,5 +194,210 @@ mod coverage {
             bare_pointer, 0,
             "a bare `pointer type` refusal returned; pointers are lowerable"
         );
+    }
+}
+
+
+#[cfg(test)]
+mod construct_census {
+    //! What each corpus function *needs*, not what it is refused for first.
+    //!
+    //! The coverage census reports the first `LowerError`, which makes it a
+    //! queue: fixing pointers revealed calls, and fixing calls will reveal
+    //! whatever is behind those. This asks the other question --- which
+    //! constructs does each function contain --- so a capability bundle can be
+    //! costed before it is built rather than after.
+    use crate::csource::parse::tag::NodeTag;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// One capability the lowering may or may not have.
+    const FLOAT: &str = "float";
+    const POINTER: &str = "pointer";
+    const ARRAY: &str = "array/subscript";
+    const AGGREGATE: &str = "struct/union member";
+    const CALL_INTRA: &str = "call (defined here)";
+    const CALL_EXTERN: &str = "call (external)";
+    const SWITCH: &str = "switch";
+    const GOTO: &str = "goto/label";
+    const GLOBAL: &str = "global reference";
+
+    #[test]
+    fn what_each_function_needs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/decompiler_fixtures/src");
+        let Ok(entries) = std::fs::read_dir(&root) else { return };
+
+        // Per function: the set of capabilities it uses.
+        let mut needs: Vec<BTreeSet<&'static str>> = Vec::new();
+        let mut per_construct: BTreeMap<&'static str, usize> = BTreeMap::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("c") { continue; }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let arena = tree.arena();
+            let defined: BTreeSet<String> =
+                tree.functions(&text).iter().map(|f| f.name.clone()).collect();
+            let flows = crate::csource::dataflow::analyze(&text).into_parts().0;
+
+            for func in tree.functions(&text) {
+                if func.name.is_empty() { continue; }
+                let mut set: BTreeSet<&'static str> = BTreeSet::new();
+                let span = func.span;
+                let body = text.get(span.lo as usize..span.hi as usize).unwrap_or("");
+
+                for node in arena.preorder(func.node) {
+                    match arena.tag(node).and_then(NodeTag::from_u16) {
+                        Some(NodeTag::IndexSuffix) => { set.insert(ARRAY); }
+                        Some(NodeTag::MemberSuffix) => { set.insert(AGGREGATE); }
+                        Some(NodeTag::SwitchStmt) => { set.insert(SWITCH); }
+                        Some(NodeTag::GotoStmt) | Some(NodeTag::LabelStmt) => { set.insert(GOTO); }
+                        _ => {}
+                    }
+                }
+                // Types, read from the text of the definition: cheap and good
+                // enough for a census that only needs to bucket.
+                if body.contains("float") || body.contains("double") { set.insert(FLOAT); }
+                if body.contains('*') { set.insert(POINTER); }
+                if body.contains("struct ") || body.contains("union ") { set.insert(AGGREGATE); }
+
+                if let Some(flow) = flows.iter().find(|f| f.name == func.name) {
+                    for call in &flow.calls {
+                        match call.callee.as_deref() {
+                            Some(name) if defined.contains(name) => { set.insert(CALL_INTRA); }
+                            Some(_) => { set.insert(CALL_EXTERN); }
+                            None => { set.insert(CALL_EXTERN); }
+                        }
+                    }
+                    if !flow.unresolved_uses.is_empty() { set.insert(GLOBAL); }
+                }
+
+                for item in &set { *per_construct.entry(item).or_default() += 1; }
+                needs.push(set);
+            }
+        }
+
+        let total = needs.len();
+        let clean = needs.iter().filter(|s| s.is_empty()).count();
+        eprintln!("CONSTRUCTS over {total} functions ({clean} need nothing beyond scalars)");
+        let mut rows: Vec<_> = per_construct.into_iter().collect();
+        rows.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        for (name, count) in &rows {
+            eprintln!("   {count:4}  {name}");
+        }
+
+        assert!(total > 500, "corpus not found: {total} functions");
+        // The census must keep finding the shape of the corpus. A collapse
+        // here means the detector broke, not that the corpus changed.
+        assert!(clean > 50, "only {clean} scalar-only functions");
+
+        // What a cumulative bundle buys: add capabilities cheapest-first and
+        // report how many functions become fully covered.
+        eprintln!("CUMULATIVE (functions fully covered by the bundle):");
+        let order = [POINTER, CALL_INTRA, ARRAY, GLOBAL, SWITCH, AGGREGATE, GOTO, CALL_EXTERN, FLOAT];
+        let mut have: BTreeSet<&'static str> = BTreeSet::new();
+        for cap in order {
+            have.insert(cap);
+            let covered = needs.iter().filter(|s| s.is_subset(&have)).count();
+            eprintln!("   +{:22} -> {covered:4} / {total}  ({:.0}%)",
+                cap, covered as f64 / total as f64 * 100.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod unresolved_census {
+    //! Of the names the lowering cannot resolve, how many are file-scope
+    //! variables and how many are object-like macros?
+    //!
+    //! The two look identical to a parser with no preprocessor -- both are a
+    //! `NameRef` with no declaration in scope -- and they need completely
+    //! different fixes. A global needs an address and a memory model; a
+    //! `#define N 8` needs a constant substituted.
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn macros_versus_globals() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/decompiler_fixtures/src");
+        let Ok(entries) = std::fs::read_dir(&root) else { return };
+        let mut macro_const = 0usize;
+        let mut macro_other = 0usize;
+        let mut file_scope = 0usize;
+        let mut unknown = 0usize;
+        let mut examples: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("c") { continue; }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+
+            // Object-like macros: `#define NAME rest`, no parameter list.
+            let mut defines: BTreeMap<String, String> = BTreeMap::new();
+            for line in text.lines() {
+                let line = line.trim_start();
+                let Some(rest) = line.strip_prefix("#define ") else { continue };
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let Some(name) = parts.next() else { continue };
+                if name.contains('(') { continue; } // function-like
+                defines.insert(name.to_string(), parts.next().unwrap_or("").trim().to_string());
+            }
+
+            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            // File-scope declarations: a `Decl` not inside any function body.
+            let function_spans: Vec<_> = tree.functions(&text).iter().map(|f| f.span).collect();
+            let spans = tree.token_spans(&text);
+            let arena = tree.arena();
+            let mut globals: Vec<String> = Vec::new();
+            for root_node in arena.roots().iter().copied() {
+                for node in arena.preorder(root_node) {
+                    if arena.tag(node) != Some(crate::csource::parse::tag::NodeTag::DeclName.as_u16()) {
+                        continue;
+                    }
+                    let Some(sp) = arena.span(node, &spans) else { continue };
+                    if function_spans.iter().any(|f| f.lo <= sp.lo && sp.hi <= f.hi) { continue; }
+                    if let Some(name) = text.get(sp.lo as usize..sp.hi as usize) {
+                        globals.push(name.to_string());
+                    }
+                }
+            }
+
+            for flow in crate::csource::dataflow::analyze(&text).into_parts().0 {
+                for index in &flow.unresolved_uses {
+                    let name = &flow.uses[*index as usize].name;
+                    if let Some(body) = defines.get(name) {
+                        // A macro whose body is a bare integer literal is a
+                        // constant; anything else needs real expansion.
+                        if body.parse::<i64>().is_ok()
+                            || body.trim_end_matches(|c| "uUlL".contains(c)).parse::<i64>().is_ok()
+                            || body.starts_with("0x")
+                        {
+                            macro_const += 1;
+                            examples.entry("macro constant").or_default().push(name.clone());
+                        } else {
+                            macro_other += 1;
+                            examples.entry("macro, not a constant").or_default().push(name.clone());
+                        }
+                    } else if globals.contains(name) {
+                        file_scope += 1;
+                        examples.entry("file-scope variable").or_default().push(name.clone());
+                    } else {
+                        unknown += 1;
+                        examples.entry("neither").or_default().push(name.clone());
+                    }
+                }
+            }
+        }
+        let total = macro_const + macro_other + file_scope + unknown;
+        eprintln!("UNRESOLVED NAMES: {total}");
+        eprintln!("   {macro_const:4}  object-like macro whose body is an integer literal");
+        eprintln!("   {macro_other:4}  object-like macro, body is not a literal");
+        eprintln!("   {file_scope:4}  file-scope variable (a real global)");
+        eprintln!("   {unknown:4}  neither (extern, libc, or a name from a header)");
+        for (kind, mut names) in examples {
+            names.sort(); names.dedup();
+            eprintln!("   {kind}: {:?}", &names[..names.len().min(6)]);
+        }
     }
 }

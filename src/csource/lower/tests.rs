@@ -386,3 +386,62 @@ fn a_pointee_width_decides_how_many_bytes_a_dereference_reads() {
     // 0x11 fits in a signed char, so the sign extension is a no-op here.
     assert_eq!(call(&narrow, &[0x44332211]), 0x11);
 }
+
+#[test]
+fn an_object_like_macro_constant_resolves() {
+    // No preprocessor, so `#define N 8` leaves `N` in the tree looking exactly
+    // like a global. Measured over the corpus, 533 of 962 unresolved names are
+    // this shape against 54 real file-scope variables, which is why it is
+    // worth resolving and a memory model is not the first thing to build.
+    let f = lower("#define N 8\nint f(int a) { return a * N; }", "f");
+    assert_eq!(call(&f, &[3]), 24);
+}
+
+#[test]
+fn a_macro_constant_takes_its_base_and_sign() {
+    let hex = lower("#define M 0x10\nint f(void) { return M; }", "f");
+    assert_eq!(call(&hex, &[]), 0x10);
+    let suffixed = lower("#define M 12u\nint f(void) { return M; }", "f");
+    assert_eq!(call(&suffixed, &[]), 12);
+    let negative = lower("#define M -5\nint f(void) { return M; }", "f");
+    assert_eq!(call(&negative, &[]), (-5i64) as u64 & 0xffff_ffff);
+}
+
+#[test]
+fn a_trailing_comment_does_not_become_part_of_the_value() {
+    // The fixture corpus writes `#define N 8   /* ... */` constantly.
+    let f = lower("#define N 8   /* eight of them */\nint f(void) { return N; }", "f");
+    assert_eq!(call(&f, &[]), 8);
+}
+
+#[test]
+fn a_macro_whose_body_is_not_an_integer_is_still_refused() {
+    // `#define STRIDE (N * 2)` is an expression, and evaluating one here would
+    // be a second, worse parser. Refusing by name is the honest answer.
+    let err = lower_named_function(
+        "#define N 8\n#define STRIDE (N * 2)\nint f(void) { return STRIDE; }",
+        "f",
+    )
+    .expect_err("an expression-bodied macro is not a constant");
+    assert!(err.what.contains("STRIDE"), "{err}");
+}
+
+#[test]
+fn a_function_like_macro_is_not_mistaken_for_a_constant() {
+    let err = lower_named_function(
+        "#define TWICE(x) ((x) * 2)\nint f(int a) { return TWICE(a); }",
+        "f",
+    )
+    .expect_err("a function-like macro is not an object-like constant");
+    // It reads as a call, which is refused for its own reason.
+    assert!(!err.what.contains("TWICE(x)"), "{err}");
+}
+
+#[test]
+fn a_local_wins_over_a_macro_of_the_same_name() {
+    // Safe rather than arbitrary: C expands macros before scoping, so a file
+    // that both defines `N` and declares a local `N` does not compile. The
+    // order is asserted so a future change cannot silently invert it.
+    let f = lower("#define VALUE 99\nint f(int a) { int VALUE = a; return VALUE; }", "f");
+    assert_eq!(call(&f, &[7]), 7);
+}

@@ -270,6 +270,20 @@ fn eval(
         }
         NodeTag::NameRef => {
             let name = ctx.text_of(node);
+            // A name with no local binding may still be an object-like macro
+            // constant: this parser has no preprocessor, so `#define N 8`
+            // leaves `N` looking exactly like a global. The local is tried
+            // first, which is safe -- C expands macros before scoping, so a
+            // file that both defines `N` and declares a local `N` does not
+            // compile.
+            if low.lookup(name).is_none() {
+                if let Some(value) = ctx.macro_value(name) {
+                    let out = low.b.temp();
+                    low.b.assign_const(&out, value as i64);
+                    values.push(Val::plain(out, IntType::INT));
+                    return Ok(());
+                }
+            }
             let Some(var) = low.lookup(name) else {
                 return Err(LowerError::new(
                     format!("reference to non-local `{name}`"),

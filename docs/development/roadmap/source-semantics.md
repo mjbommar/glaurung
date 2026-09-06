@@ -168,6 +168,130 @@ keeps: an unresolvable call costs an `unknown`, never a silent yes or no.
 
 **Cost.** Two to three weeks. No new dependency.
 
+## Phase 2.5b — A holistic plan for the lowering
+
+Everything above worked refusal-by-refusal: read the top `LowerError`, fix it,
+re-measure. That is reactive, and it has a structural flaw worth naming --
+**the coverage census reports the *first* refusal per function, so it is a
+queue, not a map.** Fixing pointers revealed calls; fixing calls would reveal
+whatever is behind those. Planning from it means never seeing more than one
+step ahead.
+
+`csource::lower::construct_census` asks the other question: what does each
+function *contain*. Measured over the 900-function corpus on 2026-09-06:
+
+| construct | functions containing it |
+|---|---:|
+| pointer | 576 |
+| global reference | 362 |
+| array / subscript | 338 |
+| call (external) | 254 |
+| call (defined here) | 200 |
+| struct / union member | 86 |
+| float | 72 |
+| `switch` | 69 |
+| `goto` / label | 9 |
+
+118 functions need nothing beyond scalars. The useful figure is not any single
+row, though --- it is what a *bundle* buys, because a function needs every
+construct it contains before it lowers at all:
+
+| bundle (cumulative) | fully covered |
+|---|---:|
+| pointer | 197 (22%) |
+| + call, defined here | 259 (29%) |
+| + array / subscript | 329 (37%) |
+| **+ global reference** | **496 (55%)** |
+| + `switch` | 542 (60%) |
+| + struct / union | 594 (66%) |
+| + `goto` / label | 601 (67%) |
+| **+ call, external** | **828 (92%)** |
+| + float | 900 (100%) |
+
+### Three things this changes
+
+**1. The next thing to build is globals, not calls.** Global references unlock
+**167 functions**; intra-unit calls unlock 62. I was about to build an inliner
+for the smaller prize because "call expression" sat at the top of the refusal
+queue. A global is also far cheaper than an inliner: it is a fixed address
+rather than a frame slot, which is a variant of a `Local` and not a new
+mechanism.
+
+**2. Depth and breadth are different axes, and the census only measures
+breadth.** Pointers are *admitted*, so the census says pointer-only functions
+are 197; the lowering delivers 168. The 29-function gap is pointer arithmetic,
+pointer-to-pointer and cast-to-pointer --- constructs inside a capability that
+is nominally present. Every row above will have a gap like that, so treat the
+cumulative column as a ceiling and not a forecast.
+
+**3. External calls are the biggest single prize (+227) and the one where the
+answer depends on the consumer.** This is the architectural point the
+refusal-by-refusal approach could not see:
+
+* The **differential** needs a call to compute the right value, so it needs
+  real semantics --- an inlined body, or a model of `memcpy`. Anything else
+  diverges against the binary.
+* **Path feasibility** needs a call to produce an *unconstrained* value, which
+  an uninterpreted function gives exactly. Not a compromise: for "can this path
+  be taken", an unknown return value is the correct model.
+
+So a call has two right answers depending on who is asking, which argues for
+the lowering carrying a **mode** rather than one policy. Phase 3 can proceed on
+uninterpreted calls long before the differential can.
+
+The census also found that several "external callees" are not functions at all:
+`UNLIKELY`, `WIDEN`, `COUNTED_SQUARE`, `SAFE_MAX` are unexpanded macros that a
+parser with no preprocessor sees as calls, and `__builtin_expect` (18 uses)
+is a compiler builtin that returns its first argument. Both are cheaper than a
+general call, and `__builtin_expect` alone is a one-line model.
+
+### The census found the wrong culprit twice, which is the point
+
+Measuring what a bundle buys said globals were worth 167 functions against
+intra-unit calls' 62, so globals went first. Measuring *what those unresolved
+names actually are* changed the answer again:
+
+| unresolved name | count |
+|---|---:|
+| object-like macro whose body is an integer literal | **533** |
+| object-like macro, body is not a literal | 77 |
+| **file-scope variable (a real global)** | **54** |
+| neither: `extern`, libc, a name from a header | 298 |
+
+`#define N 8` leaves `N` in the tree looking exactly like a global, because
+this parser has no preprocessor. So "support globals" --- an address space, an
+initialisation model, a memory region --- would have fixed **54 cases**, and
+substituting integer-literal macros fixes **533** for a file scan and one
+branch at the name lookup.
+
+> **Landed** (2026-09-06). `object_like_integer_macros` in
+> `csource/lower/func.rs`. **Coverage 168/900 -> 181/900, 18.7% -> 20.1%** ---
+> the first movement in this whole thread, and the S4 differential still passes
+> against the real binaries, which is what says the substituted values are
+> right. `reference to non-local` has left the top ten entirely; `call
+> expression` is now 210 and `array subscript` 118.
+>
+> It is **not a preprocessor** and says so: no function-like macros, no
+> `#undef`, no `#if`, and only an integer-literal body --- `#define STRIDE (N *
+> 2)` is an expression and evaluating one here would be a second, worse parser.
+
+### The ordering this implies
+
+1. ~~**Globals**~~ --- superseded above. The real remainder is 54 file-scope
+   variables, which is no longer the biggest prize.
+2. **Array and subscript** (+70 here, but it shares pointer scaling with the
+   pointer-arithmetic gap, so it buys depth on 576 pointer functions too).
+3. **`__builtin_*` and macro-shaped callees** --- small, and it shrinks the
+   external-call bucket before the hard part.
+4. **Uninterpreted calls behind a mode flag** --- unblocks phase 3 without
+   waiting for real call semantics.
+5. **Inlining intra-unit calls** --- what the differential needs, and the
+   summaries phase 2 built are what a non-inlining alternative would use.
+6. `switch`, aggregates, float --- each with a known price and no dependants.
+
+Re-run `construct_census` after each; it is a permanent test rather than a
+one-off measurement, so the curve above stays current.
+
 ## Phase 3 — Path feasibility, on the solver
 
 **Deliverable.** For a path through the source CFG, a verdict:
