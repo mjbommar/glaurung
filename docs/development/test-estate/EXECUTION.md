@@ -72,6 +72,7 @@ Both have since landed, so they are links again.
 | [x] Checked coarse pipeline stages reject invalid ordering | review WP2 | `74853fcc`, closed `e7b7de67` |
 | [x] Canonical 20-pass AST order rejects unknown, repeated, and backward passes | review WP2 | `4ea067df` |
 | [x] Bounded AST fixpoints report rounds, firings, and termination | review WP2 | `5f7df194` |
+| [x] First versioned-SSA lifecycle: conservative invalidation and definedness-use reconstruction | review WP3 | `925dc002`, census `4bfee20c` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |

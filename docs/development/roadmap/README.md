@@ -252,8 +252,12 @@ be reconstructed from a cached artifact. DWARF variadic markers now survive
 into GCC and Clang rendered signatures across O0/O2; generic stripped-binary
 variadic inference and complete SysV `va_start` lowering remain open. WP9 has
 target-owned ARM32 register views plus standing
-decoded/effect capability censuses and several silent-writer repairs. WP3,
-WP6, and WP7B remain open architectural work. No current-tip release gate
+decoded/effect capability censuses and several silent-writer repairs. WP3's
+first bounded lifecycle slice is landed at `925dc002`: explicit conservative
+invalidation reconstructs SSA after the definedness pass changes uses, with
+byte-identical output across the 419-pair identity gate. Persistent identity
+through AST lowering, origins, and remaining mutating-pass migrations keep WP3
+open. WP6 and WP7B remain open architectural work. No current-tip release gate
 is claimed green; isolated overlay results in the review record retain their
 named scope and must not be read as cross-architecture or full-plan
 completion.

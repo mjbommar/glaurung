@@ -13,7 +13,7 @@ Scope: local Glaurung implementation, tests, measurements, and documentation
 Current-state snapshot: reconciled 2026-09-06 through homogeneous-float
 behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
 `1bee3fb1`, and census commit `a0915220`. WP0 and
-WP7A are complete; the bounded WP1 production trial is complete and rejected,
+WP2 and WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
 with zero unexplained structural regressions, zero execution regressions, and
@@ -24,9 +24,11 @@ slice and the O0 `classify` signed-result vertical slice, but not the general
 solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
 unsigned parameter declaration while rendering a contradictory signed machine
 comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP3 and
-the general WP7B idiom framework remain the principal unstarted or
-dependency-blocked packages; WP2 has begun with the bounded request-model
-slice below. A bounded, pre-WP3 WP7B relational slice is
+the general WP7B idiom framework remain the principal architectural packages.
+WP3 has its first bounded consumer migration at `925dc002`: pipeline-owned SSA
+now has explicit conservative invalidation and reconstructs after the
+definedness pass changes uses. This does not yet provide persistent identity
+through AST lowering or instruction origins. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
@@ -717,16 +719,22 @@ provenance through lowering.
 
 ### Core model
 
-- [ ] Add a pipeline-owned, versioned `SsaInfo` near the existing SSA
-  implementation under `src/ir/`.
-- [ ] Define explicit invalidation classes: CFG changed, definitions changed,
+- [~] Add a pipeline-owned, versioned `SsaInfo` near the existing SSA
+  implementation under `src/ir/`. `925dc002` lands the owner for the bounded
+  definedness-normalization transaction; ownership does not yet persist across
+  the complete lowering pipeline.
+- [x] Define explicit invalidation classes: CFG changed, definitions changed,
   uses changed, types changed, and presentation-only change.
-- [ ] Make an unclassified mutating pass conservatively return
+- [x] Make an unclassified mutating pass conservatively return
   `Invalidate::All`. Migrate passes one at a time to narrower change sets; do
   not require roughly 100 passes to convert before the first consumer lands.
+  The enum default is `All`; the remaining pass migrations are tracked by the
+  following ratchet item.
 - [ ] Require every newly added mutating pass to declare a change set, and
   ratchet the count of legacy `Invalidate::All` passes downward.
-- [ ] Recompute or repair SSA before the next consumer when invalidated.
+- [~] Recompute or repair SSA before the next consumer when invalidated. The
+  definedness-normalization mutation declares `Uses` and reconstructs before
+  consumption; other mutating passes remain to migrate.
 - [ ] Preserve opaque SSA value identity through AST lowering.
 - [ ] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated.
@@ -758,13 +766,17 @@ provenance through lowering.
 
 ### Tests
 
-- [ ] Unit tests for SSA invalidation and reconstruction.
+- [~] Unit tests for SSA invalidation and reconstruction. The first three tests
+  prove conservative default invalidation, revisioned reconstruction, and that
+  type/presentation-only changes preserve value identity.
 - [ ] Unit tests for deterministic origin union and duplication.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
 - [ ] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
   non-contiguous mappings.
-- [ ] Run the 419-pair output identity sweep after each migrated pass.
+- [~] Run the 419-pair output identity sweep after each migrated pass. The
+  first migrated pass is byte-identical across all 419 lanes; repeat this gate
+  for every subsequent identity-only migration.
 
 ### Exit criteria
 
