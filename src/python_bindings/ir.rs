@@ -171,6 +171,7 @@ fn decompile_at_py(
                 max_instructions,
                 timeout_ms,
                 total_timeout_ms: 0,
+                callee: pipeline::CalleeBudget::default(),
             },
             render_options: RenderOptions {
                 types,
@@ -303,6 +304,7 @@ fn decompile_at_session(
         functions: &funcs,
         discovered: &func,
         budgets: &budgets,
+        callee_budget: analysis_budget.callee,
         render_options: RenderOptions {
             types,
             style,
@@ -394,6 +396,7 @@ fn decompile_range_at_py(
             max_instructions,
             timeout_ms,
             total_timeout_ms: 0,
+            callee: pipeline::CalleeBudget::default(),
         },
         render_options: RenderOptions {
             types,
@@ -515,6 +518,7 @@ fn decompile_range_at_py(
         functions: &discovered,
         discovered: &func,
         budgets: &budgets,
+        callee_budget: analysis_budget.callee,
         render_options: RenderOptions {
             types,
             style,
@@ -896,6 +900,7 @@ fn decompile_all_py(
         max_instructions,
         timeout_ms,
         total_timeout_ms: 0,
+        callee: pipeline::CalleeBudget::default(),
     };
     let render_options = RenderOptions {
         types: style == "decbench",
@@ -980,6 +985,7 @@ fn decompile_all_py(
             functions: &funcs,
             discovered: func,
             budgets: &budgets,
+            callee_budget: analysis_budget.callee,
             render_options,
             debug_outputs: dwarf_outputs.as_ref(),
             debug_types: dwarf_types.as_deref().unwrap_or(&[]),
@@ -1099,6 +1105,7 @@ fn decompile_many_py(
         max_instructions,
         timeout_ms,
         total_timeout_ms: 0,
+        callee: pipeline::CalleeBudget::default(),
     };
     let render_options = RenderOptions {
         types,
@@ -1198,6 +1205,7 @@ fn decompile_many_py(
             functions: &funcs,
             discovered: func,
             budgets: &budgets,
+            callee_budget: analysis_budget.callee,
             render_options: RenderOptions {
                 types,
                 style,

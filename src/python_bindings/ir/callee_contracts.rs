@@ -493,6 +493,7 @@ pub(super) fn prepare_direct_callee_facts(
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
+    max_nested_depth: u8,
     dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
@@ -509,6 +510,7 @@ pub(super) fn prepare_direct_callee_facts(
         cc,
         arm_vfp_args,
         budgets,
+        max_nested_depth,
         dwarf_outputs,
         type_env,
         address_names,
@@ -670,8 +672,6 @@ fn direct_callee_body_va(
 /// the corpus whose call chains run deeper than one nested layer do not, in
 /// fact, need the extra layer to render correctly. Raise this only with a
 /// fixture that demonstrably regresses at 1.
-const NESTED_CALLEE_DEPTH: u8 = 1;
-
 /// Recover one direct callee, using up to `remaining_depth` nested layers.
 ///
 /// The layers recover the common optimized wrapper shape without recursively
@@ -870,6 +870,7 @@ pub(super) fn recover_direct_callee_layouts(
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
+    max_nested_depth: u8,
     dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
@@ -943,7 +944,7 @@ pub(super) fn recover_direct_callee_layouts(
                 type_env,
                 address_names,
                 call_graph,
-                NESTED_CALLEE_DEPTH,
+                max_nested_depth,
             );
             cache.insert(callee_va, recovered);
         }
@@ -1023,6 +1024,7 @@ pub(super) fn recover_direct_callee_layouts(
         cc,
         arm_vfp_args,
         budgets,
+        max_nested_depth,
         dwarf_outputs,
         type_env,
         address_names,
@@ -1060,6 +1062,7 @@ fn recover_table_entry_layouts(
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
+    max_nested_depth: u8,
     dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
@@ -1095,7 +1098,7 @@ fn recover_table_entry_layouts(
                 type_env,
                 address_names,
                 call_graph,
-                NESTED_CALLEE_DEPTH,
+                max_nested_depth,
             );
             cache.insert(entry_va, recovered);
         }

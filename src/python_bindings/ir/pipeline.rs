@@ -18,12 +18,25 @@ use super::{lock_parameter_slots_from_prototype, recover_decbench_prototype_with
 /// point.  Adapters may expose different defaults, but once constructed the
 /// request has one budget identity and one conversion to discovery limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct CalleeBudget {
+    /// Additional direct-callee bodies a callee analysis may enter.
+    pub(super) max_depth: u8,
+}
+
+impl Default for CalleeBudget {
+    fn default() -> Self {
+        Self { max_depth: 1 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct AnalysisBudget {
     pub(super) max_functions: usize,
     pub(super) max_blocks: usize,
     pub(super) max_instructions: usize,
     pub(super) timeout_ms: u64,
     pub(super) total_timeout_ms: u64,
+    pub(super) callee: CalleeBudget,
 }
 
 impl AnalysisBudget {
@@ -791,6 +804,7 @@ pub(super) struct FunctionPipelineContext<'a> {
     pub(super) functions: &'a [crate::core::function::Function],
     pub(super) discovered: &'a crate::core::function::Function,
     pub(super) budgets: &'a crate::analysis::cfg::Budgets,
+    pub(super) callee_budget: CalleeBudget,
     pub(super) render_options: RenderOptions<'a>,
     pub(super) debug_outputs: Option<&'a std::collections::HashMap<u64, DwarfPrototypeContract>>,
     pub(super) debug_types: &'a [crate::debug::dwarf::DwarfType],
@@ -931,6 +945,7 @@ pub(super) fn decompile_function(
         functions,
         discovered,
         budgets,
+        callee_budget,
         render_options,
         debug_outputs,
         debug_types,
@@ -963,6 +978,7 @@ pub(super) fn decompile_function(
         cc,
         arm_vfp_args,
         budgets,
+        callee_budget.max_depth,
         debug_outputs,
         debug_type_env,
         address_names,
@@ -1618,8 +1634,8 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 #[cfg(test)]
 mod request_tests {
     use super::{
-        AnalysisBudget, AstPassOrder, AstPassOrderError, DecompileCompleteness, DecompileRequest,
-        PipelineStage, PipelineStageTracker, RenderOptions,
+        AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget, DecompileCompleteness,
+        DecompileRequest, PipelineStage, PipelineStageTracker, RenderOptions,
     };
 
     #[test]
@@ -1678,6 +1694,7 @@ mod request_tests {
             max_instructions: 31,
             timeout_ms: 37,
             total_timeout_ms: 41,
+            callee: CalleeBudget { max_depth: 3 },
         };
 
         let discovery = request.discovery();
@@ -1708,6 +1725,7 @@ mod request_tests {
                 max_instructions: 10_000,
                 timeout_ms: 500,
                 total_timeout_ms: 0,
+                callee: CalleeBudget::default(),
             },
             render_options: options,
         };
@@ -1719,6 +1737,14 @@ mod request_tests {
         assert_eq!(first.schema, "glaurung.decompile-pipeline/v1");
         assert_eq!(first.pass_version, super::PIPELINE_PASS_VERSION);
         assert_ne!(first, second);
+
+        let mut third_request = DecompileRequest {
+            va: 0x1000,
+            analysis_budget: first.analysis_budget,
+            render_options: options,
+        };
+        third_request.analysis_budget.callee.max_depth += 1;
+        assert_ne!(first, third_request.fingerprint());
     }
 
     #[test]

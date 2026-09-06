@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use pyo3::prelude::*;
 
-use super::pipeline::{AnalysisBudget, DecompileRequest, RenderOptions};
+use super::pipeline::{AnalysisBudget, CalleeBudget, DecompileRequest, RenderOptions};
 use super::{decompile_at_session, load_program_session};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -185,6 +185,7 @@ impl PyDecompilerSession {
                     max_instructions,
                     timeout_ms,
                     total_timeout_ms: 0,
+                    callee: CalleeBudget::default(),
                 },
                 render_options: RenderOptions {
                     types,
