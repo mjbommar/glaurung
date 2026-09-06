@@ -50,9 +50,12 @@ adapter. `2ef9c4eb` makes `ProgramNameContext` the sole owner of the combined
 object parse plus discovered, FLIRT, and referenced-function name enrichment.
 `d900cf1b` makes one `ProgramDiscovery` carry the exact converted budgets and
 their discovered functions for all four adapters; exact-range discovery now
-also releases the GIL. Per-function rendering, the remaining budget classes,
-the pass manager, and the fixpoint driver remain open, so WP2 is underway
-rather than complete. See
+also releases the GIL. `1e1ac0a8` moves post-lowering semantic finalization --
+analyst and DWARF local facts, exception recovery, machine-frame cleanup, and
+PDB field annotations -- behind one `finalize_prepared_ast` boundary used by
+all four adapters. Per-function rendering, the remaining budget classes, the
+pass manager, and the fixpoint driver remain open, so WP2 is underway rather
+than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -577,8 +580,9 @@ and make pass repetition/invalidation explicit.
   debug declarations and layouts in `ProgramDebugContext`; `2ef9c4eb`
   centralizes binary-truth address names and data symbols in
   `ProgramNameContext`; `d900cf1b` centralizes budget conversion and function
-  discovery in `ProgramDiscovery`. Per-function rendering still needs to move
-  before this item is complete.
+  discovery in `ProgramDiscovery`; `1e1ac0a8` centralizes post-lowering
+  semantic finalization in `finalize_prepared_ast`. Per-function rendering
+  still needs to move before this item is complete.
 - [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
   Module-level and reusable-session `decompile_at` create the typed request;
@@ -591,8 +595,10 @@ and make pass repetition/invalidation explicit.
   image-wide render-context builder, and `21f8b29a` removes the four debug-
   context builders. `2ef9c4eb` removes the four name/data context builders.
   `d900cf1b` removes the four discovery calls and keeps each result paired with
-  its exact budgets. Moving final rendering behind one `decompile_function`
-  remains open.
+  its exact budgets. `1e1ac0a8` removes four adapter-owned finalization
+  sequences while preserving their analyst, debug, exception, frame, and PDB
+  semantics. Moving final rendering behind one `decompile_function` remains
+  open.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to

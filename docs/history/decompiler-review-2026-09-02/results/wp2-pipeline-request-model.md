@@ -168,6 +168,14 @@ GOT names. `73a79d61` adds parsed-object GOT extraction and reuses that object,
 restoring 20 parses across GCC C, Clang C, Go, Rust, and both discovery limits
 without changing the ceiling.
 
+Commit `1e1ac0a8` moves the final semantic preparation of `PreparedAst` behind
+one pipeline-owned `finalize_prepared_ast` boundary. Address, exact-range, all,
+and many now apply analyst frame facts, DWARF register-local facts, DecBench
+exception recovery, machine-frame cleanup, and PDB field annotations in the
+same ordered implementation. The adapters retain only their distinct public
+return shapes and rendering policies; centralizing those render policies is the
+next WP2 boundary.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -234,3 +242,9 @@ without changing the ceiling.
   passed, zero failed, and five ignored; every integration and documentation
   target passed. Identity retrieval reports 44 passed and ten ignored in
   526.49 seconds.
+- Fresh release extension plus the same 37 focused checks at `1e1ac0a8`:
+  passed, including full-text four-entry-point equivalence.
+- Full `cargo test --features python-ext` from a clean detached worktree at
+  exact commit `1e1ac0a8`: 4,203 library tests passed, zero failed, and five
+  ignored; every integration and documentation target passed. Identity
+  retrieval reports 44 passed and ten ignored.
