@@ -141,6 +141,26 @@ mod coverage {
     //! `docs/development/roadmap/source-semantics.md` gates on.
     use super::*;
 
+    /// One refusal reduced to its *shape*, so refusals group.
+    ///
+    /// The first four words was a good enough key while every reason was a
+    /// fixed string. They are not any more --- "call to `memcpy`, which is not
+    /// defined in this file" and "call to `record`, ..." are one shape and two
+    /// keys --- so the backtick-quoted name is replaced instead.
+    fn refusal_shape(what: &str) -> String {
+        let mut out = what.to_string();
+        loop {
+            let (Some(open), Some(close)) = (out.find('`'), out.rfind('`')) else {
+                break;
+            };
+            if open >= close {
+                break;
+            }
+            out.replace_range(open..=close, "X");
+        }
+        out
+    }
+
     #[test]
     fn corpus_coverage() {
         let root =
@@ -167,18 +187,7 @@ mod coverage {
                 total += 1;
                 match crate::csource::lower::func::lower_named_function(&text, &func.name) {
                     Ok(_) => ok += 1,
-                    Err(e) => {
-                        let what = e.to_string();
-                        let key = what
-                            .split(": ")
-                            .nth(1)
-                            .unwrap_or(&what)
-                            .split_whitespace()
-                            .take(4)
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        *reasons.entry(key).or_default() += 1;
-                    }
+                    Err(e) => *reasons.entry(refusal_shape(&e.what)).or_default() += 1,
                 }
             }
         }
@@ -188,7 +197,10 @@ mod coverage {
             "COVERAGE {ok}/{total} = {:.1}%",
             ok as f64 / total as f64 * 100.0
         );
-        for (reason, count) in top.iter().take(10) {
+        // Every reason, not the top ten: this is the map for the rest of the
+        // work, and truncating it hides a long tail that turns out to be most
+        // of it --- 403 refusals in 38 shapes, of which the top ten are 272.
+        for (reason, count) in &top {
             eprintln!("   {count:4}  {reason}");
         }
 
@@ -665,5 +677,53 @@ mod call_census {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod remaining_probe {
+    #[test]
+    fn every_remaining_refusal() {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures/src");
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut total = 0usize;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("c") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            for func in tree.functions(&text) {
+                if func.name.is_empty() {
+                    continue;
+                }
+                if let Err(e) = crate::csource::lower::func::lower_named_function(&text, &func.name)
+                {
+                    total += 1;
+                    // Normalise the backtick-quoted name out so shapes group.
+                    let mut w = e.what.clone();
+                    while let (Some(a), Some(b)) = (w.find('`'), w.rfind('`')) {
+                        if a >= b {
+                            break;
+                        }
+                        w.replace_range(a..=b, "X");
+                    }
+                    *counts.entry(w).or_default() += 1;
+                }
+            }
+        }
+        let mut ranked: Vec<_> = counts.into_iter().collect();
+        ranked.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+        eprintln!("REMAINING REFUSALS: {total}");
+        for (msg, c) in &ranked {
+            eprintln!("   {c:4}  {msg}");
+        }
     }
 }

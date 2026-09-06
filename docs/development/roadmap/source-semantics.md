@@ -538,25 +538,74 @@ moves phase 3 behind a prerequisite:
    **Done** --- and it was cheap for the reason predicted: the tables already
    existed, so it was a serialization layer rather than an analysis.
 
-## Where this stands, 2026-09-06
+## Where this stands, end of 2026-09-06
 
 | phase | status |
 |---|---|
 | 1 declared types | **landed** |
 | 2 interprocedural summaries | **landed** |
-| 2.5 widen the lowering | **pointers only** --- coverage still 18.7%, `call expression` now the top refusal at 185 |
-| 3 path feasibility | **not started**, correctly: its gate is the coverage number and that number has not moved |
+| 2.5 widen the lowering | **landed to 55.2%** --- pointers, arrays, subscript, pointer scaling, calls by substitution, macro and standard constants |
+| 3 path feasibility | **not started, and no longer blocked** --- see below |
 | 4 KB facts | **landed** |
 
-Three of five are done and phase 3 is blocked on 2.5 by design. What phases 1,
-2 and 4 deliver together --- declared types, interprocedural reachability with
-a three-valued answer, and both written into a queryable store with provenance
---- needs no solver at all, which is the ordering this plan chose on purpose.
+**Phase 3's gate has cleared.** The sequencing section above set it explicitly:
+"if pointers and calls do not move 18.7% substantially, stop here and bank
+phases 1, 2 and 4". They moved it to **55.2%**, the S4 differential compares
+291 functions with zero divergences, and phase 3 is now the only unbuilt phase
+in this plan. **The plan is not complete, and phase 3 is what is missing.**
 
-The next increment is **calls in the lowering**: 185 of the remaining refusals,
-and phase 2 has just built the summaries a call op would apply. Subscripts and
-pointer stores need the pointee scaling that the S4 differential proved must be
-exact or refused, so they follow rather than lead.
+Coverage over the day, each figure from
+`cargo test --features python-ext --lib csource::lower::coverage`:
+
+| | functions | |
+|---|---:|---|
+| start of day | 168 / 900 | 18.7% |
+| macro constants | 181 | 20.1% |
+| arrays, subscript, pointer scaling | 311 | 34.6% |
+| calls by substitution | 483 | 53.7% |
+| standard constants | **497** | **55.2%** |
+
+## What the remaining 403 are, and what 100% would cost
+
+The coverage census now prints **every** refusal shape rather than the top ten,
+because the tail turned out to be most of the work: 403 refusals in 38 shapes,
+of which the top ten are only 272. Grouped by the capability that would fix
+them:
+
+| group | functions | what it needs |
+|---|---:|---|
+| **`switch` and enums** | ~65 | a jump-to-block lowering of `switch`, plus enumerators as named constants. `switch` is 60 on its own and the enumerators account for part of the 36 unresolved names (`S_IDLE`, `NOP`, `SPARSE_A`, `memory_order_*`) |
+| **structs and unions** | ~77 | layout: offsets, alignment, padding; member access; aggregate copy; and aggregate *return*, which is an ABI question (`sret`) rather than a lowering one |
+| **floating point** | 56 | FP in `src/exec`'s `Domain` --- there is no float add, no float compare and no int/float conversion anywhere in it today, so this is a core interpreter change, not a lowering one |
+| **globals and statics** | ~50 | a static address space with initialised contents. 54 real file-scope variables by the unresolved census, plus 9 `static` locals, which are the same mechanism |
+| **the rest of calls** | ~70 | 38 external (models for `memcpy`/`memset`, one line for `__builtin_expect`), 15 recursive, 17 in a postfix chain |
+| **deeper types** | ~15 | `Local` carries `IntType` + one `pointee`; array-of-pointer, pointer-to-pointer, multi-dimensional array and pointer casts all need a real `CType` there |
+| **small, individually cheap** | ~40 | `sizeof` (8), stack-passed arguments past six (10), `goto` (6), variadic (5), non-constant array extent (7) |
+| **never** | 6 | inline assembly. There is nothing to lower it *to* |
+
+So a ceiling near **97%**, not 100% --- and reaching it is dominated by two
+items that are not lowering work at all. **Floating point is an `src/exec`
+change**, and it would then need a float theory in the symbolic domain and the
+solver behind it, which is where solvers are weakest. **Aggregate return is an
+ABI question.** Everything else is ordinary front-end work.
+
+### Why 100% is the wrong target
+
+Phase 3 states the limit before the capability: a path containing a construct
+the lowering refuses returns **`unknown` with the construct named**. That is
+the designed behaviour, not a shortfall --- "a tool that reports *infeasible*
+when it means *I could not lower this* is worse than one that reports nothing."
+
+Coverage is the gate on whether phase 3 is *worth* building, and that gate was
+18.7% and is now 55.2%. Pushing to 97% before building phase 3 would spend the
+two most expensive items in the table --- floating point and aggregates --- to
+raise a subset that phase 3 already handles honestly. **The order that follows
+from the plan's own reasoning is: build phase 3 now on 55%, then let the
+feasibility results say which of these groups is actually costing answers.**
+
+The cheap end of the table is worth taking regardless, because each item is
+small and self-contained: `switch` and enums first at ~65 functions, then
+globals and statics at ~50.
 
 Note what this ordering protects: phases 1, 2 and 4 deliver a better product
 than Joern on our one language without the solver being involved at all. Phase 3
