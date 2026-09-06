@@ -1135,14 +1135,16 @@ one authoritative set of case edges.
   path. Its production baseline is updated from `fail` to `pass` after the full
   838-lane comparison and an isolated old-tip A/B proved its sole reported
   regression predates this increment.
-  The current pinned GCC O0 `statemachine::fsm` encoding remains a strict RED.
-  GCC emits a four-state comparison tree inside a counted loop rather than an
-  indirect table. Production v1 falls back to complete labelled CFG output
-  because the latch backedge is unowned (13 rendered gotos); verified v2 owns
-  the loop and emits zero gotos, but the source-level comparison-tree-to-switch
-  recovery does not yet recognize its nested `st != 0` partition. Keep
-  `test_gcc_o0_state_dispatch_recovers_switch_and_round_trips` as a strict
-  xfail until the exact decision-tree partition and loop ownership both land.
+  The pinned GCC O0 `statemachine::fsm` decision tree is now recovered as the
+  exact dense `switch (st)` with cases `0..3`. The matcher accepts GCC's nested
+  `st != 0` terminal partition and the exact sign-preserving typed relational
+  views produced by late comparison folding; it rejects side effects, a second
+  discriminant, duplicate cases, and ambiguous case-label ownership. Production
+  output drops from 13 gotos to 4 (the remaining four encode the still-unowned
+  counted loop and two case-local assignment joins), recompiles, and matches the
+  original across the deterministic differential test. The former strict xfail
+  is now an ordinary required regression test; loop ownership remains separate
+  WP4 cleanup rather than a prerequisite for recovering the source switch.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic

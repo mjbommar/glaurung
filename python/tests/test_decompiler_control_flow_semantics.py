@@ -150,15 +150,6 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     assert results["fsm"]["status"] == "pass", results
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "WP4/WP7B open defect: GCC O0 lowers the four-state switch to a "
-        "comparison tree inside a loop. Production preserves it as a labelled "
-        "CFG because the latch backedge is not owned; verified v2 removes the "
-        "gotos but the source-level switch ladder still is not recovered."
-    ),
-)
 def test_gcc_o0_state_dispatch_recovers_switch_and_round_trips(tmp_path: Path) -> None:
     """A label-based GCC dispatch ladder must become the source switch."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "statemachine.c"

@@ -136,6 +136,10 @@ struct GotoDispatch {
     discriminant: VReg,
     end: usize,
     cases: Vec<GotoCase>,
+    /// GCC may leave the final singleton case directly after the decision
+    /// tree instead of jumping to a label.  The value is proven by the false
+    /// edge of an exact `discriminant != constant` partition.
+    inline_case: Option<i64>,
     join: u64,
 }
 
@@ -177,14 +181,28 @@ fn recover_one_goto_switch(body: &mut Vec<Stmt>) -> bool {
         let Some((first_case_position, _)) = positioned.first() else {
             continue;
         };
-        if body[dispatch.end..*first_case_position]
+        let inline_body = body[dispatch.end..*first_case_position].to_vec();
+        let mut cases =
+            Vec::with_capacity(positioned.len() + usize::from(dispatch.inline_case.is_some()));
+        if let Some(value) = dispatch.inline_case {
+            if inline_body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::Label(_)))
+                || !ends_in_unconditional_transfer(&inline_body)
+            {
+                continue;
+            }
+            let mut inline_body = inline_body;
+            replace_join_gotos(&mut inline_body, dispatch.join);
+            drop_renderer_supplied_break(&mut inline_body);
+            cases.push((Some(value), inline_body));
+        } else if inline_body
             .iter()
             .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
         {
             continue;
         }
 
-        let mut cases = Vec::with_capacity(positioned.len());
         for (case_index, (position, case)) in positioned.iter().enumerate() {
             let next_position = positioned
                 .get(case_index + 1)
@@ -219,6 +237,7 @@ fn recover_one_goto_switch(body: &mut Vec<Stmt>) -> bool {
 fn parse_goto_dispatch(body: &[Stmt], start: usize) -> Option<GotoDispatch> {
     let mut discriminant = None;
     let mut cases = Vec::new();
+    let mut inline_case = None;
     let mut join = None;
     let mut reachable = Range::full();
     let mut index = start;
@@ -230,7 +249,24 @@ fn parse_goto_dispatch(body: &[Stmt], start: usize) -> Option<GotoDispatch> {
                 then_body,
                 else_body: None,
             } => {
-                let target = sole_goto(then_body)?;
+                let Some(target) = sole_goto(then_body) else {
+                    let value = inequality_on_reg(cond, &mut discriminant)?;
+                    if inline_case.is_some()
+                        || !reachable.contains(value)
+                        || cases.iter().any(|case: &GotoCase| case.value == value)
+                    {
+                        return None;
+                    }
+                    let nested_join =
+                        parse_non_equal_partition(then_body, &mut discriminant, value, &mut cases)?;
+                    if join.is_some_and(|seen| seen != nested_join) {
+                        return None;
+                    }
+                    join = Some(nested_join);
+                    inline_case = Some(value);
+                    index += 1;
+                    break;
+                };
                 match classify(cond, &mut discriminant)? {
                     Test::Case(value) => {
                         if !reachable.contains(value)
@@ -267,15 +303,65 @@ fn parse_goto_dispatch(body: &[Stmt], start: usize) -> Option<GotoDispatch> {
         }
     }
 
-    if cases.len() < MIN_CASES || cases.iter().any(|case| Some(case.label) == join) {
+    if cases.len() + usize::from(inline_case.is_some()) < MIN_CASES
+        || cases.iter().any(|case| Some(case.label) == join)
+    {
         return None;
     }
     Some(GotoDispatch {
         discriminant: discriminant?,
         end: index,
         cases,
+        inline_case,
         join: join?,
     })
+}
+
+/// Parse the taken arm of `discriminant != inline_value`.
+///
+/// Every nested equality names one labelled case and the final goto is the
+/// common default/join.  No relational test or executable statement is
+/// accepted here: the false edge is used as an implicit inline case, so the
+/// taken edge must account for every other value without side effects.
+fn parse_non_equal_partition(
+    body: &[Stmt],
+    discriminant: &mut Option<VReg>,
+    inline_value: i64,
+    cases: &mut Vec<GotoCase>,
+) -> Option<u64> {
+    let (last, prefix) = body.split_last()?;
+    let Stmt::Goto { target: join } = last else {
+        return None;
+    };
+    if prefix.is_empty() {
+        return None;
+    }
+    for statement in prefix {
+        let Stmt::If {
+            cond,
+            then_body,
+            else_body: None,
+        } = statement
+        else {
+            return None;
+        };
+        let target = sole_goto(then_body)?;
+        let Test::Case(value) = classify(cond, discriminant)? else {
+            return None;
+        };
+        if value == inline_value
+            || cases
+                .iter()
+                .any(|case| case.value == value || case.label == target)
+        {
+            return None;
+        }
+        cases.push(GotoCase {
+            value,
+            label: target,
+        });
+    }
+    Some(*join)
 }
 
 fn unique_label_position(body: &[Stmt], target: u64) -> Option<usize> {
@@ -519,6 +605,8 @@ fn classify(cond: &Expr, disc: &mut Option<VReg>) -> Option<Test> {
     let (v, k, disc_on_left) = match (lhs.as_ref(), rhs.as_ref()) {
         (Expr::Reg(v), Expr::Const(k)) => (v, *k, true),
         (Expr::Const(k), Expr::Reg(v)) => (v, *k, false),
+        (view, Expr::Const(k)) => (signed_i32_view(view)?, *k, true),
+        (Expr::Const(k), view) => (signed_i32_view(view)?, *k, false),
         _ => return None,
     };
     match disc {
@@ -609,6 +697,36 @@ fn equality_on_reg(expr: &Expr) -> Option<(&VReg, i64)> {
             unsigned_i32_view(view).map(|register| (register, i64::from(*value as u32 as i32)))
         }
         _ => None,
+    }
+}
+
+/// Bind the discriminant of an exact `v != constant` test and return the
+/// singleton value proven by its false/fallthrough edge.
+fn inequality_on_reg(expr: &Expr, disc: &mut Option<VReg>) -> Option<i64> {
+    let Expr::Cmp {
+        op: CmpOp::Ne,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return None;
+    };
+    let (register, value) = match (lhs.as_ref(), rhs.as_ref()) {
+        (Expr::Reg(register), Expr::Const(value)) | (Expr::Const(value), Expr::Reg(register)) => {
+            (register, *value)
+        }
+        (view, Expr::Const(value)) | (Expr::Const(value), view) => {
+            (unsigned_i32_view(view)?, i64::from(*value as u32 as i32))
+        }
+        _ => return None,
+    };
+    match disc {
+        Some(seen) if seen != register => None,
+        Some(_) => Some(value),
+        None => {
+            *disc = Some(register.clone());
+            Some(value)
+        }
     }
 }
 
@@ -1106,6 +1224,21 @@ mod tests {
         )
     }
 
+    /// The same signed comparison after typed comparison folding has removed
+    /// the x86 flag identity but retained the exact sign-preserving view.
+    fn typed_signed_greater(v: &str, k: i64) -> Expr {
+        let signed_i32 = Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(reg(v)),
+            }),
+        };
+        cmp(CmpOp::Slt, Expr::Const(k), signed_i32)
+    }
+
     fn real_lifted_gcc_ladder(n: i64) -> Stmt {
         const L: u64 = 0x11a9;
         let mut inner = Stmt::Goto { target: L };
@@ -1195,6 +1328,36 @@ mod tests {
         let mut body = vec![
             goto_case(3, 0x130),
             Stmt::If {
+                cond: typed_signed_greater("state", 3),
+                then_body: vec![Stmt::Goto { target: JOIN }],
+                else_body: None,
+            },
+            goto_case(2, 0x120),
+            Stmt::If {
+                cond: typed_signed_greater("state", 2),
+                then_body: vec![Stmt::Goto { target: JOIN }],
+                else_body: None,
+            },
+            goto_case(0, 0x100),
+            goto_case(1, 0x110),
+            Stmt::Goto { target: JOIN },
+        ];
+        for (label, value) in [(0x100, 0), (0x110, 1), (0x120, 2), (0x130, 3)] {
+            body.extend([
+                Stmt::Label(label),
+                assign("ret", value),
+                Stmt::Goto { target: JOIN },
+            ]);
+        }
+        body.extend([Stmt::Label(JOIN), Stmt::Return { value: None }]);
+        body
+    }
+
+    fn linear_goto_dispatch_with_inline_zero() -> Vec<Stmt> {
+        const JOIN: u64 = 0x200;
+        let mut body = vec![
+            goto_case(3, 0x130),
+            Stmt::If {
                 cond: lifted_signed_greater("state", 3),
                 then_body: vec![Stmt::Goto { target: JOIN }],
                 else_body: None,
@@ -1205,11 +1368,15 @@ mod tests {
                 then_body: vec![Stmt::Goto { target: JOIN }],
                 else_body: None,
             },
-            goto_case(0, 0x100),
-            goto_case(1, 0x110),
+            Stmt::If {
+                cond: cmp(CmpOp::Ne, unsigned_i32("state"), Expr::Const(0)),
+                then_body: vec![goto_case(1, 0x110), Stmt::Goto { target: JOIN }],
+                else_body: None,
+            },
+            assign("ret", 0),
             Stmt::Goto { target: JOIN },
         ];
-        for (label, value) in [(0x100, 0), (0x110, 1), (0x120, 2), (0x130, 3)] {
+        for (label, value) in [(0x110, 1), (0x120, 2), (0x130, 3)] {
             body.extend([
                 Stmt::Label(label),
                 assign("ret", value),
@@ -1249,6 +1416,59 @@ mod tests {
         assert!(cases.iter().all(|(_, body)| {
             !matches!(body.last(), Some(Stmt::Break)) && count_gotos_body(body, 0x200) == 0
         }));
+    }
+
+    #[test]
+    fn gcc_nested_nonzero_partition_keeps_its_inline_zero_case() {
+        let mut f = Function {
+            name: "fsm".into(),
+            entry_va: 0x1000,
+            body: linear_goto_dispatch_with_inline_zero(),
+        };
+
+        recover_switches(&mut f);
+
+        let Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } = &f.body[0]
+        else {
+            panic!("expected a switch, got:\n{:#?}", f.body);
+        };
+        assert_eq!(*discriminant, reg("state"));
+        assert_eq!(
+            cases
+                .iter()
+                .filter_map(|(value, _)| *value)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert!(default.is_none());
+        assert_eq!(cases[0].1, vec![assign("ret", 0)]);
+        assert!(goto_targets(&f.body).is_empty());
+    }
+
+    #[test]
+    fn nested_nonzero_partition_with_a_second_discriminant_is_refused() {
+        let mut body = linear_goto_dispatch_with_inline_zero();
+        let Stmt::If { then_body, .. } = &mut body[4] else {
+            panic!("expected nested partition");
+        };
+        let Stmt::If { cond, .. } = &mut then_body[0] else {
+            panic!("expected nested equality");
+        };
+        *cond = cmp(CmpOp::Eq, unsigned_i32("other"), Expr::Const(1));
+        let mut f = Function {
+            name: "not_a_switch".into(),
+            entry_va: 0x1000,
+            body,
+        };
+        let before = f.clone();
+
+        recover_switches(&mut f);
+
+        assert_eq!(f, before);
     }
 
     #[test]
