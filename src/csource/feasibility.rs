@@ -112,6 +112,13 @@ pub struct Report {
     /// Set when the function produced no paths at all --- it did not lower, or
     /// its contract has no input space.
     pub abstained: Option<Unknown>,
+    /// Blocks that only infeasible paths reach: code in the recovered function
+    /// that **no input executes**.
+    ///
+    /// This is roadmap item 1, "drop the paths a solver refutes", made
+    /// concrete. Empty unless the enumeration was total --- see
+    /// [`unreachable_blocks`].
+    pub unreachable_blocks: Vec<u64>,
 }
 
 impl Report {
@@ -203,12 +210,54 @@ pub fn feasibility_of_lowered(lowered: &LoweredFunction, bounds: &Bounds) -> Rep
         });
     }
 
+    let unreachable = unreachable_blocks(&exploration, &paths);
     Report {
         name: lowered.name.clone(),
         paths,
         cuts: exploration.cuts,
         abstained: None,
+        unreachable_blocks: unreachable,
     }
+}
+
+/// Blocks every enumerated path to which the solver refuted.
+///
+/// # Why totality is required
+///
+/// A block reached only by paths that were **cut** has no verdict at all, and a
+/// block reached by a cut path might be reachable by an input the enumeration
+/// never got to. So this returns nothing unless the exploration is total: with
+/// even one cut, "every path I looked at is infeasible" is not "no input gets
+/// here", and reporting dead code on that basis would be the exact error this
+/// module exists to stop --- a claim where an abstention was owed.
+fn unreachable_blocks(
+    exploration: &crate::csource::equiv::explore::Exploration,
+    paths: &[PathVerdict],
+) -> Vec<u64> {
+    if !exploration.is_total() {
+        return Vec::new();
+    }
+    let mut reachable: std::collections::BTreeSet<u64> = Default::default();
+    let mut seen: std::collections::BTreeSet<u64> = Default::default();
+    for (path, verdict) in exploration.complete.iter().zip(paths) {
+        for block in &path.blocks {
+            seen.insert(*block);
+            // Only a *decided* feasible path makes a block reachable. An
+            // `Unknown` path is not evidence either way.
+            if matches!(verdict.verdict, Verdict::Feasible(_)) {
+                reachable.insert(*block);
+            }
+        }
+    }
+    // A block on an undecided path is not claimed unreachable either.
+    for (path, verdict) in exploration.complete.iter().zip(paths) {
+        if matches!(verdict.verdict, Verdict::Unknown(_)) {
+            for block in &path.blocks {
+                reachable.insert(*block);
+            }
+        }
+    }
+    seen.difference(&reachable).copied().collect()
 }
 
 /// A report that decided nothing, with the reason.
@@ -218,6 +267,7 @@ fn abstain(name: &str, why: Unknown) -> Report {
         paths: Vec::new(),
         cuts: Vec::new(),
         abstained: Some(why),
+        unreachable_blocks: Vec::new(),
     }
 }
 
@@ -823,6 +873,55 @@ mod tests {
     fn a_function_with_no_risky_operation_reports_nothing() {
         assert!(violations("int f(int a, int b) { return a + b; }", "f").is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Unreachable code, which is what "drop the paths a solver refutes" buys.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_block_only_infeasible_paths_reach_is_reported_as_unreachable() {
+        // `x > 10 && x < 5` guards a `return 1` no input executes. That block
+        // is dead code in the recovered function, and no graph can say so.
+        let r = report(
+            "int f(int x) { if (x > 10) { if (x < 5) { return 1; } } return 0; }",
+            "f",
+        );
+        if !has_solver(&r) {
+            return;
+        }
+        assert!(
+            !r.unreachable_blocks.is_empty(),
+            "the `return 1` arm is dead: {r:?}"
+        );
+    }
+
+    #[test]
+    fn a_function_with_no_dead_arm_reports_none() {
+        let r = report("int f(int x) { if (x > 10) { return 1; } return 0; }", "f");
+        if !has_solver(&r) {
+            return;
+        }
+        assert!(r.unreachable_blocks.is_empty(), "{r:?}");
+    }
+
+    #[test]
+    fn nothing_is_claimed_unreachable_when_the_enumeration_was_cut() {
+        // A loop past the unroll bound leaves cuts, and a block reached only by
+        // paths that were cut has no verdict. Claiming it dead would be a claim
+        // where an abstention is owed.
+        let r = report(
+            "int f(int n) { int s = 0; int i = 0; while (i < n) { s += i; i++; } return s; }",
+            "f",
+        );
+        assert!(
+            !r.cuts.is_empty(),
+            "this loop should exceed the unroll bound"
+        );
+        assert!(
+            r.unreachable_blocks.is_empty(),
+            "a cut enumeration cannot prove code dead: {r:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -846,6 +945,7 @@ mod corpus {
             (0usize, 0usize, 0usize, 0usize);
         let (mut decided_functions, mut not_lowered, mut no_inputs) = (0usize, 0usize, 0usize);
         let mut with_infeasible = 0usize;
+        let (mut with_dead_code, mut dead_blocks) = (0usize, 0usize);
         let mut paths: std::collections::BTreeMap<String, usize> = Default::default();
 
         let mut files: Vec<_> = entries.flatten().map(|e| e.path()).collect();
@@ -876,6 +976,10 @@ mod corpus {
                 }
                 decided_functions += 1;
                 let dead = report.infeasible();
+                if !report.unreachable_blocks.is_empty() {
+                    with_dead_code += 1;
+                    dead_blocks += report.unreachable_blocks.len();
+                }
                 if dead > 0 {
                     with_infeasible += 1;
                     *paths.entry(func.name.clone()).or_default() += dead;
@@ -899,6 +1003,7 @@ mod corpus {
         );
         eprintln!("   paths cut by a bound (no verdict): {cuts}");
         eprintln!("   functions with at least one infeasible path: {with_infeasible}");
+        eprintln!("   functions with provably unreachable blocks: {with_dead_code} ({dead_blocks} blocks)");
         let mut ranked: Vec<_> = paths.into_iter().collect();
         ranked.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
         for (name, count) in ranked.iter().take(15) {

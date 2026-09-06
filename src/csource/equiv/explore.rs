@@ -68,6 +68,13 @@ pub struct CompletePath {
     /// The 64-bit value in the result register (or named by the return op) when
     /// the path returned.
     pub result: ExprId,
+    /// The blocks this path entered, in order, with repeats for a loop.
+    ///
+    /// Recorded so a consumer can ask which blocks *only* infeasible paths
+    /// reach --- code in the recovered function that no input executes. The
+    /// equivalence checker ignores it; it costs one `u64` per block entry,
+    /// bounded by [`Bounds::max_steps`].
+    pub blocks: Vec<u64>,
 }
 
 /// Everything enumeration found for one function.
@@ -98,6 +105,7 @@ struct PathRun {
     guard: Vec<(ExprId, bool)>,
     decisions: Vec<bool>,
     end: PathEnd,
+    blocks: Vec<u64>,
 }
 
 /// Enumerate the paths of `func` under `bounds`, seeding `seeds` into registers
@@ -141,6 +149,7 @@ pub fn explore(
             PathEnd::Returned(result) => complete.push(CompletePath {
                 guard: run.guard,
                 result,
+                blocks: run.blocks,
             }),
             PathEnd::Cut(cut) => cuts.push(cut),
         }
@@ -179,6 +188,7 @@ fn run_one(
 
     let mut guard: Vec<(ExprId, bool)> = Vec::new();
     let mut decisions: Vec<bool> = Vec::new();
+    let mut entered_blocks: Vec<u64> = Vec::new();
     let mut visits: BTreeMap<u64, u32> = BTreeMap::new();
     let mut steps: u64 = 0;
     let mut cur = func.entry_va;
@@ -187,6 +197,7 @@ fn run_one(
         let Some(block) = blocks.get(&cur).copied() else {
             break PathEnd::Cut(Cut::NoBlock(cur));
         };
+        entered_blocks.push(cur);
         let entered = visits.entry(cur).or_insert(0);
         *entered += 1;
         if *entered > bounds.max_block_visits {
@@ -262,6 +273,7 @@ fn run_one(
             guard,
             decisions,
             end,
+            blocks: entered_blocks,
         },
     )
 }

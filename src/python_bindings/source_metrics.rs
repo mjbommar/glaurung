@@ -799,6 +799,107 @@ pub fn reaches_py(
     Ok(verdict.name().to_string())
 }
 
+
+/// Path feasibility verdicts for one function.
+///
+/// Needs an extension built with the `symbolic` feature, which is deliberately
+/// opt-in: `python-ext` bundles the concrete emulator but not the symbolic
+/// engine or a solver, and pulling an SMT backend into the default wheel is a
+/// packaging decision this binding does not make on its own.
+///
+/// The **symbol always exists** and the unsupported build raises instead. That
+/// is not politeness: `python/glaurung/_native/*.pyi` is generated from the
+/// built module and `test_every_stub_matches_the_built_module` requires a
+/// byte-for-byte match, so a symbol that appears under one feature set and not
+/// another would make the stub describe exactly one build and be stale against
+/// the other. One signature, two bodies.
+///
+/// Each entry is one enumerated path: `decisions` is how many branch decisions
+/// guard it, `verdict` is `"feasible"`, `"infeasible"` or `"unknown"`, `args`
+/// is the input that takes it (feasible only), and `why` names the reason for
+/// an abstention. A function the lowering refuses yields a single entry whose
+/// `why` carries the construct.
+#[cfg(feature = "symbolic")]
+#[pyfunction]
+#[pyo3(name = "path_feasibility")]
+pub fn path_feasibility_py<'py>(
+    py: Python<'py>,
+    text: &str,
+    name: &str,
+) -> PyResult<Bound<'py, PyList>> {
+    use crate::csource::equiv::Bounds;
+    use crate::csource::feasibility::{feasibility_of, Unknown, Verdict};
+
+    let report = py.detach(|| feasibility_of(text, name, &Bounds::default()));
+    let out = PyList::empty(py);
+    if let Some(why) = &report.abstained {
+        let entry = PyDict::new(py);
+        entry.set_item("decisions", py.None())?;
+        entry.set_item("verdict", "unknown")?;
+        entry.set_item("args", py.None())?;
+        entry.set_item("why", describe(why))?;
+        out.append(entry)?;
+        return Ok(out);
+    }
+    for path in &report.paths {
+        let entry = PyDict::new(py);
+        entry.set_item("decisions", path.decisions)?;
+        match &path.verdict {
+            Verdict::Feasible(w) => {
+                entry.set_item("verdict", "feasible")?;
+                entry.set_item("args", w.args.clone())?;
+                entry.set_item("why", py.None())?;
+            }
+            Verdict::Infeasible => {
+                entry.set_item("verdict", "infeasible")?;
+                entry.set_item("args", py.None())?;
+                entry.set_item("why", py.None())?;
+            }
+            Verdict::Unknown(why) => {
+                entry.set_item("verdict", "unknown")?;
+                entry.set_item("args", py.None())?;
+                entry.set_item("why", describe(why))?;
+            }
+        }
+        out.append(entry)?;
+    }
+    Ok(out)
+}
+
+/// The same entry point on a build without the symbolic engine.
+///
+/// Raises rather than returning an empty list: "no paths" and "this build
+/// cannot answer" are different facts, and a caller that cannot tell them apart
+/// would record "nothing infeasible" for a function it never examined.
+#[cfg(not(feature = "symbolic"))]
+#[pyfunction]
+#[pyo3(name = "path_feasibility")]
+pub fn path_feasibility_py<'py>(
+    py: Python<'py>,
+    text: &str,
+    name: &str,
+) -> PyResult<Bound<'py, PyList>> {
+    let _ = (text, name);
+    let _ = py;
+    Err(pyo3::exceptions::PyRuntimeError::new_err(
+        "glaurung was built without the `symbolic` feature, so path \
+         feasibility is unavailable; rebuild with `maturin develop -F \
+         pyo3/extension-module,python-ext,symbolic`",
+    ))
+}
+
+/// One abstention rendered for a Python consumer.
+#[cfg(feature = "symbolic")]
+fn describe(why: &crate::csource::feasibility::Unknown) -> String {
+    use crate::csource::feasibility::Unknown;
+    match why {
+        Unknown::NotLowered(what) => format!("not lowered: {what}"),
+        Unknown::NoInputSpec => "a parameter is not an integer type".to_string(),
+        Unknown::Solver(m) => format!("solver: {m}"),
+        Unknown::WitnessDidNotReproduce => "the witness did not reproduce".to_string(),
+    }
+}
+
 /// Register the `source` submodule on the extension root.
 pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "source")?;
@@ -815,6 +916,7 @@ pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>
     sub.add_function(wrap_pyfunction!(backward_slice_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(call_summaries_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(reaches_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(path_feasibility_py, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }

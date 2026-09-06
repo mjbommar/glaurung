@@ -941,6 +941,35 @@ some input reaches it *and* breaks it returns four functions in nine hundred.
 `a_guarded_division_is_not_reported` and `a_guarded_shift_is_not_reported` are
 the tests that pin the difference.
 
+### Item 1, infeasible-path pruning --- landed as unreachable *code*
+
+"Take the reachability answer from phase 2 and drop the paths a solver refutes"
+does not survive contact with phase 2: `reaches` is a summary over the call
+graph and is path-*insensitive*, so there are no paths in it to drop. Making it
+path-sensitive is a research increment, not the cheap one this item was
+described as.
+
+The concrete form of the same idea is one level down, and it is a better
+finding: **a block that only infeasible paths reach is code no input
+executes.** `explore` now records each path's block trace --- one `u64` per
+block entry, which the equivalence checker ignores --- and
+`Report::unreachable_blocks` is the set difference.
+
+```
+functions with provably unreachable blocks: 7 (8 blocks)
+```
+
+Far smaller than the 23 functions with *an* infeasible path, and it should be:
+a block is dead only when **every** path to it is refuted.
+
+Two rules keep it a proof rather than a guess, both tested:
+
+* **Nothing is claimed unless the enumeration was total.** With even one cut,
+  "every path I looked at is infeasible" is not "no input gets here", and
+  `nothing_is_claimed_unreachable_when_the_enumeration_was_cut` pins it.
+* **An `unknown` path makes its blocks reachable.** A path the solver could not
+  decide is not evidence in either direction.
+
 ### What this does not decide yet, stated plainly
 
 **204 functions lower but cannot be analysed**, because `IoSpec::of_lowered`
@@ -950,6 +979,18 @@ parameter could be an unconstrained 64-bit symbol --- but a guard that reads
 through it needs symbolic memory, which is a real capability and not a
 loosened check. **This is now the largest single limit on phase 3, larger than
 the lowering's 403.**
+
+**510 paths were cut by a bound** and carry no verdict, which also suppresses
+every unreachable-block claim in the functions they belong to. Raising
+`max_block_visits` trades that for query size; the right answer is probably
+loop summarisation rather than a bigger bound, and it is not attempted here.
+
+The three properties `property_violations` does not check --- array bounds ---
+needs the lowering to emit obligations, as does any check about memory.
+
+**Phase 4 writes the verdicts, but only the infeasible ones.** A feasible path
+is the ordinary case, and one row per path of every function would bury the
+finding in its own background.
 
 ### Item 2, guard duplication --- landed
 

@@ -681,6 +681,37 @@ def call_summaries(code: str) -> list[dict[str, Any]]:
     return [dict(entry) for entry in _native.source.call_summaries(code)]
 
 
+def path_feasibility(code: str, function: str) -> list[dict[str, Any]]:
+    """Which paths through `function` any input can actually take.
+
+    A reachability answer that has never been checked for satisfiability
+    reports paths no input can take. On decompiler output that is not a rare
+    case: the structurer invents dispatch and duplicates guards.
+
+    **Requires an extension built with the ``symbolic`` feature.** The default
+    wheel bundles the concrete emulator but not the symbolic engine or a
+    solver, because pulling an SMT backend into it is a packaging decision.
+    The function always exists -- so the generated native stub describes one
+    surface rather than two -- and raises on a build that cannot answer.
+    Callers that want to degrade gracefully catch :class:`RuntimeError`.
+
+    Args:
+        code: The source text.
+        function: The function to decide, by name.
+
+    Returns:
+        One entry per enumerated path, each with ``decisions`` (how many branch
+        decisions guard it), ``verdict`` (``"feasible"``, ``"infeasible"`` or
+        ``"unknown"``), ``args`` (an input that takes it, feasible only) and
+        ``why`` (the reason for an abstention). A function the lowering refuses
+        yields a single entry whose ``why`` names the construct.
+
+    Raises:
+        RuntimeError: If the extension was built without ``symbolic``.
+    """
+    return [dict(entry) for entry in _native.source.path_feasibility(code, function)]
+
+
 def reaches(code: str, source: str, parameter: int, sink: str) -> str:
     """Whether a value in one function's parameter can reach another function.
 
@@ -992,6 +1023,7 @@ from glaurung._source_files import (
 
 __all__ += [
     "Function",
+    "path_feasibility",
     "SourceParseError",
     "SourceParseWarning",
     "fast_cfgs_from_source",

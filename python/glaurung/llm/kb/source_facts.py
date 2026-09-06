@@ -65,10 +65,14 @@ class SourceFactCounts:
     dependence_edges: int = 0
     dead_stores: int = 0
     unused_bindings: int = 0
+    #: Paths proved takeable by some input.
+    feasible_paths: int = 0
+    #: Paths proved takeable by none, which is the finding.
+    infeasible_paths: int = 0
 
     def total(self) -> int:
         """Every row written."""
-        return self.prototypes + self.dependence_edges
+        return self.prototypes + self.dependence_edges + self.infeasible_paths
 
 
 def ingest_source(
@@ -77,6 +81,7 @@ def ingest_source(
     *,
     origin: str | None = None,
     write_dependence: bool = True,
+    write_feasibility: bool = True,
 ) -> SourceFactCounts:
     """Read `code` and write what it says into `kb`.
 
@@ -90,6 +95,10 @@ def ingest_source(
         write_dependence: Whether to write the data-dependence edges as well as
             the prototypes. They are the bulk of the rows, and a caller who
             only wants types can skip them.
+        write_feasibility: Whether to write path-feasibility verdicts. Requires
+            an extension built with the ``symbolic`` feature; without one the
+            capability is simply absent and no rows are written, which is not
+            an error.
 
     Returns:
         What was written, as :class:`SourceFactCounts`.
@@ -100,6 +109,8 @@ def ingest_source(
     edges = 0
     dead = 0
     unused = 0
+    feasible = 0
+    infeasible = 0
 
     flows = glaurung.source.data_flow(code)
     for flow in flows:
@@ -120,6 +131,15 @@ def ingest_source(
         if write_dependence:
             edges += _write_dependence(kb, flow, origin=origin)
 
+        if write_feasibility:
+            # Not named `dead`: that is the dead-store accumulator above, and
+            # rebinding it here silently zeroed `dead_stores` on every
+            # iteration. `test_the_dead_store_and_unused_counts_are_reported`
+            # is what caught it.
+            reachable, unreachable = _write_feasibility(kb, code, name, origin=origin)
+            feasible += reachable
+            infeasible += unreachable
+
     return SourceFactCounts(
         functions=functions,
         prototypes=prototypes,
@@ -127,6 +147,8 @@ def ingest_source(
         dependence_edges=edges,
         dead_stores=dead,
         unused_bindings=unused,
+        feasible_paths=feasible,
+        infeasible_paths=infeasible,
     )
 
 
@@ -347,3 +369,86 @@ def _upsert_node(
         # The real session id, for the NULL-is-not-NULL reason on `kb_edges`.
         (kb.session_id, node_id, kind, label, None, json.dumps(props), "[]"),
     )
+
+
+def _write_feasibility(
+    kb: PersistentKnowledgeBase,
+    code: str,
+    name: str,
+    *,
+    origin: str | None,
+) -> tuple[int, int]:
+    """Write one function's path-feasibility verdicts. Returns (feasible, infeasible).
+
+    Only the **infeasible** paths become rows. A feasible path is the ordinary
+    case and writing one row per path of every function would bury the finding
+    in its own background: an infeasible path is a path a reachability answer
+    reports and no input can take, which is the whole reason phase 3 exists.
+    The feasible count is still returned so a caller can report the denominator.
+
+    Requires an extension built with the ``symbolic`` feature. Without one the
+    call raises :class:`RuntimeError` and this writes nothing -- the capability
+    is opt-in at build time, not a failure at run time.
+
+    Only ``RuntimeError`` is caught, and deliberately not ``Exception``: the
+    front end is total, so anything else escaping here is a defect and must not
+    be turned into a silent zero.
+    """
+    import json
+
+    try:
+        paths = glaurung.source.path_feasibility(code, name)
+    except RuntimeError:
+        return (0, 0)
+
+    feasible = 0
+    infeasible = 0
+    conn = kb._conn
+    cur = conn.cursor()
+    for position, path in enumerate(paths):
+        verdict = path.get("verdict")
+        if verdict == "feasible":
+            feasible += 1
+            continue
+        if verdict != "infeasible":
+            continue
+        infeasible += 1
+        node_id = f"srcpath:{name}:{position}"
+        _upsert_node(
+            cur,
+            kb,
+            node_id,
+            kind="source_infeasible_path",
+            label=name,
+            props={
+                "function": name,
+                "decisions": path.get("decisions"),
+                "origin": origin,
+                "set_by": SET_BY,
+            },
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO kb_edges "
+            "(session_id, edge_id, src_node_id, dst_node_id, kind, props_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                # The real session, for the NULL-is-not-NULL reason recorded on
+                # `_write_dependence`.
+                kb.session_id,
+                f"srcpathof:{name}:{position}",
+                node_id,
+                node_id,
+                "source_infeasible_path",
+                json.dumps(
+                    {
+                        "function": name,
+                        "decisions": path.get("decisions"),
+                        "origin": origin,
+                        "set_by": SET_BY,
+                    }
+                ),
+            ),
+        )
+
+    conn.commit()
+    return (feasible, infeasible)

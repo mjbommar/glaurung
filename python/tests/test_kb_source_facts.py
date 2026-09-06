@@ -194,3 +194,122 @@ def test_a_file_is_read_lossily(kb, tmp_path: Path):
     target.write_bytes(b'int f(int a) { char *s = "\xff\xfe"; return a; }\n')
     counts = ingest_source_path(kb, target)
     assert counts.functions == 1
+
+
+# ---------------------------------------------------------------------------
+# Path-feasibility verdicts (phase 3 into phase 4).
+#
+# The capability is opt-in at build time: the default wheel bundles the
+# concrete emulator but not the symbolic engine or a solver. These tests skip
+# rather than fail on such a build, and `test_feasibility_is_optional...`
+# asserts the *graceful* half so a missing backend cannot silently become a
+# missing feature.
+# ---------------------------------------------------------------------------
+
+#: A function with one path no input can take: `x > 10` and `x < 5` together.
+UNREACHABLE_ARM = """
+int decide(int x)
+{
+    if (x > 10) {
+        if (x < 5) {
+            return 1;
+        }
+    }
+    return 0;
+}
+"""
+
+
+def _has_feasibility() -> bool:
+    """Whether this build can actually answer, not whether the name exists.
+
+    The binding is present in every build so the generated native stub
+    describes one surface; the build without the `symbolic` feature raises. So
+    the probe has to *call* it -- `hasattr` is true either way and would run
+    these tests against a build that cannot answer.
+    """
+    import glaurung
+
+    try:
+        glaurung.source.path_feasibility("int probe(void) { return 0; }", "probe")
+    except RuntimeError:
+        return False
+    return True
+
+
+@pytest.mark.core
+def test_feasibility_is_optional_and_absence_writes_nothing(kb):
+    """An extension without `symbolic` ingests everything else and no verdicts."""
+    counts = ingest_source(kb, CODE, write_feasibility=True)
+    assert counts.prototypes >= 0
+    if not _has_feasibility():
+        assert counts.infeasible_paths == 0
+        assert counts.feasible_paths == 0
+        cur = kb._conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM kb_nodes WHERE kind = 'source_infeasible_path'"
+        )
+        assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.skipif(
+    not _has_feasibility(),
+    reason="extension built without the `symbolic` feature",
+)
+def test_an_infeasible_path_becomes_a_row_with_source_provenance(kb):
+    import json
+
+    counts = ingest_source(kb, UNREACHABLE_ARM, origin="decide.c")
+    assert counts.infeasible_paths >= 1, "the `x > 10 && x < 5` arm is unreachable"
+    assert counts.feasible_paths >= 1, "the other arms are reachable"
+
+    cur = kb._conn.cursor()
+    cur.execute("SELECT props_json FROM kb_nodes WHERE kind = 'source_infeasible_path'")
+    rows = cur.fetchall()
+    assert len(rows) == counts.infeasible_paths
+    for (props,) in rows:
+        payload = json.loads(props)
+        assert payload["set_by"] == SET_BY
+        assert payload["function"] == "decide"
+        assert payload["origin"] == "decide.c"
+
+
+@pytest.mark.skipif(
+    not _has_feasibility(),
+    reason="extension built without the `symbolic` feature",
+)
+def test_only_infeasible_paths_are_written(kb):
+    """A feasible path is the ordinary case and would bury the finding."""
+    counts = ingest_source(kb, UNREACHABLE_ARM)
+    cur = kb._conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM kb_nodes WHERE kind = 'source_infeasible_path'")
+    assert (
+        cur.fetchone()[0]
+        == counts.infeasible_paths
+        < (counts.feasible_paths + counts.infeasible_paths)
+    )
+
+
+@pytest.mark.skipif(
+    not _has_feasibility(),
+    reason="extension built without the `symbolic` feature",
+)
+def test_feasibility_can_be_skipped(kb):
+    counts = ingest_source(kb, UNREACHABLE_ARM, write_feasibility=False)
+    assert counts.infeasible_paths == 0
+    cur = kb._conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM kb_nodes WHERE kind = 'source_infeasible_path'")
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.skipif(
+    not _has_feasibility(),
+    reason="extension built without the `symbolic` feature",
+)
+def test_ingesting_twice_writes_the_same_verdict_rows(kb):
+    """The NULL-session_id duplication bug, guarded on the new table too."""
+    first = ingest_source(kb, UNREACHABLE_ARM)
+    ingest_source(kb, UNREACHABLE_ARM)
+    cur = kb._conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM kb_nodes WHERE kind = 'source_infeasible_path'")
+    assert cur.fetchone()[0] == first.infeasible_paths
