@@ -214,6 +214,17 @@ pipeline. Focused tests cover both an unregistered pass and a pass moved behind
 `apply_role_names`. Repeated semantic cleanup is still a separate fixpoint
 ownership problem and remains open.
 
+Commit `5f7df194` closes that fixpoint ownership problem. The common
+`run_bounded_fixpoint` driver replaces both manual AST settle loops: the
+copy/constant pair retains its four-round safety bound, and forward-region plus
+linear-loop recovery retains its two-round bound. The two constituent
+structure passes now return truthful change flags. Each invocation produces a
+`FixpointReport` with total rounds, firing rounds, and an explicit `quiescent`
+or `bound_reached` termination reason. DecBench preparation carries both
+reports to `FunctionProfiler`; the fail-closed Python parser validates and
+aggregates them. The remaining profile-report gap is ordered stage-sequence
+reporting, not fixpoint observability.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -314,6 +325,15 @@ ownership problem and remains open.
   passed.
 - Full `cargo test --features python-ext` from a clean detached worktree at
   exact commit `4ea067df`: exit zero; 4,206 library tests passed, zero failed,
+  and five ignored; every integration and documentation target passed.
+  Identity retrieval reports 44 passed and ten ignored; doc tests report two
+  passed and one ignored.
+- Fresh release extension plus 33 pipeline-profile, entry-point-equivalence,
+  determinism, and render-style checks at `5f7df194`: all passed. The real
+  profile contains both named fixpoint reports. The complete AST-focused Rust
+  slice reports 261 passed.
+- Full `cargo test --features python-ext` from a clean detached worktree at
+  exact commit `5f7df194`: exit zero; 4,208 library tests passed, zero failed,
   and five ignored; every integration and documentation target passed.
   Identity retrieval reports 44 passed and ten ignored; doc tests report two
   passed and one ignored.

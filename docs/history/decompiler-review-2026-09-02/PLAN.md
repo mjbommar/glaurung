@@ -63,8 +63,10 @@ single per-function transaction. `74853fcc` adds checked coarse semantic-stage
 transitions and a focused invalid-order failure; `4ea067df` registers and checks
 the canonical order of all 20 production AST passes, including safe optional
 omissions and typed rejection of unknown, repeated, or backward passes.
-Remaining budget classes, the fixpoint driver, and their closure tests remain
-open, so WP2 is
+`5f7df194` replaces both hand-written AST settle loops with one bounded
+fixpoint driver and emits their rounds, firing counts, and quiescent/bound-
+reached termination through the pipeline profile. Remaining budget classes and
+their closure tests remain open, so WP2 is
 substantially underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
@@ -629,8 +631,12 @@ and make pass repetition/invalidation explicit.
   `4ea067df` adds one canonical 20-pass AST order and makes every production
   `pass!` invocation check it. Optional passes may be omitted, while unknown,
   repeated, or backward passes return typed `AstPassOrderError` values.
-- [ ] Replace hand-repeated settle passes with a bounded fixpoint driver that
-  records firing and termination reasons.
+- [x] Replace hand-repeated settle passes with a bounded fixpoint driver that
+  records firing and termination reasons. `5f7df194` makes copy/constant
+  settling and forward-region/loop settling use one `run_bounded_fixpoint`
+  implementation. Each invocation records total rounds, firing rounds, and
+  `quiescent` versus `bound_reached`; the real DecBench profile carries both
+  reports without changing pseudocode.
 - [x] Include analysis-budget identity and pass-version identity in the
   pipeline fingerprint.
   `5ea45dca` defines schema `glaurung.decompile-pipeline/v1`, explicit
@@ -651,8 +657,11 @@ and make pass repetition/invalidation explicit.
   identity remains open with the batch/request migration.
 - [ ] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
   function-order independence.
-- [ ] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
-  firing counts, and bounded fixpoint termination.
+- [~] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
+  firing counts, and bounded fixpoint termination. `5f7df194` validates and
+  aggregates both production fixpoint reports, including impossible counts and
+  the closed termination vocabulary. An explicit ordered stage-sequence field
+  remains to cover pass order in this report.
 - [ ] Test that a deliberately lower range budget differs only with an
   explicit completeness reason.
 
@@ -665,8 +674,9 @@ and make pass repetition/invalidation explicit.
 - [x] Invalid pass order fails in focused tests. `74853fcc` proves this for
   coarse semantic stages; `4ea067df` proves it for individual AST passes and
   separately rejects unregistered passes.
-- [ ] Every repeated pass is justified by recorded invalidation or a declared
-  fixpoint, not duplicated orchestration.
+- [x] Every repeated pass is justified by recorded invalidation or a declared
+  fixpoint, not duplicated orchestration. The two intentional AST settling
+  repetitions are named bounded fixpoints with reported termination.
 
 ## 9. WP3 — Authoritative SSA, stable value identity, and origins
 
