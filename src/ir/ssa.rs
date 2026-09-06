@@ -56,6 +56,12 @@ pub struct Phi {
 /// SSA side-car information about an [`LlirFunction`].
 #[derive(Debug, Default, Clone)]
 pub struct SsaInfo {
+    /// Revision of the LLIR value graph this sidecar describes.
+    ///
+    /// Direct `compute_ssa*` calls produce revision zero. A pipeline-owned
+    /// [`VersionedSsa`] increments this whenever an SSA-relevant mutation
+    /// forces reconstruction.
+    revision: u64,
     /// Immediate dominator of each block, by block index. The entry block
     /// has no idom and maps to `None`.
     pub idom: Vec<Option<usize>>,
@@ -75,6 +81,71 @@ pub struct SsaInfo {
     /// time. This prevents queries from re-canonicalizing under a different
     /// architecture later.
     use_values_all: OperandTable,
+}
+
+/// The semantic class of a mutation after SSA construction.
+///
+/// `Default` is deliberately conservative: an unclassified pass invalidates
+/// everything rather than silently permitting stale value identities.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Invalidate {
+    Cfg,
+    Definitions,
+    Uses,
+    Types,
+    Presentation,
+    #[default]
+    All,
+}
+
+impl Invalidate {
+    fn affects_ssa(self) -> bool {
+        matches!(self, Self::Cfg | Self::Definitions | Self::Uses | Self::All)
+    }
+}
+
+/// Pipeline-owned SSA artifact that cannot be consumed after invalidation.
+#[derive(Debug, Clone)]
+pub struct VersionedSsa {
+    info: SsaInfo,
+    target: TargetSpec,
+    dirty: bool,
+}
+
+impl VersionedSsa {
+    /// Construct revision zero for the current LLIR value graph.
+    pub fn compute(function: &LlirFunction, target: TargetSpec) -> Self {
+        Self {
+            info: compute_ssa_for_target(function, target),
+            target,
+            dirty: false,
+        }
+    }
+
+    /// Declare the effect of a mutation before another SSA consumer runs.
+    pub fn invalidate(&mut self, change: Invalidate) {
+        self.dirty |= change.affects_ssa();
+    }
+
+    /// Return current SSA, rebuilding it first when a mutation made it stale.
+    pub fn ensure(&mut self, function: &LlirFunction) -> &SsaInfo {
+        if self.dirty {
+            let revision = self.info.revision.saturating_add(1);
+            self.info = compute_ssa_for_target(function, self.target);
+            self.info.revision = revision;
+            self.dirty = false;
+        }
+        &self.info
+    }
+
+    /// Consume a current artifact. A dirty state must first use [`Self::ensure`].
+    pub fn into_info(self) -> Result<SsaInfo, &'static str> {
+        if self.dirty {
+            Err("SSA artifact is invalid; call ensure before consuming it")
+        } else {
+            Ok(self.info)
+        }
+    }
 }
 
 /// Per-`(block, instruction, operand)` storage, indexed rather than hashed.
@@ -181,6 +252,11 @@ pub(crate) fn ssa_def_width(op: &Op) -> usize {
 }
 
 impl SsaInfo {
+    /// Revision assigned by the pipeline-owned SSA state.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Return the SSA value defined by the instruction at `addr`.
     pub fn def_value(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<SsaValue> {
         self.def_value_ref(lf, addr).cloned()
@@ -840,6 +916,7 @@ fn rename(
     }
 
     let info = SsaInfo {
+        revision: 0,
         idom: idom.to_vec(),
         frontier: Vec::new(), // filled in by caller
         phis,
@@ -914,6 +991,61 @@ mod tests {
             dst: VReg::phys(reg),
             src: Value::Const(c),
         }
+    }
+
+    #[test]
+    fn unclassified_mutation_defaults_to_invalidate_everything() {
+        assert_eq!(Invalidate::default(), Invalidate::All);
+    }
+
+    #[test]
+    fn versioned_ssa_rebuilds_before_consumption_after_value_graph_changes() {
+        let mut function = mk_cfg(vec![(0x1000, vec![assign("rax", 1)], vec![])]);
+        let target = TargetSpec::from_image_metadata(
+            crate::core::binary::Arch::X86_64,
+            crate::core::binary::Endianness::Little,
+            crate::core::binary::Format::ELF,
+            false,
+        );
+        let mut state = VersionedSsa::compute(&function, target);
+
+        assert_eq!(state.ensure(&function).revision(), 0);
+        state.invalidate(Invalidate::Definitions);
+        assert!(state.clone().into_info().is_err());
+
+        function.blocks[0].instrs.push(LlirInstr {
+            va: 0x1004,
+            op: assign("rax", 2),
+        });
+        let rebuilt = state.ensure(&function);
+        assert_eq!(rebuilt.revision(), 1);
+        assert_eq!(
+            rebuilt.def_version(
+                &function,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                }
+            ),
+            2
+        );
+        assert!(state.into_info().is_ok());
+    }
+
+    #[test]
+    fn type_and_presentation_changes_do_not_rebuild_value_identity() {
+        let function = mk_cfg(vec![(0x1000, vec![assign("rax", 1)], vec![])]);
+        let target = TargetSpec::from_image_metadata(
+            crate::core::binary::Arch::X86_64,
+            crate::core::binary::Endianness::Little,
+            crate::core::binary::Format::ELF,
+            false,
+        );
+        let mut state = VersionedSsa::compute(&function, target);
+
+        state.invalidate(Invalidate::Types);
+        state.invalidate(Invalidate::Presentation);
+        assert_eq!(state.ensure(&function).revision(), 0);
     }
 
     #[test]

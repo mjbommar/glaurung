@@ -1370,15 +1370,18 @@ fn normalize_definedness_and_compute_ssa(
     target: crate::target::TargetSpec,
 ) -> crate::ir::ssa::SsaInfo {
     let graph = crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let initial_ssa = crate::ir::ssa::compute_ssa_for_target(&graph, target);
-    let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, &initial_ssa, cc);
-    if crate::ir::definedness::erase_unobserved_masked_inputs(function, &initial_ssa, &oracle) == 0
+    let mut ssa = crate::ir::ssa::VersionedSsa::compute(&graph, target);
+    let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, ssa.ensure(&graph), cc);
+    if crate::ir::definedness::erase_unobserved_masked_inputs(function, ssa.ensure(&graph), &oracle)
+        != 0
     {
-        return initial_ssa;
+        ssa.invalidate(crate::ir::ssa::Invalidate::Uses);
+        let normalized_graph =
+            crate::analysis::exception::with_exceptional_successors(function, exception_sites);
+        ssa.ensure(&normalized_graph);
     }
-    let normalized_graph =
-        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    crate::ir::ssa::compute_ssa_for_target(&normalized_graph, target)
+    ssa.into_info()
+        .expect("definedness normalization ensured current SSA")
 }
 
 /// One shared LLIR preparation pipeline for every decompilation entry point.
