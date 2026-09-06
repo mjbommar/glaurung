@@ -294,9 +294,12 @@ pub(super) fn run_ast_passes(
     );
     if let Some(prototype) = prototype {
         pass!(
-            "materialize_aapcs32_wide_parameters",
-            crate::ir::wide_parameters::materialize_aapcs32_wide_parameters(
-                f, prototype, endianness,
+            "materialize_32bit_wide_parameters",
+            crate::ir::wide_parameters::materialize_32bit_wide_parameters(
+                f,
+                prototype,
+                &stack_facts,
+                endianness,
             )
         );
     }

@@ -548,6 +548,10 @@ pub struct RecoveredPrototype {
     /// primary storage identity for existing scalar consumers; this auxiliary
     /// fact prevents the second word from becoming an invented source local.
     wide_integer_parameter_parts: BTreeMap<usize, [SsaValue; 2]>,
+    /// Source parameter slot -> low/high byte offsets within the cdecl32
+    /// incoming argument area. Offsets are relative to its first argument,
+    /// after the return address (and after saved EBP in that coordinate).
+    wide_integer_stack_parameter_parts: BTreeMap<usize, [i64; 2]>,
     parameter_arity_locked: bool,
     locked_parameters: HashSet<usize>,
     result: Option<RecoveredResult>,
@@ -884,6 +888,7 @@ impl RecoveredPrototype {
         declared: &[Option<TypeHint>],
     ) {
         self.wide_integer_parameter_parts.clear();
+        self.wide_integer_stack_parameter_parts.clear();
         // BTreeMap rather than HashMap: the recovered-spelling search below
         // scans every prior parameter, and a HashMap's iteration order is not
         // reproducible between runs. A prototype that differs run to run is the
@@ -932,6 +937,30 @@ impl RecoveredPrototype {
                         },
                     ],
                 );
+            }
+        }
+        if cc == crate::ir::call_args::CallConv::Cdecl32 {
+            let mut byte_offset = 0i64;
+            for (slot, hint) in declared.iter().copied().enumerate() {
+                let Some(hint) = hint else {
+                    break;
+                };
+                let footprint = match hint {
+                    TypeHint::Int { width: 8, .. } | TypeHint::Float { width: 8 } => 8,
+                    TypeHint::Int {
+                        width: 1 | 2 | 4, ..
+                    }
+                    | TypeHint::Float { width: 4 }
+                    | TypeHint::BoolLike
+                    | TypeHint::Pointer { .. }
+                    | TypeHint::CodePointer => 4,
+                    TypeHint::Int { .. } | TypeHint::Float { .. } => break,
+                };
+                if matches!(hint, TypeHint::Int { width: 8, .. }) {
+                    self.wide_integer_stack_parameter_parts
+                        .insert(slot, [byte_offset, byte_offset + 4]);
+                }
+                byte_offset += footprint;
             }
         }
         // x86-64 SysV has the same two-independent-banks shape, with the same
@@ -1123,6 +1152,14 @@ impl RecoveredPrototype {
         self.wide_integer_parameter_parts
             .iter()
             .map(|(slot, parts)| (*slot, [parts[0].base.clone(), parts[1].base.clone()]))
+            .collect()
+    }
+
+    /// Exact low/high offsets in cdecl32's incoming stack-argument area.
+    pub(crate) fn wide_integer_stack_parameter_parts(&self) -> Vec<(usize, [i64; 2])> {
+        self.wide_integer_stack_parameter_parts
+            .iter()
+            .map(|(slot, offsets)| (*slot, *offsets))
             .collect()
     }
 
@@ -1781,6 +1818,7 @@ pub fn recover_prototype_with_arm_vfp_args(
     RecoveredPrototype {
         parameters,
         wide_integer_parameter_parts: BTreeMap::new(),
+        wide_integer_stack_parameter_parts: BTreeMap::new(),
         parameter_arity_locked: false,
         locked_parameters: HashSet::new(),
         result,

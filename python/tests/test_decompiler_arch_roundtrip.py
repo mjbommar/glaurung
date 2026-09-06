@@ -984,6 +984,61 @@ def test_arm32_o2_wide_selector_uses_both_aapcs_entry_words(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize(
+    ("optimization", "functions"),
+    [
+        (
+            "O0",
+            {"wide_selector_dense", "wide_selector_high_labels", "wide_selector_mixed"},
+        ),
+        ("O2", {"wide_selector_dense", "wide_selector_high_labels"}),
+    ],
+)
+def test_i386_wide_selector_uses_both_cdecl_stack_words(
+    tmp_path: Path, optimization: str, functions: set[str]
+) -> None:
+    """A cdecl uint64_t stack argument is one source value, not two locals."""
+    arch = "i386"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-i386") is None:
+        pytest.skip("i386 cross compiler and qemu-i386 are required")
+    fixture = "215_switch_on_wide_selector"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-{optimization}.so"
+    ok, error = A._cross_build(arch, source, optimization, target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-{optimization}.so"
+    ok, error = A._reference_build(source, optimization, reference)
+    assert ok, error
+
+    addresses = D.exported_functions(str(target))
+    decompiled = D.decompiled_many_c(
+        str(target), [addresses[function] for function in sorted(functions)]
+    )
+    for function in sorted(functions):
+        recovered = decompiled[addresses[function]]
+        assert "unsigned long long op" in recovered, recovered
+        assert re.search(r"\bop\s*>>\s*32\b", recovered), recovered
+        assert not re.search(r"\bstack_\d+\b", recovered), recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:{optimization}",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+        decompiled_by_va=decompiled,
+    )
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> None:
     """Discovery and typed transport reach the structurer that owns loop latches."""
     arch = "armv7_a32"
