@@ -45,7 +45,8 @@
 //! [`Unknown::WitnessDidNotReproduce`].
 
 use crate::exec::domain::Domain;
-use crate::ir::types::Width;
+use crate::ir::types::{BinOp, CmpOp, Width};
+use crate::symbolic::expr::{Expr, ExprId};
 use crate::symbolic::solver::{solve, SolveResult};
 use crate::symbolic::symdomain::Symbolic;
 
@@ -364,6 +365,192 @@ pub fn redundant_guards_of(text: &str, name: &str, bounds: &Bounds) -> Vec<Redun
     }
 }
 
+/// A way a function can be undefined, that some input actually reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Property {
+    /// A division or remainder whose divisor can be zero.
+    DivisionByZero,
+    /// A shift whose count can be negative or reach the operand width. Both are
+    /// undefined in C (C17 6.5.7p3); the width is the operand's, after
+    /// promotion.
+    ShiftPastWidth { width: u16 },
+}
+
+/// One property violation, with an input that reaches it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyFinding {
+    /// Which enumerated path reaches it.
+    pub path: usize,
+    pub property: Property,
+    /// A concrete input that takes that path *and* triggers the violation.
+    pub witness: Witness,
+}
+
+/// Inputs that make a function execute undefined behaviour.
+///
+/// On decompiler output this is a **finding about the binary**, which is the
+/// product: given a recovered function, is there an input that divides by this
+/// zero or shifts by this width.
+///
+/// # What it reads, and the one property it cannot
+///
+/// The obligations are read off the expression DAG the symbolic run built, so
+/// an operation is visible exactly when its value reaches the path's result or
+/// one of its guards. A division whose result is discarded is not reported ---
+/// and at source level a discarded division is not a computation anyone kept.
+///
+/// A shift is found *through the lowering's mask*. `csource::lower` masks a
+/// shift count to the operand width deliberately, because evaluating on 64-bit
+/// temporaries and truncating is a third answer no machine gives --- but that
+/// makes the post-mask count in-range by construction. So the check looks
+/// through `count & (width - 1)` to the count the source wrote, which is the
+/// one C calls undefined.
+///
+/// **Array indexing is not checked**, and cannot be from here. The bound lives
+/// in `Local::elements` and the LLIR carries an address, not an extent: by the
+/// time there is an expression to ask about, `a[i]` and `*(p + i)` are the same
+/// term. Checking it needs the lowering to emit the obligation, which is a
+/// change to the lowering rather than a query over its output.
+pub fn property_violations(lowered: &LoweredFunction, bounds: &Bounds) -> Vec<PropertyFinding> {
+    let Some(Explored {
+        mut sym,
+        exploration,
+        slots,
+        ..
+    }) = explored(lowered, bounds)
+    else {
+        return Vec::new();
+    };
+
+    let mut found = Vec::new();
+    for (index, path) in exploration.complete.iter().enumerate() {
+        let mut roots = vec![path.result];
+        roots.extend(path.guard.iter().map(|(e, _)| *e));
+        for (property, operand) in obligations(&sym, &roots) {
+            let condition = match property {
+                Property::DivisionByZero => {
+                    let width = sym.pool.width_of(operand);
+                    let zero = Domain::constant(&mut sym, width, 0);
+                    Domain::cmp(&mut sym, CmpOp::Eq, &operand, &zero, width)
+                }
+                Property::ShiftPastWidth { width } => {
+                    let w = sym.pool.width_of(operand);
+                    let zero = Domain::constant(&mut sym, w, 0);
+                    let limit = Domain::constant(&mut sym, w, u128::from(width));
+                    // Undefined below zero and at or above the width; `Sle` the
+                    // other way round is the `>=` this `CmpOp` has no variant for.
+                    let negative = Domain::cmp(&mut sym, CmpOp::Slt, &operand, &zero, w);
+                    let too_wide = Domain::cmp(&mut sym, CmpOp::Sle, &limit, &operand, w);
+                    Domain::binop(&mut sym, BinOp::Or, &negative, &too_wide, Width::W1)
+                }
+            };
+            let mut query: Vec<(ExprId, bool)> = path.guard.clone();
+            query.push((condition, true));
+            if let SolveResult::Sat(model) = solve(&sym.pool, &query) {
+                let args = slots
+                    .iter()
+                    .map(|(id, slot)| {
+                        slot.canonicalize(model.values.get(id).copied().unwrap_or(0) as u64)
+                    })
+                    .collect();
+                found.push(PropertyFinding {
+                    path: index,
+                    property,
+                    witness: Witness { args },
+                });
+            }
+        }
+    }
+    found
+}
+
+/// [`property_violations`] from source text.
+pub fn property_violations_of(
+    text: &str,
+    name: &str,
+    bounds: &Bounds,
+) -> Result<Vec<PropertyFinding>, String> {
+    match lower_named_function(text, name) {
+        Ok(f) => Ok(property_violations(&f, bounds)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Every risky operation reachable from `roots`, with the operand to constrain.
+///
+/// Walks the DAG once with a visited set: interning shares structural equals
+/// aggressively, so walking the tree a node denotes instead would pay 2^n for
+/// n shared doublings.
+fn obligations(sym: &Symbolic, roots: &[ExprId]) -> Vec<(Property, ExprId)> {
+    let mut seen: std::collections::HashSet<ExprId> = Default::default();
+    let mut stack: Vec<ExprId> = roots.to_vec();
+    let mut out = Vec::new();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = sym.pool.get(id).clone();
+        match node {
+            Expr::Bin { op, a, b, width } => {
+                match op {
+                    BinOp::Div => out.push((Property::DivisionByZero, b)),
+                    BinOp::Shl | BinOp::Shr | BinOp::Sar => {
+                        out.push((
+                            Property::ShiftPastWidth {
+                                width: width.bits(),
+                            },
+                            unmasked_count(sym, b),
+                        ));
+                    }
+                    _ => {}
+                }
+                stack.push(a);
+                stack.push(b);
+            }
+            Expr::Un { a, .. } | Expr::ZExt { a, .. } | Expr::SExt { a, .. } => stack.push(a),
+            Expr::Trunc { a, .. } | Expr::Extract { a, .. } => stack.push(a),
+            Expr::Cmp { a, b, .. } => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Expr::Concat { hi, lo, .. } => {
+                stack.push(hi);
+                stack.push(lo);
+            }
+            Expr::Ite { c, t, e, .. } => {
+                stack.push(c);
+                stack.push(t);
+                stack.push(e);
+            }
+            Expr::Const { .. } | Expr::Sym { .. } => {}
+        }
+    }
+    out
+}
+
+/// See through `count & (width - 1)` to the count the source wrote.
+///
+/// The lowering applies that mask so a shift has one defined answer; the count
+/// C calls undefined is the one before it.
+fn unmasked_count(sym: &Symbolic, count: ExprId) -> ExprId {
+    if let Expr::Bin {
+        op: BinOp::And,
+        a,
+        b,
+        ..
+    } = sym.pool.get(count)
+    {
+        if let Expr::Const { value, .. } = sym.pool.get(*b) {
+            // Exactly the shape `Builder` emits: an all-ones mask one below a
+            // power of two. Anything else is the program's own `&`.
+            if (*value + 1).is_power_of_two() {
+                return *a;
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +749,80 @@ mod tests {
             "an unsatisfiable prefix produced findings: {found:?}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Bounded property checking.
+    // -----------------------------------------------------------------------
+
+    fn violations(text: &str, name: &str) -> Vec<PropertyFinding> {
+        property_violations_of(text, name, &Bounds::default()).expect("lowers")
+    }
+
+    #[test]
+    fn an_unguarded_division_is_reported_with_an_input_that_divides_by_zero() {
+        let found = violations("int f(int a, int b) { return a / b; }", "f");
+        let divs: Vec<_> = found
+            .iter()
+            .filter(|f| f.property == Property::DivisionByZero)
+            .collect();
+        assert!(!divs.is_empty(), "b can be zero");
+        // The witness must actually be the zero divisor, or it is not a finding.
+        assert_eq!(divs[0].witness.args[1], 0, "{:?}", divs[0]);
+    }
+
+    #[test]
+    fn a_guarded_division_is_not_reported() {
+        // The whole value of asking a solver rather than grepping for `/`: the
+        // guard proves the divisor is nonzero on every path that reaches it.
+        let found = violations(
+            "int f(int a, int b) { if (b == 0) { return 0; } return a / b; }",
+            "f",
+        );
+        assert!(
+            !found.iter().any(|f| f.property == Property::DivisionByZero),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_remainder_is_the_same_obligation_as_a_division() {
+        let found = violations("int f(int a, int b) { return a % b; }", "f");
+        assert!(found.iter().any(|f| f.property == Property::DivisionByZero));
+    }
+
+    #[test]
+    fn an_unguarded_shift_is_reported_through_the_lowerings_mask() {
+        // `csource::lower` masks the count so the shift has one defined answer.
+        // The count C calls undefined is the one *before* that mask, and the
+        // check has to see through it or this finding is unreachable.
+        let found = violations("int f(int a, int n) { return a << n; }", "f");
+        let shifts: Vec<_> = found
+            .iter()
+            .filter(|f| matches!(f.property, Property::ShiftPastWidth { .. }))
+            .collect();
+        assert!(!shifts.is_empty(), "n can be 32 or negative: {found:?}");
+        let n = shifts[0].witness.args[1] as i64 as i32;
+        assert!(!(0..32).contains(&n), "witness n = {n} is in range");
+    }
+
+    #[test]
+    fn a_guarded_shift_is_not_reported() {
+        let found = violations(
+            "int f(int a, int n) { if (n < 0 || n > 31) { return 0; } return a << n; }",
+            "f",
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|f| matches!(f.property, Property::ShiftPastWidth { .. })),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_function_with_no_risky_operation_reports_nothing() {
+        assert!(violations("int f(int a, int b) { return a + b; }", "f").is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -647,6 +908,66 @@ mod corpus {
         assert!(decided_functions > 100, "corpus not found or not lowering");
         // Every path carries exactly one verdict, and a cut carries none.
         assert_eq!(total, feasible + infeasible + unknown);
+    }
+
+    #[test]
+    fn what_the_corpus_can_be_made_to_do_wrong() {
+        // The product claim: given a recovered function, is there an input that
+        // divides by this zero or shifts by this width. Each finding carries an
+        // input, so none of them is a guess.
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures/src");
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+        let bounds = Bounds::default();
+        let (mut divisions, mut shifts, mut functions) = (0usize, 0usize, 0usize);
+        let mut named: Vec<String> = Vec::new();
+        let mut files: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        files.sort();
+        for path in files {
+            if path.extension().and_then(|e| e.to_str()) != Some("c") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            for func in tree.functions(&text) {
+                if func.name.is_empty() {
+                    continue;
+                }
+                let Ok(found) = property_violations_of(&text, &func.name, &bounds) else {
+                    continue;
+                };
+                if found.is_empty() {
+                    continue;
+                }
+                functions += 1;
+                let d = found
+                    .iter()
+                    .filter(|f| f.property == Property::DivisionByZero)
+                    .count();
+                let s = found.len() - d;
+                divisions += d;
+                shifts += s;
+                named.push(format!("{stem}::{} ({d} div, {s} shift)", func.name));
+            }
+        }
+        eprintln!("PROPERTY VIOLATIONS over the fixture corpus");
+        eprintln!("   functions with at least one: {functions}");
+        eprintln!("   division by zero: {divisions}; shift past the width: {shifts}");
+        for line in named.iter().take(20) {
+            eprintln!("   {line}");
+        }
+        // A count is not asserted --- it moves with the lowering's coverage.
+        // What is asserted is that the check runs over the corpus at all.
+        assert!(
+            divisions + shifts > 0,
+            "no property violation found anywhere in the corpus, which would \
+             mean the check is not reaching real code"
+        );
     }
 }
 

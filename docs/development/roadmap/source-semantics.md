@@ -887,6 +887,60 @@ without a backend every assertion in the file would skip and a green run would
 prove nothing --- the failure mode `traps.md` records as "a silently-skipped
 test is identical to a passing one".
 
+### Item 3, bounded property checking --- landed for two properties of three
+
+`property_violations` reads obligations off the expression DAG the symbolic run
+built, then asks the solver for an input that takes the path **and** violates
+one:
+
+* **division by zero** --- the divisor of any `Div` reachable from the result or
+  a guard;
+* **shift past the width** --- a count that is negative or at least the operand
+  width, both undefined by C17 6.5.7p3.
+
+The shift check has to look *through* the lowering's mask. `csource::lower`
+masks a shift count to the operand width on purpose, because evaluating at 64
+bits and truncating is a third answer no machine gives --- but that makes the
+post-mask count in-range by construction, so the check unwraps
+`count & (width - 1)` to the count the source actually wrote.
+
+**Array indexing is the third property and is not checked**, because it cannot
+be from here: the bound lives in `Local::elements` and the LLIR carries an
+address, not an extent. By the time there is a term to ask about, `a[i]` and
+`*(p + i)` are the same expression. Checking it needs the *lowering* to emit
+the obligation, which is a change to the lowering rather than a query over its
+output.
+
+#### The result, and why one row of it is the validation
+
+```
+PROPERTY VIOLATIONS over the fixture corpus
+   functions with at least one: 4
+   division by zero: 3; shift past the width: 2
+   02_integer_widths::urem64 (1 div, 0 shift)
+   02_integer_widths::srem64 (1 div, 0 shift)
+   17_hash_table::hash_slot (1 div, 0 shift)
+   54_sha256_block::rotate_right (0 div, 2 shift)
+```
+
+Every one is real. `urem64` and `srem64` are `a % b` with nothing constraining
+`b`. `hash_slot` is `% (uint32_t)capacity`, where the caller must guarantee a
+nonzero capacity and the function does not.
+
+And `rotate_right` is the validation. It is
+`(value >> amount) | (value << (32u - amount))`, and it is **the one function in
+this corpus whose undefined behaviour a human had to find by hand** --- it is
+the single entry the S4 differential's known-UB list was created to hold, and
+the reasoning about it is written out in `differential_tests.rs`. The checker
+rediscovered it from the source with no list, no annotation and no hint, and
+attached an input that triggers it.
+
+That is the difference between a lint and this: a grep for `<<` finds every
+shift, and finds `rotate_right` alongside hundreds of safe ones. Asking whether
+some input reaches it *and* breaks it returns four functions in nine hundred.
+`a_guarded_division_is_not_reported` and `a_guarded_shift_is_not_reported` are
+the tests that pin the difference.
+
 ### What this does not decide yet, stated plainly
 
 **204 functions lower but cannot be analysed**, because `IoSpec::of_lowered`
