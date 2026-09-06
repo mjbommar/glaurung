@@ -30,14 +30,16 @@ slice below. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
-`DecompileRequest`, `AnalysisBudget`, and `RenderOptions`; every discovery
+  `DecompileRequest`, `AnalysisBudget`, and `RenderOptions`; every discovery
 limit survives one checked conversion. Exact-range discovery converged with
 the other entry points at `5a2d6c86`, and `e19bd73b` moves the ordered helper,
 ABI-call, recovered-callee, and caller-effect sequence behind one
 `callee_contracts.rs` boundary used by all four entry points. The other three
 public entry points still need to construct the request directly; the common
-per-function orchestrator, structured result, fingerprint, pass manager, and
-fixpoint driver remain open, so WP2 is underway rather than complete. See
+per-function orchestrator is now shared from prepared LLIR through AST passes
+at `41bd90a6`, but discovery/context assembly and rendering remain adapter-owned.
+The structured result, fingerprint, pass manager, and fixpoint driver also
+remain open, so WP2 is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -547,16 +549,23 @@ and make pass repetition/invalidation explicit.
   `5a2d6c86` moves all four entry points onto the same `AnalysisBudget`
   conversion and makes an exact discovered range reuse the ordinary CFG and
   direct-callee facts.
-- [ ] Move common orchestration out of `src/python_bindings/ir.rs` into one
+- [~] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
+  `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
+  lower-stage health tracing, and the AST pass invocation behind one
+  pipeline-owned `lower_and_run_ast_passes` boundary. All four adapters consume
+  its `PreparedAst`, including exact-range, which previously skipped
+  pass-through parameter refinement. Context assembly and rendering still need
+  to move before this item is complete.
 - [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
   Module-level and reusable-session `decompile_at` create the typed request;
   all/range/many now share its budget conversion. The first full-text
   differential caught range's synthetic one-block CFG and empty callee facts;
   `5a2d6c86` makes an exact discovered range reuse both authoritative inputs
-  while preserving the explicit-window fallback. Extraction of the remaining
-  common per-function body is still open.
+  while preserving the explicit-window fallback. `41bd90a6` then makes every
+  adapter call the same LLIR-to-AST stage; request construction and the final
+  rendering/result adapter remain open.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to

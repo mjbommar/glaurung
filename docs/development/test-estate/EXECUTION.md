@@ -58,6 +58,7 @@ Both have since landed, so they are links again.
 | [~] Pipeline-owned request model for module/session `decompile_at` | review WP2 | `d6a65779` |
 | [~] Exact-range CFG/callee convergence across all four entry points | review WP2 | `5a2d6c86` |
 | [x] One ordered callee-preparation boundary used by all four entry points | review WP2 | `e19bd73b` |
+| [~] One LLIR-to-AST stage used by all four entry points | review WP2 | `41bd90a6` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |

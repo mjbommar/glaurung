@@ -2,7 +2,7 @@
 
 Date: 2026-09-06
 
-Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`
+Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`
 
 ## Boundary moved
 
@@ -60,8 +60,31 @@ owns this exact order:
 Address, exact range, all, and many call this boundary instead of importing and
 sequencing its component passes themselves. This completes the plan's shared
 callee-preparation item. It does not complete the common per-function
-orchestrator: declaration selection, LLIR preparation, lowering, AST passes,
-and rendering are still repeated in `ir.rs`.
+orchestrator: discovery/context assembly, declaration selection, and rendering
+are still repeated in `ir.rs` at this point in the history.
+
+## One LLIR-to-AST stage
+
+`41bd90a6` adds pipeline-owned `PreparedAst` and
+`lower_and_run_ast_passes`. Every public adapter now hands its `PreparedLlir`
+to that one function, which owns:
+
+- direct-callee pass-through parameter refinement;
+- region lowering and function profiling;
+- landing-pad annotation and lower-stage health tracing; and
+- the complete shared AST pass invocation and its returned stack/role facts.
+
+This removes four independently sequenced copies from `ir.rs`. It also closes
+a real range-path drift: range did not previously refine pass-through parameter
+hints, while address, all, and many did. The pinned four-entry-point fixture
+remains byte-identical after making the refinement universal.
+
+The boundary deliberately returns the numbered LLIR, prototype, width map,
+stack facts, and profiler beside the AST so a renderer cannot accidentally use
+facts from another function. Context/discovery assembly, declaration-local
+merging, and rendering still live in the adapters; therefore the planned
+pipeline-owned `decompile_function(session, request)` and `DecompileResult`
+are not yet complete.
 
 ## Validation
 
@@ -81,3 +104,9 @@ and rendering are still repeated in `ir.rs`.
   passed, zero failed, five ignored; every integration and documentation target
   passed. The long identity-retrieval target reports 44 passed and ten ignored
   in 522.46 seconds.
+- Fresh release extension plus the same 23-test focused set at `41bd90a6`:
+  passed, including byte-identical output across address, range, all, and many.
+- Full `cargo test --features python-ext` at `41bd90a6`: 4,201 library tests
+  passed, zero failed, five ignored; every integration and documentation target
+  passed. The identity-retrieval target reports 44 passed and ten ignored in
+  524.96 seconds.
