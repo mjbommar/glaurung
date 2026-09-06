@@ -21,12 +21,19 @@ use crate::csource::parse::Tree;
 use crate::syntax::cfg::Cfg;
 use crate::syntax::ids::{NodeId, Span};
 
-use super::model::{Binding, DefKind, Definition, Use};
+use super::model::{Binding, CType, CallRecord, DefKind, Definition, Use};
+use super::types::declared_types;
 
 /// The definitions and uses of one function, before the fixpoint.
 pub(super) struct Events {
     pub(super) definitions: Vec<Definition>,
     pub(super) uses: Vec<Use>,
+    /// One entry per binding, in binding order.
+    pub(super) types: Vec<CType>,
+    /// One entry per binding, in binding order.
+    pub(super) names: Vec<String>,
+    /// Every call, in source order.
+    pub(super) calls: Vec<CallRecord>,
 }
 
 /// One lexical scope's bindings, as (name, binding) pairs.
@@ -42,6 +49,8 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
     let arena = tree.arena();
     let mut definitions: Vec<Definition> = Vec::new();
     let mut uses: Vec<Use> = Vec::new();
+    let mut types: Vec<CType> = Vec::new();
+    let mut binding_names: Vec<String> = Vec::new();
 
     // Find the function definition node whose span matches this graph's.
     let Some(definition_node) = tree
@@ -49,7 +58,13 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
         .into_iter()
         .find(|f| f.span == function.span)
     else {
-        return Events { definitions, uses };
+        return Events {
+            definitions,
+            uses,
+            types,
+            names: binding_names,
+            calls: Vec::new(),
+        };
     };
     let root = definition_node.node;
     // The declarator names the function itself. That is not a variable, and
@@ -76,6 +91,16 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
     // analysis first reported --- and, worse, a read of one looked satisfied
     // rather than being the read-of-uninitialized it is.
     let initialized = initialized_declarator_spans(tree, text, token_spans, root);
+    // The declared type of every name, keyed by the name's span. Read once:
+    // the walk below binds names in source order and looks each one up.
+    let declared = declared_types(tree, text, token_spans, root);
+    let type_at = |span: Span| -> CType {
+        declared
+            .iter()
+            .find(|(candidate, _)| *candidate == span)
+            .map(|(_, ty)| ty.clone())
+            .unwrap_or_default()
+    };
 
     let mut scopes: Vec<Scope> = vec![Vec::new()];
     let mut next_binding = 0u32;
@@ -92,6 +117,9 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
         if let Some(scope) = scopes.last_mut() {
             scope.push((name.clone(), binding));
         }
+        let ty = type_at(span);
+        types.push(ty.clone());
+        binding_names.push(name.clone());
         definitions.push(Definition {
             binding,
             name,
@@ -101,6 +129,7 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
             // read in the body including the first.
             effect_at: 0,
             kind: DefKind::Parameter,
+            declared: (!ty.is_empty()).then_some(ty),
         });
     }
 
@@ -147,6 +176,12 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
                     if let Some(scope) = scopes.last_mut() {
                         scope.push((name.clone(), binding));
                     }
+                    // The type is bound even when the declaration writes
+                    // nothing: `int x;` has a type and no definition.
+                    let ty = type_at(span);
+                    debug_assert_eq!(types.len(), binding.0 as usize);
+                    types.push(ty.clone());
+                    binding_names.push(name.clone());
                     if initialized.contains(&span) {
                         definitions.push(Definition {
                             binding,
@@ -159,6 +194,7 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
                             // visible.
                             effect_at: span.hi,
                             kind: DefKind::Declaration,
+                            declared: (!ty.is_empty()).then_some(ty.clone()),
                         });
                     }
                 }
@@ -209,6 +245,10 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
     // enclosing expression is available.
     promote_writes(tree, text, token_spans, root, &mut definitions, &mut uses);
 
+    // Calls, collected after the scope walk so each argument can be resolved
+    // to the binding it names.
+    let calls = collect_calls(tree, text, token_spans, root, &uses);
+
     // A declaration's initializer runs before the name is visible, so raise
     // each declaration's effect point to the end of the `Decl` that holds it.
     for node in arena.preorder(root) {
@@ -236,7 +276,93 @@ pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], func
         use_.node = node_for_span(&function.cfg, use_.span);
     }
 
-    Events { definitions, uses }
+    Events {
+        definitions,
+        uses,
+        types,
+        names: binding_names,
+        calls,
+    }
+}
+
+/// Every call in the function, with each argument resolved to its binding.
+///
+/// Runs after the scope walk because an argument's binding is only known once
+/// the walk has resolved the name at that offset. Matching by span is exact:
+/// the walk recorded a use at the same offset the argument occupies.
+fn collect_calls(
+    tree: &Tree,
+    text: &str,
+    token_spans: &[Span],
+    root: NodeId,
+    uses: &[Use],
+) -> Vec<CallRecord> {
+    let arena = tree.arena();
+    let binding_at = |span: Span| -> Binding {
+        uses.iter()
+            .find(|use_| use_.span == span)
+            .map(|use_| use_.binding)
+            .unwrap_or(Binding::FREE)
+    };
+
+    let mut out: Vec<CallRecord> = Vec::new();
+    for node in arena.preorder(root) {
+        if arena.tag(node) != Some(NodeTag::PostfixExpr.as_u16()) {
+            continue;
+        }
+        let children: Vec<NodeId> = arena.children_iter(node).collect();
+        let Some(args) = children
+            .iter()
+            .find(|child| arena.tag(**child) == Some(NodeTag::CallArgs.as_u16()))
+        else {
+            continue;
+        };
+
+        // The callee is the first child when it is a bare name. Anything else
+        // --- a parenthesised expression, a member access --- is an indirect
+        // call as far as a summary is concerned.
+        let callee = children
+            .first()
+            .filter(|first| arena.tag(**first) == Some(NodeTag::NameRef.as_u16()))
+            .and_then(|first| name_of(tree, text, token_spans, *first))
+            .map(|(name, _)| name);
+
+        // One argument per child of the `CallArgs` node. A child that is a
+        // bare name resolves to its binding; anything else is FREE.
+        let arguments: Vec<Binding> = arena
+            .children_iter(*args)
+            .map(|child| {
+                if arena.tag(child) == Some(NodeTag::NameRef.as_u16()) {
+                    name_of(tree, text, token_spans, child)
+                        .map(|(_, span)| binding_at(span))
+                        .unwrap_or(Binding::FREE)
+                } else {
+                    Binding::FREE
+                }
+            })
+            .collect();
+
+        let span = arena.span(node, token_spans).unwrap_or_default();
+        out.push(CallRecord {
+            callee,
+            arguments,
+            results: Vec::new(),
+            result_is_returned: returned_directly(tree, token_spans, root, span),
+            span,
+        });
+    }
+    out
+}
+
+/// Whether the expression at `span` is the operand of a `return`.
+fn returned_directly(tree: &Tree, token_spans: &[Span], root: NodeId, span: Span) -> bool {
+    let arena = tree.arena();
+    arena.preorder(root).any(|node| {
+        arena.tag(node) == Some(NodeTag::ReturnStmt.as_u16())
+            && arena
+                .span(node, token_spans)
+                .is_some_and(|outer| outer.lo <= span.lo && span.hi <= outer.hi)
+    })
 }
 
 /// Turn the left operand of an assignment, and the operand of `++`/`--`, into
@@ -342,6 +468,8 @@ fn promote_writes(
             span,
             effect_at,
             kind,
+            // An assignment declares nothing; only the declaration site does.
+            declared: None,
         });
         if kind == DefKind::Assignment {
             uses.remove(index);
@@ -362,7 +490,7 @@ fn resolve(scopes: &[Scope], name: &str) -> Binding {
 }
 
 /// The identifier `node` carries, with its span.
-fn name_of(tree: &Tree, text: &str, token_spans: &[Span], node: NodeId) -> Option<(String, Span)> {
+pub(super) fn name_of(tree: &Tree, text: &str, token_spans: &[Span], node: NodeId) -> Option<(String, Span)> {
     let arena = tree.arena();
     let (first, end) = arena.token_extent(node)?;
     for index in first..end {
@@ -817,4 +945,5 @@ fn node_for_span(cfg: &Cfg, span: Span) -> u32 {
     }
     cfg.entry().index() as u32
 }
+
 

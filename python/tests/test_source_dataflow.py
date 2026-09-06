@@ -215,3 +215,200 @@ def test_spans_are_byte_offsets_not_character_offsets():
     assert raw[definition["start"] : definition["end"]].decode() == "x"
     # And the naive character slice is wrong, which is why the warning exists.
     assert text[definition["start"] : definition["end"]] != "x"
+
+
+# --- declared types (phase 1 of the source-semantics plan) -------------------
+
+TYPED = (
+    "int f(const char *name, int n) { unsigned long total = 0; "
+    "struct point *p; int m[4][4]; return (int)total; }"
+)
+
+
+@pytest.mark.core
+def test_every_binding_carries_the_type_the_source_spells():
+    flow = glaurung.source.data_flow(TYPED)[0]
+    by_name = {b["name"]: b for b in flow["bindings"]}
+    assert by_name["name"]["type"] == "const char *"
+    assert by_name["name"]["pointer_depth"] == 1
+    assert by_name["name"]["is_const"] is True
+    assert by_name["n"]["type"] == "int"
+    assert by_name["total"]["type"] == "unsigned long"
+    assert by_name["p"]["type"] == "struct point *"
+    assert by_name["m"]["array_rank"] == 2
+
+
+@pytest.mark.core
+def test_a_typedef_from_a_header_stays_an_opaque_name():
+    """No `#include` resolution, so the spelling is recorded and not resolved.
+
+    Storing `uint32_t` and being unable to say it is four bytes is honest;
+    claiming to know would not be.
+    """
+    flow = glaurung.source.data_flow("int f(void) { uint32_t n = 0; return (int)n; }")[
+        0
+    ]
+    binding = next(b for b in flow["bindings"] if b["name"] == "n")
+    assert binding["specifiers"] == "uint32_t"
+
+
+@pytest.mark.core
+def test_definitions_and_uses_join_to_bindings():
+    flow = glaurung.source.data_flow(TYPED)[0]
+    count = len(flow["bindings"])
+    for definition in flow["definitions"]:
+        assert 0 <= definition["binding"] < count or definition["binding"] == 2**32 - 1
+    for use in flow["uses"]:
+        assert 0 <= use["binding"] < count or use["binding"] == 2**32 - 1
+
+
+@pytest.mark.core
+def test_a_declaration_site_records_the_type_it_declared():
+    flow = glaurung.source.data_flow(TYPED)[0]
+    declared = {
+        d["name"]: d["declared_type"] for d in flow["definitions"] if d["declared_type"]
+    }
+    assert declared["total"] == "unsigned long"
+    assert declared["name"] == "const char *"
+    # An assignment declares nothing.
+    flow2 = glaurung.source.data_flow("int f(void) { int x = 1; x = 2; return x; }")[0]
+    assignment = next(d for d in flow2["definitions"] if d["kind"] == "assignment")
+    assert assignment["declared_type"] is None
+
+
+@pytest.mark.core
+def test_an_unused_declaration_is_reported_and_is_not_a_dead_store():
+    """`int *b;` is not a store, so it cannot be a dead one -- but it is unused.
+
+    The two counts answer different questions and a caller wants both.
+    """
+    flow = glaurung.source.data_flow(
+        "int f(int p) { int used = 1; int *never; return used; }"
+    )[0]
+    unused = [flow["bindings"][i]["name"] for i in flow["unused_bindings"]]
+    assert unused == ["never"], unused
+    assert flow["dead_stores"] == []
+
+
+@pytest.mark.core
+def test_well_typed_source_has_no_type_conflicts():
+    flow = glaurung.source.data_flow(TYPED)[0]
+    assert flow["type_conflicts"] == []
+
+
+@pytest.mark.slow
+def test_the_corpus_types_every_binding_and_declares_nothing_it_does_not_use():
+    """Both baselines the decompiler comparison is measured against.
+
+    Hand-written C types everything it binds and declares nothing it does not
+    use. A drop in either means the reader is losing declarations, not that
+    the corpus changed.
+    """
+    root = Path(__file__).resolve().parents[2] / "tests" / "decompiler_fixtures" / "src"
+    bindings = typed = conflicts = unused = 0
+    for path in sorted(root.glob("*.c")):
+        for flow in glaurung.source.data_flow(path.read_text(errors="replace")):
+            bindings += len(flow["bindings"])
+            typed += sum(1 for b in flow["bindings"] if b["type"])
+            conflicts += len(flow["type_conflicts"])
+            unused += len(flow["unused_bindings"])
+    assert bindings > 1000, bindings
+    assert typed == bindings, f"{bindings - typed} bindings carry no type"
+    assert conflicts == 0, f"{conflicts} type conflicts in hand-written C"
+    assert unused == 0, f"{unused} unused bindings in hand-written C"
+
+
+# --- interprocedural summaries (phase 2 of the source-semantics plan) --------
+
+CALLS = """int strip(int x) { return 0; }
+int carry(int y) { return y; }
+int outer(int n) { return carry(n); }
+"""
+
+
+@pytest.mark.core
+def test_every_function_gets_a_summary():
+    summaries = {s["name"]: s for s in glaurung.source.call_summaries(CALLS)}
+    assert set(summaries) == {"strip", "carry", "outer"}
+    assert summaries["carry"]["parameters"] == 1
+
+
+@pytest.mark.core
+def test_a_parameter_that_is_returned_flows_and_one_that_is_dropped_does_not():
+    """The test that separates an analysis from a rubber stamp."""
+    summaries = {s["name"]: s for s in glaurung.source.call_summaries(CALLS)}
+    assert summaries["carry"]["flows"] == [
+        {"parameter": 0, "sink": "return", "sink_parameter": None}
+    ]
+    assert summaries["strip"]["flows"] == []
+
+
+@pytest.mark.core
+def test_a_flow_crosses_a_call():
+    """`outer` propagates only because `carry` returns what it is given.
+
+    This is the whole point of the module: with no call-site rule the answer
+    would be the same for a callee that drops its argument, which is right by
+    accident and wrong in general.
+    """
+    summaries = {s["name"]: s for s in glaurung.source.call_summaries(CALLS)}
+    assert summaries["outer"]["flows"], "outer should propagate through carry"
+
+    dropped = """int strip(int x) { return 0; }
+int outer(int n) { return strip(n); }
+"""
+    summaries = {s["name"]: s for s in glaurung.source.call_summaries(dropped)}
+    assert summaries["outer"]["flows"] == [], "strip drops its argument"
+
+
+@pytest.mark.core
+def test_reaches_answers_yes_no_and_unknown():
+    assert glaurung.source.reaches(CALLS, "carry", 0, "carry") == "yes"
+    # A function this unit does not define cannot be summarized.
+    assert glaurung.source.reaches(CALLS, "nosuch", 0, "outer") == "unknown"
+    # A parameter position the function does not have.
+    assert glaurung.source.reaches(CALLS, "carry", 9, "outer") == "no"
+
+
+@pytest.mark.core
+def test_an_indirect_call_makes_a_summary_incomplete():
+    """An indirect call names no callee, so no summary can be applied.
+
+    Reporting `no` here would be a claim rather than an analysis, so the
+    summary is marked incomplete and a caller inherits `unknown`.
+    """
+    code = "int f(int (*p)(int), int n) { return p(n); }"
+    summaries = {s["name"]: s for s in glaurung.source.call_summaries(code)}
+    assert summaries["f"]["complete"] is False
+
+
+@pytest.mark.core
+def test_recursion_and_mutual_recursion_terminate():
+    for code in [
+        "int f(int n) { if (n > 0) { return f(n - 1); } return n; }",
+        "int a(int n) { return b(n); }\nint b(int n) { if (n > 0) { return a(n - 1); } return n; }",
+    ]:
+        assert glaurung.source.call_summaries(code)
+
+
+@pytest.mark.core
+def test_summarizing_is_total_on_input_that_is_not_c():
+    for junk in ["", "\x00\x01", "int f(", "}}}"]:
+        assert isinstance(glaurung.source.call_summaries(junk), list)
+
+
+@pytest.mark.slow
+def test_the_corpus_summarizes_every_function():
+    root = Path(__file__).resolve().parents[2] / "tests" / "decompiler_fixtures" / "src"
+    functions = flows = incomplete = 0
+    for path in sorted(root.glob("*.c")):
+        code = path.read_text(errors="replace")
+        summaries = glaurung.source.call_summaries(code)
+        functions += len(summaries)
+        for summary in summaries:
+            flows += len(summary["flows"])
+            incomplete += 0 if summary["complete"] else 1
+            for flow in summary["flows"]:
+                assert flow["parameter"] < summary["parameters"], summary
+    assert functions > 500, functions
+    assert flows > 100, f"only {flows} parameter flows over {functions} functions"

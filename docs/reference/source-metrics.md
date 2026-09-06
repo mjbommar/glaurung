@@ -460,6 +460,158 @@ Each round of over-reporting during development tripped exactly that assertion:
 897 when a bare `int x;` counted as a store, 460 when a write to a global
 counted, 27 when `++a[i]` counted as a write to `a`.
 
+## Declared types
+
+Every binding carries the type **as the source spells it**.
+
+```python
+for flow in glaurung.source.data_flow(code):
+    for binding in flow["bindings"]:
+        print(binding["name"], binding["type"], binding["pointer_depth"])
+```
+
+| field | meaning |
+|---|---|
+| `type` | the rendered type: `const char *`, `struct point *`, `int` |
+| `specifiers` | the declaration specifiers, whitespace-collapsed |
+| `pointer_depth` | `char **argv` is 2 |
+| `array_rank` | `int m[4][4]` is 2 |
+| `is_const`, `is_volatile` | qualifier flags. A dead store to a `volatile` is not dead |
+
+Each definition and use carries a `binding` index, so the three lists join. A
+definition also carries `declared_type` — the type written at *that* site,
+`None` for an assignment, which declares nothing.
+
+**Types are not resolved.** This reads one translation unit and does not
+process `#include`, so a typedef from a header is an opaque name: `uint32_t` is
+recorded as `uint32_t`, and nothing claims to know it is four bytes. Two
+spellings we cannot resolve compare as different, which is the honest answer
+rather than a guess.
+
+This deliberately does not use
+[`metrics::type_name::normalize_type`](../../src/metrics/type_name.rs). That
+function reproduces four defects in DecBench's reference implementation on
+purpose — it emits the non-C spelling `long long long`, and turns `_Bool` into
+`_bool` — because parity with the benchmark is its contract. A consumer who
+wants the type the programmer wrote needs a different reader, so this is one.
+
+### Two counts that come with it
+
+**`type_conflicts`** lists bindings whose declaration sites disagree about
+type. That cannot happen in code a C compiler accepted, and it is the shape of
+a decompiler's type-recovery failure.
+
+**`unused_bindings`** lists variables declared and never read. Distinct from a
+dead store: `int *b;` is not a store at all, so it appears in neither the
+definition list nor `dead_stores`, and without the binding table there is no
+way to ask about it.
+
+### Measured
+
+Over `tests/decompiler_fixtures/src` (900 functions), and our own decompiler's
+output for ten of them, at engine commit `5527d218`:
+
+| | bindings | typed | conflicts | unused |
+|---|---:|---:|---:|---:|
+| hand-written source | 3,602 | **100%** | 0 | **0** |
+| ten fixtures, source | 274 | 100% | 0 | **0** |
+| the same ten, decompiled | 660 | 100% | 0 | **22** |
+
+The source baselines are what make the decompiled number readable: hand-written
+C types everything it binds and declares nothing it does not use, so 22 unused
+declarations in recovered output is a real finding rather than a parser
+artifact. It is the third defect class of this kind, beside dead stores and
+control depth, and like both of those the execution differential passes every
+one of them.
+
+The most common specifiers in that decompiled output are `int` (229), `long`
+(221) and `extern unsigned char` (80) — the last being how the recovered code
+spells a reference to a data symbol it did not define.
+
+## Across calls
+
+The intraprocedural analysis stops at the call: a call reads its arguments and
+defines nothing. Summaries cross it.
+
+```python
+for summary in glaurung.source.call_summaries(code):
+    print(summary["name"], summary["parameters"], summary["complete"], summary["flows"])
+
+glaurung.source.reaches(code, "parse_header", 0, "checksum")   # "yes" | "no" | "unknown"
+```
+
+For each function, which parameter reaches the return and which reaches which
+other parameter, computed once and applied by callers rather than re-analysed.
+**Summaries, not inlining** — inlining does not terminate on recursion, and a
+summary is a set of `(parameter, sink)` pairs over a finite lattice, so
+iterating to a fixed point converges. `f` calling `g` calling `f` costs one
+extra round.
+
+### Three answers, not two
+
+`reaches` returns `"yes"`, `"no"` or **`"unknown"`**, and the third is not a
+failure. It means the search met one of:
+
+* **an indirect call** — `p(x)` names no callee, so no summary can be applied;
+* **a callee this unit does not define** — `memcpy(dst, src, n)` is an edge to
+  a name whose body is elsewhere, and what it does with its arguments is not
+  knowable from one translation unit;
+* **a bound** — the fixed point is capped so a pathological call graph costs an
+  `unknown` and not a hang.
+
+Reporting any of those as `"no"` would be a claim rather than an analysis. A
+caller that treats `"unknown"` as `"no"` gets an unsound answer, which is why
+it is a separate value rather than a flag.
+
+`complete` on a summary carries the same information per function: `False` when
+the body held something unresolvable, so a caller applying it inherits
+`"unknown"`.
+
+### The test that matters
+
+```c
+int strip(int x) { return 0; }
+int carry(int y) { return y; }
+int outer(int n) { return carry(n); }
+```
+
+`carry` propagates parameter 0 to its return; `strip` does not; and `outer`
+propagates **only because `carry` does**. An analysis with no call-site rule
+answers the same for both callees, which is right by accident and wrong in
+general — the second case is what pins it.
+
+### Measured
+
+Over `tests/decompiler_fixtures/src`, 900 functions:
+
+| | |
+|---|---|
+| functions summarized | 900 |
+| parameter flows found | 1,731 |
+| summaries marked incomplete | 254 |
+
+The 254 are honest: those bodies contain an indirect call or a call to
+something defined elsewhere, and the summary says so rather than guessing.
+
+The incompleteness rate is itself a measurement, and it separates source from
+recovered code. Ten fixtures and our own decompiler's output for the same ten:
+
+| | functions | flows | incomplete |
+|---|---:|---:|---:|
+| source | 84 | 182 | 4 (**5%**) |
+| decompiled | 169 | 194 | 50 (**30%**) |
+
+Six times the rate. Recovered code turns direct calls into indirect ones and
+splits functions the source did not have, so an interprocedural analysis can
+see through less of it — which is worth knowing before trusting a `"no"` from
+one, and is exactly what the third answer exists to say.
+
+### What it does not do
+
+No libc effect table. `memcpy` is an edge to a name, and a curated table of
+what the standard library does with its arguments is the obvious next increment
+— deliberately its own decision rather than smuggled in here.
+
 ## Control dependence and slicing
 
 `--repr cdg` answers which branch decides each statement;

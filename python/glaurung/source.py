@@ -52,8 +52,10 @@ __all__ = [
     "compare",
     "control_flow_graphs",
     "backward_slice",
+    "call_summaries",
     "control_dependence",
     "data_flow",
+    "reaches",
     "export_graphs",
     "export_path",
     "feature_names",
@@ -568,6 +570,22 @@ def data_flow(code: str) -> list[dict[str, Any]]:
         An **unresolved use** is a read no write reaches: a global, a macro
         constant, a name from a header this parser never saw, or a genuine
         read of uninitialized storage.
+
+        ``bindings`` is one entry per variable, with the type **as the source
+        spells it** -- ``type``, ``specifiers``, ``pointer_depth``,
+        ``array_rank``, ``is_const``, ``is_volatile``. Types are not resolved:
+        this reads one translation unit and does not process ``#include``, so a
+        typedef from a header is an opaque name. ``uint32_t`` is recorded as
+        ``uint32_t`` and nothing claims to know it is four bytes.
+
+        ``type_conflicts`` lists bindings whose declaration sites disagree
+        about type, which cannot happen in code a C compiler accepted and is
+        the shape of a decompiler's type-recovery failure.
+        ``unused_bindings`` lists variables declared and never read -- distinct
+        from a dead store, because ``int *b;`` is not a store at all.
+
+        Each definition and use carries ``binding``, an index into
+        ``bindings``, so the three can be joined.
     """
     return [dict(entry) for entry in _native.source.data_flow(code)]
 
@@ -636,6 +654,53 @@ def backward_slice(code: str, function: str, node: int) -> list[int]:
         KeyError: If no function of that name was recovered.
     """
     return list(_native.source.backward_slice(code, function, node))
+
+
+def call_summaries(code: str) -> list[dict[str, Any]]:
+    """What each function does with the values passed to it, across calls.
+
+    Interprocedural summaries at a fixed point over the call graph: which
+    parameter reaches the return, and which reaches which other parameter. A
+    caller applies the summary rather than re-analysing the callee, which is
+    what makes recursion terminate -- summaries only grow, over a finite
+    lattice.
+
+    Args:
+        code: The source text.
+
+    Returns:
+        One dict per function with ``name``, ``parameters``, ``complete`` and
+        ``flows``. Each flow is ``{"parameter": n, "sink": "return" |
+        "parameter", "sink_parameter": m | None}``.
+
+        ``complete`` is ``False`` when the body held something this analysis
+        could not resolve: an indirect call, which names no callee, or a call
+        to a function this translation unit does not define. A caller applying
+        an incomplete summary inherits ``unknown`` rather than a clean no.
+    """
+    return [dict(entry) for entry in _native.source.call_summaries(code)]
+
+
+def reaches(code: str, source: str, parameter: int, sink: str) -> str:
+    """Whether a value in one function's parameter can reach another function.
+
+    The query a code property graph is used for, answered across calls.
+
+    Args:
+        code: The source text.
+        source: The function the value starts in.
+        parameter: Which of its parameters, by position.
+        sink: The function to reach.
+
+    Returns:
+        ``"yes"``, ``"no"`` or ``"unknown"``.
+
+        ``"unknown"`` is not a failure and must not be read as ``"no"``. It
+        means the search met an indirect call, a callee defined in another
+        translation unit, or a bound -- and reporting any of those as ``"no"``
+        would be a claim rather than an analysis.
+    """
+    return _native.source.reaches(code, source, parameter, sink)
 
 
 def export_graphs(

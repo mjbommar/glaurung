@@ -286,3 +286,212 @@ eprintln!(
      {dead} dead stores, {unresolved} unresolved uses"
 );
 }
+
+// --- declared types ---------------------------------------------------------
+
+/// The declared type of the binding named `name`.
+fn type_of(flow: &DataFlow, name: &str) -> Option<CType> {
+    flow.type_of(flow.binding_named(name)?).cloned()
+}
+
+#[test]
+fn a_local_carries_the_type_it_was_declared_with() {
+    let flow = one("int f(void) { unsigned long total = 0; return (int)total; }");
+    let ty = type_of(&flow, "total").expect("a type for total");
+    assert_eq!(ty.specifiers, "unsigned long");
+    assert_eq!(ty.pointer_depth, 0);
+    assert_eq!(ty.render(), "unsigned long");
+}
+
+#[test]
+fn a_parameter_carries_its_type_including_pointer_depth() {
+    let flow = one("int f(const char *name, int n) { return n; }");
+    let name = type_of(&flow, "name").expect("a type for name");
+    assert_eq!(name.specifiers, "const char");
+    assert_eq!(name.pointer_depth, 1);
+    assert!(name.is_const);
+    let n = type_of(&flow, "n").expect("a type for n");
+    assert_eq!(n.specifiers, "int");
+    assert_eq!(n.pointer_depth, 0);
+}
+
+#[test]
+fn one_declaration_of_several_names_gives_each_its_own_shape() {
+    // The specifiers apply to all three; the stars and brackets do not.
+    let flow = one("int f(void) { int a = 1, *b, c[4]; return a; }");
+    let a = type_of(&flow, "a").expect("a");
+    let b = type_of(&flow, "b").expect("b");
+    let c = type_of(&flow, "c").expect("c");
+    assert_eq!((a.specifiers.as_str(), a.pointer_depth, a.array_rank), ("int", 0, 0));
+    assert_eq!((b.specifiers.as_str(), b.pointer_depth, b.array_rank), ("int", 1, 0));
+    assert_eq!((c.specifiers.as_str(), c.pointer_depth, c.array_rank), ("int", 0, 1));
+}
+
+#[test]
+fn a_struct_tag_is_recorded_as_written() {
+    let flow = one("int f(void) { struct point *p; return (int)(long)p; }");
+    let ty = type_of(&flow, "p").expect("a type for p");
+    assert_eq!(ty.specifiers, "struct point");
+    assert_eq!(ty.pointer_depth, 1);
+    assert_eq!(ty.render(), "struct point *");
+}
+
+#[test]
+fn a_typedef_from_a_header_stays_an_opaque_name() {
+    // No `#include` resolution, so `uint32_t` is a name and nothing claims to
+    // know its width. Recording the spelling is the honest answer.
+    let flow = one("int f(void) { uint32_t n = 0; return (int)n; }");
+    let ty = type_of(&flow, "n").expect("a type for n");
+    assert_eq!(ty.specifiers, "uint32_t");
+}
+
+#[test]
+fn qualifiers_are_flagged_and_ignored_when_comparing_shape() {
+    let flow = one("int f(void) { const volatile int a = 1; int b = 2; return a + b; }");
+    let a = type_of(&flow, "a").expect("a");
+    let b = type_of(&flow, "b").expect("b");
+    assert!(a.is_const && a.is_volatile);
+    assert!(!b.is_const && !b.is_volatile);
+    assert!(a.same_shape(&b), "const int and int are the same shape");
+}
+
+#[test]
+fn two_spellings_we_cannot_resolve_are_reported_as_different() {
+    // Without `#include`, `uint32_t` and `unsigned int` are two opaque names.
+    // Saying they differ is honest; guessing they match would not be.
+    let flow = one("int f(void) { uint32_t a = 0; unsigned int b = 0; return (int)(a + b); }");
+    let a = type_of(&flow, "a").expect("a");
+    let b = type_of(&flow, "b").expect("b");
+    assert!(!a.same_shape(&b));
+}
+
+#[test]
+fn a_multidimensional_array_counts_every_rank() {
+    let flow = one("int f(void) { int m[4][4]; return m[0][0]; }");
+    let ty = type_of(&flow, "m").expect("m");
+    assert_eq!(ty.array_rank, 2, "{ty:?}");
+}
+
+#[test]
+fn a_declaration_without_an_initializer_still_has_a_type() {
+    // `int x;` writes nothing -- it is not a definition -- but it is a binding
+    // and it has a type. The two facts are independent.
+    let flow = one("int f(int n) { unsigned long slot; slot = (unsigned long)n; return (int)slot; }");
+    let binding = flow
+        .definitions
+        .iter()
+        .find(|d| d.name == "slot")
+        .map(|d| d.binding)
+        .expect("a binding for slot");
+    let ty = flow.type_of(binding).expect("a type for slot");
+    assert_eq!(ty.specifiers, "unsigned long");
+}
+
+#[test]
+fn well_typed_source_has_no_type_conflicts() {
+    let flow = one("int f(int n) { int a = n; int b = a; return b; }");
+    assert!(flow.type_conflicts().is_empty(), "{:?}", flow.type_conflicts());
+}
+
+#[test]
+fn a_free_binding_has_no_type() {
+    // A global's type is not knowable from one translation unit.
+    let flow = one("int f(void) { return g; }");
+    assert!(flow.type_of(Binding::FREE).is_none());
+}
+
+#[test]
+fn type_recovery_is_deterministic() {
+    let text = "int f(const char *s, int n) { unsigned long t = 0; return (int)t; }";
+    assert_eq!(one(text).types, one(text).types);
+}
+
+
+#[test]
+fn a_declared_name_is_reachable_even_when_nothing_mentions_it_again() {
+    // `int *b;` writes nothing and reads nothing, so it is in neither the
+    // definition list nor the use list. Without the binding-name table there
+    // is no way to ask about it at all, and an unused local is unreportable.
+    let flow = one("int f(void) { int a = 1, *b, c[4]; return a; }");
+    let binding = flow.binding_named("b").expect("a binding for b");
+    let ty = flow.type_of(binding).expect("a type for b");
+    assert_eq!((ty.specifiers.as_str(), ty.pointer_depth), ("int", 1));
+}
+
+#[test]
+fn an_unused_local_is_reported_and_a_parameter_is_not() {
+    let flow = one("int f(int unused_param) { int unused_local; return 0; }");
+    let unused: Vec<&str> = flow
+        .unused_bindings()
+        .iter()
+        .filter_map(|b| flow.names.get(b.0 as usize).map(|s| s.as_str()))
+        .collect();
+    assert_eq!(unused, vec!["unused_local"], "{unused:?}");
+}
+
+#[test]
+fn the_corpus_recovers_a_type_for_almost_every_binding() {
+    // The gate the plan states: every binding resolves to a specifier or is
+    // explicitly empty, and the empty count is reported rather than assumed.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/decompiler_fixtures/src");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
+    let mut bindings = 0usize;
+    let mut typed = 0usize;
+    let mut conflicts = 0usize;
+    let mut unused = 0usize;
+    let mut untyped_examples: Vec<String> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("c") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for flow in analyze(&text).into_parts().0 {
+            // The three tables are one row per binding and must agree.
+            assert_eq!(flow.names.len(), flow.types.len(), "{}", flow.name);
+            bindings += flow.names.len();
+            for (index, ty) in flow.types.iter().enumerate() {
+                if ty.is_empty() {
+                    if untyped_examples.len() < 8 {
+                        untyped_examples.push(format!(
+                            "{}:{}",
+                            flow.name,
+                            flow.names.get(index).cloned().unwrap_or_default()
+                        ));
+                    }
+                } else {
+                    typed += 1;
+                }
+            }
+            conflicts += flow.type_conflicts().len();
+            unused += flow.unused_bindings().len();
+        }
+    }
+
+    assert!(bindings > 1000, "only {bindings} bindings");
+    let rate = typed as f64 / bindings as f64;
+    eprintln!(
+        "corpus types: {typed}/{bindings} = {:.1}%  conflicts={conflicts}  unused={unused}",
+        rate * 100.0
+    );
+    if !untyped_examples.is_empty() {
+        eprintln!("  untyped examples: {untyped_examples:?}");
+    }
+    // Hand-written C declares a type for everything it binds. A rate below
+    // this means the reader is losing declarations, not that the corpus is
+    // untyped.
+    assert!(rate > 0.95, "only {:.1}% of bindings carry a type", rate * 100.0);
+    // Well-typed source cannot contain a type conflict: a C compiler would
+    // have rejected it. Any is a bug in the reader.
+    assert_eq!(conflicts, 0, "type conflicts in hand-written C");
+    // And hand-written C declares nothing it does not use, which is what makes
+    // the same count meaningful on a decompiler's output.
+    assert_eq!(unused, 0, "unused bindings in hand-written C");
+}
+

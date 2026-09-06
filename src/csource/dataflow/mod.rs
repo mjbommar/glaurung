@@ -112,13 +112,16 @@
 
 
 pub mod events;
+pub mod interproc;
+pub mod types;
 pub mod model;
 pub mod solve;
 
 #[cfg(test)]
 mod tests;
 
-pub use model::{Binding, DataFlow, DefKind, Definition, FlowEdge, Use};
+pub use interproc::{summarize, Flow, Sink, Summaries, Summary};
+pub use model::{Binding, CType, CallRecord, DataFlow, DefKind, Definition, FlowEdge, Use};
 
 use crate::csource::cfg::{function_cfgs, FunctionCfg};
 use crate::csource::parse::{parse, Tree};
@@ -156,6 +159,9 @@ pub fn analyze_function(
         name: function.name.clone(),
         definitions: events.definitions,
         uses: events.uses,
+        types: events.types,
+        names: events.names,
+        calls: events.calls,
         edges: Vec::new(),
         unresolved_uses: Vec::new(),
         dead_stores: Vec::new(),

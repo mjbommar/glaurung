@@ -546,8 +546,13 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
         for definition in &flow.definitions {
             let item = PyDict::new(py);
             item.set_item("name", definition.name.clone())?;
+            item.set_item("binding", definition.binding.0)?;
             item.set_item("kind", definition.kind.name())?;
             item.set_item("cfg_node", definition.node)?;
+            item.set_item(
+                "declared_type",
+                definition.declared.as_ref().map(|ty| ty.render()),
+            )?;
             item.set_item("start", definition.span.lo)?;
             item.set_item("end", definition.span.hi)?;
             definitions.append(item)?;
@@ -558,6 +563,7 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
         for use_ in &flow.uses {
             let item = PyDict::new(py);
             item.set_item("name", use_.name.clone())?;
+            item.set_item("binding", use_.binding.0)?;
             item.set_item("cfg_node", use_.node)?;
             item.set_item("start", use_.span.lo)?;
             item.set_item("end", use_.span.hi)?;
@@ -576,6 +582,32 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
         entry.set_item("edges", edges)?;
         entry.set_item("unresolved_uses", flow.unresolved_uses.clone())?;
         entry.set_item("dead_stores", flow.dead_stores.clone())?;
+
+        let bindings = PyList::empty(py);
+        for (index, name) in flow.names.iter().enumerate() {
+            let item = PyDict::new(py);
+            item.set_item("name", name.clone())?;
+            let ty = flow.types.get(index);
+            item.set_item("type", ty.filter(|t| !t.is_empty()).map(|t| t.render()))?;
+            item.set_item(
+                "specifiers",
+                ty.map(|t| t.specifiers.clone()).unwrap_or_default(),
+            )?;
+            item.set_item("pointer_depth", ty.map(|t| t.pointer_depth).unwrap_or(0))?;
+            item.set_item("array_rank", ty.map(|t| t.array_rank).unwrap_or(0))?;
+            item.set_item("is_const", ty.map(|t| t.is_const).unwrap_or(false))?;
+            item.set_item("is_volatile", ty.map(|t| t.is_volatile).unwrap_or(false))?;
+            bindings.append(item)?;
+        }
+        entry.set_item("bindings", bindings)?;
+        entry.set_item(
+            "type_conflicts",
+            flow.type_conflicts().iter().map(|b| b.0).collect::<Vec<u32>>(),
+        )?;
+        entry.set_item(
+            "unused_bindings",
+            flow.unused_bindings().iter().map(|b| b.0).collect::<Vec<u32>>(),
+        )?;
         out.append(entry)?;
     }
     Ok(out)
@@ -701,6 +733,72 @@ pub fn backward_slice_py(
     })
 }
 
+/// What each function does with the values passed to it, across calls.
+///
+/// Interprocedural summaries at a fixed point over the call graph: which
+/// parameter reaches the return, and which reaches which other parameter. A
+/// summary is marked incomplete when the body held something this analysis
+/// could not resolve --- an indirect call, or a callee this translation unit
+/// does not define --- so a caller inherits `unknown` rather than a clean no.
+#[pyfunction]
+#[pyo3(name = "call_summaries")]
+pub fn call_summaries_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
+    use crate::csource::dataflow::{analyze, summarize, Sink};
+
+    let summaries = py.detach(|| summarize(&analyze(text).into_parts().0));
+    let out = PyList::empty(py);
+    for summary in summaries.iter() {
+        let entry = PyDict::new(py);
+        entry.set_item("name", summary.name.clone())?;
+        entry.set_item("parameters", summary.parameters)?;
+        entry.set_item("complete", summary.complete)?;
+        let flows = PyList::empty(py);
+        for (index, sink) in &summary.flows {
+            let item = PyDict::new(py);
+            item.set_item("parameter", *index)?;
+            match sink {
+                Sink::Return => {
+                    item.set_item("sink", "return")?;
+                    item.set_item("sink_parameter", py.None())?;
+                }
+                Sink::Parameter(other) => {
+                    item.set_item("sink", "parameter")?;
+                    item.set_item("sink_parameter", *other)?;
+                }
+            }
+            flows.append(item)?;
+        }
+        entry.set_item("flows", flows)?;
+        out.append(entry)?;
+    }
+    Ok(out)
+}
+
+/// Whether a value in one function's parameter can reach another function.
+///
+/// Returns `"yes"`, `"no"` or `"unknown"`. The third is not a failure: an
+/// indirect call names no callee and a function defined in another translation
+/// unit has no body here, and reporting either as `"no"` would be a claim
+/// rather than an analysis.
+#[pyfunction]
+#[pyo3(name = "reaches")]
+#[pyo3(signature = (text, source, parameter, sink))]
+pub fn reaches_py(
+    py: Python<'_>,
+    text: &str,
+    source: &str,
+    parameter: u32,
+    sink: &str,
+) -> PyResult<String> {
+    use crate::csource::dataflow::{analyze, interproc::reaches, summarize};
+
+    let verdict = py.detach(|| {
+        let summaries = summarize(&analyze(text).into_parts().0);
+        reaches(&summaries, source, parameter, sink)
+    });
+    Ok(verdict.name().to_string())
+}
+
 /// Register the `source` submodule on the extension root.
 pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "source")?;
@@ -715,6 +813,8 @@ pub fn register_source_metrics_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>
     sub.add_function(wrap_pyfunction!(data_flow_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(control_dependence_py, &sub)?)?;
     sub.add_function(wrap_pyfunction!(backward_slice_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(call_summaries_py, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(reaches_py, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }

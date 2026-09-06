@@ -65,6 +65,15 @@ phase 3, and phases 1 and 2 exist to make it reachable.
 
 ## Phase 1 — Declared types on bindings
 
+> **Landed** at `5527d218`+1 (2026-09-05). `CType` in
+> `src/csource/dataflow/model.rs`, read by `declared_types` in `events.rs`,
+> exposed as `bindings` on `glaurung.source.data_flow`. Measured: **3,602 of
+> 3,602 corpus bindings carry a type (100%), zero type conflicts, zero unused
+> bindings** — and 22 unused bindings in our decompiler's output for ten of the
+> same fixtures, which is the third readability defect class of this kind.
+> 15 Rust tests, 6 Python tests. The gate below is
+> `the_corpus_recovers_a_type_for_almost_every_binding`.
+
 **Deliverable.** Every `Binding` carries the type as written, and
 `glaurung.source` exposes it.
 
@@ -108,6 +117,20 @@ function pointer, and a parameter.
 **Cost.** Days. No new dependency.
 
 ## Phase 2 — Interprocedural dataflow
+
+> **Landed** at `5527d218`+1 (2026-09-05). `src/csource/dataflow/interproc.rs`,
+> exposed as `glaurung.source.call_summaries` and `reaches`. Measured over the
+> 900-function corpus: **900 summarized, 1,731 parameter flows, 254 marked
+> incomplete** — the last being bodies with an indirect call or a callee
+> defined elsewhere, which report `unknown` rather than guessing. 18 Rust
+> tests, 7 Python tests.
+>
+> One defect the tests caught and the design would not have: the first version
+> had no call-site rule and reported a flow whenever a parameter was read
+> before a return, so `int outer(int n) { return strip(n); }` propagated even
+> though `strip` returns a constant. Right by accident on the positive case,
+> wrong in general. `a_callee_that_drops_its_argument_does_not_propagate` is
+> the test that found it.
 
 **Deliverable.** Dependence that crosses a call edge, and a `reaches` query
 over it.
