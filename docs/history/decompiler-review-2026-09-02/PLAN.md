@@ -44,9 +44,11 @@ makes range, all, and many construct the same typed request and result internall
 before preserving their legacy Python return shapes. `e0588083` moves the
 image-wide string/data reconciliation, relocated read-only data, function-table,
 and GOT facts into one pipeline-owned `ProgramRenderContext` used by all four
-adapters and prepared once per batch. Discovery/debug context, per-function
-rendering, the remaining budget classes, the pass manager, and the fixpoint
-driver remain open, so WP2 is underway rather than complete. See
+adapters and prepared once per batch. `21f8b29a` similarly makes one
+`ProgramDebugContext` own DWARF/PDB declaration and type preparation for every
+adapter. Discovery/address-name context, per-function rendering, the remaining
+budget classes, the pass manager, and the fixpoint driver remain open, so WP2
+is underway rather than complete. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -567,8 +569,10 @@ and make pass repetition/invalidation explicit.
   pipeline-owned `lower_and_run_ast_passes` boundary. All four adapters consume
   its `PreparedAst`, including exact-range, which previously skipped
   pass-through parameter refinement. `e0588083` then centralizes the immutable
-  image-wide render facts in `ProgramRenderContext`. Discovery/debug context and
-  per-function rendering still need to move before this item is complete.
+  image-wide render facts in `ProgramRenderContext`; `21f8b29a` centralizes
+  debug declarations and layouts in `ProgramDebugContext`. Discovery/address-
+  name context and per-function rendering still need to move before this item
+  is complete.
 - [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
   Module-level and reusable-session `decompile_at` create the typed request;
@@ -578,8 +582,9 @@ and make pass repetition/invalidation explicit.
   while preserving the explicit-window fallback. `41bd90a6` then makes every
   adapter call the same LLIR-to-AST stage. `15d044eb` closes typed request/result
   construction for range/all/many too. `e0588083` removes four copies of the
-  image-wide render-context builder; moving the remaining discovery/debug
-  context and final rendering behind one `decompile_function` remains open.
+  image-wide render-context builder, and `21f8b29a` removes the four debug-
+  context builders. Moving the remaining discovery/address-name context and
+  final rendering behind one `decompile_function` remains open.
 - [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to

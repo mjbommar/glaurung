@@ -3,7 +3,7 @@
 Date: 2026-09-06
 
 Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
-`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`
+`73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`, `21f8b29a`
 
 ## Boundary moved
 
@@ -128,8 +128,17 @@ the adapters into thin shells over one `decompile_function`.
 Every adapter consumes the resulting `ProgramRenderContext`. All/many prepare
 it once outside their per-function loops, preserving the batch performance
 contract. This is deliberately narrower than the final `decompile_function`
-boundary: debug-contract loading, discovery and address-name construction,
-per-function declaration facts, and final rendering still remain to migrate.
+boundary: discovery and address-name construction, per-function declaration
+facts, and final rendering still remain to migrate.
+
+`21f8b29a` then removes the other four image-wide setup copies.
+`prepare_program_debug_context` now owns optional DWARF/PDB declaration loading,
+PDB-source identity, and the combined DWARF/PDB type records. Its disabled path
+returns explicit empty facts without parsing debug data. The borrowed
+`DwarfTypeEnv` remains a caller-local view over the context's owned records,
+avoiding a self-referential context while keeping the preparation policy in one
+place. Each adapter retains its exact prior enablement condition, including the
+declaration-only DecBench batch mode.
 
 The expanded profile test initially exposed 21 constant object parses against
 the ceiling of 20. An exact parent/current A/B proved the result model added
@@ -186,3 +195,9 @@ without changing the ceiling.
   passed, zero failed, and five ignored; every integration and documentation
   target passed. Identity retrieval reports 44 passed and ten ignored in
   524.91 seconds.
+- Fresh release extension plus the same 37 focused checks at `21f8b29a`:
+  passed.
+- Full `cargo test --features python-ext` at `21f8b29a`: 4,203 library tests
+  passed, zero failed, and five ignored; every integration and documentation
+  target passed. Identity retrieval reports 44 passed and ten ignored in
+  526.66 seconds.
