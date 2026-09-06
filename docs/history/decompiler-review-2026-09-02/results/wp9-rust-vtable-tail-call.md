@@ -1,6 +1,6 @@
 # WP9 Rust vtable tail-call evidence
 
-Date: 2026-09-03
+> **Kind:** record · **Date:** 2026-09-03
 
 ## Defect
 

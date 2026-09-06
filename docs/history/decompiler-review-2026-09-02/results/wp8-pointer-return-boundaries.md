@@ -1,6 +1,6 @@
 # WP8 pointer-return boundary evidence
 
-Date: 2026-09-04
+> **Kind:** record · **Date:** 2026-09-04
 
 ## Defect
 

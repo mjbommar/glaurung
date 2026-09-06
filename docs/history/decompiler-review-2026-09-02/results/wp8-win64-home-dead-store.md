@@ -1,6 +1,6 @@
 # WP8 Win64 home-slot dead-store evidence
 
-Date: 2026-09-04
+> **Kind:** record · **Date:** 2026-09-04
 
 ## Defect
 

@@ -568,7 +568,19 @@ def test_the_recovered_interface_is_identical_in_every_configuration(
 # --------------------------------------------------------------------------
 # 4. Frame disjointness.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("config", CONFIG_NAMES)
+@pytest.mark.parametrize(
+    "config",
+    _configs_xfail(
+        {"lto"},
+        "OPEN DEFECT (-flto): no frame object is recovered in any function, so "
+        "this test's own non-vacuity assertion fires — there are no extents to "
+        "check for overlap. Not a separate defect: it is the same cross-CU "
+        "`DW_AT_abstract_origin` failure the two tests below record, where "
+        "nothing establishes the frame and the prologue `sub $0x58,%rsp` is "
+        "lifted as arithmetic on an unknown. This test is the third thing that "
+        "loses to it, and it fails loudly rather than passing on an empty set.",
+    ),
+)
 def test_frame_locals_occupy_disjoint_byte_ranges(built, recovered, config) -> None:
     """Two named frame slots may not claim the same byte, in any configuration.
 
@@ -704,23 +716,20 @@ def test_the_stack_guard_is_never_part_of_the_recovered_interface(
 # 7. A recovered branch describes a branch that was really there.
 # --------------------------------------------------------------------------
 #: Configurations in which the recovery is known to emit a statically decidable
-#: guard. Every lane whose frame carries a canary is here, which on this host is
-#: every lane except the one that explicitly asks for no protector: the defect is
-#: in how the guard LOAD is modelled, so it appears wherever a guard appears and
-#: is unrelated to linkage, frame pointers or optimisation level. The set can
-#: only shrink — a listed lane that stops exhibiting it fails this test.
-DECIDABLE_GUARD_KNOWN_BAD = {
-    "shared_pic",
-    "pie_exe",
-    "nopie_exe",
-    "static_exe",
-    "no_unwind_tables",
-    "frame_pointer",
-    "omit_frame_pointer",
-    "size_opt",
-    "lto",
-    "stack_protector",
-}
+#: guard. The set can only shrink — a listed lane that stops exhibiting the
+#: defect fails this test rather than passing quietly.
+#:
+#: **Empty**, and kept rather than deleted, because the mechanism is what
+#: reported the change that emptied it.
+#:
+#: It held all ten lanes that carry a canary, which on this host is every lane
+#: except the one explicitly asking for no protector: the defect was in how the
+#: guard LOAD was modelled, so it appeared wherever a guard appeared and was
+#: unrelated to linkage, frame pointers or optimisation level. Every one of
+#: those lanes still emits a guard — the skip below fires when a lane emits
+#: none, and it did not fire — and on none of them is the guard now statically
+#: decidable from the emitted text.
+DECIDABLE_GUARD_KNOWN_BAD: set[str] = set()
 
 
 @pytest.mark.parametrize("config", CONFIG_NAMES)

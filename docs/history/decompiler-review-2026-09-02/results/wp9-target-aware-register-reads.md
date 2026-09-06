@@ -1,6 +1,6 @@
 # WP9 target-aware register-read identity
 
-Date: 2026-09-03
+> **Kind:** record · **Date:** 2026-09-03
 
 ## Scope
 

@@ -1,6 +1,6 @@
 # WP8 declared-call pointer-boundary evidence
 
-Date: 2026-09-04
+> **Kind:** record · **Date:** 2026-09-04
 
 ## Defect
 

@@ -1,6 +1,6 @@
 # WP9 machine-model ownership inventory
 
-Date: 2026-09-03
+> **Kind:** record · **Date:** 2026-09-03
 
 This inventory is the prerequisite for migrating machine facts behind one
 queried contract. It records the live implementation, not the intended final

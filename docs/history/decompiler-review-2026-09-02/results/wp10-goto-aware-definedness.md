@@ -1,5 +1,7 @@
 # WP10 goto-aware definition verification
 
+> **Kind:** record · **Date:** 2026-09-02
+
 ## Revisions and build
 
 - Before: `2419372380e229d938bc54da0e3e656289b262c2`

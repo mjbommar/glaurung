@@ -1,6 +1,6 @@
 # O0 round-trip improvement handoff
 
-> **Kind:** implementation handoff  
+> **Kind:** record  
 > **Date:** 2026-09-03  
 > **Scope:** the shared dirty checkout; no commit or baseline refresh is claimed
 

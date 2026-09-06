@@ -1,6 +1,6 @@
 # WP9 Rust scalar source-type evidence
 
-Date: 2026-09-03
+> **Kind:** record · **Date:** 2026-09-03
 
 ## Defect
 

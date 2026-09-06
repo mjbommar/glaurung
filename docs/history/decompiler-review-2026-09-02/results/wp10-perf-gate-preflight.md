@@ -1,6 +1,6 @@
 # WP10 performance-gate preflight evidence
 
-Date: 2026-09-04
+> **Kind:** record · **Date:** 2026-09-04
 
 Implementation revision: `ef24d729858a2fa363cf314611b9da9b8b2da177`
 
