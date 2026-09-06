@@ -543,6 +543,11 @@ pub enum RecoveredOutputKind {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveredPrototype {
     parameters: Vec<RecoveredParameter>,
+    /// Source parameter slot -> the low/high AAPCS32 entry values for one
+    /// declared eight-byte integer. `RecoveredParameter::value` remains the
+    /// primary storage identity for existing scalar consumers; this auxiliary
+    /// fact prevents the second word from becoming an invented source local.
+    wide_integer_parameter_parts: BTreeMap<usize, [SsaValue; 2]>,
     parameter_arity_locked: bool,
     locked_parameters: HashSet<usize>,
     result: Option<RecoveredResult>,
@@ -878,6 +883,7 @@ impl RecoveredPrototype {
         cc: crate::ir::call_args::CallConv,
         declared: &[Option<TypeHint>],
     ) {
+        self.wide_integer_parameter_parts.clear();
         // BTreeMap rather than HashMap: the recovered-spelling search below
         // scans every prior parameter, and a HashMap's iteration order is not
         // reproducible between runs. A prototype that differs run to run is the
@@ -898,6 +904,36 @@ impl RecoveredPrototype {
             crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
         )
         .then(|| locked_aapcs_parameter_storage(cc, declared));
+        if let Some(storage) = aapcs_storage.as_ref() {
+            for (slot, hint) in declared.iter().copied().enumerate() {
+                let Some(TypeHint::Int { width: 8, .. }) = hint else {
+                    continue;
+                };
+                let Some(VReg::Phys(low)) = storage.get(slot) else {
+                    continue;
+                };
+                let Some(low_index) = low.strip_prefix('r').and_then(|n| n.parse::<u8>().ok())
+                else {
+                    continue;
+                };
+                if low_index >= 3 {
+                    continue;
+                }
+                self.wide_integer_parameter_parts.insert(
+                    slot,
+                    [
+                        SsaValue {
+                            base: VReg::phys(format!("r{low_index}")),
+                            version: 0,
+                        },
+                        SsaValue {
+                            base: VReg::phys(format!("r{}", low_index + 1)),
+                            version: 0,
+                        },
+                    ],
+                );
+            }
+        }
         // x86-64 SysV has the same two-independent-banks shape, with the same
         // consequence when it is missing: the positional fallback below reaches
         // into `argument_registers`, which holds only the INTEGER bank, and
@@ -1079,6 +1115,14 @@ impl RecoveredPrototype {
                 VReg::Phys(name) => Some((name.clone(), parameter.slot)),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// Exact AAPCS32 low/high live-in words for declared eight-byte integers.
+    pub(crate) fn wide_integer_parameter_parts(&self) -> Vec<(usize, [VReg; 2])> {
+        self.wide_integer_parameter_parts
+            .iter()
+            .map(|(slot, parts)| (*slot, [parts[0].base.clone(), parts[1].base.clone()]))
             .collect()
     }
 
@@ -1736,6 +1780,7 @@ pub fn recover_prototype_with_arm_vfp_args(
     parameters.sort_by_key(|parameter| parameter.slot);
     RecoveredPrototype {
         parameters,
+        wide_integer_parameter_parts: BTreeMap::new(),
         parameter_arity_locked: false,
         locked_parameters: HashSet::new(),
         result,

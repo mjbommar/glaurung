@@ -85,6 +85,7 @@ pub(super) fn run_ast_passes(
     profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     cc: crate::ir::call_args::CallConv,
+    endianness: crate::core::binary::Endianness,
     nested_machine_frame_cleanup: bool,
     prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     param_slots: &mut std::collections::HashSet<usize>,
@@ -291,6 +292,14 @@ pub(super) fn run_ast_passes(
         "split_argument_storage_reuse",
         crate::ir::value_split::split_argument_storage_reuse(f, cc, split_unspilled_dual_role)
     );
+    if let Some(prototype) = prototype {
+        pass!(
+            "materialize_aapcs32_wide_parameters",
+            crate::ir::wide_parameters::materialize_aapcs32_wide_parameters(
+                f, prototype, endianness,
+            )
+        );
+    }
     let role_names = pass!(
         "apply_role_names",
         crate::ir::naming::apply_role_names_with_parameter_roles(

@@ -939,6 +939,51 @@ def test_a32_o2_pc_relative_byte_switch_round_trips(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("arch", ["armv7", "armv7_a32"])
+def test_arm32_o2_wide_selector_uses_both_aapcs_entry_words(
+    tmp_path: Path, arch: str
+) -> None:
+    """A uint64_t parameter is r0:r1, not r0 plus an undefined local."""
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "215_switch_on_wide_selector"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"wide_selector_dense", "wide_selector_high_labels"}
+    addresses = D.exported_functions(str(target))
+    decompiled = D.decompiled_many_c(
+        str(target), [addresses[function] for function in sorted(functions)]
+    )
+    for function in sorted(functions):
+        recovered = decompiled[addresses[function]]
+        assert "unsigned long long op" in recovered, recovered
+        assert re.search(r"\bop\s*>>\s*32\b", recovered), recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+        decompiled_by_va=decompiled,
+    )
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> None:
     """Discovery and typed transport reach the structurer that owns loop latches."""
     arch = "armv7_a32"
