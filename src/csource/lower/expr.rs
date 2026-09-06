@@ -30,9 +30,9 @@ use crate::ir::types::{BinOp, VReg};
 use crate::syntax::ids::NodeId;
 
 use super::build::BlockRef;
+use super::call::{inline_call, parenthesised_type};
 use super::ctype::{CType, IntType};
 use super::func::{Local, Lowerer};
-use super::call::{inline_call, parenthesised_type};
 use super::literal::parse_literal;
 use super::value::{binary, canonicalize, convert, deref, index_address, load_local, unary, Val};
 use super::{unsupported, LowerError};
@@ -325,10 +325,10 @@ fn eval(
             // file that both defines `N` and declares a local `N` does not
             // compile.
             if low.lookup(name).is_none() {
-                if let Some(value) = ctx.macro_value(name) {
+                if let Some((value, ty)) = ctx.macro_value(name) {
                     let out = low.b.temp();
-                    low.b.assign_const(&out, value as i64);
-                    values.push(Val::plain(out, IntType::INT));
+                    low.b.assign_const(&out, value);
+                    values.push(Val::plain(canonicalize(low, &out, ty), ty));
                     return Ok(());
                 }
             }

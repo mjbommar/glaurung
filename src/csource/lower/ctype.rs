@@ -417,3 +417,73 @@ mod tests {
         assert_eq!(IntType::LONG.common(IntType::ULONG), IntType::ULONG);
     }
 }
+
+/// The standard constants a translation unit gets from its headers, by name.
+///
+/// The same argument as [`TYPEDEF_TABLE`], and the same caveat. These are not
+/// guesses: they are the values `x86_64-linux-gnu`'s `<limits.h>`,
+/// `<stdint.h>` and `<stddef.h>` give, and the fixture binaries were built
+/// with those headers. A file that defines its own `INT_MAX` means its own ---
+/// [`super::func::Ctx::macro_value`] consults the file's macros first.
+///
+/// The *type* of each is the type the header's expansion has, which is not
+/// always the obvious one: `UINT8_MAX` expands to `255`, an `int`, while
+/// `UINT_MAX` expands to `4294967295u`, an `unsigned int`. Getting that wrong
+/// would silently change the common type of every comparison against them.
+///
+/// `NULL` is here rather than modelled as a pointer because a null pointer
+/// constant *is* an integer constant expression with value zero (C17 6.3.2.3),
+/// so `p == NULL`, `p = NULL` and `return NULL` all work through the ordinary
+/// conversions.
+const CONSTANT_TABLE: &[(&str, i64, IntType)] = &[
+    ("NULL", 0, IntType::INT),
+    ("CHAR_BIT", 8, IntType::INT),
+    ("SCHAR_MIN", -128, IntType::INT),
+    ("SCHAR_MAX", 127, IntType::INT),
+    ("UCHAR_MAX", 255, IntType::INT),
+    // Plain `char` is signed on this target; see the module docs.
+    ("CHAR_MIN", -128, IntType::INT),
+    ("CHAR_MAX", 127, IntType::INT),
+    ("SHRT_MIN", -32768, IntType::INT),
+    ("SHRT_MAX", 32767, IntType::INT),
+    ("USHRT_MAX", 65535, IntType::INT),
+    ("INT_MIN", i32::MIN as i64, IntType::INT),
+    ("INT_MAX", i32::MAX as i64, IntType::INT),
+    ("UINT_MAX", u32::MAX as i64, IntType::UINT),
+    ("LONG_MIN", i64::MIN, IntType::LONG),
+    ("LONG_MAX", i64::MAX, IntType::LONG),
+    ("ULONG_MAX", -1, IntType::ULONG),
+    ("LLONG_MIN", i64::MIN, IntType::LONG),
+    ("LLONG_MAX", i64::MAX, IntType::LONG),
+    ("ULLONG_MAX", -1, IntType::ULONG),
+    ("INT8_MIN", -128, IntType::INT),
+    ("INT8_MAX", 127, IntType::INT),
+    ("UINT8_MAX", 255, IntType::INT),
+    ("INT16_MIN", -32768, IntType::INT),
+    ("INT16_MAX", 32767, IntType::INT),
+    ("UINT16_MAX", 65535, IntType::INT),
+    ("INT32_MIN", i32::MIN as i64, IntType::INT),
+    ("INT32_MAX", i32::MAX as i64, IntType::INT),
+    ("UINT32_MAX", u32::MAX as i64, IntType::UINT),
+    ("INT64_MIN", i64::MIN, IntType::LONG),
+    ("INT64_MAX", i64::MAX, IntType::LONG),
+    ("UINT64_MAX", -1, IntType::ULONG),
+    ("INTPTR_MIN", i64::MIN, IntType::LONG),
+    ("INTPTR_MAX", i64::MAX, IntType::LONG),
+    ("UINTPTR_MAX", -1, IntType::ULONG),
+    ("PTRDIFF_MIN", i64::MIN, IntType::LONG),
+    ("PTRDIFF_MAX", i64::MAX, IntType::LONG),
+    ("SIZE_MAX", -1, IntType::ULONG),
+];
+
+/// The value and type of a standard constant, or `None` for anything else.
+///
+/// `-1` in the table is the 64-bit pattern of the unsigned maxima: the value is
+/// carried as `i64` and read back through an unsigned type, which is the same
+/// two's-complement bit pattern the header's `18446744073709551615UL` has.
+pub fn builtin_constant(name: &str) -> Option<(i64, IntType)> {
+    CONSTANT_TABLE
+        .iter()
+        .find(|(known, _, _)| *known == name)
+        .map(|(_, value, ty)| (*value, *ty))
+}

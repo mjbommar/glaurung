@@ -141,7 +141,7 @@ pub struct Ctx<'a> {
     /// Measured over the fixture corpus, **533 of 962 unresolved names are
     /// this**, against 54 real file-scope variables, so resolving them is by
     /// far the cheapest coverage available.
-    macros: std::collections::BTreeMap<String, i128>,
+    macros: std::collections::BTreeMap<String, (i64, IntType)>,
     /// Every function *defined* in this translation unit, by name.
     ///
     /// Cached here because `Tree::functions` walks the whole tree, and an
@@ -181,10 +181,17 @@ impl<'a> Ctx<'a> {
         Ok((ret, params))
     }
 
-    /// The integer value of `name`, when the file defines it as an object-like
-    /// macro whose body is an integer literal.
-    pub fn macro_value(&self, name: &str) -> Option<i128> {
-        self.macros.get(name).copied()
+    /// The value and type of `name`, when the file defines it as an
+    /// object-like macro whose body is an integer literal, or when it is one of
+    /// the standard constants in [`super::ctype::builtin_constant`].
+    ///
+    /// The file's own definition wins: a translation unit that redefines
+    /// `INT_MAX` means its own.
+    pub fn macro_value(&self, name: &str) -> Option<(i64, IntType)> {
+        self.macros
+            .get(name)
+            .copied()
+            .or_else(|| super::ctype::builtin_constant(name))
     }
 
     /// The node's tag, or `None` for a tag no C front end wrote.
@@ -343,7 +350,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
 /// consulted first. That is safe rather than arbitrary: in real C the macro
 /// expands before scoping, so a file that both defines `N` and declares a
 /// local `N` does not compile, and no correct input can reach the ambiguity.
-fn object_like_integer_macros(text: &str) -> std::collections::BTreeMap<String, i128> {
+fn object_like_integer_macros(text: &str) -> std::collections::BTreeMap<String, (i64, IntType)> {
     let mut out = std::collections::BTreeMap::new();
     for line in text.lines() {
         let Some(rest) = line.trim_start().strip_prefix("#define ") else {
@@ -366,26 +373,28 @@ fn object_like_integer_macros(text: &str) -> std::collections::BTreeMap<String, 
     out
 }
 
-/// Parse a C integer literal, with an optional `u`/`l` suffix and `0x` base.
-fn parse_integer_literal(body: &str) -> Option<i128> {
+/// Parse a macro body that is a C integer literal, with its type.
+///
+/// Delegates to [`super::literal::parse_literal`] rather than re-deriving the
+/// base and suffix rules, so a macro constant gets **the same type an inline
+/// literal would**: `#define MASK 0xFFFFFFFFu` is `unsigned int` and
+/// `#define BIG 5000000000` is `long`, where a hand-rolled scanner that
+/// returned only a value would have called both `int` and truncated.
+///
+/// A leading `-` is handled here because it is not part of a literal: in C it
+/// is unary minus applied to one, and its type is the operand's after
+/// promotion, which is what negating the parsed pair gives.
+fn parse_integer_literal(body: &str) -> Option<(i64, IntType)> {
     let body = body.trim();
     let (negative, digits) = match body.strip_prefix('-') {
         Some(rest) => (true, rest.trim()),
         None => (false, body),
     };
-    let digits = digits.trim_end_matches(|c: char| matches!(c, 'u' | 'U' | 'l' | 'L'));
-    if digits.is_empty() {
-        return None;
+    let (value, ty) = super::literal::parse_literal(digits)?;
+    if !negative {
+        return Some((value, ty));
     }
-    let value = if let Some(hex) = digits
-        .strip_prefix("0x")
-        .or_else(|| digits.strip_prefix("0X"))
-    {
-        i128::from_str_radix(hex, 16).ok()?
-    } else {
-        digits.parse::<i128>().ok()?
-    };
-    Some(if negative { -value } else { value })
+    Some((value.wrapping_neg(), ty.promote()))
 }
 
 /// Lower one function definition to LLIR.

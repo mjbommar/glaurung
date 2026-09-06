@@ -512,7 +512,8 @@ fn array_extent(ctx: &Ctx<'_>, first: u32, end: u32) -> Option<u64> {
     if let Some((bits, _)) = super::literal::parse_literal(text) {
         return u64::try_from(bits).ok();
     }
-    ctx.macro_value(text).and_then(|v| u64::try_from(v).ok())
+    ctx.macro_value(text)
+        .and_then(|(value, _)| u64::try_from(value).ok())
 }
 
 /// Declare one array local and apply its initializer.

@@ -844,3 +844,68 @@ fn a_local_shadowing_a_type_name_keeps_its_call() {
     // useful of the two: `size_t` here is a variable being called.
     assert!(err.what.contains("`size_t`"), "{err}");
 }
+
+// ---------------------------------------------------------------------------
+// Standard constants from headers the front end does not read.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn standard_limit_constants_resolve_to_their_header_values() {
+    // gcc: 2147483647 and -2147483648.
+    let max = lower("int f(void) { return INT_MAX; }", "f");
+    assert_eq!(call(&max, &[]), 0x7fff_ffff);
+    let min = lower("int f(void) { return INT_MIN; }", "f");
+    assert_eq!(call(&min, &[]), 0x8000_0000);
+    // gcc: `UINT8_MAX` is 255 and `INT16_MIN` is -32768, both `int`.
+    let byte = lower("int f(void) { return UINT8_MAX; }", "f");
+    assert_eq!(call(&byte, &[]), 255);
+    let short = lower("int f(void) { return INT16_MIN; }", "f");
+    assert_eq!(call(&short, &[]), (-32768i32) as u32 as u64);
+}
+
+#[test]
+fn a_constants_type_decides_the_arithmetic_it_takes_part_in() {
+    // The reason the table carries a type at all. gcc: `(int)(UINT_MAX / 2)` is
+    // 2147483647, because `UINT_MAX` is `unsigned int` and the division is
+    // unsigned. Typed as a plain `int` it would be -1, and -1 / 2 is 0.
+    let f = lower("int f(void) { return (int)(UINT_MAX / 2); }", "f");
+    assert_eq!(call(&f, &[]), 0x7fff_ffff);
+    // gcc: `(int)(SIZE_MAX / 2)` is -1 --- the unsigned 64-bit maximum halved
+    // is 0x7fff_ffff_ffff_ffff, whose low 32 bits are all ones.
+    let wide = lower("int f(void) { return (int)(SIZE_MAX / 2); }", "f");
+    assert_eq!(wide.result_width().expect("int").bits(), 32);
+    assert_eq!(call(&wide, &[]), 0xffff_ffff);
+}
+
+#[test]
+fn null_compares_equal_to_a_null_pointer_and_not_to_a_real_one() {
+    // A null pointer constant is an integer constant expression with value
+    // zero (C17 6.3.2.3), so it needs no pointer machinery of its own.
+    // gcc: 1 and 0.
+    let f = lower(
+        "int f(void) { int x = 1; int *p = 0; int *q = &x; \
+         return (p == NULL) * 10 + (q == NULL); }",
+        "f",
+    );
+    assert_eq!(call(&f, &[]), 10);
+}
+
+#[test]
+fn a_files_own_definition_beats_the_standard_one() {
+    // A translation unit that defines `INT_MAX` means its own. The file's
+    // macros are consulted before the table, and this pins that order.
+    let f = lower("#define INT_MAX 5\nint f(void) { return INT_MAX; }", "f");
+    assert_eq!(call(&f, &[]), 5);
+}
+
+#[test]
+fn a_macro_constant_takes_the_type_an_inline_literal_would() {
+    // gcc: `(int)(BIG / 1000000)` is 5000. A scanner that returned only a
+    // value and called every macro an `int` would truncate 5000000000 to
+    // 705032704 and answer 705.
+    let f = lower(
+        "#define BIG 5000000000\nint f(void) { return (int)(BIG / 1000000); }",
+        "f",
+    );
+    assert_eq!(call(&f, &[]), 5000);
+}

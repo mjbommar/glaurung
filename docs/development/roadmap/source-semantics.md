@@ -724,3 +724,35 @@ lifted side to follow a call into another lifted function, which is an
 `src/exec` capability rather than a lowering one. Along with the 192 signatures
 the harness cannot call, that is now the binding constraint on the oracle
 rather than on the lowering.
+
+### The constants the front end never reads
+
+`NULL` at 22 refusals and `INT32_MAX` and friends sat in the unresolved
+census's "neither" bucket --- 298 names that are not macros this file defines
+and not file-scope variables --- and stayed invisible while calls dominated the
+head of the list.
+
+They are the same problem `ctype.rs`'s `TYPEDEF_TABLE` already solves and take
+the same answer: a table of what `x86_64-linux-gnu`'s `<limits.h>`,
+`<stdint.h>` and `<stddef.h>` actually say, consulted **after** the file's own
+macros so a translation unit that redefines `INT_MAX` means its own.
+
+> **Landed** (2026-09-06). **Coverage 483/900 -> 497/900, 53.7% -> 55.2%**,
+> divergences still zero.
+
+Two things it forced that were worth more than the coverage.
+
+**A constant has a type, and the type is not always the obvious one.**
+`UINT8_MAX` expands to `255`, an `int`; `UINT_MAX` expands to `4294967295u`, an
+`unsigned int`. Get that wrong and the *common type* of every comparison
+against them changes: `(int)(UINT_MAX / 2)` is 2147483647 unsigned and 0 if the
+constant is called a plain `int`, because -1 / 2 is 0.
+
+**The same defect was already live in the macro scanner.**
+`object_like_integer_macros` returned an `i128` and every caller typed it
+`int`, so `#define BIG 5000000000` truncated to 705032704 --- silently, with no
+refusal, in a lowering whose whole discipline is to refuse rather than
+approximate. It now delegates to `literal::parse_literal`, so **a macro
+constant gets exactly the type an inline literal would**, which is what C says
+it gets. A hand-rolled second parser of the same grammar is how that
+disagreement arose in the first place.
