@@ -299,6 +299,10 @@ one-off measurement, so the curve above stays current.
 
 ## Phase 3 — Path feasibility, on the solver
 
+> **Landed** (2026-09-06). `src/csource/feasibility.rs`, behind the `symbolic`
+> feature. **373 of 1,131 decided paths in the fixture corpus are infeasible
+> --- 33% of them, takeable by no input at all.**
+
 **Deliverable.** For a path through the source CFG, a verdict:
 **feasible** with a concrete witness, **infeasible** with the constraint that
 kills it, or **unknown**.
@@ -545,14 +549,17 @@ moves phase 3 behind a prerequisite:
 | 1 declared types | **landed** |
 | 2 interprocedural summaries | **landed** |
 | 2.5 widen the lowering | **landed to 55.2%** --- pointers, arrays, subscript, pointer scaling, calls by substitution, macro and standard constants |
-| 3 path feasibility | **not started, and no longer blocked** --- see below |
+| 3 path feasibility | **landed** --- `src/csource/feasibility.rs`; 373 of 1,131 decided paths are infeasible |
 | 4 KB facts | **landed** |
 
-**Phase 3's gate has cleared.** The sequencing section above set it explicitly:
-"if pointers and calls do not move 18.7% substantially, stop here and bank
-phases 1, 2 and 4". They moved it to **55.2%**, the S4 differential compares
-291 functions with zero divergences, and phase 3 is now the only unbuilt phase
-in this plan. **The plan is not complete, and phase 3 is what is missing.**
+**Phase 3's gate cleared, and phase 3 then landed.** The sequencing section
+above set it explicitly: "if pointers and calls do not move 18.7%
+substantially, stop here and bank phases 1, 2 and 4". They moved it to
+**55.2%**, the S4 differential compares 291 functions with zero divergences,
+and phase 3 followed the same day. **All five phases are landed.** What remains
+is the two items built *on* phase 3 --- guard-duplication reporting and bounded
+property checking --- and widening the lowering, which is now measured and
+costed below.
 
 Coverage over the day, each figure from
 `cargo test --features python-ext --lib csource::lower::coverage`:
@@ -805,3 +812,93 @@ approximate. It now delegates to `literal::parse_literal`, so **a macro
 constant gets exactly the type an inline literal would**, which is what C says
 it gets. A hand-rolled second parser of the same grammar is how that
 disagreement arose in the first place.
+
+## Phase 3, landed --- and it needed almost no new code
+
+The plan said "nothing new is needed" and undersold it. `csource::equiv`
+already enumerates paths through a lowered function and hands back, per path,
+`guard: Vec<(ExprId, bool)>` --- which *is* `&[Assert]`, the argument
+`Solver::check` takes. Phase 3 is the layer that asks about **one path's guard**
+instead of about a difference between two functions. `feasibility.rs` is ~260
+lines of product code and reuses `explore`, `seed_inputs`, `IoSpec`,
+`InputSlot::canonicalize` and `Bounds` unchanged.
+
+### The number
+
+`cargo test --features symbolic --lib csource::feasibility -- --nocapture`,
+2026-09-06:
+
+```
+functions decided: 293; abstained: 403 did not lower,
+                        204 lowered but have a non-integer parameter
+paths: 1131; feasible 746; INFEASIBLE 373; unknown 12
+paths cut by a bound (no verdict): 510
+functions with at least one infeasible path: 23
+```
+
+**A third of the paths cannot be taken by any input.** That is the size of the
+error in an unchecked reachability answer, measured on real code rather than
+argued from first principles --- and it is the claim the phase was written to
+test.
+
+A "path" here is a decision sequence through the *bounded unrolling* of the
+lowered function, not a source-level path, and the bound is why 510 more got no
+verdict at all. Cuts are never counted as either verdict.
+
+### What the infeasible paths actually are, checked rather than assumed
+
+The top function is `69_molar_mass.c::element_mass_centi` with 87, and reading
+it says exactly why:
+
+```c
+if (first == (uint8_t)'H' && second == 0) return 101;
+if (first == (uint8_t)'C' && second == 0) return 1201;
+if (first == (uint8_t)'N' && second == 0) return 1401;
+```
+
+Each `&&` contributes two decisions, so a path may assume `first == 'H'` held,
+`second == 0` did not, and then that `first == 'C'` holds --- of one byte, at
+one program point, with no assignment between. **No graph can see that.** It is
+a fact about the *values*, and it is the mutually-exclusive dispatch chain that
+decompiler output is made of.
+
+`213_arm_predicated_execution.c::branchless_classify` is the loop-free
+confirmation, at 14: four independent ternaries over `x`, `lo` and `hi`, whose
+32 decision combinations are mostly contradictory. So the finding is not a
+loop-unrolling artefact, which the presence of `simpson_integrate` and
+`trapezoid_integrate` near the top might otherwise have suggested.
+
+### The gate, which is the part that could have been faked
+
+`traps.md`'s "our own emulator is not an oracle" applies with full force here:
+agreement between the solver and our interpreter is two readings of *our*
+semantics, and they are not even the same reading --- `BinOp::Div` by zero is
+`0` concretely and all-ones under `bvudiv`, and a shift at or above the operand
+width reduces modulo the width concretely but saturates under `bvshl`.
+
+So no model is reported as feasible until the interpreter, **given those inputs
+as constants**, reaches a path. That re-enters the same `explore` with constant
+seeds rather than calling a second walker: every condition then folds, folding
+goes through `exec::Concrete`, and exactly one path runs. A model that does not
+reproduce becomes `Unknown::WitnessDidNotReproduce`, never a verdict.
+
+The test suite also demands a solver (`the_suite_has_a_solver_to_ask`), because
+without a backend every assertion in the file would skip and a green run would
+prove nothing --- the failure mode `traps.md` records as "a silently-skipped
+test is identical to a passing one".
+
+### What this does not decide yet, stated plainly
+
+**204 functions lower but cannot be analysed**, because `IoSpec::of_lowered`
+refuses a non-integer parameter. That rule is `equiv`'s, and it is right there:
+a counterexample has to be a *callable* input. For feasibility a pointer
+parameter could be an unconstrained 64-bit symbol --- but a guard that reads
+through it needs symbolic memory, which is a real capability and not a
+loosened check. **This is now the largest single limit on phase 3, larger than
+the lowering's 403.**
+
+Roadmap items 2 and 3 built on this phase are not done: guard-duplication
+detection has its mechanism (a duplicated guard makes its negation infeasible,
+and there is a test for exactly that shape) but no reporting surface, and
+bounded property checking --- is there an input that overflows this index,
+divides by this zero --- is untouched. Neither is exposed to Python.

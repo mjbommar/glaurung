@@ -168,7 +168,7 @@ pub(super) fn decide(
 ///
 /// Returns the symbol ids paired with their slots, in parameter order, so a
 /// model can be read back as an argument vector.
-pub(super) fn seed_inputs<'a>(
+pub(crate) fn seed_inputs<'a>(
     sym: &mut Symbolic,
     io: &'a IoSpec,
 ) -> (Vec<(u32, &'a super::InputSlot)>, Vec<(VReg, ExprId)>) {

@@ -15,6 +15,10 @@ pub mod export;
 /// Needs the symbolic engine and its solver seam; see the module docs.
 #[cfg(feature = "symbolic")]
 pub mod equiv;
+/// `S6` --- path feasibility for a lowered function, on the solver.
+/// Needs the symbolic engine and its solver seam; see the module docs.
+#[cfg(feature = "symbolic")]
+pub mod feasibility;
 pub mod joern;
 pub mod lex;
 pub mod lower;
