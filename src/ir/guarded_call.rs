@@ -24,24 +24,26 @@ fn materialize_body(body: &mut [Stmt]) {
         let Some(destination) = guarded_update_destination(&body[index]) else {
             continue;
         };
-        let Stmt::If { cond, .. } = &body[index] else {
+        let Stmt::If { cond, .. } = body[index].semantic() else {
             unreachable!("guarded_update_destination accepts only if statements");
         };
         if !false_edge_proves_zero(&body[..index], cond, &destination) {
             continue;
         }
-        let Stmt::If { else_body, .. } = &mut body[index] else {
+        let origins = body[index].origins().cloned();
+        let Stmt::If { else_body, .. } = body[index].semantic_mut() else {
             unreachable!("guarded_update_destination accepts only if statements");
         };
         *else_body = Some(vec![Stmt::Assign {
             dst: destination,
             src: Expr::Const(0),
-        }]);
+        }
+        .with_optional_origins(origins)]);
     }
 }
 
 fn visit_children(statement: &mut Stmt) {
-    match statement {
+    match statement.semantic_mut() {
         Stmt::If {
             then_body,
             else_body,
@@ -78,17 +80,24 @@ fn guarded_update_destination(statement: &Stmt) -> Option<VReg> {
         then_body,
         else_body: None,
         ..
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    let [Stmt::Call {
+    let [call, assignment] = then_body.as_slice() else {
+        return None;
+    };
+    let Stmt::Call {
         dst: Some(call_result),
         ..
-    }, Stmt::Assign {
+    } = call.semantic()
+    else {
+        return None;
+    };
+    let Stmt::Assign {
         dst: destination,
         src: copied_result,
-    }] = then_body.as_slice()
+    } = assignment.semantic()
     else {
         return None;
     };
@@ -125,7 +134,7 @@ fn false_edge_proves_zero(prefix: &[Stmt], condition: &Expr, destination: &VReg)
     // intervening control-flow construct makes lexical order insufficient, so
     // the query fails closed instead of pretending the structured AST is SSA.
     for statement in prefix.iter().rev() {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { dst, src } if dst == destination => return src == tested,
             Stmt::Call { dst: Some(dst), .. } | Stmt::Pop { target: dst } if dst == destination => {
                 return false;
@@ -245,6 +254,34 @@ mod tests {
                 }
             ] if else_body == &[assign("value", Expr::Const(0))]
         ));
+    }
+
+    #[test]
+    fn attributed_guarded_call_preserves_the_false_edge_proof() {
+        let guard_origins = crate::ir::ast::OriginSet::one(0x1004);
+        let mut f = function(vec![
+            assign("value", Expr::Reg(reg("input")))
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+            guarded_update(Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs: Box::new(Expr::Reg(reg("value"))),
+                rhs: Box::new(Expr::Const(0)),
+            })
+            .with_origins(guard_origins.clone()),
+        ]);
+
+        materialize_false_edges(&mut f);
+
+        let Stmt::If {
+            else_body: Some(else_body),
+            ..
+        } = f.body[1].semantic()
+        else {
+            panic!("attributed guarded call kept an implicit false edge");
+        };
+        assert_eq!(else_body.len(), 1);
+        assert!(matches!(else_body[0].semantic(), Stmt::Assign { .. }));
+        assert_eq!(else_body[0].origins(), Some(&guard_origins));
     }
 
     #[test]

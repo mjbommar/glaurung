@@ -107,7 +107,7 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     // is the safe direction: a register listed here merely blocks a hoist.
     fn collect_assigned(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
         for s in stmts {
-            match s {
+            match s.semantic() {
                 Stmt::Assign {
                     dst: VReg::Phys(n), ..
                 }
@@ -241,7 +241,7 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     let mut defined_here: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for s in pre {
-        match s {
+        match s.semantic() {
             Stmt::Assign { dst, src } => {
                 if expr_reads_memory(src) {
                     return false;
@@ -1022,7 +1022,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::ast::{Expr, Stmt};
+    use crate::ir::ast::{Expr, OriginSet, Stmt};
     use crate::ir::types::{LlirBlock, LlirInstr, Op, VReg, Value};
 
     #[test]
@@ -1109,6 +1109,29 @@ mod tests {
             super::hoisting_the_header_is_safe(&pre, &inert),
             "a genuinely invariant preamble must still hoist, or every rotated loop \
              regresses to `while (1) {{ ... }}`"
+        );
+    }
+
+    #[test]
+    fn instruction_origins_do_not_hide_loop_carried_header_values() {
+        let pre = vec![Stmt::Assign {
+            dst: VReg::phys("t"),
+            src: Expr::Reg(VReg::phys("i")),
+        }
+        .with_origins(OriginSet::one(0x1000))];
+        let body = vec![Stmt::Assign {
+            dst: VReg::phys("i"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        }
+        .with_origins(OriginSet::one(0x1004))];
+
+        assert!(
+            !super::hoisting_the_header_is_safe(&pre, &body),
+            "origin carriers must not make a loop-carried header appear invariant"
         );
     }
 

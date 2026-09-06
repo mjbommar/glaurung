@@ -376,7 +376,7 @@ fn unstructured_has_both_events(body: &[Stmt], read: &VReg, written: &VReg) -> b
 }
 
 fn contains_unstructured_control(body: &[Stmt]) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
         Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => true,
         Stmt::If {
             then_body,
@@ -546,6 +546,30 @@ mod tests {
             &body,
             &reg("arg0"),
             &reg("home")
+        ));
+    }
+
+    #[test]
+    fn instruction_origins_do_not_hide_unstructured_control() {
+        let origin =
+            |statement: Stmt, va| statement.with_origins(crate::ir::ast::OriginSet::one(va));
+        let body = vec![
+            origin(Stmt::Label(0x1000), 0x1000),
+            origin(
+                Stmt::Assign {
+                    dst: reg("sink"),
+                    src: Expr::Reg(reg("home")),
+                },
+                0x1004,
+            ),
+            origin(write_value(), 0x1008),
+            origin(Stmt::Goto { target: 0x1000 }, 0x100c),
+        ];
+
+        assert!(read_may_observe_prior_write(
+            &body,
+            &reg("home"),
+            &reg("value")
         ));
     }
 }
