@@ -740,10 +740,75 @@ pub(super) struct PipelineFunctionOutput {
     pub(super) rendered: RenderedAst,
 }
 
+/// Coarse semantic stages of the per-function pipeline.
+///
+/// These are deliberately not inferred from which values happen to exist.
+/// A new orchestration step must state the stage it consumes and produces, so
+/// moving it across a semantic boundary fails immediately in tests and in the
+/// production transaction instead of silently changing only one entry point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PipelineStage {
+    Start,
+    Lifted,
+    CalleeFactsPrepared,
+    LlirPrepared,
+    AstPrepared,
+    Finalized,
+    Rendered,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PipelineStageError {
+    operation: &'static str,
+    expected: PipelineStage,
+    actual: PipelineStage,
+}
+
+impl std::fmt::Display for PipelineStageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "pipeline operation {} requires {:?}, found {:?}",
+            self.operation, self.expected, self.actual
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PipelineStageTracker {
+    current: PipelineStage,
+}
+
+impl PipelineStageTracker {
+    fn new() -> Self {
+        Self {
+            current: PipelineStage::Start,
+        }
+    }
+
+    fn advance(
+        &mut self,
+        operation: &'static str,
+        expected: PipelineStage,
+        next: PipelineStage,
+    ) -> Result<(), PipelineStageError> {
+        if self.current != expected {
+            return Err(PipelineStageError {
+                operation,
+                expected,
+                actual: self.current,
+            });
+        }
+        self.current = next;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FunctionPipelineError {
     Lift(String),
     Shadow(&'static str),
+    Stage(PipelineStageError),
 }
 
 impl std::fmt::Display for FunctionPipelineError {
@@ -751,7 +816,14 @@ impl std::fmt::Display for FunctionPipelineError {
         match self {
             Self::Lift(reason) => formatter.write_str(reason),
             Self::Shadow(reason) => formatter.write_str(reason),
+            Self::Stage(reason) => reason.fmt(formatter),
         }
+    }
+}
+
+impl From<PipelineStageError> for FunctionPipelineError {
+    fn from(error: PipelineStageError) -> Self {
+        Self::Stage(error)
     }
 }
 
@@ -759,6 +831,7 @@ impl std::fmt::Display for FunctionPipelineError {
 pub(super) fn decompile_function(
     context: FunctionPipelineContext<'_>,
 ) -> Result<PipelineFunctionOutput, FunctionPipelineError> {
+    let mut stages = PipelineStageTracker::new();
     let FunctionPipelineContext {
         image,
         functions,
@@ -788,6 +861,7 @@ pub(super) fn decompile_function(
     let function_va = discovered.entry_point.value;
     let mut raw = crate::ir::lift_function::lift_function_from_image(image, discovered)
         .map_err(|error| FunctionPipelineError::Lift(error.to_string()))?;
+    stages.advance("lift", PipelineStage::Start, PipelineStage::Lifted)?;
     let mut callee_facts = prepare_direct_callee_facts(
         image,
         functions,
@@ -802,6 +876,11 @@ pub(super) fn decompile_function(
         call_graph,
         callee_cache,
     );
+    stages.advance(
+        "prepare_direct_callee_facts",
+        PipelineStage::Lifted,
+        PipelineStage::CalleeFactsPrepared,
+    )?;
     if let Some(names) = render_options.analyst_names {
         let renames = crate::ir::name_resolve::apply_analyst_names(address_names, names);
         if !renames.is_empty() {
@@ -823,6 +902,11 @@ pub(super) fn decompile_function(
         debug_type_env,
         render_options.shadow_v2,
     );
+    stages.advance(
+        "prepare_llir_for_lowering_with_shadow",
+        PipelineStage::CalleeFactsPrepared,
+        PipelineStage::LlirPrepared,
+    )?;
     prepared_llir
         .select_shadow_v2(render_options.shadow_v2, render_options.style == "decbench")
         .map_err(FunctionPipelineError::Shadow)?;
@@ -856,6 +940,11 @@ pub(super) fn decompile_function(
         &stack_object_hints,
         got_targets,
     );
+    stages.advance(
+        "lower_and_run_ast_passes",
+        PipelineStage::LlirPrepared,
+        PipelineStage::AstPrepared,
+    )?;
     let mut prepared = finalize_prepared_ast(
         prepared,
         render_options.analyst_locals,
@@ -868,6 +957,11 @@ pub(super) fn decompile_function(
         address_names,
         field_map,
     );
+    stages.advance(
+        "finalize_prepared_ast",
+        PipelineStage::AstPrepared,
+        PipelineStage::Finalized,
+    )?;
     let rendered = render_prepared_ast(
         &mut prepared,
         FunctionRenderContext {
@@ -890,6 +984,11 @@ pub(super) fn decompile_function(
             pdb_outer_name,
         },
     );
+    stages.advance(
+        "render_prepared_ast",
+        PipelineStage::Finalized,
+        PipelineStage::Rendered,
+    )?;
     Ok(PipelineFunctionOutput {
         raw,
         prepared,
@@ -1421,7 +1520,31 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 
 #[cfg(test)]
 mod request_tests {
-    use super::{AnalysisBudget, DecompileCompleteness, DecompileRequest, RenderOptions};
+    use super::{
+        AnalysisBudget, DecompileCompleteness, DecompileRequest, PipelineStage,
+        PipelineStageTracker, RenderOptions,
+    };
+
+    #[test]
+    fn invalid_pipeline_stage_order_fails_with_the_required_precondition() {
+        let mut stages = PipelineStageTracker::new();
+        stages
+            .advance("lift", PipelineStage::Start, PipelineStage::Lifted)
+            .unwrap();
+
+        let error = stages
+            .advance(
+                "render_prepared_ast",
+                PipelineStage::Finalized,
+                PipelineStage::Rendered,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.operation, "render_prepared_ast");
+        assert_eq!(error.expected, PipelineStage::Finalized);
+        assert_eq!(error.actual, PipelineStage::Lifted);
+        assert_eq!(stages.current, PipelineStage::Lifted);
+    }
 
     #[test]
     fn pipeline_budget_preserves_every_discovery_limit() {
