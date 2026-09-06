@@ -169,6 +169,15 @@ pub struct DiscoveryCacheStats {
     pub evictions: u64,
 }
 
+/// Observable ownership of program-scoped facts retained by one session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramFactCacheStats {
+    pub call_graph_entries: usize,
+    pub environment_entries: usize,
+    pub type_artifacts_initialized: bool,
+    pub symbol_artifacts_initialized: bool,
+}
+
 /// One immutable image plus analysis artifacts reusable across function queries.
 ///
 /// Cache keys include every discovery budget and the normalized, sorted seed set.
@@ -335,6 +344,24 @@ impl ProgramSession {
             misses: self.discovery.misses.load(Ordering::Relaxed),
             entries,
             evictions: self.discovery.evictions.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Snapshot program facts independently from rendered-artifact caching.
+    pub fn program_fact_cache_stats(&self) -> ProgramFactCacheStats {
+        ProgramFactCacheStats {
+            call_graph_entries: self
+                .call_graphs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            environment_entries: self
+                .environments
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            type_artifacts_initialized: self.type_artifacts.get().is_some(),
+            symbol_artifacts_initialized: self.symbol_artifacts.get().is_some(),
         }
     }
 

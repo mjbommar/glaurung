@@ -133,6 +133,30 @@ impl PyDecompilerSession {
         ])
     }
 
+    /// Session-local program-fact ownership, exposed as counts for stable Python shape.
+    #[getter]
+    fn program_fact_cache_stats(&self) -> HashMap<&'static str, u64> {
+        let stats = self.session.program_fact_cache_stats();
+        HashMap::from([
+            (
+                "call_graph_entries",
+                u64::try_from(stats.call_graph_entries).unwrap_or(u64::MAX),
+            ),
+            (
+                "environment_entries",
+                u64::try_from(stats.environment_entries).unwrap_or(u64::MAX),
+            ),
+            (
+                "type_artifacts_initialized",
+                u64::from(stats.type_artifacts_initialized),
+            ),
+            (
+                "symbol_artifacts_initialized",
+                u64::from(stats.symbol_artifacts_initialized),
+            ),
+        ])
+    }
+
     /// Session-local exact rendered-artifact cache counters.
     #[getter]
     fn artifact_cache_stats(&self) -> HashMap<&'static str, u64> {
