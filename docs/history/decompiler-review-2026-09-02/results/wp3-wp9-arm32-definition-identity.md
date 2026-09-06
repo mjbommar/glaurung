@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Behavioral commit: `a8ba1b87`
+Behavioral commits: `a8ba1b87`, hardened by `dcdc99cc`
 
 ## Defect
 
@@ -19,10 +19,16 @@ stack promotion and source-local recovery. The output declared `p`, `i`, and
 
 ## Change
 
-`src/ir/value_number/tagging.rs` now applies the exact target-qualified
-`SsaValue` base and version to definitions, matching the existing use-side
-contract. `src/ir/value_number.rs` passes that identity directly from the SSA
-side car instead of passing only its version.
+The first implementation made `src/ir/value_number/tagging.rs` apply the exact
+target-qualified `SsaValue` base and version to every definition. The required
+def-use census showed that this was too broad: definition spelling is also a
+compatibility boundary for non-ARM targets and synthetic definitions.
+
+The hardened implementation in `dcdc99cc` keeps the established version-only
+tagger and adopts the SSA side-car base only for ARM32 calling conventions and
+only when the architecture-blind parent cannot express the target alias. This
+is the narrow seam needed by `fp`/`r11`; x86, AArch64, synthetic, and missing
+definition identities retain their prior behavior.
 
 The focused unit reproduces the mixed ARM spelling directly: an `fp = sp`
 definition and an `r11`-relative load must both become the same `r11#1` value.
@@ -59,6 +65,16 @@ The undefined frame base and all raw frame dereferences are gone.
 - `uv run --no-sync pytest -q python/tests/test_decompiler_arm32_semantics.py`:
   12 passed, including the source-to-QEMU execution differential.
 - `uv run maturin develop --release`: completed before Python validation.
+- `cargo test --features python-ext`: 4,200 library tests passed, zero failed,
+  and five ignored; all integration and documentation targets passed. The long
+  identity-retrieval target independently reports 44 passed and ten ignored.
+- The complete six-test def-use census reports four passed and two ratchets
+  red. The same 27 required-function regression list reproduces at both
+  `4fa0b12f` and its parent `ce3fd28a`, before the ARM32 repair. The second red
+  ratchet records large pre-existing improvements (for example aggregate lane
+  totals fall from 140 to 77 for Clang O0 and from 7,898 to 6,613 for Rust O0).
+  The baseline was not rewritten because the remaining renamed/new findings
+  require their own reconciliation.
 
-The complete Rust and Python release gates remain separate WP10 evidence and
-are not claimed by this focused increment.
+The whole Python release gate remains separate WP10 evidence and is not claimed
+by this focused increment.

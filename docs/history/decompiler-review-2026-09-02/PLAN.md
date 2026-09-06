@@ -244,17 +244,29 @@ The exact whole-Python comparison has no ordinary tip-only regression, and the
 promotes the Duff latch to a positive test; see
 `results/wp5-wide-selector-shared-return.md`.
 
-Commit `a8ba1b87` closes one concrete WP3/WP9 identity seam exposed by the
+Commit `a8ba1b87`, hardened at `dcdc99cc`, closes one concrete WP3/WP9 identity seam exposed by the
 whole-Python fail-fast gate. Target-aware SSA already gave ARM32 `fp` and
 `r11` one canonical value, but value numbering applied that canonical base
-only to uses. Definitions now consume the same exact `SsaValue` base and
-version. The real GCC A32 O0 `03_loop_shapes::while_prefix` output moves from
+only to uses. Definitions now adopt that target-qualified base only for ARM32
+calling conventions and only when the architecture-blind compatibility parent
+cannot express it; the earlier all-target definition rewrite was rejected.
+The real GCC A32 O0 `03_loop_shapes::while_prefix` output moves from
 an undefined raw `var0` frame base back to source-level `p[i]`, initialized
 `i`/`s`, and execution-correct output. All 44 value-numbering, 12 SSA, 85
-stack-local, and 12 ARM32 semantic tests pass. This is a bounded identity
+stack-local, and 12 ARM32 semantic tests pass. The complete Rust gate is green
+with 4,200 library tests passed, zero failed, and five ignored. The complete
+def-use module is 4/6 green; both red ratchets reproduce at the pre-repair
+parent and therefore remain separately tracked baseline debt. This is a bounded identity
 handoff, not completion of WP3 invalidation/origins or the wider WP9
 architecture migration. See
 `results/wp3-wp9-arm32-definition-identity.md`.
+
+The adjacent `4fa0b12f` stack-coordinate repair is hardened by the same
+`dcdc99cc` commit. A call argument loaded through `rsp` can no longer be moved
+across an `rsp` adjustment and reinterpreted as a different stack slot. The
+real stripped SysV format wrapper returns to its true two-parameter signature
+and forwards `arg1`, while the hardened rule declines to change generic impure
+folding. See `results/wp3-stack-coordinate-phase.md`.
 
 ## Authority and relationship to the roadmaps
 
