@@ -21,7 +21,9 @@ nested post-tested branches preserved; it still lacks the remaining promotion
 measurements. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
 slice and the O0 `classify` signed-result vertical slice, but not the general
-solver. WP2, WP3,
+solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
+unsigned parameter declaration while rendering a contradictory signed machine
+comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP2, WP3,
 and the general WP7B idiom framework remain the principal unstarted or
 dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
@@ -1270,6 +1272,19 @@ representable literal, and retains wider-literal and unsigned cases. This
 closes the concrete example's cast-heavy predicate spelling without claiming
 the general WP6 constraint solver is complete.
 
+The bounded fixture-215 follow-on at `a88edd9a`/`8ab39b50` handles the inverse
+boundary conflict: an authoritative `uint64_t` parameter consumed by a signed
+machine comparison in Clang O2's partition tree. `DeclarationPlan` preserves
+the source signature and records that its integer fact is authoritative; the
+renderer applies a same-width signed cast only at that exact relational use.
+The initially broader rule over all inferred unsigned declarations was rejected
+after the structural census exposed unnecessary churn. The narrowed tip makes
+`wide_selector_high_labels` pass `UINT64_MAX`, moves the final Clang-O2
+fixture-215 cell from fail to pass, and produces byte-identical matched
+parent/tip structural and def-use diagnostics. This is a concrete per-use WP6
+increment, not the general solver. See
+`results/wp6-authoritative-unsigned-signed-edge.md`.
+
 Required regression coverage is equally part of completion:
 
 - `python/tests/test_classify_signed_loop.py` must assert the signed declaration,
@@ -2348,6 +2363,10 @@ relevant ratchet's accepted-regression record.
    value constraints rather than extending fixture-specific ABI adapters.
    Keep Rust totals separate and do not generalize the SysV/x86 evidence to
    unsupported architectures, vector forms, or language ABIs.
+   The fixture-215 signed-edge slice at `8ab39b50` is the model for boundary
+   conflicts: retain the authoritative declaration, attach the machine
+   interpretation to one use, and refuse inferred declarations. Extend that
+   model through stable WP3 identities rather than adding renderer name rules.
    The first fixture-217 prerequisite models legacy packed binary32 arithmetic,
    and the following bounded compiler-runtime boundary is landed. Direct SysV
    calls to `__mulsc3`/`__muldc3` now carry exact source-ordered
