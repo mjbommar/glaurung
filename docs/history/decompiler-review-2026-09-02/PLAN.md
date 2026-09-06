@@ -539,11 +539,20 @@ and make pass repetition/invalidation explicit.
   `d6a65779` lands the request half for module-level and reusable-session
   `decompile_at`: the VA, five explicit discovery limits, render selection,
   debug cache, and analyst overlays now cross one typed boundary. The result
-  model and the range/all/many adapters remain open.
+  model and the range/all/many request adapters remain open. Follow-on
+  `5a2d6c86` moves all four entry points onto the same `AnalysisBudget`
+  conversion and makes an exact discovered range reuse the ordinary CFG and
+  direct-callee facts.
 - [ ] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
-- [ ] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
+- [~] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
+  Module-level and reusable-session `decompile_at` create the typed request;
+  all/range/many now share its budget conversion. The first full-text
+  differential caught range's synthetic one-block CFG and empty callee facts;
+  `5a2d6c86` makes an exact discovered range reuse both authoritative inputs
+  while preserving the explicit-window fallback. Extraction of the remaining
+  common per-function body is still open.
 - [ ] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
 - [ ] Add checked `PipelineStage` and pass preconditions to
@@ -559,8 +568,13 @@ and make pass repetition/invalidation explicit.
 
 - [ ] Extend `python/tests/test_decompiler_session.py` for shared-session facts
   and explicit budgets.
-- [ ] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
+- [~] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
   four entry points at equal budgets.
+  The first production case is landed: all four paths emit byte-identical
+  `tail_dispatch`, including its indirect-call arguments, with equal block,
+  instruction, and per-function time budgets. Whole-image discovery still
+  couples its output limit to `max_functions`, so exact complete budget
+  identity remains open with the batch/request migration.
 - [ ] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
   function-order independence.
 - [ ] Extend `python/tests/test_pipeline_profile_report.py` for pass order,

@@ -2,7 +2,7 @@
 
 Date: 2026-09-06
 
-Behavioral commit: `d6a65779`
+Behavioral commits: `d6a65779`, `5a2d6c86`
 
 ## Boundary moved
 
@@ -27,6 +27,25 @@ pipeline-owned structured result, completeness/provenance, fingerprint,
 checked pass stages, and bounded fixpoint driver also remain open. No new
 public Python API or output format is claimed.
 
+## Exact-range convergence
+
+The first full-text four-entry-point differential exposed a real semantic
+split. For the exact 38-byte `08_indirect_dispatch::tail_dispatch` range,
+address, many, and all emitted the same structured switch and preserved two
+indirect-call arguments. Range synthesized one basic block, discarded the CFG,
+used empty direct-callee facts, and emitted a zero-argument indirect call.
+
+`5a2d6c86` makes a range request reuse ordinary discovered CFG and callee facts
+only when every discovered block fits inside the caller's exact range. An
+undiscovered or out-of-range function retains the old explicit-window fallback;
+the API does not silently expand beyond the caller's bound. All four public
+paths now emit the same 759-byte pseudocode for the pinned case.
+
+The same commit routes range/all/many discovery through the pipeline-owned
+`AnalysisBudget` conversion. It does not yet make those three adapters construct
+`DecompileRequest`, and their remaining per-function orchestration is still
+duplicated.
+
 ## Validation
 
 - Pipeline budget field-preservation unit: passed.
@@ -36,3 +55,7 @@ public Python API or output format is claimed.
 - `cargo test --features python-ext`: 4,201 library tests passed, zero failed,
   five ignored; all integration and documentation targets passed. The long
   identity-retrieval target reports 44 passed and ten ignored.
+- `python/tests/test_decompiler_entrypoint_equivalence.py`: one full-text
+  four-entry-point differential passed.
+- Declaration authority, PDB type recovery, session reuse, and entry-point
+  equivalence focused set: 22 passed.

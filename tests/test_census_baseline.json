@@ -1,6 +1,6 @@
 {
  "note": "Declared #[test] attributes per module. A declaration count, not an execution count -- see never_executed.",
- "total_declared": 4717,
+ "total_declared": 4718,
  "never_executed_total": 0,
  "never_executed": {},
  "solver_gated_estimate": 92,
@@ -24,7 +24,7 @@
   "logging": 4,
   "metrics": 122,
   "program": 81,
-  "python_bindings": 46,
+  "python_bindings": 47,
   "similarity": 2,
   "strings": 33,
   "symbolic": 207,
