@@ -488,9 +488,9 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     definition_widths_by_site: &DefinitionWidthsBySite,
     incoming_widths: &[Option<u8>],
     source_lifetimes: &[SourceRegisterLifetime],
-) {
+) -> HashMap<VReg, VReg> {
     if copies.is_empty() {
-        return;
+        return HashMap::new();
     }
 
     // --- Candidate set: the operands of the copies we are trying to remove ---
@@ -515,11 +515,11 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
             pairs.push((d, s));
         }
         if names.len() > MAX_COALESCE_CANDIDATES {
-            return;
+            return HashMap::new();
         }
     }
     if pairs.is_empty() {
-        return;
+        return HashMap::new();
     }
     let n = names.len();
 
@@ -719,7 +719,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
         }
     }
     if rename.is_empty() {
-        return;
+        return rename;
     }
 
     for block in out.blocks.iter_mut() {
@@ -761,6 +761,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
         merged_widths.insert(names[representative_index].clone(), exact_width);
     }
     *definition_widths = merged_widths;
+    rename
 }
 
 #[cfg(test)]

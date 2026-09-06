@@ -36,7 +36,7 @@
 //! * `vreg_walk` -- the order-free mutable walk over an operation's registers.
 //! * `coalesce` -- merging the phi copies liveness and width prove removable.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::call_args::CallConv;
 use crate::ir::ssa::SsaValue;
@@ -59,6 +59,53 @@ pub(crate) use vreg_walk::for_each_vreg_mut;
 use coalesce::{coalesce_phi_copies_with_definition_sites, DefinitionWidthsBySite};
 use tagging::{tag_op, tag_phys, VnCtx};
 use temp_remap::build_temp_remap;
+
+/// Exact SSA identities carried beside value-numbered LLIR and its lowered AST.
+///
+/// A rendered variable may represent several non-interfering SSA values after
+/// phi-copy coalescing. Callers therefore receive an exact identity only when
+/// the numbered name has one candidate; ambiguity stays explicit rather than
+/// being guessed from a `register#version` display spelling.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ValueIdentities {
+    by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
+}
+
+impl ValueIdentities {
+    /// Return the sole SSA identity represented by `value`, if unambiguous.
+    pub fn exact(&self, value: &VReg) -> Option<&SsaValue> {
+        let candidates = self.by_numbered_value.get(value)?;
+        (candidates.len() == 1)
+            .then(|| candidates.first())
+            .flatten()
+    }
+
+    /// Return every SSA identity represented by a coalesced numbered value.
+    pub fn candidates(&self, value: &VReg) -> Option<&BTreeSet<SsaValue>> {
+        self.by_numbered_value.get(value)
+    }
+
+    pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
+        self.by_numbered_value
+            .entry(numbered)
+            .or_default()
+            .insert(identity);
+    }
+
+    fn apply_renames(&mut self, renames: &HashMap<VReg, VReg>) {
+        if renames.is_empty() {
+            return;
+        }
+        let previous = std::mem::take(&mut self.by_numbered_value);
+        for (value, identities) in previous {
+            let numbered = renames.get(&value).cloned().unwrap_or(value);
+            self.by_numbered_value
+                .entry(numbered)
+                .or_default()
+                .extend(identities);
+        }
+    }
+}
 
 #[cfg(test)]
 use coalesce::{coalesce_phi_copies, coalesce_phi_copies_with_lifetimes};
@@ -158,6 +205,24 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     cc: CallConv,
     source_lifetimes: &[SourceRegisterLifetime],
 ) -> (LlirFunction, HashMap<VReg, u8>, HashSet<usize>) {
+    let (numbered, widths, slots, _) =
+        value_number_with_parameter_slots_lifetimes_and_identities(lf, ssa, cc, source_lifetimes);
+    (numbered, widths, slots)
+}
+
+/// Value-number while retaining opaque SSA identities for downstream AST
+/// consumers.
+pub fn value_number_with_parameter_slots_lifetimes_and_identities(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+    source_lifetimes: &[SourceRegisterLifetime],
+) -> (
+    LlirFunction,
+    HashMap<VReg, u8>,
+    HashSet<usize>,
+    ValueIdentities,
+) {
     let keep = keep_bare::definitions(lf, ssa, cc);
     let ctx = VnCtx::new(lf, keep, build_temp_remap(lf, ssa));
 
@@ -165,6 +230,7 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     let mut definition_widths = HashMap::new();
     let mut definition_widths_by_site = DefinitionWidthsBySite::new();
     let mut definition_widths_by_value = DefinitionWidthsByValue::new();
+    let mut identities = ValueIdentities::default();
     // One buffer for every instruction's use versions. The per-instruction
     // `Vec` was a heap allocation for a list that is normally one or two long.
     let mut use_values: Vec<Option<SsaValue>> = Vec::new();
@@ -202,6 +268,18 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
                 }
             }
             tag_op(&mut ins.op, def_ver, &use_values, &ctx);
+            if let (Some(numbered), Some(identity)) =
+                (def_ref(&ins.op), ssa.def_value_ref(lf, addr))
+            {
+                identities.record(numbered.clone(), identity.clone());
+            }
+            let mut use_index = 0usize;
+            for_each_use(&ins.op, |numbered| {
+                if let Some(Some(identity)) = use_values.get(use_index) {
+                    identities.record(numbered.clone(), identity.clone());
+                }
+                use_index += 1;
+            });
             if let (Some(dst), Some(width)) = (
                 def_ref(&ins.op),
                 operation_definition_width(&lf.blocks[bi].instrs[ii].op),
@@ -221,9 +299,10 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
         &ctx,
         &mut definition_widths,
         &definition_widths_by_value,
+        &mut identities,
     );
     let parameter_slots = live_in_arg_slots_llir(&out, cc);
-    coalesce_phi_copies_with_definition_sites(
+    let renames = coalesce_phi_copies_with_definition_sites(
         &mut out,
         &phi_copies.pairs,
         &mut definition_widths,
@@ -231,7 +310,8 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
         &phi_copies.incoming_widths,
         source_lifetimes,
     );
-    (out, definition_widths, parameter_slots)
+    identities.apply_renames(&renames);
+    (out, definition_widths, parameter_slots, identities)
 }
 
 /// Translate *out* of SSA: give every phi result an actual definition.
@@ -293,6 +373,7 @@ fn insert_phi_copies(
     ctx: &VnCtx,
     definition_widths: &mut HashMap<VReg, u8>,
     definition_widths_by_value: &DefinitionWidthsByValue,
+    identities: &mut ValueIdentities,
 ) -> PhiCopies {
     let mut created = PhiCopies::default();
     if ssa.phis.is_empty() {
@@ -343,6 +424,13 @@ fn insert_phi_copies(
     for phi in &ssa.phis {
         let mut dst = phi.base.clone();
         tag_phys(&mut dst, phi.dst_version, ctx);
+        identities.record(
+            dst.clone(),
+            SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            },
+        );
         if !matches!(dst, VReg::Phys(_) | VReg::FlagValue { .. }) {
             // A temp phi would need the remap to agree across blocks, which
             // `build_temp_remap` does not guarantee, so leave it alone rather than
@@ -403,6 +491,13 @@ fn insert_phi_copies(
             }
             let mut src = phi.base.clone();
             tag_phys(&mut src, *ver, ctx);
+            identities.record(
+                src.clone(),
+                SsaValue {
+                    base: phi.base.clone(),
+                    version: *ver,
+                },
+            );
             if src == dst {
                 continue; // a version kept bare on both sides: `rax = rax`
             }
@@ -455,6 +550,76 @@ mod tests {
     use super::*;
     use crate::ir::ssa::{compute_ssa, compute_ssa_for_target};
     use crate::ir::use_def::def_uses;
+
+    #[test]
+    fn opaque_ssa_identity_survives_llir_to_ast_lowering() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rax"),
+                src: Value::Const(7),
+            },
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rax")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let (numbered, _, _, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &lf,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let ast = crate::ir::ast::lower(
+            &numbered,
+            &crate::ir::structure::Region::Block(0),
+            "identity",
+        );
+        let numbered_use = ast
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                crate::ir::ast::Stmt::Assign {
+                    src: crate::ir::ast::Expr::Reg(value),
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .expect("lowered AST keeps the numbered register occurrence");
+
+        assert_eq!(numbered_use, &VReg::phys("rax#1"));
+        assert_eq!(
+            identities.exact(numbered_use),
+            Some(&SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn coalesced_value_with_multiple_ssa_candidates_is_not_exact() {
+        let numbered = VReg::phys("rax#1");
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            numbered.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            numbered.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+
+        assert_eq!(identities.exact(&numbered), None);
+        assert_eq!(identities.candidates(&numbered).map(BTreeSet::len), Some(2));
+    }
 
     #[test]
     fn target_aware_numbering_preserves_the_parent_identity_of_partial_reads() {

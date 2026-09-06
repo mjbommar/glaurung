@@ -59,7 +59,7 @@ pub(super) fn remap_type_map(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) -> crate::ir::types_recover::TypeMap {
-    remap_type_map_impl(tm, cc, param_slots, true, None, false)
+    remap_type_map_impl(tm, cc, param_slots, true, None, None, false)
 }
 
 fn remap_type_map_impl(
@@ -68,6 +68,7 @@ fn remap_type_map_impl(
     param_slots: &std::collections::HashSet<usize>,
     include_parameters: bool,
     exact_roles: Option<&std::collections::HashMap<String, String>>,
+    value_identities: Option<&crate::ir::value_number::ValueIdentities>,
     exact_integer_roles: bool,
 ) -> crate::ir::types_recover::TypeMap {
     // Reconstruct the alias table the naming pass used for arg/ret slots;
@@ -147,7 +148,16 @@ fn remap_type_map_impl(
                     let mut projected = false;
                     if let Some(roles) = exact_roles {
                         for (storage, role) in roles {
-                            if crate::ir::abi::ssa_base(storage) == n
+                            let storage_value = crate::ir::types::VReg::Phys(storage.clone());
+                            let same_storage = value_identities.map_or_else(
+                                || crate::ir::abi::ssa_base(storage) == n,
+                                |identities| {
+                                    identities.exact(&storage_value).is_some_and(|identity| {
+                                        identity.base == crate::ir::types::VReg::Phys(n.clone())
+                                    })
+                                },
+                            );
+                            if same_storage
                                 && (include_parameters
                                     || crate::ir::ast::parse_arg_index(role).is_none())
                             {
@@ -491,6 +501,7 @@ pub(super) fn decbench_type_maps(
     source_names: &std::collections::HashMap<String, String>,
     dwarf_type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     role_names: &std::collections::HashMap<String, String>,
+    value_identities: &crate::ir::value_number::ValueIdentities,
     definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
     max_refinement_rounds: usize,
 ) -> (
@@ -506,9 +517,18 @@ pub(super) fn decbench_type_maps(
         param_slots,
         false,
         Some(role_names),
+        Some(value_identities),
         true,
     );
-    let mut decl = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names), false);
+    let mut decl = remap_type_map_impl(
+        &raw,
+        cc,
+        param_slots,
+        false,
+        Some(role_names),
+        Some(value_identities),
+        false,
+    );
     let live_ins = prototype.parameter_type_map();
     let result = prototype.result_type_map();
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
@@ -548,7 +568,15 @@ pub(super) fn decbench_type_maps(
     for (role, hint) in numbered.iter() {
         refine_numbered_declaration(&mut decl, role, hint);
     }
-    let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names), false);
+    let mut width = remap_type_map_impl(
+        &raw,
+        cc,
+        param_slots,
+        false,
+        Some(role_names),
+        Some(value_identities),
+        false,
+    );
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
         if prototype.output_is_locked() {
             width.apply_locked_fact(crate::ir::types::VReg::phys("ret"), hint);
@@ -685,13 +713,44 @@ fn refine_numbered_declaration(
 mod tests {
     use super::{
         integer_widths_by_role, merge_exact_definition_widths, refine_float_copy_types,
-        refine_numbered_declaration,
+        refine_numbered_declaration, remap_type_map_impl,
     };
     use crate::ir::ast::{Expr, Stmt};
     use crate::ir::call_args::CallConv;
+    use crate::ir::ssa::SsaValue;
     use crate::ir::types::VReg;
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use std::collections::HashMap;
+
+    #[test]
+    fn float_role_projection_uses_opaque_identity_instead_of_numbered_spelling() {
+        let mut raw = TypeMap::default();
+        raw.upsert_public(VReg::phys("s15"), TypeHint::Float { width: 4 });
+        let roles = HashMap::from([("opaque-value".to_string(), "var0".to_string())]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque-value"),
+            SsaValue {
+                base: VReg::phys("s15"),
+                version: 7,
+            },
+        );
+
+        let projected = remap_type_map_impl(
+            &raw,
+            CallConv::ArmHardFloat,
+            &Default::default(),
+            false,
+            Some(&roles),
+            Some(&identities),
+            false,
+        );
+
+        assert_eq!(
+            projected.get(&VReg::phys("var0")),
+            Some(TypeHint::Float { width: 4 })
+        );
+    }
 
     #[test]
     fn float_copy_refinement_terminates_when_the_join_declines_the_hint() {
