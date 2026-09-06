@@ -325,6 +325,80 @@ pub(super) fn prepare_program_debug_context(
     }
 }
 
+/// Canonical semantic order for the AST pipeline.
+///
+/// A pass may be omitted when its typed precondition is absent (for example,
+/// wide-parameter materialization without a recovered prototype), but a pass
+/// may not be unknown, repeated, or run behind a later pass.
+const AST_PASS_ORDER: &[&str] = &[
+    "recover_wide_copies",
+    "reconstruct",
+    "fold_constants",
+    "fold_boolean_masks",
+    "prune_dead_flags",
+    "fold_got_pointer_loads",
+    "recover_resolved_tail_calls",
+    "reconstruct_args",
+    "apply_known_call_contracts",
+    "split_call_result_lifetimes",
+    "canary+strings",
+    "promote_stack_locals",
+    "bind_indirect_result_buffers",
+    "recognise_machine_frame",
+    "materialize_direct_output",
+    "split_argument_storage_reuse",
+    "materialize_32bit_wide_parameters",
+    "apply_role_names",
+    "eliminate_dead_stores",
+    "stack_idiom+label_prune",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AstPassOrderError {
+    Unknown {
+        pass: &'static str,
+    },
+    OutOfOrder {
+        pass: &'static str,
+        previous: &'static str,
+    },
+}
+
+impl std::fmt::Display for AstPassOrderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown { pass } => write!(formatter, "unknown AST pipeline pass {pass}"),
+            Self::OutOfOrder { pass, previous } => write!(
+                formatter,
+                "AST pipeline pass {pass} cannot run after {previous}"
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct AstPassOrder {
+    previous: Option<(usize, &'static str)>,
+}
+
+impl AstPassOrder {
+    fn check(&mut self, pass: &'static str) -> Result<(), AstPassOrderError> {
+        let Some(index) = AST_PASS_ORDER
+            .iter()
+            .position(|candidate| *candidate == pass)
+        else {
+            return Err(AstPassOrderError::Unknown { pass });
+        };
+        if let Some((previous_index, previous)) = self.previous {
+            if index <= previous_index {
+                return Err(AstPassOrderError::OutOfOrder { pass, previous });
+            }
+        }
+        self.previous = Some((index, pass));
+        Ok(())
+    }
+}
+
 /// THE AST pass pipeline. Every public decompile entry point runs exactly this.
 ///
 /// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
@@ -357,10 +431,13 @@ pub(super) fn run_ast_passes(
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
     got_targets: &std::collections::HashMap<u64, u64>,
-) -> (
-    crate::ir::stack_locals::StackLocalFacts,
-    std::collections::HashMap<String, String>,
-) {
+) -> Result<
+    (
+        crate::ir::stack_locals::StackLocalFacts,
+        std::collections::HashMap<String, String>,
+    ),
+    AstPassOrderError,
+> {
     let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
     let output_kind = prototype.map_or(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
@@ -391,8 +468,10 @@ pub(super) fn run_ast_passes(
         );
         eprintln!("\n===== stack object hints =====\n{stack_object_hints:#?}");
     }
+    let mut pass_order = AstPassOrder::default();
     macro_rules! pass {
         ($n:expr, $operation:expr) => {{
+            pass_order.check($n)?;
             let result = profiler.measure($n, || $operation);
             crate::ir::health::trace_pass($n, f, cfg_health);
             if dump {
@@ -587,7 +666,7 @@ pub(super) fn run_ast_passes(
         crate::ir::stack_idiom::rematerialise_stack_ops(f);
         crate::ir::label_prune::prune_unreferenced_labels(f);
     });
-    (stack_facts, role_names)
+    Ok((stack_facts, role_names))
 }
 
 /// Collapse architecture-specific machine frames after stack-slot promotion.
@@ -809,6 +888,7 @@ pub(super) enum FunctionPipelineError {
     Lift(String),
     Shadow(&'static str),
     Stage(PipelineStageError),
+    PassOrder(AstPassOrderError),
 }
 
 impl std::fmt::Display for FunctionPipelineError {
@@ -817,6 +897,7 @@ impl std::fmt::Display for FunctionPipelineError {
             Self::Lift(reason) => formatter.write_str(reason),
             Self::Shadow(reason) => formatter.write_str(reason),
             Self::Stage(reason) => reason.fmt(formatter),
+            Self::PassOrder(reason) => reason.fmt(formatter),
         }
     }
 }
@@ -824,6 +905,12 @@ impl std::fmt::Display for FunctionPipelineError {
 impl From<PipelineStageError> for FunctionPipelineError {
     fn from(error: PipelineStageError) -> Self {
         Self::Stage(error)
+    }
+}
+
+impl From<AstPassOrderError> for FunctionPipelineError {
+    fn from(error: AstPassOrderError) -> Self {
+        Self::PassOrder(error)
     }
 }
 
@@ -939,7 +1026,7 @@ pub(super) fn decompile_function(
         function_tables,
         &stack_object_hints,
         got_targets,
-    );
+    )?;
     stages.advance(
         "lower_and_run_ast_passes",
         PipelineStage::LlirPrepared,
@@ -1259,7 +1346,7 @@ pub(super) fn lower_and_run_ast_passes(
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
     got_targets: &std::collections::HashMap<u64, u64>,
-) -> PreparedAst {
+) -> Result<PreparedAst, AstPassOrderError> {
     let PreparedLlir {
         region,
         cfg_health,
@@ -1307,9 +1394,9 @@ pub(super) fn lower_and_run_ast_passes(
         function_tables,
         stack_object_hints,
         got_targets,
-    );
+    )?;
 
-    PreparedAst {
+    Ok(PreparedAst {
         function,
         profiler,
         cfg_health,
@@ -1320,7 +1407,7 @@ pub(super) fn lower_and_run_ast_passes(
         prototype,
         stack_facts,
         role_names,
-    }
+    })
 }
 
 impl PreparedLlir {
@@ -1521,9 +1608,36 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 #[cfg(test)]
 mod request_tests {
     use super::{
-        AnalysisBudget, DecompileCompleteness, DecompileRequest, PipelineStage,
-        PipelineStageTracker, RenderOptions,
+        AnalysisBudget, AstPassOrder, AstPassOrderError, DecompileCompleteness, DecompileRequest,
+        PipelineStage, PipelineStageTracker, RenderOptions,
     };
+
+    #[test]
+    fn ast_pass_order_allows_omissions_but_rejects_duplicates_and_reordering() {
+        let mut passes = AstPassOrder::default();
+        passes.check("recover_wide_copies").unwrap();
+        passes.check("fold_constants").unwrap();
+        passes.check("apply_role_names").unwrap();
+
+        assert_eq!(
+            passes.check("fold_constants"),
+            Err(AstPassOrderError::OutOfOrder {
+                pass: "fold_constants",
+                previous: "apply_role_names",
+            })
+        );
+    }
+
+    #[test]
+    fn ast_pass_order_rejects_an_unregistered_pass() {
+        let mut passes = AstPassOrder::default();
+        assert_eq!(
+            passes.check("surprise_cleanup"),
+            Err(AstPassOrderError::Unknown {
+                pass: "surprise_cleanup",
+            })
+        );
+    }
 
     #[test]
     fn invalid_pipeline_stage_order_fails_with_the_required_precondition() {
