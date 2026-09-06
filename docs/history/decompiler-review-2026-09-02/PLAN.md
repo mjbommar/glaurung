@@ -2402,6 +2402,10 @@ relevant ratchet's accepted-regression record.
    do not generalize this declared-parameter fact to inferred values before
    WP3 provides stable identity. See
    `results/wp6-wp9-aapcs32-wide-parameters.md`.
+   A first spelling-level `fp`/`r11` frame-alias prototype fixed the two A32 O0
+   fixture-215 cells but caused 188 regressions in the complete 410-lane A32
+   O0/O2 comparison and was rejected. Resume only with exact SSA-definition
+   lifetime evidence; never make the architectural alias globally active.
 10. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned

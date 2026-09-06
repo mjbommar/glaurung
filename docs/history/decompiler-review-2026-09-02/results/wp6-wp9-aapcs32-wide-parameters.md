@@ -70,3 +70,15 @@ The next architecture work should address the residual A32 O0 frame/storage
 identity failures and the i386 two-word parameter carrier. General source-value
 identity still belongs in WP3; this bounded authoritative ABI fact must not
 grow into a parallel name-based type system.
+
+## Rejected A32 O0 follow-on
+
+The two residual A32 O0 failures expose mixed aliases after lifting: frame
+establishment is spelled `fp = sp`, while memory operands retain versioned
+`r11` coordinates. Treating every such `fp`/`r11` pair as one active stack base
+made both target functions pass, but the required full 410-lane A32 O0/O2 run
+rejected it with 188 pass-to-fail movements, concentrated in frame-pointer-
+omitted O2 code. That prototype was removed without commit or baseline change.
+A future repair must join the exact established SSA frame value to its aliases
+and stop at later `r11` definitions; architecture-level spelling equivalence is
+not sufficient evidence.
