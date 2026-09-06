@@ -23,10 +23,18 @@ but have not met their full exit criteria. WP6 has its first per-use signedness
 slice and the O0 `classify` signed-result vertical slice, but not the general
 solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
 unsigned parameter declaration while rendering a contradictory signed machine
-comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP2, WP3,
-and the general WP7B idiom framework remain the principal unstarted or
-dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
+comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP3 and
+the general WP7B idiom framework remain the principal unstarted or
+dependency-blocked packages; WP2 has begun with the bounded request-model
+slice below. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
+The first WP2 request-model slice is landed at `d6a65779`. Module-level and
+reusable-session `decompile_at` now construct one pipeline-owned
+`DecompileRequest`, `AnalysisBudget`, and `RenderOptions`; every discovery
+limit survives one checked conversion. The other three public entry points,
+structured result, fingerprint, pass manager, and fixpoint driver remain open,
+so WP2 is now started rather than complete. See
+`results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
 entry words into the AST instead of presenting its high word as an invented
@@ -521,13 +529,17 @@ and make pass repetition/invalidation explicit.
 
 ### Production changes
 
-- [ ] Introduce a pipeline-owned request and result model in
+- [~] Introduce a pipeline-owned request and result model in
   `src/python_bindings/ir/pipeline.rs`:
   - `DecompileRequest { va, style, analysis_budget, render_options }`
   - `AnalysisBudget` with explicit callee, discovery, type, CFG, and size
     limits;
   - `DecompileResult` carrying pseudocode, health, completeness, provenance,
     and pipeline fingerprint.
+  `d6a65779` lands the request half for module-level and reusable-session
+  `decompile_at`: the VA, five explicit discovery limits, render selection,
+  debug cache, and analyst overlays now cross one typed boundary. The result
+  model and the range/all/many adapters remain open.
 - [ ] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
 - [ ] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and

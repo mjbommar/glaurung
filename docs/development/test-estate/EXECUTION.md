@@ -55,6 +55,7 @@ Both have since landed, so they are links again.
 | [x] Host-compiler test scoped to validated majors | (found by CI) | `09f4d511` |
 | [x] Canary set: default suite exercises the decompiler | estate 2 | `b4d23221` |
 | [x] ARM32 definition identity and stack-coordinate phase repairs | review WP3/WP9 | `4fa0b12f`, `a8ba1b87`, `dcdc99cc` |
+| [~] Pipeline-owned request model for module/session `decompile_at` | review WP2 | `d6a65779` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |
