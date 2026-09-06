@@ -245,6 +245,28 @@ impl FnBuilder {
         });
     }
 
+    /// Load `bytes` from the address held in `base` into `dst`.
+    ///
+    /// The register-base form of [`FnBuilder::load_abs`], which is what a
+    /// pointer dereference needs: the address is a value, not a constant.
+    /// `MemOp` already models this --- the lifter uses it for every
+    /// register-indirect access a real instruction makes --- so nothing new
+    /// reaches the interpreter here.
+    pub fn load_reg(&mut self, dst: &VReg, base: &VReg, bytes: u8) {
+        self.emit(Op::Load {
+            dst: dst.clone(),
+            addr: MemOp::plain(Some(base.clone()), None, 0, 0, bytes),
+        });
+    }
+
+    /// Store the low `bytes` of `src` to the address held in `base`.
+    pub fn store_reg(&mut self, base: &VReg, bytes: u8, src: &VReg) {
+        self.emit(Op::Store {
+            addr: MemOp::plain(Some(base.clone()), None, 0, 0, bytes),
+            src: Value::Reg(src.clone()),
+        });
+    }
+
     /// Store the low `bytes` of `src` to the absolute address `addr`.
     pub fn store_abs(&mut self, addr: u64, bytes: u8, src: &VReg) {
         self.emit(Op::Store {

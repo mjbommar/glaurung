@@ -250,7 +250,28 @@ not exotic: pointers and calls are 477 of the 732 refusals. A "path feasibility"
 feature that silently answers `unknown` on 81% of functions would be a worse
 product than not shipping it.
 
-> **Partly done** (2026-09-05). Pointers are now a lowerable type:
+> **Pointers done** (2026-09-05), and the differential earned its keep. What
+> landed: `CType::Pointer` with a pointee, pointer declarators (`int *p`),
+> pointer parameters (named --- the first version left them anonymous and the
+> body could not find them), `&x` on a local, and `*p` taking its width from
+> the pointee. `Val` and `Local` both carry the pointee beside the integer
+> type rather than replacing it, because a dereference is the only operation
+> that needs it and widening the type would touch every arithmetic rule to
+> answer a question none of them asks.
+>
+> **`s4_differential_on_the_gcc_o0_lane` caught a real bug the tests would not
+> have.** `128_qualifier_combinations:pointer_to_const_walks` returned `0x0`
+> from the lowering against `0x2464c45` from the real binary, because
+> `cursor += 1` on an `int32_t *` walked one byte instead of four: pointer
+> arithmetic scales by the pointee size and this lowering does not scale. The
+> answer is a named refusal --- `pointer arithmetic (no pointee scaling)` ---
+> rather than shipping the unscaled add, per `traps.md` on approximate
+> lowering. Pointer-to-pointer is refused for the same reason: `Local::pointee`
+> is one level deep and treating `**p` as `*p` reads the wrong bytes.
+>
+> Original entry follows.
+>
+> Pointers are now a lowerable type:
 > `CType::Pointer` carries its pointee and reports the unsigned pointer-width
 > integer from `as_int`, which is the representation the rest of the engine
 > already uses --- `src/exec/interp.rs` executes `Op::Load`/`Op::Store` over a
@@ -278,7 +299,10 @@ its own phase**, not a footnote to this one:
 |---|---:|---|
 | ~~pointer types~~ | ~~325~~ **0** | done: `CType::Pointer` carries a pointee and lowers as a pointer-width integer |
 | call expressions | 152 → **169** | a call op with a summary or an uninterpreted result. Now the top refusal |
-| dereference and subscript | ~40 | `expr::Val` must carry a `CType`, not an `IntType`, so a use site knows the pointee width |
+| ~~dereference~~ | ~~~40~~ **0** | done: `Val`/`Local` carry the pointee, `&x` and `*p` lower |
+| array subscript | 58 | needs the same pointee scaling pointer arithmetic needs |
+| assignment to a non-variable | 58 | `*p = v` --- the store half of the dereference |
+| pointer arithmetic | refused | scales by pointee size; the S4 differential is what makes this non-negotiable |
 | floating point | 51 | the solver has an FP route; the lowering has no FP type |
 | `switch` | 38 | a jump-table lowering; `analysis::jump_tables` does this for binaries |
 | aggregates | 36+ | struct and union member access |

@@ -410,13 +410,26 @@ fn declaration(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<(), LowerError
         let (first, end) = ctx
             .extent(child)
             .ok_or_else(|| LowerError::new("declarator with no tokens", ctx.offset_of(node)))?;
+        // A `*` makes this declarator a pointer to the base type, which is a
+        // pointer-width integer holding an address. Brackets and parens are
+        // still refused: an array declarator needs a multi-slot frame object
+        // and a function declarator is not an object at all.
+        let stars = (first..end)
+            .filter(|i| ctx.kind_at(*i) == Some(TokenKind::Star))
+            .count();
         if (first..end).any(|i| {
             matches!(
                 ctx.kind_at(i),
-                Some(TokenKind::Star) | Some(TokenKind::LBracket) | Some(TokenKind::LParen)
+                Some(TokenKind::LBracket) | Some(TokenKind::LParen)
             )
         }) {
-            return unsupported("pointer, array or function declarator", child, ctx);
+            return unsupported("array or function declarator", child, ctx);
+        }
+        // Only a single level of indirection is modelled. `int **p` would need
+        // the pointee to be a pointer, and `Local::pointee` is one `IntType`
+        // deep --- refusing is better than silently treating `**p` as `*p`.
+        if stars > 1 {
+            return unsupported("pointer-to-pointer declarator", child, ctx);
         }
         let Some(name_node) = ctx
             .children(child)
@@ -447,11 +460,18 @@ fn declaration(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<(), LowerError
             }
             None => None,
         };
-        let local = low.declare(&name, base);
+        // A pointer declarator stores an address, so the slot is
+        // pointer-width and the declared base becomes the pointee.
+        let (slot_ty, pointee) = if stars == 1 {
+            (super::ctype::IntType::ULONG, Some(base))
+        } else {
+            (base, None)
+        };
+        let local = low.declare_typed(&name, slot_ty, pointee);
         if let Some(value) = value {
-            let stored = super::expr::convert(low, &value, base);
+            let stored = super::expr::convert(low, &value, slot_ty);
             low.b
-                .store_abs(local.addr, base.width.bytes().max(1) as u8, &stored.reg);
+                .store_abs(local.addr, slot_ty.width.bytes().max(1) as u8, &stored.reg);
         }
     }
     Ok(())

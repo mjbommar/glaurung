@@ -33,14 +33,40 @@ use super::{unsupported, LowerError};
 pub struct Val {
     /// The register holding the canonical value.
     pub reg: VReg,
-    /// The C type of the expression.
+    /// The C type of the expression, as an integer.
+    ///
+    /// A pointer is an unsigned pointer-width integer here, which is what
+    /// makes comparison, assignment and argument passing work without a
+    /// special case at every use site.
     pub ty: IntType,
+    /// What this points at, when it is a pointer.
+    ///
+    /// Carried beside `ty` rather than replacing it because a dereference is
+    /// the *only* operation that needs it, and widening `ty` to a full
+    /// `CType` would touch every arithmetic and comparison rule to answer a
+    /// question none of them asks. `None` means "not a pointer, or a pointer
+    /// to something this model does not distinguish" --- and a dereference of
+    /// the second is refused rather than guessed at a width.
+    pub pointee: Option<IntType>,
+}
+
+impl Val {
+    /// A value of integer type that points at nothing.
+    pub fn plain(reg: VReg, ty: IntType) -> Val {
+        Val {
+            reg,
+            ty,
+            pointee: None,
+        }
+    }
 }
 
 /// One step of the expression walk.
 enum Job {
     /// Lower the expression rooted at this node.
     Eval(NodeId),
+    /// Load through the pointer on top of the stack.
+    Deref { node: NodeId },
     /// Apply a binary operator to the top two values.
     Bin { node: NodeId, op: TokenKind },
     /// Apply a prefix operator to the top value.
@@ -108,6 +134,11 @@ pub fn lower_expr(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<Val, LowerE
                 let out = unary(low, node, op, v)?;
                 values.push(out);
             }
+            Job::Deref { node } => {
+                let v = pop(&mut values, node, low)?;
+                let out = deref(low, node, &v)?;
+                values.push(out);
+            }
             Job::Convert { ty } => {
                 let v = pop(&mut values, node, low)?;
                 values.push(convert(low, &v, ty));
@@ -149,6 +180,8 @@ pub fn lower_expr(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<Val, LowerE
                 values.push(Val {
                     reg: result,
                     ty: IntType::INT,
+                    // An arithmetic or conversion result is not a pointer.
+                    pointee: None,
                 });
             }
             Job::CondSetup { then_n, else_n } => {
@@ -198,6 +231,8 @@ pub fn lower_expr(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<Val, LowerE
                     &Val {
                         reg: result,
                         ty: common,
+                        // An arithmetic or conversion result is not a pointer.
+                        pointee: None,
                     },
                     common,
                 ));
@@ -372,8 +407,26 @@ fn prefix(
             values.push(new);
             Ok(())
         }
-        TokenKind::Amp => unsupported("address-of operator", node, ctx),
-        TokenKind::Star => unsupported("pointer dereference", node, ctx),
+        TokenKind::Amp => {
+            // `&x` on a local is its frame address, which the lowering already
+            // knows: `Local::addr`. Only a bare local is handled --- `&a[i]`
+            // and `&s.f` need the arithmetic that pointer scaling would bring,
+            // and are refused by `lvalue` rather than approximated here.
+            let var = lvalue(low, operand)?;
+            let out = low.b.temp();
+            low.b.assign_const(&out, var.addr as i64);
+            values.push(Val {
+                reg: out,
+                ty: crate::csource::lower::ctype::IntType::ULONG,
+                pointee: Some(var.ty),
+            });
+            Ok(())
+        }
+        TokenKind::Star => {
+            jobs.push(Job::Deref { node });
+            jobs.push(Job::Eval(operand));
+            Ok(())
+        }
         TokenKind::KwSizeof => unsupported("sizeof of an expression", node, ctx),
         TokenKind::KwReal | TokenKind::KwImag => unsupported("complex-number operator", node, ctx),
         TokenKind::Plus | TokenKind::Minus | TokenKind::Tilde | TokenKind::Bang => {
@@ -589,6 +642,8 @@ fn step_local(
         Val {
             reg: new,
             ty: var.ty,
+            // An arithmetic or conversion result is not a pointer.
+            pointee: None,
         },
     ))
 }
@@ -603,6 +658,9 @@ pub(crate) fn load_local(low: &mut Lowerer<'_, '_>, var: Local) -> Val {
     Val {
         reg: out,
         ty: var.ty,
+        // Loading a pointer local yields a pointer: the pointee has to survive
+        // the load or a dereference has no width.
+        pointee: var.pointee,
     }
 }
 
@@ -624,6 +682,9 @@ pub(crate) fn convert(low: &mut Lowerer<'_, '_>, value: &Val, ty: IntType) -> Va
     Val {
         reg: canonicalize(low, &value.reg, ty),
         ty,
+        // A conversion to an integer type discards pointee-ness: the result is
+        // the integer that was asked for.
+        pointee: None,
     }
 }
 
@@ -641,6 +702,27 @@ pub(crate) fn canonicalize(low: &mut Lowerer<'_, '_>, raw: &VReg, ty: IntType) -
 }
 
 /// A prefix operator applied to a lowered value.
+/// Load through a pointer.
+///
+/// The pointee width is what decides how many bytes to read, which is why
+/// [`Val::pointee`] exists at all. A value with no pointee is refused rather
+/// than assumed to be a `long`: guessing the width would read the wrong bytes
+/// and the interpreter would happily execute it.
+fn deref(low: &mut Lowerer<'_, '_>, node: NodeId, ptr: &Val) -> Result<Val, LowerError> {
+    let Some(pointee) = ptr.pointee else {
+        return Err(LowerError::new(
+            "dereference of a pointer with no known pointee width",
+            low.ctx.offset_of(node),
+        ));
+    };
+    let raw = low.b.temp();
+    low.b
+        .load_reg(&raw, &ptr.reg, pointee.width.bytes().max(1) as u8);
+    let out = low.b.temp();
+    low.b.normalize(&out, &raw, pointee.width, pointee.signed);
+    Ok(Val::plain(out, pointee))
+}
+
 fn unary(
     low: &mut Lowerer<'_, '_>,
     node: NodeId,
@@ -659,6 +741,8 @@ fn unary(
             Ok(Val {
                 reg: out,
                 ty: IntType::INT,
+                // An arithmetic or conversion result is not a pointer.
+                pointee: None,
             })
         }
         TokenKind::Plus => Ok(convert(low, &value, value.ty.promote())),
@@ -677,7 +761,7 @@ fn unary(
             );
             let out = low.b.temp();
             low.b.normalize(&out, &raw, ty.width, ty.signed);
-            Ok(Val { reg: out, ty })
+            Ok(Val::plain(out, ty))
         }
         other => Err(LowerError::new(
             format!("prefix operator `{}`", other.name()),
@@ -695,6 +779,24 @@ fn binary(
     rhs: Val,
 ) -> Result<Val, LowerError> {
     use TokenKind::*;
+
+    // Pointer arithmetic scales by the pointee size: `cursor + 1` on an
+    // `int32_t *` advances four bytes, not one. This lowering does not scale,
+    // so it refuses rather than emitting the unscaled add.
+    //
+    // Found by `s4_differential_on_the_gcc_o0_lane`, not by reading the code:
+    // `128_qualifier_combinations:pointer_to_const_walks` returned 0 from the
+    // lowering against 0x2464c45 from the real binary, because `cursor += 1`
+    // walked one byte at a time. A silently wrong address is exactly the class
+    // of defect `docs/development/traps.md` says an approximate lowering
+    // produces, so the answer is a named refusal until the scaling exists.
+    if matches!(op, Plus | Minus) && (lhs.pointee.is_some() || rhs.pointee.is_some()) {
+        return Err(LowerError::new(
+            "pointer arithmetic (no pointee scaling)",
+            low.ctx.offset_of(node),
+        ));
+    }
+
     // Shifts do not take the usual arithmetic conversions: the result type is
     // the promoted *left* operand and the right operand promotes on its own.
     if matches!(op, Shl | Shr) {
@@ -730,7 +832,7 @@ fn binary(
         low.b.binop(&raw, kind, &a.reg, &count);
         let out = low.b.temp();
         low.b.normalize(&out, &raw, ty.width, ty.signed);
-        return Ok(Val { reg: out, ty });
+        return Ok(Val::plain(out, ty));
     }
 
     let ty = lhs.ty.common(rhs.ty);
@@ -749,6 +851,8 @@ fn binary(
         return Ok(Val {
             reg: out,
             ty: IntType::INT,
+            // An arithmetic or conversion result is not a pointer.
+            pointee: None,
         });
     }
 
@@ -770,7 +874,7 @@ fn binary(
     };
     let out = low.b.temp();
     low.b.normalize(&out, &raw, ty.width, ty.signed);
-    Ok(Val { reg: out, ty })
+    Ok(Val::plain(out, ty))
 }
 
 fn arith(low: &mut Lowerer<'_, '_>, op: BinOp, a: &Val, b: &Val) -> VReg {
@@ -875,5 +979,5 @@ fn literal(low: &mut Lowerer<'_, '_>, node: NodeId) -> Result<Val, LowerError> {
         .ok_or_else(|| LowerError::new(format!("literal `{text}`"), ctx.offset_of(node)))?;
     let out = low.b.temp();
     low.b.assign_const(&out, bits);
-    Ok(Val { reg: out, ty })
+    Ok(Val::plain(out, ty))
 }

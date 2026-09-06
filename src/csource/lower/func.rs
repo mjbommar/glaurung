@@ -78,8 +78,16 @@ impl LoweredFunction {
 pub struct Local {
     /// Absolute address of its frame slot.
     pub addr: u64,
-    /// Its integer type.
+    /// Its integer type. A pointer is the unsigned pointer-width integer.
     pub ty: IntType,
+    /// What it points at, when it is a pointer to something this model
+    /// distinguishes.
+    ///
+    /// Without this a pointer local is indistinguishable from a `long` once it
+    /// has been loaded, and a dereference has no width to load. `None` means
+    /// not a pointer, or a pointer whose pointee is opaque --- and a
+    /// dereference of the second is refused rather than guessed.
+    pub pointee: Option<IntType>,
 }
 
 /// Where `break` and `continue` go in the innermost enclosing loop.
@@ -193,8 +201,18 @@ impl<'a, 'b> Lowerer<'a, 'b> {
     /// aliasing it, which is what C's one-definition rule already guarantees;
     /// an inner scope shadows, which the scope stack gives for free.
     pub fn declare(&mut self, name: &str, ty: IntType) -> Local {
+        self.declare_typed(name, ty, None)
+    }
+
+    /// Declare `name`, recording what it points at when it is a pointer.
+    pub fn declare_typed(
+        &mut self,
+        name: &str,
+        ty: IntType,
+        pointee: Option<IntType>,
+    ) -> Local {
         let addr = self.b.slot(u64::from(ty.width.bytes().max(1)));
-        let local = Local { addr, ty };
+        let local = Local { addr, ty, pointee };
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.to_string(), local);
         }
@@ -265,7 +283,8 @@ pub fn lower_function(
         });
         let value = low.b.temp();
         low.b.normalize(&value, &raw, ty.width, ty.signed);
-        let local = low.declare(&param.name, ty);
+        let pointee = param.ty.pointee().and_then(|inner| inner.as_int());
+        let local = low.declare_typed(&param.name, ty, pointee);
         low.b
             .store_abs(local.addr, ty.width.bytes().max(1) as u8, &value);
     }
@@ -438,8 +457,18 @@ fn push_param(
                     words.iter().copied(),
                 )
                 .map(Box::new);
+                // The name is the last identifier in the group --- `const
+                // char *name` names `name`. Without it the parameter is
+                // declared anonymously and the body cannot find it, which
+                // reads as `reference to non-local` at the first use.
+                let name = group
+                    .iter()
+                    .rev()
+                    .find(|i| ctx.kind_at(**i) == Some(TokenKind::Identifier))
+                    .map(|i| ctx.text_at(*i).to_string())
+                    .unwrap_or_default();
                 out.push(ParamSlot {
-                    name: String::new(),
+                    name,
                     ty: CType::Pointer(pointee),
                     reg,
                 });

@@ -269,8 +269,18 @@ fn a_long_result_keeps_all_sixty_four_bits() {
 
 #[test]
 fn an_unlowerable_construct_is_refused_by_name_rather_than_approximated() {
-    let err = lower_named_function("int f(int *p) { return *p; }", "f")
-        .expect_err("a pointer parameter is not modelled");
+    // A pointer parameter and a plain dereference now lower --- see
+    // `a_pointer_parameter_dereferences_to_its_pointee`. What is still refused
+    // is arithmetic on one, because the lowering does not scale by the pointee
+    // size and an unscaled `cursor + 1` walks one byte instead of four. The
+    // S4 differential caught exactly that against the real binary.
+    let err = lower_named_function("int f(int *p) { return *(p + 1); }", "f")
+        .expect_err("pointer arithmetic is not modelled");
+    assert!(err.what.contains("pointer arithmetic"), "{err}");
+    // Pointer-to-pointer is refused too: `Local::pointee` is one level deep,
+    // and treating `**p` as `*p` would read the wrong bytes.
+    let err = lower_named_function("int f(int **p) { return **p; }", "f")
+        .expect_err("pointer-to-pointer is not modelled");
     assert!(err.what.contains("pointer"), "{err}");
     let err = lower_named_function("double f(double x) { return x; }", "f")
         .expect_err("floating point is not modelled");
@@ -343,4 +353,36 @@ fn a_shift_count_at_the_operand_width_wraps_the_way_the_hardware_does() {
         "wide",
     );
     assert_eq!(call(&wide, &[1, 64]), 1);
+}
+
+#[test]
+fn a_pointer_to_a_local_round_trips_through_memory() {
+    // The whole point of admitting pointers: `&x` puts a real frame address in
+    // a register, `*p` loads through it, and the width comes from the pointee
+    // rather than a guess. Run on the real interpreter, so this is the load
+    // actually executing rather than the lowering merely compiling.
+    //
+    // Written so the C itself supplies the value, because there is no helper
+    // to seed memory from the outside and inventing one to test this would put
+    // the test's own arithmetic between the lowering and the answer.
+    let f = lower("int f(int a) { int x = a; int *p = &x; return *p; }", "f");
+    assert_eq!(call(&f, &[7]), 7);
+    assert_eq!(call(&f, &[(-3i64) as u64]), (-3i64) as u64 & 0xffff_ffff);
+}
+
+#[test]
+fn a_pointee_width_decides_how_many_bytes_a_dereference_reads() {
+    // Taking the width from the pointee rather than the pointer is why
+    // `Val::pointee` exists. A `char` local holds one byte, so dereferencing a
+    // `char *` to it reads one; an `int` local dereferenced through an `int *`
+    // reads four.
+    //
+    // Declared rather than cast: `(char *)&x` is a cast to a pointer type,
+    // which this lowering still refuses, and writing the test with one would
+    // be testing a construct that does not exist yet.
+    let wide = lower("int f(int a) { int x = a; int *p = &x; return *p; }", "f");
+    let narrow = lower("int f(int a) { char c = (char)a; char *p = &c; return *p; }", "f");
+    assert_eq!(call(&wide, &[0x44332211]), 0x44332211);
+    // 0x11 fits in a signed char, so the sign extension is a no-op here.
+    assert_eq!(call(&narrow, &[0x44332211]), 0x11);
 }
