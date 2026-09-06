@@ -749,6 +749,141 @@ tree:
 A `maturin develop` build is DEBUG and roughly an order of magnitude slower;
 these are the release figures.
 
+## Path feasibility
+
+Everything above reads the program's *structure*. This asks whether a path
+through it can be taken by any input at all, by putting the branch conditions
+to an SMT solver.
+
+```python
+for path in glaurung.source.path_feasibility(code, "decide"):
+    print(path["decisions"], path["verdict"], path["args"], path["why"])
+```
+
+Each entry is one enumerated path: `decisions` is how many branch decisions
+guard it, `verdict` is `"feasible"`, `"infeasible"` or `"unknown"`, `args` is a
+concrete input that takes it (feasible only), and `why` names the reason for an
+abstention.
+
+**This needs an extension built with the `symbolic` feature.** The default
+wheel bundles the concrete emulator but not the symbolic engine or a solver, so
+the function is always present and raises `RuntimeError` on a build that cannot
+answer:
+
+```bash
+uv run maturin develop -F pyo3/extension-module,python-ext,symbolic
+```
+
+It raises rather than returning an empty list because "no paths" and "this
+build cannot answer" are different facts, and a caller that cannot tell them
+apart would record "nothing infeasible" for a function it never examined.
+
+### Why an unchecked reachability answer is wrong
+
+A path a graph reports as reachable may be takeable by no input. Measured over
+`tests/decompiler_fixtures/src` (`cargo test --features symbolic --lib
+csource::feasibility -- --nocapture`):
+
+| | |
+|---|---:|
+| functions decided | 293 |
+| paths decided | 1,131 |
+| **infeasible** | **373 (33%)** |
+| feasible | 746 |
+| unknown | 12 |
+| paths cut by a bound, no verdict | 510 |
+
+A third of the paths cannot be taken. The shape that produces them is the
+mutually-exclusive dispatch chain decompiler output is made of:
+
+```c
+if (first == (uint8_t)'H' && second == 0) return 101;
+if (first == (uint8_t)'C' && second == 0) return 1201;
+```
+
+Each `&&` contributes two decisions, so a path can assume `first == 'H'` held,
+`second == 0` did not, and then that `first == 'C'` holds — of one byte, at one
+program point, with no assignment between. No graph can see that; it is a fact
+about *values*.
+
+### What it will not answer
+
+The lowering accepts a subset of C and refuses the rest **by name**, and a
+function it refuses returns one entry whose `why` carries the construct rather
+than a verdict:
+
+```python
+>>> glaurung.source.path_feasibility("double f(double x) { return x; }", "f")
+[{'decisions': None, 'verdict': 'unknown', 'args': None,
+  'why': 'not lowered: unsupported at byte 0: floating-point type '
+         '(no FP in the exec Domain) as a result'}]
+```
+
+A tool that reports "infeasible" when it means "I could not lower this" is
+worse than one that reports nothing. Of 900 corpus functions, 403 do not lower
+and a further 204 lower but have a non-integer parameter, for which there is no
+input space to quantify over.
+
+### Every witness is re-run, twice
+
+A satisfying assignment is not taken on trust. The solver and our interpreter
+do not agree everywhere — `Div` by zero is `0` concretely and all-ones under
+SMT-LIB's `bvudiv`, and a shift at or above the operand width reduces modulo
+the width concretely but saturates under `bvshl` — so agreement between them is
+two readings of *our* semantics.
+
+1. The interpreter re-runs the model as constants and must reach a path; one
+   that does not becomes `unknown`, never a verdict.
+2. Every solver-chosen input is fed to the binary **`gcc` built from the same
+   source**: 745 witnesses, 600 decided, **0 diverged**. This is a sharper
+   probe than a fixed vector set, because the solver does not pick round
+   numbers — it picks whatever satisfies a guard, which is disproportionately a
+   boundary.
+
+### Three things built on it
+
+Rust-side today (`src/csource/feasibility.rs`); not yet exposed to Python.
+
+**Unreachable code.** A block that only infeasible paths reach is code no input
+executes — 7 functions and 8 blocks in the corpus. Nothing is claimed unless
+the path enumeration was *total*: with even one path cut by a bound, "every
+path I looked at is infeasible" is not "no input gets here".
+
+**Redundant guards.** A decision earlier decisions already force. `x > 10`
+forces `x > 0`, so this is a solver query and not a syntactic one. Only
+satisfiable paths are examined, because implication is vacuous from a
+contradiction and a naive version turns one infeasible path into a list of fake
+findings.
+
+**Reachable undefined behaviour.** Is there an input that divides by this zero
+or shifts by this width. Four functions in nine hundred, each with a triggering
+input:
+
+| function | property |
+|---|---|
+| `02_integer_widths::urem64`, `srem64` | `a % b` with `b` unconstrained |
+| `17_hash_table::hash_slot` | `% (uint32_t)capacity`, and nothing forces capacity nonzero |
+| `54_sha256_block::rotate_right` | `value << (32u - amount)` is undefined at `amount == 0` |
+
+The last is the check validating itself: `rotate_right` is the one function in
+this corpus whose undefined behaviour a person had to find by hand, and it is
+the single entry the execution differential's known-UB list was created to
+hold. Grepping for `<<` finds it among hundreds of safe shifts; asking whether
+some input *reaches and breaks* it returns four functions.
+
+Array bounds is the property this does **not** check. The extent lives in the
+lowering's `Local` and the LLIR carries an address, not a bound, so by the time
+there is a term to ask about, `a[i]` and `*(p + i)` are the same expression.
+
+### Into the knowledge base
+
+`glaurung.llm.kb.source_facts.ingest_source` writes the **infeasible** verdicts
+as `source_infeasible_path` nodes with `set_by = "source"`, alongside the
+prototypes and dependence edges. Only the infeasible ones: a feasible path is
+the ordinary case and one row per path of every function would bury the finding
+in its own background. Without a `symbolic` build it writes none, and the
+counts say so.
+
 ## What this is not
 
 It is not a linter, a type checker, or a code property graph. It reads one
