@@ -333,13 +333,14 @@ pub(super) fn fold_one_call(
                             // Keep the setup where it stands when moving it to
                             // the call would read a value written after it; the
                             // call then names the argument register instead.
-                            found[slot] = if !substitutable
-                                || versioned_operand_is_reassigned(src, body, i, call_idx)
-                            {
-                                Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
-                            } else {
-                                Some((i, src.clone()))
-                            };
+                            found[slot] =
+                                if phase_sensitive_stack_read(src, body, i, call_idx, arch)
+                                    || versioned_operand_is_reassigned(src, body, i, call_idx)
+                                {
+                                    Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
+                                } else {
+                                    Some((i, src.clone()))
+                                };
                             if feeds_balanced_stack_argument {
                                 for argument in &mut stack_args {
                                     let _ = substitute_exact_reg(argument, dst, src);
@@ -721,6 +722,44 @@ pub(super) fn fold_one_call(
     for idx in used_stmt_indices {
         body.remove(idx);
     }
+}
+
+/// Does moving this load to the call cross a stack-coordinate phase change?
+///
+/// A local backward fold may safely inline ordinary pure expressions. A load
+/// through the current stack pointer is different: an epilogue adjustment
+/// between the load and call changes what the same textual address means. Keep
+/// that exact definition statement-rooted. Other impure expressions retain the
+/// established behavior until a general memory/reaching-definition model can
+/// classify them.
+fn phase_sensitive_stack_read(
+    source: &Expr,
+    body: &[Stmt],
+    definition_index: usize,
+    call_index: usize,
+    arch: CallConv,
+) -> bool {
+    let Expr::Deref { addr, .. } = source else {
+        return false;
+    };
+    let stack_names: &[&str] = match arch {
+        CallConv::SysVAmd64 | CallConv::Win64 => &["rsp"],
+        CallConv::Cdecl32 => &["esp", "rsp"],
+        CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64 => &["sp"],
+    };
+    let reads_stack = stack_names
+        .iter()
+        .any(|name| reads_reg_in_expr(addr, &VReg::phys(*name)));
+    reads_stack
+        && body[(definition_index + 1).min(call_index)..call_index]
+            .iter()
+            .any(|statement| {
+                matches!(
+                    statement,
+                    Stmt::Assign { dst: VReg::Phys(name), .. }
+                        if stack_names.contains(&ssa_base(name))
+                )
+            })
 }
 
 /// Preserve an immediately reaching `xmm0:xmm1` aggregate result across a

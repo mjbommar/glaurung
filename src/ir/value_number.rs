@@ -41,7 +41,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::call_args::CallConv;
 use crate::ir::ssa::SsaValue;
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
-use crate::ir::use_def::{def_ref, for_each_use, use_count, InstrAddr};
+use crate::ir::use_def::{def_mut, def_ref, for_each_use, use_count, InstrAddr};
 
 mod architectural_reads;
 mod coalesce;
@@ -177,12 +177,31 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
             // Read out of the indexed SSA tables rather than the
             // address-keyed maps: same answer, no hashing. Keep the base as
             // well as the version so target-qualified aliases stay coherent.
-            let def_value = ssa.def_value_ref(lf, addr);
+            let def_ver = ssa.def_version(lf, addr);
             // Only the use ARITY is wanted here; `def_uses` would allocate a
             // vector of cloned register spellings to report it.
             use_values.clear();
             use_values.extend((0..use_count(&ins.op)).map(|k| ssa.use_value(lf, addr, k)));
-            tag_op(&mut ins.op, def_value, &use_values, &ctx);
+            // SSA definitions and uses must agree on their target-qualified
+            // base. The ordinary tagger already handles x86/AArch64 view
+            // parents; adopt the side-car base only when that compatibility
+            // path cannot express the target alias (currently ARM32 fp/r11).
+            if matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
+                if let (
+                    Some(VReg::Phys(definition)),
+                    Some(SsaValue {
+                        base: VReg::Phys(canonical),
+                        ..
+                    }),
+                ) = (def_mut(&mut ins.op), ssa.def_value_ref(lf, addr))
+                {
+                    let compatibility = crate::ir::ssa::parent64(definition).unwrap_or(definition);
+                    if compatibility != canonical {
+                        *definition = canonical.clone();
+                    }
+                }
+            }
+            tag_op(&mut ins.op, def_ver, &use_values, &ctx);
             if let (Some(dst), Some(width)) = (
                 def_ref(&ins.op),
                 operation_definition_width(&lf.blocks[bi].instrs[ii].op),
