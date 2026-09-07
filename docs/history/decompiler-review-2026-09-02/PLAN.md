@@ -1000,6 +1000,12 @@ provenance through lowering.
   prologue test, focused epilogue ownership test, all 12 module tests, and one
   exact AArch64 O0 `classify` cell pass. See
   `results/wp3-aarch64-frame-origins.md`.
+  Commit `7c2fc34b` begins the next enabled cleanup boundary: attributed
+  `ret = C; return C` pairs now collapse in supported structured bodies and
+  union the removed assignment owner onto the surviving return, while
+  mismatched constants remain unchanged. Its observed-red test, all four
+  return-fold module tests, and both exact host O0 `classify` cells pass. See
+  `results/wp3-constant-return-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

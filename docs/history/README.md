@@ -188,6 +188,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-x87-scrub-origins.md](decompiler-review-2026-09-02/results/wp3-x87-scrub-origins.md) | 2026-09-07 | exact hardened-return x87 scrub recognition sees attributed operations and unions all consumed machine owners onto its replacement comment | the focused test was observed red and all 35 x86 frame tests pass; no checked-in fixture exercises the compiler option |
 | [results/wp3-x86-epilogue-origins.md](decompiler-review-2026-09-02/results/wp3-x86-epilogue-origins.md) | 2026-09-07 | ordinary leave, pop, promoted-stack, and second-round x86 epilogues see attributed statements and preserve exact replacement owners | the focused test was observed red; all 39 x86 frame tests and two exact host O0 classify cells pass |
 | [results/wp3-aarch64-frame-origins.md](decompiler-review-2026-09-02/results/wp3-aarch64-frame-origins.md) | 2026-09-07 | AArch64 canonical and promoted prologues plus paired restore epilogues see attributed statements and preserve exact replacement owners | the prologue test was observed red; two focused ownership tests, all 12 module tests, and one exact AArch64 O0 classify cell pass |
+| [results/wp3-constant-return-origins.md](decompiler-review-2026-09-02/results/wp3-constant-return-origins.md) | 2026-09-07 | late attributed constant-result assignments collapse into the identical surviving return with the exact owner union | the focused test was observed red; all four return-fold tests and two exact host O0 classify cells pass |
 
 ## `design/`
 
