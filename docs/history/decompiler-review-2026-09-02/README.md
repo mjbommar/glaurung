@@ -88,7 +88,12 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-call-result-loop-origins.md`](results/wp3-call-result-loop-origins.md):
+[`results/wp3-verification-pointer-origins.md`](results/wp3-verification-pointer-origins.md):
+goto-aware final-source verification and authoritative pointer refinement now
+see attributed statements; both observed-red tests, all 66 touched-module
+tests, and all eight declaration/use invariant cells pass. The preceding
+[`results/wp3-call-result-loop-origins.md`](results/wp3-call-result-loop-origins.md)
+records how
 attributed loop breaks and boxed-clause calls now preserve call-result
 dataflow safety; both observed-red tests, all 15 module tests, and eight exact
 real-binary cases pass. The preceding

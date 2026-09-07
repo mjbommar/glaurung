@@ -941,6 +941,10 @@ provenance through lowering.
   not request an impossible compatibility insertion. Both observed-red tests,
   all 15 module tests, and eight exact call-result lanes pass. See
   `results/wp3-call-result-loop-origins.md`.
+  Commit `c6a42332` then migrates the goto-aware final-source verifier and
+  authoritative pointer-boundary refinement. Both observed-red tests, all 66
+  touched-module tests, and the eight architecture/optimization declaration
+  invariant cells pass. See `results/wp3-verification-pointer-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
@@ -2947,8 +2951,10 @@ relevant ratchet's accepted-regression record.
    `results/wp3-output-value-origins.md`.
    Commit `6068a59c` now migrates that first complex path under the explicit
    policy, and `876bddf6` closes the adjacent raw loop-exit and boxed-call
-   omissions in `call_result_split.rs`. Re-audit for the next enabled wildcard
-   consumer; keep expression ownership behind completion of that audit.
+   omissions in `call_result_split.rs`. Commit `c6a42332` next closes the
+   final-source verifier and authoritative pointer reader surfaces. Continue
+   with canonical local naming and architecture-specific prologue readers;
+   keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
