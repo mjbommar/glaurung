@@ -111,7 +111,8 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
 /// being reconstructed, but it is redundant in the final source AST.
 pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
     for stmt in body.iter_mut() {
-        match stmt {
+        match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -139,7 +140,7 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
 
     let mut index = 0;
     while index < body.len() {
-        let assigned = match &body[index] {
+        let assigned = match body[index].semantic() {
             Stmt::Assign {
                 dst,
                 src: Expr::Const(value),
@@ -151,17 +152,26 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
             continue;
         };
         let mut return_index = index + 1;
-        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+        while body
+            .get(return_index)
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+        {
             return_index += 1;
         }
-        let identical_return = matches!(
-            body.get(return_index),
-            Some(Stmt::Return {
-                value: Some(Expr::Const(returned)),
-            }) if *returned == assigned
-        );
+        let identical_return = body.get(return_index).is_some_and(|statement| {
+            matches!(
+                statement.semantic(),
+                Stmt::Return {
+                    value: Some(Expr::Const(returned)),
+                } if *returned == assigned
+            )
+        });
         if identical_return {
+            let assignment_origins = body[index].origins().cloned();
             body.remove(index);
+            if let Some(origins) = assignment_origins {
+                body[return_index - 1].merge_origins(&origins);
+            }
             continue;
         }
         index += 1;
@@ -477,6 +487,35 @@ mod tests {
             vec![Stmt::Return {
                 value: Some(Expr::Const(-1)),
             }]
+        );
+    }
+
+    #[test]
+    fn attributed_late_return_cleanup_moves_assignment_owner_to_return() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+        ];
+
+        remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(body.len(), 1);
+        assert!(matches!(
+            body[0].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Const(-1))
+            }
+        ));
+        assert_eq!(
+            body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([0x1010, 0x1014]))
         );
     }
 
