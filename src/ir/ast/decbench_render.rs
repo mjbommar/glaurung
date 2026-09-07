@@ -38,7 +38,7 @@ use super::{
 
 fn statement_writes_register(statement: &super::Stmt, target: &VReg) -> bool {
     use super::Stmt;
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => dst == target,
         Stmt::Store {
             addr: super::Expr::Reg(dst),
@@ -115,7 +115,7 @@ fn inline_scalar_declarations(
         }
         let target = VReg::phys(name);
         for (index, statement) in body.iter().enumerate() {
-            let source = match statement {
+            let source = match statement.semantic() {
                 super::Stmt::Assign { dst, src } if dst == &target => Some(src),
                 super::Stmt::Store {
                     addr: super::Expr::Reg(dst),
@@ -124,8 +124,8 @@ fn inline_scalar_declarations(
                 } if dst == &target => Some(src),
                 _ => None,
             };
-            let for_source = match statement {
-                super::Stmt::For { init, .. } => match init.as_ref() {
+            let for_source = match statement.semantic() {
+                super::Stmt::For { init, .. } => match init.semantic() {
                     super::Stmt::Assign { dst, src } if dst == &target => Some(src),
                     super::Stmt::Store {
                         addr: super::Expr::Reg(dst),

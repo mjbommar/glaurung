@@ -11457,6 +11457,39 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_first_scalar_definition_becomes_its_declaration_initializer() {
+        let local = VReg::phys("local_4");
+        let function = Function {
+            name: "initialise".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: local.clone(),
+                    src: Expr::Const(0),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                }
+                .with_origins(OriginSet::one(0x1014)),
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            local,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(rendered.contains("    int local_4 = 0;"), "{rendered}");
+        assert_eq!(rendered.matches("int local_4").count(), 1, "{rendered}");
+    }
+
+    #[test]
     fn scalar_read_before_definition_keeps_the_entry_declaration() {
         let local = VReg::phys("local_4");
         let function = Function {
