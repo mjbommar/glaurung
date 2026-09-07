@@ -36,7 +36,8 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
     let mut cursor = call_idx;
     while cursor > 0 {
         let i = cursor - 1;
-        match &body[i] {
+        match body[i].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Call { .. }
             | Stmt::Label(_)
             | Stmt::Goto { .. }
@@ -168,17 +169,32 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
         return;
     }
 
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
     if let Stmt::Call {
         args: call_args, ..
-    } = &mut body[call_idx]
+    } = body[call_idx].semantic_mut()
     {
         *call_args = args;
+        if let Some(origins) = consumed_origins.as_ref() {
+            body[call_idx].merge_origins(origins);
+        }
+    } else {
+        return;
     }
     used.sort_unstable_by(|left, right| right.cmp(left));
     let removed_pushes: Vec<(usize, i64)> = used
         .iter()
         .filter_map(|&index| stack_pointer_sub_width(&body[index]).map(|width| (index, width)))
         .collect();
+    let adjustment_origins = removed_pushes
+        .iter()
+        .filter_map(|(index, _)| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
     let folded_bytes: i64 = removed_pushes.iter().map(|(_, width)| *width).sum();
     rebase_esp_after_removed_pushes(body, call_idx, &removed_pushes);
     let removed_before_call = used.iter().filter(|&&index| index < call_idx).count();
@@ -186,10 +202,11 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
         body.remove(stmt_idx);
     }
     if folded_bytes > 0 {
-        body.insert(
-            call_idx - removed_before_call,
-            folded_push_adjustment(folded_bytes),
-        );
+        let adjustment = match adjustment_origins {
+            Some(origins) => folded_push_adjustment(folded_bytes).with_origins(origins),
+            None => folded_push_adjustment(folded_bytes),
+        };
+        body.insert(call_idx - removed_before_call, adjustment);
     }
 }
 
@@ -328,7 +345,8 @@ fn visit_expr_mut(expr: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
 
 /// Subtract `bytes` from every `esp`/`rsp`-relative displacement in `stmt`.
 fn shift_stack_pointer_displacements(stmt: &mut Stmt, bytes: i64) {
-    match stmt {
+    match stmt.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => shift_stack_pointer_displacements_in_expr(src, bytes),
         Stmt::Store { addr, src, .. } => {
             shift_stack_pointer_displacements_in_expr(addr, bytes);
@@ -375,7 +393,7 @@ fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
                     lhs,
                     rhs,
                 },
-        } = statement
+        } = statement.semantic()
         {
             if matches!(ssa_base(dst), "esp" | "rsp")
                 && matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(base)) if ssa_base(base) == ssa_base(dst))
@@ -386,7 +404,8 @@ fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
                 };
             }
         }
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Comment(_) | Stmt::Nop => {}
             Stmt::Assign { dst, src } if is_pure_arg_normalisation(src) => match dst {
                 VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. } => {}
@@ -401,7 +420,7 @@ fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
 /// A statement that only computes a value into a register, touching neither
 /// memory nor the stack pointer.
 fn is_pure_register_value(statement: &Stmt) -> bool {
-    let Stmt::Assign { dst, src } = statement else {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
         return false;
     };
     if let VReg::Phys(name) = dst {

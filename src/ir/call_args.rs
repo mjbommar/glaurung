@@ -2858,6 +2858,45 @@ mod tests {
     }
 
     #[test]
+    fn cdecl32_folds_attributed_stack_stores_into_the_call_owner() {
+        let stack_store = |disp, value, va| {
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("esp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                },
+                src: Expr::Const(value),
+                size: 4,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(va))
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                stack_store(4, 20, 0x1010),
+                stack_store(0, 10, 0x1014),
+                call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(f.body.len(), 1, "attributed setup was not folded: {f:#?}");
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Const(10), Expr::Const(20)]
+        ));
+        assert_eq!(
+            f.body[0].origins().expect("folded call owner").addresses(),
+            &[0x1010, 0x1014, 0x1018]
+        );
+    }
+
+    #[test]
     fn sysv_resolves_reused_scratch_registers_in_captured_arguments() {
         let from_rax = |addend| Expr::Bin {
             op: BinOp::Add,
@@ -3498,6 +3537,64 @@ mod tests {
             Stmt::Call { args, .. }
                 if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
         ));
+    }
+
+    #[test]
+    fn cdecl32_attributed_pushes_preserve_call_and_adjustment_owners() {
+        let push_pair = |value, va| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(va)),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 4,
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(va)),
+            ]
+        };
+        let mut body = Vec::new();
+        body.extend(push_pair(20, 0x1020));
+        body.extend(push_pair(10, 0x1024));
+        body.push(call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1028)));
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(f.body.len(), 2, "attributed pushes were not folded: {f:#?}");
+        assert_eq!(stack_pointer_sub_width(&f.body[0]), Some(8));
+        assert_eq!(
+            f.body[0]
+                .origins()
+                .expect("net stack adjustment owner")
+                .addresses(),
+            &[0x1020, 0x1024]
+        );
+        assert!(matches!(
+            f.body[1].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Const(10), Expr::Const(20)]
+        ));
+        assert_eq!(
+            f.body[1].origins().expect("folded call owner").addresses(),
+            &[0x1020, 0x1024, 0x1028]
+        );
     }
 
     #[test]
