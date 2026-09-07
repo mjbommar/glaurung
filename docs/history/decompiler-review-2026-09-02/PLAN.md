@@ -132,11 +132,16 @@ and unions every removed owner into the synthesized canary comment. The
   109-test call-argument module is green. The whole-Python boundary improves
   from 211 to 209 exact failure nodes with no addition; focused release A/B
   attributes both restored indirect-tail/table-dispatch tests to this batch.
-  The following enabled-consumer audit selects
-  `src/ir/lazy_call_select.rs` as the next cohesive origin slice: its result
-  inventory, recursive traversal, adjacent folding, goto census, diamond
-  matching, and replacement construction still inspect raw statements in both
-  production entry points. Most
+  Commit `b84c03e5` completes the following enabled-consumer slice in
+  `src/ir/lazy_call_select.rs`: result inventory, recursive traversal,
+  adjacent folding, goto census, every supported diamond matcher, and
+  replacement construction now see attributed statements in both production
+  entry points and union every consumed owner. Five focused tests were
+  observed red; the module, origin, release real-binary, fixture-189, and
+  complete Rust gates pass. The whole-Python gate has zero attributable
+  failure-set change; its one newly exercised i386 invariant reproduces at the
+  parent.
+  Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -2874,11 +2879,15 @@ relevant ratchet's accepted-regression record.
    tests, 54/54 origin-focused tests, and a green complete Rust gate. Its exact
    whole-Python failure set improves from 211 to 209 with no additions, and
    focused release A/B proves both indirect-tail/table-dispatch removals are
-   attributable. Re-audit
-   the remaining enabled semantic consumers before starting expression
-   ownership. The next bounded family is `src/ir/lazy_call_select.rs`, used by
-   both AST preparation and the DecBench renderer path; migrate its recognition,
-   recursion, consumed-origin unions, and replacement ownership together.
+   attributable. Commit `b84c03e5` then migrates
+   `src/ir/lazy_call_select.rs` in both AST preparation and the DecBench
+   renderer path: recognition, recursion, goto census, consumed-origin unions,
+   and replacement ownership move together. Five focused tests were observed
+   red; 18 module and 58 origin tests pass, along with the release
+   compiled/stripped check, all 20 fixture-189 functions, and the complete Rust
+   gate. Its whole-Python gate has zero attributable failure-set change after a
+   release parent/tip classification. Re-audit the remaining enabled semantic
+   consumers before starting expression ownership.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
