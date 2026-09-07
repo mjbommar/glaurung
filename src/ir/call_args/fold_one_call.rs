@@ -266,7 +266,12 @@ pub(super) fn fold_one_call(
             }
         }
         let stop = matches!(body[i].semantic(), Stmt::Call { .. });
+        let statement_origins = body[i].origins().cloned();
         if let Stmt::Assign { dst, src } = body[i].semantic() {
+            let mut attributed_source = src.clone();
+            if let Some(origins) = &statement_origins {
+                attributed_source.merge_origins(origins);
+            }
             if let VReg::Phys(name) = dst {
                 if let Some(slot) = slot_of(arch, name.as_str()) {
                     if known_arm_core_arity.is_some_and(|arity| slot >= arity) {
@@ -303,7 +308,7 @@ pub(super) fn fold_one_call(
                         // dependent call arguments must move together.
                         if feeds_captured_register_argument && feeds_balanced_stack_argument {
                             for (_, argument) in found.iter_mut().flatten() {
-                                let _ = substitute_exact_reg(argument, dst, src);
+                                let _ = substitute_exact_reg(argument, dst, &attributed_source);
                             }
                         }
                         let would_dangle =
@@ -339,11 +344,11 @@ pub(super) fn fold_one_call(
                                 {
                                     Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
                                 } else {
-                                    Some((i, src.clone()))
+                                    Some((i, attributed_source.clone()))
                                 };
                             if feeds_balanced_stack_argument {
                                 for argument in &mut stack_args {
-                                    let _ = substitute_exact_reg(argument, dst, src);
+                                    let _ = substitute_exact_reg(argument, dst, &attributed_source);
                                 }
                             }
                         } else {
@@ -369,7 +374,7 @@ pub(super) fn fold_one_call(
                         &mut found,
                         &mut stack_args,
                         dst,
-                        src,
+                        &attributed_source,
                         substitutable,
                     );
                     if feeds_captured_argument {
@@ -452,7 +457,7 @@ pub(super) fn fold_one_call(
                         &mut found,
                         &mut stack_args,
                         dst,
-                        src,
+                        &attributed_source,
                         substitutable,
                         !name.contains('#'),
                     ) {

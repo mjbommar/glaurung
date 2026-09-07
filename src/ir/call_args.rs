@@ -1729,29 +1729,75 @@ mod tests {
 
     #[test]
     fn origin_wrapped_argument_setup_folds_into_origin_wrapped_call() {
+        let first_owner = OriginSet::one(0x1000);
+        let second_owner = OriginSet::one(0x1004);
+        let call_owner = OriginSet::one(0x1008);
         let mut function = Function {
             name: "wrapped_caller".into(),
             entry_va: 0x1000,
             body: vec![
-                assign("rdi", 11).with_origins(crate::ir::ast::OriginSet::one(0x1000)),
-                call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+                assign("rdi", 11).with_origins(first_owner.clone()),
+                assign("rsi", 22).with_origins(second_owner.clone()),
+                call_to("callee").with_origins(call_owner.clone()),
             ],
         };
 
         reconstruct_args(&mut function, CallConv::SysVAmd64);
 
         assert_eq!(function.body.len(), 1);
-        assert!(matches!(
-            function.body[0].semantic(),
-            Stmt::Call { args, .. } if args == &[Expr::Const(11)]
-        ));
+        let Stmt::Call { args, .. } = function.body[0].semantic() else {
+            panic!("expected folded call: {:#?}", function.body)
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(11)));
+        assert!(matches!(args[1].semantic(), Expr::Const(22)));
+        assert_eq!(args[0].origins(), Some(&first_owner));
+        assert_eq!(args[1].origins(), Some(&second_owner));
         assert_eq!(
             function.body[0]
                 .origins()
                 .expect("folded call retains setup and call origins")
                 .addresses(),
-            &[0x1000, 0x1004]
+            &[0x1000, 0x1004, 0x1008]
         );
+    }
+
+    #[test]
+    fn transitive_argument_definition_origins_reach_the_folded_argument() {
+        let source_owner = OriginSet::one(0x1010);
+        let setup_owner = OriginSet::one(0x1014);
+        let mut function = Function {
+            name: "transitive_argument_origin".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: Expr::Const(17),
+                }
+                .with_origins(source_owner.clone()),
+                Stmt::Assign {
+                    dst: reg("rdi"),
+                    src: Expr::Reg(reg("var0")),
+                }
+                .with_origins(setup_owner.clone()),
+                call_to("callee").with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        let call = function
+            .body
+            .iter()
+            .find(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
+            .expect("folded call survives");
+        let Stmt::Call { args, .. } = call.semantic() else {
+            unreachable!()
+        };
+        assert_eq!(args.len(), 1);
+        let (value, origins) = args[0].clone().into_semantic_with_origins();
+        assert!(matches!(value, Expr::Const(17)));
+        assert_eq!(origins, Some(source_owner.union(&setup_owner)));
     }
 
     /// An argument setup may only be folded into its call when nothing it reads
