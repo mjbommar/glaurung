@@ -22,7 +22,7 @@
 //! mingw) for hardened binaries, so the rule is simply: deref of
 //! `[constant 0x28]` → `__stack_chk_guard`.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 
 const CANARY_DISP: i64 = 0x28;
 const CANARY_NAME: &str = "__stack_chk_guard";
@@ -82,7 +82,7 @@ pub fn collapse_canary_save(f: &mut Function) {
 
 fn find_canary_slot(body: &[Stmt]) -> Option<String> {
     for s in body {
-        if let Stmt::Comment(c) = s {
+        if let Stmt::Comment(c) = s.semantic() {
             if let Some(rest) = c.strip_prefix("stack canary: save guard to %") {
                 return Some(rest.to_string());
             }
@@ -98,7 +98,8 @@ fn find_canary_slot(body: &[Stmt]) -> Option<String> {
 fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
     // Recurse into nested arms first.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -128,7 +129,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         // the exact inequality plus exact noreturn call is sufficient even if
         // late copy folding reduced the original guard load back to its GOT VA.
         let structured_failure = matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::If {
                 cond: cond @ Expr::Cmp {
                     op: crate::ir::types::CmpOp::Ne,
@@ -141,7 +142,8 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
                 && expr_mentions_slot(cond, slot)
         );
         if structured_failure {
-            body[i] = Stmt::Comment("stack-canary check".to_string());
+            let origins = origins_in_tree(&body[i]);
+            body[i] = comment_with_origins("stack-canary check", origins);
             i += 1;
             continue;
         }
@@ -157,7 +159,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         // `slot` is canary storage, retain the success body and discard only the
         // compiler-inserted guard machinery.
         let structured_success = if i + 1 < body.len() && is_stack_chk_fail_call(&body[i + 1]) {
-            match &body[i] {
+            match body[i].semantic() {
                 Stmt::If {
                     cond:
                         cond @ Expr::Cmp {
@@ -167,7 +169,10 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
                     then_body,
                     else_body: None,
                 } if !then_body.is_empty()
-                    && matches!(then_body.last(), Some(Stmt::Return { .. }))
+                    && matches!(
+                        then_body.last().map(Stmt::semantic),
+                        Some(Stmt::Return { .. })
+                    )
                     && expr_mentions_slot(cond, slot)
                     && expr_mentions_guard(cond) =>
                 {
@@ -179,9 +184,10 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
             None
         };
         if let Some(success_body) = structured_success {
+            let origins = own_origins(&body[i]).union(&origins_in_tree(&body[i + 1]));
             body.splice(
                 i..=i + 1,
-                std::iter::once(Stmt::Comment("stack-canary check".to_string()))
+                std::iter::once(comment_with_origins("stack-canary check", origins))
                     .chain(success_body),
             );
             i += 1;
@@ -194,18 +200,19 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         // supplies the provenance that makes this otherwise broad-looking
         // constant comparison safe to erase.
         let is_direct_check = matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::If {
                 cond,
                 then_body,
                 else_body: None,
             } if then_body.len() == 1
-                && matches!(&then_body[0], Stmt::Goto { .. })
+                && matches!(then_body[0].semantic(), Stmt::Goto { .. })
                 && expr_mentions_slot(cond, slot)
                 && expr_mentions_canary_marker(cond)
         );
         if is_direct_check {
-            body[i] = Stmt::Comment("stack-canary check".to_string());
+            let origins = origins_in_tree(&body[i]);
+            body[i] = comment_with_origins("stack-canary check", origins);
             i += 1;
             continue;
         }
@@ -215,7 +222,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         }
 
         // Reload: `%X = %stack_N`.
-        let reload = match &body[i] {
+        let reload = match body[i].semantic() {
             Stmt::Assign {
                 dst: crate::ir::types::VReg::Phys(dst_name),
                 src: Expr::Reg(crate::ir::types::VReg::Phys(s)),
@@ -233,7 +240,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         // `__stack_chk_guard`.
         let mut end = i + 1;
         let has_compare_step = matches!(
-            &body[end],
+            body[end].semantic(),
             Stmt::Assign {
                 dst: crate::ir::types::VReg::Phys(d),
                 src: Expr::Bin { lhs, rhs, .. },
@@ -250,17 +257,22 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
             continue;
         }
         let is_branch = matches!(
-            &body[end],
+            body[end].semantic(),
             Stmt::If {
                 cond: _,
                 then_body,
                 else_body: None,
             } if then_body.len() == 1
-                && matches!(&then_body[0], Stmt::Goto { .. })
+                && matches!(then_body[0].semantic(), Stmt::Goto { .. })
         );
         if is_branch {
+            let origins = body[i..=end]
+                .iter()
+                .fold(OriginSet::empty(), |all, statement| {
+                    all.union(&origins_in_tree(statement))
+                });
             body.drain(i..=end);
-            body.insert(i, Stmt::Comment("stack-canary check".to_string()));
+            body.insert(i, comment_with_origins("stack-canary check", origins));
         }
         i += 1;
     }
@@ -268,7 +280,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
 
 fn is_stack_chk_fail_call(stmt: &Stmt) -> bool {
     matches!(
-        stmt,
+        stmt.semantic(),
         Stmt::Call {
             target: Expr::Named { name, .. },
             ..
@@ -360,7 +372,8 @@ fn collapse_body(body: &mut Vec<Stmt>) {
     // Recurse into structured arms so nested prologue shapes collapse too
     // (unlikely in practice, but symmetric with the ARM64 pass).
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -388,7 +401,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
         // This is the split-statement counterpart of `got_indirect_guard`.
         // The relocation name, two 64-bit dereferences, and stack destination
         // keep the match specific to the ABI canary sequence.
-        let got_addr = match &body[i] {
+        let got_addr = match body[i].semantic() {
             Stmt::Assign {
                 dst,
                 src:
@@ -408,7 +421,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
         let split_got_store = got_addr.as_ref().and_then(|got_addr| {
             let mut j = i + 1;
             while j < body.len() {
-                let slot = match &body[j] {
+                let slot = match body[j].semantic() {
                     Stmt::Store {
                         addr: Expr::Reg(crate::ir::types::VReg::Phys(slot)),
                         src:
@@ -434,7 +447,7 @@ fn collapse_body(body: &mut Vec<Stmt>) {
                 if crate::ir::dead_stores::stmt_reads(&body[j], got_addr)
                     || stmt_overwrites(&body[j], got_addr)
                     || !matches!(
-                        &body[j],
+                        body[j].semantic(),
                         Stmt::Assign { .. }
                             | Stmt::Store { .. }
                             | Stmt::Comment(_)
@@ -449,14 +462,16 @@ fn collapse_body(body: &mut Vec<Stmt>) {
             None
         });
         if let Some((store_index, slot)) = split_got_store {
+            let origins = own_origins(&body[i]).union(&origins_in_tree(&body[store_index]));
             body.remove(store_index);
-            body[i] = Stmt::Comment(format!("stack canary: save guard to %{}", slot));
+            body[i] =
+                comment_with_origins(&format!("stack canary: save guard to %{}", slot), origins);
             i += 1;
             continue;
         }
 
         let load = matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::Assign {
                 dst: crate::ir::types::VReg::Phys(_),
                 src: Expr::Named { name, .. },
@@ -466,13 +481,13 @@ fn collapse_body(body: &mut Vec<Stmt>) {
             i += 1;
             continue;
         }
-        let Stmt::Assign { dst: load_dst, .. } = &body[i] else {
+        let Stmt::Assign { dst: load_dst, .. } = body[i].semantic() else {
             i += 1;
             continue;
         };
         let load_dst = load_dst.clone();
         // Next stmt must store that register to a %stack_* slot.
-        let store_match = match &body[i + 1] {
+        let store_match = match body[i + 1].semantic() {
             Stmt::Store {
                 addr: Expr::Reg(crate::ir::types::VReg::Phys(slot)),
                 src: Expr::Reg(src),
@@ -481,10 +496,70 @@ fn collapse_body(body: &mut Vec<Stmt>) {
             _ => None,
         };
         if let Some(slot) = store_match {
+            let origins = own_origins(&body[i]).union(&origins_in_tree(&body[i + 1]));
             body.remove(i + 1);
-            body[i] = Stmt::Comment(format!("stack canary: save guard to %{}", slot));
+            body[i] =
+                comment_with_origins(&format!("stack canary: save guard to %{}", slot), origins);
         }
         i += 1;
+    }
+}
+
+fn own_origins(statement: &Stmt) -> OriginSet {
+    statement.origins().cloned().unwrap_or_default()
+}
+
+fn origins_in_tree(statement: &Stmt) -> OriginSet {
+    let mut origins = own_origins(statement);
+    let mut merge = |nested: &Stmt| origins.merge(&origins_in_tree(nested));
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for nested in then_body {
+                merge(nested);
+            }
+            for nested in else_body.iter().flatten() {
+                merge(nested);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            for nested in body {
+                merge(nested);
+            }
+        }
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            merge(init);
+            merge(step);
+            for nested in body {
+                merge(nested);
+            }
+        }
+        Stmt::Switch { cases, default, .. } => {
+            for nested in cases
+                .iter()
+                .flat_map(|(_, case_body)| case_body)
+                .chain(default.iter().flatten())
+            {
+                merge(nested);
+            }
+        }
+        _ => {}
+    }
+    origins
+}
+
+fn comment_with_origins(text: &str, origins: OriginSet) -> Stmt {
+    let comment = Stmt::Comment(text.to_string());
+    if origins.is_empty() {
+        comment
+    } else {
+        comment.with_origins(origins)
     }
 }
 
@@ -1045,6 +1120,44 @@ mod tests {
     }
 
     #[test]
+    fn attributed_canary_save_pair_unions_its_instruction_owners() {
+        use crate::ir::ast::OriginSet;
+        use crate::ir::types::VReg;
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Deref {
+                        addr: Box::new(lea_abs(0x28)),
+                        size: 8,
+                    },
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_0")),
+                    src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
+                }
+                .with_origins(OriginSet::one(0x1014)),
+            ],
+        };
+
+        recognise_canary(&mut f);
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f.body.len(), 1);
+        assert!(
+            matches!(f.body[0].semantic(), Stmt::Comment(text) if text.contains("stack canary"))
+        );
+        assert_eq!(
+            f.body[0].origins().expect("save comment owner").addresses(),
+            &[0x1010, 0x1014]
+        );
+    }
+
+    #[test]
     fn canary_exit_check_collapses_when_save_comment_present() {
         use crate::ir::types::VReg;
         let mut f = Function {
@@ -1082,6 +1195,47 @@ mod tests {
         assert!(matches!(&f.body[1], Stmt::Call { .. }));
         assert!(matches!(&f.body[2], Stmt::Comment(s) if s == "stack-canary check"));
         assert!(matches!(&f.body[3], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_canary_exit_check_unions_reload_branch_and_transfer_owners() {
+        use crate::ir::ast::OriginSet;
+        use crate::ir::types::VReg;
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Comment("stack canary: save guard to %stack_0".to_string())
+                    .with_origins(OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("stack_0")),
+                }
+                .with_origins(OriginSet::one(0x1020)),
+                Stmt::If {
+                    cond: Expr::Reg(VReg::Flag(crate::ir::types::Flag::Z)),
+                    then_body: vec![
+                        Stmt::Goto { target: 0x1227 }.with_origins(OriginSet::one(0x1028))
+                    ],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1024)),
+            ],
+        };
+
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f.body.len(), 2, "attributed check did not collapse: {f:#?}");
+        assert!(
+            matches!(f.body[1].semantic(), Stmt::Comment(text) if text == "stack-canary check")
+        );
+        assert_eq!(
+            f.body[1]
+                .origins()
+                .expect("check comment owner")
+                .addresses(),
+            &[0x1020, 0x1024, 0x1028]
+        );
     }
 
     #[test]
