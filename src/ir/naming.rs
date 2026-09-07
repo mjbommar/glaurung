@@ -228,7 +228,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
     }
 
     fn local_assignment(statement: &Stmt) -> Option<(&str, &Expr)> {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -253,7 +253,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
     }
 
     fn has_additive_update(body: &[Stmt], name: &str) -> bool {
-        body.iter().any(|statement| match statement {
+        body.iter().any(|statement| match statement.semantic() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -278,7 +278,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
     for (loop_index, statement) in f.body.iter().enumerate() {
         let Stmt::For {
             init, step, body, ..
-        } = statement
+        } = statement.semantic()
         else {
             continue;
         };
@@ -1370,6 +1370,87 @@ mod tests {
         assert!(text.contains("%sum = 0"), "{text}");
         assert!(text.contains("for (%i = 0;"), "{text}");
         assert!(text.contains("%sum = (%sum + strlen())"), "{text}");
+    }
+
+    #[test]
+    fn canonical_loop_names_see_through_origins_without_reassigning_them() {
+        use crate::ir::ast::OriginSet;
+
+        let accumulator_owner = OriginSet::one(0x1000);
+        let loop_owner = OriginSet::from_addresses([0x1004, 0x1008, 0x100c]);
+        let init_owner = OriginSet::one(0x1004);
+        let update_owner = OriginSet::one(0x1008);
+        let step_owner = OriginSet::one(0x100c);
+        let mut function = Function {
+            name: "sum_loop".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                }
+                .with_origins(accumulator_owner.clone()),
+                Stmt::For {
+                    init: Box::new(
+                        Stmt::Store {
+                            addr: Expr::Reg(reg("stack_5")),
+                            src: Expr::Const(0),
+                            size: 4,
+                        }
+                        .with_origins(init_owner.clone()),
+                    ),
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("stack_5"))),
+                        rhs: Box::new(Expr::Reg(reg("arg0"))),
+                    },
+                    step: Box::new(
+                        Stmt::Store {
+                            addr: Expr::Reg(reg("stack_5")),
+                            src: Expr::Bin {
+                                op: crate::ir::types::BinOp::Add,
+                                lhs: Box::new(Expr::Reg(reg("stack_5"))),
+                                rhs: Box::new(Expr::Const(1)),
+                            },
+                            size: 4,
+                        }
+                        .with_origins(step_owner.clone()),
+                    ),
+                    body: vec![Stmt::Store {
+                        addr: Expr::Reg(reg("stack_4")),
+                        src: Expr::Bin {
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("stack_4"))),
+                            rhs: Box::new(Expr::Const(7)),
+                        },
+                        size: 4,
+                    }
+                    .with_origins(update_owner.clone())],
+                }
+                .with_origins(loop_owner.clone()),
+            ],
+        };
+
+        let roles = apply_canonical_loop_local_names(&mut function);
+
+        assert_eq!(roles.get("stack_5").map(String::as_str), Some("i"));
+        assert_eq!(roles.get("stack_4").map(String::as_str), Some("sum"));
+        assert_eq!(function.body[0].origins(), Some(&accumulator_owner));
+        assert_eq!(function.body[1].origins(), Some(&loop_owner));
+        let Stmt::For {
+            init, step, body, ..
+        } = function.body[1].semantic()
+        else {
+            panic!("expected origin-wrapped for loop");
+        };
+        assert_eq!(init.origins(), Some(&init_owner));
+        assert_eq!(step.origins(), Some(&step_owner));
+        assert_eq!(body[0].origins(), Some(&update_owner));
+        let text = render(&function);
+        assert!(text.contains("%sum = 0"), "{text}");
+        assert!(text.contains("for (%i = 0;"), "{text}");
+        assert!(text.contains("%sum = (%sum + 7)"), "{text}");
     }
 
     #[test]
