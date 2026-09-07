@@ -88,7 +88,15 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-final-cleanup-origins.md`](results/wp3-final-cleanup-origins.md):
+[`results/wp3-output-value-origins.md`](results/wp3-output-value-origins.md):
+seven output-value readers and in-place rewrites now see attributed statements,
+covering direct returns, fixed caller arity, parameter homes, and wide
+dual-role storage. The focused origin set is 62/62 and the release call-shape,
+AArch64 result-lifetime, and ARM frame-spill checks pass. The record also marks
+bank-return synthesis as the first consumer that must wait for the explicit
+fold/hoist/duplication policy. The preceding
+[`results/wp3-final-cleanup-origins.md`](results/wp3-final-cleanup-origins.md)
+records that
 final preparation and dead-store analysis now see through statement origins,
 preserving widening, comparison fusion, DWARF invalidation, nested-exit
 safety, and effect-only call cleanup. Seven tests were observed red first; all

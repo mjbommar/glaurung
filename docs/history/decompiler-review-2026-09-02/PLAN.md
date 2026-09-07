@@ -922,6 +922,14 @@ provenance through lowering.
   restores effect-only calls without losing their statement owner and prevents
   an attributed exit from making a reaching value look dead. See
   `results/wp3-final-cleanup-origins.md`.
+  Commit `025937a7` next migrates direct-output cleanup, balanced-stack caller
+  arity, named and frame-object parameter homes, and wide dual-role definition
+  evidence. Seven focused cases were observed red before repair; attributed
+  readers and in-place rewrites now match their unwrapped behavior without
+  losing surviving owners. The audit also identifies bank-return composition
+  as a non-mechanical boundary: it synthesizes stores and returns, so its
+  migration follows the explicit fold/hoist/duplication policy rather than an
+  ad hoc wrapper bypass. See `results/wp3-output-value-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
@@ -971,8 +979,24 @@ provenance through lowering.
   universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
   data; do not infer them by parsing rendered text.
-- [ ] Define non-contiguous origin behavior for folded, hoisted, and duplicated
-  nodes.
+- [~] Define non-contiguous origin behavior for folded, hoisted, and duplicated
+  nodes. The normative contract is:
+  - an in-place rewrite retains the exact existing owner;
+  - a fold unions the sorted, deduplicated origins of every consumed semantic
+    contributor with any owner already on the surviving replacement;
+  - a hoisted unchanged node retains its own origins, and additionally unions
+    the owners of control nodes consumed to make it unconditional;
+  - every proved duplicate receives the complete original origin set; origins
+    are never partitioned among clones, including when the original already
+    represents a fold;
+  - purely synthetic scaffolding has an empty origin unless it represents
+    consumed machine semantics; a pass must never invent a nearest address;
+  - deletion of genuinely dead semantics may remove its mapping, but must not
+    transfer it to an unrelated survivor.
+  `OriginSet` remains the canonical sorted/deduplicated representation and the
+  structured Python mapping must permit one instruction to own multiple output
+  nodes. Transformation-level tests and the first complex synthesis migration
+  remain before this item can close.
 
 ### Tests
 
@@ -2901,6 +2925,13 @@ relevant ratchet's accepted-regression record.
    temporaries on effect-only calls. Finish the remaining wildcard audit, then
    define non-contiguous transformation behavior and start expression
    ownership. See `results/wp3-final-cleanup-origins.md`.
+   Commit `025937a7` closes seven more output-value readers and in-place
+   rewrites across four modules. The origin filter is 62/62, fixture 11 is
+   52/52, and the focused AArch64 result-lifetime plus ARM frame-spill checks
+   pass on a release build. Complete the wildcard classification, define the
+   non-contiguous transformation policy, and only then migrate the
+   store/return-synthesizing bank composition paths. See
+   `results/wp3-output-value-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
