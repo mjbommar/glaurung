@@ -185,7 +185,10 @@ pub(crate) fn prune_unread_promoted_locals(
     fn prune(body: &mut Vec<Stmt>, unread: &std::collections::HashSet<VReg>) -> usize {
         let mut removed = 0;
         for statement in body.iter_mut() {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -219,8 +222,8 @@ pub(crate) fn prune_unread_promoted_locals(
         }
         let before = body.len();
         body.retain(|statement| {
-            !matches!(statement, Stmt::Assign { dst, src } if unread.contains(dst) && pure(src))
-                && !matches!(statement, Stmt::Store { addr: Expr::Reg(dst), src, .. }
+            !matches!(statement.semantic(), Stmt::Assign { dst, src } if unread.contains(dst) && pure(src))
+                && !matches!(statement.semantic(), Stmt::Store { addr: Expr::Reg(dst), src, .. }
                     if unread.contains(dst) && pure(src))
         });
         removed + before - body.len()
@@ -315,7 +318,10 @@ pub(crate) fn prune_unread_promoted_locals(
             .iter()
             .flat_map(|statement| {
                 fn collect(statement: &Stmt, out: &mut Vec<VReg>) {
-                    match statement {
+                    match statement.semantic() {
+                        Stmt::Origin { .. } => {
+                            unreachable!("semantic statement cannot be an origin wrapper")
+                        }
                         Stmt::Assign {
                             dst: VReg::Phys(name),
                             ..
@@ -470,7 +476,10 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
 
     fn prune(body: &mut Vec<Stmt>) {
         for statement in body.iter_mut() {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -507,7 +516,7 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
                 addr: Expr::Reg(slot),
                 src: Expr::Reg(saved),
                 ..
-            } = statement
+            } = statement.semantic()
             else {
                 continue;
             };
@@ -521,7 +530,7 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
                 .enumerate()
                 .filter(|(index, candidate)| {
                     *index > store_index
-                        && matches!(candidate, Stmt::Assign { dst, src: Expr::Reg(source) }
+                        && matches!(candidate.semantic(), Stmt::Assign { dst, src: Expr::Reg(source) }
                             if dst == saved && source == slot)
                 })
                 .map(|(index, _)| index)
@@ -561,7 +570,8 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
 
 fn clear_body_return_values(body: &mut [Stmt]) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value } => *value = None,
             Stmt::If {
                 then_body,
@@ -907,6 +917,90 @@ mod tests {
                 value: Some(Expr::Const(0)),
             }]
         );
+    }
+
+    #[test]
+    fn attributed_unread_promoted_return_slot_is_removed() {
+        let mut function = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        prune_unread_promoted_locals(&mut function, &std::collections::HashSet::new());
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }]
+        );
+    }
+
+    #[test]
+    fn attributed_void_result_save_restore_is_removed() {
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_8")),
+                    src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "puts".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Reg(VReg::phys("local_8")),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            ],
+        };
+
+        prune_void_entry_result_restores(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(function.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn attributed_return_value_is_cleared_without_losing_its_owner() {
+        let owner = crate::ir::ast::OriginSet::one(0x1004);
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("rax"))),
+            }
+            .with_origins(owner.clone())],
+        };
+
+        clear_return_values(&mut function);
+
+        assert_eq!(function.body[0].origins(), Some(&owner));
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Return { value: None }
+        ));
     }
 
     #[test]

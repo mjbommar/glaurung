@@ -28,8 +28,11 @@ pub(crate) fn stack_proven_direct_call_arities(
         found: &mut Vec<(u64, usize)>,
     ) {
         for (call_index, statement) in body.iter().enumerate() {
-            let Stmt::Call { target, .. } = statement else {
-                match statement {
+            let Stmt::Call { target, .. } = statement.semantic() else {
+                match statement.semantic() {
+                    Stmt::Origin { .. } => {
+                        unreachable!("semantic statement cannot be an origin wrapper")
+                    }
                     Stmt::If {
                         then_body,
                         else_body,
@@ -106,18 +109,18 @@ fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> O
             continue;
         }
         if matches!(
-            &body[index],
+            body[index].semantic(),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 ..
             } if ssa_base(name) != "rsp"
         ) || matches!(
-            &body[index],
+            body[index].semantic(),
             Stmt::Assign {
                 dst: VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. },
                 ..
             }
-        ) || matches!(&body[index], Stmt::Comment(_) | Stmt::Nop)
+        ) || matches!(body[index].semantic(), Stmt::Comment(_) | Stmt::Nop)
         {
             cursor = index;
             continue;
@@ -268,6 +271,38 @@ mod tests {
         assert_eq!(
             stack_proven_fixed_arity(&popped, 4, CallConv::SysVAmd64),
             Some(8)
+        );
+    }
+
+    #[test]
+    fn attributed_stack_call_sequence_keeps_its_arity_evidence() {
+        let mut body = Vec::new();
+        body.extend(sysv_stack_push(7));
+        body.extend(sysv_stack_push(6));
+        body.push(call_to("callee"));
+        body.push(stack_add(16));
+        let body = body
+            .into_iter()
+            .enumerate()
+            .map(|(index, statement)| {
+                statement.with_origins(crate::ir::ast::OriginSet::one(
+                    0x1000 + u64::try_from(index).expect("small fixture") * 4,
+                ))
+            })
+            .collect();
+        let function = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body,
+        };
+
+        assert_eq!(
+            stack_proven_direct_call_arities(
+                &function,
+                CallConv::SysVAmd64,
+                &HashSet::from([0x2000]),
+            ),
+            vec![(0x2000, 8)]
         );
     }
 }

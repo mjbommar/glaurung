@@ -152,7 +152,8 @@ fn expr_reads_exact_frame_home(expr: &Expr, home: &FrameParamHome) -> bool {
 }
 
 fn body_reads_exact_frame_home(body: &[Stmt], home: &FrameParamHome) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expr_reads_exact_frame_home(src, home),
         Stmt::Store { addr, src, .. } => {
             expr_reads_exact_frame_home(addr, home) || expr_reads_exact_frame_home(src, home)
@@ -269,7 +270,8 @@ fn record_frame_store(addr: &Expr, size: u8, src: &Expr, homes: &mut Vec<FramePa
 
 fn collect_frame_param_homes(body: &[Stmt], homes: &mut Vec<FrameParamHome>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store { addr, src, size } => record_frame_store(addr, *size, src, homes),
             Stmt::If {
                 then_body,
@@ -350,12 +352,13 @@ fn rewrite_frame_home_expr(expr: &mut Expr, homes: &[FrameParamHome]) {
 
 fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
     body.retain(|statement| {
-        !matches!(statement,
+        !matches!(statement.semantic(),
             Stmt::Store { addr, size, .. }
                 if homes.iter().any(|home| home.size == *size && home.addr == *addr))
     });
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => rewrite_frame_home_expr(src, homes),
             Stmt::Store { addr, src, .. } => {
                 rewrite_frame_home_expr(addr, homes);
@@ -440,7 +443,9 @@ fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
 /// local assignment. The pre-rename name cannot be confused that way.
 fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMap<String, String>) {
     for s in body.iter_mut() {
-        match s {
+        let statement = s.semantic_mut();
+        match statement {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(name)),
                 src,
@@ -454,9 +459,9 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
                     // width made it `local = (uint32_t)arg0`.  Retaining that
                     // cast as `arg0 = (uint32_t)arg0` truncates a pointer when a
                     // foreign-width host recompiles the recovered C.
-                    *s = Stmt::Nop;
+                    *statement = Stmt::Nop;
                 } else {
-                    *s = Stmt::Assign {
+                    *statement = Stmt::Assign {
                         dst: VReg::phys(name.clone()),
                         src: src.clone(),
                     };
@@ -482,6 +487,12 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
                 }
                 if let Some(b) = default {
                     slot_stores_to_assigns(b, slots);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                slot_stores_to_assigns(try_body, slots);
+                for catch in catches {
+                    slot_stores_to_assigns(&mut catch.body, slots);
                 }
             }
             _ => {}
@@ -526,7 +537,8 @@ fn collect_param_homes_with_aliases(
     aliases: &mut std::collections::HashMap<VReg, String>,
 ) {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 if let Some(argument) = parameter_alias(src, aliases) {
                     aliases.insert(dst.clone(), argument);
@@ -763,7 +775,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
 pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
     body.retain(|s| {
         !matches!(
-            s,
+            s.semantic(),
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(a)),
                 src: Expr::Reg(VReg::Phys(b)),
@@ -772,7 +784,7 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
         ) && !matches!(
             // Same collapse, in assignment form: the spill store is now an Assign
             // (see `slot_stores_to_assigns`), so `arg0 = arg0` must go too.
-            s,
+            s.semantic(),
             Stmt::Assign {
                 dst: VReg::Phys(a),
                 src: Expr::Reg(VReg::Phys(b)),
@@ -780,7 +792,8 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
         )
     });
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -803,5 +816,78 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ast::OriginSet;
+
+    #[test]
+    fn attributed_named_parameter_home_is_coalesced() {
+        let spill_owner = OriginSet::one(0x1000);
+        let return_owner = OriginSet::one(0x1004);
+        let mut body = vec![
+            Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_4")),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 4,
+            }
+            .with_origins(spill_owner.clone()),
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_4"))),
+            }
+            .with_origins(return_owner.clone()),
+        ];
+
+        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new());
+
+        assert_eq!(body.len(), 2);
+        assert_eq!(body[0].origins(), Some(&spill_owner));
+        assert!(matches!(body[0].semantic(), Stmt::Nop));
+        assert_eq!(body[1].origins(), Some(&return_owner));
+        assert!(matches!(
+            body[1].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Reg(register))
+            } if register == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn attributed_frame_object_parameter_home_is_coalesced() {
+        let frame = VReg::phys("frame_10");
+        let address = Expr::StackAddr {
+            object: frame,
+            size: 16,
+        };
+        let return_owner = OriginSet::one(0x2004);
+        let mut body = vec![
+            Stmt::Store {
+                addr: address.clone(),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 8,
+            }
+            .with_origins(OriginSet::one(0x2000)),
+            Stmt::Return {
+                value: Some(Expr::Deref {
+                    addr: Box::new(address),
+                    size: 8,
+                }),
+            }
+            .with_origins(return_owner.clone()),
+        ];
+
+        coalesce_frame_object_param_spills(&mut body);
+
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].origins(), Some(&return_owner));
+        assert!(matches!(
+            body[0].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Reg(register))
+            } if register == &VReg::phys("arg0")
+        ));
     }
 }
