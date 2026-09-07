@@ -659,7 +659,7 @@ impl Splitter {
     }
 
     fn body_contains_break(body: &[Stmt]) -> bool {
-        body.iter().any(|statement| match statement {
+        body.iter().any(|statement| match statement.semantic() {
             Stmt::Break => true,
             Stmt::If {
                 then_body,
@@ -973,7 +973,7 @@ impl Splitter {
     }
 
     fn walk_embedded_stmt(&mut self, statement: &mut Stmt, state: &mut FlowState) {
-        if let Stmt::Call { target, args, .. } = statement {
+        if let Stmt::Call { target, args, .. } = statement.semantic_mut() {
             self.rewrite_expr(target, state);
             for argument in args {
                 self.rewrite_expr(argument, state);
@@ -988,6 +988,7 @@ impl Splitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 
     fn reg(name: &str) -> VReg {
@@ -1033,6 +1034,36 @@ mod tests {
             src: Expr::Reg(reg("x0")),
             size: 4,
         }
+    }
+
+    #[test]
+    fn attributed_break_remains_a_loop_result_barrier() {
+        assert!(Splitter::body_contains_break(&[
+            Stmt::Break.with_origins(OriginSet::one(0x1008))
+        ]));
+    }
+
+    #[test]
+    fn attributed_embedded_call_keeps_the_boxed_statement_shape() {
+        let owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "embedded_call".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::For {
+                init: Box::new(call("producer").with_origins(owner.clone())),
+                cond: Expr::Const(1),
+                step: Box::new(Stmt::Nop),
+                body: vec![Stmt::Break],
+            }],
+        };
+
+        split_call_result_lifetimes(&mut function, CallConv::Aarch64);
+
+        let Stmt::For { init, .. } = &function.body[0] else {
+            panic!("loop shape changed: {function:#?}");
+        };
+        assert_eq!(init.origins(), Some(&owner));
+        assert!(matches!(init.semantic(), Stmt::Call { .. }));
     }
 
     #[test]
