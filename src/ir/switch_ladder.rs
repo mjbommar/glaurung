@@ -28,7 +28,7 @@
 //! default, a surviving `goto` into the label from outside the tree — leaves the
 //! function untouched.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Fewer arms than this stay nested `if`/`else`. Two or three equality tests read
@@ -58,7 +58,8 @@ pub fn recover_existing_switch_join_breaks(f: &mut Function) {
 
 fn recover_existing_switch_join_breaks_body(body: &mut [Stmt]) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -93,18 +94,19 @@ fn recover_existing_switch_join_breaks_body(body: &mut [Stmt]) {
 
     for index in 0..body.len().saturating_sub(1) {
         let (prefix, suffix) = body.split_at_mut(index + 1);
-        let Stmt::Switch { cases, default, .. } = &mut prefix[index] else {
+        let Some(Stmt::Label(join)) = suffix.first().map(Stmt::semantic) else {
             continue;
         };
-        let Some(Stmt::Label(join)) = suffix.first() else {
+        let join = *join;
+        let Stmt::Switch { cases, default, .. } = prefix[index].semantic_mut() else {
             continue;
         };
         for (_, case_body) in cases {
-            replace_join_gotos(case_body, *join);
+            replace_join_gotos(case_body, join);
             drop_renderer_supplied_break(case_body);
         }
         if let Some(default_body) = default {
-            replace_join_gotos(default_body, *join);
+            replace_join_gotos(default_body, join);
             drop_renderer_supplied_break(default_body);
         }
     }
@@ -187,7 +189,7 @@ fn recover_one_goto_switch(body: &mut Vec<Stmt>) -> bool {
         if let Some(value) = dispatch.inline_case {
             if inline_body
                 .iter()
-                .any(|statement| matches!(statement, Stmt::Label(_)))
+                .any(|statement| matches!(statement.semantic(), Stmt::Label(_)))
                 || !ends_in_unconditional_transfer(&inline_body)
             {
                 continue;
@@ -198,7 +200,7 @@ fn recover_one_goto_switch(body: &mut Vec<Stmt>) -> bool {
             cases.push((Some(value), inline_body));
         } else if inline_body
             .iter()
-            .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+            .any(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))
         {
             continue;
         }
@@ -223,11 +225,13 @@ fn recover_one_goto_switch(body: &mut Vec<Stmt>) -> bool {
         // Source case order is the clearest stable spelling; dispatch-tree order
         // is an implementation detail of GCC's binary search.
         cases.sort_by_key(|(value, _)| *value);
+        let origins = statements_origins(&body[start..=join_position]);
         let switch = Stmt::Switch {
             discriminant: Expr::Reg(dispatch.discriminant),
             cases,
             default: None,
-        };
+        }
+        .with_optional_origins(origins);
         body.splice(start..join_position, std::iter::once(switch));
         return true;
     }
@@ -243,7 +247,8 @@ fn parse_goto_dispatch(body: &[Stmt], start: usize) -> Option<GotoDispatch> {
     let mut index = start;
 
     loop {
-        match body.get(index)? {
+        match body.get(index)?.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 cond,
                 then_body,
@@ -330,7 +335,7 @@ fn parse_non_equal_partition(
     cases: &mut Vec<GotoCase>,
 ) -> Option<u64> {
     let (last, prefix) = body.split_last()?;
-    let Stmt::Goto { target: join } = last else {
+    let Stmt::Goto { target: join } = last.semantic() else {
         return None;
     };
     if prefix.is_empty() {
@@ -341,7 +346,7 @@ fn parse_non_equal_partition(
             cond,
             then_body,
             else_body: None,
-        } = statement
+        } = statement.semantic()
         else {
             return None;
         };
@@ -366,7 +371,7 @@ fn parse_non_equal_partition(
 
 fn unique_label_position(body: &[Stmt], target: u64) -> Option<usize> {
     let mut positions = body.iter().enumerate().filter_map(|(index, statement)| {
-        matches!(statement, Stmt::Label(label) if *label == target).then_some(index)
+        matches!(statement.semantic(), Stmt::Label(label) if *label == target).then_some(index)
     });
     let position = positions.next()?;
     positions.next().is_none().then_some(position)
@@ -379,7 +384,8 @@ fn count_gotos_body(body: &[Stmt], target: u64) -> usize {
 }
 
 fn count_gotos_stmt(statement: &Stmt, target: u64) -> usize {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Goto { target: seen } => usize::from(*seen == target),
         Stmt::If {
             then_body,
@@ -412,10 +418,15 @@ fn count_gotos_stmt(statement: &Stmt, target: u64) -> usize {
 fn ends_in_unconditional_transfer(body: &[Stmt]) -> bool {
     body.iter()
         .rev()
-        .find(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_) | Stmt::Label(_)))
+        .find(|statement| {
+            !matches!(
+                statement.semantic(),
+                Stmt::Nop | Stmt::Comment(_) | Stmt::Label(_)
+            )
+        })
         .is_some_and(|statement| {
             matches!(
-                statement,
+                statement.semantic(),
                 Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Return { .. } | Stmt::Break
             )
         })
@@ -426,8 +437,13 @@ fn ends_in_unconditional_transfer(body: &[Stmt]) -> bool {
 /// intentionally escape a different control construct and must remain explicit.
 fn replace_join_gotos(body: &mut [Stmt], join: u64) {
     for statement in body {
-        match statement {
-            Stmt::Goto { target } if *target == join => *statement = Stmt::Break,
+        if matches!(statement.semantic(), Stmt::Goto { target } if *target == join) {
+            let origins = statement.origins().cloned();
+            *statement = Stmt::Break.with_optional_origins(origins);
+            continue;
+        }
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -449,11 +465,11 @@ fn replace_join_gotos(body: &mut [Stmt], join: u64) {
 fn drop_renderer_supplied_break(body: &mut Vec<Stmt>) {
     let Some(position) = body
         .iter()
-        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+        .rposition(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))
     else {
         return;
     };
-    if matches!(body[position], Stmt::Break) {
+    if matches!(body[position].semantic(), Stmt::Break) {
         body.remove(position);
     }
 }
@@ -481,7 +497,8 @@ fn rewrite_body(body: &mut [Stmt]) {
 }
 
 fn rewrite_stmt(s: &mut Stmt) {
-    match s {
+    match s.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::If {
             then_body,
             else_body,
@@ -779,7 +796,8 @@ fn lifted_signed_greater(cond: &Expr) -> Option<(VReg, i64)> {
 fn sole_goto(body: &[Stmt]) -> Option<u64> {
     let mut target = None;
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Goto { target: t } if target.is_none() => target = Some(*t),
             Stmt::Nop | Stmt::Comment(_) | Stmt::Label(_) => {}
             _ => return None,
@@ -814,7 +832,7 @@ fn nest_terminal_guard_continuations(statement: &Stmt) -> Stmt {
         cond,
         then_body,
         else_body,
-    } = statement
+    } = statement.semantic()
     else {
         return statement.clone();
     };
@@ -823,6 +841,7 @@ fn nest_terminal_guard_continuations(statement: &Stmt) -> Stmt {
         then_body: then_body.clone(),
         else_body: else_body.as_deref().map(nest_terminal_guard_sequence),
     }
+    .with_optional_origins(statement.origins().cloned())
 }
 
 fn nest_terminal_guard_sequence(body: &[Stmt]) -> Vec<Stmt> {
@@ -831,14 +850,15 @@ fn nest_terminal_guard_sequence(body: &[Stmt]) -> Vec<Stmt> {
             cond,
             then_body,
             else_body: None,
-        } = &body[0]
+        } = body[0].semantic()
         {
             if ends_in_unconditional_transfer(then_body) {
                 return vec![Stmt::If {
                     cond: cond.clone(),
                     then_body: then_body.clone(),
                     else_body: Some(nest_terminal_guard_sequence(&body[1..])),
-                }];
+                }
+                .with_optional_origins(body[0].origins().cloned())];
             }
         }
     }
@@ -847,6 +867,7 @@ fn nest_terminal_guard_sequence(body: &[Stmt]) -> Vec<Stmt> {
 
 fn try_ladder(s: &Stmt, common_suffix: &[Stmt]) -> Option<Stmt> {
     let normalized = nest_terminal_guard_continuations(s);
+    let origins = statement_tree_origins(&normalized);
     let mut disc = None;
     let mut cases: Vec<(i64, Vec<Stmt>)> = Vec::new();
     // Bodies reached by a prune arm, keyed by the label they jump to. The first
@@ -861,7 +882,7 @@ fn try_ladder(s: &Stmt, common_suffix: &[Stmt]) -> Option<Stmt> {
             cond,
             then_body,
             else_body,
-        } = cur
+        } = cur.semantic()
         else {
             // The innermost `else` with no further test on the discriminant is the
             // default, unless a prune arm already supplied one.
@@ -944,11 +965,14 @@ fn try_ladder(s: &Stmt, common_suffix: &[Stmt]) -> Option<Stmt> {
     // `default_label` is not carried out: the label lived inside the tree we are
     // replacing, and every `goto` to it was a prune arm we just consumed.
     // `recover_switches` prunes it once nothing references it.
-    Some(Stmt::Switch {
-        discriminant: Expr::Reg(l.disc),
-        cases: l.cases.into_iter().map(|(k, b)| (Some(k), b)).collect(),
-        default: Some(l.default),
-    })
+    Some(
+        Stmt::Switch {
+            discriminant: Expr::Reg(l.disc),
+            cases: l.cases.into_iter().map(|(k, b)| (Some(k), b)).collect(),
+            default: Some(l.default),
+        }
+        .with_optional_origins(origins),
+    )
 }
 
 /// Compare two spellings of one switch default under a proven common return.
@@ -959,41 +983,41 @@ fn try_ladder(s: &Stmt, common_suffix: &[Stmt]) -> Option<Stmt> {
 /// exact common return; without it this deliberately falls back to exact AST
 /// equality.
 fn default_bodies_equivalent(a: &[Stmt], b: &[Stmt], common_suffix: &[Stmt]) -> bool {
-    if a == b {
+    if semantic_body_eq(a, b) {
         return true;
     }
     let a_canonical = default_before_common_return(a, common_suffix);
     let b_canonical = default_before_common_return(b, common_suffix);
     a_canonical
         .as_deref()
-        .is_some_and(|canonical| canonical == b)
+        .is_some_and(|canonical| semantic_body_eq(canonical, b))
         || b_canonical
             .as_deref()
-            .is_some_and(|canonical| canonical == a)
-        || matches!((a_canonical, b_canonical), (Some(a), Some(b)) if a == b)
+            .is_some_and(|canonical| semantic_body_eq(canonical, a))
+        || matches!((a_canonical, b_canonical), (Some(a), Some(b)) if semantic_body_eq(&a, &b))
 }
 
 fn default_before_common_return(body: &[Stmt], common_suffix: &[Stmt]) -> Option<Vec<Stmt>> {
     let common_result = sole_common_return_reg(common_suffix)?;
     let return_index = body
         .iter()
-        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))?;
+        .rposition(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))?;
     let Stmt::Return {
         value: Some(returned),
-    } = &body[return_index]
+    } = body[return_index].semantic()
     else {
         return None;
     };
     let assignment_index = body[..return_index]
         .iter()
-        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))?;
+        .rposition(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))?;
     if body[assignment_index + 1..return_index]
         .iter()
         .any(|statement| !is_epilogue_residue(statement))
     {
         return None;
     }
-    let Stmt::Assign { dst, src } = &body[assignment_index] else {
+    let Stmt::Assign { dst, src } = body[assignment_index].semantic() else {
         return None;
     };
     if dst != common_result
@@ -1009,15 +1033,18 @@ fn sole_common_return_reg(body: &[Stmt]) -> Option<&VReg> {
         .iter()
         .filter(|statement| !is_epilogue_residue(statement))
         .collect();
-    let [Stmt::Return { value: Some(value) }] = meaningful.as_slice() else {
+    let [statement] = meaningful.as_slice() else {
+        return None;
+    };
+    let Stmt::Return { value: Some(value) } = statement.semantic() else {
         return None;
     };
     expression_root_reg(value)
 }
 
 fn is_epilogue_residue(statement: &Stmt) -> bool {
-    matches!(statement, Stmt::Nop)
-        || matches!(statement, Stmt::Comment(text) if text.contains("epilogue"))
+    matches!(statement.semantic(), Stmt::Nop)
+        || matches!(statement.semantic(), Stmt::Comment(text) if text.contains("epilogue"))
 }
 
 fn expression_root_reg(mut expression: &Expr) -> Option<&VReg> {
@@ -1031,10 +1058,68 @@ fn expression_root_reg(mut expression: &Expr) -> Option<&VReg> {
 }
 
 fn leading_label(body: &[Stmt]) -> Option<u64> {
-    body.iter().find_map(|s| match s {
+    body.iter().find_map(|s| match s.semantic() {
         Stmt::Label(l) => Some(*l),
         _ => None,
     })
+}
+
+fn semantic_body_eq(left: &[Stmt], right: &[Stmt]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.semantic() == right.semantic())
+}
+
+fn statement_tree_origins(statement: &Stmt) -> Option<OriginSet> {
+    fn merge(out: &mut Option<OriginSet>, origins: Option<&OriginSet>) {
+        let Some(origins) = origins else { return };
+        match out {
+            Some(out) => out.merge(origins),
+            None => *out = Some(origins.clone()),
+        }
+    }
+
+    fn walk(statement: &Stmt, out: &mut Option<OriginSet>) {
+        merge(out, statement.origins());
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for child in then_body {
+                    walk(child, out);
+                }
+                if let Some(else_body) = else_body {
+                    for child in else_body {
+                        walk(child, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut origins = None;
+    walk(statement, &mut origins);
+    origins
+}
+
+fn statements_origins(statements: &[Stmt]) -> Option<OriginSet> {
+    let mut merged: Option<OriginSet> = None;
+    for statement in statements {
+        let Some(origins) = statement_tree_origins(statement) else {
+            continue;
+        };
+        match &mut merged {
+            Some(merged) => merged.merge(&origins),
+            None => merged = Some(origins),
+        }
+    }
+    merged
 }
 
 /// Every label still jumped to anywhere in `body`.
@@ -1153,6 +1238,57 @@ mod tests {
         }
     }
 
+    fn attribute_control_tree(statement: &mut Stmt, next: &mut u64) {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for child in then_body {
+                    attribute_control_tree(child, next);
+                }
+                if let Some(else_body) = else_body {
+                    for child in else_body {
+                        attribute_control_tree(child, next);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if matches!(
+            statement.semantic(),
+            Stmt::If { .. } | Stmt::Goto { .. } | Stmt::Label(_)
+        ) {
+            let origin = OriginSet::one(*next);
+            *next += 4;
+            let owned = std::mem::replace(statement, Stmt::Nop);
+            *statement = owned.with_origins(origin);
+        }
+    }
+
+    fn collect_origins(statement: &Stmt, out: &mut OriginSet) {
+        if let Some(origins) = statement.origins() {
+            out.merge(origins);
+        }
+        if let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = statement.semantic()
+        {
+            for child in then_body {
+                collect_origins(child, out);
+            }
+            if let Some(else_body) = else_body {
+                for child in else_body {
+                    collect_origins(child, out);
+                }
+            }
+        }
+    }
+
     #[test]
     fn switch_cleanup_preserves_origin_wrapped_referenced_labels() {
         let mut function = Function {
@@ -1178,6 +1314,25 @@ mod tests {
             .body
             .iter()
             .any(|statement| matches!(statement.semantic(), Stmt::Label(0x1200))));
+    }
+
+    #[test]
+    fn an_attributed_gcc_comparison_ladder_becomes_an_attributed_switch() {
+        let mut ladder = gcc_ladder(8);
+        let mut next = 0x1000;
+        attribute_control_tree(&mut ladder, &mut next);
+        let mut expected = OriginSet::empty();
+        collect_origins(&ladder, &mut expected);
+        let mut function = Function {
+            name: "attributed_ladder".into(),
+            entry_va: 0x1000,
+            body: vec![ladder, Stmt::Return { value: None }],
+        };
+
+        recover_switches(&mut function);
+
+        assert!(matches!(function.body[0].semantic(), Stmt::Switch { .. }));
+        assert_eq!(function.body[0].origins(), Some(&expected));
     }
 
     /// gcc -O0's binary-search shape: `== k` alternating with a range prune, the
@@ -1448,6 +1603,29 @@ mod tests {
         assert!(cases.iter().all(|(_, body)| {
             !matches!(body.last(), Some(Stmt::Break)) && count_gotos_body(body, 0x200) == 0
         }));
+    }
+
+    #[test]
+    fn an_attributed_linear_goto_dispatch_becomes_an_attributed_switch() {
+        let mut body = linear_goto_dispatch();
+        let mut next = 0x3000;
+        for statement in &mut body {
+            attribute_control_tree(statement, &mut next);
+        }
+        let mut expected = OriginSet::empty();
+        for statement in &body[..body.len() - 1] {
+            collect_origins(statement, &mut expected);
+        }
+        let mut function = Function {
+            name: "attributed_fsm".into(),
+            entry_va: 0x1000,
+            body,
+        };
+
+        recover_switches(&mut function);
+
+        assert!(matches!(function.body[0].semantic(), Stmt::Switch { .. }));
+        assert_eq!(function.body[0].origins(), Some(&expected));
     }
 
     #[test]
@@ -1972,6 +2150,52 @@ mod tests {
             panic!("conditional case must survive");
         };
         assert_eq!(then_body, &[Stmt::Break]);
+    }
+
+    #[test]
+    fn an_attributed_switchs_conditional_join_goto_becomes_an_attributed_break() {
+        const JOIN: u64 = 0x2000;
+        let mut f = Function {
+            name: "attributed_joined".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Switch {
+                    discriminant: reg("arg0"),
+                    cases: vec![(
+                        Some(0),
+                        vec![Stmt::If {
+                            cond: reg("arg1"),
+                            then_body: vec![
+                                Stmt::Goto { target: JOIN }.with_origins(OriginSet::one(0x1010))
+                            ],
+                            else_body: Some(vec![assign("ret", 7)]),
+                        }
+                        .with_origins(OriginSet::one(0x100c))],
+                    )],
+                    default: None,
+                }
+                .with_origins(OriginSet::one(0x1008)),
+                Stmt::Label(JOIN).with_origins(OriginSet::one(JOIN)),
+                Stmt::Return {
+                    value: Some(reg("ret")),
+                },
+            ],
+        };
+
+        recover_existing_switch_join_breaks(&mut f);
+
+        let Stmt::Switch { cases, .. } = f.body[0].semantic() else {
+            panic!("switch must survive");
+        };
+        let Stmt::If { then_body, .. } = cases[0].1[0].semantic() else {
+            panic!("conditional case must survive");
+        };
+        assert!(matches!(then_body[0].semantic(), Stmt::Break));
+        assert_eq!(
+            then_body[0].origins(),
+            Some(&OriginSet::one(0x1010)),
+            "the break must retain the machine goto that justified it"
+        );
     }
 
     #[test]
