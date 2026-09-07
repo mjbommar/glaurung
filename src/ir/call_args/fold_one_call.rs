@@ -233,7 +233,11 @@ pub(super) fn fold_one_call(
         }
         if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
             if let Some((value, width)) = outgoing_sysv_stack_push(body, i) {
-                stack_args.push(value.clone());
+                let mut argument = value.clone();
+                if let Some(origins) = body[i].origins() {
+                    argument.merge_origins(origins);
+                }
+                stack_args.push(argument);
                 stack_arg_bytes += width;
                 stack_setup_indices.extend([i, i - 1]);
                 mark_arg_reads_in_expr(value, arch, &mut read_between);

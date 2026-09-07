@@ -1381,7 +1381,11 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
                 if outgoing_sysv_stack_push(body, index).is_some() {
                     return None;
                 }
-                if by_offset.insert(*disp, (index, src.clone())).is_some() {
+                let mut value = src.clone();
+                if let Some(origins) = body[index].origins() {
+                    value.merge_origins(origins);
+                }
+                if by_offset.insert(*disp, (index, value)).is_some() {
                     return None;
                 }
             }
@@ -3253,17 +3257,22 @@ mod tests {
 
     #[test]
     fn sysv_folds_contiguous_preallocated_outgoing_stack_arguments() {
-        let stack_store = |disp, value| Stmt::Store {
-            addr: Expr::Lea {
-                base: Some(reg("rsp")),
-                index: None,
-                scale: 1,
-                disp,
-                segment: None,
-            },
-            src: Expr::Const(value),
-            size: 4,
+        let stack_store = |disp, value, owner| {
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                },
+                src: Expr::Const(value),
+                size: 4,
+            }
+            .with_origins(owner)
         };
+        let seventh_owner = OriginSet::one(0x1020);
+        let eighth_owner = OriginSet::one(0x1024);
         let mut f = Function {
             name: "caller".into(),
             entry_va: 0,
@@ -3274,22 +3283,29 @@ mod tests {
                 assign("rcx", 3),
                 assign("r8", 4),
                 assign("r9", 5),
-                stack_store(0, 6),
-                stack_store(8, 7),
+                stack_store(0, 6, seventh_owner.clone()),
+                stack_store(8, 7, eighth_owner.clone()),
                 call_to("callee"),
             ],
         };
 
         reconstruct_args(&mut f, CallConv::SysVAmd64);
 
+        let [call] = f.body.as_slice() else {
+            panic!("preallocated outgoing area was not absorbed: {f:#?}")
+        };
+        let Stmt::Call { args, .. } = call.semantic() else {
+            panic!("expected folded call: {f:#?}")
+        };
+        assert_eq!(args.len(), 8);
         assert!(
-            matches!(
-                f.body.as_slice(),
-                [Stmt::Call { args, .. }]
-                    if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
-            ),
-            "preallocated outgoing area was not absorbed: {f:#?}"
+            args.iter()
+                .enumerate()
+                .all(|(index, arg)| matches!(arg.semantic(), Expr::Const(value) if *value == index as i64)),
+            "wrong argument values: {args:#?}"
         );
+        assert_eq!(args[6].origins(), Some(&seventh_owner));
+        assert_eq!(args[7].origins(), Some(&eighth_owner));
     }
 
     #[test]
@@ -3399,6 +3415,77 @@ mod tests {
             [Stmt::Call { args, .. }]
                 if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
         ));
+    }
+
+    #[test]
+    fn sysv_balanced_stack_argument_keeps_only_its_value_store_owner() {
+        let allocation_owner = OriginSet::one(0x1100);
+        let value_owner = OriginSet::one(0x1104);
+        let call_owner = OriginSet::one(0x1108);
+        let cleanup_owner = OriginSet::one(0x110c);
+        let mut body = vec![
+            assign("rdi", 0),
+            assign("rsi", 1),
+            assign("rdx", 2),
+            assign("rcx", 3),
+            assign("r8", 4),
+            assign("r9", 5),
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }
+            .with_origins(allocation_owner.clone()),
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    segment: None,
+                },
+                src: Expr::Const(6),
+                size: 8,
+            }
+            .with_origins(value_owner.clone()),
+            call_to("callee").with_origins(call_owner.clone()),
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }
+            .with_origins(cleanup_owner.clone()),
+        ];
+        let mut function = Function {
+            name: "stack_argument_origin".into(),
+            entry_va: 0x1100,
+            body: std::mem::take(&mut body),
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 1, "setup did not fold: {function:#?}");
+        let Stmt::Call { args, .. } = function.body[0].semantic() else {
+            panic!("expected folded call: {function:#?}")
+        };
+        assert_eq!(args.len(), 7);
+        assert!(matches!(args[6].semantic(), Expr::Const(6)));
+        assert_eq!(args[6].origins(), Some(&value_owner));
+        assert_eq!(
+            function.body[0].origins(),
+            Some(
+                &allocation_owner
+                    .union(&value_owner)
+                    .union(&call_owner)
+                    .union(&cleanup_owner)
+            )
+        );
     }
 
     #[test]
