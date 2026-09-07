@@ -950,6 +950,12 @@ provenance through lowering.
   reassigning their independent owners. Its observed-red test, all 18 naming
   tests, and the four exact `skip_odd_sum` host lanes pass. See
   `results/wp3-canonical-loop-naming-origins.md`.
+  Commit `51d3c9df` then migrates the ARM32 frame recognizer end to end:
+  attributed prologue, epilogue, nested-return, and helper reads preserve the
+  transactional balance proof, while each synthesized machine-frame comment
+  receives the exact union of the instructions it replaces. Its observed-red
+  test, all nine module tests, and the exact ARMv7 A32 `while_prefix` cell pass.
+  See `results/wp3-arm32-frame-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
