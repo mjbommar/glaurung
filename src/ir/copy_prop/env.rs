@@ -37,6 +37,7 @@ use super::reads::visit_expr_reads;
 /// value can change or their operands be clobbered before the use.
 pub(super) fn is_pure_copyable(e: &Expr) -> bool {
     match e {
+        Expr::Origin { expr, .. } => is_pure_copyable(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Addr(_)

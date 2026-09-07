@@ -95,7 +95,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                 dst: dst @ VReg::Temp(_),
                 src,
             } => {
-                if contains_reg(src, dst) || matches!(src, Expr::Select { .. }) {
+                if contains_reg(src, dst) || matches!(src.semantic(), Expr::Select { .. }) {
                     i += 1;
                     continue;
                 }
@@ -175,9 +175,15 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         // former `stmts[i + 1]`, so the rewrite and the resulting list are
         // exactly what substitute-then-remove produced.
         let (definition, origins) = stmts.remove(i).into_semantic_with_origins();
-        let Stmt::Assign { src: def_expr, .. } = definition else {
+        let Stmt::Assign {
+            src: mut def_expr, ..
+        } = definition
+        else {
             unreachable!("guarded by the `Stmt::Assign` match above")
         };
+        if let Some(origins) = &origins {
+            def_expr.merge_origins(origins);
+        }
         substitute_in_stmt(&mut stmts[i], &temp, &def_expr);
         if let Some(origins) = origins {
             stmts[i].merge_origins(&origins);
@@ -876,7 +882,7 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{lower, render};
+    use crate::ir::ast::{lower, render, OriginSet};
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
     use crate::ir::types::{
@@ -937,6 +943,49 @@ mod tests {
             "temp definition not removed: {}",
             text
         );
+    }
+
+    #[test]
+    fn reconstructed_expression_retains_definition_and_consumer_origins() {
+        let temporary = VReg::Temp(0);
+        let mut function = Function {
+            name: "origin_composition".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: temporary.clone(),
+                    src: Expr::Const(7),
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: VReg::phys("eax"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(temporary)),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1004)),
+            ],
+        };
+
+        reconstruct(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&OriginSet::from_iter([0x1000, 0x1004]))
+        );
+        let Stmt::Assign {
+            src: Expr::Bin { lhs, rhs, .. },
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected the reconstructed assignment")
+        };
+        assert!(matches!(lhs.semantic(), Expr::Const(7)));
+        assert_eq!(lhs.origins(), Some(&OriginSet::one(0x1000)));
+        assert!(matches!(rhs.as_ref(), Expr::Const(1)));
     }
 
     #[test]

@@ -74,7 +74,7 @@ pub fn fold_constants(f: &mut Function) -> bool {
 pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
     fn declared_source_type(expr: &Expr, signed: bool, width: u8, tm: &TypeMap) -> bool {
         matches!(
-            expr,
+            expr.semantic(),
             Expr::Reg(crate::ir::types::VReg::Phys(name))
                 if crate::ir::ast::declared_int_type(name, Some(tm)) == Some((signed, width))
         )
@@ -566,6 +566,7 @@ fn fold_expr(e: &mut Expr, changed: &mut bool) {
 fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
+        Expr::Origin { expr, .. } => fold_expr_at(expr, shift_left_operand, changed),
         Expr::Bin { op, lhs, rhs } => {
             let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
             fold_expr_at(lhs, shift, changed);
@@ -1231,8 +1232,12 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             _ => None,
         };
         if let Some(inner) = inner {
-            let replacement = match (op, inner) {
-                (CmpOp::Ne, boolean) => Some(boolean.clone()),
+            let replacement = match (op, inner.semantic()) {
+                (CmpOp::Ne, boolean) => Some(
+                    boolean
+                        .clone()
+                        .with_optional_origins(inner.origins().cloned()),
+                ),
                 (
                     CmpOp::Eq,
                     Expr::Cmp {
@@ -1240,7 +1245,10 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                         lhs: inner_lhs,
                         rhs: inner_rhs,
                     },
-                ) => Some(invert_comparison(*inner_op, inner_lhs, inner_rhs)),
+                ) => Some(
+                    invert_comparison(*inner_op, inner_lhs, inner_rhs)
+                        .with_optional_origins(inner.origins().cloned()),
+                ),
                 _ => None,
             };
             if let Some(replacement) = replacement {
@@ -1274,6 +1282,7 @@ fn cast_preserves_constant(value: i64, signed: bool, width: u8) -> bool {
 /// additionally use [`is_short_circuit_safe_boolean`].
 pub(crate) fn is_exact_boolean(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_exact_boolean(expr),
         Expr::Cmp { .. } => true,
         Expr::Const(value) => matches!(value, 0 | 1),
         Expr::Cast { width, expr, .. } => *width > 0 && is_exact_boolean(expr),
@@ -1292,6 +1301,7 @@ pub(crate) fn is_exact_boolean(expr: &Expr) -> bool {
 /// behavior.
 pub(crate) fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_short_circuit_safe_boolean(expr),
         Expr::Cmp { lhs, rhs, .. } => {
             is_short_circuit_safe_value(lhs) && is_short_circuit_safe_value(rhs)
         }
@@ -1992,6 +2002,62 @@ mod tests {
     }
 
     #[test]
+    fn attributed_xor_cancellation_retains_origin() {
+        let less = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Reg(reg("rbx"))),
+        };
+        let sign = Expr::Reg(reg("sf"));
+        let owner = crate::ir::ast::OriginSet::one(0x1000);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Xor,
+                sign.clone(),
+                bin(BinOp::Xor, less.clone(), sign),
+            )
+            .with_origins(owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &less);
+        assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
+    fn zero_test_inverts_attributed_comparison_and_retains_origin() {
+        let owner = crate::ir::ast::OriginSet::one(0x1000);
+        let comparison = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("a"))),
+            rhs: Box::new(Expr::Reg(reg("b"))),
+        }
+        .with_origins(owner.clone());
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(comparison),
+            rhs: Box::new(Expr::Const(0)),
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(
+            src.semantic(),
+            Expr::Cmp { op: CmpOp::Sle, lhs, rhs }
+                if matches!(lhs.as_ref(), Expr::Reg(register) if register == &reg("b"))
+                    && matches!(rhs.as_ref(), Expr::Reg(register) if register == &reg("a"))
+        ));
+        assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
     fn equality_or_less_merges_to_less_equal() {
         let lhs = Expr::Reg(reg("rax"));
         let rhs = Expr::Reg(reg("rbx"));
@@ -2672,6 +2738,51 @@ mod tests {
                 ..
             } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("arg0"))
                     && matches!(rhs.as_ref(), Expr::Reg(r) if r == &reg("arg1"))
+        ));
+    }
+
+    #[test]
+    fn typed_comparison_views_ignore_source_origin_carriers() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |name, address| Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(
+                    Expr::Reg(reg(name)).with_origins(crate::ir::ast::OriginSet::one(address)),
+                ),
+            }),
+        };
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("arg0", 0x1000)),
+            rhs: Box::new(extended("arg1", 0x1004)),
+        });
+        let mut types = TypeMap::default();
+        for name in ["arg0", "arg1"] {
+            types.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        fold_typed_comparison_extensions(&mut function, &types);
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp { lhs, rhs, .. },
+                ..
+            } if matches!(lhs.semantic(), Expr::Reg(register) if register == &reg("arg0"))
+                && matches!(rhs.semantic(), Expr::Reg(register) if register == &reg("arg1"))
+                && lhs.origins() == Some(&crate::ir::ast::OriginSet::one(0x1000))
+                && rhs.origins() == Some(&crate::ir::ast::OriginSet::one(0x1004))
         ));
     }
 

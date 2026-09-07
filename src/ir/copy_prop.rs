@@ -427,11 +427,38 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
     use crate::ir::types::{BinOp, CmpOp, VReg};
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
+    }
+
+    #[test]
+    fn attributed_pure_value_propagates_without_losing_its_origin() {
+        let owner = OriginSet::one(0x1000);
+        let mut function = Function {
+            name: "attributed_copy".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Const(7).with_origins(owner.clone()),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert!(matches!(
+            function.body.as_slice(),
+            [_, Stmt::Return { value: Some(value) }]
+                if matches!(value.semantic(), Expr::Const(7))
+                    && value.origins() == Some(&owner)
+        ));
     }
 
     #[test]

@@ -193,6 +193,32 @@ mod tests {
     }
 
     #[test]
+    fn attributed_control_comparison_does_not_add_parentheses() {
+        let comparison = Expr::Cmp {
+            op: crate::ir::types::CmpOp::Sle,
+            lhs: Box::new(Expr::Reg(VReg::phys("b"))),
+            rhs: Box::new(Expr::Reg(VReg::phys("a"))),
+        };
+        let function = |cond| Function {
+            name: "ordered".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond,
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(1)),
+                }],
+                else_body: None,
+            }],
+        };
+        let plain = render_decbench(&function(comparison.clone()));
+        let attributed =
+            render_decbench(&function(comparison.with_origins(OriginSet::one(0x1000))));
+
+        assert_eq!(attributed, plain);
+        assert!(plain.contains("if (b <= a)"), "{plain}");
+    }
+
+    #[test]
     fn origin_wrappers_do_not_change_rendered_text() {
         let init = Stmt::Assign {
             dst: VReg::phys("i"),

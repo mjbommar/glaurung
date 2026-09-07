@@ -91,7 +91,7 @@ fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
 /// layer is redundant. Render first to preserve every specialized comparison
 /// spelling, then remove exactly that known outer layer.
 fn write_control_condition_dec(condition: &Expr, out: &mut String) {
-    if !matches!(condition, Expr::Cmp { .. }) {
+    if !matches!(condition.semantic(), Expr::Cmp { .. }) {
         write_expr_dec(condition, out);
         return;
     }
