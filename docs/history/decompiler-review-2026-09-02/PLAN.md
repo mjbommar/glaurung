@@ -1066,7 +1066,14 @@ provenance through lowering.
   fixture remains entirely green; see
   `results/wp3-register-argument-expression-origins.md`. Generic stack
   arguments and specialized recovered-layout/cdecl/AAPCS producers remain
-  open.
+  open. Commit `5f8dec01` then attributes both generic SysV stack forms:
+  preallocated outgoing-area and balanced-push argument expressions receive
+  only their exact value-store owners, while allocation, call, and cleanup
+  owners remain on the call statement. Both observed-red tests, all 111
+  call-argument tests, and the exact four-cell release-built `call_into_spill`
+  canary pass; see `results/wp3-sysv-stack-argument-expression-origins.md`.
+  Generic AAPCS stack arguments and the specialized recovered-layout, cdecl32,
+  hard-float, and table-call expression producers remain open.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
