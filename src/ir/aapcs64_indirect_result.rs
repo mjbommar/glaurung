@@ -114,7 +114,8 @@ fn promoted_object(expr: &Expr, known: &HashMap<String, VReg>) -> Option<VReg> {
 /// The statement lists a compound statement owns.
 fn nested_bodies(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
     let mut bodies: Vec<&mut Vec<Stmt>> = Vec::new();
-    match statement {
+    match statement.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::If {
             then_body,
             else_body,
@@ -197,7 +198,7 @@ fn sysv_stack_adjustment(statement: &Stmt) -> Option<i64> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
         src: Expr::Bin { op, lhs, rhs },
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -223,7 +224,7 @@ fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<Stack
         }
         if let Stmt::Call {
             args, call_spec, ..
-        } = statement
+        } = statement.semantic()
         {
             if let (Some(bytes), Some((base, disp))) = (
                 sysv_hidden_result_bytes(call_spec.as_ref()),
@@ -241,7 +242,8 @@ fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<Stack
                 });
             }
         }
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -277,7 +279,8 @@ fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<Stack
 fn collect_hints(body: &[Stmt], hints: &mut Vec<StackObjectHint>) {
     let mut known: HashMap<String, (String, i64)> = HashMap::new();
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 let resolved = frame_address(src, &known);
                 if let VReg::Phys(name) = dst {
@@ -362,7 +365,8 @@ pub fn bind_indirect_result_buffers(f: &mut Function, cc: CallConv) -> usize {
 fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize) {
     let mut known: HashMap<String, VReg> = HashMap::new();
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 let resolved = promoted_object(src, &known);
                 if let VReg::Phys(name) = dst {
@@ -395,6 +399,7 @@ fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 
     fn indirect_spec(bytes: u16) -> Option<CallSiteSpec> {
@@ -436,12 +441,14 @@ mod tests {
                         lhs: Box::new(Expr::Reg(VReg::phys("sp"))),
                         rhs: Box::new(Expr::Const(16)),
                     },
-                },
+                }
+                .with_origins(OriginSet::one(0x1000)),
                 Stmt::Assign {
                     dst: VReg::phys("x8"),
                     src: Expr::Reg(VReg::phys("x0")),
-                },
-                call(indirect_spec(20), None),
+                }
+                .with_origins(OriginSet::one(0x1004)),
+                call(indirect_spec(20), None).with_origins(OriginSet::one(0x1008)),
             ],
         };
         let hints = indirect_result_buffer_hints(&f, CallConv::Aarch64);
@@ -476,7 +483,7 @@ mod tests {
         let f = Function {
             name: "caller".to_string(),
             entry_va: 0x1000,
-            body: vec![hidden_call],
+            body: vec![hidden_call.with_origins(OriginSet::one(0x1010))],
         };
 
         let hints = indirect_result_buffer_hints(&f, CallConv::SysVAmd64);
@@ -575,15 +582,17 @@ mod tests {
                         object: VReg::phys("local_30"),
                         size: 20,
                     },
-                },
-                call(spec, None),
+                }
+                .with_origins(OriginSet::one(0x1020)),
+                call(spec, None).with_origins(OriginSet::one(0x1024)),
             ],
         };
         let mut f = promoted(indirect_spec(20));
         assert_eq!(bind_indirect_result_buffers(&mut f, CallConv::Aarch64), 1);
         assert!(
-            matches!(&f.body[1], Stmt::Call { dst: Some(VReg::Phys(name)), .. } if name == "local_30")
+            matches!(f.body[1].semantic(), Stmt::Call { dst: Some(VReg::Phys(name)), .. } if name == "local_30")
         );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1024)));
         // The negative: an ordinary scalar callee keeps its destination
         // untouched even with a frame address sitting in `x8`.
         let mut scalar = promoted(None);
@@ -591,7 +600,10 @@ mod tests {
             bind_indirect_result_buffers(&mut scalar, CallConv::Aarch64),
             0
         );
-        assert!(matches!(&scalar.body[1], Stmt::Call { dst: None, .. }));
+        assert!(matches!(
+            scalar.body[1].semantic(),
+            Stmt::Call { dst: None, .. }
+        ));
         // And no other convention binds anything.
         let mut other = promoted(indirect_spec(20));
         assert_eq!(
