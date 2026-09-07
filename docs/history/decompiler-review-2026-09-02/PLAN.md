@@ -68,9 +68,14 @@ migrate before expression ownership. Commit `c51a116d` closes that omission
 for AAPCS64 `x8` and SysV hidden-result setup, nested traversal, stack
 adjustments, and post-promotion call binding. Its complete stripped
 differential and 221-node whole-Python failure set are exactly neutral; see
-`results/wp3-indirect-result-origins.md`. The next confirmed front-of-pipeline
-omission is `vector_copy`, whose destructive batch and bridge rewrites also
-need exact origin unions. Most
+`results/wp3-indirect-result-origins.md`. Commit `02b0da5c` then migrates
+`vector_copy`: attributed and nested lane transports rejoin without losing
+their owners, synthesized wide operations receive exact consumed-origin
+unions, and multiple nested consumers still fail closed. Its complete stripped
+differential and normalized 221-node whole-Python failure set are exactly
+neutral; the current undeclared-local invariant is eight-for-eight green. See
+`results/wp3-vector-copy-origins.md`. The next confirmed wildcard omission is
+the raw guarded-return and diamond surface in `select_fold`. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -808,7 +813,11 @@ provenance through lowering.
   both loop-carrier coalescers transparent and transfers each removed
   contributor to its surviving loop. Commit `c51a116d` makes AAPCS64 and SysV
   indirect-result hinting plus post-promotion binding transparent while
-  preserving call ownership. Expression ownership, the remaining wildcard
+  preserving call ownership. Commit `02b0da5c` makes packed-vector batch,
+  scalar-view bridge, and nested-control recovery transparent, unions every
+  consumed lane and bridge origin into the two synthesized wide operations,
+  and retains the one-consumer safety proof under nesting. Expression
+  ownership, the remaining wildcard
   consumers, and production attribution remain open.
 
 ### Migration targets
@@ -2747,7 +2756,11 @@ relevant ratchet's accepted-regression record.
    bounded omission; commit `c51a116d` completes that migration with neutral
    stripped and whole-Python comparisons. Next migrate the enabled
    `vector_copy` consumer, including exact unions for removed lane batches and
-   scalar-view bridges, before expression ownership.
+   scalar-view bridges, before expression ownership. Commit `02b0da5c`
+   completes that migration with eight focused tests, a neutral stripped
+   differential, an identical normalized 221-node whole-Python failure set,
+   and an eight-for-eight green undeclared-local invariant. Next migrate the
+   remaining raw guarded-return and diamond paths in `select_fold`.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
