@@ -89,9 +89,15 @@ function-table recovery and conservative clobber tracking. Its stripped map is
 exactly neutral, while the whole-Python boundary improves from 218 to 217
 failures with no addition; a controlled release A/B proves the recovered
 portable `ops[5]` table is attributable. See
-`results/wp3-function-table-origins.md`. The next enabled raw consumer is
-`call_args::tail_calls`; audit its direct, resolved-indirect, and vtable
-replacement paths before beginning expression ownership. Most
+`results/wp3-function-table-origins.md`. Commit `849c5a5b` then migrates direct,
+resolved GOT-indirect, and relocation-proven vtable tail-call recovery. Its
+stripped map is exactly neutral and its whole-Python boundary improves from 217
+to 216 failures with no addition; a controlled release A/B attributes the
+recovered Rust trait-object tail to this commit. See
+`results/wp3-tail-call-origins.md`. Continue through the convention-generic
+argument-layout folds in `call_args.rs`, then the architecture-specific
+`cdecl32.rs` and `aapcs.rs` setup/removal paths, before beginning expression
+ownership. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -2784,6 +2790,12 @@ relevant ratchet's accepted-regression record.
    `e92d7248` completes that migration and removes three whole-Python failures
    with zero additions; re-audit the remaining enabled wildcard surface, then
    start expression ownership and the non-contiguous transformation policy.
+   Commit `18ef9fdc` migrates GOT folding, `217796be` migrates relocation-proven
+   function tables, and `849c5a5b` migrates direct, resolved-indirect, and
+   vtable tail calls. The last increment is stripped-neutral and removes the
+   Rust O2 trait-object unrecovered-tail failure with zero additions. Next
+   migrate the convention-generic recovered-layout folds in `call_args.rs`,
+   followed by the bounded cdecl32 and AAPCS setup/removal paths.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.

@@ -85,6 +85,7 @@ three places. The detailed file now records the reconciled decisions:
 | [05-planning-docs-audit.md](05-planning-docs-audit.md) | What the planning documents decided, tried, abandoned, or left contradictory. |
 | [06-recommendations.md](06-recommendations.md) | Ten recommendations, ordered by leverage, each with the evidence it rests on, what the docs already said, and how it would be judged. |
 | [PLAN.md](PLAN.md) | Dependency-ordered implementation work packages with exact production/test paths, TDD sequence, gates, measurements, stop conditions, and milestones. |
+| [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 ## Headline findings
 
