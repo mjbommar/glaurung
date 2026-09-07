@@ -119,10 +119,24 @@ cdecl32, and AAPCS call-argument surfaces are now migrated. The enabled
 consumer re-audit selected `src/ir/canary.rs`; commit `9942f948` makes its save,
 reload, branch, failure-call, and nested structured paths origin-transparent
 and unions every removed owner into the synthesized canary comment. The
-complete stripped differential and exact 211-node whole-Python failure set are
-neutral, and the release declaration invariant is eight-for-eight green; see
-`results/wp3-canary-origins.md`. Re-run the enabled consumer audit before
-selecting the next bounded origin slice. Most
+  complete stripped differential and exact 211-node whole-Python failure set are
+  neutral, and the release declaration invariant is eight-for-eight green; see
+  `results/wp3-canary-origins.md`. Commit `8989cecc` then makes integer-pair
+  return composition origin-transparent and rejects contradictory explicit SSE
+  low-result evidence; its stripped map and normalized 211-node semantic
+  whole-Python boundary are neutral. Commit `82a95253` batches the next five
+  related call-analysis surfaces: register discovery, result attribution,
+  frame-load alias barriers, enclosing reaching definitions, SysV SSE-pair
+  forwarding, and format-proven variadic arity all see through statement
+  carriers. All six focused tests failed before their fixes, and the complete
+  109-test call-argument module is green. The whole-Python boundary improves
+  from 211 to 209 exact failure nodes with no addition; focused release A/B
+  attributes both restored indirect-tail/table-dispatch tests to this batch.
+  The following enabled-consumer audit selects
+  `src/ir/lazy_call_select.rs` as the next cohesive origin slice: its result
+  inventory, recursive traversal, adjacent folding, goto census, diamond
+  matching, and replacement construction still inspect raw statements in both
+  production entry points. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -889,6 +903,13 @@ provenance through lowering.
   structured statements remain visible, and synthesized comments receive the
   complete deterministic union of removed owners. Both the stripped map and
   exact 211-node whole-Python boundary are neutral.
+  Commit `8989cecc` next migrates integer-pair return recognition and mutation,
+  preserving the return owner and refusing an explicitly floating low result.
+  Commit `82a95253` batches six origin-transparent call-analysis consumers
+  across `call_args.rs`, `captured_defs.rs`, `enclosing_slots.rs`,
+  `fold_one_call.rs`, and `return_attribution.rs`; it preserves carriers while
+  recognizing reads, writes, calls, alias barriers, enclosing definitions,
+  SSE-pair producers, and literal-format proofs.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
@@ -2846,8 +2867,20 @@ relevant ratchet's accepted-regression record.
    and `e403de27`. The subsequent audit selected the stack-canary consumer;
    `9942f948` completes it with 22 focused tests, an unchanged
    102-regression/18-improvement stripped differential, and an exact-neutral
-   211-node whole-Python comparison. Re-audit for the next bounded raw
-   statement consumer before starting expression ownership.
+   211-node whole-Python comparison. Integer-pair return composition follows at
+   `8989cecc`; the normalized semantic failure set and stripped differential
+   remain neutral. Commit `82a95253` then closes six related raw call-analysis
+   readers as one batch, with six observed-red tests, 109/109 call-argument
+   tests, 54/54 origin-focused tests, and a green complete Rust gate. Its exact
+   whole-Python failure set improves from 211 to 209 with no additions, and
+   focused release A/B proves both indirect-tail/table-dispatch removals are
+   attributable. Re-audit
+   the remaining enabled semantic consumers before starting expression
+   ownership. The next bounded family is `src/ir/lazy_call_select.rs`, used by
+   both AST preparation and the DecBench renderer path; migrate its recognition,
+   recursion, consumed-origin unions, and replacement ownership together.
+   Batch related migrations and use focused fixtures during
+   development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.

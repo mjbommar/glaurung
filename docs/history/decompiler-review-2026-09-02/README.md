@@ -88,12 +88,15 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-canary-origins.md`](results/wp3-canary-origins.md): stack-canary
-save and exit-check folding now sees attributed statements and transfers every
-removed instruction owner to the synthesized comment. Its release-built
-whole-Python boundary has the exact same 211 failed nodes, the stripped
-differential remains 102 regressions and 18 improvements, and all eight
-declaration-invariant cells are green.
+[`results/wp3-call-analysis-origins.md`](results/wp3-call-analysis-origins.md):
+six related call-analysis consumers now see through attributed statements
+while preserving the carrier and their existing safety proofs. All six focused
+tests failed before repair; 109 call-argument tests, 54 origin-focused tests,
+and the complete Rust gate are green. The whole-Python boundary improves from
+211 to 209 exact failure nodes with no additions, and focused release A/B
+proves both restored indirect-tail/table-dispatch tests are attributable. The preceding
+[`results/wp3-callee-pair-return-origins.md`](results/wp3-callee-pair-return-origins.md)
+records the origin-transparent, bank-safe integer-pair return slice.
 
 ## Headline findings
 
