@@ -48,7 +48,7 @@ pub fn drop_implicit_main_runtime_call(f: &mut Function) {
     }
     f.body.retain(|statement| {
         !matches!(
-            statement,
+            statement.semantic(),
             Stmt::Call {
                 target: Expr::Named { name, .. },
                 args,
@@ -1752,6 +1752,50 @@ mod tests {
         let rendered = crate::ir::ast::render(&f);
         assert!(!rendered.contains("__main"));
         assert!(rendered.contains("puts"));
+    }
+
+    #[test]
+    fn attributed_mingw_runtime_call_is_deleted_without_reassigning_its_owner() {
+        let mut f = Function {
+            name: "_main".into(),
+            entry_va: 0x401000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x402000,
+                        name: "___main".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                }
+                .with_origins(OriginSet::one(0x401010)),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x403000,
+                        name: "_puts".into(),
+                    },
+                    args: vec![Expr::StringLit {
+                        value: "Hello".into(),
+                    }],
+                    dst: None,
+                    call_spec: None,
+                }
+                .with_origins(OriginSet::one(0x401014)),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                }
+                .with_origins(OriginSet::one(0x401018)),
+            ],
+        };
+
+        drop_implicit_main_runtime_call(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+        assert!(matches!(f.body[0].semantic(), Stmt::Call { .. }));
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x401014)));
+        assert!(matches!(f.body[1].semantic(), Stmt::Return { .. }));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x401018)));
     }
 
     #[test]
