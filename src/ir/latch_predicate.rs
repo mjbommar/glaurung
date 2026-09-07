@@ -65,16 +65,26 @@ pub(crate) fn coalesce_source_loop_updates(
             exact_value_widths,
         );
         if let Some((definition, carrier, scratch)) = candidate {
-            let (loop_body, condition) = match &mut function.body[index] {
-                Stmt::While { body, cond } | Stmt::DoWhile { body, cond } => (body, cond),
-                _ => unreachable!("candidate only accepts while-like loops"),
+            let removed_origins = {
+                let (loop_body, condition) = match function.body[index].semantic_mut() {
+                    Stmt::Origin { .. } => {
+                        unreachable!("semantic statement cannot be an origin wrapper")
+                    }
+                    Stmt::While { body, cond } | Stmt::DoWhile { body, cond } => (body, cond),
+                    _ => unreachable!("candidate only accepts while-like loops"),
+                };
+                let tail = loop_body.len() - 1;
+                for statement in &mut loop_body[definition..tail] {
+                    replace_statement_register(statement, &scratch, &carrier);
+                }
+                replace_register(condition, &scratch, &carrier);
+                loop_body
+                    .pop()
+                    .and_then(|removed| removed.origins().cloned())
             };
-            let tail = loop_body.len() - 1;
-            for statement in &mut loop_body[definition..tail] {
-                replace_statement_register(statement, &scratch, &carrier);
+            if let Some(origins) = removed_origins {
+                function.body[index].merge_origins(&origins);
             }
-            replace_register(condition, &scratch, &carrier);
-            loop_body.pop();
         }
         index += 1;
     }
@@ -87,11 +97,12 @@ fn source_loop_update_candidate(
     types: &crate::ir::types_recover::TypeMap,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
 ) -> Option<(usize, VReg, VReg)> {
-    let (body, condition) = match statement {
+    let (body, condition) = match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::While { body, cond } | Stmt::DoWhile { body, cond } => (body, cond),
         _ => return None,
     };
-    let (carrier, scratch) = match body.last()? {
+    let (carrier, scratch) = match body.last()?.semantic() {
         Stmt::Assign {
             dst,
             src: Expr::Reg(source),
@@ -142,7 +153,7 @@ fn source_loop_update_candidate(
     let [definition] = definitions.as_slice() else {
         return None;
     };
-    let Stmt::Assign { src, .. } = &body[*definition] else {
+    let Stmt::Assign { src, .. } = body[*definition].semantic() else {
         return None;
     };
     if !expression_reads(src, &carrier)
@@ -168,7 +179,7 @@ fn source_loop_update_candidate(
 
 fn straight_line_update_statement(statement: &Stmt) -> bool {
     matches!(
-        statement,
+        statement.semantic(),
         Stmt::Assign { .. }
             | Stmt::Store { .. }
             | Stmt::Call { .. }
@@ -185,7 +196,8 @@ fn coalesce_body(
     types: &mut crate::ir::types_recover::TypeMap,
 ) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -220,7 +232,7 @@ fn coalesce_body(
 
     let mut index = 0;
     while index + 1 < body.len() {
-        let candidate = match (&body[index], &body[index + 1]) {
+        let candidate = match (body[index].semantic(), body[index + 1].semantic()) {
             (
                 Stmt::Assign {
                     dst,
@@ -274,6 +286,9 @@ fn coalesce_body(
         }
         if types.get(&carrier).is_none() {
             types.upsert_public(carrier, seed_type);
+        }
+        if let Some(origins) = body[index].origins().cloned() {
+            body[index + 1].merge_origins(&origins);
         }
         body.remove(index);
     }
@@ -555,7 +570,7 @@ fn replace_statement_register(statement: &mut Stmt, target: &VReg, replacement: 
 
 fn fold_body(body: &mut [Stmt]) {
     for statement in body {
-        match statement.semantic_mut() {
+        let removed_origins = match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
@@ -566,18 +581,23 @@ fn fold_body(body: &mut [Stmt]) {
                 if let Some(else_body) = else_body {
                     fold_body(else_body);
                 }
+                None
             }
-            Stmt::While { body, .. } => fold_body(body),
+            Stmt::While { body, .. } => {
+                fold_body(body);
+                None
+            }
             Stmt::For {
                 init, step, body, ..
             } => {
                 fold_body(std::slice::from_mut(init.as_mut()));
                 fold_body(body);
                 fold_body(std::slice::from_mut(step.as_mut()));
+                None
             }
             Stmt::DoWhile { body, cond } => {
                 fold_body(body);
-                fold_one_latch(body, cond);
+                fold_one_latch(body, cond)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
@@ -586,12 +606,14 @@ fn fold_body(body: &mut [Stmt]) {
                 if let Some(default_body) = default {
                     fold_body(default_body);
                 }
+                None
             }
             Stmt::TryCatch { try_body, catches } => {
                 fold_body(try_body);
                 for catch in catches {
                     fold_body(&mut catch.body);
                 }
+                None
             }
             Stmt::Assign { .. }
             | Stmt::Store { .. }
@@ -607,41 +629,44 @@ fn fold_body(body: &mut [Stmt]) {
             | Stmt::Unknown(_)
             | Stmt::Comment(_)
             | Stmt::Push { .. }
-            | Stmt::Pop { .. } => {}
+            | Stmt::Pop { .. } => None,
+        };
+        if let Some(origins) = removed_origins {
+            statement.merge_origins(&origins);
         }
     }
 }
 
-fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) {
+fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) -> Option<crate::ir::ast::OriginSet> {
     let Expr::Reg(predicate) = cond else {
-        return;
+        return None;
     };
     let Some((tail, prefix)) = body.split_last() else {
-        return;
+        return None;
     };
     let Stmt::Assign {
         dst: carried,
         src: next_value,
-    } = tail
+    } = tail.semantic()
     else {
-        return;
+        return None;
     };
     let Some((predicate_statement, before_predicate)) = prefix.split_last() else {
-        return;
+        return None;
     };
     let Stmt::Assign {
         dst: predicate_destination,
         src: predicate_expression,
-    } = predicate_statement
+    } = predicate_statement.semantic()
     else {
-        return;
+        return None;
     };
     if predicate_destination != predicate
         || predicate == carried
         || !expression_reads(predicate_expression, carried)
         || expression_reads(next_value, predicate)
     {
-        return;
+        return None;
     }
 
     // Keep this proof intentionally straight-line. A branch, nested loop, call,
@@ -650,15 +675,15 @@ fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) {
     // installing the next value.
     if !before_predicate
         .iter()
-        .all(|statement| matches!(statement, Stmt::Assign { .. } | Stmt::Comment(_)))
+        .all(|statement| matches!(statement.semantic(), Stmt::Assign { .. } | Stmt::Comment(_)))
     {
-        return;
+        return None;
     }
 
     let snapshots: Vec<(usize, &VReg)> = before_predicate
         .iter()
         .enumerate()
-        .filter_map(|(index, statement)| match statement {
+        .filter_map(|(index, statement)| match statement.semantic() {
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
@@ -667,10 +692,10 @@ fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) {
         })
         .collect();
     let [(snapshot_index, saved)] = snapshots.as_slice() else {
-        return;
+        return None;
     };
     if *saved == predicate || *saved == next_value_root(next_value).unwrap_or(carried) {
-        return;
+        return None;
     }
 
     let after_snapshot = &before_predicate[snapshot_index + 1..];
@@ -684,16 +709,16 @@ fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) {
             .iter()
             .any(|statement| statement_reads(statement, predicate))
     {
-        return;
+        return None;
     }
 
     let mut rewritten = predicate_expression.clone();
     replace_register(&mut rewritten, carried, saved);
     if expression_reads(&rewritten, carried) {
-        return;
+        return None;
     }
     *cond = rewritten;
-    body.remove(body.len() - 2);
+    body.remove(body.len() - 2).origins().cloned()
 }
 
 fn next_value_root(expression: &Expr) -> Option<&VReg> {
@@ -705,13 +730,14 @@ fn next_value_root(expression: &Expr) -> Option<&VReg> {
 }
 
 fn statement_writes(statement: &Stmt, target: &VReg) -> bool {
-    matches!(statement, Stmt::Assign { dst, .. } if dst == target)
-        || matches!(statement, Stmt::Pop { target: dst } if dst == target)
-        || matches!(statement, Stmt::Call { dst: Some(dst), .. } if dst == target)
+    matches!(statement.semantic(), Stmt::Assign { dst, .. } if dst == target)
+        || matches!(statement.semantic(), Stmt::Pop { target: dst } if dst == target)
+        || matches!(statement.semantic(), Stmt::Call { dst: Some(dst), .. } if dst == target)
 }
 
 fn statement_reads(statement: &Stmt, target: &VReg) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expression_reads(src, target),
         Stmt::Comment(_) => false,
         _ => true,

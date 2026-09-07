@@ -1,5 +1,5 @@
 use super::*;
-use crate::ir::ast::{Expr, Stmt};
+use crate::ir::ast::{Expr, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
 fn reg(name: &str) -> VReg {
@@ -53,10 +53,16 @@ fn candidate(extra: Vec<Stmt>) -> Function {
 #[test]
 fn folds_predicate_across_final_carried_value_assignment() {
     let mut function = candidate(vec![]);
+    let Stmt::DoWhile { body, .. } = &mut function.body[0] else {
+        unreachable!()
+    };
+    body[2] = std::mem::replace(&mut body[2], Stmt::Nop).with_origins(OriginSet::one(0x1010));
+    function.body[0] =
+        std::mem::replace(&mut function.body[0], Stmt::Nop).with_origins(OriginSet::one(0x1000));
 
     fold_latched_predicates(&mut function);
 
-    let Stmt::DoWhile { body, cond } = &function.body[0] else {
+    let Stmt::DoWhile { body, cond } = function.body[0].semantic() else {
         panic!("expected do-while");
     };
     assert_eq!(body.len(), 3, "predicate assignment should be removed");
@@ -67,6 +73,10 @@ fn folds_predicate_across_final_carried_value_assignment() {
             lhs: Box::new(read("next")),
             rhs: Box::new(read("old")),
         }
+    );
+    assert_eq!(
+        function.body[0].origins(),
+        Some(&OriginSet::from_addresses([0x1000, 0x1010]))
     );
 }
 
@@ -113,7 +123,8 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
             Stmt::Assign {
                 dst: reg("var5"),
                 src: read("var3"),
-            },
+            }
+            .with_origins(OriginSet::one(0x1020)),
             Stmt::DoWhile {
                 body: vec![Stmt::Assign {
                     dst: reg("var5"),
@@ -128,7 +139,8 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
                     lhs: Box::new(read("var5")),
                     rhs: Box::new(read("limit")),
                 },
-            },
+            }
+            .with_origins(OriginSet::one(0x1030)),
             Stmt::Return {
                 value: Some(read("var5")),
             },
@@ -153,6 +165,10 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
     assert!(text.contains("%var5 = (%var5 + 1)"), "{text}");
     assert!(text.contains("return %var5"), "{text}");
     assert!(types.get(&reg("var5")).is_some());
+    assert_eq!(
+        function.body[1].origins(),
+        Some(&OriginSet::from_addresses([0x1020, 0x1030]))
+    );
 }
 
 #[test]
@@ -374,10 +390,12 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
                     Stmt::Assign {
                         dst: reg("var4"),
                         src: read("ret"),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x1040)),
                 ],
                 cond: read("predicate"),
-            },
+            }
+            .with_origins(OriginSet::one(0x1030)),
             Stmt::Return { value: None },
         ],
     };
@@ -405,6 +423,10 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
     assert!(!text.contains("%ret"), "{text}");
     assert!(text.contains("%var4 = (%var4 + 1)"), "{text}");
     assert!(text.contains("(%var4 u< %limit)"), "{text}");
+    assert_eq!(
+        function.body[1].origins(),
+        Some(&OriginSet::from_addresses([0x1030, 0x1040]))
+    );
 }
 
 #[test]
