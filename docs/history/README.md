@@ -185,6 +185,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-cdecl-alignment-origins.md](decompiler-review-2026-09-02/results/wp3-cdecl-alignment-origins.md) | 2026-09-07 | balanced cdecl32 call-padding cleanup sees attributed structured statements and unions removed machine owners onto the call | the focused test was observed red; all 32 x86 frame tests and two exact i386 O0 call functions pass |
 | [results/wp3-cdecl-entry-frame-origins.md](decompiler-review-2026-09-02/results/wp3-cdecl-entry-frame-origins.md) | 2026-09-07 | cdecl32 aligned-entry-frame recognition sees attributed setup and teardown while keeping their synthesized-comment owners disjoint | the focused test was observed red; all 33 x86 frame tests and the exact checked-in MinGW PE32 main test pass |
 | [results/wp3-mingw-runtime-origins.md](decompiler-review-2026-09-02/results/wp3-mingw-runtime-origins.md) | 2026-09-07 | implicit MinGW runtime-call cleanup sees attributed calls without reassigning deleted machine bookkeeping to surviving source statements | the focused test was observed red; all 34 x86 frame tests and the exact checked-in MinGW PE32 main test pass |
+| [results/wp3-x87-scrub-origins.md](decompiler-review-2026-09-02/results/wp3-x87-scrub-origins.md) | 2026-09-07 | exact hardened-return x87 scrub recognition sees attributed operations and unions all consumed machine owners onto its replacement comment | the focused test was observed red and all 35 x86 frame tests pass; no checked-in fixture exercises the compiler option |
 
 ## `design/`
 

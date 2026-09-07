@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-x87-scrub-origins.md`](results/wp3-x87-scrub-origins.md): the
+exact hardened-return x87 scrub now sees attributed operations and unions all
+consumed machine owners onto its replacement comment; its observed-red test
+and all 35 x86 frame tests pass, while no checked-in real fixture currently
+exercises the compiler option. The preceding
 [`results/wp3-mingw-runtime-origins.md`](results/wp3-mingw-runtime-origins.md):
 implicit MinGW `___main` cleanup now sees attributed calls, deletes only the
 runtime mapping, and leaves unrelated owners unchanged; its observed-red test,

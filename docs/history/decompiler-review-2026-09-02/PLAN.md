@@ -979,6 +979,13 @@ provenance through lowering.
   unrelated surviving call or return. Its observed-red test, all 34 x86 frame
   tests, and the exact checked-in MinGW PE32 `main` integration test pass. See
   `results/wp3-mingw-runtime-origins.md`.
+  Commit `8bfadfa9` then migrates the exact hardened-return x87 scrub: wrapped
+  `8 x fldz; 8 x fstp` sequences remain recognizable, incomplete sequences
+  still fail closed, and the replacement comment receives the exact union of
+  every consumed x87/stack-teardown owner while the return stays independent.
+  Its observed-red test and all 35 x86 frame tests pass; no checked-in fixture
+  currently exercises `-fzero-call-used-regs=all`. See
+  `results/wp3-x87-scrub-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
