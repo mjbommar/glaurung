@@ -1006,6 +1006,13 @@ provenance through lowering.
   mismatched constants remain unchanged. Its observed-red test, all four
   return-fold module tests, and both exact host O0 `classify` cells pass. See
   `results/wp3-constant-return-origins.md`.
+  Commit `1c909df4` completes the adjacent exhaustive-return transaction:
+  attributed if/switch control, arm definitions, optional breaks, epilogue
+  comments, and shared returns retain exact ownership through joined-return
+  recovery. Shared-tail owners are copied into every newly materialized return
+  while control and arm-specific owners remain disjoint. Both focused tests
+  were observed red; all six module tests and four exact O0 if/switch cells
+  pass. See `results/wp3-exhaustive-return-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

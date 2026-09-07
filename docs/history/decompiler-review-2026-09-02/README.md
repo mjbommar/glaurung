@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-exhaustive-return-origins.md`](results/wp3-exhaustive-return-origins.md):
+attributed exhaustive if/switch joins now preserve disjoint control/arm owners
+and duplicate only shared-tail owners into materialized returns; both tests
+were observed red, all six module tests and four exact O0 review cells pass.
+The preceding
 [`results/wp3-constant-return-origins.md`](results/wp3-constant-return-origins.md):
 late attributed `ret = C; return C` pairs now collapse to one return carrying
 the exact union; its observed-red test, all four module tests, and two exact O0

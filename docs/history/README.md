@@ -189,6 +189,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-x86-epilogue-origins.md](decompiler-review-2026-09-02/results/wp3-x86-epilogue-origins.md) | 2026-09-07 | ordinary leave, pop, promoted-stack, and second-round x86 epilogues see attributed statements and preserve exact replacement owners | the focused test was observed red; all 39 x86 frame tests and two exact host O0 classify cells pass |
 | [results/wp3-aarch64-frame-origins.md](decompiler-review-2026-09-02/results/wp3-aarch64-frame-origins.md) | 2026-09-07 | AArch64 canonical and promoted prologues plus paired restore epilogues see attributed statements and preserve exact replacement owners | the prologue test was observed red; two focused ownership tests, all 12 module tests, and one exact AArch64 O0 classify cell pass |
 | [results/wp3-constant-return-origins.md](decompiler-review-2026-09-02/results/wp3-constant-return-origins.md) | 2026-09-07 | late attributed constant-result assignments collapse into the identical surviving return with the exact owner union | the focused test was observed red; all four return-fold tests and two exact host O0 classify cells pass |
+| [results/wp3-exhaustive-return-origins.md](decompiler-review-2026-09-02/results/wp3-exhaustive-return-origins.md) | 2026-09-07 | attributed exhaustive if/switch joins preserve control and arm owners while duplicating shared-tail owners into materialized returns | both tests were observed red; all six return-fold tests and four exact host O0 if/switch cells pass |
 
 ## `design/`
 
