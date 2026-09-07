@@ -104,7 +104,12 @@ The release-built whole-Python boundary improves from 216 to 215 failures with
 zero additions, and the real mixed hard-float call retains
 `arm_hf_mixed_callee(7, measured, negate)`; see
 `results/wp3-recovered-call-layout-origins.md`. Continue with `cdecl32.rs` and
-`aapcs.rs`. Most
+`aapcs.rs`. Commit `c291328a` completes the cdecl32 slice: attributed outgoing
+stores, lowered pushes, cleanup evidence, and rebasing remain visible; removed
+setup owners join the call and decrement owners survive on the net stack
+adjustment. A release A/B proves real `helper3(a, b, c)` recovery and two
+whole-Python failures removed with zero additions; see
+`results/wp3-cdecl-call-origins.md`. Continue with `aapcs.rs`. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -856,6 +861,11 @@ provenance through lowering.
   remain available to the stronger general argument scan. The complete
   stripped map is neutral and the whole-Python boundary improves by one node
   with no addition.
+  Commit `c291328a` then migrates cdecl32 outgoing stores, lowered push pairs,
+  cleanup proof, and stack rebasing. Consumed setup owners join the call and
+  removed decrement owners remain on the synthesized net adjustment. Its
+  stripped map is neutral, while controlled release A/B proves two
+  whole-Python failures removed with zero additions.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

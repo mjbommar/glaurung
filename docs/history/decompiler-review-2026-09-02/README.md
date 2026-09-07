@@ -88,11 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-recovered-call-layout-origins.md`](results/wp3-recovered-call-layout-origins.md):
-recovered-callee layout folding now sees attributed pure setup and preserves
-its owners without consuming ARM frame loads ahead of the general argument
-scan. Its release-built whole-Python boundary is 215 failures with zero new
-nodes relative to the preceding accepted increment.
+[`results/wp3-cdecl-call-origins.md`](results/wp3-cdecl-call-origins.md):
+cdecl32 outgoing-stack recovery now sees attributed setup and preserves owners
+on the call and net stack adjustment. Its release-built whole-Python boundary
+is 213 failures with zero new nodes relative to the preceding accepted
+increment.
 
 ## Headline findings
 
