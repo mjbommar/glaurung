@@ -75,7 +75,12 @@ unions, and multiple nested consumers still fail closed. Its complete stripped
 differential and normalized 221-node whole-Python failure set are exactly
 neutral; the current undeclared-local invariant is eight-for-eight green. See
 `results/wp3-vector-copy-origins.md`. The next confirmed wildcard omission is
-the raw guarded-return and diamond surface in `select_fold`. Most
+the raw guarded-return and diamond surface in `select_fold`. Commit `e92d7248`
+closes that surface, including nested `try`/`catch` traversal, and improves the
+whole-Python boundary from 221 to 218 failures with zero new nodes. A controlled
+parent/tip release A/B proves all three removals, including corrected ARM
+hard-float execution. See `results/wp3-select-fold-origins.md`. Re-audit the
+remaining enabled pass surface before beginning expression ownership. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -816,9 +821,13 @@ provenance through lowering.
   preserving call ownership. Commit `02b0da5c` makes packed-vector batch,
   scalar-view bridge, and nested-control recovery transparent, unions every
   consumed lane and bridge origin into the two synthesized wide operations,
-  and retains the one-consumer safety proof under nesting. Expression
-  ownership, the remaining wildcard
-  consumers, and production attribution remain open.
+  and retains the one-consumer safety proof under nesting. Commit `e92d7248`
+  additionally makes assignment-diamond, guarded-return,
+  created-select-return, and `try`/`catch` traversal transparent, distributing
+  exact origin unions to the semantic replacements. Its three whole-Python
+  improvements are parent/tip A/B-confirmed with zero new failing nodes.
+  Expression ownership, the remaining wildcard consumers, and production
+  attribution remain open.
 
 ### Migration targets
 
@@ -2760,7 +2769,10 @@ relevant ratchet's accepted-regression record.
    completes that migration with eight focused tests, a neutral stripped
    differential, an identical normalized 221-node whole-Python failure set,
    and an eight-for-eight green undeclared-local invariant. Next migrate the
-   remaining raw guarded-return and diamond paths in `select_fold`.
+   remaining raw guarded-return and diamond paths in `select_fold`. Commit
+   `e92d7248` completes that migration and removes three whole-Python failures
+   with zero additions; re-audit the remaining enabled wildcard surface, then
+   start expression ownership and the non-contiguous transformation policy.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
