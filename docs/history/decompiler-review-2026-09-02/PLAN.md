@@ -945,6 +945,11 @@ provenance through lowering.
   authoritative pointer-boundary refinement. Both observed-red tests, all 66
   touched-module tests, and the eight architecture/optimization declaration
   invariant cells pass. See `results/wp3-verification-pointer-origins.md`.
+  Commit `bd31420d` next makes fallback canonical loop naming transparent to
+  attributed loop, initializer, step, and accumulator statements without
+  reassigning their independent owners. Its observed-red test, all 18 naming
+  tests, and the four exact `skip_odd_sum` host lanes pass. See
+  `results/wp3-canonical-loop-naming-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

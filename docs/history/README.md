@@ -179,6 +179,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-banked-return-origins.md](decompiler-review-2026-09-02/results/wp3-banked-return-origins.md) | 2026-09-07 | stack and register-resident multi-bank return composition preserves exact statement owners | two focused tests were observed red; all 20 module tests and eight exact GCC/Clang aggregate-return lanes pass |
 | [results/wp3-call-result-loop-origins.md](decompiler-review-2026-09-02/results/wp3-call-result-loop-origins.md) | 2026-09-07 | attributed loop exits and boxed-clause calls preserve conservative call-result lifetime analysis | both tests were observed red; all 15 module tests and eight exact GCC/Clang call-result lanes pass |
 | [results/wp3-verification-pointer-origins.md](decompiler-review-2026-09-02/results/wp3-verification-pointer-origins.md) | 2026-09-07 | goto-aware final-source verification and authoritative pointer refinement see attributed statements | both tests were observed red; all 66 touched-module tests and eight declaration/use invariant cells pass |
+| [results/wp3-canonical-loop-naming-origins.md](decompiler-review-2026-09-02/results/wp3-canonical-loop-naming-origins.md) | 2026-09-07 | fallback canonical loop roles see attributed loop clauses and accumulator updates without changing their owners | the focused test was observed red; all 18 naming tests and four exact host loop lanes pass |
 
 ## `design/`
 

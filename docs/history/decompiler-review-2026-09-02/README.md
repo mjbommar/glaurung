@@ -88,10 +88,15 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-verification-pointer-origins.md`](results/wp3-verification-pointer-origins.md):
-goto-aware final-source verification and authoritative pointer refinement now
-see attributed statements; both observed-red tests, all 66 touched-module
-tests, and all eight declaration/use invariant cells pass. The preceding
+[`results/wp3-canonical-loop-naming-origins.md`](results/wp3-canonical-loop-naming-origins.md):
+fallback canonical loop naming now sees attributed loop clauses and accumulator
+updates without changing any owner; its observed-red test, all 18 naming tests,
+and four exact loop-fixture lanes pass. The preceding
+[`results/wp3-verification-pointer-origins.md`](results/wp3-verification-pointer-origins.md)
+records that goto-aware final-source verification and authoritative pointer
+refinement see attributed statements; both observed-red tests, all 66
+touched-module tests, and all eight declaration/use invariant cells pass. The
+preceding
 [`results/wp3-call-result-loop-origins.md`](results/wp3-call-result-loop-origins.md)
 records how
 attributed loop breaks and boxed-clause calls now preserve call-result
