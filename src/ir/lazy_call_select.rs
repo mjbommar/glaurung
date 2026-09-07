@@ -688,6 +688,7 @@ fn is_integer_view_of(expression: &Expr, target: &VReg) -> bool {
 /// across another lazy boundary or an opaque/memory effect.
 fn count_register_uses(expression: &Expr, target: &VReg) -> Option<usize> {
     match expression {
+        Expr::Origin { expr, .. } => count_register_uses(expr, target),
         Expr::Reg(register) => Some(usize::from(register == target)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -723,6 +724,8 @@ fn count_register_uses(expression: &Expr, target: &VReg) -> Option<usize> {
 
 fn substitute_call_result(expression: &Expr, target: &VReg, call: &Expr) -> Option<Expr> {
     match expression {
+        Expr::Origin { origins, expr } => substitute_call_result(expr, target, call)
+            .map(|replacement| replacement.with_origins(origins.clone())),
         Expr::Reg(register) if register == target => Some(call.clone()),
         Expr::NumericConvert { from, to, expr } => Some(Expr::NumericConvert {
             from: *from,

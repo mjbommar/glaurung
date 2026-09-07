@@ -47,6 +47,7 @@ pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
 fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
     fn discardable_source(expression: &Expr) -> bool {
         match expression {
+            Expr::Origin { expr, .. } => discardable_source(expr),
             Expr::Reg(_)
             | Expr::Const(_)
             | Expr::FloatConst { .. }
@@ -1124,6 +1125,7 @@ fn contains_nested_exit(statement: &Stmt) -> bool {
 
 fn expr_reads(e: &Expr, dst: &VReg) -> bool {
     match e {
+        Expr::Origin { expr, .. } => expr_reads(expr, dst),
         Expr::Reg(r) => r == dst,
         Expr::StackAddr { object, .. } => object == dst,
         Expr::Const(_)

@@ -52,6 +52,7 @@ fn mark_slot_read(reg: &VReg, arch: CallConv, read_between: &mut [bool]) {
 
 pub(super) fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
     match e {
+        Expr::Origin { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
         Expr::Reg(r) => mark_slot_read(r, arch, read_between),
         Expr::Const(_)
         | Expr::FloatConst { .. }

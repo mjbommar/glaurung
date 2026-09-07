@@ -634,6 +634,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
     }
     fn re(e: &mut Expr, map: &std::collections::HashMap<String, String>) {
         match e {
+            Expr::Origin { expr, .. } => re(expr, map),
             Expr::Reg(v) => rn(v, map),
             Expr::StackAddr { object, .. } => rn(object, map),
             Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {

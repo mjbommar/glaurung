@@ -515,6 +515,7 @@ fn count_reads_in_statement(statement: &Stmt, target: &VReg) -> usize {
 
 fn count_reads_in_expr(expr: &Expr, target: &VReg) -> usize {
     match expr {
+        Expr::Origin { expr, .. } => count_reads_in_expr(expr, target),
         Expr::Reg(register) => usize::from(register == target),
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }

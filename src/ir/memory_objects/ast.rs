@@ -187,6 +187,7 @@ fn observe_expr(
     observations: &mut Observations,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => observe_expr(expr, context, source, observations),
         Expr::Reg(register) => {
             if matches!(context, ExprContext::Integer) {
                 observations.non_address_uses.insert(register.clone());

@@ -153,6 +153,7 @@ pub(crate) fn prune_unread_promoted_locals(
 ) {
     fn pure(expression: &Expr) -> bool {
         match expression {
+            Expr::Origin { expr, .. } => pure(expr),
             Expr::Reg(_)
             | Expr::Const(_)
             | Expr::FloatConst { .. }
@@ -402,6 +403,7 @@ pub(crate) fn prune_unread_promoted_locals(
 pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
     fn reads(expr: &Expr, target: &VReg) -> bool {
         match expr {
+            Expr::Origin { expr, .. } => reads(expr, target),
             Expr::Reg(register)
             | Expr::StackAddr {
                 object: register, ..

@@ -215,6 +215,7 @@ impl Splitter {
 
     fn rename_expr(&self, e: &mut Expr, state: &SplitState) {
         match e {
+            Expr::Origin { expr, .. } => self.rename_expr(expr, state),
             Expr::Reg(v) => self.rename_reg(v, state),
             Expr::StackAddr { object, .. } => self.rename_reg(object, state),
             Expr::Const(_)

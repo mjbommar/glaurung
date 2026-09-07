@@ -215,6 +215,7 @@ fn note_temp(r: &VReg, out: &mut std::collections::HashMap<VReg, u32>) {
 
 fn count_temp_reads_in_expr(e: &Expr, out: &mut std::collections::HashMap<VReg, u32>) {
     match e {
+        Expr::Origin { expr, .. } => count_temp_reads_in_expr(expr, out),
         Expr::Reg(r) => note_temp(r, out),
         Expr::StackAddr { object, .. } => note_temp(object, out),
         Expr::Const(_)
@@ -394,6 +395,7 @@ fn reconstruct_do_while(
 
 fn contains_reg(e: &Expr, target: &VReg) -> bool {
     match e {
+        Expr::Origin { expr, .. } => contains_reg(expr, target),
         Expr::Reg(r) => r == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Const(_)
@@ -445,6 +447,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
 fn reads_as_address_register(s: &Stmt, target: &VReg) -> bool {
     fn in_expr(e: &Expr, target: &VReg) -> bool {
         match e {
+            Expr::Origin { expr, .. } => in_expr(expr, target),
             Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
                 base.as_ref() == Some(target) || index.as_ref() == Some(target)
             }
@@ -519,6 +522,7 @@ fn for_each_expr_in_stmt(s: &Stmt, visit: &mut impl FnMut(&Expr)) {
 
 fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
     match e {
+        Expr::Origin { expr, .. } => count_reg_uses(expr, target),
         Expr::Reg(r) => (r == target) as usize,
         Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
@@ -671,6 +675,10 @@ fn count_reg_uses_in_body_recursive(body: &[Stmt], target: &VReg) -> usize {
 fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
     let take = std::mem::replace(e, Expr::Unknown(String::new()));
     *e = match take {
+        Expr::Origin { origins, mut expr } => {
+            substitute_in_expr(&mut expr, target, with);
+            (*expr).with_origins(origins)
+        }
         Expr::Reg(r) if &r == target => with.clone(),
         Expr::Reg(r) => Expr::Reg(r),
         Expr::StackAddr { object, size } => Expr::StackAddr { object, size },

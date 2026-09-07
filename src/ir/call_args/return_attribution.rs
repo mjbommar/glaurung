@@ -44,6 +44,7 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
     let register_matches =
         |register: &VReg| matches!(register, VReg::Phys(name) if ssa_base(name) == storage);
     match expr {
+        Expr::Origin { expr, .. } => expr_reads_storage(expr, storage),
         Expr::Reg(register) => register_matches(register),
         Expr::StackAddr { object, .. } => register_matches(object),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {

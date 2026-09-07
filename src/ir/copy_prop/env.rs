@@ -66,6 +66,7 @@ pub(super) fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -
     }
     fn pure(expression: &Expr) -> bool {
         match expression {
+            Expr::Origin { expr, .. } => pure(expr),
             Expr::Reg(_) | Expr::Const(_) => true,
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => pure(lhs) && pure(rhs),
             Expr::Un { src, .. }

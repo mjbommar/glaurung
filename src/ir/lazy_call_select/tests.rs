@@ -101,6 +101,7 @@ fn selected_expression(function: &Function) -> &Expr {
 
 fn count_calls(expression: &Expr) -> usize {
     match expression {
+        Expr::Origin { expr, .. } => count_calls(expr),
         Expr::Call { target, args, .. } => {
             1 + count_calls(target) + args.iter().map(count_calls).sum::<usize>()
         }

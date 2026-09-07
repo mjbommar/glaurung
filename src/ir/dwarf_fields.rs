@@ -629,6 +629,9 @@ fn annotate_expr(
     definitions: &HashMap<VReg, Expr>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => {
+            annotate_expr(expr, layouts, pointer_width, pointer_types, definitions)
+        }
         Expr::Deref { addr, size } => {
             annotate_expr(addr, layouts, pointer_width, pointer_types, definitions);
             annotate_address(

@@ -106,6 +106,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
 
 fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
     match e {
+        Expr::Origin { expr, .. } => resolve_expr(expr, addr_map),
         Expr::Addr(a) => {
             if let Some(name) = addr_map.get(a) {
                 *e = Expr::Named {

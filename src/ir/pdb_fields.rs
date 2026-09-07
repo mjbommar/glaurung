@@ -209,6 +209,7 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
 
 fn annotate_expr(expr: &mut Expr, field_map: &PdbFieldMap) {
     match expr {
+        Expr::Origin { expr, .. } => annotate_expr(expr, field_map),
         Expr::Deref { addr, .. } => annotate_expr(addr, field_map),
         Expr::Call { target, args, .. } => {
             annotate_expr(target, field_map);

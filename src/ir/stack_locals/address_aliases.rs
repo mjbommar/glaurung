@@ -43,6 +43,7 @@ pub(super) fn expand(body: &mut [Stmt], ctx: StackContext) {
 
 fn pure_address_expression(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => pure_address_expression(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::StackAddr { .. }
@@ -106,6 +107,7 @@ fn is_versioned_local_value(register: &VReg) -> bool {
 
 fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => contains_active_stack_base(expr, ctx),
         Expr::Reg(VReg::Phys(name)) => is_active_stack_base(name, ctx),
         Expr::Reg(_) => false,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -152,6 +154,7 @@ fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
 
 fn contains_register(expr: &Expr, target: &VReg) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => contains_register(expr, target),
         Expr::Reg(register) => register == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -199,6 +202,7 @@ fn contains_register(expr: &Expr, target: &VReg) -> bool {
 
 fn replace_register(expr: &mut Expr, target: &VReg, replacement: &VReg) {
     match expr {
+        Expr::Origin { expr, .. } => replace_register(expr, target, replacement),
         Expr::Reg(register) => {
             if register == target {
                 *register = replacement.clone();
@@ -316,6 +320,7 @@ fn expand_expr(expr: &mut Expr, aliases: &HashMap<VReg, Expr>) {
         return;
     }
     match expr {
+        Expr::Origin { expr, .. } => expand_expr(expr, aliases),
         Expr::Deref { addr, .. } => expand_expr(addr, aliases),
         Expr::Call { target, args, .. } => {
             expand_expr(target, aliases);
@@ -405,6 +410,7 @@ fn expand_affine_definition(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
 /// out of the general copy-propagation business.
 fn expand_memory_address_components(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
     match expr {
+        Expr::Origin { expr, .. } => expand_memory_address_components(expr, components),
         Expr::Deref { addr, .. } => expand_affine_definition(addr, components),
         Expr::Call { target, args, .. } => {
             expand_memory_address_components(target, components);

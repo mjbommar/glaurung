@@ -79,6 +79,7 @@ fn write_reg_c(v: &VReg, out: &mut String) {
 
 fn write_expr_c(e: &Expr, out: &mut String) {
     match e {
+        Expr::Origin { expr, .. } => write_expr_c(expr, out),
         Expr::Reg(v) => write_reg_c(v, out),
         Expr::Const(c) => {
             if *c == 0 {

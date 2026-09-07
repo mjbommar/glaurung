@@ -145,6 +145,7 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
 fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
     fn direct_signed_value(expr: &Expr) -> Option<&VReg> {
         match expr {
+            Expr::Origin { expr, .. } => direct_signed_value(expr),
             Expr::Reg(reg) => Some(reg),
             Expr::Cast {
                 signed: true, expr, ..
@@ -155,6 +156,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
 
     fn expression(expr: &Expr, tm: &mut TypeMap) {
         match expr {
+            Expr::Origin { expr, .. } => expression(expr, tm),
             Expr::Cmp { op, lhs, rhs } => {
                 if matches!(op, CmpOp::Slt | CmpOp::Sle) {
                     for operand in [lhs.as_ref(), rhs.as_ref()] {
@@ -361,6 +363,7 @@ fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> b
 
 fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => expression_proven_scalar(expr, tm),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Cmp { .. }
@@ -742,6 +745,7 @@ fn expression_value_width(
     defs: &std::collections::HashMap<String, u8>,
 ) -> Option<u8> {
     match expr {
+        Expr::Origin { expr, .. } => expression_value_width(expr, tm, defs),
         Expr::Reg(VReg::Phys(name)) => defs
             .get(name)
             .copied()

@@ -1256,6 +1256,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
 
 fn is_pure_arg_normalisation(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_pure_arg_normalisation(expr),
         Expr::Deref { .. }
         | Expr::Call { .. }
         | Expr::FunctionTableEntry { .. }
@@ -1588,6 +1589,7 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
 
 fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
     match e {
+        Expr::Origin { expr, .. } => reads_reg_in_expr(expr, target),
         Expr::Reg(r) => r == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Const(_)

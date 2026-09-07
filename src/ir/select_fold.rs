@@ -95,6 +95,7 @@ fn fold_masks_in_stmt(statement: &mut Stmt) {
 
 fn fold_masks_in_expr(expr: &mut Expr) {
     match expr {
+        Expr::Origin { expr, .. } => fold_masks_in_expr(expr),
         Expr::FunctionTableEntry { index, .. } => fold_masks_in_expr(index),
         Expr::Call { target, args, .. } => {
             fold_masks_in_expr(target);
@@ -388,6 +389,7 @@ fn false_edge_value(condition: &Expr, default_value: &Expr) -> Expr {
 
 fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => expression_reads_register(expr, target),
         Expr::Reg(reg) => reg == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => base

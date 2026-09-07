@@ -569,6 +569,7 @@ fn resolve_expr(
     definitions: &HashMap<VReg, Expr>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => resolve_expr(expr, tables, definitions),
         Expr::Deref { addr, .. } => resolve_expr(addr, tables, definitions),
         Expr::Call { target, args, .. } => {
             resolve_expr(target, tables, definitions);

@@ -265,6 +265,7 @@ fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
 
 fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
     match e {
+        Expr::Origin { expr, .. } => fold_expr(expr, pool),
         Expr::Addr(v) => {
             if let Some(s) = pool.get(v) {
                 *e = Expr::StringLit { value: shorten(s) };

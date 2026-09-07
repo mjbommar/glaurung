@@ -149,6 +149,50 @@ mod tests {
     }
 
     #[test]
+    fn expression_origins_union_without_nesting_and_render_transparently() {
+        let plain = Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+            rhs: Box::new(Expr::Const(1)),
+        };
+        let attributed = plain
+            .clone()
+            .with_origins(OriginSet::from_addresses([0x1010, 0x1004]))
+            .with_origins(OriginSet::from_addresses([0x1014, 0x1010]));
+
+        assert_eq!(
+            attributed
+                .origins()
+                .expect("attributed expression")
+                .addresses(),
+            &[0x1004, 0x1010, 0x1014]
+        );
+        assert_eq!(attributed.semantic(), &plain);
+        let Expr::Origin { expr, .. } = &attributed else {
+            panic!("expression must have one origin wrapper");
+        };
+        assert!(!matches!(expr.as_ref(), Expr::Origin { .. }));
+
+        let plain_function = Function {
+            name: "increment".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return { value: Some(plain) }],
+        };
+        let attributed_function = Function {
+            name: plain_function.name.clone(),
+            entry_va: plain_function.entry_va,
+            body: vec![Stmt::Return {
+                value: Some(attributed),
+            }],
+        };
+        assert_eq!(render_c(&attributed_function), render_c(&plain_function));
+        assert_eq!(
+            render_decbench(&attributed_function),
+            render_decbench(&plain_function)
+        );
+    }
+
+    #[test]
     fn origin_wrappers_do_not_change_rendered_text() {
         let init = Stmt::Assign {
             dst: VReg::phys("i"),

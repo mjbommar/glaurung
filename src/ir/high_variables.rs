@@ -767,6 +767,14 @@ fn expr_uses_preserve_positive_value(
     uses: &mut usize,
 ) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => expr_uses_preserve_positive_value(
+            expr,
+            name,
+            width,
+            types,
+            unsigned_context,
+            uses,
+        ),
         Expr::Reg(VReg::Phys(found)) if found == name => {
             *uses += 1;
             unsigned_context
@@ -919,6 +927,7 @@ fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -
 
 fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
     match expression {
+        Expr::Origin { expr, .. } => classify_expr(expr, types),
         Expr::StringLit { .. } => ValueClass::Pointer(1),
         Expr::StackAddr { .. } => ValueClass::Pointer(0),
         Expr::FunctionTableEntry { .. } => ValueClass::Pointer(0),
@@ -1131,6 +1140,7 @@ fn collect_unsafe_expr(
     out: &mut HashSet<String>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => collect_unsafe_expr(expr, integer_context, types, out),
         Expr::Reg(VReg::Phys(name)) if integer_context => {
             out.insert(name.clone());
         }

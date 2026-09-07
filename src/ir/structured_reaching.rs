@@ -226,6 +226,7 @@ fn analyze_statement(
 
 fn expression_reads(expression: &Expr, value: &VReg) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => expression_reads(expr, value),
         Expr::Reg(register) => register == value,
         Expr::StackAddr { object, .. } => object == value,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {

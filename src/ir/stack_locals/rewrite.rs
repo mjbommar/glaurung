@@ -324,6 +324,7 @@ fn rewrite_expr(
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     match e {
+        Expr::Origin { expr, .. } => rewrite_expr(expr, map, names, ctx, sp_delta, address_defs),
         Expr::Deref { addr, size } => {
             let size_val = *size;
             rewrite_expr(addr, map, names, ctx, sp_delta, address_defs);
@@ -576,6 +577,7 @@ pub(super) fn reconcile_late_address_taken_objects(
             return;
         }
         match expr {
+            Expr::Origin { expr, .. } => rewrite_value(expr, objects),
             Expr::Deref { addr, .. } => {
                 if let Expr::Reg(reg) = addr.as_ref() {
                     if let Some(address) = object_address(reg, objects) {

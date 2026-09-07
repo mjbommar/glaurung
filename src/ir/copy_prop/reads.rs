@@ -35,6 +35,7 @@ use crate::ir::types::{is_promoted_local_reg, VReg};
 /// the rest of the expression.
 pub(super) fn visit_expr_reads<F: FnMut(&VReg) -> bool>(e: &Expr, visit: &mut F) -> bool {
     match e {
+        Expr::Origin { expr, .. } => visit_expr_reads(expr, visit),
         Expr::Reg(r) => visit(r),
         Expr::StackAddr { object, .. } => visit(object),
         Expr::Const(_)

@@ -217,6 +217,13 @@ impl WideArithmetic {
 /// subexpressions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
+    /// A value expression and the machine instructions that contributed to it.
+    /// Rewrites retain, union, or clone this carrier under the same provenance
+    /// rules as [`Stmt::Origin`].
+    Origin {
+        origins: OriginSet,
+        expr: Box<Expr>,
+    },
     Reg(VReg),
     Const(i64),
     /// Exact IEEE-754 literal payload recovered from a floating-point machine
@@ -375,6 +382,83 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// Attach instruction ownership without creating nested carriers.
+    pub fn with_origins(self, origins: OriginSet) -> Self {
+        match self {
+            Self::Origin {
+                origins: existing,
+                expr,
+            } => Self::Origin {
+                origins: existing.union(&origins),
+                expr,
+            },
+            expr => Self::Origin {
+                origins,
+                expr: Box::new(expr),
+            },
+        }
+    }
+
+    /// Instruction ownership attached directly to this expression node.
+    pub fn origins(&self) -> Option<&OriginSet> {
+        match self {
+            Self::Origin { origins, .. } => Some(origins),
+            _ => None,
+        }
+    }
+
+    /// Expression meaning with any ownership carrier removed.
+    pub fn semantic(&self) -> &Self {
+        match self {
+            Self::Origin { expr, .. } => expr.semantic(),
+            expression => expression,
+        }
+    }
+
+    /// Mutable expression meaning with any ownership carrier removed.
+    pub fn semantic_mut(&mut self) -> &mut Self {
+        match self {
+            Self::Origin { expr, .. } => expr.semantic_mut(),
+            expression => expression,
+        }
+    }
+
+    /// Split semantic meaning from its canonical ownership carrier.
+    pub fn into_semantic_with_origins(self) -> (Self, Option<OriginSet>) {
+        match self {
+            Self::Origin { origins, expr } => {
+                let (expression, nested) = expr.into_semantic_with_origins();
+                let origins = nested.map_or(origins.clone(), |other| origins.union(&other));
+                (expression, Some(origins))
+            }
+            expression => (expression, None),
+        }
+    }
+
+    /// Restore optional ownership returned by [`Self::into_semantic_with_origins`].
+    pub fn with_optional_origins(self, origins: Option<OriginSet>) -> Self {
+        match origins {
+            Some(origins) => self.with_origins(origins),
+            None => self,
+        }
+    }
+
+    /// Union another contributor into this node without nesting carriers.
+    pub fn merge_origins(&mut self, origins: &OriginSet) {
+        if origins.is_empty() {
+            return;
+        }
+        match self {
+            Self::Origin {
+                origins: existing, ..
+            } => existing.merge(origins),
+            expression => {
+                let semantic = std::mem::replace(expression, Self::Unknown(String::new()));
+                *expression = semantic.with_origins(origins.clone());
+            }
+        }
+    }
+
     /// Return whether evaluating this expression can invoke a callee.
     ///
     /// Calls may be nested in a lazy select arm. Passes that delete, duplicate,
@@ -382,6 +466,7 @@ impl Expr {
     /// [`Stmt::Assign`] source is pure.
     pub(crate) fn contains_call(&self) -> bool {
         match self {
+            Self::Origin { expr, .. } => expr.contains_call(),
             Self::Call { .. } => true,
             Self::Deref { addr, .. }
             | Self::Un { src: addr, .. }
@@ -415,6 +500,7 @@ impl Expr {
     /// of its recursively nested operands.
     pub(crate) fn contains_reg(&self, target: &VReg) -> bool {
         match self {
+            Self::Origin { expr, .. } => expr.contains_reg(target),
             Self::Reg(reg) => reg == target,
             Self::StackAddr { object, .. } => object == target,
             Self::Deref { addr, .. } => addr.contains_reg(target),
@@ -1198,6 +1284,7 @@ fn local_reg_spelling(v: &VReg) -> Option<String> {
 
 fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
     match e {
+        Expr::Origin { expr, .. } => collect_idents_expr(expr, ids),
         Expr::Reg(v) => collect_reg(v, ids),
         Expr::StackAddr { object, size } => {
             collect_reg(object, ids);

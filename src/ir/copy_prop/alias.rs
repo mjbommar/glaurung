@@ -48,6 +48,7 @@ pub(super) fn contains_reg(e: &Expr, target: &VReg) -> bool {
 /// post-store value.
 pub(super) fn contains_deref(e: &Expr) -> bool {
     match e {
+        Expr::Origin { expr, .. } => contains_deref(expr),
         Expr::Deref { .. } | Expr::Call { .. } | Expr::FunctionTableEntry { .. } => true,
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -76,6 +77,7 @@ pub(super) fn contains_deref(e: &Expr) -> bool {
 
 pub(super) fn contains_unknown(e: &Expr) -> bool {
     match e {
+        Expr::Origin { expr, .. } => contains_unknown(expr),
         Expr::Unknown(_) => true,
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -108,6 +110,7 @@ pub(super) fn contains_unknown(e: &Expr) -> bool {
 
 pub(super) fn contains_select(e: &Expr) -> bool {
     match e {
+        Expr::Origin { expr, .. } => contains_select(expr),
         Expr::Select { .. } => true,
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
@@ -245,6 +248,7 @@ fn addresses_disjoint(a: &Expr, a_size: i64, b: &Expr, b_size: i64) -> bool {
 /// memory footprint this function does not enumerate must answer `false`.
 fn loads_proven_disjoint(e: &Expr, store_addr: &Expr, store_size: i64) -> bool {
     match e {
+        Expr::Origin { expr, .. } => loads_proven_disjoint(expr, store_addr, store_size),
         // Opaque footprint — a call may write anything.
         Expr::Call { .. } | Expr::FunctionTableEntry { .. } => false,
         Expr::Deref { addr, size } => {

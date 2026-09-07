@@ -702,6 +702,7 @@ fn canary_symbol(name: &str) -> bool {
 
 fn rewrite_expr(e: &mut Expr) {
     match e {
+        Expr::Origin { expr, .. } => rewrite_expr(expr),
         // Canonical shape: deref of a base-less/index-less Lea with a known
         // TLS displacement and a matching segment override.
         Expr::Deref { addr, .. } => {

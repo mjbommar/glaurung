@@ -479,6 +479,7 @@ fn collect_flag_reads_in_expr(
         }
     }
     match e {
+        Expr::Origin { expr, .. } => collect_flag_reads_in_expr(expr, out, versioned),
         Expr::Reg(r) => note(r, out, versioned),
         Expr::StackAddr { object, .. } => note(object, out, versioned),
         Expr::Const(_)
@@ -656,6 +657,7 @@ mod tests {
 
     fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
         match e {
+            Expr::Origin { expr, .. } => count_reads_in_expr(expr, target),
             Expr::Reg(r) => (r == target) as usize,
             Expr::StackAddr { object, .. } => (object == target) as usize,
             Expr::Const(_)

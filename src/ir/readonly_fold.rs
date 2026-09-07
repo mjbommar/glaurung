@@ -493,6 +493,7 @@ fn fold_expr(
         return;
     }
     match expression {
+        Expr::Origin { expr, .. } => fold_expr(expr, data, aliases, bounds, active_guard),
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, bounds, active_guard);
             if let Some(text) =

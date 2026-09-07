@@ -154,6 +154,7 @@ pub(super) fn is_stable_frame_arg_definition(
 
 fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => collect_fixed_frame_reads(expr, reads),
         Expr::Deref { addr, size } => {
             let Some((base, disp)) = fixed_frame_address(addr) else {
                 return false;
@@ -220,6 +221,7 @@ fn byte_ranges_overlap(left: i64, left_size: i64, right: i64, right_size: i64) -
 /// identity and intentionally does not participate in scalar substitution.
 pub(super) fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => substitute_exact_reg(expr, target, replacement),
         Expr::Reg(reg) if reg == target => {
             *expr = replacement.clone();
             true

@@ -333,6 +333,7 @@ fn collect_named_call_expr(
         };
     }
     match expression {
+        Expr::Origin { expr, .. } => visit!(expr),
         Expr::Call {
             target,
             args,

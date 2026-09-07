@@ -82,6 +82,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
 
     fn expression(expr: &mut Expr, tm: &TypeMap) {
         match expr {
+            Expr::Origin { expr, .. } => expression(expr, tm),
             Expr::Deref { addr, .. } => expression(addr, tm),
             Expr::Call { target, args, .. } => {
                 expression(target, tm);
@@ -256,6 +257,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
 pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
     fn expression(expr: &mut Expr, tm: &TypeMap) {
         match expr {
+            Expr::Origin { expr, .. } => expression(expr, tm),
             Expr::Deref { addr, .. } => expression(addr, tm),
             Expr::Call { target, args, .. } => {
                 expression(target, tm);
@@ -644,6 +646,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // could remove an observable second evaluation.
     fn repeatable_condition(expr: &Expr) -> bool {
         match expr {
+            Expr::Origin { expr, .. } => repeatable_condition(expr),
             Expr::Reg(_) | Expr::Const(_) => true,
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 repeatable_condition(lhs) && repeatable_condition(rhs)
@@ -1305,6 +1308,7 @@ pub(crate) fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
 
 fn is_short_circuit_safe_value(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_short_circuit_safe_value(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }

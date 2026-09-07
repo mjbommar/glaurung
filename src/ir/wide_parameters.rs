@@ -129,6 +129,7 @@ fn rewrite_expr(expr: &mut Expr, replacements: &HashMap<VReg, Expr>, changed: &m
         return;
     }
     match expr {
+        Expr::Origin { expr, .. } => rewrite_expr(expr, replacements, changed),
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
         | Expr::Cast { expr: addr, .. }

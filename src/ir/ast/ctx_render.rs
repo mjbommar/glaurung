@@ -101,6 +101,7 @@ fn write_reg_with_type(v: &VReg, tm: Option<&TypeMap>, out: &mut String) {
 
 fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
     match e {
+        Expr::Origin { expr, .. } => write_expr_ctx(expr, tm, out),
         Expr::Reg(v) => {
             write_reg_with_type(v, tm, out);
         }

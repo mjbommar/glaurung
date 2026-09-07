@@ -549,6 +549,7 @@ fn base_name(name: &str) -> &str {
 
 fn expr_mentions_sp(expression: &Expr) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => expr_mentions_sp(expr),
         Expr::Reg(register) => is_sp(register),
         Expr::StackAddr { object, .. } => is_sp(object),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -724,6 +725,7 @@ mod tests {
     fn mentions_sp(statement: &Stmt) -> bool {
         fn expr_mentions_sp(expression: &Expr) -> bool {
             match expression {
+                Expr::Origin { expr, .. } => expr_mentions_sp(expr),
                 Expr::Reg(VReg::Phys(name)) => base_name(name) == "sp",
                 Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
                     base.iter().chain(index.iter()).any(

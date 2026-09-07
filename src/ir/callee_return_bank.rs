@@ -475,6 +475,7 @@ fn expression_bank(expression: &Expr) -> Option<ResultBank> {
     use crate::ir::ast::ScalarType;
 
     match expression {
+        Expr::Origin { expr, .. } => expression_bank(expr),
         Expr::Reg(register) => result_bank(register),
         Expr::FloatConst { .. } => Some(ResultBank::Sse),
         Expr::NumericConvert { to, .. } => Some(match to {

@@ -580,6 +580,7 @@ fn is_padding_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
 /// which is how the divergence was found; keep the two in step.
 fn contains_deref(expression: &Expr) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => contains_deref(expr),
         Expr::Deref { .. } | Expr::Call { .. } | Expr::FunctionTableEntry { .. } => true,
         Expr::Const(_)
         | Expr::FloatConst { .. }

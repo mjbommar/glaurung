@@ -746,6 +746,7 @@ fn statement_reads(statement: &Stmt, target: &VReg) -> bool {
 
 fn expression_reads(expression: &Expr, target: &VReg) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => expression_reads(expr, target),
         Expr::Reg(register)
         | Expr::StackAddr {
             object: register, ..
@@ -795,6 +796,7 @@ fn expression_reads(expression: &Expr, target: &VReg) -> bool {
 
 fn replace_register(expression: &mut Expr, target: &VReg, replacement: &VReg) {
     match expression {
+        Expr::Origin { expr, .. } => replace_register(expr, target, replacement),
         Expr::Reg(register)
         | Expr::StackAddr {
             object: register, ..

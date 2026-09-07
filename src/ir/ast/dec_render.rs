@@ -801,6 +801,7 @@ fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: 
 
 fn write_expr_dec(e: &Expr, out: &mut String) {
     match e {
+        Expr::Origin { expr, .. } => write_expr_dec(expr, out),
         Expr::Reg(v) => write_reg_dec(v, out),
         Expr::StackAddr { object, .. } => {
             if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
@@ -2294,6 +2295,7 @@ fn printf_variadic_parameter_types(target: &Expr, args: &[Expr]) -> Option<Vec<O
 
 fn expression_has_pointer_representation(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => expression_has_pointer_representation(expr),
         Expr::Reg(register @ VReg::Phys(name)) => {
             declared_reg_ctype(register).ends_with('*') || dec_is_stack_object(name)
         }

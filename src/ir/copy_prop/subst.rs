@@ -114,6 +114,7 @@ pub(super) fn subst(e: &mut Expr, copies: &Copies) -> bool {
         return true;
     }
     match e {
+        Expr::Origin { expr, .. } => subst(expr, copies),
         Expr::Reg(r) => {
             if let Some(src) = copies.get(r) {
                 *e = src.clone();

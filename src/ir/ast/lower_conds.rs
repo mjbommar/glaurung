@@ -167,6 +167,7 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     }
     fn collect_read(e: &Expr, out: &mut std::collections::HashSet<String>) {
         match e {
+            Expr::Origin { expr, .. } => collect_read(expr, out),
             // A `StackAddr` names its object as a register directly, exactly as
             // `Lea` names its base.
             Expr::Reg(VReg::Phys(n))
@@ -718,6 +719,7 @@ pub(super) fn extract_cond_and_strip<'a>(
 
 fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
     match e {
+        Expr::Origin { expr, .. } => count_reg_uses_in_expr(expr, target),
         Expr::Reg(r) => (r == target) as usize,
         Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
@@ -782,6 +784,7 @@ fn moving_condition_to_end_is_safe(condition: &Expr, following: &[Stmt]) -> bool
 
 fn expr_reads_memory(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => expr_reads_memory(expr),
         Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Call { .. } => true,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads_memory(lhs) || expr_reads_memory(rhs)
@@ -889,6 +892,7 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
 /// opaque expressions are not.
 fn can_eagerly_evaluate(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => can_eagerly_evaluate(expr),
         Expr::Deref { .. }
         | Expr::FunctionTableEntry { .. }
         | Expr::Call { .. }

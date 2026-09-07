@@ -581,6 +581,7 @@ impl Splitter {
 
     fn rewrite_expr(&self, expression: &mut Expr, state: &FlowState) {
         match expression {
+            Expr::Origin { expr, .. } => self.rewrite_expr(expr, state),
             Expr::Reg(register) => self.rewrite_reg(register, state),
             Expr::StackAddr { object, .. } => self.rewrite_reg(object, state),
             Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
