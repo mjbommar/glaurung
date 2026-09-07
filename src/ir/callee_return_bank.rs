@@ -292,19 +292,23 @@ fn materialize_register_body(
 ) -> Option<RegisterParts> {
     let mut reaching = incoming;
     let mut output = Vec::with_capacity(body.len() + 3);
-    for mut statement in std::mem::take(body) {
+    for statement in std::mem::take(body) {
+        let (mut statement, owner) = statement.into_semantic_with_origins();
         match &mut statement {
             Stmt::Assign { dst, .. } if contract.part(dst).is_some() => {
                 let captured = dst.clone();
                 let part = contract.part(dst).expect("checked above");
-                output.push(statement);
-                output.push(register_part_store(
-                    object,
-                    contract.object_size(),
-                    part,
-                    contract.part_size(part),
-                    Expr::Reg(captured),
-                ));
+                output.push(statement.with_optional_origins(owner.clone()));
+                output.push(
+                    register_part_store(
+                        object,
+                        contract.object_size(),
+                        part,
+                        contract.part_size(part),
+                        Expr::Reg(captured),
+                    )
+                    .with_optional_origins(owner),
+                );
                 set_part(&mut reaching, part, true);
                 continue;
             }
@@ -314,14 +318,17 @@ fn materialize_register_body(
                 reaching = RegisterParts::default();
                 if let Some(part) = dst.as_ref().and_then(|dst| contract.part(dst)) {
                     let captured = dst.clone().expect("checked above");
-                    output.push(statement);
-                    output.push(register_part_store(
-                        object,
-                        contract.object_size(),
-                        part,
-                        contract.part_size(part),
-                        Expr::Reg(captured),
-                    ));
+                    output.push(statement.with_optional_origins(owner.clone()));
+                    output.push(
+                        register_part_store(
+                            object,
+                            contract.object_size(),
+                            part,
+                            contract.part_size(part),
+                            Expr::Reg(captured),
+                        )
+                        .with_optional_origins(owner),
+                    );
                     set_part(&mut reaching, part, true);
                     continue;
                 }
@@ -391,27 +398,33 @@ fn materialize_register_body(
                         .projected_part(value)
                         .map(|part| (part, value.clone()))
                 }) {
-                    output.push(register_part_store(
-                        object,
-                        contract.object_size(),
-                        part,
-                        contract.part_size(part),
-                        projected,
-                    ));
+                    output.push(
+                        register_part_store(
+                            object,
+                            contract.object_size(),
+                            part,
+                            contract.part_size(part),
+                            projected,
+                        )
+                        .with_optional_origins(owner.clone()),
+                    );
                     set_part(&mut reaching, part, true);
                 }
                 if !reaching.complete() {
                     return None;
                 }
-                output.push(Stmt::Return {
-                    value: Some(Expr::Deref {
-                        addr: Box::new(Expr::StackAddr {
-                            object: object.clone(),
-                            size: contract.object_size(),
+                output.push(
+                    Stmt::Return {
+                        value: Some(Expr::Deref {
+                            addr: Box::new(Expr::StackAddr {
+                                object: object.clone(),
+                                size: contract.object_size(),
+                            }),
+                            size: 8,
                         }),
-                        size: 8,
-                    }),
-                });
+                    }
+                    .with_optional_origins(owner),
+                );
                 continue;
             }
             Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => {
@@ -424,7 +437,7 @@ fn materialize_register_body(
             }
             _ => {}
         }
-        output.push(statement);
+        output.push(statement.with_optional_origins(owner));
     }
     *body = output;
     Some(reaching)
@@ -549,7 +562,7 @@ pub fn bank_return_c_type(
 /// Whether every `return` in `body` is the exact whole-object load this module
 /// installs, and all of them name the same object.
 fn every_return_loads_one_object(body: &[Stmt], seen: &mut Option<(VReg, u16)>) -> bool {
-    body.iter().all(|statement| match statement {
+    body.iter().all(|statement| match statement.semantic() {
         Stmt::Return { value } => {
             let Some(Expr::Deref { addr, .. }) = value else {
                 return false;
@@ -602,7 +615,7 @@ fn scan_returns(
     any: &mut bool,
 ) -> bool {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { dst, src } => match stack_object_load(src) {
                 Some(object) => {
                     locals.insert(dst.clone(), object);
@@ -667,7 +680,7 @@ fn scan_returns(
 /// Replace each `return` with the whole-object load.
 fn rewrite_returns(body: &mut [Stmt], object: &VReg, size: u16) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::Return { value } => {
                 *value = Some(Expr::Deref {
                     addr: Box::new(Expr::StackAddr {
@@ -695,7 +708,7 @@ fn rewrite_returns(body: &mut [Stmt], object: &VReg, size: u16) {
 /// pass would declare a two-bank result over an object only the first bank was
 /// ever written to, and hand back whatever the frame happened to hold.
 fn stores_second_bank(body: &[Stmt], object: &VReg, contract: BankContract) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
         Stmt::Store { addr, .. } => stack_object_offset(addr).is_some_and(|(base, _, offset)| {
             base == *object
                 && offset >= i64::from(contract.second_bank)
@@ -739,7 +752,7 @@ fn stack_object_offset(expr: &Expr) -> Option<(VReg, u16, i64)> {
 
 /// The statement lists a compound statement owns.
 fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
-    match statement {
+    match statement.semantic() {
         Stmt::If {
             then_body,
             else_body,
@@ -765,7 +778,7 @@ fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
 /// [`nested_bodies`], for a rewrite.
 fn nested_bodies_mut(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
     let mut bodies: Vec<&mut Vec<Stmt>> = Vec::new();
-    match statement {
+    match statement.semantic_mut() {
         Stmt::If {
             then_body,
             else_body,
@@ -801,6 +814,7 @@ fn nested_bodies_mut(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
     fn object() -> VReg {
@@ -876,6 +890,37 @@ mod tests {
             &mut f,
             CallConv::SysVAmd64,
             Some(&declared)
+        ));
+        assert_eq!(
+            bank_return_c_type(&f.body, CallConv::SysVAmd64, Some(&declared)),
+            Some("struct __glaurung_sse_pair")
+        );
+    }
+
+    #[test]
+    fn attributed_stack_bank_return_is_composed_without_losing_its_owner() {
+        let return_owner = OriginSet::from_addresses([0x1030, 0x1010]);
+        let mut f = function(vec![
+            store(0, 16).with_origins(OriginSet::one(0x1000)),
+            store(8, 16).with_origins(OriginSet::one(0x1008)),
+            Stmt::Return {
+                value: Some(load(0, 16)),
+            }
+            .with_origins(return_owner.clone()),
+        ]);
+        let declared = prototype(ReturnClass::SsePair { high_bytes: 8 });
+
+        assert!(compose_bank_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(f.body[2].origins(), Some(&return_owner));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Deref { addr, .. })
+            } if matches!(addr.as_ref(), Expr::StackAddr { size: 16, .. })
         ));
         assert_eq!(
             bank_return_c_type(&f.body, CallConv::SysVAmd64, Some(&declared)),
@@ -1103,6 +1148,33 @@ mod tests {
                 value: Some(Expr::Deref { addr, .. })
             }) if matches!(addr.as_ref(), Expr::StackAddr { size: 16, .. })
         ));
+    }
+
+    #[test]
+    fn attributed_register_result_duplicates_exact_owners_onto_materialization() {
+        let low_owner = OriginSet::from_addresses([0x2004, 0x2000]);
+        let high_owner = OriginSet::one(0x2008);
+        let return_owner = OriginSet::one(0x200c);
+        let mut f = function(vec![
+            register_assignment("xmm0#4", 40).with_origins(high_owner.clone()),
+            register_assignment("eax#5", 17).with_origins(low_owner.clone()),
+            bare_return(Expr::Reg(VReg::phys("eax#5"))).with_origins(return_owner.clone()),
+        ]);
+        let declared = split_prototype(true);
+
+        assert!(materialize_register_split_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(f.body.len(), 6);
+        assert_eq!(f.body[0].origins(), Some(&high_owner));
+        assert_eq!(f.body[1].origins(), Some(&high_owner));
+        assert_eq!(f.body[2].origins(), Some(&low_owner));
+        assert_eq!(f.body[3].origins(), Some(&low_owner));
+        assert_eq!(f.body[4].origins(), Some(&return_owner));
+        assert_eq!(f.body[5].origins(), Some(&return_owner));
+        assert!(matches!(f.body[5].semantic(), Stmt::Return { .. }));
     }
 
     #[test]
