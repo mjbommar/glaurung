@@ -1017,6 +1017,16 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
     if found.iter().any(Option::is_none) {
         return false;
     }
+    if found
+        .iter()
+        .flatten()
+        .any(|(_, expression, _)| !is_pure_arg_normalisation(expression))
+    {
+        return false;
+    }
+    if !resolve_recovered_layout_sources(body, call_idx, &mut found) {
+        return false;
+    }
 
     // Removing a setup assignment must not leave another captured expression
     // referring to that exact definition. Decline instead of inventing a
@@ -1066,6 +1076,53 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
     used.sort_unstable_by(|left, right| right.cmp(left));
     for index in used {
         body.remove(index);
+    }
+    true
+}
+
+/// Follow pure straight-line definitions feeding a recovered layout setup.
+///
+/// The layout scan stops once every ABI storage location has a nearest setup,
+/// but those setup expressions can still name compiler-generated spill locals.
+/// The ordinary argument fold already follows these exact definition edges;
+/// doing the same here prevents a stronger callee-layout proof from degrading
+/// `callee(arg0)` into `local = arg0; callee(local)`. A call, control boundary,
+/// memory effect, impure definition, or intervening rewrite declines the
+/// specialized fold and leaves the established general path in charge.
+fn resolve_recovered_layout_sources(
+    body: &[Stmt],
+    call_idx: usize,
+    found: &mut [Option<(usize, Expr, VReg)>],
+) -> bool {
+    let Some(first_setup) = found.iter().flatten().map(|(index, _, _)| *index).min() else {
+        return true;
+    };
+    for index in (0..first_setup).rev() {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, src } => {
+                if !crate::ir::types::is_promoted_local_reg(dst) {
+                    continue;
+                }
+                let feeds = found
+                    .iter()
+                    .flatten()
+                    .any(|(_, argument, _)| reads_reg_in_expr(argument, dst));
+                if !feeds {
+                    continue;
+                }
+                if !is_pure_arg_normalisation(src)
+                    || versioned_operand_is_reassigned(src, body, index, call_idx)
+                {
+                    return false;
+                }
+                for (_, argument, _) in found.iter_mut().flatten() {
+                    let _ = substitute_exact_reg(argument, dst, src);
+                }
+            }
+            Stmt::Nop | Stmt::Comment(_) => {}
+            _ => break,
+        }
     }
     true
 }
@@ -4580,6 +4637,61 @@ mod tests {
             body[0].origins().expect("folded call owner").addresses(),
             &[0x1010, 0x1014, 0x1018]
         );
+    }
+
+    #[test]
+    fn attributed_recovered_layout_follows_a_pure_spill_definition() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("local_c"),
+                src: Expr::Reg(reg("arg0")),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            Stmt::Assign {
+                dst: reg("rdi#1"),
+                src: Expr::Reg(reg("local_c")),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
+        ];
+
+        assert!(fold_one_recovered_layout_call(&mut body, 2, &[reg("rdi")],));
+
+        assert_eq!(body.len(), 2, "only the ABI setup is consumed");
+        assert!(matches!(
+            body[1].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Reg(reg("arg0"))]
+        ));
+        assert_eq!(
+            body[1].origins().expect("folded call owner").addresses(),
+            &[0x1014, 0x1018]
+        );
+    }
+
+    #[test]
+    fn attributed_recovered_layout_leaves_frame_loads_for_the_general_fold() {
+        let frame_load = Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                segment: None,
+                base: Some(reg("r7#1")),
+                index: None,
+                scale: 1,
+                disp: 4,
+            }),
+            size: 4,
+        };
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("s0#1"),
+                src: frame_load,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
+        ];
+
+        assert!(!fold_one_recovered_layout_call(&mut body, 1, &[reg("s0")],));
+        assert_eq!(body.len(), 2, "the general fold must retain the load root");
+        assert!(matches!(body[1].semantic(), Stmt::Call { args, .. } if args.is_empty()));
     }
 
     #[test]
