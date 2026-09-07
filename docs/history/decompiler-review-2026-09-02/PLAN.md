@@ -57,7 +57,14 @@ stripped differential exactly neutral, and leaves no guard-chain node in the
 `results/wp3-guard-chain-origins.md`. Commit `3b7d8a95` then migrates
 comparison-tree and linear-labelled
 switch ladders plus final join-to-`break` cleanup with an exactly neutral
-stripped differential; see `results/wp3-switch-ladder-origins.md`. Most
+stripped differential; see `results/wp3-switch-ladder-origins.md`. Commit
+`a807b2d0` completes the next bounded wildcard migration in
+`latch_predicate`: attributed predicate, snapshot, entry-copy, and loop-update
+statements remain visible, and every removed contributor is unioned into the
+surviving loop. Its complete stripped differential is again exactly neutral;
+see `results/wp3-latch-predicate-origins.md`. The post-migration audit confirms
+that `aapcs64_indirect_result.rs` is the next enabled raw-statement consumer to
+migrate before expression ownership. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -791,7 +798,9 @@ provenance through lowering.
   assignments, and terminal tails. Commit `3b7d8a95` makes
   both switch-ladder synthesis forms and final join-break cleanup transparent,
   preserving unions across every consumed comparison, dispatch, label, goto,
-  case, and join statement. Expression ownership, the remaining wildcard
+  case, and join statement. Commit `a807b2d0` makes latch-predicate folding and
+  both loop-carrier coalescers transparent and transfers each removed
+  contributor to its surviving loop. Expression ownership, the remaining wildcard
   consumers, and production attribution remain open.
 
 ### Migration targets
@@ -2723,7 +2732,11 @@ relevant ratchet's accepted-regression record.
    `guard_chain` consumer with an exactly neutral differential. Next migrate
    `switch_ladder`, then `latch_predicate`. Commit `3b7d8a95` completes the
    `switch_ladder` migration with another exactly neutral differential; next
-   migrate `latch_predicate` and re-audit the wildcard surface.
+   migrate `latch_predicate` and re-audit the wildcard surface. Commit
+   `a807b2d0` completes that migration with another exactly neutral
+   differential. The re-audit identifies the enabled
+   `aapcs64_indirect_result` pre/post-stack-promotion consumer as the next
+   bounded omission; migrate it before expression ownership.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
