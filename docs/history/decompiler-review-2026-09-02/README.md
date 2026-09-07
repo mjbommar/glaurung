@@ -87,6 +87,13 @@ three places. The detailed file now records the reconciled decisions:
 | [PLAN.md](PLAN.md) | Dependency-ordered implementation work packages with exact production/test paths, TDD sequence, gates, measurements, stop conditions, and milestones. |
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
+The latest WP3 record is
+[`results/wp3-recovered-call-layout-origins.md`](results/wp3-recovered-call-layout-origins.md):
+recovered-callee layout folding now sees attributed pure setup and preserves
+its owners without consuming ARM frame loads ahead of the general argument
+scan. Its release-built whole-Python boundary is 215 failures with zero new
+nodes relative to the preceding accepted increment.
+
 ## Headline findings
 
 1. **The design docs describe one semantic spine; the code is a flat AST with

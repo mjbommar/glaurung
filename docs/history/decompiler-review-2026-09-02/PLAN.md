@@ -97,7 +97,14 @@ recovered Rust trait-object tail to this commit. See
 `results/wp3-tail-call-origins.md`. Continue through the convention-generic
 argument-layout folds in `call_args.rs`, then the architecture-specific
 `cdecl32.rs` and `aapcs.rs` setup/removal paths, before beginning expression
-ownership. Most
+ownership. Commits `b6172031` and `a0917da5` complete that generic-layout
+slice: attributed setup is consumed with exact call-owner unions, while an
+explicit purity boundary leaves ARM frame loads rooted for the general scan.
+The release-built whole-Python boundary improves from 216 to 215 failures with
+zero additions, and the real mixed hard-float call retains
+`arm_hf_mixed_callee(7, measured, negate)`; see
+`results/wp3-recovered-call-layout-origins.md`. Continue with `cdecl32.rs` and
+`aapcs.rs`. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -843,6 +850,12 @@ provenance through lowering.
   created-select-return, and `try`/`catch` traversal transparent, distributing
   exact origin unions to the semantic replacements. Its three whole-Python
   improvements are parent/tip A/B-confirmed with zero new failing nodes.
+  Commits `b6172031` and `a0917da5` make the convention-generic recovered-
+  layout folds transparent, union removed setup owners into the call, and
+  enforce the existing pure-expression boundary so attributed ARM frame loads
+  remain available to the stronger general argument scan. The complete
+  stripped map is neutral and the whole-Python boundary improves by one node
+  with no addition.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
