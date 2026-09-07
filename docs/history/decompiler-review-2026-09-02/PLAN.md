@@ -115,8 +115,14 @@ pure-VFP setup, outgoing stack areas, and phase-sensitive stack adjustments
 remain visible, and removed VFP setup owners join the call. Release A/B proves
 two ARM32 execution failures removed and one stripped fixture improvement with
 no added regression; see `results/wp3-aapcs-call-origins.md`. The generic,
-cdecl32, and AAPCS call-argument surfaces are now migrated; re-run the enabled
-consumer audit before selecting the next bounded origin slice. Most
+cdecl32, and AAPCS call-argument surfaces are now migrated. The enabled
+consumer re-audit selected `src/ir/canary.rs`; commit `9942f948` makes its save,
+reload, branch, failure-call, and nested structured paths origin-transparent
+and unions every removed owner into the synthesized canary comment. The
+complete stripped differential and exact 211-node whole-Python failure set are
+neutral, and the release declaration invariant is eight-for-eight green; see
+`results/wp3-canary-origins.md`. Re-run the enabled consumer audit before
+selecting the next bounded origin slice. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -878,6 +884,11 @@ provenance through lowering.
   attributed statements, with exact call-owner preservation. Controlled
   release A/B proves two ARM32 execution failures removed and one stripped
   improvement without a regression.
+  Commit `9942f948` then migrates stack-canary recognition and collapse:
+  attributed save, reload, comparison, branch, failure-call, and nested
+  structured statements remain visible, and synthesized comments receive the
+  complete deterministic union of removed owners. Both the stripped map and
+  exact 211-node whole-Python boundary are neutral.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
@@ -2831,6 +2842,12 @@ relevant ratchet's accepted-regression record.
    Rust O2 trait-object unrecovered-tail failure with zero additions. Next
    migrate the convention-generic recovered-layout folds in `call_args.rs`,
    followed by the bounded cdecl32 and AAPCS setup/removal paths.
+   Those three call-argument surfaces are complete at `a0917da5`, `c291328a`,
+   and `e403de27`. The subsequent audit selected the stack-canary consumer;
+   `9942f948` completes it with 22 focused tests, an unchanged
+   102-regression/18-improvement stripped differential, and an exact-neutral
+   211-node whole-Python comparison. Re-audit for the next bounded raw
+   statement consumer before starting expression ownership.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.

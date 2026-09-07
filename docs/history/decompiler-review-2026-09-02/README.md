@@ -88,11 +88,12 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-aapcs-call-origins.md`](results/wp3-aapcs-call-origins.md):
-the AAPCS call-argument surface now sees attributed contracts and setup while
-preserving exact call ownership and refusal rules. Its release-built
-whole-Python boundary is 211 failures, and the stripped differential gains one
-improvement with no regression.
+[`results/wp3-canary-origins.md`](results/wp3-canary-origins.md): stack-canary
+save and exit-check folding now sees attributed statements and transfers every
+removed instruction owner to the synthesized comment. Its release-built
+whole-Python boundary has the exact same 211 failed nodes, the stripped
+differential remains 102 regressions and 18 improvements, and all eight
+declaration-invariant cells are green.
 
 ## Headline findings
 
