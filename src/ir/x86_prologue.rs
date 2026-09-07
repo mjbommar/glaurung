@@ -919,7 +919,7 @@ fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Opti
 fn collapse_prologue(body: &mut Vec<Stmt>) {
     // Skip leading nops (the lifter emits them for ENDBR64).
     let mut i = 0usize;
-    while i < body.len() && matches!(&body[i], Stmt::Nop) {
+    while i < body.len() && matches!(body[i].semantic(), Stmt::Nop) {
         i += 1;
     }
     if body.len() - i < 2 {
@@ -930,10 +930,11 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     // two-statement form (`rsp -= 8; stack_0 = rbp`) instead of rematerialising
     // `Stmt::Push`; accept it only when the decrement exactly equals the store
     // width and is immediately followed by the canonical frame-pointer setup.
-    let set_fp_idx = if matches!(&body[i], Stmt::Push { value: Expr::Reg(v) } if is_rbp(v)) {
+    let set_fp_idx = if matches!(body[i].semantic(), Stmt::Push { value: Expr::Reg(v) } if is_rbp(v))
+    {
         i + 1
     } else if body.len() - i >= 3 {
-        match (&body[i + 1], rsp_sub_width(&body[i])) {
+        match (body[i + 1].semantic(), rsp_sub_width(&body[i])) {
             (
                 Stmt::Store {
                     addr: Expr::Reg(slot),
@@ -951,7 +952,7 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     };
     // Step 2: `%rbp = %rsp;`
     if !matches!(
-        &body[set_fp_idx],
+        body[set_fp_idx].semantic(),
         Stmt::Assign { dst, src: Expr::Reg(s) } if is_rbp(dst) && is_rsp(s)
     ) {
         return;
@@ -969,7 +970,7 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
         if let Stmt::Assign {
             dst,
             src: Expr::Bin { op, lhs, rhs },
-        } = &body[end]
+        } = body[end].semantic()
         {
             if is_rsp(dst)
                 && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
@@ -994,8 +995,12 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
         Some(n) => format!("x86-64 prologue: save rbp, frame {} bytes", n),
         None => "x86-64 prologue: save rbp".to_string(),
     };
+    let origins = origins_in_range(body, i, end);
     body.drain(i..end);
-    body.insert(i, Stmt::Comment(comment));
+    body.insert(
+        i,
+        Stmt::Comment(comment).with_optional_origins((!origins.is_empty()).then_some(origins)),
+    );
 }
 
 fn collapse_epilogue(body: &mut Vec<Stmt>) {
@@ -1635,6 +1640,40 @@ mod tests {
             Stmt::Comment(s) if s.contains("x86-64 prologue") && s.contains("32")
         ));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_full_prologue_collapses_with_exact_machine_owners() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                push_rbp().with_origins(OriginSet::one(0x1000)),
+                mov_rbp_rsp().with_origins(OriginSet::one(0x1004)),
+                sub_rsp(0x20).with_origins(OriginSet::one(0x1008)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x100c)),
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "attributed prologue did not collapse: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text)
+                if text == "x86-64 prologue: save rbp, frame 32 bytes"
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008]))
+        );
+        assert!(matches!(f.body[1].semantic(), Stmt::Return { value: None }));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x100c)));
     }
 
     #[test]
