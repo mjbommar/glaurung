@@ -1045,12 +1045,14 @@ provenance through lowering.
   expression attribution and the remaining non-exhaustive matcher audit remain
   open; see `results/wp3-reconstructed-expression-origins.md` and
   `results/wp3-expression-origin-carrier.md`.
-  Commit `f30167f7` extends that production boundary through both return folds
-  that delete an ABI result assignment. Returned values retain the definition
-  owner while the surviving return statement retains the definition/transfer
-  union. Both tests were observed red, all seven touched-module tests pass, and
-  the exact two-cell host O0 `classify` slice remains green on a fresh release
-  build; see `results/wp3-return-expression-origins.md`.
+  Commits `f30167f7` and `b269a3f2` extend that production boundary through
+  every return fold that replaces an ABI result assignment, including
+  exhaustive `if`/`switch` joins. Returned values retain their definition
+  owners while surviving return statements retain the definition/control-
+  transfer unions. All four ownership assertions were observed red, all seven
+  touched-module tests pass, and the exact four-cell host O0 conditional/switch
+  slice remains green on a fresh release build; see
+  `results/wp3-return-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
