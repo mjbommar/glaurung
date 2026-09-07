@@ -52,7 +52,10 @@ proofs, remains exactly neutral on the same differential, and reduces the
 shared whole-Python failing-node set from 228 to 227; see
 `results/wp3-guarded-switch-origins.md`. Most semantic consumers, multi-output
 definition identity, expression origins, and structured line mappings remain
-open. A bounded, pre-WP3 WP7B relational slice is
+open. Commit `f7b47953` migrates every guard-chain rewrite, keeps the complete
+stripped differential exactly neutral, and leaves no guard-chain node in the
+224-entry shared Python failure cache; see
+`results/wp3-guard-chain-origins.md`. A bounded, pre-WP3 WP7B relational slice is
 landed and proved at `9c9c607c`; it does not establish the general framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
@@ -778,7 +781,9 @@ provenance through lowering.
   synthesized statements. Commit `52914784` makes guarded-switch recovery
   transparent through recognition, recursion, and mutation and preserves the
   union of each removed guard, discriminator copy, and inner switch on the
-  replacement. Expression ownership, the remaining wildcard
+  replacement. Commit `f7b47953` makes every guard-chain rewrite transparent
+  and unions origins across removed guards, labels, gotos, duplicate
+  assignments, and terminal tails. Expression ownership, the remaining wildcard
   consumers, and production attribution remain open.
 
 ### Migration targets
@@ -820,7 +825,9 @@ provenance through lowering.
   and `cda7ab73` plus `cb9e5b10` migrate exception recovery and six
   control-oriented wildcard consumers. Commit `52914784` adds the guarded-
   switch consumer, including direct, copied-discriminator, speculative, and
-  early-return shapes. Expression ownership, non-contiguous
+  early-return shapes. Commit `f7b47953` adds contradictory, terminal-return,
+  redundant-copy, shared-assignment, and shared-exit guard-chain rewrites.
+  Expression ownership, non-contiguous
   transformation policy, and the remaining wildcard audit must finish before
   universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
@@ -2704,7 +2711,9 @@ relevant ratchet's accepted-regression record.
    consumer and moves the stripped differential from 103 to 102 regressions.
    Commit `cb9e5b10` closes six more control-oriented wildcard consumers with
    an exactly neutral 102-regression/17-improvement stripped differential; next
-   migrate `guarded_switch`, then the remaining guarded/switch/latch consumers.
+   `52914784` migrates `guarded_switch`, and `f7b47953` migrates the complete
+   `guard_chain` consumer with an exactly neutral differential. Next migrate
+   `switch_ladder`, then `latch_predicate`.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
