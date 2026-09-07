@@ -393,6 +393,38 @@ fn recovered_direct_callee_parameter_refines_a_forwarded_argument() {
 }
 
 #[test]
+fn attributed_authoritative_callee_refines_a_forwarded_argument() {
+    let recovered = CallPrototype {
+        return_type: "int".into(),
+        parameter_types: vec!["int *".into()],
+        variadic: false,
+        authority: CallPrototypeAuthority::Recovered,
+    };
+    let function = Function {
+        name: "forward_attributed_pointer".into(),
+        entry_va: 0,
+        body: vec![Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: "read_first".into(),
+            },
+            args: vec![Expr::Reg(VReg::phys("arg0"))],
+            dst: Some(VReg::phys("ret")),
+            call_spec: Some(CallSiteSpec {
+                call_prototype: recovered.clone(),
+                callee_prototype: Some(recovered),
+            }),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1010))],
+    };
+    let mut types = TypeMap::default();
+
+    refine_pointer_high_variables(&function, &mut types);
+
+    assert_eq!(pointer_width(&types, "arg0"), Some(4));
+}
+
+#[test]
 fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
     // Real shape: diffutils `lf_skip(struct line_filter *lf, lin lines)`.
     // The incoming pointer is copied to a numbered value, used in raw byte

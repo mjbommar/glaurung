@@ -284,7 +284,7 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>) {
 
 /// Does this body contain flow this walk does not model (a label or a goto)?
 fn has_unstructured_flow(body: &[Stmt]) -> bool {
-    body.iter().any(|s| match s {
+    body.iter().any(|s| match s.semantic() {
         Stmt::Label(_) | Stmt::Goto { .. } => true,
         Stmt::If {
             then_body,
@@ -379,7 +379,7 @@ fn goto_aware_undefined_reads(body: &[Stmt]) -> Option<BTreeSet<String>> {
             continuation: Option<usize>,
             break_target: Option<usize>,
         ) -> Option<usize> {
-            match statement {
+            match statement.semantic() {
                 Stmt::Label(address) => {
                     let node = self.node(BTreeSet::new(), BTreeSet::new());
                     if self.labels.insert(*address, node).is_some() {
@@ -692,7 +692,7 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
         out.extend(reads_of(e));
     }
     for s in body {
-        match s {
+        match s.semantic() {
             Stmt::Assign { src, .. } => push(src, out),
             Stmt::Store { addr, src, .. } => {
                 if stored_slot(addr).is_none() {
@@ -838,7 +838,7 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
     }
     fn scan(body: &[Stmt], out: &mut BTreeSet<String>) {
         for s in body {
-            match s {
+            match s.semantic() {
                 Stmt::Assign { src, .. } => scan_expr(src, out),
                 Stmt::Store { addr, src, .. } => {
                     regs_in(addr, out);
@@ -922,7 +922,7 @@ fn declared_machine_register_expr(e: &Expr) -> Option<String> {
 /// Versioned values whose reaching definition is explicit poison.
 fn poisoned_defs(body: &[Stmt], out: &mut BTreeSet<String>) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign {
                 dst,
                 src: Expr::Unknown(reason),
@@ -1554,6 +1554,21 @@ mod tests {
                 .any(|x| x.name == "var2" && x.kind == ViolationKind::UsedBeforeDefinition),
             "the unreachable textual definition must not satisfy the labelled read: {v:?}"
         );
+    }
+
+    #[test]
+    fn attributed_goto_flow_still_reports_an_unreachable_definition() {
+        let f = func(vec![
+            Stmt::Goto { target: 0x1010 }.with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+            assign("var2", Expr::Const(1)).with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+            Stmt::Label(0x1010).with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            assign("var1", reg("var2")).with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+        ]);
+
+        let violations = check(&f);
+        assert!(violations.iter().any(|violation| {
+            violation.name == "var2" && violation.kind == ViolationKind::UsedBeforeDefinition
+        }));
     }
 
     #[test]

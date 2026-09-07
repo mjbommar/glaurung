@@ -288,7 +288,7 @@ fn refine_authoritative_pointer_values(
 ) {
     fn collect(body: &[Stmt], out: &mut HashMap<String, Vec<u8>>) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Call {
                     target,
                     args,
