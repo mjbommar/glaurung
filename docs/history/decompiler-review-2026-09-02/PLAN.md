@@ -1019,6 +1019,13 @@ provenance through lowering.
   owners remain exact. Its observed-red test, all 20 label-prune tests, and both
   exact host O0 `classify` cells pass. See
   `results/wp3-unreachable-tail-origins.md`.
+  Commit `0c7b4e0f` migrates the first declaration/render consumer: attributed
+  promoted or debug-proven integer definitions now participate in the same
+  safe inline-declaration proof as unwrapped statements, producing
+  `int local = value` without weakening prior-read/write or loop-scope refusal.
+  Its observed-red rendering test, three adjacent declaration controls, and
+  both exact host O0 `while_zero_trips` cells pass. See
+  `results/wp3-inline-scalar-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

@@ -191,6 +191,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-constant-return-origins.md](decompiler-review-2026-09-02/results/wp3-constant-return-origins.md) | 2026-09-07 | late attributed constant-result assignments collapse into the identical surviving return with the exact owner union | the focused test was observed red; all four return-fold tests and two exact host O0 classify cells pass |
 | [results/wp3-exhaustive-return-origins.md](decompiler-review-2026-09-02/results/wp3-exhaustive-return-origins.md) | 2026-09-07 | attributed exhaustive if/switch joins preserve control and arm owners while duplicating shared-tail owners into materialized returns | both tests were observed red; all six return-fold tests and four exact host O0 if/switch cells pass |
 | [results/wp3-unreachable-tail-origins.md](decompiler-review-2026-09-02/results/wp3-unreachable-tail-origins.md) | 2026-09-07 | attributed labels and terminal transfers delimit lexical unreachable-tail cleanup while surviving owners remain exact | the focused test was observed red; all 20 label-prune tests and two exact host O0 classify cells pass |
+| [results/wp3-inline-scalar-origins.md](decompiler-review-2026-09-02/results/wp3-inline-scalar-origins.md) | 2026-09-07 | attributed first scalar definitions participate in safe inline declaration planning and recover source-like initialized declarations | the rendering test was observed red; three adjacent controls and two exact host O0 local-loop cells pass |
 
 ## `design/`
 

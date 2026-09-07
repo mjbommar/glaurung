@@ -88,6 +88,10 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-inline-scalar-origins.md`](results/wp3-inline-scalar-origins.md):
+attributed first scalar definitions now participate in safe inline declaration
+planning, restoring `int local = value` output; the observed-red test, three
+adjacent controls, and two exact O0 local-loop cells pass. The preceding
 [`results/wp3-unreachable-tail-origins.md`](results/wp3-unreachable-tail-origins.md):
 attributed labels and terminal transfers now delimit lexical unreachable-tail
 cleanup; its observed-red test, all 20 module tests, and two exact O0 review
