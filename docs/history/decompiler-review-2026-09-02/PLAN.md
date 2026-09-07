@@ -961,6 +961,12 @@ provenance through lowering.
   allocation remain recognizable, and the replacement comment receives their
   exact origin union. Its observed-red test, all 31 module tests, and the two
   exact host O0 `classify` cells pass. See `results/wp3-x86-frame-origins.md`.
+  Commit `4dcaa1f5` then migrates balanced cdecl32 call padding through top-level
+  and nested structured control. Each surviving call receives the exact union
+  of its own owner and the removed padding/cleanup owners without weakening
+  the arity and balance proof. Its observed-red test, all 32 x86 frame tests,
+  and two exact i386 O0 call functions pass. See
+  `results/wp3-cdecl-alignment-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

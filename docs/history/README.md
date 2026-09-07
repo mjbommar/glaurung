@@ -182,6 +182,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-canonical-loop-naming-origins.md](decompiler-review-2026-09-02/results/wp3-canonical-loop-naming-origins.md) | 2026-09-07 | fallback canonical loop roles see attributed loop clauses and accumulator updates without changing their owners | the focused test was observed red; all 18 naming tests and four exact host loop lanes pass |
 | [results/wp3-arm32-frame-origins.md](decompiler-review-2026-09-02/results/wp3-arm32-frame-origins.md) | 2026-09-07 | transactional ARM32 frame recognition sees attributed bookkeeping and unions consumed owners onto synthesized frame comments | the focused test was observed red; all nine module tests and one exact ARMv7 A32 fixture cell pass |
 | [results/wp3-x86-frame-origins.md](decompiler-review-2026-09-02/results/wp3-x86-frame-origins.md) | 2026-09-07 | canonical x86 frame recognition sees attributed prologue bookkeeping and preserves its exact union on the synthesized comment | the focused test was observed red; all 31 module tests and two exact host O0 cells pass |
+| [results/wp3-cdecl-alignment-origins.md](decompiler-review-2026-09-02/results/wp3-cdecl-alignment-origins.md) | 2026-09-07 | balanced cdecl32 call-padding cleanup sees attributed structured statements and unions removed machine owners onto the call | the focused test was observed red; all 32 x86 frame tests and two exact i386 O0 call functions pass |
 
 ## `design/`
 
