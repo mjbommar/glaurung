@@ -23,7 +23,7 @@
 //! comment, and deletes the underlying stmts. The mirror epilogue — `ldp
 //! x29, x30, [sp], #K; ret` — becomes a simple `return;`.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 /// Run the pass over `f`'s body. Nested arms are currently left alone —
@@ -49,7 +49,7 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     if let [fp_save, lr_save, fp_set, ..] = body.as_slice() {
         let fp_object = frame_record_store(fp_save, "fp", 0);
         let lr_object = frame_record_store(lr_save, "lr", 8);
-        let set_object = match fp_set {
+        let set_object = match fp_set.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(fp),
                 src,
@@ -57,10 +57,12 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
             _ => None,
         };
         if fp_object.is_some() && fp_object == lr_object && fp_object == set_object {
+            let origins = origins_in_range(body, 0, 3);
             body.drain(0..3);
             body.insert(
                 0,
-                Stmt::Comment("aarch64 prologue: save fp/lr in promoted frame record".into()),
+                Stmt::Comment("aarch64 prologue: save fp/lr in promoted frame record".into())
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
             );
             return;
         }
@@ -74,7 +76,7 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     let mut saw_fp_set = false;
 
     for (i, s) in body.iter().enumerate() {
-        match s {
+        match s.semantic() {
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(slot)),
                 src: Expr::Reg(VReg::Phys(reg)),
@@ -150,10 +152,12 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     let saves_seen = saw_fp_save && saw_lr_save;
     let Some(frame) = sp_adjust else { return };
     if saves_seen {
+        let origins = origins_in_range(body, 0, end);
         body.drain(0..end);
         body.insert(
             0,
-            Stmt::Comment(format!("aarch64 prologue: save fp/lr, frame {frame} bytes")),
+            Stmt::Comment(format!("aarch64 prologue: save fp/lr, frame {frame} bytes"))
+                .with_optional_origins((!origins.is_empty()).then_some(origins)),
         );
     } else if saw_fp_set {
         // Only claim what was observed: the frame, not the spills.
@@ -172,15 +176,16 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
     let return_positions: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter(|(_, s)| matches!(s, Stmt::Return { .. }))
+        .filter(|(_, s)| matches!(s.semantic(), Stmt::Return { .. }))
         .map(|(i, _)| i)
         .collect();
     for ret_idx in return_positions.into_iter().rev() {
         // 1. Drop a single `sp += K` immediately before Return.
         let mut ret_idx = ret_idx;
+        let mut adjustment_origins = None;
         if ret_idx > 0
             && matches!(
-                &body[ret_idx - 1],
+                body[ret_idx - 1].semantic(),
                 Stmt::Assign {
                     dst,
                     src: Expr::Bin { op: BinOp::Add, lhs, rhs },
@@ -189,6 +194,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
                     && matches!(rhs.as_ref(), Expr::Const(k) if *k > 0)
             )
         {
+            adjustment_origins = body[ret_idx - 1].origins().cloned();
             body.remove(ret_idx - 1);
             ret_idx -= 1;
         }
@@ -203,7 +209,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         for s in run {
             if let Stmt::Assign {
                 dst: VReg::Phys(n), ..
-            } = s
+            } = s.semantic()
             {
                 if n == "fp" || n == "x29" {
                     fp_seen = true;
@@ -213,10 +219,15 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             }
         }
         if fp_seen && lr_seen && run_start < ret_idx {
+            let mut origins = origins_in_range(body, run_start, ret_idx);
+            if let Some(adjustment_origins) = adjustment_origins {
+                origins.merge(&adjustment_origins);
+            }
             body.drain(run_start..ret_idx);
             body.insert(
                 run_start,
-                Stmt::Comment("aarch64 epilogue: restore fp/lr".to_string()),
+                Stmt::Comment("aarch64 epilogue: restore fp/lr".to_string())
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
             );
         }
     }
@@ -240,7 +251,7 @@ fn stack_object_at(expr: &Expr, expected_offset: i64) -> Option<&VReg> {
 }
 
 fn frame_record_store<'a>(statement: &'a Stmt, register: &str, offset: i64) -> Option<&'a VReg> {
-    match statement {
+    match statement.semantic() {
         Stmt::Store {
             addr,
             src: Expr::Reg(VReg::Phys(source)),
@@ -257,18 +268,25 @@ fn frame_record_store<'a>(statement: &'a Stmt, register: &str, offset: i64) -> O
 
 fn is_stack_restore(statement: &Stmt) -> bool {
     matches!(
-        statement,
+        statement.semantic(),
         Stmt::Assign {
             dst: VReg::Phys(_),
             src: Expr::Reg(VReg::Phys(source)),
         } if source.starts_with("stack_")
     ) || matches!(
-        statement,
+        statement.semantic(),
         Stmt::Assign {
             dst: VReg::Phys(_),
             src: Expr::Deref { addr, size: 8 },
         } if stack_object_at(addr, 0).is_some() || stack_object_at(addr, 8).is_some()
     )
+}
+
+fn origins_in_range(body: &[Stmt], start: usize, end: usize) -> OriginSet {
+    body[start..end]
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next))
 }
 
 fn is_sp(v: &VReg) -> bool {
@@ -339,6 +357,34 @@ mod tests {
         // The stmts after the prologue must be preserved.
         assert!(matches!(&f.body[1], Stmt::Nop));
         assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_prologue_collapses_with_exact_machine_owners() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                store("stack_0", "fp").with_origins(OriginSet::one(0x1000)),
+                store("stack_1", "lr").with_origins(OriginSet::one(0x1004)),
+                sp_sub(48).with_origins(OriginSet::one(0x1008)),
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Reg(reg("sp")),
+                }
+                .with_origins(OriginSet::one(0x100c)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1010)),
+            ],
+        };
+
+        recognise_arm64_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "attributed prologue leaked: {:#?}", f.body);
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008, 0x100c]))
+        );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1010)));
     }
 
     #[test]
@@ -485,6 +531,37 @@ mod tests {
             Stmt::Comment(s) if s.contains("epilogue")
         ));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_epilogue_collapses_with_exact_machine_owners() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Reg(reg("stack_0")),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("lr"),
+                    src: Expr::Reg(reg("stack_1")),
+                }
+                .with_origins(OriginSet::one(0x1014)),
+                sp_add(48).with_origins(OriginSet::one(0x1018)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x101c)),
+            ],
+        };
+
+        recognise_arm64_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "attributed epilogue leaked: {:#?}", f.body);
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014, 0x1018]))
+        );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x101c)));
     }
 
     #[test]
