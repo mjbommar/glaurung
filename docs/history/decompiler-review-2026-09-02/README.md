@@ -88,10 +88,16 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-cdecl-alignment-origins.md`](results/wp3-cdecl-alignment-origins.md):
-balanced cdecl32 call padding now remains recognizable through attribution and
-its exact owners join the surviving call; its observed-red test, all 32 x86
-frame tests, and two exact i386 call functions pass. The preceding
+[`results/wp3-cdecl-entry-frame-origins.md`](results/wp3-cdecl-entry-frame-origins.md):
+the cdecl32 aligned-entry-frame recognizer now sees attributed setup/teardown
+and keeps their replacement-comment owners separate; its observed-red test,
+all 33 x86 frame tests, and the exact PE32 `main` integration test pass. The
+preceding
+[`results/wp3-cdecl-alignment-origins.md`](results/wp3-cdecl-alignment-origins.md)
+records that balanced cdecl32 call padding remains recognizable through
+attribution and its exact owners join the surviving call; its observed-red
+test, all 32 x86 frame tests, and two exact i386 call functions pass. The
+preceding
 [`results/wp3-x86-frame-origins.md`](results/wp3-x86-frame-origins.md) records
 that the canonical x86 frame recognizer sees attributed prologue statements
 and assigns their exact union to its replacement comment; its observed-red

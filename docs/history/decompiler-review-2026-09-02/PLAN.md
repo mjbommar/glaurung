@@ -967,6 +967,12 @@ provenance through lowering.
   the arity and balance proof. Its observed-red test, all 32 x86 frame tests,
   and two exact i386 O0 call functions pass. See
   `results/wp3-cdecl-alignment-origins.md`.
+  Commit `ce8d092a` completes the adjacent aligned-entry-frame transaction:
+  attributed entry setup and teardown remain recognizable, while the two
+  synthesized comments receive separate exact unions for the disjoint machine
+  ranges they replace. Its observed-red test, all 33 x86 frame tests, and the
+  exact checked-in MinGW PE32 `main` integration test pass. See
+  `results/wp3-cdecl-entry-frame-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
