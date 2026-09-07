@@ -956,6 +956,11 @@ provenance through lowering.
   receives the exact union of the instructions it replaces. Its observed-red
   test, all nine module tests, and the exact ARMv7 A32 `while_prefix` cell pass.
   See `results/wp3-arm32-frame-origins.md`.
+  Commit `6e4cd9ec` follows with the canonical x86 frame prologue: attributed
+  pushes, frame-pointer setup, optional dead allocation predicates, and stack
+  allocation remain recognizable, and the replacement comment receives their
+  exact origin union. Its observed-red test, all 31 module tests, and the two
+  exact host O0 `classify` cells pass. See `results/wp3-x86-frame-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

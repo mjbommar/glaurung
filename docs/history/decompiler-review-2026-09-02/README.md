@@ -88,8 +88,12 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-arm32-frame-origins.md`](results/wp3-arm32-frame-origins.md):
-the transactional ARM32 frame recognizer now sees attributed machine
+[`results/wp3-x86-frame-origins.md`](results/wp3-x86-frame-origins.md): the
+canonical x86 frame recognizer now sees attributed prologue statements and
+assigns their exact union to its replacement comment; its observed-red test,
+all 31 module tests, and two exact O0 cells pass. The preceding
+[`results/wp3-arm32-frame-origins.md`](results/wp3-arm32-frame-origins.md)
+records that the transactional ARM32 frame recognizer sees attributed machine
 bookkeeping and assigns exact consumed-owner unions to its synthesized
 comments; its observed-red test, all nine module tests, and one exact A32 cell
 pass. The preceding
