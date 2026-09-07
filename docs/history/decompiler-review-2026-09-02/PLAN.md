@@ -109,7 +109,14 @@ stores, lowered pushes, cleanup evidence, and rebasing remain visible; removed
 setup owners join the call and decrement owners survive on the net stack
 adjustment. A release A/B proves real `helper3(a, b, c)` recovery and two
 whole-Python failures removed with zero additions; see
-`results/wp3-cdecl-call-origins.md`. Continue with `aapcs.rs`. Most
+`results/wp3-cdecl-call-origins.md`. Commit `e403de27` completes the AAPCS
+slice: attributed locked contracts,
+pure-VFP setup, outgoing stack areas, and phase-sensitive stack adjustments
+remain visible, and removed VFP setup owners join the call. Release A/B proves
+two ARM32 execution failures removed and one stripped fixture improvement with
+no added regression; see `results/wp3-aapcs-call-origins.md`. The generic,
+cdecl32, and AAPCS call-argument surfaces are now migrated; re-run the enabled
+consumer audit before selecting the next bounded origin slice. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
@@ -866,6 +873,11 @@ provenance through lowering.
   removed decrement owners remain on the synthesized net adjustment. Its
   stripped map is neutral, while controlled release A/B proves two
   whole-Python failures removed with zero additions.
+  Commit `e403de27` completes the AAPCS call-argument surface: locked contract
+  lookup, pure-VFP setup, outgoing stack areas, and stack-phase refusal all see
+  attributed statements, with exact call-owner preservation. Controlled
+  release A/B proves two ARM32 execution failures removed and one stripped
+  improvement without a regression.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
