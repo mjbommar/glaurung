@@ -1032,8 +1032,14 @@ provenance through lowering.
   shapes and scored text remain unchanged. The exact real `classify` result
   proves both non-contiguous address sets and one instruction contributing to
   several output lines. See `results/wp3-structured-line-mappings.md`.
-  Expression ownership, the remaining wildcard consumers, and universal
-  production attribution remain open.
+  Commit `9b10f06e` adds the expression-level carrier and canonical
+  attach/unwrap/union helpers, makes all 87 compiler-enumerated exhaustive
+  consumers explicitly transparent, and keeps both renderers byte-neutral.
+  Production attachment at expression reconstruction and the remaining
+  non-exhaustive matcher audit remain open; see
+  `results/wp3-expression-origin-carrier.md`.
+  The remaining wildcard consumers and universal production attribution remain
+  open.
 
 ### Migration targets
 
@@ -1066,7 +1072,10 @@ provenance through lowering.
   to inspect semantic statements without discarding their carriers and attaches
   each lowered LLIR instruction VA at the block-lowering boundary. Expressions and
   structured control nodes still need direct ownership where statement-level
-  attribution is insufficient.
+  attribution is insufficient. Commit `9b10f06e` adds the corresponding
+  expression carrier, deterministic union-without-nesting, semantic access,
+  and explicit transparency at every exhaustive expression consumer. It does
+  not yet attach origins to production expression nodes.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -1076,9 +1085,10 @@ provenance through lowering.
   switch consumer, including direct, copied-discriminator, speculative, and
   early-return shapes. Commit `f7b47953` adds contradictory, terminal-return,
   redundant-copy, shared-assignment, and shared-exit guard-chain rewrites.
-  Expression ownership, non-contiguous
-  transformation policy, and the remaining wildcard audit must finish before
-  universal attribution.
+  Commit `9b10f06e` establishes expression ownership's carrier and exhaustive
+  consumer boundary. Production attachment, composition through expression
+  reconstruction, and the remaining non-exhaustive matcher audit must finish
+  before universal attribution.
 - [x] Expose line-to-address mappings from the Python binding as structured
   data; do not infer them by parsing rendered text. Commit `db2e7735` adds an
   opt-in sixth batch-result field with ordered `line_number`/`addresses`
@@ -1114,7 +1124,9 @@ provenance through lowering.
 - [x] Unit tests for deterministic origin union and duplication. Five focused
   tests at `7bea3314` cover non-contiguous canonical construction,
   commutative/idempotent union, and independent duplicated sets; `59840017`
-  adds union-without-nesting and byte-identical C/scored rendering.
+  adds union-without-nesting and byte-identical C/scored rendering. Commit
+  `9b10f06e` adds the matching expression-level union, semantic-unwrapping, and
+  byte-identical C/scored-rendering contract.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
 - [x] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
