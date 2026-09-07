@@ -986,6 +986,13 @@ provenance through lowering.
   Its observed-red test and all 35 x86 frame tests pass; no checked-in fixture
   currently exercises `-fzero-call-used-regs=all`. See
   `results/wp3-x87-scrub-origins.md`.
+  Commit `96e86313` completes the ordinary x86 epilogue transaction: canonical
+  `leave`, standalone pop, promoted-stack restore, pre-rematerialized pop, and
+  second-round teardown forms all see attributed statements. Each replacement
+  comment receives the exact consumed-owner union and each return remains
+  independent. Its observed-red test, four focused ownership assertions, all
+  39 x86 frame tests, and both exact host O0 `classify` cells pass. See
+  `results/wp3-x86-epilogue-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

@@ -88,6 +88,10 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-x86-epilogue-origins.md`](results/wp3-x86-epilogue-origins.md):
+ordinary `leave`, pop, promoted-stack, and second-round x86 epilogues now see
+attributed statements and preserve exact replacement owners; its observed-red
+test, all 39 x86 frame tests, and two exact O0 review cells pass. The preceding
 [`results/wp3-x87-scrub-origins.md`](results/wp3-x87-scrub-origins.md): the
 exact hardened-return x87 scrub now sees attributed operations and unions all
 consumed machine owners onto its replacement comment; its observed-red test
