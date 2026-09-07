@@ -144,7 +144,7 @@ pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
 
 fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
-        let Some((destination, source)) = (match body[index].semantic() {
+        let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_scratch_reg(dst)
                     && !is_promoted_local_reg(dst)
@@ -158,6 +158,10 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
         }) else {
             continue;
         };
+        let origins = body[index].origins().cloned();
+        if let Some(origins) = &origins {
+            source.merge_origins(origins);
+        }
         let Some(consumer_index) = (index + 1..body.len())
             .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
@@ -191,7 +195,6 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
             _ => false,
         };
         if consumed {
-            let origins = body[index].origins().cloned();
             body.remove(index);
             if let Some(origins) = origins {
                 body[consumer_index - 1].merge_origins(&origins);
@@ -277,7 +280,7 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     }
 
     for index in 0..body.len().saturating_sub(1) {
-        let Some((destination, source)) = (match body[index].semantic() {
+        let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_scratch_reg(dst)
                     && !is_promoted_local_reg(dst)
@@ -292,6 +295,10 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
         }) else {
             continue;
         };
+        let origins = body[index].origins().cloned();
+        if let Some(origins) = &origins {
+            source.merge_origins(origins);
+        }
         let Some(next_index) = (index + 1..body.len())
             .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
@@ -308,7 +315,6 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
             continue;
         }
         subst(consumer, &Copies::single(destination.clone(), source));
-        let origins = body[index].origins().cloned();
         body.remove(index);
         if let Some(origins) = origins {
             body[next_index - 1].merge_origins(&origins);
@@ -351,7 +357,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
     }
 
     for index in 0..body.len().saturating_sub(1) {
-        let Some((dst, source)) = (match body[index].semantic() {
+        let Some((dst, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
                 if is_scratch_reg(dst)
                     && !is_promoted_local_reg(dst)
@@ -366,6 +372,10 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
         }) else {
             continue;
         };
+        let origins = body[index].origins().cloned();
+        if let Some(origins) = &origins {
+            source.merge_origins(origins);
+        }
         let Some(guard_index) = (index + 1..body.len())
             .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
         else {
@@ -396,7 +406,6 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
             unreachable!()
         };
         subst(cond, &Copies::single(dst, source));
-        let origins = body[index].origins().cloned();
         body.remove(index);
         if let Some(origins) = origins {
             body[guard_index - 1].merge_origins(&origins);
@@ -437,9 +446,13 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
             }
             _ => None,
         };
-        let Some((dst, selected)) = candidate else {
+        let Some((dst, mut selected)) = candidate else {
             continue;
         };
+        let origins = body[index].origins().cloned();
+        if let Some(origins) = &origins {
+            selected.merge_origins(origins);
+        }
 
         let Some(next_index) = (index + 1..body.len())
             .find(|next| !matches!(body[*next].semantic(), Stmt::Comment(_) | Stmt::Nop))
@@ -475,7 +488,6 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
             _ => false,
         };
         if substituted {
-            let origins = body[index].origins().cloned();
             body.remove(index);
             if let Some(origins) = origins {
                 body[next_index - 1].merge_origins(&origins);
@@ -543,6 +555,7 @@ fn is_deferable_promoted_value(e: &Expr) -> bool {
 mod tests {
     use super::super::propagate_copies;
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types::{BinOp, CmpOp, VReg};
 
     fn reg(n: &str) -> VReg {
@@ -592,6 +605,49 @@ mod tests {
             }],
             "the call must move to its sole adjacent consumer, not be copied"
         );
+    }
+
+    #[test]
+    fn attributed_effectful_move_retains_source_and_consumer_owners() {
+        let definition_owner = OriginSet::one(0x1000);
+        let consumer_owner = OriginSet::one(0x1004);
+        let mut function = Function {
+            name: "effectful_origin".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var14"),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "read_once".into(),
+                        }),
+                        args: Vec::new(),
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                }
+                .with_origins(definition_owner.clone()),
+                Stmt::Assign {
+                    dst: reg("local_10"),
+                    src: Expr::Reg(reg("var14")),
+                }
+                .with_origins(consumer_owner.clone()),
+            ],
+        };
+
+        move_adjacent_effectful_scratch_values(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&definition_owner.union(&consumer_owner))
+        );
+        let Stmt::Assign { src, .. } = function.body[0].semantic() else {
+            panic!("expected moved call: {:#?}", function.body)
+        };
+        assert!(matches!(src.semantic(), Expr::Call { .. }));
+        assert_eq!(src.origins(), Some(&definition_owner));
     }
 
     #[test]
@@ -851,6 +907,40 @@ mod tests {
     }
 
     #[test]
+    fn attributed_promoted_value_retains_definition_owner_after_substitution() {
+        let definition_owner = OriginSet::one(0x1100);
+        let return_owner = OriginSet::one(0x1104);
+        let mut function = Function {
+            name: "promoted_origin".into(),
+            entry_va: 0x1100,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_result"),
+                    src: Expr::Const(7),
+                }
+                .with_origins(definition_owner.clone()),
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_result"))),
+                }
+                .with_origins(return_owner.clone()),
+            ],
+        };
+
+        propagate_adjacent_promoted_values(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&definition_owner.union(&return_owner))
+        );
+        let Stmt::Return { value: Some(value) } = function.body[0].semantic() else {
+            panic!("expected substituted return: {:#?}", function.body)
+        };
+        assert!(matches!(value.semantic(), Expr::Const(7)));
+        assert_eq!(value.origins(), Some(&definition_owner));
+    }
+
+    #[test]
     fn adjacent_physical_load_folds_into_its_only_eager_guard_use() {
         // x86-64 `movzx eax, byte ptr [base+index]; test eax,eax` now carries
         // the architectural zero-extension explicitly. After role naming the
@@ -929,6 +1019,49 @@ mod tests {
     }
 
     #[test]
+    fn attributed_guard_value_retains_definition_owner_in_condition() {
+        let definition_owner = OriginSet::one(0x1200);
+        let guard_owner = OriginSet::one(0x1204);
+        let mut function = Function {
+            name: "guard_origin".into(),
+            entry_va: 0x1200,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Const(7),
+                }
+                .with_origins(definition_owner.clone()),
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("ret"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                }
+                .with_origins(guard_owner.clone()),
+            ],
+        };
+
+        propagate_adjacent_guard_values(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&definition_owner.union(&guard_owner))
+        );
+        let Stmt::If { cond, .. } = function.body[0].semantic() else {
+            panic!("expected substituted guard: {:#?}", function.body)
+        };
+        let Expr::Cmp { lhs, .. } = cond.semantic() else {
+            panic!("expected comparison guard: {cond:#?}")
+        };
+        assert!(matches!(lhs.semantic(), Expr::Const(7)));
+        assert_eq!(lhs.origins(), Some(&definition_owner));
+    }
+
+    #[test]
     fn adjacent_predicate_folds_into_the_assignment_that_overwrites_it() {
         let result = reg("result");
         let mut function = Function {
@@ -973,6 +1106,50 @@ mod tests {
         assert_eq!(dst, &result);
         assert_eq!(count_reg_uses(src, &result), 0);
         assert!(format!("{src:#?}").contains("op: Sle"), "{src:#?}");
+    }
+
+    #[test]
+    fn attributed_overwritten_value_retains_definition_owner_in_consumer() {
+        let result = reg("result");
+        let definition_owner = OriginSet::one(0x1300);
+        let consumer_owner = OriginSet::one(0x1304);
+        let mut function = Function {
+            name: "overwrite_origin".into(),
+            entry_va: 0x1300,
+            body: vec![
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Const(3),
+                }
+                .with_origins(definition_owner.clone()),
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(result)),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                }
+                .with_origins(consumer_owner.clone()),
+            ],
+        };
+
+        propagate_adjacent_overwritten_values(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&definition_owner.union(&consumer_owner))
+        );
+        let Stmt::Assign {
+            src: Expr::Bin { lhs, .. },
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected substituted overwrite: {:#?}", function.body)
+        };
+        assert!(matches!(lhs.semantic(), Expr::Const(3)));
+        assert_eq!(lhs.origins(), Some(&definition_owner));
     }
 
     #[test]
