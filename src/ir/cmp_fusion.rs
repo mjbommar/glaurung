@@ -65,7 +65,7 @@ fn fuse_block(
 ) {
     for statement in statements.iter_mut() {
         fuse_stmt(statement, types, writes, &definitions);
-        if let Stmt::Assign { dst, src } = statement {
+        if let Stmt::Assign { dst, src } = statement.semantic() {
             if writes.get(dst).copied() == Some(1)
                 && proof_expression(src)
                 && !expression_reads_register(src, dst)
@@ -83,7 +83,7 @@ fn fuse_stmt(
     writes: &HashMap<VReg, usize>,
     definitions: &HashMap<VReg, Expr>,
 ) {
-    match statement {
+    match statement.semantic_mut() {
         Stmt::If {
             cond,
             then_body,
@@ -470,7 +470,7 @@ fn expression_reads_only_immutable_registers(
 fn assignment_counts(function: &Function) -> HashMap<VReg, usize> {
     fn visit(body: &[Stmt], counts: &mut HashMap<VReg, usize>) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Assign { dst, .. } => *counts.entry(dst.clone()).or_default() += 1,
                 Stmt::If {
                     then_body,
@@ -765,6 +765,7 @@ fn same_value(left: &Expr, right: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types::VReg;
 
     fn local(name: &str) -> Expr {
@@ -1310,5 +1311,35 @@ mod tests {
                 cmp(CmpOp::Sle, local("n"), Expr::Const(0))
             )
         );
+    }
+
+    #[test]
+    fn attributed_guard_is_fused_without_losing_its_owner() {
+        let owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "attributed_guard".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: bin(
+                    BinOp::Or,
+                    cmp(CmpOp::Eq, local("n"), Expr::Const(0)),
+                    cmp(CmpOp::Slt, local("n"), Expr::Const(0)),
+                ),
+                then_body: Vec::new(),
+                else_body: None,
+            }
+            .with_origins(owner.clone())],
+        };
+
+        fuse_comparisons(&mut function);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::If {
+                cond: Expr::Cmp { op: CmpOp::Sle, .. },
+                ..
+            }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
     }
 }

@@ -96,7 +96,13 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
     }
 
     for statement in body.iter_mut() {
-        match statement {
+        let owned_frame_marker = statement.origins().is_some()
+            && matches!(statement.semantic(), super::Stmt::Comment(text) if is_frame_marker(text));
+        if owned_frame_marker {
+            *statement.semantic_mut() = super::Stmt::Nop;
+            continue;
+        }
+        match statement.semantic_mut() {
             super::Stmt::If {
                 then_body,
                 else_body,
@@ -113,12 +119,12 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
             super::Stmt::For {
                 init, step, body, ..
             } => {
-                if matches!(init.as_ref(), super::Stmt::Comment(text) if is_frame_marker(text)) {
-                    **init = super::Stmt::Nop;
+                if matches!(init.semantic(), super::Stmt::Comment(text) if is_frame_marker(text)) {
+                    *init.semantic_mut() = super::Stmt::Nop;
                 }
                 drop_machine_frame_comments(body);
-                if matches!(step.as_ref(), super::Stmt::Comment(text) if is_frame_marker(text)) {
-                    **step = super::Stmt::Nop;
+                if matches!(step.semantic(), super::Stmt::Comment(text) if is_frame_marker(text)) {
+                    *step.semantic_mut() = super::Stmt::Nop;
                 }
             }
             super::Stmt::Switch { cases, default, .. } => {
@@ -459,7 +465,10 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
 
 #[cfg(test)]
 mod fixpoint_tests {
-    use super::{run_bounded_fixpoint, FixpointReport, FixpointTermination};
+    use super::{
+        drop_machine_frame_comments, run_bounded_fixpoint, FixpointReport, FixpointTermination,
+    };
+    use crate::ir::ast::{OriginSet, Stmt};
 
     #[test]
     fn bounded_fixpoint_records_quiescent_termination_and_firings() {
@@ -492,5 +501,31 @@ mod fixpoint_tests {
                 termination: FixpointTermination::BoundReached,
             }
         );
+    }
+
+    #[test]
+    fn attributed_machine_frame_markers_become_owned_inert_nodes() {
+        let owner = OriginSet::one(0x1010);
+        let nested_owner = OriginSet::one(0x1020);
+        let mut body = vec![
+            Stmt::Comment("x86-64 prologue: frame".into()).with_origins(owner.clone()),
+            Stmt::While {
+                cond: crate::ir::ast::Expr::Const(1),
+                body: vec![Stmt::Comment("x86-64 epilogue: frame".into())
+                    .with_origins(nested_owner.clone())],
+            },
+            Stmt::Comment("ordinary analyst note".into()),
+        ];
+
+        drop_machine_frame_comments(&mut body);
+
+        assert!(matches!(body[0].semantic(), Stmt::Nop));
+        assert_eq!(body[0].origins(), Some(&owner));
+        let Stmt::While { body: nested, .. } = body[1].semantic() else {
+            panic!("loop disappeared: {body:#?}");
+        };
+        assert!(matches!(nested[0].semantic(), Stmt::Nop));
+        assert_eq!(nested[0].origins(), Some(&nested_owner));
+        assert!(matches!(body[2].semantic(), Stmt::Comment(_)));
     }
 }

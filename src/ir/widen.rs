@@ -65,7 +65,7 @@ fn rewrite_body(body: &mut [Stmt], ret_width: u8, tm: &TypeMap, machine_width: u
 }
 
 fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap, machine_width: u8) {
-    match s {
+    match s.semantic_mut() {
         Stmt::Assign { dst, src } => {
             // The destination's own declaration says how wide this value is kept.
             let want = declared_int_destination(dst, tm)
@@ -270,7 +270,7 @@ fn declared_int(name: Option<&str>, tm: &TypeMap) -> Option<(bool, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::render_decbench_typed;
+    use crate::ir::ast::{render_decbench_typed, OriginSet};
     use crate::ir::types_recover::TypeHint;
 
     fn tm_of(pairs: &[(&str, bool, u8)]) -> TypeMap {
@@ -692,5 +692,27 @@ mod tests {
             out.contains("(unsigned long)(arg0)") && out.contains("(unsigned long)(arg1)"),
             "both register-pair operands must widen before multiplication:\n{out}"
         );
+    }
+
+    #[test]
+    fn attributed_assignment_is_widened_without_losing_its_owner() {
+        let owner = OriginSet::one(0x1010);
+        let tm = tm_of(&[("arg0", false, 4), ("ret", true, 8)]);
+        let mut f = func(vec![Stmt::Assign {
+            dst: VReg::phys("ret"),
+            src: reg("arg0"),
+        }
+        .with_origins(owner.clone())]);
+
+        insert_widening_casts(&mut f, &tm);
+
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Assign {
+                src: Expr::Cast { width: 8, .. },
+                ..
+            }
+        ));
+        assert_eq!(f.body[0].origins(), Some(&owner));
     }
 }

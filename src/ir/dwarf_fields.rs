@@ -964,7 +964,7 @@ fn invalidate_registers(written: &[VReg], definitions: &mut HashMap<VReg, Expr>)
 }
 
 fn collect_written_registers(statement: &Stmt, written: &mut Vec<VReg>) {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => written.push(dst.clone()),
         Stmt::Call { dst: Some(dst), .. } => written.push(dst.clone()),
         Stmt::If {
@@ -1025,6 +1025,7 @@ fn collect_written_registers(statement: &Stmt, written: &mut Vec<VReg>) {
 mod tests {
     use super::*;
     use crate::debug::dwarf::DwarfField;
+    use crate::ir::ast::OriginSet;
     use crate::ir::call_contracts::CallPrototypeAuthority;
 
     fn node_layout() -> DwarfType {
@@ -1503,5 +1504,25 @@ mod tests {
                 ..
             } if base == &VReg::phys("arg0")
         ));
+    }
+
+    #[test]
+    fn attributed_writes_are_visible_to_definition_invalidation() {
+        let target = VReg::phys("var0");
+        let statement = Stmt::If {
+            cond: Expr::Const(1),
+            then_body: vec![Stmt::Assign {
+                dst: target.clone(),
+                src: Expr::Const(7),
+            }
+            .with_origins(OriginSet::one(0x1014))],
+            else_body: None,
+        }
+        .with_origins(OriginSet::one(0x1010));
+        let mut written = Vec::new();
+
+        collect_written_registers(&statement, &mut written);
+
+        assert_eq!(written, vec![target]);
     }
 }
