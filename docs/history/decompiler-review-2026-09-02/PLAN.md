@@ -930,6 +930,17 @@ provenance through lowering.
   as a non-mechanical boundary: it synthesizes stores and returns, so its
   migration follows the explicit fold/hoist/duplication policy rather than an
   ad hoc wrapper bypass. See `results/wp3-output-value-origins.md`.
+  Commit `6068a59c` completes that first complex boundary: stack-resident bank
+  composition sees through carriers, while register-resident materialization
+  copies each exact assignment/call/return owner onto every synthesized store
+  or rewritten return. Both transformation tests were observed red first; all
+  20 module tests and the eight exact aggregate-return lanes pass. See
+  `results/wp3-banked-return-origins.md`.
+  Commit `876bddf6` follows through the adjacent call-result loop boundary:
+  attributed breaks remain exit barriers and attributed boxed-clause calls do
+  not request an impossible compatibility insertion. Both observed-red tests,
+  all 15 module tests, and eight exact call-result lanes pass. See
+  `results/wp3-call-result-loop-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
@@ -979,7 +990,7 @@ provenance through lowering.
   universal attribution.
 - [ ] Expose line-to-address mappings from the Python binding as structured
   data; do not infer them by parsing rendered text.
-- [~] Define non-contiguous origin behavior for folded, hoisted, and duplicated
+- [x] Define non-contiguous origin behavior for folded, hoisted, and duplicated
   nodes. The normative contract is:
   - an in-place rewrite retains the exact existing owner;
   - a fold unions the sorted, deduplicated origins of every consumed semantic
@@ -995,8 +1006,10 @@ provenance through lowering.
     transfer it to an unrelated survivor.
   `OriginSet` remains the canonical sorted/deduplicated representation and the
   structured Python mapping must permit one instruction to own multiple output
-  nodes. Transformation-level tests and the first complex synthesis migration
-  remain before this item can close.
+  nodes. Commit `6068a59c` supplies the first transformation-level proof:
+  banked-return materialization clones exact owners onto every synthesized
+  store and rewritten return. Structured Python exposure remains separately
+  open above.
 
 ### Tests
 
@@ -2932,6 +2945,10 @@ relevant ratchet's accepted-regression record.
    non-contiguous transformation policy, and only then migrate the
    store/return-synthesizing bank composition paths. See
    `results/wp3-output-value-origins.md`.
+   Commit `6068a59c` now migrates that first complex path under the explicit
+   policy, and `876bddf6` closes the adjacent raw loop-exit and boxed-call
+   omissions in `call_result_split.rs`. Re-audit for the next enabled wildcard
+   consumer; keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
