@@ -358,6 +358,7 @@ fn decompile_at_session(
         output.prepared.cfg_health,
         &func,
         output.rendered.provenance,
+        output.rendered.line_mappings,
         pipeline_fingerprint,
     ))
 }
@@ -584,6 +585,7 @@ fn decompile_range_at_py(
         output.prepared.cfg_health,
         &func,
         output.rendered.provenance,
+        output.rendered.line_mappings,
         pipeline_fingerprint,
     )
     .pseudocode)
@@ -903,7 +905,7 @@ fn record_prototype_conflict_with_candidate(
 /// discovered function unless the caller requests a smaller output window.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None, max_functions=30_000usize))]
+#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None, max_functions=30_000usize, include_line_mappings=false))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,
@@ -915,6 +917,7 @@ fn decompile_all_py(
     style: &str,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
     max_functions: usize,
+    include_line_mappings: bool,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
 
@@ -1054,6 +1057,7 @@ fn decompile_all_py(
             output.prepared.cfg_health,
             func,
             output.rendered.provenance,
+            output.rendered.line_mappings,
             pipeline_fingerprint,
         );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
@@ -1063,20 +1067,32 @@ fn decompile_all_py(
             calling_convention_pointer_width(cc),
             &output.raw,
         );
-        list.append((
-            outer_name,
-            func.entry_point.value,
-            result.pseudocode,
-            func.size,
-            variables_to_py(py, &variables)?,
-        ))?;
+        let variables = variables_to_py(py, &variables)?;
+        if include_line_mappings {
+            list.append((
+                outer_name,
+                func.entry_point.value,
+                result.pseudocode,
+                func.size,
+                variables,
+                line_mappings_to_py(py, &result.line_mappings)?,
+            ))?;
+        } else {
+            list.append((
+                outer_name,
+                func.entry_point.value,
+                result.pseudocode,
+                func.size,
+                variables,
+            ))?;
+        }
     }
     Ok(list.into())
 }
 
 #[pyfunction]
 #[pyo3(name = "decompile_many")]
-#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", shadow_v2=false, pdb_cache="", max_functions=0usize, analyst_names=None))]
+#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", shadow_v2=false, pdb_cache="", max_functions=0usize, analyst_names=None, include_line_mappings=false))]
 #[allow(clippy::too_many_arguments)]
 fn decompile_many_py(
     py: Python<'_>,
@@ -1091,6 +1107,7 @@ fn decompile_many_py(
     pdb_cache: &str,
     max_functions: usize,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
+    include_line_mappings: bool,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_many");
     if shadow_v2 && style != "decbench" {
@@ -1301,6 +1318,7 @@ fn decompile_many_py(
             output.prepared.cfg_health,
             func,
             output.rendered.provenance,
+            output.rendered.line_mappings,
             pipeline_fingerprint,
         );
         let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
@@ -1310,16 +1328,38 @@ fn decompile_many_py(
             calling_convention_pointer_width(cc),
             &output.raw,
         );
-        list.append((
-            name,
-            func_va,
-            result.pseudocode,
-            func.size,
-            variables_to_py(py, &variables)?,
-        ))?;
+        let variables = variables_to_py(py, &variables)?;
+        if include_line_mappings {
+            list.append((
+                name,
+                func_va,
+                result.pseudocode,
+                func.size,
+                variables,
+                line_mappings_to_py(py, &result.line_mappings)?,
+            ))?;
+        } else {
+            list.append((name, func_va, result.pseudocode, func.size, variables))?;
+        }
         output_count += 1;
     }
     Ok(list.into())
+}
+
+fn line_mappings_to_py(
+    py: Python<'_>,
+    mappings: &[(usize, crate::ir::ast::OriginSet)],
+) -> PyResult<PyObject> {
+    use pyo3::types::{PyDict, PyList};
+
+    let rows = PyList::empty(py);
+    for (line_number, origins) in mappings {
+        let row = PyDict::new(py);
+        row.set_item("line_number", line_number)?;
+        row.set_item("addresses", origins.addresses())?;
+        rows.append(row)?;
+    }
+    Ok(rows.into())
 }
 
 /// One `RecoveredVariable` per dict, in the shape a consumer reads.

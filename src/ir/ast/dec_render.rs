@@ -53,14 +53,72 @@ use super::{
     direct_global_address, expr_machine_width, flag_ident, int_ctype,
     normalize_wrapped_scaled_index_constant, parse_arg_index, sanitize_c_ident,
     signed_shift_operand, target_int_ctype, unop_sym, width_ctype, write_float_literal, Expr,
-    PdbFieldHint, ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS, DEC_NAMED_CALL_PROTOTYPES,
-    DEC_POINTER_WIDTH, DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST, DEC_STRUCT_PTR_TYPES,
-    DEC_WIDE_LOCALS,
+    OriginSet, PdbFieldHint, ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS,
+    DEC_NAMED_CALL_PROTOTYPES, DEC_POINTER_WIDTH, DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST,
+    DEC_STRUCT_PTR_TYPES, DEC_WIDE_LOCALS,
 };
 
 mod stmt;
 
 pub(super) use stmt::write_stmt_dec;
+
+#[derive(Default)]
+struct LineMappingCollector {
+    last_offset: usize,
+    line_number: usize,
+    mappings: std::collections::BTreeMap<usize, OriginSet>,
+}
+
+thread_local! {
+    static DEC_LINE_MAPPINGS: std::cell::RefCell<Option<LineMappingCollector>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+pub(super) fn begin_line_mapping_collection(rendered_prefix: &str) {
+    DEC_LINE_MAPPINGS.with(|slot| {
+        *slot.borrow_mut() = Some(LineMappingCollector {
+            last_offset: rendered_prefix.len(),
+            line_number: rendered_prefix
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                + 1,
+            mappings: std::collections::BTreeMap::new(),
+        });
+    });
+}
+
+pub(super) fn record_line_mapping(rendered: &str, origins: &OriginSet) {
+    if origins.is_empty() {
+        return;
+    }
+    DEC_LINE_MAPPINGS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(collector) = slot.as_mut() else {
+            return;
+        };
+        collector.line_number += rendered[collector.last_offset..]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        collector.last_offset = rendered.len();
+        collector
+            .mappings
+            .entry(collector.line_number)
+            .and_modify(|existing| existing.merge(origins))
+            .or_insert_with(|| origins.clone());
+    });
+}
+
+pub(crate) fn take_line_mappings() -> Vec<(usize, OriginSet)> {
+    DEC_LINE_MAPPINGS.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .map(|collector| collector.mappings.into_iter().collect())
+            .unwrap_or_default()
+    })
+}
 
 fn dec_is_global_addr(address: u64) -> bool {
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow().contains(&address))

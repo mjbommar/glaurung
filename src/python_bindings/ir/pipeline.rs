@@ -204,6 +204,7 @@ impl DecompileCompleteness {
 #[allow(dead_code)] // Legacy Python adapters project text until structured-result migration lands.
 pub(super) struct DecompileResult {
     pub(super) pseudocode: String,
+    pub(super) line_mappings: Vec<(usize, crate::ir::ast::OriginSet)>,
     pub(super) health: crate::ir::health::AstHealth,
     pub(super) completeness: DecompileCompleteness,
     pub(super) provenance: Vec<&'static str>,
@@ -217,10 +218,12 @@ impl DecompileResult {
         cfg_health: crate::ir::health::CfgHealth,
         discovered: &crate::core::function::Function,
         provenance: Vec<&'static str>,
+        line_mappings: Vec<(usize, crate::ir::ast::OriginSet)>,
         pipeline_fingerprint: PipelineFingerprint,
     ) -> Self {
         Self {
             pseudocode,
+            line_mappings,
             health: crate::ir::health::measure_with_cfg(function, cfg_health),
             completeness: DecompileCompleteness::from_function(discovered),
             provenance,
@@ -856,6 +859,7 @@ pub(super) struct FunctionRenderContext<'a> {
 pub(super) struct RenderedAst {
     pub(super) text: String,
     pub(super) provenance: Vec<&'static str>,
+    pub(super) line_mappings: Vec<(usize, crate::ir::ast::OriginSet)>,
 }
 
 pub(super) struct FunctionPipelineContext<'a> {
@@ -1333,11 +1337,25 @@ pub(super) fn render_prepared_ast(
             .profiler
             .measure("render", || crate::ir::ast::render(&prepared.function))
     };
+    let mut line_mappings = if render_options.style == "decbench" {
+        crate::ir::ast::take_decbench_line_mappings()
+    } else {
+        Vec::new()
+    };
     let text = match crate::analysis::completeness::cfg_incompleteness_note(discovered, budgets) {
-        Some(note) => format!("{note}\n{text}"),
+        Some(note) => {
+            for (line_number, _) in &mut line_mappings {
+                *line_number += 1;
+            }
+            format!("{note}\n{text}")
+        }
         None => text,
     };
-    RenderedAst { text, provenance }
+    RenderedAst {
+        text,
+        provenance,
+        line_mappings,
+    }
 }
 
 pub(super) fn target_calling_convention(

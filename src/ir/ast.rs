@@ -85,6 +85,10 @@ pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
 pub use lower_region::lower;
 pub use origin::OriginSet;
+
+pub(crate) fn take_decbench_line_mappings() -> Vec<(usize, OriginSet)> {
+    dec_render::take_line_mappings()
+}
 #[cfg(test)]
 pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
 pub(crate) use prepare::{
@@ -11487,6 +11491,48 @@ function f @ 0x1000 {
 
         assert!(rendered.contains("    int local_4 = 0;"), "{rendered}");
         assert_eq!(rendered.matches("int local_4").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn decbench_render_exposes_deterministic_statement_line_mappings() {
+        let local = VReg::phys("local_4");
+        let function = Function {
+            name: "mapped".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: local.clone(),
+                    src: Expr::Const(7),
+                }
+                .with_origins(OriginSet::from_addresses([0x1010, 0x1004, 0x1010])),
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+            ],
+        };
+
+        let rendered = render_decbench(&function);
+        let mappings = take_decbench_line_mappings();
+
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].1.addresses(), &[0x1004, 0x1010]);
+        assert_eq!(mappings[1].1.addresses(), &[0x1010]);
+        assert!(mappings[0].0 < mappings[1].0);
+        assert!(
+            rendered
+                .lines()
+                .nth(mappings[0].0 - 1)
+                .is_some_and(|line| line.contains("local_4 = 7")),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .nth(mappings[1].0 - 1)
+                .is_some_and(|line| line.contains("return local_4")),
+            "{rendered}"
+        );
     }
 
     #[test]

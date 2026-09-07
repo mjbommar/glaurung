@@ -278,7 +278,10 @@ fn float_store_pointee_ctype(src: &Expr, size: u8) -> Option<&'static str> {
 
 pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
     match s {
-        Stmt::Origin { stmt, .. } => write_stmt_dec(stmt, out, level),
+        Stmt::Origin { origins, stmt } => {
+            super::record_line_mapping(out, origins);
+            write_stmt_dec(stmt, out, level)
+        }
         Stmt::Assign { dst, src } => {
             if dec_is_wide_local(dst) {
                 if let Expr::Deref {

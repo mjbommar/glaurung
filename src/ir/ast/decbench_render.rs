@@ -1007,6 +1007,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     });
 
     // Body.
+    super::dec_render::begin_line_mapping_collection(&out);
     for s in &f.body {
         write_stmt_dec(s, &mut out, 1);
     }
