@@ -84,7 +84,7 @@ pub fn compose_pair_returns(
         return false;
     };
     let mut composed = function.body.clone();
-    if !compose_body(&mut composed, high, width, None) {
+    if !compose_body(&mut composed, cc, high, width, None) {
         return false;
     }
     function.body = composed;
@@ -109,10 +109,17 @@ fn pair_storage(cc: CallConv) -> Option<(u8, &'static str, &'static str)> {
 /// conservatively — a branch that redefines the high half invalidates the
 /// reaching value for everything after it, because which arm ran is exactly
 /// what a linear walk cannot know.
-fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>) -> bool {
+fn compose_body(
+    body: &mut [Stmt],
+    cc: CallConv,
+    high: &str,
+    width: u8,
+    incoming: Option<VReg>,
+) -> bool {
     let mut reaching = incoming;
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } | Stmt::Call { dst: Some(dst), .. }
                 if is_high_half(dst, high) =>
             {
@@ -128,6 +135,15 @@ fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>
                 let Some(low_value) = value.clone() else {
                     return false;
                 };
+                // A recovered IntegerPair class cannot override direct
+                // evidence that the value selected for the low result came
+                // from a floating-point result bank. This conflict occurs for
+                // mixed INTEGER+SSE aggregates when incomplete class recovery
+                // says IntegerPair; composing that scalar double with `rdx`
+                // fabricates a 128-bit integer return.
+                if is_explicit_sse_result(&low_value, cc) {
+                    return false;
+                }
                 *value = Some(Expr::Bin {
                     op: BinOp::Or,
                     lhs: Box::new(wide_cast(low_value, width)),
@@ -143,12 +159,12 @@ fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>
                 else_body,
                 ..
             } => {
-                if !compose_body(then_body, high, width, reaching.clone()) {
+                if !compose_body(then_body, cc, high, width, reaching.clone()) {
                     return false;
                 }
                 let mut redefined = defines_high_half(then_body, high);
                 if let Some(else_body) = else_body {
-                    if !compose_body(else_body, high, width, reaching.clone()) {
+                    if !compose_body(else_body, cc, high, width, reaching.clone()) {
                         return false;
                     }
                     redefined |= defines_high_half(else_body, high);
@@ -158,7 +174,7 @@ fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                if !compose_body(body, high, width, reaching.clone()) {
+                if !compose_body(body, cc, high, width, reaching.clone()) {
                     return false;
                 }
                 if defines_high_half(body, high) {
@@ -168,13 +184,13 @@ fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>
             Stmt::Switch { cases, default, .. } => {
                 let mut redefined = false;
                 for (_, case_body) in cases.iter_mut() {
-                    if !compose_body(case_body, high, width, reaching.clone()) {
+                    if !compose_body(case_body, cc, high, width, reaching.clone()) {
                         return false;
                     }
                     redefined |= defines_high_half(case_body, high);
                 }
                 if let Some(default) = default {
-                    if !compose_body(default, high, width, reaching.clone()) {
+                    if !compose_body(default, cc, high, width, reaching.clone()) {
                         return false;
                     }
                     redefined |= defines_high_half(default, high);
@@ -184,12 +200,12 @@ fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                if !compose_body(try_body, high, width, reaching.clone()) {
+                if !compose_body(try_body, cc, high, width, reaching.clone()) {
                     return false;
                 }
                 let mut redefined = defines_high_half(try_body, high);
                 for catch in catches.iter_mut() {
-                    if !compose_body(&mut catch.body, high, width, reaching.clone()) {
+                    if !compose_body(&mut catch.body, cc, high, width, reaching.clone()) {
                         return false;
                     }
                     redefined |= defines_high_half(&catch.body, high);
@@ -205,6 +221,21 @@ fn compose_body(body: &mut [Stmt], high: &str, width: u8, incoming: Option<VReg>
         }
     }
     true
+}
+
+fn is_explicit_sse_result(expression: &Expr, cc: CallConv) -> bool {
+    match expression {
+        Expr::FloatConst { .. }
+        | Expr::NumericConvert {
+            to: crate::ir::ast::ScalarType::Float(_),
+            ..
+        } => true,
+        Expr::Reg(VReg::Phys(name)) => {
+            crate::ir::abi::float_return_registers(cc).contains(&crate::ir::abi::ssa_base(name))
+        }
+        Expr::Cast { expr, .. } => is_explicit_sse_result(expr, cc),
+        _ => false,
+    }
 }
 
 /// Whether every `return` in `body` carries the composition this module
@@ -226,7 +257,8 @@ pub fn returns_are_pair_composed(body: &[Stmt], cc: CallConv) -> bool {
 }
 
 fn every_return_is_composed(body: &[Stmt], width: u8, seen: &mut bool) -> bool {
-    body.iter().all(|statement| match statement {
+    body.iter().all(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Return { value } => {
             *seen = true;
             matches!(
@@ -314,7 +346,8 @@ fn is_high_half(value: &VReg, high: &str) -> bool {
 }
 
 fn defines_high_half(body: &[Stmt], high: &str) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, .. } | Stmt::Call { dst: Some(dst), .. } => is_high_half(dst, high),
         Stmt::If {
             then_body,
@@ -435,6 +468,38 @@ mod tests {
         assert!(returns_are_pair_composed(&f.body, CallConv::SysVAmd64));
     }
 
+    #[test]
+    fn attributed_integer_pair_result_retains_its_return_owner() {
+        let mut f = function(
+            quad_body()
+                .into_iter()
+                .enumerate()
+                .map(|(index, statement)| {
+                    statement.with_origins(crate::ir::ast::OriginSet::one(
+                        0x1000 + u64::try_from(index).unwrap() * 4,
+                    ))
+                })
+                .collect(),
+        );
+        assert!(compose_pair_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&pair_prototype(ReturnClass::IntegerPair)),
+        ));
+        assert!(returns_are_pair_composed(&f.body, CallConv::SysVAmd64));
+        let returned = f.body.last().expect("attributed return");
+        assert_eq!(
+            returned.origins(),
+            Some(&crate::ir::ast::OriginSet::one(0x1008))
+        );
+        assert!(matches!(
+            returned.semantic(),
+            Stmt::Return {
+                value: Some(Expr::Bin { op: BinOp::Or, .. })
+            }
+        ));
+    }
+
     /// The renderer and the rewrite must agree, and they agree by reading the
     /// same AST. An uncomposed body must not be DECLARED at the double-word
     /// type: the signature would assert a contract the body does not meet.
@@ -497,6 +562,36 @@ mod tests {
             Stmt::Return {
                 value: Some(Expr::Reg(reg("rax#17"))),
             },
+        ]);
+        let before = f.body.clone();
+        assert!(!compose_pair_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&pair_prototype(ReturnClass::IntegerPair)),
+        ));
+        assert_eq!(f.body, before);
+    }
+
+    #[test]
+    fn an_explicit_sse_low_result_is_not_retyped_as_an_integer_pair() {
+        let mut f = function(vec![
+            Stmt::Assign {
+                dst: reg("rdx#3"),
+                src: Expr::Const(2),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+            Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::NumericConvert {
+                        from: crate::ir::ast::ScalarType::SignedInt(4),
+                        to: crate::ir::ast::ScalarType::Float(8),
+                        expr: Box::new(Expr::Const(4)),
+                    }),
+                }),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
         ]);
         let before = f.body.clone();
         assert!(!compose_pair_returns(
