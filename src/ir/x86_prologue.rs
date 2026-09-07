@@ -80,7 +80,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
         return;
     }
     let aligned = matches!(
-        &body[start],
+        body[start].semantic(),
         Stmt::Assign {
             dst,
             src: Expr::Bin { op: BinOp::And, lhs, rhs },
@@ -93,7 +93,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     }
 
     let (prologue_end, saved_push_count, frame_allocation) = if matches!(
-        &body[start + 1],
+        body[start + 1].semantic(),
         Stmt::Assign { dst, src: Expr::Reg(source) }
             if is_rbp(dst) && is_rsp(source)
     ) && rsp_sub_width(&body[start + 2])
@@ -101,18 +101,21 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     {
         (start + 3, None, rsp_sub_width(&body[start + 2]))
     } else if body.len().saturating_sub(start) >= 7
-        && matches!(&body[start + 1], Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved))
-        && matches!(&body[start + 2], Stmt::Push { value: Expr::Reg(saved) } if is_rbp(saved))
-        && matches!(&body[start + 3], Stmt::Assign { dst, src: Expr::Reg(source) } if is_rbp(dst) && is_rsp(source))
+        && matches!(body[start + 1].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved))
+        && matches!(body[start + 2].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_rbp(saved))
+        && matches!(body[start + 3].semantic(), Stmt::Assign { dst, src: Expr::Reg(source) } if is_rbp(dst) && is_rsp(source))
     {
         let pushes_start = start + 4;
         let mut cursor = pushes_start;
-        while matches!(body.get(cursor), Some(Stmt::Push { .. })) {
+        while body
+            .get(cursor)
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Push { .. }))
+        {
             cursor += 1;
         }
         let push_count = cursor - pushes_start;
         if push_count == 0
-            || !matches!(&body[cursor - 1], Stmt::Push { value: Expr::StackAddr { object, .. } } if base_name_of_vreg(object) == Some("arg0"))
+            || !matches!(body[cursor - 1].semantic(), Stmt::Push { value: Expr::StackAddr { object, .. } } if base_name_of_vreg(object) == Some("arg0"))
         {
             return;
         }
@@ -126,13 +129,13 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     };
 
     let return_index = body.len() - 1;
-    if !matches!(body[return_index], Stmt::Return { .. }) || return_index < 3 {
+    if !matches!(body[return_index].semantic(), Stmt::Return { .. }) || return_index < 3 {
         return;
     }
     let restore_stack_index = return_index - 1;
     let restore_base_index = return_index - 2;
     let mut teardown = restore_base_index;
-    while teardown > 0 && matches!(body[teardown - 1], Stmt::Pop { .. }) {
+    while teardown > 0 && matches!(body[teardown - 1].semantic(), Stmt::Pop { .. }) {
         teardown -= 1;
     }
     let pop_count = restore_base_index - teardown;
@@ -153,14 +156,14 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     if compact_single_save && !frame_reset && !balanced_frame_release {
         teardown += 1;
     }
-    let saved_base = match &body[restore_base_index] {
+    let saved_base = match body[restore_base_index].semantic() {
         Stmt::Assign {
             dst,
             src: Expr::Reg(saved),
         } if is_rbp(dst) && is_promoted_stack_slot(saved) => saved.clone(),
         _ => return,
     };
-    let entry_stack = match &body[restore_stack_index] {
+    let entry_stack = match body[restore_stack_index].semantic() {
         Stmt::Assign {
             dst,
             src: Expr::Bin { lhs, .. },
@@ -179,11 +182,13 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
         return;
     }
     if pop_count > 0
-        && !matches!(&body[teardown + 1], Stmt::Pop { target } if target == &entry_stack)
+        && !matches!(body[teardown + 1].semantic(), Stmt::Pop { target } if target == &entry_stack)
     {
         return;
     }
 
+    let prologue_origins = origins_in_range(body, start, prologue_end);
+    let epilogue_origins = origins_in_range(body, teardown, return_index);
     let mut candidate = body.clone();
     candidate.drain(teardown..return_index);
     candidate.drain(start..prologue_end);
@@ -204,11 +209,13 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     }
     candidate.insert(
         start,
-        Stmt::Comment("cdecl32 prologue: aligned entry frame".to_string()),
+        Stmt::Comment("cdecl32 prologue: aligned entry frame".to_string())
+            .with_optional_origins((!prologue_origins.is_empty()).then_some(prologue_origins)),
     );
     candidate.insert(
         candidate.len() - 1,
-        Stmt::Comment("cdecl32 epilogue: restore entry stack".to_string()),
+        Stmt::Comment("cdecl32 epilogue: restore entry stack".to_string())
+            .with_optional_origins((!epilogue_origins.is_empty()).then_some(epilogue_origins)),
     );
     *body = candidate;
 }
@@ -1482,6 +1489,93 @@ mod tests {
             matches!(f.body.get(2), Some(Stmt::Comment(text)) if text.starts_with("cdecl32 epilogue:"))
         );
         assert!(matches!(f.body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn attributed_cdecl32_entry_frame_keeps_prologue_and_epilogue_owners_separate() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(-16)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                mov_rbp_rsp().with_origins(OriginSet::one(0x1004)),
+                sub_rsp(28).with_origins(OriginSet::one(0x1008)),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "work".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                }
+                .with_origins(OriginSet::one(0x100c)),
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rbp"))),
+                        rhs: Box::new(Expr::Const(12)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_top")),
+                }
+                .with_origins(OriginSet::one(0x1014)),
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("var17"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1018)),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                }
+                .with_origins(OriginSet::one(0x101c)),
+            ],
+        };
+
+        recognise_cdecl32_call_alignment(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            4,
+            "attributed entry frame did not collapse: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text) if text.starts_with("cdecl32 prologue:")
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008]))
+        );
+        assert!(matches!(f.body[1].semantic(), Stmt::Call { .. }));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x100c)));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Comment(text) if text.starts_with("cdecl32 epilogue:")
+        ));
+        assert_eq!(
+            f.body[2].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014, 0x1018]))
+        );
+        assert!(matches!(f.body[3].semantic(), Stmt::Return { .. }));
+        assert_eq!(f.body[3].origins(), Some(&OriginSet::one(0x101c)));
     }
 
     #[test]
