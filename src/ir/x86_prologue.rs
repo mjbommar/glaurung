@@ -214,7 +214,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
 }
 
 fn stack_adjustment(statement: &Stmt) -> Option<i64> {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign {
             src: Expr::Bin { op, rhs, .. },
             ..
@@ -235,7 +235,7 @@ fn stack_adjust_from_base(
     let Stmt::Assign {
         dst,
         src: Expr::Bin { lhs, .. },
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -246,7 +246,7 @@ fn stack_adjust_from_base(
 
 fn collapse_cdecl32_call_alignment_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -285,7 +285,7 @@ fn collapse_cdecl32_call_alignment_body(body: &mut Vec<Stmt>) {
             cursor += 1;
             continue;
         };
-        let Stmt::Call { args, .. } = &body[cursor + 1] else {
+        let Stmt::Call { args, .. } = body[cursor + 1].semantic() else {
             cursor += 1;
             continue;
         };
@@ -305,8 +305,14 @@ fn collapse_cdecl32_call_alignment_body(body: &mut Vec<Stmt>) {
             cursor += 1;
             continue;
         }
-        body.remove(cursor + 2);
+        let origins = origins_in_range(body, cursor, cursor + 3);
+        let call = body.remove(cursor + 1);
+        body.remove(cursor + 1);
         body.remove(cursor);
+        body.insert(
+            cursor,
+            call.with_optional_origins((!origins.is_empty()).then_some(origins)),
+        );
         cursor += 1;
     }
 }
@@ -1334,6 +1340,59 @@ mod tests {
         assert!(matches!(body.first(), Some(Stmt::Call { .. })));
         assert!(!f.body.iter().any(is_rsp_add));
         assert!(!body.iter().any(is_rsp_add));
+    }
+
+    #[test]
+    fn attributed_cdecl32_padding_moves_exact_owners_to_the_call() {
+        let call = || Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: "puts".into(),
+            },
+            args: vec![Expr::Reg(reg("arg0"))],
+            dst: None,
+            call_spec: None,
+        };
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                sub_rsp(12).with_origins(OriginSet::one(0x1000)),
+                call().with_origins(OriginSet::one(0x1004)),
+                add_rsp(16).with_origins(OriginSet::one(0x1008)),
+                Stmt::While {
+                    cond: Expr::Const(1),
+                    body: vec![
+                        sub_rsp(12).with_origins(OriginSet::one(0x1014)),
+                        call().with_origins(OriginSet::one(0x1018)),
+                        add_rsp(16).with_origins(OriginSet::one(0x101c)),
+                        Stmt::Break.with_origins(OriginSet::one(0x1020)),
+                    ],
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1024)),
+            ],
+        };
+
+        recognise_cdecl32_call_alignment(&mut f);
+
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008]))
+        );
+        assert!(matches!(f.body[0].semantic(), Stmt::Call { .. }));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1010)));
+        let Stmt::While { body, .. } = f.body[1].semantic() else {
+            panic!("expected attributed loop");
+        };
+        assert_eq!(body.len(), 2);
+        assert!(matches!(body[0].semantic(), Stmt::Call { .. }));
+        assert_eq!(
+            body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1014, 0x1018, 0x101c]))
+        );
+        assert!(matches!(body[1].semantic(), Stmt::Break));
+        assert_eq!(body[1].origins(), Some(&OriginSet::one(0x1020)));
     }
 
     #[test]
