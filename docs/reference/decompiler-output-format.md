@@ -113,19 +113,24 @@ by both `objdump` and `llvm-objdump`. The per-corpus breakdown and the per-slot
 coverage rates are the table in `src/ir/variable_addresses.rs` (measured
 2026-08-29).
 
-### There is deliberately no line map
+### Line mappings
 
-No `{line → address}`. That needs AST-node-to-instruction lineage, which lowering
-discards: `lower_block` (`src/ir/ast/lower_conds.rs:280`) passes only `&ins.op`
-onward and drops `ins.va`, and `ast::Function` keeps `name`, `entry_va` and
-`body`.
+The DecBench-style batch APIs expose structured `{line_number, addresses}`
+records when called with `include_line_mappings=True`. The CLI requests that
+field for JSON/JSONL output. Line numbers are one-based within `pseudocode`;
+addresses are sorted, deduplicated instruction VAs. One line may own several
+non-contiguous instructions after folding, and one instruction may appear on
+several lines after a proved duplication.
 
-Per-variable addresses are a *different* problem and need no node identity at
-all — the join is on the frame coordinate, which both `stack_locals` and the LLIR
-still hold. Conflating the two is why the capability went unbuilt for as long as
-it did. dewolf and Reko emit this same shape, and DecBench's ingest supports it:
-variable addresses are filtered independently of line mappings and survive with
-none.
+Mappings are recorded from AST statement origins while the renderer emits the
+line. They are not reconstructed by parsing C text. The default native batch
+tuple remains the legacy five fields; opting in appends mappings as field six.
+Plain/C render styles return an empty mapping because their statement lineage
+has not been wired to this scored-output contract.
+
+Per-variable addresses remain a *different* problem: they join on frame
+coordinates rather than AST ownership and are filtered independently of line
+mappings.
 
 ## Stderr
 

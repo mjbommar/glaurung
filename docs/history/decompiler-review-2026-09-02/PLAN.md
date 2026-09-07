@@ -1026,8 +1026,14 @@ provenance through lowering.
   Its observed-red rendering test, three adjacent declaration controls, and
   both exact host O0 `while_zero_trips` cells pass. See
   `results/wp3-inline-scalar-origins.md`.
-  Expression ownership, the remaining wildcard consumers, and production
-  attribution remain open.
+  Commit `db2e7735` adds render-time structured line mappings to the opt-in
+  Python batch result and CLI JSON. It records canonical statement origins at
+  the line actually emitted, without parsing pseudocode; default native tuple
+  shapes and scored text remain unchanged. The exact real `classify` result
+  proves both non-contiguous address sets and one instruction contributing to
+  several output lines. See `results/wp3-structured-line-mappings.md`.
+  Expression ownership, the remaining wildcard consumers, and universal
+  production attribution remain open.
 
 ### Migration targets
 
@@ -1073,8 +1079,10 @@ provenance through lowering.
   Expression ownership, non-contiguous
   transformation policy, and the remaining wildcard audit must finish before
   universal attribution.
-- [ ] Expose line-to-address mappings from the Python binding as structured
-  data; do not infer them by parsing rendered text.
+- [x] Expose line-to-address mappings from the Python binding as structured
+  data; do not infer them by parsing rendered text. Commit `db2e7735` adds an
+  opt-in sixth batch-result field with ordered `line_number`/`addresses`
+  records and exposes the same records in CLI JSON.
 - [x] Define non-contiguous origin behavior for folded, hoisted, and duplicated
   nodes. The normative contract is:
   - an in-place rewrite retains the exact existing owner;
@@ -1093,8 +1101,8 @@ provenance through lowering.
   structured Python mapping must permit one instruction to own multiple output
   nodes. Commit `6068a59c` supplies the first transformation-level proof:
   banked-return materialization clones exact owners onto every synthesized
-  store and rewritten return. Structured Python exposure remains separately
-  open above.
+  store and rewritten return. Commit `db2e7735` supplies the structured Python
+  exposure above.
 
 ### Tests
 
@@ -1109,8 +1117,9 @@ provenance through lowering.
   adds union-without-nesting and byte-identical C/scored rendering.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
-- [ ] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
-  non-contiguous mappings.
+- [x] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
+  non-contiguous mappings. Its exact release-built `classify` cell also proves
+  legacy tuple-shape compatibility and repeated-call determinism.
 - [~] Run the 419-pair output identity sweep after each migrated pass. The
   invalidation, persistent-lifecycle, and first opaque-identity consumer slices
   are byte-identical across all 419 lanes; repeat this gate for every
