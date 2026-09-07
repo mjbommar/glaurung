@@ -377,6 +377,7 @@ fn resolve_body(
                     resolve_expr(value, tables, &definitions);
                 }
             }
+            Stmt::Throw { value } => resolve_expr(value, tables, &definitions),
             Stmt::If {
                 cond,
                 then_body,
@@ -436,6 +437,16 @@ fn resolve_body(
                     forget_definitions_written_in(default, &mut definitions);
                 }
             }
+            Stmt::TryCatch { try_body, catches } => {
+                resolve_body(try_body, tables, &definitions);
+                for catch in catches.iter_mut() {
+                    resolve_body(&mut catch.body, tables, &definitions);
+                }
+                forget_definitions_written_in(try_body, &mut definitions);
+                for catch in catches.iter() {
+                    forget_definitions_written_in(&catch.body, &mut definitions);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
@@ -443,14 +454,15 @@ fn resolve_body(
             | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            | Stmt::Comment(_) => {}
         }
 
-        if let Stmt::Assign { dst, src } = statement {
+        if let Stmt::Assign { dst, src } = statement.semantic() {
             definitions.insert(dst.clone(), src.clone());
-        } else if matches!(statement, Stmt::Call { .. } | Stmt::IndirectGoto { .. }) {
+        } else if matches!(
+            statement.semantic(),
+            Stmt::Call { .. } | Stmt::IndirectGoto { .. }
+        ) {
             // Unversioned physical registers may be clobbered by a transfer.
             // Never carry an address proof across that boundary.
             definitions.clear();
@@ -496,7 +508,8 @@ fn collect_written(body: &[Stmt], out: &mut Vec<VReg>, depth: usize) -> bool {
     }
     let mut clobbers = false;
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } => out.push(dst.clone()),
             Stmt::Call { .. } | Stmt::IndirectGoto { .. } => clobbers = true,
             Stmt::If {
@@ -527,7 +540,24 @@ fn collect_written(body: &[Stmt], out: &mut Vec<VReg>, depth: usize) -> bool {
                     clobbers |= collect_written(default, out, depth + 1);
                 }
             }
-            _ => {}
+            Stmt::TryCatch { try_body, catches } => {
+                clobbers |= collect_written(try_body, out, depth + 1);
+                for catch in catches {
+                    clobbers |= collect_written(&catch.body, out, depth + 1);
+                }
+            }
+            Stmt::Store { .. }
+            | Stmt::Return { .. }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Push { .. }
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
         }
     }
     clobbers
@@ -885,6 +915,7 @@ fn is_zero(expression: &Expr, definitions: &HashMap<VReg, Expr>, depth: usize) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::{CatchClause, OriginSet};
 
     /// ELF32 relocations are `Rel`: the value to relocate lives at the relocated
     /// address, not in an addend field. Read from a real armhf binary whose
@@ -982,6 +1013,111 @@ mod tests {
             ),
             "expected the ops[] entry, got {src:?}"
         );
+    }
+
+    #[test]
+    fn an_attributed_table_base_remains_available_to_the_following_load() {
+        let base_owner = OriginSet::one(0x11d0);
+        let load_owner = OriginSet::one(0x11d8);
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax#2"),
+                    src: Expr::Addr(0x3ff4),
+                }
+                .with_origins(base_owner.clone()),
+                Stmt::Assign {
+                    dst: VReg::phys("rax#3"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("rax#2")),
+                            index: Some(VReg::phys("rdx#1")),
+                            scale: 4,
+                            disp: 0x10,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                }
+                .with_origins(load_owner.clone()),
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Assign {
+                src: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&base_owner));
+        assert_eq!(function.body[1].origins(), Some(&load_owner));
+    }
+
+    #[test]
+    fn exception_and_transfer_expressions_share_the_table_resolution_surface() {
+        let indexed_load = || Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Addr(0x4004)),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 4,
+        };
+        let owner = OriginSet::one(0x1200);
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![Stmt::Throw {
+                    value: indexed_load(),
+                }],
+                catches: vec![CatchClause {
+                    type_name: "void *".into(),
+                    binding: VReg::phys("caught"),
+                    body: vec![Stmt::IndirectGoto {
+                        target: indexed_load(),
+                    }],
+                }],
+            }
+            .with_origins(owner.clone())],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
+            panic!("exception shape changed")
+        };
+        assert!(matches!(
+            try_body.as_slice(),
+            [Stmt::Throw {
+                value: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                }
+            }]
+        ));
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::IndirectGoto {
+                target: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                }
+            }]
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
     }
 
     /// The wrong displacement names a different object and must not resolve.
