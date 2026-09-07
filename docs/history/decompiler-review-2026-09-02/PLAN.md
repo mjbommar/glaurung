@@ -50,13 +50,18 @@ differential; see `results/wp3-control-consumer-origins.md`. Commit `52914784`
 migrates guarded-switch recovery without weakening its ownership and range
 proofs, remains exactly neutral on the same differential, and reduces the
 shared whole-Python failing-node set from 228 to 227; see
-`results/wp3-guarded-switch-origins.md`. Most semantic consumers, multi-output
-definition identity, expression origins, and structured line mappings remain
-open. Commit `f7b47953` migrates every guard-chain rewrite, keeps the complete
+`results/wp3-guarded-switch-origins.md`. Commit `f7b47953` migrates every
+guard-chain rewrite, keeps the complete
 stripped differential exactly neutral, and leaves no guard-chain node in the
 224-entry shared Python failure cache; see
-`results/wp3-guard-chain-origins.md`. A bounded, pre-WP3 WP7B relational slice is
-landed and proved at `9c9c607c`; it does not establish the general framework.
+`results/wp3-guard-chain-origins.md`. Commit `3b7d8a95` then migrates
+comparison-tree and linear-labelled
+switch ladders plus final join-to-`break` cleanup with an exactly neutral
+stripped differential; see `results/wp3-switch-ladder-origins.md`. Most
+semantic consumers, multi-output definition identity, expression origins, and
+structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
+is landed and proved at `9c9c607c`; it does not establish the general
+framework.
 The first WP2 request-model slice is landed at `d6a65779`. Module-level and
 reusable-session `decompile_at` now construct one pipeline-owned
   `DecompileRequest`, `AnalysisBudget`, and `RenderOptions`; every discovery
@@ -783,7 +788,10 @@ provenance through lowering.
   union of each removed guard, discriminator copy, and inner switch on the
   replacement. Commit `f7b47953` makes every guard-chain rewrite transparent
   and unions origins across removed guards, labels, gotos, duplicate
-  assignments, and terminal tails. Expression ownership, the remaining wildcard
+  assignments, and terminal tails. Commit `3b7d8a95` makes
+  both switch-ladder synthesis forms and final join-break cleanup transparent,
+  preserving unions across every consumed comparison, dispatch, label, goto,
+  case, and join statement. Expression ownership, the remaining wildcard
   consumers, and production attribution remain open.
 
 ### Migration targets
@@ -2713,7 +2721,9 @@ relevant ratchet's accepted-regression record.
    an exactly neutral 102-regression/17-improvement stripped differential; next
    `52914784` migrates `guarded_switch`, and `f7b47953` migrates the complete
    `guard_chain` consumer with an exactly neutral differential. Next migrate
-   `switch_ladder`, then `latch_predicate`.
+   `switch_ladder`, then `latch_predicate`. Commit `3b7d8a95` completes the
+   `switch_ladder` migration with another exactly neutral differential; next
+   migrate `latch_predicate` and re-audit the wildcard surface.
    Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
