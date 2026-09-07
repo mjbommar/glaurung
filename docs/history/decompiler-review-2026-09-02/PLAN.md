@@ -973,6 +973,12 @@ provenance through lowering.
   ranges they replace. Its observed-red test, all 33 x86 frame tests, and the
   exact checked-in MinGW PE32 `main` integration test pass. See
   `results/wp3-cdecl-entry-frame-origins.md`.
+  Commit `5db4b91b` closes the adjacent MinGW runtime-call omission: attributed
+  zero-argument `___main` cleanup now sees through the origin carrier, deletes
+  only that runtime bookkeeping, and does not reassign its owner to an
+  unrelated surviving call or return. Its observed-red test, all 34 x86 frame
+  tests, and the exact checked-in MinGW PE32 `main` integration test pass. See
+  `results/wp3-mingw-runtime-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 

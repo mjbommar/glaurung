@@ -184,6 +184,7 @@ live plan is [`development/roadmap/`](../development/roadmap/README.md).
 | [results/wp3-x86-frame-origins.md](decompiler-review-2026-09-02/results/wp3-x86-frame-origins.md) | 2026-09-07 | canonical x86 frame recognition sees attributed prologue bookkeeping and preserves its exact union on the synthesized comment | the focused test was observed red; all 31 module tests and two exact host O0 cells pass |
 | [results/wp3-cdecl-alignment-origins.md](decompiler-review-2026-09-02/results/wp3-cdecl-alignment-origins.md) | 2026-09-07 | balanced cdecl32 call-padding cleanup sees attributed structured statements and unions removed machine owners onto the call | the focused test was observed red; all 32 x86 frame tests and two exact i386 O0 call functions pass |
 | [results/wp3-cdecl-entry-frame-origins.md](decompiler-review-2026-09-02/results/wp3-cdecl-entry-frame-origins.md) | 2026-09-07 | cdecl32 aligned-entry-frame recognition sees attributed setup and teardown while keeping their synthesized-comment owners disjoint | the focused test was observed red; all 33 x86 frame tests and the exact checked-in MinGW PE32 main test pass |
+| [results/wp3-mingw-runtime-origins.md](decompiler-review-2026-09-02/results/wp3-mingw-runtime-origins.md) | 2026-09-07 | implicit MinGW runtime-call cleanup sees attributed calls without reassigning deleted machine bookkeeping to surviving source statements | the focused test was observed red; all 34 x86 frame tests and the exact checked-in MinGW PE32 main test pass |
 
 ## `design/`
 

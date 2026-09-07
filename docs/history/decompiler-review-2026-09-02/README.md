@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-mingw-runtime-origins.md`](results/wp3-mingw-runtime-origins.md):
+implicit MinGW `___main` cleanup now sees attributed calls, deletes only the
+runtime mapping, and leaves unrelated owners unchanged; its observed-red test,
+all 34 x86 frame tests, and the exact PE32 `main` integration test pass. The
+preceding
 [`results/wp3-cdecl-entry-frame-origins.md`](results/wp3-cdecl-entry-frame-origins.md):
 the cdecl32 aligned-entry-frame recognizer now sees attributed setup/teardown
 and keeps their replacement-comment owners separate; its observed-red test,
