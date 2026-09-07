@@ -766,7 +766,7 @@ fn phase_sensitive_stack_read(
             .iter()
             .any(|statement| {
                 matches!(
-                    statement,
+                    statement.semantic(),
                     Stmt::Assign { dst: VReg::Phys(name), .. }
                         if stack_names.contains(&ssa_base(name))
                 )

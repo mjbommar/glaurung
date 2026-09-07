@@ -29,7 +29,7 @@ use super::{ssa_base, CallConv};
 /// variadic, and otherwise unrepresentable layouts stay on the conservative
 /// evidence-only path until the ABI layout model can describe them exactly.
 pub(super) fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
-    let name = match statement {
+    let name = match statement.semantic() {
         Stmt::Call {
             target: Expr::Named { name, .. },
             ..
@@ -61,7 +61,7 @@ pub(super) fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
 /// Stack-spilled and variadic layouts are withheld until the AST models their
 /// outgoing storage explicitly.
 pub(super) fn known_arm_hard_float_layout(statement: &Stmt) -> Option<Vec<VReg>> {
-    let name = match statement {
+    let name = match statement.semantic() {
         Stmt::Call {
             target: Expr::Named { name, .. },
             ..
@@ -175,7 +175,8 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
 
     while index > 0 {
         index -= 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -220,7 +221,7 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
         .collect();
     if let Stmt::Call {
         args: call_args, ..
-    } = &mut body[call_idx]
+    } = body[call_idx].semantic_mut()
     {
         *call_args = args;
     } else {
@@ -231,6 +232,14 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
         .iter()
         .map(|slot| slot.as_ref().expect("checked contiguous VFP prefix").0)
         .collect();
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used.sort_unstable_by(|left, right| right.cmp(left));
     for statement in used {
         body.remove(statement);
@@ -286,7 +295,8 @@ pub(super) fn outgoing_aapcs_stack_area(
     let mut cursor = call_index;
     while cursor > 0 {
         let index = cursor - 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store { addr, src, size: 4 } => {
                 let disp = match addr {
                     Expr::Reg(VReg::Phys(base)) if ssa_base(base) == "sp" => 0,
@@ -338,6 +348,7 @@ pub(super) fn outgoing_aapcs_stack_area(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -353,6 +364,90 @@ mod tests {
             dst: None,
             call_spec: None,
         }
+    }
+
+    #[test]
+    fn attributed_calls_retain_their_locked_aapcs_contracts() {
+        let memset = call_to("memset@plt").with_origins(OriginSet::one(0x1000));
+        assert_eq!(known_arm_core_register_arity(&memset), Some(3));
+
+        let asinf = call_to("asinf").with_origins(OriginSet::one(0x1004));
+        assert_eq!(known_arm_hard_float_layout(&asinf), Some(vec![reg("s0")]));
+    }
+
+    #[test]
+    fn attributed_pure_vfp_setup_folds_into_the_call_owner() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("s0#1"),
+                src: Expr::FloatConst {
+                    bits: 1.0f32.to_bits() as u64,
+                    width: 4,
+                },
+            }
+            .with_origins(OriginSet::one(0x1010)),
+            Stmt::Assign {
+                dst: reg("s1#1"),
+                src: Expr::FloatConst {
+                    bits: 2.0f32.to_bits() as u64,
+                    width: 4,
+                },
+            }
+            .with_origins(OriginSet::one(0x1014)),
+            call_to("float_pair").with_origins(OriginSet::one(0x1018)),
+        ];
+
+        assert!(fold_one_arm_hard_float_call(&mut body, 2));
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Call { args, .. } = body[0].semantic() else {
+            panic!("folded statement is not a call: {body:#?}");
+        };
+        assert_eq!(
+            args,
+            &[
+                Expr::FloatConst {
+                    bits: 1.0f32.to_bits() as u64,
+                    width: 4,
+                },
+                Expr::FloatConst {
+                    bits: 2.0f32.to_bits() as u64,
+                    width: 4,
+                },
+            ]
+        );
+        assert_eq!(
+            body[0].origins().expect("folded call owner").addresses(),
+            &[0x1010, 0x1014, 0x1018]
+        );
+    }
+
+    #[test]
+    fn attributed_aapcs_stack_area_is_recognized() {
+        let store = |disp, value, va| {
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("sp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                },
+                src: Expr::Const(value),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(va))
+        };
+        let body = vec![
+            store(4, 6, 0x1020),
+            store(0, 5, 0x1024),
+            call_to("callee").with_origins(OriginSet::one(0x1028)),
+        ];
+
+        assert_eq!(
+            outgoing_aapcs_stack_area(&body, 2, 2),
+            Some((vec![Expr::Const(5), Expr::Const(6)], vec![1, 0]))
+        );
     }
 
     #[test]
