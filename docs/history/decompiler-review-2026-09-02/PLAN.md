@@ -1035,8 +1035,15 @@ provenance through lowering.
   Commit `9b10f06e` adds the expression-level carrier and canonical
   attach/unwrap/union helpers, makes all 87 compiler-enumerated exhaustive
   consumers explicitly transparent, and keeps both renderers byte-neutral.
-  Production attachment at expression reconstruction and the remaining
-  non-exhaustive matcher audit remain open; see
+  Commit `3c5c74b9` makes the first bounded production attachment: removing a
+  single-use temporary transfers its definition origins to the exact
+  reconstructed expression subtree, while the surviving statement retains the
+  complete union. Its observed-red test, 102 touched-module tests, and the
+  four-lane/48-function `01_conditional_polarity` family pass. A release A/B
+  caught and repaired every exposed copy/fold/render regression, leaving the
+  exact `classify` text byte-identical to the clean parent. Universal
+  expression attribution and the remaining non-exhaustive matcher audit remain
+  open; see `results/wp3-reconstructed-expression-origins.md` and
   `results/wp3-expression-origin-carrier.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.

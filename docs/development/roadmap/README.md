@@ -260,8 +260,12 @@ across the 419-pair identity gate. Commit `f05c9a5d` then carries exact or
 explicitly ambiguous opaque SSA identities beside the lowered AST and migrates
 float-role type projection as the first product consumer. Commit `af65c260`
 migrates optimized DWARF register-local recovery as the second; both 419-pair
-maps are byte-identical. Multi-output identity, remaining display-name consumers,
-origins, and remaining mutating-pass migrations keep WP3 open. WP6 and WP7B
+maps are byte-identical. Statement origins and structured line mappings are
+now live, and `3c5c74b9` makes the first bounded production expression-origin
+attachment during adjacent temporary reconstruction without changing its exact
+real-binary output. Multi-output identity, remaining display-name consumers,
+universal expression attribution, and remaining mutating-pass migrations keep
+WP3 open. WP6 and WP7B
 remain open architectural work. No current-tip release gate
 is claimed green; isolated overlay results in the review record retain their
 named scope and must not be read as cross-architecture or full-plan
