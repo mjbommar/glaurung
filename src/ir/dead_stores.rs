@@ -74,7 +74,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
             addr: Expr::Reg(slot),
             src,
             size,
-        } = statement
+        } = statement.semantic()
         else {
             return None;
         };
@@ -130,7 +130,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
                     continue;
                 }
                 let Some(second) = (first + 1..body.len())
-                    .find(|index| !matches!(body[*index], Stmt::Comment(_) | Stmt::Nop))
+                    .find(|index| !matches!(body[*index].semantic(), Stmt::Comment(_) | Stmt::Nop))
                 else {
                     continue;
                 };
@@ -164,7 +164,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
 pub fn drop_globally_unused_call_results(f: &mut Function) {
     fn collect(body: &[Stmt], out: &mut HashSet<VReg>) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Call { dst: Some(dst), .. } => {
                     out.insert(dst.clone());
                 }
@@ -207,7 +207,7 @@ pub fn drop_globally_unused_call_results(f: &mut Function) {
 
     fn clear(body: &mut [Stmt], unused: &HashSet<VReg>) {
         for statement in body {
-            match statement {
+            match statement.semantic_mut() {
                 Stmt::Call { dst, .. } if dst.as_ref().is_some_and(|dst| unused.contains(dst)) => {
                     *dst = None;
                 }
@@ -275,7 +275,7 @@ fn return_reg_aliases(cc: CallConv) -> Vec<&'static str> {
 fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
     // Recurse first so inner bodies drive their own analyses.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -304,13 +304,13 @@ fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
         // side effect and appear after naming collapses two aliases onto
         // the same role-name (e.g. `%edi` and `%rdi` both becoming `%arg0`).
         if matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::Assign { dst, src: Expr::Reg(r) } if dst == r
         ) {
             body.remove(i);
             continue;
         }
-        let dst = match &body[i] {
+        let dst = match body[i].semantic() {
             Stmt::Assign { dst, src } => match dst {
                 // Only regular register writes are considered. Flag writes
                 // are handled elsewhere.
@@ -351,14 +351,14 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
 
         // An assignment that overwrites dst without reading it first kills
         // the earlier store.
-        if let Stmt::Assign { dst: d2, .. } = s {
+        if let Stmt::Assign { dst: d2, .. } = s.semantic() {
             if d2 == dst {
                 return true;
             }
         }
 
         // A call in the body is treated as writing the return register.
-        if matches!(s, Stmt::Call { .. }) {
+        if matches!(s.semantic(), Stmt::Call { .. }) {
             if let VReg::Phys(name) = dst {
                 if ret_regs.iter().any(|r| r == name) {
                     return true;
@@ -379,7 +379,7 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
         // live to be safe (except Return whose value obviously reads some
         // reg already covered by `stmt_reads`).
         if matches!(
-            s,
+            s.semantic(),
             Stmt::Return { .. }
                 | Stmt::Goto { .. }
                 | Stmt::IndirectGoto { .. }
@@ -406,7 +406,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     let candidates: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| match s {
+        .filter_map(|(i, s)| match s.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src: Expr::Const(0),
@@ -418,7 +418,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     for &i in &candidates {
         let name = if let Stmt::Assign {
             dst: VReg::Phys(n), ..
-        } = &body[i]
+        } = body[i].semantic()
         {
             n.clone()
         } else {
@@ -1043,7 +1043,7 @@ pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
 }
 
 fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
-    match s {
+    match s.semantic() {
         Stmt::If {
             then_body,
             else_body,
@@ -1073,7 +1073,7 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
 /// at least one path, even when the nested body does not itself read it.
 fn contains_nested_exit(statement: &Stmt) -> bool {
     fn body_exits(body: &[Stmt]) -> bool {
-        body.iter().any(|statement| match statement {
+        body.iter().any(|statement| match statement.semantic() {
             Stmt::Return { .. }
             | Stmt::Goto { .. }
             | Stmt::IndirectGoto { .. }
@@ -1100,7 +1100,7 @@ fn contains_nested_exit(statement: &Stmt) -> bool {
         })
     }
 
-    match statement {
+    match statement.semantic() {
         Stmt::If {
             then_body,
             else_body,
@@ -1305,6 +1305,33 @@ mod tests {
     }
 
     #[test]
+    fn attributed_unused_call_result_becomes_effect_only_without_losing_owner() {
+        let owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "owned_call".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "puts".into(),
+                },
+                args: Vec::new(),
+                dst: Some(reg("var0")),
+                call_spec: None,
+            }
+            .with_origins(owner.clone())],
+        };
+
+        drop_globally_unused_call_results(&mut function);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Call { dst: None, .. }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
+    }
+
+    #[test]
     fn read_call_result_keeps_its_destination() {
         let result = reg("var0");
         let mut f = Function {
@@ -1499,6 +1526,38 @@ mod tests {
     }
 
     #[test]
+    fn attributed_nested_exit_keeps_the_value_reaching_that_exit() {
+        let mut function = Function {
+            name: "owned_break".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Const(1),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("stop")),
+                    then_body: vec![Stmt::Break.with_origins(OriginSet::one(0x1014))],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Const(2),
+                },
+            ],
+        };
+
+        eliminate_dead_stores(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(
+            function.body.len(),
+            3,
+            "the break path needs the first value"
+        );
+    }
+
+    #[test]
     fn loop_value_before_conditional_break_is_not_dead() {
         // The first assignment reaches the return when the loop breaks before
         // the later overwrite. Treating a nested `break` as transparent made
@@ -1567,6 +1626,27 @@ mod tests {
         eliminate_dead_stores(&mut f, CallConv::SysVAmd64);
         assert_eq!(f.body.len(), 1);
         assert!(matches!(&f.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn attributed_self_assign_is_removed() {
+        let mut function = Function {
+            name: "owned_self_assign".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Reg(reg("rax")),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        eliminate_dead_stores(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(function.body[0].semantic(), Stmt::Return { .. }));
     }
 
     #[test]
