@@ -443,11 +443,15 @@ fn turn_terminal_result_into_return(
     let Some(last) = body.last_mut() else {
         return false;
     };
+    let value_origins = last.origins().cloned();
     match last.semantic_mut() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } if dst == result => {
-            let Some(value) = apply_return_cast_template(return_template, result, src.clone())
-            else {
+            let mut source = src.clone();
+            if let Some(origins) = &value_origins {
+                source.merge_origins(origins);
+            }
+            let Some(value) = apply_return_cast_template(return_template, result, source) else {
                 return false;
             };
             *last.semantic_mut() = Stmt::Return { value: Some(value) };
@@ -459,8 +463,11 @@ fn turn_terminal_result_into_return(
             src,
             ..
         } if dst == result && matches!(&*dst, VReg::Phys(name) if is_promoted_local(name)) => {
-            let Some(value) = apply_return_cast_template(return_template, result, src.clone())
-            else {
+            let mut source = src.clone();
+            if let Some(origins) = &value_origins {
+                source.merge_origins(origins);
+            }
+            let Some(value) = apply_return_cast_template(return_template, result, source) else {
                 return false;
             };
             *last.semantic_mut() = Stmt::Return { value: Some(value) };
@@ -674,6 +681,20 @@ mod tests {
                 0x1008, 0x100c, 0x1010
             ]))
         );
+        let Stmt::Return {
+            value: Some(then_value),
+        } = then_body[0].semantic()
+        else {
+            panic!("expected attributed then return: {then_body:#?}")
+        };
+        let Stmt::Return {
+            value: Some(else_value),
+        } = else_body[0].semantic()
+        else {
+            panic!("expected attributed else return: {else_body:#?}")
+        };
+        assert_eq!(then_value.origins(), Some(&OriginSet::one(0x1004)));
+        assert_eq!(else_value.origins(), Some(&OriginSet::one(0x1008)));
     }
 
     #[test]
@@ -747,6 +768,20 @@ mod tests {
                 0x100c, 0x1010, 0x1014
             ]))
         );
+        let Stmt::Return {
+            value: Some(case_value),
+        } = cases[0].1[0].semantic()
+        else {
+            panic!("expected attributed case return: {:#?}", cases[0].1)
+        };
+        let Stmt::Return {
+            value: Some(default_value),
+        } = default[0].semantic()
+        else {
+            panic!("expected attributed default return: {default:#?}")
+        };
+        assert_eq!(case_value.origins(), Some(&OriginSet::one(0x1004)));
+        assert_eq!(default_value.origins(), Some(&OriginSet::one(0x100c)));
         assert!(matches!(function.body[1].semantic(), Stmt::Comment(_)));
     }
 
