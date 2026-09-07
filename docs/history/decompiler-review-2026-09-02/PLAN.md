@@ -915,6 +915,13 @@ provenance through lowering.
   `fold_one_call.rs`, and `return_attribution.rs`; it preserves carriers while
   recognizing reads, writes, calls, alias barriers, enclosing definitions,
   SSE-pair producers, and literal-format proofs.
+  Commit `7d531781` closes final-preparation omissions in machine-frame
+  cleanup, widening, comparison fusion, and DWARF-field invalidation. Commit
+  `4b35aeab` then makes dead-store recognition, nested-exit safety, promoted-
+  store cleanup, and unused call-result clearing origin-transparent. The latter
+  restores effect-only calls without losing their statement owner and prevents
+  an attributed exit from making a reaching value look dead. See
+  `results/wp3-final-cleanup-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
@@ -2888,6 +2895,12 @@ relevant ratchet's accepted-regression record.
    gate. Its whole-Python gate has zero attributable failure-set change after a
    release parent/tip classification. Re-audit the remaining enabled semantic
    consumers before starting expression ownership.
+   Commits `7d531781` and `4b35aeab` next close four final-cleanup readers plus
+   the dead-store surface. Seven focused cases were observed red; all touched
+   modules are green, and fixture 11 remains 52/52 while losing fake result
+   temporaries on effect-only calls. Finish the remaining wildcard audit, then
+   define non-contiguous transformation behavior and start expression
+   ownership. See `results/wp3-final-cleanup-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.

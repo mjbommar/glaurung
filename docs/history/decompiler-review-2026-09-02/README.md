@@ -88,7 +88,14 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-lazy-call-select-origins.md`](results/wp3-lazy-call-select-origins.md):
+[`results/wp3-final-cleanup-origins.md`](results/wp3-final-cleanup-origins.md):
+final preparation and dead-store analysis now see through statement origins,
+preserving widening, comparison fusion, DWARF invalidation, nested-exit
+safety, and effect-only call cleanup. Seven tests were observed red first; all
+touched module suites and all 52 fixture-11 functions are green, with fake
+call-result temporaries removed. The preceding
+[`results/wp3-lazy-call-select-origins.md`](results/wp3-lazy-call-select-origins.md)
+records that
 the two production lazy-call entry points now recognize attributed adjacent
 calls and every supported diamond shape, recurse through attributed structured
 nodes, and union every consumed owner onto the replacement. Five tests were
