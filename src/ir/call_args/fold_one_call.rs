@@ -816,7 +816,8 @@ fn forward_proven_sysv_sse_pair(
     };
 
     for statement in body[..call_idx].iter().rev() {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Call { .. } => {
                 let Some(producer_va) = direct_call_target_va(statement) else {
                     return false;
@@ -829,7 +830,7 @@ fn forward_proven_sysv_sse_pair(
                 if producer_high < high_bytes {
                     return false;
                 }
-                if let Stmt::Call { args, .. } = &mut body[call_idx] {
+                if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                     *args = layout.iter().cloned().map(Expr::Reg).collect();
                     return true;
                 }
@@ -889,7 +890,7 @@ fn format_proven_arity(
     let Stmt::Call {
         target: Expr::Named { name, .. },
         ..
-    } = body.get(call_idx)?
+    } = body.get(call_idx)?.semantic()
     else {
         return None;
     };
@@ -907,7 +908,8 @@ fn format_proven_arity(
         _ => return None,
     };
     for statement in body[..call_idx].iter().rev() {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(register),
                 src,

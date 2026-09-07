@@ -95,7 +95,8 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
             *reads = true;
         }
     };
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             expr_reads(src);
             if matches!(dst, VReg::Phys(n) if ssa_base(n) == name) {
@@ -214,7 +215,7 @@ pub(super) fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
     let ret = return_reg(arch);
     let consumed: Vec<Option<&'static str>> = (0..body.len())
         .map(|i| {
-            if !matches!(&body[i], Stmt::Call { dst: None, .. }) {
+            if !matches!(body[i].semantic(), Stmt::Call { dst: None, .. }) {
                 return None;
             }
             if arch == CallConv::ArmHardFloat {
@@ -228,7 +229,8 @@ pub(super) fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
         })
         .collect();
     for (i, s) in body.iter_mut().enumerate() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Call { dst, .. } => {
                 if dst.is_none() {
                     if let Some(result) = consumed[i] {

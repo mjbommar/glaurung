@@ -254,7 +254,8 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
         }
     }
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 if let VReg::Phys(n) = dst {
                     f(n);
@@ -1636,7 +1637,7 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -3092,6 +3093,67 @@ mod tests {
     }
 
     #[test]
+    fn sysv_origin_wrapped_aliasing_store_blocks_frame_load_substitution() {
+        let frame_addr = || Expr::Lea {
+            base: Some(reg("rbp")),
+            index: None,
+            scale: 1,
+            disp: -8,
+            segment: None,
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Deref {
+                        addr: Box::new(frame_addr()),
+                        size: 4,
+                    },
+                },
+                Stmt::Store {
+                    addr: frame_addr(),
+                    src: Expr::Const(99),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rax"))),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                },
+                assign("r8", 4),
+                assign("r9", 5),
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(f.body.iter().any(|statement| matches!(
+            statement.semantic(),
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src: Expr::Deref { .. },
+            } if name == "rax"
+        )));
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive").semantic() else {
+            panic!("expected call: {f:#?}");
+        };
+        assert!(matches!(
+            &args[3],
+            Expr::Bin { lhs, .. } if lhs.as_ref() == &Expr::Reg(reg("rax"))
+        ));
+    }
+
+    #[test]
     fn sysv_does_not_cross_an_opaque_scratch_definition() {
         let mut f = Function {
             name: "caller".into(),
@@ -4518,6 +4580,53 @@ mod tests {
     }
 
     #[test]
+    fn origin_wrapped_sysv_sse_pair_result_still_forwards() {
+        let mut function = Function {
+            name: "pair_roundtrip".into(),
+            entry_va: 0x1000,
+            body: vec![
+                call_at(0x2000, "make_pair").with_origins(OriginSet::one(0x1000)),
+                call_at(0x3000, "consume_pair"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([
+            (0x2000, vec![reg("rdi")]),
+            (0x3000, vec![reg("xmm0"), reg("xmm1")]),
+        ]);
+        let prototypes = std::collections::HashMap::from([
+            (
+                0x2000,
+                recovered_prototype("struct __glaurung_sse_pair", &["int"]),
+            ),
+            (0x3000, recovered_prototype("int", &["double", "double"])),
+        ]);
+
+        reconstruct_args_with_layouts_prototypes_and_strings(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut [0].into_iter().collect(),
+            &layouts,
+            &std::collections::HashMap::new(),
+            Some(&prototypes),
+            &std::collections::HashMap::new(),
+        );
+
+        let args = function
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                Stmt::Call {
+                    target: Expr::Named { va: 0x3000, .. },
+                    args,
+                    ..
+                } => Some(args),
+                _ => None,
+            })
+            .expect("consumer call");
+        assert_eq!(args, &[Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))]);
+    }
+
+    #[test]
     fn sysv_sse_pair_forwarding_refuses_an_intervening_high_bank_write() {
         let mut function = Function {
             name: "clobbered_pair".into(),
@@ -5319,6 +5428,58 @@ mod tests {
     }
 
     #[test]
+    fn an_origin_wrapped_consumed_call_result_is_attributed_in_place() {
+        let call_owner = OriginSet::one(0x1000);
+        let return_owner = OriginSet::one(0x1004);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                call_to("g").with_origins(call_owner.clone()),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
+                }
+                .with_origins(return_owner),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(f.body[0].origins(), Some(&call_owner));
+        match f.body[0].semantic() {
+            Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys("rax"))),
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn origin_wrappers_do_not_hide_register_names_from_call_recovery() {
+        let body = vec![Stmt::Return {
+            value: Some(Expr::Reg(reg("rdi"))),
+        }
+        .with_origins(OriginSet::one(0x1000))];
+        let mut names = Vec::new();
+
+        walk_body_reg_names(&body, &mut |name| names.push(name.to_string()));
+
+        assert_eq!(names, vec!["rdi"]);
+    }
+
+    #[test]
+    fn origin_wrappers_do_not_hide_enclosing_reaching_definitions() {
+        let mut reaching = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        let definition = Stmt::Assign {
+            dst: reg("rdi#1"),
+            src: Expr::Const(7),
+        }
+        .with_origins(OriginSet::one(0x1000));
+
+        EnclosingSlots::advance_reaching(&mut reaching, &definition, CallConv::SysVAmd64);
+
+        assert_eq!(reaching[0], Some(Expr::Reg(reg("rdi#1"))));
+    }
+
+    #[test]
     fn a_result_nobody_reads_is_not_an_assignment() {
         // The ABI clobbers the return register on EVERY call — that belongs in the
         // value model. Printing `ret = puts(..)` claims something else: that the
@@ -5657,6 +5818,59 @@ mod tests {
             statement,
             Stmt::Assign { dst, .. } if dst == &reg("rdx#1")
         )));
+    }
+
+    #[test]
+    fn origin_wrapped_printf_call_keeps_format_proven_argument() {
+        let mut f = Function {
+            name: "printf_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Addr(0x3000),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(42),
+                },
+                Stmt::Store {
+                    addr: Expr::Addr(0x4000),
+                    src: Expr::Reg(reg("rsi#1")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "printf".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+            ],
+        };
+        let strings = std::collections::HashMap::from([(0x3000, "%d\n".to_string())]);
+
+        reconstruct_args_with_layouts_and_strings(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &strings,
+        );
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(args, &[Expr::Addr(0x3000), Expr::Reg(reg("rsi#1"))]);
     }
 
     /// Unsupported format constructs must not relax the read barrier. This is

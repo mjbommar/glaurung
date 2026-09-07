@@ -98,6 +98,7 @@ impl EnclosingSlots {
     /// about the value entering the following statement can be proved from
     /// what came before it.
     pub(super) fn advance(blocked: &mut [bool], statement: &Stmt, arch: CallConv) {
+        let statement = statement.semantic();
         if matches!(
             statement,
             Stmt::Label(_)
@@ -137,6 +138,7 @@ impl EnclosingSlots {
         statement: &Stmt,
         arch: CallConv,
     ) {
+        let statement = statement.semantic();
         if matches!(
             statement,
             Stmt::Label(_)

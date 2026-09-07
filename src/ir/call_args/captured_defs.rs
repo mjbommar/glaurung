@@ -107,7 +107,8 @@ pub(super) fn is_stable_frame_arg_definition(
         .take(call_index)
         .skip(definition_index + 1)
     {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 ..
